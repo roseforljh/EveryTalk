@@ -1,7 +1,7 @@
-package com.example.app1.data.models
+package com.example.app1.data.network
 
-import java.util.UUID
 import kotlinx.serialization.Serializable
+import java.util.UUID
 
 @Serializable // Ensure it's serializable
 data class ApiConfig(

@@ -1,3 +1,5 @@
+import org.gradle.kotlin.dsl.implementation
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -84,6 +86,13 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.foundation:foundation-layout:1.6.7")
     implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0") // Use the latest version
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0") // Often needed
+    implementation("com.mikepenz:multiplatform-markdown-renderer:0.33.0") // <<< 添加这一行
+    implementation("com.mikepenz:multiplatform-markdown-renderer-android:0.33.0")
+    implementation ("androidx.compose.ui:ui:1.6.0")
+    implementation ("androidx.compose.material:material-icons-extended:1.6.0")
+    implementation ("androidx.compose.animation:animation:1.5.0")
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

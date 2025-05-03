@@ -36,14 +36,14 @@ fun AppTopBar(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                "EzTalk",
+                "KunChat",
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center
             )
             selectedConfigName?.let {
                 Text(
-                    "Using: $it",
+                    it,
                     fontSize = 12.sp,
                     color = Color.Gray,
                     maxLines = 1,

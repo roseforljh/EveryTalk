@@ -1,7 +1,6 @@
 
 pluginManagement {
     repositories {
-
         // 优先使用阿里云镜像
         maven("https://maven.aliyun.com/repository/public")
         // 保留官方源作为备用，并维持 google() 的内容过滤规则
