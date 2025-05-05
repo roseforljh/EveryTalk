@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+httpx[http2]==0.27.0
+httpcore==1.0.5
+# pydantic (通常会被 fastapi 依赖自动安装)
+# asyncio (标准库，无需列出)
+# logging (标准库，无需列出)
+# inspect (标准库，无需列出)

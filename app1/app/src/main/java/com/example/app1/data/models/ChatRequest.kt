@@ -1,6 +1,6 @@
 package com.example.app1.data.models
 
-import com.example.app1.data.network.ApiMessage
+import com.example.app1.data.models.ApiMessage
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Contextual // <-- 导入 Contextual (如果使用 Map<String, Any>)

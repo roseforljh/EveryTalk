@@ -1,51 +1,45 @@
-package com.example.app1.ui.screens
+package com.example.app1.ui.screens // 确保这个包名和你的文件路径完全匹配
 
 import androidx.compose.runtime.*
+import androidx.compose.runtime.getValue // 确保导入 getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.lifecycle.viewmodel.compose.viewModel // 导入 viewModel()
-import com.example.app1.data.models.*
-import com.example.app1.ui.components.SettingsDialog // 确认 SettingsDialog 导入正确
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.app1.data.models.* // 导入数据模型 (如果 HistoryScreen 等需要)
+import com.example.app1.ui.components.SettingsDialog // 导入设置对话框
 import kotlinx.coroutines.flow.collectLatest
-import androidx.activity.compose.BackHandler // 导入 BackHandler
-import androidx.compose.foundation.layout.Box // 导入 Box
-import androidx.compose.foundation.layout.PaddingValues // 导入 PaddingValues
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding // 导入 padding 修饰符
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHostState
-import kotlinx.coroutines.flow.StateFlow // 导入 StateFlow (虽然不直接用在collectAsState这行，但为了理解类型)
+import com.example.app1.ui.screens.AppContent
 
 
 @Composable
 fun AppContent(
-    snackbarHostState: SnackbarHostState, // Snackbar 仍然由外部传入和管理
-    innerPadding: PaddingValues // <<< ADD innerPadding parameter back
+    snackbarHostState: SnackbarHostState,
+    innerPadding: PaddingValues // 来自外部 Scaffold 的内边距
 ) {
     val context = LocalContext.current
-    // 获取 ViewModel 实例 (使用 Factory)
+    // 创建 ViewModelFactory 和 ViewModel 实例
+    // 确保 AppViewModelFactory 在正确的包中或者已经导入
     val factory = remember { AppViewModelFactory(context.applicationContext) }
     val viewModel: AppViewModel = viewModel(factory = factory)
 
-    // --- 收集 ViewModel 的状态 (使用 collectAsState) ---
+    // 收集顶层需要的状态
     val currentView by viewModel.currentView.collectAsState()
-    val messages by viewModel.messages.collectAsState()
-    val text by viewModel.text.collectAsState()
-    val historicalConversations by viewModel.historicalConversations.collectAsState()
-    val selectedApiConfig by viewModel.selectedApiConfig.collectAsState()
     val showSettingsDialog by viewModel.showSettingsDialog.collectAsState()
-    val isApiCalling by viewModel.isApiCalling.collectAsState()
-    // 正确收集 StateFlow<String?> currentStreamingAiMessageId
-    val currentStreamingAiMessageId by viewModel.currentStreamingAiMessageId.collectAsState() // <-- 已修改为 collectAsState()
-
-    val expandedReasoningStates = viewModel.expandedReasoningStates // 直接使用 StateMap
-    val showScrollToBottomButton by viewModel.showScrollToBottomButton.collectAsState()
     val apiConfigs by viewModel.apiConfigs.collectAsState()
+    val selectedApiConfig by viewModel.selectedApiConfig.collectAsState()
+    val historicalConversations by viewModel.historicalConversations.collectAsState()
 
-
-    // --- 处理 Snackbar 消息 ---
+    // 处理 Snackbar
     LaunchedEffect(snackbarHostState, viewModel) {
         viewModel.snackbarMessage.collectLatest { message ->
+            // snackbarHostState.currentSnackbarData?.dismiss() // 可选：如果需要打断之前的
             snackbarHostState.showSnackbar(
                 message = message,
                 duration = SnackbarDuration.Short
@@ -53,51 +47,44 @@ fun AppContent(
         }
     }
 
-    // --- 处理返回按钮 ---
+    // 处理返回按钮：当在历史列表视图时，返回到聊天视图
+    // 确保 AppView 被正确引用 (来自 viewModel 或直接导入)
     BackHandler(enabled = currentView == AppView.HistoryList) {
         viewModel.navigateToChat(fromHistory = true)
     }
 
-    // --- 主 UI 布局 ---
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(innerPadding) // <<< APPLY innerPadding HERE
-    ) {
+    // 主 UI 布局
+    Box(modifier = Modifier
+        .fillMaxSize()
+        .padding(innerPadding)) { // 应用来自外部 Scaffold 的 padding
+
+        // 确保 AppView 被正确引用
         when (currentView) {
             AppView.CurrentChat -> {
+                // 调用 ChatScreen
                 ChatScreen(
-                    messages = messages,
-                    text = text,
-                    onTextChange = viewModel::onTextChange,
-                    selectedApiConfig = selectedApiConfig,
-                    isApiCalling = isApiCalling,
-                    currentStreamingAiMessageId = currentStreamingAiMessageId, // <-- 现在传递的是 String?
-                    showScrollToBottomButton = showScrollToBottomButton,
-                    onScrollToBottomClick = { /* ChatScreen 内部处理滚动 */ },
-                    onHistoryClick = viewModel::navigateToHistory,
-                    onSettingsClick = viewModel::showSettingsDialog,
-                    onSendMessage = viewModel::onSendMessage,
-                    onCancelAPICall = viewModel::onCancelAPICall,
-                    expandedReasoningStates = expandedReasoningStates,
-                    onToggleReasoningExpand = viewModel::onToggleReasoningExpand,
-                    onUserScrolledAwayChange = viewModel::onUserScrolledAwayChange
+                    viewModel = viewModel,
+                    modifier = Modifier // 可以传递 modifier
                 )
             }
+
             AppView.HistoryList -> {
-                HistoryScreen( // 假设 HistoryScreen 存在
+                // 调用 HistoryScreen
+                HistoryScreen(
                     historicalConversations = historicalConversations,
                     onNavigateBack = { viewModel.navigateToChat(fromHistory = true) },
                     onConversationClick = viewModel::loadConversationFromHistory,
                     onDeleteConversation = viewModel::deleteConversation,
-                    onNewChatClick = viewModel::startNewChat
+                    onNewChatClick = viewModel::startNewChat,
+                    onClearAll = viewModel::clearAllHistory // 传递清除所有历史的回调
                 )
             }
         }
     } // Box End
 
-    // --- 设置对话框 ---
+    // 设置对话框 (如果 showSettingsDialog 为 true 则显示)
     if (showSettingsDialog) {
+        // 确保 SettingsDialog 被正确导入
         SettingsDialog(
             savedConfigs = apiConfigs,
             selectedConfig = selectedApiConfig,
@@ -109,4 +96,5 @@ fun AppContent(
             onSelectConfig = viewModel::selectConfig
         )
     }
-} // AppContent End
+
+}

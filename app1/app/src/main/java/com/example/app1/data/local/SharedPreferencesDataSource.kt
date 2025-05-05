@@ -2,12 +2,11 @@ package com.example.app1.data.local
 
 import android.content.Context
 import androidx.core.content.edit
-import com.example.app1.data.network.ApiConfig // 确认导入 ApiConfig
+import com.example.app1.data.models.ApiConfig // 确认导入 ApiConfig
 import com.example.app1.data.models.Message // 确认导入 Message
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.SerializationException
-import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.SetSerializer
 import kotlinx.serialization.builtins.serializer
