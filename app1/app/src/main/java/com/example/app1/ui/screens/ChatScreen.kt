@@ -13,31 +13,30 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowDownward // 导入向下箭头图标
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Stop // 使用 Stop 图标
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.FocusRequester // 导入 FocusRequester
+import androidx.compose.ui.focus.focusRequester // 导入 focusRequester Modifier
+import androidx.compose.ui.focus.onFocusChanged // 导入 onFocusChanged Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController // 导入 KeyboardController
 import androidx.compose.ui.unit.dp
 import com.example.app1.data.models.Sender
 import com.example.app1.ui.components.AppTopBar
 import com.example.app1.ui.components.MessageBubble
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.delay // 导入 delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalAnimationApi::class) // 保留 ExperimentalAnimationApi
 @Composable
 fun ChatScreen(
     viewModel: AppViewModel,
@@ -54,9 +53,9 @@ fun ChatScreen(
 
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
-    val keyboardController = LocalSoftwareKeyboardController.current
     val density = LocalDensity.current
     val focusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current // 获取键盘控制器
 
     var lazyColumnBounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
     var inputBarBounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
@@ -64,29 +63,7 @@ fun ChatScreen(
     val lastAiMessage = messages.lastOrNull { it.sender == Sender.AI }
     val lastAiMessageId = lastAiMessage?.id
 
-    // --- 监听 ViewModel 的滚动到底部事件 ---
-    LaunchedEffect(Unit) {
-        viewModel.scrollToBottomEvent.collectLatest {
-            println("ChatScreen: Received scrollToBottomEvent")
-            coroutineScope.launch {
-                delay(100)
-                if (messages.isNotEmpty()) {
-                    val targetIndex = messages.lastIndex
-                    println("ChatScreen: Scrolling to index $targetIndex (Event Attempt 1)")
-                    listState.animateScrollToItem(index = targetIndex)
-                    delay(150)
-                    if (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index != targetIndex) {
-                        println("ChatScreen: Scrolling to index $targetIndex (Event Attempt 2)")
-                        listState.animateScrollToItem(index = targetIndex)
-                    } else {
-                        println("ChatScreen: Already at bottom after first event scroll.")
-                    }
-                }
-            }
-        }
-    }
-
-    // --- 自动收起已完成的推理框 ---
+    // -- 自动收起已完成的推理框 --
     LaunchedEffect(messages, reasoningCompleteMap) {
         messages.forEach { msg ->
             if (msg.sender == Sender.AI && !msg.reasoning.isNullOrBlank()) {
@@ -94,23 +71,48 @@ fun ChatScreen(
                 if (isComplete) {
                     if (expandedReasoningStates[msg.id] == true) {
                         println("ChatScreen: Reasoning complete for ${msg.id}, collapsing.")
-                        viewModel.collapseReasoning(msg.id)
+                        viewModel.collapseReasoning(msg.id) // 调用 ViewModel 收起
                     }
                 }
             }
         }
     }
 
-    // --- 监听列表滚动状态，更新ViewModel中的 userScrolledAway ---
+    // -- 用户滚动状态监听 --
     val userScrolledAway by remember {
         derivedStateOf {
             val layoutInfo = listState.layoutInfo
+            // 条件：列表已初始化，且最后可见项的索引小于总数减1（表示没在最底部）
             layoutInfo.visibleItemsInfo.isNotEmpty() &&
                     layoutInfo.visibleItemsInfo.last().index < layoutInfo.totalItemsCount - 1
         }
     }
     LaunchedEffect(userScrolledAway) {
         viewModel.onUserScrolledAwayChange(userScrolledAway)
+    }
+
+    // -- 滚动到底部/顶部事件监听 --
+    LaunchedEffect(Unit) {
+        viewModel.scrollToBottomEvent.collectLatest {
+            // 当 ViewModel 发出滚动事件时 (通常是发送新消息后)
+            coroutineScope.launch {
+                if (messages.isNotEmpty()) {
+                    val targetIndex = messages.lastIndex // 总是滚动到最新的一条消息
+                    println("ChatScreen: scrollToBottomEvent received, scrolling to index $targetIndex (Attempt 1)")
+                    listState.animateScrollToItem(targetIndex)
+                    // 短暂延迟后再次确保滚动到位，有时布局变化需要时间
+                    delay(150) // 调整延迟时间
+                    // 检查目标项是否完全可见并且在顶部
+                    val targetItemInfo = listState.layoutInfo.visibleItemsInfo.find { it.index == targetIndex }
+                    if (targetItemInfo == null || targetItemInfo.offset != 0) {
+                        println("ChatScreen: Scrolling to index $targetIndex (Attempt 2 to ensure top visibility)")
+                        listState.animateScrollToItem(targetIndex, scrollOffset = 0) // 滚动到项的顶部
+                    } else {
+                        println("ChatScreen: Index $targetIndex is already at top or visible.")
+                    }
+                }
+            }
+        }
     }
 
     Scaffold(
@@ -129,49 +131,45 @@ fun ChatScreen(
             ) {
                 FloatingActionButton(
                     onClick = {
-                        viewModel.triggerScrollToBottom()
+                        viewModel.triggerScrollToBottom() // 通过 ViewModel 触发滚动
                     },
-                    modifier = Modifier.padding(bottom = 80.dp),
-                    containerColor = Color.White.copy(alpha = 0.9f),
-                    contentColor = MaterialTheme.colorScheme.primary
+                    modifier = Modifier.padding(bottom = 85.dp), // 调整按钮位置
+                    containerColor = Color.White.copy(alpha = 0.9f), // 半透明白色背景
+                    contentColor = MaterialTheme.colorScheme.primary // 主色图标
                 ) {
-                    Icon(Icons.Filled.ArrowDownward, contentDescription = "滚动到底部")
+                    Icon(Icons.Filled.ArrowDownward, "滚动到底部")
                 }
             }
         },
-        floatingActionButtonPosition = FabPosition.End
-    ) { paddingValues ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(MaterialTheme.colorScheme.background)
-        ) {
+        floatingActionButtonPosition = FabPosition.End // 按钮位置在右下角
+    ) { paddingValues -> // 从 Scaffold 获取内边距
+        Box(modifier = Modifier.fillMaxSize()) {
             Column(
-                modifier = modifier
-                    .fillMaxSize()
+                modifier = Modifier.fillMaxSize()
+                // 不在此处应用 Scaffold 的 padding，分别处理
             ) {
                 LazyColumn(
                     modifier = Modifier
-                        .weight(1f)
+                        .weight(1f) // 占据剩余空间
                         .fillMaxWidth()
-                        .padding(horizontal = 6.dp)
-                        .padding(top = paddingValues.calculateTopPadding())
+                        .padding(horizontal = 6.dp) // 左右内边距
+                        .padding(top = paddingValues.calculateTopPadding()) // 应用 Scaffold 的顶部内边距
                         .onGloballyPositioned { lazyColumnBounds = it.boundsInWindow() },
-                    state = listState,
+                    state = listState, // 关联 LazyListState
+                    // 顶部留白，底部不留白（由输入框的 Surface 处理）
                     contentPadding = PaddingValues(top = 12.dp, bottom = 0.dp)
                 ) {
                     items(messages, key = { it.id }) { message ->
+                        // --- 计算 MessageBubble 所需的状态 ---
                         val isAI = message.sender == Sender.AI
                         val hasReasoning = !message.reasoning.isNullOrBlank()
-                        val isStreaming =
-                            isAI && message.id == currentStreamingAiMessageId && isApiCalling
-                        val showLoadingBubble =
-                            isStreaming && message.reasoning.isNullOrBlank() && message.text.isBlank() && !message.contentStarted
+                        val isStreaming = isAI && message.id == currentStreamingAiMessageId && isApiCalling
+                        val showLoadingBubble = isStreaming && message.reasoning.isNullOrBlank() && message.text.isBlank() && !message.contentStarted
                         val isReasoningComplete = reasoningCompleteMap[message.id] ?: false
-                        val isReasoningStreaming =
-                            isStreaming && hasReasoning && !isReasoningComplete
+                        val isReasoningStreaming = isStreaming && hasReasoning && !isReasoningComplete
                         val isManuallyExpanded = expandedReasoningStates[message.id] ?: false
 
+                        // --- 渲染消息气泡 ---
                         MessageBubble(
                             message = message,
                             isReasoningStreaming = isReasoningStreaming,
@@ -186,8 +184,9 @@ fun ChatScreen(
                             else Modifier
                         )
                     }
+                    // --- 底部 Spacer，防止最后一个气泡紧贴输入框 ---
                     item {
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(8.dp)) // 保留一个最小间距
                         val needSpacerPx = run {
                             val inputY = inputBarBounds?.top
                             val bubbleY = lastAiBubbleBottomY
@@ -196,43 +195,34 @@ fun ChatScreen(
                                 val desiredGapPx = with(density) { desiredGapDp.toPx() }
                                 val currentGapPx = inputY - bubbleY
                                 (desiredGapPx - currentGapPx).coerceAtLeast(0f)
-                            } else {
-                                0f
-                            }
+                            } else { 0f }
                         }
                         if (needSpacerPx > 0f) {
                             Spacer(Modifier.height(with(density) { needSpacerPx.toDp() }))
                         }
                     }
-                }
+                    // --- END 底部Spacer ---
+                } // End LazyColumn
 
-                // ---- 输入框区域（含模糊层） ----
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
+                        // 应用 Scaffold 的底部内边距
                         .padding(bottom = paddingValues.calculateBottomPadding())
+                        // 应用键盘内边距，将 Surface 顶起
                         .imePadding()
-                        .navigationBarsPadding()
-                        .onGloballyPositioned { inputBarBounds = it.boundsInWindow() },
-                    color = MaterialTheme.colorScheme.surface,
-                    shadowElevation = 0.dp,
-                    tonalElevation = 0.dp
+                        // 可选：应用导航栏内边距
+                        .navigationBarsPadding(),
+                    color = MaterialTheme.colorScheme.surface, // 输入框区域背景色
+                    shadowElevation = 0.dp, // 无阴影
+                    tonalElevation = 0.dp  // 无色调叠加
                 ) {
-                    Box {
-                        // 顶部模糊带
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(18.dp)
-                                .align(Alignment.TopCenter)
-                                .background(MaterialTheme.colorScheme.surface)
-                                .blur(18.dp),
-                        )
+                    Box { // 使用 Box 包裹 TextField，方便对齐
                         // 输入栏本体
                         Box(
                             modifier = Modifier
-                                .padding(horizontal = 12.dp, vertical = 8.dp)
-                                .align(Alignment.BottomCenter)
+                                .padding(horizontal = 12.dp, vertical = 8.dp) // 输入栏内边距
+                                .align(Alignment.BottomCenter) // 确保输入栏在 Surface 底部
                         ) {
                             TextField(
                                 value = text,
@@ -244,20 +234,26 @@ fun ChatScreen(
                                         MaterialTheme.colorScheme.surfaceVariant,
                                         RoundedCornerShape(24.dp)
                                     )
-                                    .focusRequester(focusRequester)
+                                    .focusRequester(focusRequester) // 关联 FocusRequester
                                     .onFocusChanged { focusState ->
                                         if (focusState.isFocused) {
+                                            // 获得焦点时，触发滚动到底部
                                             coroutineScope.launch {
-                                                delay(250)
+                                                delay(250) // 等待键盘和 imePadding 生效
                                                 if (messages.isNotEmpty()) {
                                                     val targetIndex = messages.lastIndex
+                                                    println("ChatScreen: TextField focused, scrolling to $targetIndex (Attempt 1)")
                                                     listState.animateScrollToItem(targetIndex)
                                                     delay(150)
-                                                    if (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index != targetIndex) {
-                                                        listState.animateScrollToItem(targetIndex)
+                                                    val targetItemInfo = listState.layoutInfo.visibleItemsInfo.find { it.index == targetIndex }
+                                                    if (targetItemInfo == null || targetItemInfo.offset != 0) {
+                                                        println("ChatScreen: TextField focused, scrolling to $targetIndex (Attempt 2 to ensure top visibility)")
+                                                        listState.animateScrollToItem(targetIndex, scrollOffset = 0)
+                                                    } else {
+                                                        println("ChatScreen: TextField focused, index $targetIndex already at top or visible.")
                                                     }
                                                 }
-                                                viewModel.onUserScrolledAwayChange(false)
+                                                viewModel.onUserScrolledAwayChange(false) // 获得焦点时，认为用户在底部
                                             }
                                         }
                                     },
@@ -271,9 +267,7 @@ fun ChatScreen(
                                 colors = TextFieldDefaults.colors(
                                     focusedContainerColor = MaterialTheme.colorScheme.surface,
                                     unfocusedContainerColor = MaterialTheme.colorScheme.surface,
-                                    disabledContainerColor = MaterialTheme.colorScheme.surface.copy(
-                                        alpha = 0.6f
-                                    ),
+                                    disabledContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
                                     focusedIndicatorColor = Color.Transparent,
                                     unfocusedIndicatorColor = Color.Transparent,
                                     disabledIndicatorColor = Color.Transparent,
@@ -288,51 +282,29 @@ fun ChatScreen(
                                         verticalAlignment = Alignment.CenterVertically,
                                         modifier = Modifier.padding(end = 3.dp)
                                     ) {
-                                        val showClearButton =
-                                            text.isNotBlank() && !isApiCalling
-                                        val clearButtonAreaSize = 30.dp
+                                        val showClearButton = text.isNotBlank() && !isApiCalling
+                                        val isSendEnabled = text.isNotBlank() && selectedApiConfig != null && !isApiCalling
+                                        val interactionSource = remember { MutableInteractionSource() }
+
                                         AnimatedVisibility(
                                             visible = showClearButton,
-                                            enter = fadeIn(tween(200)) + scaleIn(
-                                                tween(200),
-                                                initialScale = 0.9f
-                                            ),
-                                            exit = fadeOut(tween(150)) + scaleOut(
-                                                tween(150),
-                                                targetScale = 0.7f
-                                            )
+                                            enter = fadeIn(tween(200)) + scaleIn( tween(200), initialScale = 0.9f ),
+                                            exit = fadeOut(tween(150)) + scaleOut( tween(150), targetScale = 0.7f )
                                         ) {
-                                            Row {
-                                                Box(
-                                                    modifier = Modifier
-                                                        .size(clearButtonAreaSize)
-                                                        .background(
-                                                            MaterialTheme.colorScheme.surfaceVariant.copy(
-                                                                alpha = 0.78f
-                                                            ),
-                                                            CircleShape
-                                                        ),
-                                                    contentAlignment = Alignment.Center
-                                                ) {
-                                                    IconButton(
-                                                        onClick = { viewModel.onTextChange("") },
-                                                        modifier = Modifier.size(clearButtonAreaSize * 0.7f)
-                                                    ) {
-                                                        Icon(
-                                                            Icons.Filled.Clear,
-                                                            "Clear text",
-                                                            modifier = Modifier.size(18.dp),
-                                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                                        )
-                                                    }
-                                                }
-                                                Spacer(Modifier.width(6.dp))
+                                            IconButton(
+                                                onClick = { viewModel.onTextChange("") },
+                                                modifier = Modifier.size(30.dp) // 稍微增大点击区域
+                                            ) {
+                                                Icon(
+                                                    Icons.Filled.Clear,
+                                                    "清除内容",
+                                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    modifier = Modifier.size(20.dp) // 图标大小
+                                                )
                                             }
                                         }
-                                        val isSendEnabled =
-                                            text.isNotBlank() && selectedApiConfig != null && !isApiCalling
-                                        val interactionSource =
-                                            remember { MutableInteractionSource() }
+                                        Spacer(Modifier.width(4.dp)) // 清除和发送/停止按钮之间的间距
+
                                         IconButton(
                                             enabled = isSendEnabled || isApiCalling,
                                             interactionSource = interactionSource,
@@ -340,50 +312,29 @@ fun ChatScreen(
                                                 if (isApiCalling) {
                                                     viewModel.onCancelAPICall()
                                                 } else if (isSendEnabled) {
-                                                    keyboardController?.hide(); viewModel.onSendMessage()
+                                                    keyboardController?.hide() // 发送前隐藏键盘
+                                                    viewModel.onSendMessage()
                                                 }
-                                            }
+                                            },
+                                            modifier = Modifier.size(40.dp) // 增大发送/停止按钮的点击区域
                                         ) {
-                                            AnimatedContent(
-                                                targetState = isApiCalling,
-                                                transitionSpec = {
-                                                    fadeIn(
-                                                        animationSpec = tween(
-                                                            220,
-                                                            delayMillis = 90
-                                                        )
-                                                    ) togetherWith fadeOut(animationSpec = tween(90)) using SizeTransform(
-                                                        clip = false
-                                                    )
-                                                },
-                                                label = "SendStopIconTransition"
-                                            ) { apiCallingState ->
-                                                if (apiCallingState) {
-                                                    Box(
-                                                        contentAlignment = Alignment.Center,
-                                                        modifier = Modifier.size(24.dp)
-                                                    ) {
-                                                        CircularProgressIndicator(
-                                                            modifier = Modifier.size(20.dp),
-                                                            strokeWidth = 2.dp,
-                                                            color = MaterialTheme.colorScheme.primary
-                                                        )
-                                                        Icon(
-                                                            Icons.Filled.Close,
-                                                            "取消",
-                                                            tint = MaterialTheme.colorScheme.primary,
-                                                            modifier = Modifier.size(12.dp)
-                                                        )
-                                                    }
-                                                } else {
-                                                    Icon(
-                                                        Icons.AutoMirrored.Filled.Send,
-                                                        "发送",
-                                                        tint = if (isSendEnabled) MaterialTheme.colorScheme.primary else LocalContentColor.current.copy(
-                                                            alpha = 0.38f
-                                                        )
-                                                    )
-                                                }
+                                            if (isApiCalling) {
+                                                // 使用停止图标
+                                                Icon(
+                                                    Icons.Filled.Stop, // 使用 Stop 图标
+                                                    "停止",
+                                                    tint = MaterialTheme.colorScheme.primary, // 与发送图标颜色一致
+                                                    modifier = Modifier.size(24.dp)
+                                                )
+                                            } else {
+                                                Icon(
+                                                    Icons.AutoMirrored.Filled.Send,
+                                                    "发送",
+                                                    tint = if (isSendEnabled) MaterialTheme.colorScheme.primary else LocalContentColor.current.copy(
+                                                        alpha = 0.38f
+                                                    ),
+                                                    modifier = Modifier.size(24.dp)
+                                                )
                                             }
                                         }
                                     }
@@ -392,7 +343,6 @@ fun ChatScreen(
                         }
                     }
                 }
-                // ---- END 输入框区域 ----
             }
         }
     }

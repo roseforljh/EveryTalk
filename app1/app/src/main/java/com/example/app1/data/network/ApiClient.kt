@@ -154,7 +154,10 @@ object ApiClient {
                             if (jsonData.isNotEmpty()) {
                                 try {
                                     // Parse the JSON data using the BackendStreamChunk structure
-                                    val backendChunk = jsonParser.decodeFromString(BackendStreamChunk.serializer(), jsonData)
+                                    val backendChunk = jsonParser.decodeFromString(
+                                        BackendStreamChunk.serializer(),
+                                        jsonData
+                                    )
 
                                     // --- Map Backend Chunk to OpenAiStreamChunk ---
                                     val openAiChunk = OpenAiStreamChunk(
@@ -192,13 +195,26 @@ object ApiClient {
                                     // Handle JSON parsing errors for a specific chunk
                                     println("ApiClient: ERROR - Failed to parse stream JSON chunk. Raw JSON: '$jsonData'. Error: ${e.message}")
                                     // Close the flow with an error, including the problematic data
-                                    close(IOException("Failed to parse stream JSON chunk: '${jsonData.take(100)}...'. Error: ${e.message}", e))
+                                    close(
+                                        IOException(
+                                            "Failed to parse stream JSON chunk: '${
+                                                jsonData.take(
+                                                    100
+                                                )
+                                            }...'. Error: ${e.message}", e
+                                        )
+                                    )
                                     return@execute // Stop processing
                                 } catch (e: Exception) {
                                     // Catch unexpected errors during chunk processing
                                     println("ApiClient: ERROR - Unexpected error processing chunk: '$jsonData'. Error: ${e.message}")
                                     e.printStackTrace()
-                                    close(IOException("Unexpected error processing chunk: ${e.message}", e))
+                                    close(
+                                        IOException(
+                                            "Unexpected error processing chunk: ${e.message}",
+                                            e
+                                        )
+                                    )
                                     return@execute
                                 }
                             }
@@ -210,7 +226,12 @@ object ApiClient {
                     // Handle network errors during stream reading
                     println("ApiClient: ERROR - Network error during stream reading: ${e.message}")
                     if (!isClosedForSend) { // Check if flow already closed
-                        close(IOException("Network Error: Stream reading interrupted. ${e.message}", e))
+                        close(
+                            IOException(
+                                "Network Error: Stream reading interrupted. ${e.message}",
+                                e
+                            )
+                        )
                     }
                 } catch (e: CoroutineCancellationException) {
                     // Catch cancellation signal (likely from downstream collector or timeout)
