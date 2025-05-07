@@ -10,14 +10,16 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.filled.* // Keep Delete for SwipeToDismissBox if needed, otherwise remove
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.app1.data.models.Message
 import com.example.app1.data.models.Sender
 import com.example.app1.ui.components.HistoryTopBar
@@ -30,10 +32,15 @@ fun HistoryScreen(
     onConversationClick: (Int) -> Unit,
     onDeleteConversation: (Int) -> Unit,
     onNewChatClick: () -> Unit,
-    onClearAll: () -> Unit,
+    // REMOVED: onClearAll: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var showClearConfirmationDialog by remember { mutableStateOf(false) }
+    val appViewModel: AppViewModel = viewModel()
+    val loadedHistoryIndex by appViewModel.loadedHistoryIndex.collectAsState()
+
+    // REMOVED: var showClearConfirmationDialog by remember { mutableStateOf(false) }
+
+    val userBubbleGreyColor = remember { Color(red = 200, green = 200, blue = 200, alpha = 128) }
 
     Scaffold(
         topBar = {
@@ -44,12 +51,12 @@ fun HistoryScreen(
                 onClick = onNewChatClick,
                 modifier = Modifier.padding(16.dp),
                 shape = CircleShape,
-                containerColor = MaterialTheme.colorScheme.primary
+                containerColor = Color.Black,
+                contentColor = MaterialTheme.colorScheme.onPrimary
             ) {
                 Icon(
                     imageVector = Icons.Default.Add,
-                    contentDescription = "新建对话",
-                    tint = MaterialTheme.colorScheme.onPrimary
+                    contentDescription = "新建对话"
                 )
             }
         }
@@ -57,83 +64,53 @@ fun HistoryScreen(
         Box(
             modifier = modifier
                 .fillMaxSize()
+                .background(Color.White)
                 .padding(paddingValues)
         ) {
             ConversationHistoryList(
                 conversations = historicalConversations,
-                onConversationClick = { _, index -> onConversationClick(index) },
-                onDeleteConversation = onDeleteConversation,
+                selectedConversationIndex = loadedHistoryIndex,
+                selectedItemBackgroundColor = userBubbleGreyColor,
+                onConversationClick = { _, index ->
+                    onConversationClick(index)
+                },
+                onDeleteConversation = { index ->
+                    onDeleteConversation(index)
+                },
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 96.dp)
+                contentPadding = PaddingValues(bottom = 96.dp) // Keep padding for FAB
             )
 
-            // --- 纯白大圆角背景的清空按钮 ---
+            // REMOVED: "清空记录" button Box
+            /*
             if (historicalConversations.isNotEmpty()) {
                 Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .padding(start = 16.dp, bottom = 25.dp)
-                        .navigationBarsPadding()
-                        .background(
-                            color = MaterialTheme.colorScheme.background.copy(alpha = 1f), // 不透明白色
-                            shape = RoundedCornerShape(28.dp)
-                        )
+                    // ...
                 ) {
-                    TextButton(
-                        onClick = { showClearConfirmationDialog = true },
-                        colors = ButtonDefaults.textButtonColors(
-                            contentColor = MaterialTheme.colorScheme.error
-                        ),
-                        modifier = Modifier
-                            .padding(horizontal = 10.dp, vertical = 2.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.DeleteForever,
-                            contentDescription = null,
-                            modifier = Modifier.size(ButtonDefaults.IconSize)
-                        )
-                        Spacer(Modifier.size(ButtonDefaults.IconSpacing))
-                        Text("清空记录")
-                    }
+                    // ...
                 }
             }
-            // --- 结束新增按钮 ---
+            */
         }
 
+        // REMOVED: AlertDialog for clear confirmation
+        /*
         if (showClearConfirmationDialog) {
             AlertDialog(
-                onDismissRequest = { showClearConfirmationDialog = false },
-                title = { Text("确认操作") },
-                text = { Text("确定要清空所有聊天历史记录吗？此操作无法撤销。") },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            onClearAll()
-                            showClearConfirmationDialog = false
-                        },
-                        colors = ButtonDefaults.textButtonColors(
-                            contentColor = MaterialTheme.colorScheme.error
-                        )
-                    ) {
-                        Text("确认清空")
-                    }
-                },
-                dismissButton = {
-                    TextButton(
-                        onClick = { showClearConfirmationDialog = false }
-                    ) {
-                        Text("取消")
-                    }
-                }
+                // ...
             )
         }
+        */
     }
 }
 
+// ConversationHistoryList remains as modified in Step 1 (no trash icon)
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 private fun ConversationHistoryList(
     conversations: List<List<Message>>,
+    selectedConversationIndex: Int?,
+    selectedItemBackgroundColor: Color,
     onConversationClick: (List<Message>, index: Int) -> Unit,
     onDeleteConversation: (index: Int) -> Unit,
     modifier: Modifier = Modifier,
@@ -155,26 +132,34 @@ private fun ConversationHistoryList(
             start = 16.dp,
             end = 16.dp,
             top = 8.dp,
-            bottom = contentPadding.calculateBottomPadding() + 8.dp
+            bottom = contentPadding.calculateBottomPadding() + 8.dp // Adjusted for FAB
         )
     ) {
         itemsIndexed(
             items = conversations,
             key = { index, conversation ->
-                val firstId = conversation.firstOrNull()?.id;
-                val lastId = conversation.lastOrNull()?.id;
+                val firstId = conversation.firstOrNull()?.id
+                val lastId = conversation.lastOrNull()?.id
                 val size = conversation.size
                 if (firstId != null && lastId != null) {
                     "$firstId-$lastId-$size"
                 } else if (firstId != null) {
                     "$firstId-$size"
                 } else {
-                    index
+                    index.toString()
                 }
             }
         ) { index, conversation ->
             val currentConversation = rememberUpdatedState(conversation)
             val currentIndex = rememberUpdatedState(index)
+
+            val isSelected = selectedConversationIndex == currentIndex.value
+
+            val cardBackgroundColor by animateColorAsState(
+                targetValue = if (isSelected) selectedItemBackgroundColor else Color.White,
+                label = "cardBackgroundColor"
+            )
+
             val dismissState = rememberSwipeToDismissBoxState(
                 confirmValueChange = {
                     if (it == SwipeToDismissBoxValue.EndToStart) {
@@ -185,29 +170,26 @@ private fun ConversationHistoryList(
             )
             SwipeToDismissBox(
                 state = dismissState,
-                modifier = Modifier.padding(vertical = 4.dp),
+                modifier = Modifier
+                    .padding(vertical = 4.dp)
+                    .animateItemPlacement(),
                 enableDismissFromStartToEnd = false,
                 enableDismissFromEndToStart = true,
                 backgroundContent = {
                     val color by animateColorAsState(
                         targetValue = when (dismissState.targetValue) {
-                            SwipeToDismissBoxValue.EndToStart -> MaterialTheme.colorScheme.errorContainer; else -> MaterialTheme.colorScheme.surfaceVariant.copy(
-                                alpha = 0.5f
+                            SwipeToDismissBoxValue.EndToStart -> MaterialTheme.colorScheme.errorContainer.copy(
+                                alpha = 0.7f
                             )
+
+                            else -> Color.Transparent
                         }, label = "SwipeBackgroundColor"
-                    )
-                    val iconColor by animateColorAsState(
-                        targetValue = when (dismissState.targetValue) {
-                            SwipeToDismissBoxValue.EndToStart -> MaterialTheme.colorScheme.onErrorContainer; else -> MaterialTheme.colorScheme.onSurfaceVariant
-                        }, label = "SwipeIconColor"
                     )
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
                             .background(color, RoundedCornerShape(12.dp))
-                            .padding(horizontal = 20.dp),
-                        contentAlignment = Alignment.CenterEnd
-                    ) { Icon(Icons.Default.Delete, "删除", tint = iconColor) }
+                    ) { /* No icon here */ }
                 }
             ) {
                 Card(
@@ -220,8 +202,10 @@ private fun ConversationHistoryList(
                             )
                         },
                     shape = RoundedCornerShape(12.dp),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = cardBackgroundColor
+                    )
                 ) {
                     Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
                         val firstUser = conversation.firstOrNull { it.sender == Sender.User }?.text
@@ -235,7 +219,8 @@ private fun ConversationHistoryList(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = FontWeight.Medium
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(

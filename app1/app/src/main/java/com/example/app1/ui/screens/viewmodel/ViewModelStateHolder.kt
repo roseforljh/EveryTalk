@@ -1,12 +1,12 @@
-package com.example.app1.ui.screens.viewmodel.state
+package com.example.app1.ui.screens.viewmodel.state // 确保包名正确
 
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.snapshots.SnapshotStateMap
-import com.example.app1.data.models.ApiConfig // Assuming ApiConfig is in data.models now based on previous corrections
+import com.example.app1.data.models.ApiConfig
 import com.example.app1.data.models.Message
-import com.example.app1.ui.screens.AppView
+import com.example.app1.ui.screens.AppView // 确保 AppView 的导入路径正确
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,17 +31,18 @@ class ViewModelStateHolder {
     val expandedReasoningStates: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
     val reasoningCompleteMap: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
 
+    // Stores whether the main text animation has completed for a message ID.
+    // Key: message.id, Value: true if animation completed, false otherwise.
+    val messageAnimationStates: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
+
+
     // --- API Job Tracking ---
     var apiJob: Job? = null
 
     // --- UI Events ---
-    val _snackbarMessage = MutableSharedFlow<String>(extraBufferCapacity = 1) // Add buffer capacity
+    val _snackbarMessage = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val _userScrolledAway = MutableStateFlow(false)
-
-    // +++ New: Event flow to trigger scrolling +++
-    // Use extraBufferCapacity=1 to ensure the event is received even if the UI is briefly not collecting
     val _scrollToBottomEvent = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
-    // +++ End New +++
 
 
     fun clearForNewChat() {
@@ -50,8 +51,8 @@ class ViewModelStateHolder {
         _loadedHistoryIndex.value = null
         expandedReasoningStates.clear()
         reasoningCompleteMap.clear()
+        messageAnimationStates.clear() // Clear animation states for a new chat
         _userScrolledAway.value = false
-        // _scrollToBottomEvent.tryEmit(Unit) // Optionally trigger scroll on new chat too
     }
 
     fun clearForHistoryView() {
@@ -59,6 +60,7 @@ class ViewModelStateHolder {
         _text.value = ""
         expandedReasoningStates.clear()
         reasoningCompleteMap.clear()
+        messageAnimationStates.clear() // Clear animation states when viewing history list
         _userScrolledAway.value = false
     }
 
@@ -69,7 +71,7 @@ class ViewModelStateHolder {
     }
 
     fun clearAllUiStateForNewSession() {
-        clearForNewChat()
+        clearForNewChat() // This already clears messageAnimationStates
         _currentView.value = AppView.CurrentChat
         _showSettingsDialog.value = false
         clearApiState()

@@ -63,8 +63,6 @@ android {
     }
 }
 
-val markwonVersion = "4.6.2"
-val prism4jVersion = "2.0.0"
 
 dependencies {
     // Compose BOM

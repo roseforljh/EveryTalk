@@ -83,7 +83,7 @@ object ApiClient {
     @OptIn(ExperimentalCoroutinesApi::class) // For channelFlow
     fun streamChatResponse(request: ChatRequest): Flow<OpenAiStreamChunk> = channelFlow {
         // TODO: Replace with your actual backend proxy URL
-        val backendProxyUrl = "https://c074-39-144-129-187.ngrok-free.app/chat" // Example Ngrok URL
+        val backendProxyUrl = "https://backdaitalk-production.up.railway.app/chat" // Example Ngrok URL
         var response: HttpResponse? = null // Hold response for potential error reporting
 
         try {
