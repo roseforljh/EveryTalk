@@ -13,9 +13,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.North
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.North
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -31,17 +31,19 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalConfiguration // <-- ** Import LocalConfiguration **
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp // <-- ** Import Dp **
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
-import com.example.app1.navigation.Screen
 import com.example.app1.AppViewModel
 import com.example.app1.data.models.Message
 import com.example.app1.data.models.Sender
+import com.example.app1.navigation.Screen
 import com.example.app1.ui.components.AppTopBar
 import com.example.app1.ui.components.MessageBubble
 import kotlinx.coroutines.Job
@@ -56,7 +58,6 @@ import kotlin.math.pow
 // Constants remain the same
 private const val CHAT_SCREEN_AUTO_SCROLL_DELAY_MS = 100L
 private const val CHAT_SCREEN_STREAMING_SCROLL_INTERVAL_MS = 150L
-// private val SCROLL_UP_BUFFER_DP = 24.dp // This buffer might not be strictly needed for the new logic
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -79,10 +80,19 @@ fun ChatScreen(
     val keyboardController = LocalSoftwareKeyboardController.current
     val density = LocalDensity.current
 
-    var userManuallyScrolledUp by remember { mutableStateOf(false) } // Keep this for auto-scroll logic
+    var userManuallyScrolledUp by remember { mutableStateOf(false) }
     var ongoingScrollJob by remember { mutableStateOf<Job?>(null) }
 
-    // Custom NestedScrollConnection
+    // --- *** Calculate Max Bubble Width *** ---
+    val configuration = LocalConfiguration.current
+    val screenWidth = configuration.screenWidthDp.dp
+    val bubbleMaxWidth = remember(screenWidth) { // Remember based on screen width
+        (screenWidth * 0.8f).coerceAtMost(600.dp) // Example: 80% of screen, max 600dp
+    }
+    // --- *** End Calculate Max Bubble Width *** ---
+
+
+    // ... (NestedScrollConnection - unchanged) ...
     val overscrollConsumingConnection = remember {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
@@ -115,35 +125,26 @@ fun ChatScreen(
         }
     }
 
-    // LaunchedEffect for user scroll detection (to control auto-scroll and potentially other UI)
-    LaunchedEffect(listState) { // Simplified dependencies
+    // ... (LaunchedEffect for user scroll detection - unchanged) ...
+    LaunchedEffect(listState) {
         snapshotFlow {
             if (messages.isEmpty()) return@snapshotFlow false
             val layoutInfo = listState.layoutInfo
             val visibleItemsInfo = layoutInfo.visibleItemsInfo
             if (visibleItemsInfo.isEmpty()) return@snapshotFlow false
-
-            // For reverseLayout=true, index 0 is the newest item (bottom).
-            // Scrolled up if the first visible item is not index 0.
             val firstVisibleItemIndex = visibleItemsInfo.first().index
             firstVisibleItemIndex > 0
         }.collect { scrolledUp ->
-            Log.d(
-                "ChatScroll",
-                "SnapshotFlow - ScrolledUp (firstVisibleItemIndex > 0): $scrolledUp"
-            )
+            Log.d("ChatScroll", "SnapshotFlow - ScrolledUp: $scrolledUp")
             if (userManuallyScrolledUp != scrolledUp) {
                 userManuallyScrolledUp = scrolledUp
-                // We are not calling viewModel.onUserScrolledAwayChange(scrolledUp) for the new FAB logic
-                // but it might still be useful for other ViewModel logic if needed.
-                // viewModel.onUserScrolledAwayChange(scrolledUp) // Optionally keep if VM needs this info
                 if (scrolledUp) ongoingScrollJob?.cancel()
             }
         }
     }
 
 
-    // Auto-scroll logic (remains largely the same, relies on userManuallyScrolledUp)
+    // ... (Auto-scroll logic - unchanged) ...
     LaunchedEffect(
         messages.size,
         currentStreamingAiMessageId,
@@ -186,18 +187,14 @@ fun ChatScreen(
         }
     }
 
-    // Forced scroll to bottom event from ViewModel
+    // ... (Forced scroll to bottom event - unchanged) ...
     LaunchedEffect(Unit) {
         viewModel.scrollToBottomEvent.collectLatest {
             ongoingScrollJob?.cancel()
             ongoingScrollJob = coroutineScope.launch {
                 try {
                     listState.animateScrollToItem(0)
-                    if (userManuallyScrolledUp) {
-                        userManuallyScrolledUp = false
-                        // Optionally update VM if it needs this state:
-                        // viewModel.onUserScrolledAwayChange(false)
-                    }
+                    if (userManuallyScrolledUp) userManuallyScrolledUp = false
                 } catch (e: Exception) {
                     Log.e("ChatScroll", "Forced scroll error: ${e.message}", e)
                 }
@@ -205,7 +202,7 @@ fun ChatScreen(
         }
     }
 
-    // Collapse reasoning
+    // ... (Collapse reasoning - unchanged) ...
     LaunchedEffect(messages.size, reasoningCompleteMap) {
         messages.forEach { msg ->
             if (msg.sender == Sender.AI && !msg.reasoning.isNullOrBlank()) {
@@ -217,14 +214,9 @@ fun ChatScreen(
         }
     }
 
-    // --- *** NEW SCROLL TO BOTTOM BUTTON LOGIC *** ---
+    // ... (Scroll to bottom button logic - unchanged) ...
     val isUserActuallyScrolling = listState.isScrollInProgress
     val firstVisibleItemIndex = listState.firstVisibleItemIndex
-
-    // Button is visible if:
-    // 1. There are messages.
-    // 2. The first visible item is NOT the newest message (index 0 for reverseLayout).
-    // 3. The user is not currently dragging/flinging the list.
     val scrollToBottomButtonVisible by remember(
         messages.size,
         firstVisibleItemIndex,
@@ -232,7 +224,7 @@ fun ChatScreen(
     ) {
         derivedStateOf {
             val visible = messages.isNotEmpty() &&
-                    firstVisibleItemIndex > 0 && // Key change: directly use firstVisibleItemIndex
+                    firstVisibleItemIndex > 0 &&
                     !isUserActuallyScrolling
             Log.d(
                 "FAB_Visibility",
@@ -241,7 +233,6 @@ fun ChatScreen(
             visible
         }
     }
-    // --- *** END OF NEW SCROLL TO BOTTOM BUTTON LOGIC *** ---
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -255,10 +246,12 @@ fun ChatScreen(
         },
         floatingActionButton = {
             AnimatedVisibility(
-                visible = scrollToBottomButtonVisible, // Use the new visibility state
+                visible = scrollToBottomButtonVisible,
                 enter = fadeIn(animationSpec = tween(300)) + scaleIn(
-                    animationSpec = tween(300, easing = FastOutSlowInEasing),
-                    initialScale = 0.8f
+                    animationSpec = tween(
+                        300,
+                        easing = FastOutSlowInEasing
+                    ), initialScale = 0.8f
                 ),
                 exit = fadeOut(animationSpec = tween(200)) + scaleOut(
                     animationSpec = tween(200),
@@ -267,26 +260,17 @@ fun ChatScreen(
             ) {
                 FloatingActionButton(
                     onClick = {
-                        // When clicked, we want to scroll to bottom and also update userManuallyScrolledUp
-                        // so that auto-scroll can resume if needed (e.g. for streaming).
                         coroutineScope.launch {
                             listState.animateScrollToItem(0)
-                            // Since we scrolled to bottom, user is no longer "manually scrolled up"
-                            if (userManuallyScrolledUp) {
-                                userManuallyScrolledUp = false
-                            }
+                            if (userManuallyScrolledUp) userManuallyScrolledUp = false
                         }
                     },
-                    modifier = Modifier
-                        .padding(bottom = 160.dp), // Adjust as needed based on your input field height
+                    modifier = Modifier.padding(bottom = 160.dp),
                     shape = RoundedCornerShape(16.dp),
                     containerColor = Color.White,
                     contentColor = Color.Black
                 ) {
-                    Icon(
-                        Icons.Filled.ArrowDownward,
-                        contentDescription = "滚动到底部"
-                    )
+                    Icon(Icons.Filled.ArrowDownward, contentDescription = "滚动到底部")
                 }
             }
         },
@@ -331,6 +315,7 @@ fun ChatScreen(
                         isReasoningComplete = reasoningCompleteMap[message.id] ?: false,
                         isManuallyExpanded = expandedReasoningStates[message.id] ?: false,
                         onToggleReasoning = { viewModel.onToggleReasoningExpand(message.id) },
+                        maxWidth = bubbleMaxWidth, // <-- *** PASS MAX WIDTH ***
                         showLoadingBubble = (message.sender == Sender.AI &&
                                 message.id == currentStreamingAiMessageId &&
                                 isApiCalling &&
@@ -341,6 +326,7 @@ fun ChatScreen(
                 }
                 if (messages.isEmpty()) {
                     item {
+                        // ... (Empty state "你好..." - unchanged) ...
                         Box(
                             modifier = Modifier
                                 .fillParentMaxSize()
@@ -357,77 +343,71 @@ fun ChatScreen(
                                     color = Color.Black
                                 )
                                 Text(text = "你好", style = textStyle)
-                                val initialAmplitudeDp = (-8).dp
-                                val amplitudeDecayFactor = 0.7f
-                                val numCycles = 5
-                                val initialBouncePhaseDurationMs = 250
-                                val finalBouncePhaseDurationMs = 600
-                                val dotInterDelayMs = 150L
+                                val initialAmplitudeDp = (-8).dp;
+                                val amplitudeDecayFactor = 0.7f;
+                                val numCycles = 5;
+                                val initialBouncePhaseDurationMs = 250;
+                                val finalBouncePhaseDurationMs = 600;
+                                val dotInterDelayMs = 150L;
                                 val initialAmplitudePx = with(density) { initialAmplitudeDp.toPx() }
-                                val dot1OffsetY = remember { Animatable(0f) }
-                                val dot2OffsetY = remember { Animatable(0f) }
+                                val dot1OffsetY = remember { Animatable(0f) };
+                                val dot2OffsetY = remember { Animatable(0f) };
                                 val dot3OffsetY = remember { Animatable(0f) }
                                 LaunchedEffect(Unit) {
                                     dot1OffsetY.snapTo(0f); dot2OffsetY.snapTo(0f); dot3OffsetY.snapTo(
                                     0f
+                                ); repeat(numCycles) { cycleIndex ->
+                                    val currentCycleAmplitudePx =
+                                        initialAmplitudePx * (amplitudeDecayFactor.pow(cycleIndex));
+                                    val progress =
+                                        if (numCycles > 1) cycleIndex.toFloat() / (numCycles - 1) else 0f;
+                                    val currentBouncePhaseDurationMs =
+                                        (initialBouncePhaseDurationMs + (finalBouncePhaseDurationMs - initialBouncePhaseDurationMs) * progress).toInt(); coroutineScope {
+                                    launch {
+                                        dot1OffsetY.animateTo(
+                                            currentCycleAmplitudePx,
+                                            tween(
+                                                currentBouncePhaseDurationMs,
+                                                easing = FastOutSlowInEasing
+                                            )
+                                        ); dot1OffsetY.animateTo(
+                                        0f,
+                                        tween(
+                                            currentBouncePhaseDurationMs,
+                                            easing = FastOutSlowInEasing
+                                        )
+                                    )
+                                    }; launch {
+                                    delay(dotInterDelayMs); dot2OffsetY.animateTo(
+                                    currentCycleAmplitudePx,
+                                    tween(
+                                        currentBouncePhaseDurationMs,
+                                        easing = FastOutSlowInEasing
+                                    )
+                                ); dot2OffsetY.animateTo(
+                                    0f,
+                                    tween(
+                                        currentBouncePhaseDurationMs,
+                                        easing = FastOutSlowInEasing
+                                    )
                                 )
-                                    repeat(numCycles) { cycleIndex ->
-                                        val currentCycleAmplitudePx =
-                                            initialAmplitudePx * (amplitudeDecayFactor.pow(
-                                                cycleIndex
-                                            ))
-                                        val progress =
-                                            if (numCycles > 1) cycleIndex.toFloat() / (numCycles - 1) else 0f
-                                        val currentBouncePhaseDurationMs =
-                                            (initialBouncePhaseDurationMs + (finalBouncePhaseDurationMs - initialBouncePhaseDurationMs) * progress).toInt()
-                                        coroutineScope {
-                                            launch {
-                                                dot1OffsetY.animateTo(
-                                                    currentCycleAmplitudePx,
-                                                    tween(
-                                                        currentBouncePhaseDurationMs,
-                                                        easing = FastOutSlowInEasing
-                                                    )
-                                                ); dot1OffsetY.animateTo(
-                                                0f,
-                                                tween(
-                                                    currentBouncePhaseDurationMs,
-                                                    easing = FastOutSlowInEasing
-                                                )
-                                            )
-                                            }
-                                            launch {
-                                                delay(dotInterDelayMs); dot2OffsetY.animateTo(
-                                                currentCycleAmplitudePx,
-                                                tween(
-                                                    currentBouncePhaseDurationMs,
-                                                    easing = FastOutSlowInEasing
-                                                )
-                                            ); dot2OffsetY.animateTo(
-                                                0f,
-                                                tween(
-                                                    currentBouncePhaseDurationMs,
-                                                    easing = FastOutSlowInEasing
-                                                )
-                                            )
-                                            }
-                                            launch {
-                                                delay(dotInterDelayMs * 2); dot3OffsetY.animateTo(
-                                                currentCycleAmplitudePx,
-                                                tween(
-                                                    currentBouncePhaseDurationMs,
-                                                    easing = FastOutSlowInEasing
-                                                )
-                                            ); dot3OffsetY.animateTo(
-                                                0f,
-                                                tween(
-                                                    currentBouncePhaseDurationMs,
-                                                    easing = FastOutSlowInEasing
-                                                )
-                                            )
-                                            }
-                                        }
-                                    }
+                                }; launch {
+                                    delay(dotInterDelayMs * 2); dot3OffsetY.animateTo(
+                                    currentCycleAmplitudePx,
+                                    tween(
+                                        currentBouncePhaseDurationMs,
+                                        easing = FastOutSlowInEasing
+                                    )
+                                ); dot3OffsetY.animateTo(
+                                    0f,
+                                    tween(
+                                        currentBouncePhaseDurationMs,
+                                        easing = FastOutSlowInEasing
+                                    )
+                                )
+                                }
+                                }
+                                }
                                 }
                                 Text(
                                     ".",
@@ -448,9 +428,9 @@ fun ChatScreen(
                         }
                     }
                 }
-            }
+            } // End LazyColumn
 
-            // Input Area (remains the same)
+            // ... (Input Area - unchanged) ...
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -488,28 +468,28 @@ fun ChatScreen(
                         focusedLabelColor = MaterialTheme.colorScheme.primary,
                         unfocusedLabelColor = Color.Gray
                     ),
-                    minLines = 1, maxLines = 5,
+                    minLines = 1,
+                    maxLines = 5,
                     trailingIcon = {
-                        val showClearButton = text.isNotBlank() && !isApiCalling
-                        AnimatedVisibility(
-                            visible = showClearButton,
-                            enter = fadeIn(tween(200)) + scaleIn(tween(200), initialScale = 0.9f),
-                            exit = fadeOut(tween(150)) + scaleOut(tween(150), targetScale = 0.7f)
+                        val showClearButton =
+                            text.isNotBlank() && !isApiCalling; AnimatedVisibility(
+                        visible = showClearButton,
+                        enter = fadeIn(tween(200)) + scaleIn(tween(200), initialScale = 0.9f),
+                        exit = fadeOut(tween(150)) + scaleOut(tween(150), targetScale = 0.7f)
+                    ) {
+                        IconButton(
+                            onClick = { viewModel.onTextChange("") },
+                            modifier = Modifier.size(30.dp)
                         ) {
-                            IconButton(
-                                onClick = { viewModel.onTextChange("") },
-                                modifier = Modifier.size(30.dp)
-                            ) {
-                                Icon(
-                                    Icons.Filled.Clear,
-                                    "清除内容",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
+                            Icon(
+                                Icons.Filled.Clear,
+                                "清除内容",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp)
+                            )
                         }
                     }
-                )
+                    })
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -537,6 +517,6 @@ fun ChatScreen(
                     }
                 }
             }
-        }
-    }
+        } // End Root Column
+    } // End Scaffold
 }

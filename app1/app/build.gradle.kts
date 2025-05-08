@@ -54,20 +54,14 @@ android {
     buildFeatures {
         compose = true
     }
-    packagingOptions { // packaging 重命名为 packagingOptions
-        resources {
-            excludes += "/META-INF/{AL2.0,LGPL2.1}"
-            excludes += "/META-INF/LICENSE.md"
-            excludes += "/META-INF/LICENSE-notice.md"
-        }
-    }
+
 }
 
 
 dependencies {
     // Compose BOM
-    implementation(platform("androidx.compose:compose-bom:2024.05.00")) // 使用你指定的版本
-    androidTestImplementation(platform("androidx.compose:compose-bom:2024.05.00"))
+    implementation(platform("androidx.compose:compose-bom:2025.05.00")) // 使用你指定的版本
+    androidTestImplementation(platform("androidx.compose:compose-bom:2025.05.00"))
 
     // Compose UI
     implementation(libs.androidx.ui) // 假设 libs.versions.toml 中有这些别名，否则直接写字符串
@@ -78,6 +72,11 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.compose.foundation:foundation") // 这个 BOM 应该已经包含了，可以考虑移除显式声明
     implementation("androidx.compose.animation:animation")
+    implementation("androidx.compose.ui:ui-text:1.8.1")
+    implementation("androidx.compose.ui:ui:1.8.1")
+    implementation("androidx.compose.material3:material3:1.3.2")
+    debugImplementation("androidx.compose.ui:ui-tooling:1.8.1")
+    implementation("androidx.compose.ui:ui-tooling-preview:1.8.1")
 
     // Core Android & Lifecycle (从你的 libs.versions.toml 获取)
     implementation(libs.androidx.core.ktx)
@@ -108,9 +107,6 @@ dependencies {
 
 
 
-
-
-
     // Testing
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
@@ -121,5 +117,8 @@ dependencies {
 
 
     implementation("androidx.navigation:navigation-compose:2.7.7")
+
+    implementation("com.halilibo.compose-richtext:richtext-ui-material3:0.20.0") // 或者最新版本
+    implementation("com.halilibo.compose-richtext:richtext-commonmark:0.20.0") // Markdown 解析器
 
 }
