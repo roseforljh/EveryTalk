@@ -12,7 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.offset // Ensure this is androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -23,7 +23,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Offset // Ensure this is androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
@@ -42,25 +42,20 @@ import kotlinx.coroutines.launch
 import kotlin.coroutines.cancellation.CancellationException
 
 // --- Constants for Reasoning Scroll ---
-// How often to attempt to scroll during streaming.
-private const val REASONING_STREAM_SCROLL_ATTEMPT_INTERVAL_MS = 100L // Try to scroll every 100ms
-
-// Animation duration for each incremental scroll during streaming.
-private const val REASONING_STREAM_SCROLL_ANIMATION_MS = 250 // Animate the scroll over 250ms
-
-// Animation duration for the final scroll when reasoning is complete.
+private const val REASONING_STREAM_SCROLL_ATTEMPT_INTERVAL_MS = 100L
+private const val REASONING_STREAM_SCROLL_ANIMATION_MS = 250
 private const val REASONING_COMPLETE_SCROLL_ANIMATION_MS = 300
 
-
-// Typewriter delay remains the same
+// Typewriter delay for different parts
 private const val TYPEWRITER_DELAY_MS_REASONING = 15L
-
+private const val TYPEWRITER_DELAY_MS_MAIN_CONTENT = 30L // Delay for main message content
 
 @OptIn(ExperimentalAnimationApi::class)
 @Composable
 fun MessageBubble(
     message: Message,
     viewModel: AppViewModel,
+    isMainContentStreaming: Boolean, // <-- New parameter from ChatScreen
     isReasoningStreaming: Boolean,
     isReasoningComplete: Boolean,
     isManuallyExpanded: Boolean,
@@ -70,7 +65,7 @@ fun MessageBubble(
 ) {
     Log.d(
         "MessageBubbleRecomp",
-        "Bubble ID: ${message.id}, Text len: ${message.text.length}, Reasoning len: ${message.reasoning?.length ?: 0}, isStreaming: $isReasoningStreaming, isComplete: $isReasoningComplete"
+        "Bubble ID: ${message.id}, Text len: ${message.text.length}, Reasoning len: ${message.reasoning?.length ?: 0}, isMainStreaming: $isMainContentStreaming, isReasoningStreaming: $isReasoningStreaming, isComplete: $isReasoningComplete, contentStarted: ${message.contentStarted}"
     )
 
     val isAI = message.sender == Sender.AI
@@ -83,28 +78,171 @@ fun MessageBubble(
         mutableStateOf(animationInitiallyPlayedByVM)
     }
 
-    var displayedMainTextState by remember(currentMessageId, animationInitiallyPlayedByVM, isAI) {
+    // State for the displayed main text, potentially animated by typewriter
+    var displayedMainTextState by remember(currentMessageId) {
         mutableStateOf(
-            if ((animationInitiallyPlayedByVM || !isAI) && message.text.isNotBlank()) {
-                message.text.trim()
+            if (isAI && isMainContentStreaming && message.contentStarted && !message.isError) {
+                "" // Start empty if AI is streaming main content
             } else {
-                ""
+                message.text.trim() // Otherwise, show current full text
             }
         )
     }
 
+    // State for displayed reasoning text (remains the same)
     var displayedReasoningText by remember(currentMessageId) {
         mutableStateOf(if (message.contentStarted) message.reasoning?.trim() ?: "" else "")
     }
 
     val showMainBubbleLoadingDots = isAI &&
-            !showLoadingBubble &&
+            !showLoadingBubble && // This is the "overall loading" bubble, not the dots in an empty text bubble
             !message.isError &&
-            message.text.isBlank() &&
-            !message.contentStarted &&
-            !localAnimationTriggeredOrCompleted
+            !message.contentStarted && // Only show if content stream hasn't even begun for this message
+            (message.text.isBlank() && message.reasoning.isNullOrBlank()) // And there's no content at all in the Message object yet
 
-    // LaunchedEffect for Reasoning Text (Typewriter) - NO CHANGE HERE
+
+    // --- LaunchedEffect for Main Text (Typewriter for AI, direct set for User/Completed AI) ---
+    LaunchedEffect(
+        currentMessageId,
+        message.text,             // Full target text from ViewModel
+        isMainContentStreaming,   // Controls whether typewriter should run
+        isAI,
+        message.contentStarted,
+        message.isError,
+        showLoadingBubble         // If true, this bubble shouldn't show text
+    ) {
+        if (showLoadingBubble) { // If the global loading bubble is shown, don't process text here
+            if (displayedMainTextState.isNotEmpty()) displayedMainTextState =
+                "" // Clear if any was there
+            return@LaunchedEffect
+        }
+
+        val fullMainText = message.text.trim()
+
+        if (message.isError) {
+            if (displayedMainTextState != fullMainText) {
+                displayedMainTextState = fullMainText // Show error message immediately
+            }
+            if (!localAnimationTriggeredOrCompleted) {
+                localAnimationTriggeredOrCompleted = true
+                if (!animationInitiallyPlayedByVM) viewModel.onAnimationComplete(currentMessageId)
+                Log.d(
+                    "MessageBubble",
+                    "Error text set, animation marked completed for $currentMessageId."
+                )
+            }
+            return@LaunchedEffect
+        }
+
+        if (isAI && isMainContentStreaming && message.contentStarted) {
+            // AI Message, Main Content is Streaming, and content has started
+            if (fullMainText.isNotEmpty()) {
+                if (displayedMainTextState.length < fullMainText.length) {
+                    var currentDisplay = displayedMainTextState
+                    try {
+                        for (i in currentDisplay.length until fullMainText.length) {
+                            if (!isActive) throw CancellationException("Main text typewriter for $currentMessageId cancelled (not active)")
+                            currentDisplay = fullMainText.substring(0, i + 1)
+                            displayedMainTextState = currentDisplay
+                            delay(TYPEWRITER_DELAY_MS_MAIN_CONTENT)
+                        }
+                        if (isActive && displayedMainTextState != fullMainText) {
+                            displayedMainTextState =
+                                fullMainText // Ensure full text is set if loop completes
+                        }
+                    } catch (e: CancellationException) {
+                        Log.d(
+                            "MessageBubble",
+                            "Main text typewriter for $currentMessageId cancelled: ${e.message}"
+                        )
+                        if (isActive && displayedMainTextState != fullMainText) {
+                            displayedMainTextState =
+                                fullMainText // Ensure full text is set on cancellation
+                        }
+                    } finally {
+                        if (isActive) {
+                            // Mark animation as complete once typing finishes or is cancelled but text is present
+                            if (!localAnimationTriggeredOrCompleted && displayedMainTextState.isNotBlank()) {
+                                localAnimationTriggeredOrCompleted = true
+                                if (!animationInitiallyPlayedByVM) {
+                                    viewModel.onAnimationComplete(currentMessageId)
+                                }
+                                Log.d(
+                                    "MessageBubble",
+                                    "Main text typewriter animation marked completed for $currentMessageId."
+                                )
+                            }
+                        }
+                    }
+                } else if (displayedMainTextState != fullMainText) {
+                    // Stream flag is on, but displayed text might be out of sync (e.g. message updated)
+                    displayedMainTextState = fullMainText
+                    if (!localAnimationTriggeredOrCompleted && fullMainText.isNotEmpty()) {
+                        localAnimationTriggeredOrCompleted = true
+                        if (!animationInitiallyPlayedByVM) viewModel.onAnimationComplete(
+                            currentMessageId
+                        )
+                        Log.d(
+                            "MessageBubble",
+                            "Main text (synced during stream) marked completed for $currentMessageId."
+                        )
+                    }
+                } else if (fullMainText.isNotEmpty() && !localAnimationTriggeredOrCompleted) {
+                    // Already fully displayed but not marked complete
+                    localAnimationTriggeredOrCompleted = true
+                    if (!animationInitiallyPlayedByVM) viewModel.onAnimationComplete(
+                        currentMessageId
+                    )
+                    Log.d(
+                        "MessageBubble",
+                        "Main text (already full, stream flag on) marked completed for $currentMessageId."
+                    )
+                }
+            } else { // fullMainText is empty, but we are "streaming" (e.g. waiting for first chunk)
+                if (displayedMainTextState.isNotEmpty()) displayedMainTextState =
+                    "" // Clear if anything was there
+                // Don't mark localAnimationTriggeredOrCompleted yet if fullMainText is empty, wait for content
+            }
+        } else if (isAI && !message.contentStarted && displayedMainTextState.isNotEmpty()) {
+            // AI message, but content has not started (or was reset), clear any displayed text
+            displayedMainTextState = ""
+            // localAnimationTriggeredOrCompleted should ideally be false if content is reset
+            // but this effect might run multiple times. The key is initial state.
+        } else {
+            // Not Streaming AI Main Content OR User Message OR AI content not started (but not actively streaming)
+            // Set text directly.
+            if (displayedMainTextState != fullMainText) {
+                displayedMainTextState = fullMainText
+            }
+
+            // Mark animation complete if content is present or it's a user message
+            // or if AI content has started and text is confirmed blank (e.g. only reasoning)
+            if (!localAnimationTriggeredOrCompleted) {
+                if (fullMainText.isNotBlank() || !isAI) { // User message or AI with text
+                    localAnimationTriggeredOrCompleted = true
+                    if (!animationInitiallyPlayedByVM) viewModel.onAnimationComplete(
+                        currentMessageId
+                    )
+                    Log.d(
+                        "MessageBubble",
+                        "Main text (direct set) animation marked completed for $currentMessageId."
+                    )
+                } else if (isAI && message.contentStarted && fullMainText.isBlank()) { // AI, content started, but text is empty
+                    localAnimationTriggeredOrCompleted = true
+                    if (!animationInitiallyPlayedByVM) viewModel.onAnimationComplete(
+                        currentMessageId
+                    )
+                    Log.d(
+                        "MessageBubble",
+                        "Main text (direct set, empty AI) marked completed for $currentMessageId."
+                    )
+                }
+            }
+        }
+    }
+
+
+    // LaunchedEffect for Reasoning Text (Typewriter) - REMAINS THE SAME
     LaunchedEffect(
         currentMessageId,
         message.reasoning,
@@ -135,61 +273,25 @@ fun MessageBubble(
                             displayedReasoningText = fullReasoningText
                         }
                     }
-                } else {
+                } else { // Not streaming or already past full length
                     if (displayedReasoningText != fullReasoningText) {
                         displayedReasoningText = fullReasoningText
                     }
                 }
-            } else {
+            } else { // fullReasoningText is empty
                 if (displayedReasoningText.isNotEmpty()) {
                     displayedReasoningText = ""
                 }
             }
         } else if (isAI && !message.contentStarted && displayedReasoningText.isNotEmpty()) {
+            // Content not started for AI, clear reasoning
             displayedReasoningText = ""
         } else if (message.reasoning.isNullOrBlank() && displayedReasoningText.isNotEmpty()) {
+            // Reasoning is null/blank in source, clear displayed
             displayedReasoningText = ""
         }
     }
 
-    // LaunchedEffect for Main Text (Direct Set) - NO CHANGE HERE
-    LaunchedEffect(
-        currentMessageId,
-        message.text,
-        message.contentStarted,
-        isAI,
-        showLoadingBubble,
-        message.isError
-    ) {
-        val fullMainText = message.text.trim()
-        if (showLoadingBubble) return@LaunchedEffect
-        if (message.contentStarted || !isAI) {
-            if (displayedMainTextState != fullMainText) {
-                displayedMainTextState = fullMainText
-            }
-            if (!localAnimationTriggeredOrCompleted && (fullMainText.isNotBlank() || message.isError)) {
-                localAnimationTriggeredOrCompleted = true
-                if (!animationInitiallyPlayedByVM) {
-                    viewModel.onAnimationComplete(currentMessageId)
-                }
-                Log.d(
-                    "MessageBubble",
-                    "Main text 'animation' (direct set) marked completed for $currentMessageId."
-                )
-            } else if (!localAnimationTriggeredOrCompleted && fullMainText.isBlank() && isAI && !message.isError && message.contentStarted) {
-                localAnimationTriggeredOrCompleted = true
-                if (!animationInitiallyPlayedByVM) {
-                    viewModel.onAnimationComplete(currentMessageId)
-                }
-                Log.d(
-                    "MessageBubble",
-                    "Main text (empty) 'animation' marked completed for AI $currentMessageId."
-                )
-            }
-        } else if (!message.contentStarted && isAI && displayedMainTextState.isNotEmpty()) {
-            displayedMainTextState = ""
-        }
-    }
 
     val userBubbleGreyColor = Color(red = 200, green = 200, blue = 200, alpha = 128)
     val aiBubbleColor = Color.White
@@ -202,7 +304,7 @@ fun MessageBubble(
         modifier = modifier.fillMaxWidth()
     ) {
         if (isAI && showLoadingBubble) {
-            // ... Loading bubble ... (no change)
+            // ... Loading bubble ... (no change from your provided code)
             Row(
                 modifier = Modifier
                     .padding(vertical = 3.dp)
@@ -229,14 +331,14 @@ fun MessageBubble(
                     }
                 }
             }
-            return@Column
+            return@Column // Exit if global loading bubble is shown
         }
 
         val shouldShowReasoningToggle =
-            isAI && message.contentStarted && (message.reasoning != null || isReasoningStreaming)
+            isAI && message.contentStarted && (message.reasoning != null || isReasoningStreaming) // Keep original logic
 
         if (shouldShowReasoningToggle) {
-            // ... Reasoning Toggle Button ... (no change)
+            // ... Reasoning Toggle Button ... (no change from your provided code)
             val showThreeDotAnimationOnButton =
                 isReasoningStreaming && !isReasoningComplete && !message.isError
             Box(
@@ -302,61 +404,46 @@ fun MessageBubble(
             ) {
                 Surface(
                     shape = RoundedCornerShape(12.dp),
-                    color = userBubbleGreyColor,
+                    color = userBubbleGreyColor, // Or another distinct color for reasoning
                     tonalElevation = 1.dp,
                     shadowElevation = 0.dp,
                     modifier = Modifier
                         .heightIn(max = 200.dp)
                         .wrapContentWidth(align = Alignment.Start)
-                        .align(Alignment.Start)
+                        .align(Alignment.Start) // Ensure reasoning bubble aligns start for AI
                 ) {
                     val scrollState = rememberScrollState()
                     val coroutineScope = rememberCoroutineScope()
                     var autoScrollJob by remember { mutableStateOf<Job?>(null) }
                     var userHasScrolledUp by remember { mutableStateOf(false) }
 
-                    // --- MODIFIED: Auto-scroll for reasoning text during streaming ---
+                    // Auto-scroll for reasoning text during streaming (no change from your provided code)
                     LaunchedEffect(
-                        currentMessageId, // Ensure job restarts for new messages
+                        currentMessageId,
                         isReasoningStreaming,
                         userHasScrolledUp,
                         message.contentStarted,
                         message.isError
-                        // Note: Not including displayedReasoningText or scrollState.maxValue directly as keys
-                        // for the *looping* job, to prevent job cancellation/restart on every char.
-                        // The loop itself will check scrollState.value and scrollState.maxValue.
                     ) {
                         if (isReasoningStreaming && message.contentStarted && !userHasScrolledUp && !message.isError) {
-                            autoScrollJob?.cancel() // Cancel any existing job
+                            autoScrollJob?.cancel()
                             autoScrollJob = coroutineScope.launch {
                                 Log.d(
                                     "ReasoningScroll",
                                     "Auto-scroll job STARTED for ${message.id}"
                                 )
                                 try {
-                                    while (isActive) { // Loop while this job is active and conditions met
-                                        // Give a moment for potential layout changes and text updates
+                                    while (isActive) {
                                         delay(REASONING_STREAM_SCROLL_ATTEMPT_INTERVAL_MS)
-
-                                        if (!isActive) break // Check again after delay
-
+                                        if (!isActive) break
                                         val currentMaxValue = scrollState.maxValue
                                         if (scrollState.value < currentMaxValue) {
-                                            Log.d(
-                                                "ReasoningScroll",
-                                                "Scrolling ${message.id} from ${scrollState.value} to $currentMaxValue"
-                                            )
                                             scrollState.animateScrollTo(
                                                 currentMaxValue,
                                                 animationSpec = tween(
                                                     durationMillis = REASONING_STREAM_SCROLL_ANIMATION_MS,
-                                                    easing = LinearEasing // Use LinearEasing for smoother continuous scroll
+                                                    easing = LinearEasing
                                                 )
-                                            )
-                                        } else {
-                                            Log.d(
-                                                "ReasoningScroll",
-                                                "Scroll unnecessary for ${message.id}: value=${scrollState.value}, max=$currentMaxValue"
                                             )
                                         }
                                     }
@@ -373,31 +460,29 @@ fun MessageBubble(
                                 }
                             }
                         } else {
-                            autoScrollJob?.cancel() // Conditions not met, cancel job
+                            autoScrollJob?.cancel()
                             Log.d(
                                 "ReasoningScroll",
-                                "Auto-scroll conditions NOT MET for ${message.id}. Cancelling job. Streaming: $isReasoningStreaming, ScrolledUp: $userHasScrolledUp"
+                                "Auto-scroll conditions NOT MET for ${message.id}. Cancelling. Streaming: $isReasoningStreaming, ScrolledUp: $userHasScrolledUp"
                             )
                         }
                     }
 
-                    // Scroll to bottom when reasoning is fully complete (separate from streaming scroll)
+                    // Scroll to bottom when reasoning is fully complete (no change from your provided code)
                     LaunchedEffect(
                         currentMessageId,
                         isReasoningComplete,
-                        displayedReasoningText, // Trigger when all text is displayed
+                        displayedReasoningText,
                         message.isError
                     ) {
                         if (isReasoningComplete && !message.isError && displayedReasoningText == (message.reasoning?.trim()
                                 ?: "")
                         ) {
-                            // Ensure the streaming scroll job is stopped before attempting final scroll
                             autoScrollJob?.cancel()
                             Log.d(
                                 "ReasoningScroll",
                                 "Reasoning COMPLETE for ${message.id}. Final scroll."
                             )
-                            // Small delay to ensure UI has settled after text is fully displayed
                             delay(100)
                             if (isActive && scrollState.value < scrollState.maxValue) {
                                 scrollState.animateScrollTo(
@@ -411,20 +496,19 @@ fun MessageBubble(
                         }
                     }
 
-                    val nestedScrollConnection = remember {
+                    val nestedScrollConnection = remember { // (no change from your provided code)
                         object : NestedScrollConnection {
                             override fun onPreScroll(
                                 available: Offset,
                                 source: NestedScrollSource
                             ): Offset {
                                 if (source == NestedScrollSource.Drag && available.y > 0 && scrollState.canScrollForward) {
-                                    if (!userHasScrolledUp) { // Only log and set if state changes
+                                    if (!userHasScrolledUp) {
                                         userHasScrolledUp = true
                                         Log.d(
                                             "ReasoningScroll",
                                             "User scrolled UP ${message.id}. Auto-scroll DISABLED."
                                         )
-                                        // autoScrollJob is cancelled by the LaunchedEffect reacting to userHasScrolledUp
                                     }
                                 }
                                 return Offset.Zero
@@ -436,13 +520,12 @@ fun MessageBubble(
                                 source: NestedScrollSource
                             ): Offset {
                                 if (source == NestedScrollSource.Drag && available.y < 0 && (scrollState.value >= scrollState.maxValue - 1)) {
-                                    if (userHasScrolledUp) { // Only log and set if state changes
+                                    if (userHasScrolledUp) {
                                         userHasScrolledUp = false
                                         Log.d(
                                             "ReasoningScroll",
                                             "User scrolled to BOTTOM ${message.id}. Auto-scroll RE-ENABLED (if streaming)."
                                         )
-                                        // The LaunchedEffect will pick up userHasScrolledUp=false and restart job if streaming
                                     }
                                 }
                                 return Offset.Zero
@@ -450,7 +533,7 @@ fun MessageBubble(
                         }
                     }
 
-                    Column(
+                    Column( // (no change from your provided code)
                         modifier = Modifier
                             .fillMaxWidth()
                             .nestedScroll(nestedScrollConnection)
@@ -471,10 +554,18 @@ fun MessageBubble(
             }
         }
 
-        val shouldShowMainBubble =
-            !showLoadingBubble && ((message.contentStarted || !isAI) || message.isError)
-        if (shouldShowMainBubble) {
-            // ... Main Message Bubble Surface and Box ... (no change)
+
+        // --- Main Message Bubble ---
+        // Condition to show the main bubble surface
+        val shouldShowMainBubbleSurface = !showLoadingBubble && // Not the global loading bubble
+                (
+                        (isAI && message.contentStarted) || // AI message and content has started (even if text is initially empty for typewriter)
+                                !isAI || // User message always shows
+                                message.isError // Error message always shows
+                        )
+
+
+        if (shouldShowMainBubbleSurface) {
             val actualBubbleColor = if (isAI) aiBubbleColor else userBubbleGreyColor
             val actualContentColor =
                 if (message.isError && isAI) errorTextColor else contentBlackColor
@@ -482,8 +573,8 @@ fun MessageBubble(
             Surface(
                 color = actualBubbleColor,
                 contentColor = actualContentColor,
-                shadowElevation = 0.dp,
-                tonalElevation = if (isAI) 0.dp else 1.dp,
+                shadowElevation = 0.dp, // Subtle shadow for AI bubbles
+                tonalElevation = if (isAI) 0.dp else 1.dp,  // Or use elevation for AI too if preferred
                 shape = RoundedCornerShape(18.dp),
                 modifier = Modifier
                     .padding(
@@ -500,16 +591,17 @@ fun MessageBubble(
                     modifier = Modifier
                         .padding(horizontal = 12.dp, vertical = 8.dp)
                         .wrapContentWidth()
-                        .defaultMinSize(minHeight = 28.dp)
+                        .defaultMinSize(minHeight = 28.dp) // Ensure bubble has some min height
                 ) {
-                    if (showMainBubbleLoadingDots) {
+                    if (showMainBubbleLoadingDots) { // This is for the dots *before* contentStarted
                         ThreeDotsLoadingAnimation(
-                            dotColor = MaterialTheme.colorScheme.primary,
+                            dotColor = MaterialTheme.colorScheme.primary, // Or contentBlackColor
                             modifier = Modifier
-                                .align(Alignment.Center)
-                                .offset(y = (-6).dp)
+                                .align(Alignment.Center) // Or Alignment.CenterStart
+                                .offset(y = (-6).dp) // Adjust as needed
                         )
-                    } else if (displayedMainTextState.isNotBlank() || (isAI && message.isError)) {
+                    } else if (displayedMainTextState.isNotBlank() || (message.isError && isAI)) {
+                        // Show text if it's available or if it's an AI error message
                         SelectionContainer {
                             Text(
                                 text = displayedMainTextState,
@@ -518,15 +610,19 @@ fun MessageBubble(
                             )
                         }
                     } else if (isAI && message.contentStarted && !localAnimationTriggeredOrCompleted && !message.isError) {
-                        Spacer(Modifier.size(0.dp))
+                        // This case is for when AI content has started, text is currently blank (about to type or truly empty),
+                        // and it's not an error. Renders an empty box that will fill.
+                        // A Spacer(Modifier.size(0.dp)) or just an empty Box is fine.
+                        // The defaultMinSize on the parent Box will ensure it's not invisible.
                     }
+                    // If none of the above, the box remains (potentially with minHeight), and will be empty if displayedMainTextState is empty.
                 }
             }
         }
     }
 }
 
-// ThreeDotsLoadingAnimation - NO CHANGE HERE
+// ThreeDotsLoadingAnimation - (no change from your provided code)
 @Composable
 private fun ThreeDotsLoadingAnimation(
     modifier: Modifier = Modifier,

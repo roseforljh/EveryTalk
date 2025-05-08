@@ -6,7 +6,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.* // Ensure all necessary layout imports
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -22,7 +22,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow // Import shadow
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -56,7 +56,7 @@ import kotlin.math.pow
 // Constants remain the same
 private const val CHAT_SCREEN_AUTO_SCROLL_DELAY_MS = 100L
 private const val CHAT_SCREEN_STREAMING_SCROLL_INTERVAL_MS = 150L
-private val SCROLL_UP_BUFFER_DP = 24.dp
+// private val SCROLL_UP_BUFFER_DP = 24.dp // This buffer might not be strictly needed for the new logic
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -79,10 +79,10 @@ fun ChatScreen(
     val keyboardController = LocalSoftwareKeyboardController.current
     val density = LocalDensity.current
 
-    var userManuallyScrolledUp by remember { mutableStateOf(false) }
+    var userManuallyScrolledUp by remember { mutableStateOf(false) } // Keep this for auto-scroll logic
     var ongoingScrollJob by remember { mutableStateOf<Job?>(null) }
 
-    // Custom NestedScrollConnection (保持之前的修复逻辑)
+    // Custom NestedScrollConnection
     val overscrollConsumingConnection = remember {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
@@ -115,82 +115,133 @@ fun ChatScreen(
         }
     }
 
-    // LaunchedEffects (保持之前的逻辑)
-    LaunchedEffect(listState, density, messages.size) { /* ... */
+    // LaunchedEffect for user scroll detection (to control auto-scroll and potentially other UI)
+    LaunchedEffect(listState) { // Simplified dependencies
         snapshotFlow {
-            if (messages.isEmpty()) return@snapshotFlow false;
-            val layoutInfo = listState.layoutInfo;
-            val visibleItemsInfo =
-                layoutInfo.visibleItemsInfo; if (visibleItemsInfo.isEmpty()) return@snapshotFlow false;
-            val firstVisibleItemIndex = visibleItemsInfo.first().index;
-            val scrolledUp =
-                firstVisibleItemIndex > 0; if (!scrolledUp && messages.firstOrNull()?.id == visibleItemsInfo.first().key) {
-            val firstItemInfo = visibleItemsInfo.first();
-            val scrollUpBufferPx =
-                with(density) { SCROLL_UP_BUFFER_DP.toPx() }; return@snapshotFlow firstItemInfo.index > 0 || firstItemInfo.offset > scrollUpBufferPx
-        }; scrolledUp
+            if (messages.isEmpty()) return@snapshotFlow false
+            val layoutInfo = listState.layoutInfo
+            val visibleItemsInfo = layoutInfo.visibleItemsInfo
+            if (visibleItemsInfo.isEmpty()) return@snapshotFlow false
+
+            // For reverseLayout=true, index 0 is the newest item (bottom).
+            // Scrolled up if the first visible item is not index 0.
+            val firstVisibleItemIndex = visibleItemsInfo.first().index
+            firstVisibleItemIndex > 0
         }.collect { scrolledUp ->
+            Log.d(
+                "ChatScroll",
+                "SnapshotFlow - ScrolledUp (firstVisibleItemIndex > 0): $scrolledUp"
+            )
             if (userManuallyScrolledUp != scrolledUp) {
-                userManuallyScrolledUp =
-                    scrolledUp; viewModel.onUserScrolledAwayChange(scrolledUp); if (scrolledUp) ongoingScrollJob?.cancel()
+                userManuallyScrolledUp = scrolledUp
+                // We are not calling viewModel.onUserScrolledAwayChange(scrolledUp) for the new FAB logic
+                // but it might still be useful for other ViewModel logic if needed.
+                // viewModel.onUserScrolledAwayChange(scrolledUp) // Optionally keep if VM needs this info
+                if (scrolledUp) ongoingScrollJob?.cancel()
             }
         }
     }
-    LaunchedEffect(messages.size, currentStreamingAiMessageId, isApiCalling) { /* ... */
-        ongoingScrollJob?.cancel(); if (messages.isEmpty()) return@LaunchedEffect;
-        val targetIndex = 0;
-        val isStreamingThisMessage = currentStreamingAiMessageId != null && isApiCalling;
-        val shouldScroll = !userManuallyScrolledUp || isStreamingThisMessage; if (shouldScroll) {
+
+
+    // Auto-scroll logic (remains largely the same, relies on userManuallyScrolledUp)
+    LaunchedEffect(
+        messages.size,
+        currentStreamingAiMessageId,
+        isApiCalling,
+        userManuallyScrolledUp
+    ) {
+        ongoingScrollJob?.cancel()
+        if (messages.isEmpty()) return@LaunchedEffect
+
+        val targetIndex = 0
+        val isStreamingThisMessage = currentStreamingAiMessageId != null && isApiCalling
+        val shouldScroll = !userManuallyScrolledUp || isStreamingThisMessage
+
+        if (shouldScroll) {
             ongoingScrollJob = coroutineScope.launch {
-                delay(CHAT_SCREEN_AUTO_SCROLL_DELAY_MS); if (!isActive) return@launch; try {
-                listState.animateScrollToItem(index = targetIndex)
-            } catch (e: Exception) {
-                Log.e("ChatScroll", "Auto-scroll error: ${e.message}", e)
-            }; if (isStreamingThisMessage && !userManuallyScrolledUp) {
+                delay(CHAT_SCREEN_AUTO_SCROLL_DELAY_MS)
+                if (!isActive) return@launch
                 try {
-                    while (isActive && currentStreamingAiMessageId != null && isApiCalling && !userManuallyScrolledUp) {
-                        val firstVisible = listState.firstVisibleItemIndex;
-                        val firstVisibleOffset =
-                            listState.firstVisibleItemScrollOffset; if (firstVisible > 0 || firstVisibleOffset > with(
-                                density
-                            ) { 4.dp.toPx() }
-                        ) {
-                            listState.animateScrollToItem(index = targetIndex)
-                        }; delay(CHAT_SCREEN_STREAMING_SCROLL_INTERVAL_MS)
-                    }
-                } catch (e: CancellationException) { /* Cancelled */
+                    listState.animateScrollToItem(index = targetIndex)
                 } catch (e: Exception) {
-                    Log.e("ChatScroll", "Streaming scroll error: ${e.message}", e)
+                    Log.e("ChatScroll", "Auto-scroll error: ${e.message}", e)
                 }
-            }
+
+                if (isStreamingThisMessage && !userManuallyScrolledUp) {
+                    try {
+                        while (isActive && currentStreamingAiMessageId != null && isApiCalling && !userManuallyScrolledUp) {
+                            val firstVisible = listState.firstVisibleItemIndex
+                            val firstVisibleOffset = listState.firstVisibleItemScrollOffset
+                            if (firstVisible > 0 || firstVisibleOffset > with(density) { 4.dp.toPx() }) {
+                                listState.animateScrollToItem(index = targetIndex)
+                            }
+                            delay(CHAT_SCREEN_STREAMING_SCROLL_INTERVAL_MS)
+                        }
+                    } catch (e: CancellationException) { /* Expected */
+                    } catch (e: Exception) {
+                        Log.e("ChatScroll", "Streaming scroll error: ${e.message}", e)
+                    }
+                }
             }
         }
     }
-    LaunchedEffect(Unit) { /* ... viewModel.scrollToBottomEvent ... */
+
+    // Forced scroll to bottom event from ViewModel
+    LaunchedEffect(Unit) {
         viewModel.scrollToBottomEvent.collectLatest {
-            ongoingScrollJob?.cancel(); ongoingScrollJob = coroutineScope.launch {
-            try {
-                listState.animateScrollToItem(0); if (userManuallyScrolledUp) {
-                    userManuallyScrolledUp = false; viewModel.onUserScrolledAwayChange(false)
+            ongoingScrollJob?.cancel()
+            ongoingScrollJob = coroutineScope.launch {
+                try {
+                    listState.animateScrollToItem(0)
+                    if (userManuallyScrolledUp) {
+                        userManuallyScrolledUp = false
+                        // Optionally update VM if it needs this state:
+                        // viewModel.onUserScrolledAwayChange(false)
+                    }
+                } catch (e: Exception) {
+                    Log.e("ChatScroll", "Forced scroll error: ${e.message}", e)
                 }
-            } catch (e: Exception) {
-                Log.e("ChatScroll", "Forced scroll error: ${e.message}", e)
             }
         }
-        }
     }
-    LaunchedEffect(messages.size, reasoningCompleteMap) { /* ... viewModel.collapseReasoning ... */
+
+    // Collapse reasoning
+    LaunchedEffect(messages.size, reasoningCompleteMap) {
         messages.forEach { msg ->
             if (msg.sender == Sender.AI && !msg.reasoning.isNullOrBlank()) {
-                val isComplete = reasoningCompleteMap[msg.id]
-                    ?: false; if (isComplete && expandedReasoningStates[msg.id] == true) {
+                val isComplete = reasoningCompleteMap[msg.id] ?: false
+                if (isComplete && expandedReasoningStates[msg.id] == true) {
                     viewModel.collapseReasoning(msg.id)
                 }
             }
         }
     }
 
-    val showScrollToBottomButtonFromViewModel by viewModel.showScrollToBottomButton.collectAsState()
+    // --- *** NEW SCROLL TO BOTTOM BUTTON LOGIC *** ---
+    val isUserActuallyScrolling = listState.isScrollInProgress
+    val firstVisibleItemIndex = listState.firstVisibleItemIndex
+
+    // Button is visible if:
+    // 1. There are messages.
+    // 2. The first visible item is NOT the newest message (index 0 for reverseLayout).
+    // 3. The user is not currently dragging/flinging the list.
+    val scrollToBottomButtonVisible by remember(
+        messages.size,
+        firstVisibleItemIndex,
+        isUserActuallyScrolling
+    ) {
+        derivedStateOf {
+            val visible = messages.isNotEmpty() &&
+                    firstVisibleItemIndex > 0 && // Key change: directly use firstVisibleItemIndex
+                    !isUserActuallyScrolling
+            Log.d(
+                "FAB_Visibility",
+                "Messages: ${messages.isNotEmpty()}, FirstVisibleIndex: $firstVisibleItemIndex (>0 -> ${firstVisibleItemIndex > 0}), NotScrolling: ${!isUserActuallyScrolling} => Visible: $visible"
+            )
+            visible
+        }
+    }
+    // --- *** END OF NEW SCROLL TO BOTTOM BUTTON LOGIC *** ---
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -202,63 +253,90 @@ fun ChatScreen(
                 onMenuClick = { coroutineScope.launch { viewModel.drawerState.open() } },
                 onSettingsClick = { navController.navigate(Screen.SETTINGS_SCREEN) })
         },
-        floatingActionButton = { /* ... FAB (保持不变) ... */
-            val fabVisible =
-                showScrollToBottomButtonFromViewModel && messages.isNotEmpty(); AnimatedVisibility(
-                visible = fabVisible,
-                enter = fadeIn(animationSpec = tween(200)) + scaleIn(
-                    animationSpec = tween(200),
-                    initialScale = 0.7f
+        floatingActionButton = {
+            AnimatedVisibility(
+                visible = scrollToBottomButtonVisible, // Use the new visibility state
+                enter = fadeIn(animationSpec = tween(300)) + scaleIn(
+                    animationSpec = tween(300, easing = FastOutSlowInEasing),
+                    initialScale = 0.8f
                 ),
-                exit = fadeOut(animationSpec = tween(150)) + scaleOut(
-                    animationSpec = tween(150),
-                    targetScale = 0.7f
+                exit = fadeOut(animationSpec = tween(200)) + scaleOut(
+                    animationSpec = tween(200),
+                    targetScale = 0.8f
                 )
             ) {
-                SmallFloatingActionButton(
-                    onClick = { viewModel.triggerScrollToBottom() },
-                    modifier = Modifier.padding(bottom = 117.dp),
+                FloatingActionButton(
+                    onClick = {
+                        // When clicked, we want to scroll to bottom and also update userManuallyScrolledUp
+                        // so that auto-scroll can resume if needed (e.g. for streaming).
+                        coroutineScope.launch {
+                            listState.animateScrollToItem(0)
+                            // Since we scrolled to bottom, user is no longer "manually scrolled up"
+                            if (userManuallyScrolledUp) {
+                                userManuallyScrolledUp = false
+                            }
+                        }
+                    },
+                    modifier = Modifier
+                        .padding(bottom = 160.dp), // Adjust as needed based on your input field height
+                    shape = RoundedCornerShape(16.dp),
                     containerColor = Color.White,
                     contentColor = Color.Black
-                ) { Icon(Icons.Filled.ArrowDownward, contentDescription = "滚动到底部") }
+                ) {
+                    Icon(
+                        Icons.Filled.ArrowDownward,
+                        contentDescription = "滚动到底部"
+                    )
+                }
             }
         },
         floatingActionButtonPosition = FabPosition.End
     ) { scaffoldPaddingValues ->
-
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(scaffoldPaddingValues)
-                .windowInsetsPadding(WindowInsets.ime) // Parent Column handles IME resize
+                .windowInsetsPadding(WindowInsets.ime)
                 .navigationBarsPadding()
-            // .nestedScroll(overscrollConsumingConnection) // Removed from parent
         ) {
             LazyColumn(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    // Re-add imeNestedScroll if it helps smoothness, test order if needed
-                    // .imeNestedScroll()
-                    .nestedScroll(overscrollConsumingConnection) // Apply custom connection here
+                    .nestedScroll(overscrollConsumingConnection)
                     .padding(horizontal = 6.dp),
                 state = listState,
                 reverseLayout = true,
                 contentPadding = PaddingValues(top = 12.dp, bottom = 12.dp)
             ) {
-                // ... LazyColumn items (保持不变) ...
                 items(
                     messages,
-                    key = { message -> message.id }) { message ->
+                    key = { message -> message.id }
+                ) { message ->
+                    val isMainContentStreaming = message.sender == Sender.AI &&
+                            message.id == currentStreamingAiMessageId &&
+                            isApiCalling &&
+                            message.contentStarted
+
                     MessageBubble(
                         message = message,
                         viewModel = viewModel,
-                        isReasoningStreaming = (message.sender == Sender.AI && message.id == currentStreamingAiMessageId && isApiCalling && !message.reasoning.isNullOrBlank() && !(reasoningCompleteMap[message.id]
-                            ?: false) && message.contentStarted),
+                        isMainContentStreaming = isMainContentStreaming,
+                        isReasoningStreaming = (message.sender == Sender.AI &&
+                                message.id == currentStreamingAiMessageId &&
+                                isApiCalling &&
+                                !message.reasoning.isNullOrBlank() &&
+                                !(reasoningCompleteMap[message.id] ?: false) &&
+                                message.contentStarted),
                         isReasoningComplete = reasoningCompleteMap[message.id] ?: false,
                         isManuallyExpanded = expandedReasoningStates[message.id] ?: false,
                         onToggleReasoning = { viewModel.onToggleReasoningExpand(message.id) },
-                        showLoadingBubble = (message.sender == Sender.AI && message.id == currentStreamingAiMessageId && isApiCalling && !message.contentStarted && message.text.isBlank() && message.reasoning.isNullOrBlank())
+                        showLoadingBubble = (message.sender == Sender.AI &&
+                                message.id == currentStreamingAiMessageId &&
+                                isApiCalling &&
+                                !message.contentStarted &&
+                                message.text.isBlank() &&
+                                message.reasoning.isNullOrBlank())
                     )
                 }
                 if (messages.isEmpty()) {
@@ -277,102 +355,118 @@ fun ChatScreen(
                                     fontSize = 36.sp,
                                     fontWeight = FontWeight.ExtraBold,
                                     color = Color.Black
-                                ); Text(text = "你好", style = textStyle);
-                                val initialAmplitudeDp = (-8).dp;
-                                val amplitudeDecayFactor = 0.7f;
-                                val numCycles = 5;
-                                val initialBouncePhaseDurationMs = 250;
-                                val finalBouncePhaseDurationMs = 600;
-                                val dotInterDelayMs = 150L;
-                                val initialAmplitudePx =
-                                    with(density) { initialAmplitudeDp.toPx() };
-                                val dot1OffsetY = remember { Animatable(0f) };
-                                val dot2OffsetY = remember { Animatable(0f) };
-                                val dot3OffsetY =
-                                    remember { Animatable(0f) }; LaunchedEffect(Unit) {
-                                dot1OffsetY.snapTo(0f); dot2OffsetY.snapTo(0f); dot3OffsetY.snapTo(
-                                0f
-                            ); repeat(numCycles) { cycleIndex ->
-                                val currentCycleAmplitudePx =
-                                    initialAmplitudePx * (amplitudeDecayFactor.pow(cycleIndex));
-                                val progress =
-                                    if (numCycles > 1) cycleIndex.toFloat() / (numCycles - 1) else 0f;
-                                val currentBouncePhaseDurationMs =
-                                    (initialBouncePhaseDurationMs + (finalBouncePhaseDurationMs - initialBouncePhaseDurationMs) * progress).toInt(); coroutineScope {
-                                launch {
-                                    dot1OffsetY.animateTo(
-                                        currentCycleAmplitudePx,
-                                        tween(
-                                            currentBouncePhaseDurationMs,
-                                            easing = FastOutSlowInEasing
-                                        )
-                                    ); dot1OffsetY.animateTo(
-                                    0f,
-                                    tween(
-                                        currentBouncePhaseDurationMs,
-                                        easing = FastOutSlowInEasing
-                                    )
                                 )
-                                }; launch {
-                                delay(dotInterDelayMs); dot2OffsetY.animateTo(
-                                currentCycleAmplitudePx,
-                                tween(currentBouncePhaseDurationMs, easing = FastOutSlowInEasing)
-                            ); dot2OffsetY.animateTo(
-                                0f,
-                                tween(currentBouncePhaseDurationMs, easing = FastOutSlowInEasing)
-                            )
-                            }; launch {
-                                delay(dotInterDelayMs * 2); dot3OffsetY.animateTo(
-                                currentCycleAmplitudePx,
-                                tween(currentBouncePhaseDurationMs, easing = FastOutSlowInEasing)
-                            ); dot3OffsetY.animateTo(
-                                0f,
-                                tween(currentBouncePhaseDurationMs, easing = FastOutSlowInEasing)
-                            )
-                            }
-                            }
-                            }
-                            }; Text(
-                                ".",
-                                style = textStyle,
-                                modifier = Modifier.offset(y = with(density) { dot1OffsetY.value.toDp() })
-                            ); Text(
-                                ".",
-                                style = textStyle,
-                                modifier = Modifier.offset(y = with(density) { dot2OffsetY.value.toDp() })
-                            ); Text(
-                                ".",
-                                style = textStyle,
-                                modifier = Modifier.offset(y = with(density) { dot3OffsetY.value.toDp() })
-                            )
+                                Text(text = "你好", style = textStyle)
+                                val initialAmplitudeDp = (-8).dp
+                                val amplitudeDecayFactor = 0.7f
+                                val numCycles = 5
+                                val initialBouncePhaseDurationMs = 250
+                                val finalBouncePhaseDurationMs = 600
+                                val dotInterDelayMs = 150L
+                                val initialAmplitudePx = with(density) { initialAmplitudeDp.toPx() }
+                                val dot1OffsetY = remember { Animatable(0f) }
+                                val dot2OffsetY = remember { Animatable(0f) }
+                                val dot3OffsetY = remember { Animatable(0f) }
+                                LaunchedEffect(Unit) {
+                                    dot1OffsetY.snapTo(0f); dot2OffsetY.snapTo(0f); dot3OffsetY.snapTo(
+                                    0f
+                                )
+                                    repeat(numCycles) { cycleIndex ->
+                                        val currentCycleAmplitudePx =
+                                            initialAmplitudePx * (amplitudeDecayFactor.pow(
+                                                cycleIndex
+                                            ))
+                                        val progress =
+                                            if (numCycles > 1) cycleIndex.toFloat() / (numCycles - 1) else 0f
+                                        val currentBouncePhaseDurationMs =
+                                            (initialBouncePhaseDurationMs + (finalBouncePhaseDurationMs - initialBouncePhaseDurationMs) * progress).toInt()
+                                        coroutineScope {
+                                            launch {
+                                                dot1OffsetY.animateTo(
+                                                    currentCycleAmplitudePx,
+                                                    tween(
+                                                        currentBouncePhaseDurationMs,
+                                                        easing = FastOutSlowInEasing
+                                                    )
+                                                ); dot1OffsetY.animateTo(
+                                                0f,
+                                                tween(
+                                                    currentBouncePhaseDurationMs,
+                                                    easing = FastOutSlowInEasing
+                                                )
+                                            )
+                                            }
+                                            launch {
+                                                delay(dotInterDelayMs); dot2OffsetY.animateTo(
+                                                currentCycleAmplitudePx,
+                                                tween(
+                                                    currentBouncePhaseDurationMs,
+                                                    easing = FastOutSlowInEasing
+                                                )
+                                            ); dot2OffsetY.animateTo(
+                                                0f,
+                                                tween(
+                                                    currentBouncePhaseDurationMs,
+                                                    easing = FastOutSlowInEasing
+                                                )
+                                            )
+                                            }
+                                            launch {
+                                                delay(dotInterDelayMs * 2); dot3OffsetY.animateTo(
+                                                currentCycleAmplitudePx,
+                                                tween(
+                                                    currentBouncePhaseDurationMs,
+                                                    easing = FastOutSlowInEasing
+                                                )
+                                            ); dot3OffsetY.animateTo(
+                                                0f,
+                                                tween(
+                                                    currentBouncePhaseDurationMs,
+                                                    easing = FastOutSlowInEasing
+                                                )
+                                            )
+                                            }
+                                        }
+                                    }
+                                }
+                                Text(
+                                    ".",
+                                    style = textStyle,
+                                    modifier = Modifier.offset(y = with(density) { dot1OffsetY.value.toDp() })
+                                )
+                                Text(
+                                    ".",
+                                    style = textStyle,
+                                    modifier = Modifier.offset(y = with(density) { dot2OffsetY.value.toDp() })
+                                )
+                                Text(
+                                    ".",
+                                    style = textStyle,
+                                    modifier = Modifier.offset(y = with(density) { dot3OffsetY.value.toDp() })
+                                )
                             }
                         }
                     }
                 }
             }
 
-            // --- *** INPUT AREA STYLE MODIFIED *** ---
-            // Removed the Surface, replaced with a Column that has shadow and background
+            // Input Area (remains the same)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    // Apply shadow to this Column (background area)
                     .shadow(
-                        elevation = 8.dp, // Adjust shadow strength
+                        elevation = 8.dp,
                         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-                        clip = false // Let shadow draw outside
+                        clip = false
                     )
-                    // Apply background *after* shadow
                     .background(
-                        color = Color.White, // Background color of the input area
-                        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp) // Match shape
+                        color = Color.White,
+                        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
                     )
-                    // Clip content to the shape *after* background
                     .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
-                    .animateContentSize() // Animate this Column's size changes
-                    .padding(horizontal = 8.dp, vertical = 8.dp) // Padding for content inside
+                    .animateContentSize()
+                    .padding(horizontal = 8.dp, vertical = 8.dp)
             ) {
-                // Use OutlinedTextField as per the original code structure you provided last
                 OutlinedTextField(
                     value = text,
                     onValueChange = viewModel::onTextChange,
@@ -380,15 +474,12 @@ fun ChatScreen(
                         .fillMaxWidth()
                         .focusRequester(focusRequester)
                         .onFocusChanged {}
-                        .padding(bottom = 4.dp), // Spacing below text field
-                        // label = { Text("输入消息…") }, // 已移除
-                        placeholder = { Text("输入消息…") }, // <-- 添加 placeholder
-                        colors = OutlinedTextFieldDefaults.colors(
-                        // Make container transparent to show parent Column's background
+                        .padding(bottom = 4.dp),
+                    placeholder = { Text("输入消息…") },
+                    colors = OutlinedTextFieldDefaults.colors(
                         focusedContainerColor = Color.Transparent,
                         unfocusedContainerColor = Color.Transparent,
-                        disabledContainerColor = Color.Transparent, // Handle disabled state if needed
-                        // Keep other colors (text, cursor, border, label) as they were
+                        disabledContainerColor = Color.Transparent,
                         focusedTextColor = MaterialTheme.colorScheme.onSurface,
                         unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
                         cursorColor = MaterialTheme.colorScheme.primary,
@@ -397,11 +488,10 @@ fun ChatScreen(
                         focusedLabelColor = MaterialTheme.colorScheme.primary,
                         unfocusedLabelColor = Color.Gray
                     ),
-                    minLines = 1,
-                    maxLines = 5,
-                    trailingIcon = { /* ... Trailing icon (保持不变) ... */
-                        val showClearButton =
-                            text.isNotBlank() && !isApiCalling; AnimatedVisibility(
+                    minLines = 1, maxLines = 5,
+                    trailingIcon = {
+                        val showClearButton = text.isNotBlank() && !isApiCalling
+                        AnimatedVisibility(
                             visible = showClearButton,
                             enter = fadeIn(tween(200)) + scaleIn(tween(200), initialScale = 0.9f),
                             exit = fadeOut(tween(150)) + scaleOut(tween(150), targetScale = 0.7f)
@@ -420,14 +510,12 @@ fun ChatScreen(
                         }
                     }
                 )
-
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 0.dp, end = 8.dp, bottom = 8.dp), // Padding for the button
+                        .padding(top = 0.dp, end = 8.dp, bottom = 8.dp),
                     contentAlignment = Alignment.CenterEnd
                 ) {
-                    // ... Send button IconButton (保持不变) ...
                     IconButton(
                         enabled = true,
                         onClick = {
@@ -449,7 +537,6 @@ fun ChatScreen(
                     }
                 }
             }
-            // --- *** END OF INPUT AREA STYLE MODIFICATION *** ---
         }
     }
 }
