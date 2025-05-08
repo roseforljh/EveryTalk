@@ -1,42 +1,42 @@
-package com.example.app1.ui.components // 确保包名正确
+package com.example.app1.ui.components
 
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack // 使用 AutoMirrored 图标以支持 RTL 布局
+import androidx.compose.material.icons.automirrored.filled.ArrowBack // 自动镜像返回箭头
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color // <--- 正确的导入
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
-@OptIn(ExperimentalMaterial3Api::class) // CenterAlignedTopAppBar 是 M3 的实验性 API
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HistoryTopBar(onBackClick: () -> Unit) { // 接收返回按钮的点击事件回调
-    // 使用 CenterAlignedTopAppBar 实现居中标题的效果
-    CenterAlignedTopAppBar(
+fun HistoryTopBar(
+    onBackClick: () -> Unit, // 点击返回按钮的回调
+    modifier: Modifier = Modifier
+) {
+    CenterAlignedTopAppBar( // 标题居中的顶部栏
         title = {
             Text(
-                text = "历史记录", // 标题文本
-                fontSize = 20.sp, // 字体大小
-                fontWeight = FontWeight.Bold // 字体加粗
+                text = "历史记录",
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold
             )
         },
-        navigationIcon = { // 导航图标（通常是返回按钮）
-            IconButton(onClick = onBackClick) { // 点击时调用传入的回调
+        navigationIcon = {
+            IconButton(onClick = onBackClick) {
                 Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack, // 返回箭头图标
-                    contentDescription = "返回" // 无障碍描述
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack, // 返回箭头
+                    contentDescription = "返回"
                 )
             }
         },
         colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-            containerColor = Color.White, // 背景色
-            titleContentColor = MaterialTheme.colorScheme.onSurface, // 标题颜色
-            navigationIconContentColor = MaterialTheme.colorScheme.onSurface // 导航图标颜色
+            containerColor = MaterialTheme.colorScheme.surface,
+            titleContentColor = MaterialTheme.colorScheme.onSurface,
+            navigationIconContentColor = MaterialTheme.colorScheme.onSurface
         ),
-        // 应用状态栏的边距
-        modifier = Modifier.windowInsetsPadding(TopAppBarDefaults.windowInsets)
+        modifier = modifier.windowInsetsPadding(TopAppBarDefaults.windowInsets)
     )
 }

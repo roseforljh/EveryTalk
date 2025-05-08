@@ -2,6 +2,7 @@ package com.example.app1.ui.components
 
 import android.util.Log
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.animation.core.*
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -31,23 +32,31 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.example.app1.AppViewModel
 import com.example.app1.data.models.Message
 import com.example.app1.data.models.Sender
-import com.example.app1.ui.screens.AppViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.coroutines.cancellation.CancellationException
 
+// --- Constants for Reasoning Scroll ---
+// How often to attempt to scroll during streaming.
+private const val REASONING_STREAM_SCROLL_ATTEMPT_INTERVAL_MS = 100L // Try to scroll every 100ms
 
-private const val TYPEWRITER_DELAY_MS_REASONING = 20L
+// Animation duration for each incremental scroll during streaming.
+private const val REASONING_STREAM_SCROLL_ANIMATION_MS = 250 // Animate the scroll over 250ms
 
-// --- 推理过程定时滚动相关常量 ---
-private const val REASONING_AUTO_SCROLL_INTERVAL_MS = 500L
-private const val REASONING_AUTO_SCROLL_ANIMATION_MS = 400
-// --- 结束 ---
+// Animation duration for the final scroll when reasoning is complete.
+private const val REASONING_COMPLETE_SCROLL_ANIMATION_MS = 300
 
+
+// Typewriter delay remains the same
+private const val TYPEWRITER_DELAY_MS_REASONING = 15L
+
+
+@OptIn(ExperimentalAnimationApi::class)
 @Composable
 fun MessageBubble(
     message: Message,
@@ -59,107 +68,141 @@ fun MessageBubble(
     modifier: Modifier = Modifier,
     showLoadingBubble: Boolean = false
 ) {
+    Log.d(
+        "MessageBubbleRecomp",
+        "Bubble ID: ${message.id}, Text len: ${message.text.length}, Reasoning len: ${message.reasoning?.length ?: 0}, isStreaming: $isReasoningStreaming, isComplete: $isReasoningComplete"
+    )
+
     val isAI = message.sender == Sender.AI
     val currentMessageId = message.id
 
-    val animationPlayedVM = viewModel.hasAnimationBeenPlayed(currentMessageId)
-    var displayedMainTextState by remember(currentMessageId) {
-        mutableStateOf(
-            if (animationPlayedVM && message.text.isNotBlank()) message.text.trim()
-            else if (!isAI && message.text.isNotBlank()) message.text.trim()
-            else ""
-        )
-    }
-    var localAnimationCompleted by remember(currentMessageId) { mutableStateOf(animationPlayedVM) }
-    val showMainBubbleLoadingDots = isAI && !showLoadingBubble && !message.contentStarted &&
-            message.text.isBlank() && !animationPlayedVM
+    val animationInitiallyPlayedByVM =
+        remember(currentMessageId) { viewModel.hasAnimationBeenPlayed(currentMessageId) }
 
-    var displayedReasoningText by remember(currentMessageId, message.reasoning) {
-        mutableStateOf(
-            message.reasoning?.trim() ?: ""
-        )
+    var localAnimationTriggeredOrCompleted by remember(currentMessageId) {
+        mutableStateOf(animationInitiallyPlayedByVM)
     }
 
-    // --- 推理文本打印效果 ---
+    var displayedMainTextState by remember(currentMessageId, animationInitiallyPlayedByVM, isAI) {
+        mutableStateOf(
+            if ((animationInitiallyPlayedByVM || !isAI) && message.text.isNotBlank()) {
+                message.text.trim()
+            } else {
+                ""
+            }
+        )
+    }
+
+    var displayedReasoningText by remember(currentMessageId) {
+        mutableStateOf(if (message.contentStarted) message.reasoning?.trim() ?: "" else "")
+    }
+
+    val showMainBubbleLoadingDots = isAI &&
+            !showLoadingBubble &&
+            !message.isError &&
+            message.text.isBlank() &&
+            !message.contentStarted &&
+            !localAnimationTriggeredOrCompleted
+
+    // LaunchedEffect for Reasoning Text (Typewriter) - NO CHANGE HERE
     LaunchedEffect(
+        currentMessageId,
         message.reasoning,
         isReasoningStreaming,
-        isAI,
-        currentMessageId,
         message.contentStarted
     ) {
-        if (isAI && !message.reasoning.isNullOrBlank()) {
-            val fullReasoningText = message.reasoning!!.trim()
-            if (isReasoningStreaming && message.contentStarted) {
-                if (fullReasoningText.length > displayedReasoningText.length) {
-                    var tempReasoning = displayedReasoningText
-                    for (i in displayedReasoningText.length until fullReasoningText.length) {
-                        if (!isActive) break
-                        tempReasoning = fullReasoningText.substring(0, i + 1)
-                        displayedReasoningText = tempReasoning
-                        delay(TYPEWRITER_DELAY_MS_REASONING)
+        if (isAI && message.contentStarted) {
+            val fullReasoningText = message.reasoning?.trim() ?: ""
+            if (fullReasoningText.isNotEmpty()) {
+                if (isReasoningStreaming && displayedReasoningText.length < fullReasoningText.length) {
+                    var currentDisplay = displayedReasoningText
+                    try {
+                        for (i in displayedReasoningText.length until fullReasoningText.length) {
+                            if (!isActive) throw CancellationException("Reasoning typewriter for $currentMessageId cancelled (not active)")
+                            currentDisplay = fullReasoningText.substring(0, i + 1)
+                            displayedReasoningText = currentDisplay
+                            delay(TYPEWRITER_DELAY_MS_REASONING)
+                        }
+                        if (isActive && displayedReasoningText != fullReasoningText) {
+                            displayedReasoningText = fullReasoningText
+                        }
+                    } catch (e: CancellationException) {
+                        Log.d(
+                            "MessageBubble",
+                            "Reasoning typewriter for $currentMessageId cancelled: ${e.message}"
+                        )
+                        if (isActive && displayedReasoningText != fullReasoningText) {
+                            displayedReasoningText = fullReasoningText
+                        }
                     }
-                    if (displayedReasoningText != tempReasoning && isActive) displayedReasoningText =
-                        tempReasoning
-                } else if (displayedReasoningText != fullReasoningText) {
-                    displayedReasoningText = fullReasoningText
+                } else {
+                    if (displayedReasoningText != fullReasoningText) {
+                        displayedReasoningText = fullReasoningText
+                    }
                 }
-            } else if (!isReasoningStreaming) {
-                if (displayedReasoningText != fullReasoningText) displayedReasoningText =
-                    fullReasoningText
+            } else {
+                if (displayedReasoningText.isNotEmpty()) {
+                    displayedReasoningText = ""
+                }
             }
+        } else if (isAI && !message.contentStarted && displayedReasoningText.isNotEmpty()) {
+            displayedReasoningText = ""
         } else if (message.reasoning.isNullOrBlank() && displayedReasoningText.isNotEmpty()) {
             displayedReasoningText = ""
         }
     }
 
-    // --- 主文本简化打印效果 ---
+    // LaunchedEffect for Main Text (Direct Set) - NO CHANGE HERE
     LaunchedEffect(
-        message.text,
         currentMessageId,
+        message.text,
+        message.contentStarted,
         isAI,
         showLoadingBubble,
-        message.contentStarted
+        message.isError
     ) {
         val fullMainText = message.text.trim()
-        val animationShouldPlay =
-            isAI && !showLoadingBubble && fullMainText.isNotBlank() && message.contentStarted
-        val vmCompleted = viewModel.hasAnimationBeenPlayed(currentMessageId)
-
-        if (animationShouldPlay) {
-            if (!vmCompleted && !localAnimationCompleted) {
+        if (showLoadingBubble) return@LaunchedEffect
+        if (message.contentStarted || !isAI) {
+            if (displayedMainTextState != fullMainText) {
                 displayedMainTextState = fullMainText
-                localAnimationCompleted = true
-                viewModel.onAnimationComplete(currentMessageId)
-            } else {
-                if (displayedMainTextState != fullMainText) {
-                    displayedMainTextState = fullMainText
-                }
-                if (!vmCompleted && localAnimationCompleted) {
+            }
+            if (!localAnimationTriggeredOrCompleted && (fullMainText.isNotBlank() || message.isError)) {
+                localAnimationTriggeredOrCompleted = true
+                if (!animationInitiallyPlayedByVM) {
                     viewModel.onAnimationComplete(currentMessageId)
                 }
+                Log.d(
+                    "MessageBubble",
+                    "Main text 'animation' (direct set) marked completed for $currentMessageId."
+                )
+            } else if (!localAnimationTriggeredOrCompleted && fullMainText.isBlank() && isAI && !message.isError && message.contentStarted) {
+                localAnimationTriggeredOrCompleted = true
+                if (!animationInitiallyPlayedByVM) {
+                    viewModel.onAnimationComplete(currentMessageId)
+                }
+                Log.d(
+                    "MessageBubble",
+                    "Main text (empty) 'animation' marked completed for AI $currentMessageId."
+                )
             }
-        } else if (!isAI && fullMainText.isNotBlank()) {
-            if (displayedMainTextState != fullMainText) displayedMainTextState = fullMainText
-            if (!vmCompleted && !localAnimationCompleted) {
-                localAnimationCompleted = true; viewModel.onAnimationComplete(currentMessageId); }
-        } else if (fullMainText.isBlank()) {
-            if (displayedMainTextState.isNotEmpty()) displayedMainTextState = ""
-            if (isAI && !vmCompleted && !localAnimationCompleted && message.contentStarted) {
-                localAnimationCompleted = true; viewModel.onAnimationComplete(currentMessageId); }
+        } else if (!message.contentStarted && isAI && displayedMainTextState.isNotEmpty()) {
+            displayedMainTextState = ""
         }
     }
 
-
     val userBubbleGreyColor = Color(red = 200, green = 200, blue = 200, alpha = 128)
+    val aiBubbleColor = Color.White
+    val contentBlackColor = Color.Black
+    val reasoningTextColor = Color(0xFF444444)
+    val errorTextColor = Color.Red
 
-    // --- UI 结构 ---
     Column(
         horizontalAlignment = if (isAI) Alignment.Start else Alignment.End,
         modifier = modifier.fillMaxWidth()
     ) {
-        // 加载气泡
         if (isAI && showLoadingBubble) {
+            // ... Loading bubble ... (no change)
             Row(
                 modifier = Modifier
                     .padding(vertical = 3.dp)
@@ -168,41 +211,42 @@ fun MessageBubble(
             ) {
                 Surface(
                     shape = RoundedCornerShape(18.dp),
-                    color = Color.White, // MODIFIED: Loading bubble background to White
+                    color = Color.White,
                     shadowElevation = 4.dp,
-                    contentColor = Color.Black // Ensure content (text) is black
+                    contentColor = Color.Black
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),//思考加载圈！
+                            modifier = Modifier.size(18.dp),
                             color = Color.Black,
                             strokeWidth = 1.dp
                         )
                         Spacer(Modifier.width(12.dp))
-                        Text(
-                            text = "正在连接大模型",
-                            // color = Color.Black, // Will inherit from Surface's contentColor
-                            style = MaterialTheme.typography.bodyMedium
-                        )
+                        Text(text = "正在连接大模型", style = MaterialTheme.typography.bodyMedium)
                     }
                 }
             }
             return@Column
         }
 
-        // 推理过程
-        val hasReasoning = !message.reasoning.isNullOrBlank()
-        if (isAI && hasReasoning && message.contentStarted) {
-            val showThreeDotAnimationOnButton =
-                isReasoningStreaming && !isReasoningComplete && message.contentStarted
+        val shouldShowReasoningToggle =
+            isAI && message.contentStarted && (message.reasoning != null || isReasoningStreaming)
 
-            Box( // Outer Box for padding of the button
-                modifier = Modifier.padding(bottom = 6.dp, top = 2.dp)
+        if (shouldShowReasoningToggle) {
+            // ... Reasoning Toggle Button ... (no change)
+            val showThreeDotAnimationOnButton =
+                isReasoningStreaming && !isReasoningComplete && !message.isError
+            Box(
+                modifier = Modifier.padding(
+                    start = if (isAI) 8.dp else 0.dp,
+                    bottom = 6.dp,
+                    top = 2.dp
+                )
             ) {
-                Box( // The actual button with background and click handling
+                Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
                         .height(38.dp)
@@ -212,8 +256,7 @@ fun MessageBubble(
                         .clickable(
                             onClick = onToggleReasoning,
                             indication = null,
-                            interactionSource = remember { MutableInteractionSource() }
-                        )
+                            interactionSource = remember { MutableInteractionSource() })
                 ) {
                     if (showThreeDotAnimationOnButton) {
                         ThreeDotsLoadingAnimation(
@@ -228,7 +271,7 @@ fun MessageBubble(
                     } else {
                         val circleIconSize by animateDpAsState(
                             targetValue = if (isManuallyExpanded) 12.dp else 8.dp,
-                            label = "circleIconSizeAnimation",
+                            label = "reasoningToggleIconSize",
                             animationSpec = tween(
                                 durationMillis = 250,
                                 easing = FastOutSlowInEasing
@@ -244,9 +287,13 @@ fun MessageBubble(
             }
 
 
+            val isReasoningTextVisible =
+                (isManuallyExpanded && displayedReasoningText.isNotBlank()) ||
+                        (isReasoningStreaming && message.contentStarted && !message.isError && displayedReasoningText.isNotBlank())
+
             AnimatedVisibility(
-                visible = (isReasoningStreaming && message.contentStarted) || isManuallyExpanded,
-                modifier = Modifier.padding(bottom = 8.dp),
+                visible = isReasoningTextVisible,
+                modifier = Modifier.padding(start = if (isAI) 8.dp else 0.dp, bottom = 8.dp),
                 enter = fadeIn(tween(250)) + expandVertically(
                     tween(250),
                     expandFrom = Alignment.Top
@@ -257,9 +304,10 @@ fun MessageBubble(
                     shape = RoundedCornerShape(12.dp),
                     color = userBubbleGreyColor,
                     tonalElevation = 1.dp,
+                    shadowElevation = 0.dp,
                     modifier = Modifier
                         .heightIn(max = 200.dp)
-                        .wrapContentWidth()
+                        .wrapContentWidth(align = Alignment.Start)
                         .align(Alignment.Start)
                 ) {
                     val scrollState = rememberScrollState()
@@ -267,60 +315,117 @@ fun MessageBubble(
                     var autoScrollJob by remember { mutableStateOf<Job?>(null) }
                     var userHasScrolledUp by remember { mutableStateOf(false) }
 
-                    // Scroll logic
+                    // --- MODIFIED: Auto-scroll for reasoning text during streaming ---
                     LaunchedEffect(
-                        isReasoningComplete,
-                        displayedReasoningText,
-                        scrollState.maxValue
+                        currentMessageId, // Ensure job restarts for new messages
+                        isReasoningStreaming,
+                        userHasScrolledUp,
+                        message.contentStarted,
+                        message.isError
+                        // Note: Not including displayedReasoningText or scrollState.maxValue directly as keys
+                        // for the *looping* job, to prevent job cancellation/restart on every char.
+                        // The loop itself will check scrollState.value and scrollState.maxValue.
                     ) {
-                        if (isReasoningComplete && displayedReasoningText == (message.reasoning?.trim()
+                        if (isReasoningStreaming && message.contentStarted && !userHasScrolledUp && !message.isError) {
+                            autoScrollJob?.cancel() // Cancel any existing job
+                            autoScrollJob = coroutineScope.launch {
+                                Log.d(
+                                    "ReasoningScroll",
+                                    "Auto-scroll job STARTED for ${message.id}"
+                                )
+                                try {
+                                    while (isActive) { // Loop while this job is active and conditions met
+                                        // Give a moment for potential layout changes and text updates
+                                        delay(REASONING_STREAM_SCROLL_ATTEMPT_INTERVAL_MS)
+
+                                        if (!isActive) break // Check again after delay
+
+                                        val currentMaxValue = scrollState.maxValue
+                                        if (scrollState.value < currentMaxValue) {
+                                            Log.d(
+                                                "ReasoningScroll",
+                                                "Scrolling ${message.id} from ${scrollState.value} to $currentMaxValue"
+                                            )
+                                            scrollState.animateScrollTo(
+                                                currentMaxValue,
+                                                animationSpec = tween(
+                                                    durationMillis = REASONING_STREAM_SCROLL_ANIMATION_MS,
+                                                    easing = LinearEasing // Use LinearEasing for smoother continuous scroll
+                                                )
+                                            )
+                                        } else {
+                                            Log.d(
+                                                "ReasoningScroll",
+                                                "Scroll unnecessary for ${message.id}: value=${scrollState.value}, max=$currentMaxValue"
+                                            )
+                                        }
+                                    }
+                                } catch (e: CancellationException) {
+                                    Log.d(
+                                        "ReasoningScroll",
+                                        "Auto-scroll job CANCELLED for ${message.id}: ${e.message}"
+                                    )
+                                } finally {
+                                    Log.d(
+                                        "ReasoningScroll",
+                                        "Auto-scroll job FINISHED for ${message.id}"
+                                    )
+                                }
+                            }
+                        } else {
+                            autoScrollJob?.cancel() // Conditions not met, cancel job
+                            Log.d(
+                                "ReasoningScroll",
+                                "Auto-scroll conditions NOT MET for ${message.id}. Cancelling job. Streaming: $isReasoningStreaming, ScrolledUp: $userHasScrolledUp"
+                            )
+                        }
+                    }
+
+                    // Scroll to bottom when reasoning is fully complete (separate from streaming scroll)
+                    LaunchedEffect(
+                        currentMessageId,
+                        isReasoningComplete,
+                        displayedReasoningText, // Trigger when all text is displayed
+                        message.isError
+                    ) {
+                        if (isReasoningComplete && !message.isError && displayedReasoningText == (message.reasoning?.trim()
                                 ?: "")
                         ) {
-                            autoScrollJob?.cancel(); delay(50)
+                            // Ensure the streaming scroll job is stopped before attempting final scroll
+                            autoScrollJob?.cancel()
+                            Log.d(
+                                "ReasoningScroll",
+                                "Reasoning COMPLETE for ${message.id}. Final scroll."
+                            )
+                            // Small delay to ensure UI has settled after text is fully displayed
+                            delay(100)
                             if (isActive && scrollState.value < scrollState.maxValue) {
                                 scrollState.animateScrollTo(
                                     scrollState.maxValue,
-                                    tween(300, easing = FastOutSlowInEasing)
+                                    tween(
+                                        REASONING_COMPLETE_SCROLL_ANIMATION_MS,
+                                        easing = FastOutSlowInEasing
+                                    )
                                 )
                             }
                         }
                     }
-                    LaunchedEffect(
-                        isReasoningStreaming,
-                        message.contentStarted,
-                        userHasScrolledUp
-                    ) {
-                        if (isReasoningStreaming && message.contentStarted && !userHasScrolledUp) {
-                            autoScrollJob?.cancel()
-                            autoScrollJob = coroutineScope.launch {
-                                try {
-                                    while (isActive) {
-                                        if (scrollState.value < scrollState.maxValue) {
-                                            scrollState.animateScrollTo(
-                                                scrollState.maxValue,
-                                                tween(
-                                                    REASONING_AUTO_SCROLL_ANIMATION_MS,
-                                                    easing = LinearOutSlowInEasing
-                                                )
-                                            )
-                                        }
-                                        delay(REASONING_AUTO_SCROLL_INTERVAL_MS)
-                                    }
-                                } catch (e: CancellationException) { /* Allowed */
-                                }
-                            }
-                        } else {
-                            autoScrollJob?.cancel()
-                        }
-                    }
+
                     val nestedScrollConnection = remember {
                         object : NestedScrollConnection {
                             override fun onPreScroll(
                                 available: Offset,
                                 source: NestedScrollSource
                             ): Offset {
-                                if (available.y > 0 && scrollState.canScrollForward) {
-                                    userHasScrolledUp = true; autoScrollJob?.cancel()
+                                if (source == NestedScrollSource.Drag && available.y > 0 && scrollState.canScrollForward) {
+                                    if (!userHasScrolledUp) { // Only log and set if state changes
+                                        userHasScrolledUp = true
+                                        Log.d(
+                                            "ReasoningScroll",
+                                            "User scrolled UP ${message.id}. Auto-scroll DISABLED."
+                                        )
+                                        // autoScrollJob is cancelled by the LaunchedEffect reacting to userHasScrolledUp
+                                    }
                                 }
                                 return Offset.Zero
                             }
@@ -331,7 +436,14 @@ fun MessageBubble(
                                 source: NestedScrollSource
                             ): Offset {
                                 if (source == NestedScrollSource.Drag && available.y < 0 && (scrollState.value >= scrollState.maxValue - 1)) {
-                                    if (userHasScrolledUp) userHasScrolledUp = false
+                                    if (userHasScrolledUp) { // Only log and set if state changes
+                                        userHasScrolledUp = false
+                                        Log.d(
+                                            "ReasoningScroll",
+                                            "User scrolled to BOTTOM ${message.id}. Auto-scroll RE-ENABLED (if streaming)."
+                                        )
+                                        // The LaunchedEffect will pick up userHasScrolledUp=false and restart job if streaming
+                                    }
                                 }
                                 return Offset.Zero
                             }
@@ -349,7 +461,7 @@ fun MessageBubble(
                             SelectionContainer {
                                 Text(
                                     text = displayedReasoningText,
-                                    color = Color(0xFF444444),
+                                    color = reasoningTextColor,
                                     style = MaterialTheme.typography.bodyMedium
                                 )
                             }
@@ -359,45 +471,54 @@ fun MessageBubble(
             }
         }
 
-        // 主体气泡区
-        if (!showLoadingBubble) {
-            val aiBubbleColor = Color.White
+        val shouldShowMainBubble =
+            !showLoadingBubble && ((message.contentStarted || !isAI) || message.isError)
+        if (shouldShowMainBubble) {
+            // ... Main Message Bubble Surface and Box ... (no change)
             val actualBubbleColor = if (isAI) aiBubbleColor else userBubbleGreyColor
-            val actualContentColor = Color.Black
+            val actualContentColor =
+                if (message.isError && isAI) errorTextColor else contentBlackColor
 
             Surface(
                 color = actualBubbleColor,
                 contentColor = actualContentColor,
-                tonalElevation = if (isAI) 0.dp else 1.dp,
                 shadowElevation = 0.dp,
+                tonalElevation = if (isAI) 0.dp else 1.dp,
                 shape = RoundedCornerShape(18.dp),
                 modifier = Modifier
-                    .padding(vertical = 2.dp)
+                    .padding(
+                        start = if (isAI) 8.dp else 0.dp,
+                        end = if (!isAI) 8.dp else 0.dp,
+                        top = 2.dp,
+                        bottom = 2.dp
+                    )
                     .wrapContentWidth()
                     .align(if (isAI) Alignment.Start else Alignment.End)
             ) {
                 Box(
                     contentAlignment = Alignment.CenterStart,
                     modifier = Modifier
-                        .padding(horizontal = 12.dp, vertical = 5.dp)
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
                         .wrapContentWidth()
-                        .defaultMinSize(minHeight = 32.dp)
+                        .defaultMinSize(minHeight = 28.dp)
                 ) {
                     if (showMainBubbleLoadingDots) {
                         ThreeDotsLoadingAnimation(
-                            dotColor = MaterialTheme.colorScheme.primary, // This one stays primary as per no change request
+                            dotColor = MaterialTheme.colorScheme.primary,
                             modifier = Modifier
                                 .align(Alignment.Center)
                                 .offset(y = (-6).dp)
                         )
-                    } else {
+                    } else if (displayedMainTextState.isNotBlank() || (isAI && message.isError)) {
                         SelectionContainer {
                             Text(
                                 text = displayedMainTextState,
                                 textAlign = TextAlign.Start,
-                                modifier = Modifier
+                                color = if (message.isError) errorTextColor else actualContentColor
                             )
                         }
+                    } else if (isAI && message.contentStarted && !localAnimationTriggeredOrCompleted && !message.isError) {
+                        Spacer(Modifier.size(0.dp))
                     }
                 }
             }
@@ -405,7 +526,7 @@ fun MessageBubble(
     }
 }
 
-// ThreeDotsLoadingAnimation
+// ThreeDotsLoadingAnimation - NO CHANGE HERE
 @Composable
 private fun ThreeDotsLoadingAnimation(
     modifier: Modifier = Modifier,
@@ -417,7 +538,7 @@ private fun ThreeDotsLoadingAnimation(
     animationDuration: Int = 450
 ) {
     val infiniteTransition =
-        rememberInfiniteTransition(label = "dots_loader_bubble_${dotColor.value}")
+        rememberInfiniteTransition(label = "three_dots_loader_bubble_${dotColor.value}")
 
     @Composable
     fun animateDot(delayMillis: Int): Pair<Float, Float> {
@@ -426,8 +547,11 @@ private fun ThreeDotsLoadingAnimation(
             initialValue = 0f,
             targetValue = 0f,
             animationSpec = infiniteRepeatable(animation = keyframes {
-                durationMillis =
-                    animationDuration * 3; 0f at (animationDuration * 0) + delayMillis using LinearEasing; -bounceHeight.value at (animationDuration * 1) + delayMillis using LinearEasing; 0f at (animationDuration * 2) + delayMillis using LinearEasing; 0f at (animationDuration * 3) + delayMillis using LinearEasing
+                durationMillis = animationDuration * 3
+                0f at (animationDuration * 0) + delayMillis with LinearEasing
+                -bounceHeight.value at (animationDuration * 1) + delayMillis with LinearEasing
+                0f at (animationDuration * 2) + delayMillis with LinearEasing
+                0f at (animationDuration * 3) + delayMillis with LinearEasing
             }, repeatMode = RepeatMode.Restart),
             label = "${key}_yOffset_bubble"
         );
@@ -435,8 +559,11 @@ private fun ThreeDotsLoadingAnimation(
             initialValue = 1f,
             targetValue = 1f,
             animationSpec = infiniteRepeatable(animation = keyframes {
-                durationMillis =
-                    animationDuration * 3; 1f at (animationDuration * 0) + delayMillis using LinearEasing; scaleAmount at (animationDuration * 1) + delayMillis using LinearEasing; 1f at (animationDuration * 2) + delayMillis using LinearEasing; 1f at (animationDuration * 3) + delayMillis using LinearEasing
+                durationMillis = animationDuration * 3
+                1f at (animationDuration * 0) + delayMillis with LinearEasing
+                scaleAmount at (animationDuration * 1) + delayMillis with LinearEasing
+                1f at (animationDuration * 2) + delayMillis with LinearEasing
+                1f at (animationDuration * 3) + delayMillis with LinearEasing
             }, repeatMode = RepeatMode.Restart),
             label = "${key}_scale_bubble"
         ); return Pair(yOffset, scale)

@@ -119,6 +119,7 @@ dependencies {
     debugImplementation(libs.androidx.ui.tooling)          // BOM 会管理版本
     debugImplementation(libs.androidx.ui.test.manifest)    // BOM 会管理版本
 
-    // 重复的 foundation 依赖，BOM 会管理，可以移除
-    // implementation ("androidx.compose.foundation:foundation:1.5.4")
+
+    implementation("androidx.navigation:navigation-compose:2.7.7")
+
 }
