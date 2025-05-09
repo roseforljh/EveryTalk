@@ -1,4 +1,4 @@
-package com.example.app1.ui.screens
+package com.example.app1.ui.screens.viewmodel
 
 import android.util.Log
 import androidx.activity.compose.BackHandler
@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
@@ -44,6 +45,9 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
@@ -51,8 +55,6 @@ import androidx.compose.ui.window.PopupProperties
 import com.example.app1.data.models.Message
 import com.example.app1.data.models.Sender
 import kotlinx.coroutines.delay
-import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.roundToInt
 
 // --- 常量定义 ---
@@ -131,7 +133,7 @@ private fun rememberGeneratedPreviewSnippet(
 @OptIn(
     ExperimentalFoundationApi::class,
     ExperimentalMaterial3Api::class,
-    androidx.compose.ui.ExperimentalComposeUiApi::class
+    ExperimentalComposeUiApi::class
 )
 @Composable
 fun AppDrawerContent(
@@ -582,10 +584,10 @@ fun AppDrawerContent(
                                                 popupPositionProvider = object :
                                                     PopupPositionProvider {
                                                     override fun calculatePosition(
-                                                        anchorBounds: androidx.compose.ui.unit.IntRect,
-                                                        windowSize: androidx.compose.ui.unit.IntSize,
-                                                        layoutDirection: androidx.compose.ui.unit.LayoutDirection,
-                                                        popupContentSize: androidx.compose.ui.unit.IntSize
+                                                        anchorBounds: IntRect,
+                                                        windowSize: IntSize,
+                                                        layoutDirection: LayoutDirection,
+                                                        popupContentSize: IntSize
                                                     ): IntOffset {
                                                         val x =
                                                             anchorBounds.left + currentLongPressPosition.x.roundToInt()

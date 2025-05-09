@@ -6,9 +6,10 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.items // AndroidX Compose Foundation
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -31,21 +32,21 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.platform.LocalConfiguration // <-- ** Import LocalConfiguration **
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.Dp // <-- ** Import Dp **
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
-import com.example.app1.AppViewModel
-import com.example.app1.data.models.Message
 import com.example.app1.data.models.Sender
 import com.example.app1.navigation.Screen
 import com.example.app1.ui.components.AppTopBar
-import com.example.app1.ui.components.MessageBubble
+import com.example.app1.AppViewModel
+import com.example.app1.ui.screens.BubbleMain.Main.MessageBubble
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -55,9 +56,10 @@ import kotlinx.coroutines.launch
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.pow
 
-// Constants remain the same
+// 常量
 private const val CHAT_SCREEN_AUTO_SCROLL_DELAY_MS = 100L
 private const val CHAT_SCREEN_STREAMING_SCROLL_INTERVAL_MS = 150L
+private const val USER_INACTIVITY_TIMEOUT_MS = 5000L
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -83,34 +85,65 @@ fun ChatScreen(
     var userManuallyScrolledUp by remember { mutableStateOf(false) }
     var ongoingScrollJob by remember { mutableStateOf<Job?>(null) }
 
-    // --- *** Calculate Max Bubble Width *** ---
+    var lastInteractionTime by remember { mutableStateOf(System.currentTimeMillis()) }
+    var isUserActive by remember { mutableStateOf(true) }
+
+    val resetInactivityTimer: () -> Unit = {
+        lastInteractionTime = System.currentTimeMillis()
+        if (!isUserActive) {
+            isUserActive = true
+            Log.d("FAB_Inactivity", "User became active. Resetting inactivity timer.")
+        }
+    }
+
+    LaunchedEffect(lastInteractionTime) {
+        isUserActive = true
+        Log.d(
+            "FAB_Inactivity",
+            "User activity detected or timer restarted. Active for ${USER_INACTIVITY_TIMEOUT_MS}ms."
+        )
+        delay(USER_INACTIVITY_TIMEOUT_MS)
+        if (isActive) {
+            isUserActive = false
+            Log.d(
+                "FAB_Inactivity",
+                "User inactive after ${USER_INACTIVITY_TIMEOUT_MS}ms timeout. Hiding FAB."
+            )
+        }
+    }
+
+    LaunchedEffect(text) {
+        if (text.isNotEmpty() || (text.isEmpty() && viewModel.text.value.isNotEmpty())) {
+            resetInactivityTimer()
+        }
+    }
+
     val configuration = LocalConfiguration.current
     val screenWidth = configuration.screenWidthDp.dp
-    val bubbleMaxWidth = remember(screenWidth) { // Remember based on screen width
-        (screenWidth * 0.8f).coerceAtMost(600.dp) // Example: 80% of screen, max 600dp
-    }
-    // --- *** End Calculate Max Bubble Width *** ---
+    val bubbleMaxWidth = remember(screenWidth) { (screenWidth * 0.8f).coerceAtMost(600.dp) }
+    val codeBlockViewWidth = remember(screenWidth) { (screenWidth * 0.9f).coerceAtMost(700.dp) }
 
-
-    // ... (NestedScrollConnection - unchanged) ...
     val overscrollConsumingConnection = remember {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
                 if (!listState.canScrollBackward && available.y < 0 && source == NestedScrollSource.Drag) {
                     return available
-                }; return Offset.Zero
+                }
+                return Offset.Zero
             }
 
             override suspend fun onPreFling(available: Velocity): Velocity {
                 if (!listState.canScrollBackward && available.y < 0) {
                     return available
-                }; return Velocity.Zero
+                }
+                return Velocity.Zero
             }
 
             override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
                 if (!listState.canScrollBackward && available.y < 0) {
                     return available
-                }; return super.onPostFling(consumed, available)
+                }
+                return super.onPostFling(consumed, available)
             }
 
             override fun onPostScroll(
@@ -120,60 +153,103 @@ fun ChatScreen(
             ): Offset {
                 if (!listState.canScrollBackward && available.y < 0 && source == NestedScrollSource.Drag) {
                     return available
-                }; return Offset.Zero
+                }
+                return Offset.Zero
             }
         }
     }
 
-    // ... (LaunchedEffect for user scroll detection - unchanged) ...
-    LaunchedEffect(listState) {
+    LaunchedEffect(listState, messages.size) {
+        var lastKnownFirstVisibleIndex = listState.firstVisibleItemIndex
+        var lastKnownScrollInProgress = listState.isScrollInProgress
+        var lastKnownFirstVisibleScrollOffset = listState.firstVisibleItemScrollOffset
+
         snapshotFlow {
-            if (messages.isEmpty()) return@snapshotFlow false
-            val layoutInfo = listState.layoutInfo
-            val visibleItemsInfo = layoutInfo.visibleItemsInfo
-            if (visibleItemsInfo.isEmpty()) return@snapshotFlow false
-            val firstVisibleItemIndex = visibleItemsInfo.first().index
-            firstVisibleItemIndex > 0
-        }.collect { scrolledUp ->
-            Log.d("ChatScroll", "SnapshotFlow - ScrolledUp: $scrolledUp")
-            if (userManuallyScrolledUp != scrolledUp) {
-                userManuallyScrolledUp = scrolledUp
-                if (scrolledUp) ongoingScrollJob?.cancel()
+            Triple(
+                listState.firstVisibleItemIndex,
+                listState.isScrollInProgress,
+                listState.firstVisibleItemScrollOffset
+            )
+        }.collect { (currentIndex, currentScrollInProgress, currentOffset) ->
+            if (currentIndex != lastKnownFirstVisibleIndex ||
+                currentOffset != lastKnownFirstVisibleScrollOffset ||
+                (currentScrollInProgress && !lastKnownScrollInProgress) ||
+                (!currentScrollInProgress && lastKnownScrollInProgress)
+            ) {
+                resetInactivityTimer()
             }
+
+            if (messages.isEmpty()) {
+                if (userManuallyScrolledUp) userManuallyScrolledUp = false
+                lastKnownFirstVisibleIndex = currentIndex
+                lastKnownScrollInProgress = currentScrollInProgress
+                lastKnownFirstVisibleScrollOffset = currentOffset
+                return@collect
+            }
+
+            val scrolledAwayFromBottom =
+                currentIndex > 0 || (currentIndex == 0 && currentOffset > 0)
+
+            if (scrolledAwayFromBottom && currentScrollInProgress &&
+                ((currentOffset < lastKnownFirstVisibleScrollOffset && currentIndex == lastKnownFirstVisibleIndex) ||
+                        (currentIndex > lastKnownFirstVisibleIndex))
+            ) {
+                if (!userManuallyScrolledUp) {
+                    userManuallyScrolledUp = true
+                    Log.d("ChatScroll", "User manually scrolled up. Cancelling ongoing scroll job.")
+                    ongoingScrollJob?.cancel(CancellationException("User scrolled up manually"))
+                }
+            }
+            lastKnownFirstVisibleIndex = currentIndex
+            lastKnownScrollInProgress = currentScrollInProgress
+            lastKnownFirstVisibleScrollOffset = currentOffset
         }
     }
 
-
-    // ... (Auto-scroll logic - unchanged) ...
-    LaunchedEffect(
-        messages.size,
-        currentStreamingAiMessageId,
-        isApiCalling,
-        userManuallyScrolledUp
-    ) {
-        ongoingScrollJob?.cancel()
-        if (messages.isEmpty()) return@LaunchedEffect
+    LaunchedEffect(messages.size, currentStreamingAiMessageId, isApiCalling) {
+        ongoingScrollJob?.cancel(CancellationException("New auto-scroll event"))
+        if (messages.isEmpty()) {
+            if (userManuallyScrolledUp) userManuallyScrolledUp = false
+            return@LaunchedEffect
+        }
 
         val targetIndex = 0
-        val isStreamingThisMessage = currentStreamingAiMessageId != null && isApiCalling
-        val shouldScroll = !userManuallyScrolledUp || isStreamingThisMessage
+        val isStreamingThisMessage = currentStreamingAiMessageId != null &&
+                isApiCalling &&
+                messages.firstOrNull()?.id == currentStreamingAiMessageId
 
-        if (shouldScroll) {
+        val shouldScrollProgrammatically = !userManuallyScrolledUp || isStreamingThisMessage
+
+        if (shouldScrollProgrammatically) {
             ongoingScrollJob = coroutineScope.launch {
                 delay(CHAT_SCREEN_AUTO_SCROLL_DELAY_MS)
                 if (!isActive) return@launch
+
                 try {
                     listState.animateScrollToItem(index = targetIndex)
+                    if (isActive) {
+                        val actuallyAtBottom =
+                            listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+                        if (actuallyAtBottom) {
+                            if (!(isStreamingThisMessage && userManuallyScrolledUp)) {
+                                if (userManuallyScrolledUp) userManuallyScrolledUp = false
+                            }
+                        } else if (!userManuallyScrolledUp && !(isStreamingThisMessage && userManuallyScrolledUp)) {
+                            Log.w("ChatScroll", "Auto-scroll finished but not perfectly at bottom.")
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    Log.d("ChatScroll", "Auto-scroll: Animation cancelled: ${e.message}")
                 } catch (e: Exception) {
-                    Log.e("ChatScroll", "Auto-scroll error: ${e.message}", e)
+                    Log.e("ChatScroll", "Auto-scroll: Error during animation: ${e.message}", e)
                 }
 
-                if (isStreamingThisMessage && !userManuallyScrolledUp) {
+                if (isStreamingThisMessage && isActive) {
                     try {
                         while (isActive && currentStreamingAiMessageId != null && isApiCalling && !userManuallyScrolledUp) {
                             val firstVisible = listState.firstVisibleItemIndex
                             val firstVisibleOffset = listState.firstVisibleItemScrollOffset
-                            if (firstVisible > 0 || firstVisibleOffset > with(density) { 4.dp.toPx() }) {
+                            if (firstVisible > 0 || firstVisibleOffset > with(density) { 1.dp.toPx() }) {
                                 listState.animateScrollToItem(index = targetIndex)
                             }
                             delay(CHAT_SCREEN_STREAMING_SCROLL_INTERVAL_MS)
@@ -183,26 +259,60 @@ fun ChatScreen(
                         Log.e("ChatScroll", "Streaming scroll error: ${e.message}", e)
                     }
                 }
-            }
-        }
-    }
-
-    // ... (Forced scroll to bottom event - unchanged) ...
-    LaunchedEffect(Unit) {
-        viewModel.scrollToBottomEvent.collectLatest {
-            ongoingScrollJob?.cancel()
-            ongoingScrollJob = coroutineScope.launch {
-                try {
-                    listState.animateScrollToItem(0)
-                    if (userManuallyScrolledUp) userManuallyScrolledUp = false
-                } catch (e: Exception) {
-                    Log.e("ChatScroll", "Forced scroll error: ${e.message}", e)
+            }.also { job ->
+                job.invokeOnCompletion {
+                    if (ongoingScrollJob === job) ongoingScrollJob = null
                 }
             }
         }
     }
 
-    // ... (Collapse reasoning - unchanged) ...
+    LaunchedEffect(Unit) {
+        viewModel.scrollToBottomEvent.collectLatest {
+            Log.d("ChatScroll", "Received scrollToBottomEvent from ViewModel.")
+            ongoingScrollJob?.cancel(CancellationException("Forced scroll event (scrollToBottom) from ViewModel"))
+            ongoingScrollJob = coroutineScope.launch {
+                try {
+                    if (messages.isNotEmpty()) listState.animateScrollToItem(0)
+                    if (userManuallyScrolledUp) userManuallyScrolledUp = false
+                } catch (e: Exception) {
+                    Log.e("ChatScroll", "Forced scroll (scrollToBottom) error: ${e.message}", e)
+                }
+            }.also { job ->
+                job.invokeOnCompletion {
+                    if (ongoingScrollJob === job) ongoingScrollJob = null
+                }
+            }
+        }
+    }
+
+    // The scrollToIndexEvent listener is no longer strictly needed for the new "regenerate" logic
+    // as it always results in scrolling to the bottom.
+    // However, if you plan to reintroduce features that require scrolling to a specific mid-list item,
+    // you can uncomment and adapt it.
+    /*
+    val scrollToIndex by viewModel.scrollToIndexEvent.collectAsState() // Assuming you re-add this to ViewModel
+    LaunchedEffect(scrollToIndex) {
+        scrollToIndex?.let { index ->
+            Log.d("ChatScroll", "Received scrollToIndexEvent from ViewModel: Index $index.")
+            if (index >= 0 && index < messages.size) {
+                ongoingScrollJob?.cancel(CancellationException("Forced scroll event (scrollToIndex) from ViewModel"))
+                ongoingScrollJob = coroutineScope.launch {
+                    try {
+                        listState.animateScrollToItem(index)
+                        Log.d("ChatScroll", "Scrolled to index $index due to event.")
+                    } catch (e: Exception) {
+                        Log.e("ChatScroll", "Forced scroll (scrollToIndex $index) error: ${e.message}", e)
+                    }
+                }.also { job -> job.invokeOnCompletion { if (ongoingScrollJob === job) ongoingScrollJob = null } }
+            } else {
+                Log.w("ChatScroll", "Invalid scroll to index request: $index. List size: ${messages.size}")
+            }
+            viewModel.consumedScrollToIndexEvent() // Assuming you re-add this to ViewModel
+        }
+    }
+    */
+
     LaunchedEffect(messages.size, reasoningCompleteMap) {
         messages.forEach { msg ->
             if (msg.sender == Sender.AI && !msg.reasoning.isNullOrBlank()) {
@@ -214,35 +324,49 @@ fun ChatScreen(
         }
     }
 
-    // ... (Scroll to bottom button logic - unchanged) ...
-    val isUserActuallyScrolling = listState.isScrollInProgress
-    val firstVisibleItemIndex = listState.firstVisibleItemIndex
-    val scrollToBottomButtonVisible by remember(
-        messages.size,
-        firstVisibleItemIndex,
-        isUserActuallyScrolling
-    ) {
+    val isAtBottom by remember {
         derivedStateOf {
-            val visible = messages.isNotEmpty() &&
-                    firstVisibleItemIndex > 0 &&
-                    !isUserActuallyScrolling
-            Log.d(
-                "FAB_Visibility",
-                "Messages: ${messages.isNotEmpty()}, FirstVisibleIndex: $firstVisibleItemIndex (>0 -> ${firstVisibleItemIndex > 0}), NotScrolling: ${!isUserActuallyScrolling} => Visible: $visible"
-            )
-            visible
+            if (messages.isEmpty()) true
+            else listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
         }
     }
 
+    LaunchedEffect(isAtBottom, userManuallyScrolledUp, listState.isScrollInProgress) {
+        if (isAtBottom && userManuallyScrolledUp && !listState.isScrollInProgress) {
+            Log.d("ChatScroll", "Reached bottom, resetting userManuallyScrolledUp.")
+            userManuallyScrolledUp = false
+        }
+    }
+
+    val scrollToBottomButtonVisible by remember(
+        userManuallyScrolledUp,
+        listState.isScrollInProgress,
+        messages.size,
+        isAtBottom,
+        isUserActive
+    ) {
+        derivedStateOf {
+            val baseVisibility =
+                userManuallyScrolledUp && !listState.isScrollInProgress && messages.isNotEmpty()
+            baseVisibility && !isAtBottom && isUserActive
+        }
+    }
+
+    val showEditDialog by viewModel.showEditDialog.collectAsState()
+    val editDialogInputText by viewModel.editDialogInputText.collectAsState()
+
     Scaffold(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier
+            .fillMaxSize()
+            .pointerInput(Unit) { detectTapGestures(onTap = { resetInactivityTimer() }) },
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         containerColor = Color.White,
         topBar = {
             AppTopBar(
                 selectedConfigName = selectedApiConfig?.model ?: "选择配置",
                 onMenuClick = { coroutineScope.launch { viewModel.drawerState.open() } },
-                onSettingsClick = { navController.navigate(Screen.SETTINGS_SCREEN) })
+                onSettingsClick = { navController.navigate(Screen.SETTINGS_SCREEN) }
+            )
         },
         floatingActionButton = {
             AnimatedVisibility(
@@ -260,15 +384,23 @@ fun ChatScreen(
             ) {
                 FloatingActionButton(
                     onClick = {
+                        resetInactivityTimer()
                         coroutineScope.launch {
-                            listState.animateScrollToItem(0)
+                            ongoingScrollJob?.cancel(CancellationException("FAB (scroll to bottom) clicked"))
+                            if (messages.isNotEmpty()) listState.animateScrollToItem(0)
                             if (userManuallyScrolledUp) userManuallyScrolledUp = false
                         }
                     },
                     modifier = Modifier.padding(bottom = 160.dp),
                     shape = RoundedCornerShape(16.dp),
                     containerColor = Color.White,
-                    contentColor = Color.Black
+                    contentColor = Color.Black,
+                    elevation = FloatingActionButtonDefaults.elevation(
+                        defaultElevation = 0.dp,
+                        pressedElevation = 0.dp,
+                        focusedElevation = 0.dp,
+                        hoveredElevation = 0.dp
+                    )
                 ) {
                     Icon(Icons.Filled.ArrowDownward, contentDescription = "滚动到底部")
                 }
@@ -294,7 +426,7 @@ fun ChatScreen(
                 contentPadding = PaddingValues(top = 12.dp, bottom = 12.dp)
             ) {
                 items(
-                    messages,
+                    items = messages,
                     key = { message -> message.id }
                 ) { message ->
                     val isMainContentStreaming = message.sender == Sender.AI &&
@@ -305,6 +437,7 @@ fun ChatScreen(
                     MessageBubble(
                         message = message,
                         viewModel = viewModel,
+                        onUserInteraction = { resetInactivityTimer() },
                         isMainContentStreaming = isMainContentStreaming,
                         isReasoningStreaming = (message.sender == Sender.AI &&
                                 message.id == currentStreamingAiMessageId &&
@@ -314,19 +447,31 @@ fun ChatScreen(
                                 message.contentStarted),
                         isReasoningComplete = reasoningCompleteMap[message.id] ?: false,
                         isManuallyExpanded = expandedReasoningStates[message.id] ?: false,
-                        onToggleReasoning = { viewModel.onToggleReasoningExpand(message.id) },
-                        maxWidth = bubbleMaxWidth, // <-- *** PASS MAX WIDTH ***
+                        onToggleReasoning = {
+                            resetInactivityTimer()
+                            viewModel.onToggleReasoningExpand(message.id)
+                        },
+                        maxWidth = bubbleMaxWidth,
+                        codeBlockFixedWidth = codeBlockViewWidth,
                         showLoadingBubble = (message.sender == Sender.AI &&
                                 message.id == currentStreamingAiMessageId &&
                                 isApiCalling &&
                                 !message.contentStarted &&
                                 message.text.isBlank() &&
-                                message.reasoning.isNullOrBlank())
+                                message.reasoning.isNullOrBlank()),
+                        onEditRequest = { msgToEdit ->
+                            resetInactivityTimer()
+                            viewModel.requestEditMessage(msgToEdit)
+                        },
+                        onRegenerateRequest = { userMessageForRegen ->
+                            resetInactivityTimer()
+                            viewModel.regenerateAiResponse(userMessageForRegen)
+                        }
                     )
                 }
+
                 if (messages.isEmpty()) {
                     item {
-                        // ... (Empty state "你好..." - unchanged) ...
                         Box(
                             modifier = Modifier
                                 .fillParentMaxSize()
@@ -348,7 +493,7 @@ fun ChatScreen(
                                 val numCycles = 5;
                                 val initialBouncePhaseDurationMs = 250;
                                 val finalBouncePhaseDurationMs = 600;
-                                val dotInterDelayMs = 150L;
+                                val dotInterDelayMs = 150L
                                 val initialAmplitudePx = with(density) { initialAmplitudeDp.toPx() }
                                 val dot1OffsetY = remember { Animatable(0f) };
                                 val dot2OffsetY = remember { Animatable(0f) };
@@ -377,35 +522,37 @@ fun ChatScreen(
                                             easing = FastOutSlowInEasing
                                         )
                                     )
-                                    }; launch {
-                                    delay(dotInterDelayMs); dot2OffsetY.animateTo(
-                                    currentCycleAmplitudePx,
-                                    tween(
-                                        currentBouncePhaseDurationMs,
-                                        easing = FastOutSlowInEasing
+                                    };
+                                    launch {
+                                        delay(dotInterDelayMs); dot2OffsetY.animateTo(
+                                        currentCycleAmplitudePx,
+                                        tween(
+                                            currentBouncePhaseDurationMs,
+                                            easing = FastOutSlowInEasing
+                                        )
+                                    ); dot2OffsetY.animateTo(
+                                        0f,
+                                        tween(
+                                            currentBouncePhaseDurationMs,
+                                            easing = FastOutSlowInEasing
+                                        )
                                     )
-                                ); dot2OffsetY.animateTo(
-                                    0f,
-                                    tween(
-                                        currentBouncePhaseDurationMs,
-                                        easing = FastOutSlowInEasing
+                                    };
+                                    launch {
+                                        delay(dotInterDelayMs * 2); dot3OffsetY.animateTo(
+                                        currentCycleAmplitudePx,
+                                        tween(
+                                            currentBouncePhaseDurationMs,
+                                            easing = FastOutSlowInEasing
+                                        )
+                                    ); dot3OffsetY.animateTo(
+                                        0f,
+                                        tween(
+                                            currentBouncePhaseDurationMs,
+                                            easing = FastOutSlowInEasing
+                                        )
                                     )
-                                )
-                                }; launch {
-                                    delay(dotInterDelayMs * 2); dot3OffsetY.animateTo(
-                                    currentCycleAmplitudePx,
-                                    tween(
-                                        currentBouncePhaseDurationMs,
-                                        easing = FastOutSlowInEasing
-                                    )
-                                ); dot3OffsetY.animateTo(
-                                    0f,
-                                    tween(
-                                        currentBouncePhaseDurationMs,
-                                        easing = FastOutSlowInEasing
-                                    )
-                                )
-                                }
+                                    }
                                 }
                                 }
                                 }
@@ -428,9 +575,8 @@ fun ChatScreen(
                         }
                     }
                 }
-            } // End LazyColumn
+            }
 
-            // ... (Input Area - unchanged) ...
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -449,11 +595,11 @@ fun ChatScreen(
             ) {
                 OutlinedTextField(
                     value = text,
-                    onValueChange = viewModel::onTextChange,
+                    onValueChange = { viewModel.onTextChange(it) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(focusRequester)
-                        .onFocusChanged {}
+                        .onFocusChanged { if (it.isFocused) resetInactivityTimer() }
                         .padding(bottom = 4.dp),
                     placeholder = { Text("输入消息…") },
                     colors = OutlinedTextFieldDefaults.colors(
@@ -468,28 +614,28 @@ fun ChatScreen(
                         focusedLabelColor = MaterialTheme.colorScheme.primary,
                         unfocusedLabelColor = Color.Gray
                     ),
-                    minLines = 1,
-                    maxLines = 5,
+                    minLines = 1, maxLines = 5,
                     trailingIcon = {
-                        val showClearButton =
-                            text.isNotBlank() && !isApiCalling; AnimatedVisibility(
-                        visible = showClearButton,
-                        enter = fadeIn(tween(200)) + scaleIn(tween(200), initialScale = 0.9f),
-                        exit = fadeOut(tween(150)) + scaleOut(tween(150), targetScale = 0.7f)
-                    ) {
-                        IconButton(
-                            onClick = { viewModel.onTextChange("") },
-                            modifier = Modifier.size(30.dp)
+                        val showClearButton = text.isNotBlank() && !isApiCalling
+                        AnimatedVisibility(
+                            visible = showClearButton,
+                            enter = fadeIn(tween(200)) + scaleIn(tween(200), initialScale = 0.9f),
+                            exit = fadeOut(tween(150)) + scaleOut(tween(150), targetScale = 0.7f)
                         ) {
-                            Icon(
-                                Icons.Filled.Clear,
-                                "清除内容",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(20.dp)
-                            )
+                            IconButton(
+                                onClick = { viewModel.onTextChange(""); resetInactivityTimer() },
+                                modifier = Modifier.size(30.dp)
+                            ) {
+                                Icon(
+                                    Icons.Filled.Clear,
+                                    "清除内容",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                         }
                     }
-                    })
+                )
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -497,9 +643,11 @@ fun ChatScreen(
                     contentAlignment = Alignment.CenterEnd
                 ) {
                     IconButton(
-                        enabled = true,
                         onClick = {
-                            if (isApiCalling) viewModel.onCancelAPICall() else if (text.isNotBlank() && selectedApiConfig != null) {
+                            resetInactivityTimer()
+                            if (isApiCalling) {
+                                viewModel.onCancelAPICall()
+                            } else if (text.isNotBlank() && selectedApiConfig != null) {
                                 keyboardController?.hide(); viewModel.onSendMessage()
                             }
                         },
@@ -510,13 +658,62 @@ fun ChatScreen(
                         colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
                     ) {
                         Icon(
-                            imageVector = if (isApiCalling) Icons.Filled.Stop else Icons.Filled.North,
-                            contentDescription = if (isApiCalling) "停止" else "发送",
+                            if (isApiCalling) Icons.Filled.Stop else Icons.Filled.North,
+                            if (isApiCalling) "停止" else "发送",
                             modifier = Modifier.size(24.dp)
                         )
                     }
                 }
             }
-        } // End Root Column
-    } // End Scaffold
+        }
+
+        if (showEditDialog) {
+            AlertDialog(
+                onDismissRequest = { viewModel.dismissEditDialog() },
+                title = { Text("编辑消息", color = Color.Black) },
+                text = {
+                    OutlinedTextField(
+                        value = editDialogInputText,
+                        onValueChange = { viewModel.onEditDialogTextChanged(it) },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("消息内容", color = Color.DarkGray) },
+                        textStyle = TextStyle(color = Color.Black, fontSize = 16.sp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.Black,
+                            unfocusedTextColor = Color.Black,
+                            cursorColor = MaterialTheme.colorScheme.primary,
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = Color.LightGray,
+                            focusedContainerColor = Color.White,
+                            unfocusedContainerColor = Color.White,
+                            disabledContainerColor = Color.White,
+                            focusedLabelColor = MaterialTheme.colorScheme.primary,
+                            unfocusedLabelColor = Color.Gray
+                        ),
+                        singleLine = false, maxLines = 5, shape = RoundedCornerShape(8.dp)
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.confirmMessageEdit() }) {
+                        Text(
+                            "确定",
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { viewModel.dismissEditDialog() }) {
+                        Text(
+                            "取消",
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                },
+                shape = RoundedCornerShape(20.dp),
+                containerColor = Color.White,
+                titleContentColor = Color.Black,
+                textContentColor = Color.Black
+            )
+        }
+    }
 }

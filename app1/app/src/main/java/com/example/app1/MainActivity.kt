@@ -4,9 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -17,13 +15,12 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.navigation.NavController // 确保导入
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.app1.data.local.SharedPreferencesDataSource
 import com.example.app1.navigation.Screen // 确保导入
-import com.example.app1.ui.screens.AppDrawerContent // <--- 确保导入你的抽屉 Composable
+import com.example.app1.ui.screens.viewmodel.AppDrawerContent // <--- 确保导入你的抽屉 Composable
 import com.example.app1.ui.screens.ChatScreen
 import com.example.app1.ui.screens.SettingsScreen // 确保导入
 import com.example.app1.ui.theme.App1Theme
@@ -33,6 +30,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.input.ImeAction
+import com.example.app1.AppViewModel
 
 
 // ViewModel Factory (保持不变)

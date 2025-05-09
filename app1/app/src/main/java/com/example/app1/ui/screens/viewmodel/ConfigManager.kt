@@ -1,7 +1,7 @@
 package com.example.app1.ui.screens.viewmodel
 
 import com.example.app1.data.models.ApiConfig
-import com.example.app1.ui.screens.USER_CANCEL_MESSAGE // 假设常量已正确导入
+import com.example.app1.ui.screens.ApiHandler
 import com.example.app1.ui.screens.viewmodel.data.DataPersistenceManager
 import com.example.app1.ui.screens.viewmodel.state.ViewModelStateHolder
 import kotlinx.coroutines.CoroutineScope
