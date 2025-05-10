@@ -13,9 +13,9 @@ import kotlinx.coroutines.launch
  * 管理聊天历史操作，如保存、加载、删除和清除。
  */
 class HistoryManager(
-    private val stateHolder: ViewModelStateHolder,
-    private val persistenceManager: DataPersistenceManager,
-    private val viewModelScope: CoroutineScope
+    private val stateHolder: ViewModelStateHolder,          // ViewModel 状态持有者
+    private val persistenceManager: DataPersistenceManager, // 数据持久化管理器
+    private val viewModelScope: CoroutineScope              // ViewModel 的协程作用域
 ) {
 
     /** 过滤适合保存到历史记录的消息。 */
@@ -75,7 +75,8 @@ class HistoryManager(
                     // 情况 2: 当前聊天是新的或加载的索引无效
                     // 检查现有历史记录中是否有重复项
                     val existingIndex =
-                        if (forceSave && loadedIndex == null) -1 else mutableHistory.indexOfFirst { it == messagesToSave } // 如果是强制保存新聊天，则不检查重复
+                        // 如果是强制保存新聊天 (loadedIndex 为 null)，则不检查重复
+                        if (forceSave && loadedIndex == null) -1 else mutableHistory.indexOfFirst { it == messagesToSave }
 
                     if (existingIndex == -1) {
                         // 未找到重复项（或强制保存），作为新的历史条目添加（在开头）
@@ -117,13 +118,17 @@ class HistoryManager(
         return historyModified // 返回历史结构是否已更改
     }
 
+    /**
+     * 删除指定索引处的历史对话。
+     * @param indexToDelete 要删除的历史对话的索引。
+     */
     fun deleteConversation(indexToDelete: Int) {
         Log.d("HistoryManager", "请求删除历史索引 $indexToDelete。")
-        var deleted = false
-        val currentLoadedIndexBeforeDelete = stateHolder._loadedHistoryIndex.value
+        var deleted = false // 标记是否成功删除
+        val currentLoadedIndexBeforeDelete = stateHolder._loadedHistoryIndex.value // 删除前的加载索引
 
         stateHolder._historicalConversations.update { currentHistory ->
-            if (indexToDelete >= 0 && indexToDelete < currentHistory.size) {
+            if (indexToDelete >= 0 && indexToDelete < currentHistory.size) { // 检查索引有效性
                 val mutableHistory = currentHistory.toMutableList()
                 mutableHistory.removeAt(indexToDelete) // 从列表中移除
                 deleted = true
@@ -131,12 +136,14 @@ class HistoryManager(
 
                 // 如有必要，调整加载的索引
                 if (currentLoadedIndexBeforeDelete == indexToDelete) {
+                    // 如果删除的是当前加载的项，则重置加载索引
                     stateHolder._loadedHistoryIndex.value = null
                     Log.d(
                         "HistoryManager",
                         "已删除当前加载的历史 $indexToDelete，重置 loadedHistoryIndex。"
                     )
                 } else if (currentLoadedIndexBeforeDelete != null && currentLoadedIndexBeforeDelete > indexToDelete) {
+                    // 如果删除的项在当前加载项之前，则加载索引减一
                     stateHolder._loadedHistoryIndex.value = currentLoadedIndexBeforeDelete - 1
                     Log.d(
                         "HistoryManager",
@@ -149,25 +156,28 @@ class HistoryManager(
                 currentHistory // 返回原始列表
             }
         }
-        if (deleted) {
+        if (deleted) { // 如果成功删除
             persistenceManager.saveChatHistory() // 持久化删除操作
-            viewModelScope.launch { stateHolder._snackbarMessage.emit("对话已删除") }
+            viewModelScope.launch { stateHolder._snackbarMessage.emit("对话已删除") } // 显示提示
         }
     }
 
+    /**
+     * 清除所有历史记录。
+     */
     fun clearAllHistory() {
         Log.d("HistoryManager", "请求清除所有历史记录。")
-        if (stateHolder._historicalConversations.value.isNotEmpty()) {
-            stateHolder._historicalConversations.value = emptyList()
+        if (stateHolder._historicalConversations.value.isNotEmpty()) { // 如果历史记录不为空
+            stateHolder._historicalConversations.value = emptyList() // 清空历史列表
             if (stateHolder._loadedHistoryIndex.value != null) {
-                stateHolder._loadedHistoryIndex.value = null
+                stateHolder._loadedHistoryIndex.value = null // 重置加载索引
                 Log.d("HistoryManager", "历史记录已清除，重置 loadedHistoryIndex。")
             }
             persistenceManager.saveChatHistory() // 持久化清除操作
-            viewModelScope.launch { stateHolder._snackbarMessage.emit("所有历史记录已清除") }
+            viewModelScope.launch { stateHolder._snackbarMessage.emit("所有历史记录已清除") } // 显示提示
         } else {
             Log.d("HistoryManager", "没有历史记录可以清除。")
-            viewModelScope.launch { stateHolder._snackbarMessage.emit("没有历史记录可以清除") }
+            viewModelScope.launch { stateHolder._snackbarMessage.emit("没有历史记录可以清除") } // 显示提示
         }
     }
 }

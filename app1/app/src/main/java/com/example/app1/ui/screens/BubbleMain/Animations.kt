@@ -35,7 +35,8 @@ fun ThreeDotsLoadingAnimation(
     animationDuration: Int = 450 // 单个点完成一次跳动动画（上、下）所需的时间
 ) {
     // 无限循环过渡，用于驱动动画
-    val infiniteTransition = rememberInfiniteTransition(label = "three_dots_loader_bubble_${dotColor.value.toULong()}")
+    val infiniteTransition =
+        rememberInfiniteTransition(label = "three_dots_loader_bubble_${dotColor.value.toULong()}")
 
     // 辅助函数，为单个点创建Y轴偏移和缩放的动画值
     @Composable

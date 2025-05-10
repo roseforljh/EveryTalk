@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- 仅为 debug 构建变体添加此权限，以允许 Macrobenchmark 测试通过 -->
+    <!-- 不要将此权限添加到 src/main/AndroidManifest.xml -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+    <!-- tools:ignore="ScopedStorage" 是为了避免Linter关于分区存储的警告，因为这只是临时的 -->
+
+
+    <!-- 可选：如果你的 debug 构建需要与 release 构建不同的 application 属性，可以在这里覆盖 -->
+    <!-- <application android:debuggable="true" ... /> -->
+    <!-- 通常不需要，因为 debug 构建默认是 debuggable 的 -->
+
+</manifest>

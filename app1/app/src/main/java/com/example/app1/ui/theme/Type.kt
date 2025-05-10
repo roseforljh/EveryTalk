@@ -1,5 +1,6 @@
 package com.example.app1.ui.theme // 确保这是你的主题包名
 
+import com.example.app1.R // <<--- 尝试添加这个导入语句
 import androidx.compose.material3.Typography // 保持默认的 Typography 导入
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
@@ -7,7 +8,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
-import com.example.app1.R // <-- 导入你应用的 R 类
 
 // 1. 定义 OppoSans FontFamily
 val OppoSans = FontFamily(

@@ -1,11 +1,9 @@
-
 pluginManagement {
     repositories {
         google()
         mavenCentral()
         gradlePluginPortal()
     }
-
 }
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
@@ -21,6 +19,11 @@ dependencyResolutionManagement {
     }
 }
 
-
-rootProject.name = "app1"
+rootProject.name = "EveyTalkAi" // 或者你的项目根名称
 include(":app")
+include(":benchmark")
+
+// 添加下面这行来明确指定 :benchmark 模块的物理路径
+project(":benchmark").projectDir = File(rootDir, "app/benchmark") // <--- 修改这里
+// rootDir 指向 settings.gradle.kts 所在的目录
+// 然后我们指定相对路径 "app/benchmark"

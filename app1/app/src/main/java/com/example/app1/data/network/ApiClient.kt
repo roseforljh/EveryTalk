@@ -1,217 +1,273 @@
 package com.example.app1.data.network
 
+import android.util.Log // 导入 Logcat 日志工具
 import io.ktor.client.*
-import io.ktor.client.engine.android.*
+import io.ktor.client.engine.android.* // 使用 Ktor 的 Android 引擎
 import io.ktor.client.plugins.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
-import io.ktor.utils.io.* // For ByteReadChannel
+import io.ktor.utils.io.* // 用于 ByteReadChannel
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.SerializationException
-import java.io.IOException // Use java.io.IOException
+import java.io.IOException // 使用 java.io.IOException
 
-// Import project-specific models
+// 导入项目特定的数据模型
 import com.example.app1.data.models.ChatRequest
 import com.example.app1.data.models.OpenAiStreamChunk
 import com.example.app1.data.models.OpenAiChoice
 import com.example.app1.data.models.OpenAiDelta
 
-// Use kotlinx.coroutines.CancellationException explicitly to avoid ambiguity
+// 显式使用 kotlinx.coroutines.CancellationException 以避免歧义
 import kotlinx.coroutines.CancellationException as CoroutineCancellationException
 
 object ApiClient {
 
-    // JSON parser configuration for Ktor client and backend stream parsing
-    private val jsonParser = Json {
-        ignoreUnknownKeys = true // Tolerate extra fields from backend/API
-        isLenient = true       // Allow slightly malformed JSON if possible (use with caution)
-        encodeDefaults = true  // Ensure default values are sent in requests
+    // Ktor 客户端和后端流解析所用的 JSON 解析器配置
+    private val jsonParser: Json by lazy { // 使用 lazy 初始化，以便可以被预热
+        Log.d("ApiClient", "创建 Json 解析器实例...")
+        Json {
+            ignoreUnknownKeys = true // 容忍后端/API返回的多余字段
+            isLenient = true       // 如果可能，允许轻微格式错误的JSON（谨慎使用）
+            encodeDefaults = true  // 确保请求中发送默认值
+        }
     }
 
-    // Ktor HTTP Client setup
-    private val client = HttpClient(Android) { // Using Android engine
-        // Content Negotiation for automatic JSON serialization/deserialization
-        install(ContentNegotiation) {
-            json(jsonParser)
+    // Ktor HTTP 客户端设置
+    private val client: HttpClient by lazy { // 使用 lazy 初始化
+        Log.d("ApiClient", "创建 Ktor HttpClient 实例...")
+        HttpClient(Android) { // 使用 Android 引擎
+            // 内容协商，用于自动 JSON 序列化/反序列化
+            install(ContentNegotiation) {
+                json(jsonParser) // 使用我们上面配置的 jsonParser
+            }
+            // 超时配置
+            install(HttpTimeout) {
+                requestTimeoutMillis = 300_000 // 整个请求的超时时间为 5 分钟
+                connectTimeoutMillis = 60_000  // 建立连接的超时时间为 1 分钟
+                socketTimeoutMillis = 300_000  // 数据传输不活动的超时时间为 5 分钟
+            }
+            // 可选：日志记录 (用于调试)
+            // install(Logging) {
+            //     logger = object : Logger { // 自定义日志记录器或使用 Logger.DEFAULT
+            //         override fun log(message: String) {
+            //             Log.v("KtorHttpClient", message)
+            //         }
+            //     }
+            //     level = LogLevel.ALL // 记录请求头和请求体 (注意敏感数据)
+            // }
+            // 可选：默认请求配置 (例如，通用的请求头)
+            // defaultRequest {
+            //     header("X-App-Version", "1.0.0") // 示例：应用版本号
+            // }
         }
-        // Timeouts configuration
-        install(HttpTimeout) {
-            requestTimeoutMillis = 300_000 // 5 minutes for the entire request
-            connectTimeoutMillis = 60_000  // 1 minute to establish connection
-            socketTimeoutMillis = 300_000  // 5 minutes for data transfer inactivity
-        }
-        // Optional: Logging (useful for debugging)
-        // install(Logging) {
-        //     logger = Logger.DEFAULT
-        //     level = LogLevel.ALL // Log headers and bodies (be careful with sensitive data)
-        // }
-        // Optional: Default request configuration (e.g., common headers)
-        // defaultRequest {
-        //     header("X-App-Version", "1.0.0")
-        // }
     }
 
-    // Data class to represent the structure of JSON chunks expected from *your* backend proxy
+    // 表示从 *你的* 后端代理期望接收的 JSON 块结构的数据类
     @Serializable
     data class BackendStreamChunk(
-        val type: String? = null,        // e.g., "content", "reasoning", "status", "error"
-        val text: String? = null,        // The actual text content for "content" or "reasoning" types
-        @SerialName("finish_reason")     // Matches the field name from backend JSON
-        val finishReason: String? = null // e.g., "stop", "length", "error", "cancelled"
-        // Add other fields your backend might send per chunk, e.g.:
+        val type: String? = null,        // 例如："content", "reasoning", "status", "error"
+        val text: String? = null,        // 对于 "content" 或 "reasoning" 类型的实际文本内容
+        @SerialName("finish_reason")     // 匹配后端 JSON 中的字段名
+        val finishReason: String? = null // 例如："stop", "length", "error", "cancelled"
+        // 添加你的后端可能在每个块中发送的其他字段，例如：
         // val message_id: String? = null
         // val sequence_id: Int? = null
         // val error_code: String? = null
     )
 
     /**
-     * Streams chat responses from the backend proxy.
-     * Handles the HTTP request and parses the Server-Sent Events (SSE) stream line by line.
-     * Maps the backend's chunk format to the `OpenAiStreamChunk` format expected by the ViewModel.
-     *
-     * @param request The ChatRequest object containing messages, config, etc.
-     * @return A Flow emitting `OpenAiStreamChunk` objects as they are received and parsed.
-     *         The flow completes normally when the stream ends, or emits an error (IOException, CoroutineCancellationException).
+     * 预热 ApiClient 中的懒加载组件。
+     * 目标是在实际使用前触发 Ktor HttpClient 和 Json 解析器的初始化。
+     * 应在应用启动的早期阶段，在后台线程调用此方法。
      */
-    @OptIn(ExperimentalCoroutinesApi::class) // For channelFlow
+    fun preWarm() {
+        Log.d("ApiClient", "ApiClient.preWarm() 已调用。")
+        // 1. 触发 HttpClient 的创建和配置
+        // 只需访问 client 属性即可触发其 lazy 初始化块
+        val clientInstance = client
+        Log.d("ApiClient", "Ktor HttpClient 实例已访问: $clientInstance")
+
+        // 2. 触发 Json 解析器的创建
+        val jsonInstance = jsonParser
+        Log.d("ApiClient", "Json 解析器实例已访问: $jsonInstance")
+
+        // 可选：可以尝试用 jsonParser 解析一个非常小的、预定义的 JSON 字符串
+        // 这可以帮助触发 Kotlinx Serialization 内部关于特定类型序列化器的查找和缓存机制
+        try {
+            @kotlinx.serialization.Serializable
+            data class PreWarmTestData(val status: String)
+
+            val testJsonString = """{"status":"ok"}"""
+            val decoded =
+                jsonInstance.decodeFromString(PreWarmTestData.serializer(), testJsonString)
+            Log.d("ApiClient", "Json 预热解码测试成功: $decoded")
+        } catch (e: Exception) {
+            Log.w("ApiClient", "Json 预热解码测试失败 (这可能正常，仅为预热目的)", e)
+        }
+        Log.d("ApiClient", "ApiClient.preWarm() 执行完毕。")
+    }
+
+
+    /**
+     * 从后端代理流式传输聊天响应。
+     * 处理 HTTP 请求并逐行解析服务器发送事件 (SSE) 流。
+     * 将后端的块格式映射到 ViewModel 期望的 `OpenAiStreamChunk` 格式。
+     *
+     * @param request 包含消息、配置等的 ChatRequest 对象。
+     * @return 一个 Flow，当接收和解析到 `OpenAiStreamChunk` 对象时发出它们。
+     *         当流结束时，Flow 正常完成；或者发出错误 (IOException, CoroutineCancellationException)。
+     */
+    @OptIn(ExperimentalCoroutinesApi::class) // 用于 channelFlow
     fun streamChatResponse(request: ChatRequest): Flow<OpenAiStreamChunk> = channelFlow {
-        // TODO: Replace with your actual backend proxy URL
-        val backendProxyUrl = "https://backdaitalk-production.up.railway.app/chat" // Example Ngrok URL
-        var response: HttpResponse? = null // Hold response for potential error reporting
+        // TODO: 替换为你的实际后端代理 URL
+        val backendProxyUrl = "https://backdaitalk-production.up.railway.app/chat" // 示例 Ngrok URL
+        var response: HttpResponse? = null // 保存响应对象，以便在出错时可以访问其信息
 
         try {
-            println("ApiClient: Preparing POST request to $backendProxyUrl")
+            Log.d("ApiClient", "准备向 $backendProxyUrl 发起 POST 请求")
             client.preparePost(backendProxyUrl) {
-                contentType(ContentType.Application.Json)
-                setBody(request) // Send the ChatRequest object as JSON body
-                // Include API key in a header (adjust header name if needed)
+                contentType(ContentType.Application.Json) // 设置请求内容类型为 JSON
+                setBody(request) // 将 ChatRequest 对象作为 JSON 请求体发送
+                // 在请求头中包含 API 密钥 (如果你的代理需要，请调整请求头名称)
                 header("X-API-Key", request.apiKey ?: "")
-                // Add other headers if your proxy requires them
+                // 如果你的代理需要其他请求头，在此处添加
                 // header("Authorization", "Bearer ${request.apiKey}")
-                accept(ContentType.Text.EventStream) // Explicitly accept SSE stream
-                timeout { // Can override default timeouts per request
-                    requestTimeoutMillis = 310_000 // Slightly longer for this specific call
+                accept(ContentType.Text.EventStream) // 显式接受 SSE 流
+                timeout { // 可以为特定请求覆盖默认超时设置
+                    requestTimeoutMillis = 310_000 // 对此特定调用设置稍长一点的超时时间
                 }
 
-            }.execute { receivedResponse -> // Execute the request and process the response
-                response = receivedResponse // Store response for potential error access
-                println("ApiClient: Received response status: ${response?.status}")
+            }.execute { receivedResponse -> // 执行请求并处理响应
+                response = receivedResponse // 存储响应对象
+                Log.d("ApiClient", "收到响应状态: ${response?.status}")
 
-                // --- Check Response Status ---
+                // --- 检查响应状态 ---
                 if (response?.status?.isSuccess() != true) {
                     val errorBody = try {
-                        response?.bodyAsText() ?: "(No error body)"
+                        response?.bodyAsText() ?: "(无错误响应体)"
                     } catch (e: Exception) {
-                        "(Failed to read error body: ${e.message})"
+                        "(读取错误响应体失败: ${e.message})"
                     }
-                    println("ApiClient: Proxy error ${response?.status}. Body: $errorBody")
-                    // Close the flow with an error
-                    close(IOException("Proxy error: ${response?.status?.value} - $errorBody"))
-                    return@execute // Stop processing
+                    Log.e("ApiClient", "代理错误 ${response?.status}. 响应体: $errorBody")
+                    // 使用错误关闭 Flow
+                    close(IOException("代理错误: ${response?.status?.value} - $errorBody"))
+                    return@execute // 停止处理
                 }
 
-                // --- Process Successful Stream ---
+                // --- 处理成功的流 ---
                 val channel: ByteReadChannel = response?.bodyAsChannel() ?: run {
-                    println("ApiClient: Error - Response body channel is null.")
-                    close(IOException("Failed to get response body channel."))
+                    Log.e("ApiClient", "错误 - 响应体通道为 null。")
+                    close(IOException("获取响应体通道失败。"))
                     return@execute
                 }
-                println("ApiClient: Starting to read stream channel...")
+                Log.d("ApiClient", "开始读取流通道...")
 
                 try {
-                    // Loop while the flow collector is active and the channel has data
+                    // 当 Flow 收集器处于活动状态且通道有数据时循环
                     while (isActive && !channel.isClosedForRead) {
-                        // Read lines until EOF or channel closed
+                        // 读取行直到 EOF 或通道关闭
                         val line = channel.readUTF8Line()
 
                         if (line == null) {
-                            println("ApiClient: Stream channel EOF reached.")
-                            break // End of stream
+                            Log.d("ApiClient", "流通道 EOF 已到达。")
+                            break // 流结束
                         }
 
                         val messageString = line.trim()
-                        // println("ApiClient: Raw line: '$messageString'") // Debug raw lines
+                        // Log.v("ApiClient", "原始行: '$messageString'") // 调试原始行
 
-                        // Process non-empty lines (ignore potential keep-alive blank lines)
+                        // 处理非空行 (忽略潜在的保持连接的空行)
                         if (messageString.isNotEmpty()) {
-                            // SSE format usually prefixes data lines with "data: "
+                            // SSE 格式通常以 "data: " 为数据行前缀
                             val jsonData = if (messageString.startsWith("data:")) {
                                 messageString.substring(5).trim()
                             } else {
-                                // If not starting with "data:", treat the whole line as JSON?
-                                // Or log a warning, depending on your backend's SSE format.
-                                println("ApiClient: WARN - Received line without 'data:' prefix: '$messageString'. Attempting to parse directly.")
+                                // 如果不以 "data:" 开头，是否将整行视为 JSON？
+                                // 或记录警告，具体取决于后端 SSE 格式。
+                                Log.w(
+                                    "ApiClient",
+                                    "警告 - 收到没有 'data:' 前缀的行: '$messageString'。尝试直接解析。"
+                                )
                                 messageString
                             }
 
                             if (jsonData.isNotEmpty()) {
                                 try {
-                                    // Parse the JSON data using the BackendStreamChunk structure
+                                    // 使用 BackendStreamChunk 结构解析 JSON 数据
                                     val backendChunk = jsonParser.decodeFromString(
                                         BackendStreamChunk.serializer(),
                                         jsonData
                                     )
 
-                                    // --- Map Backend Chunk to OpenAiStreamChunk ---
+                                    // --- 将后端块映射到 OpenAiStreamChunk ---
                                     val openAiChunk = OpenAiStreamChunk(
-                                        // Assuming one choice per chunk from backend for simplicity
+                                        // 为简单起见，假设后端每个块只有一个 choice
                                         choices = listOf(
                                             OpenAiChoice(
                                                 index = 0,
                                                 delta = OpenAiDelta(
-                                                    // Map based on backend 'type' field
+                                                    // 根据后端的 'type' 字段进行映射
                                                     content = if (backendChunk.type == "content") backendChunk.text else null,
                                                     reasoningContent = if (backendChunk.type == "reasoning") backendChunk.text else null
-                                                    // Add other delta fields if needed (role, tool_calls)
+                                                    // 如果需要，添加其他 delta 字段 (role, tool_calls)
                                                 ),
-                                                finishReason = backendChunk.finishReason // Pass through finish reason
+                                                finishReason = backendChunk.finishReason // 直接传递 finish reason
                                             )
                                         )
-                                        // Add other top-level OpenAiStreamChunk fields if needed (id, created, model)
+                                        // 如果需要，添加其他顶层的 OpenAiStreamChunk 字段 (id, created, model)
                                     )
-                                    // --- End Mapping ---
+                                    // --- 结束映射 ---
 
-                                    // Send the mapped chunk to the flow collector
-                                    // Use trySend to handle backpressure and check if downstream is still listening
+                                    // 将映射后的块发送给 Flow 收集器
+                                    // 使用 trySend 处理背压并检查下游是否仍在监听
                                     val sendResult = trySend(openAiChunk)
                                     if (!sendResult.isSuccess) {
-                                        println("ApiClient: Downstream collector closed or failed. Stopping stream reading. Reason: ${sendResult.toString()}")
-                                        // Optionally, explicitly close the channel/response here? Ktor might handle it.
-                                        channel.cancel(CoroutineCancellationException("Downstream closed"))
-                                        return@execute // Stop processing
+                                        Log.w(
+                                            "ApiClient",
+                                            "下游收集器已关闭或失败。停止读取流。原因: ${sendResult}"
+                                        )
+                                        channel.cancel(CoroutineCancellationException("下游已关闭"))
+                                        return@execute // 停止处理
                                     }
                                     // else {
-                                    //    println("ApiClient: Sent chunk: Type=${backendChunk.type}, FinishReason=${backendChunk.finishReason}")
+                                    //    Log.v("ApiClient", "已发送块: Type=${backendChunk.type}, FinishReason=${backendChunk.finishReason}")
                                     // }
 
                                 } catch (e: SerializationException) {
-                                    // Handle JSON parsing errors for a specific chunk
-                                    println("ApiClient: ERROR - Failed to parse stream JSON chunk. Raw JSON: '$jsonData'. Error: ${e.message}")
-                                    // Close the flow with an error, including the problematic data
+                                    // 处理特定块的 JSON 解析错误
+                                    Log.e(
+                                        "ApiClient",
+                                        "错误 - 解析流 JSON 块失败。原始 JSON: '$jsonData'。错误: ${e.message}"
+                                    )
+                                    // 使用包含问题数据的错误关闭 Flow
                                     close(
                                         IOException(
-                                            "Failed to parse stream JSON chunk: '${
+                                            "解析流 JSON 块失败: '${
                                                 jsonData.take(
                                                     100
                                                 )
-                                            }...'. Error: ${e.message}", e
+                                            }...'. 错误: ${e.message}", e
                                         )
                                     )
-                                    return@execute // Stop processing
+                                    return@execute // 停止处理
                                 } catch (e: Exception) {
-                                    // Catch unexpected errors during chunk processing
-                                    println("ApiClient: ERROR - Unexpected error processing chunk: '$jsonData'. Error: ${e.message}")
-                                    e.printStackTrace()
+                                    // 捕获块处理期间的意外错误
+                                    Log.e(
+                                        "ApiClient",
+                                        "错误 - 处理块 '$jsonData' 时发生意外错误。错误: ${e.message}",
+                                        e
+                                    )
+                                    // e.printStackTrace() // 调试时可以打印堆栈跟踪
                                     close(
                                         IOException(
-                                            "Unexpected error processing chunk: ${e.message}",
+                                            "处理块时发生意外错误: ${e.message}",
                                             e
                                         )
                                     )
@@ -219,60 +275,63 @@ object ApiClient {
                                 }
                             }
                         }
-                    } // End while loop (reading lines)
-                    println("ApiClient: Finished reading stream channel (isActive=$isActive, isClosedForRead=${channel.isClosedForRead}).")
+                    } // 结束 while 循环 (读取行)
+                    Log.d(
+                        "ApiClient",
+                        "完成读取流通道 (isActive=$isActive, isClosedForRead=${channel.isClosedForRead})."
+                    )
 
                 } catch (e: IOException) {
-                    // Handle network errors during stream reading
-                    println("ApiClient: ERROR - Network error during stream reading: ${e.message}")
-                    if (!isClosedForSend) { // Check if flow already closed
+                    // 处理流读取期间的网络错误
+                    Log.e("ApiClient", "错误 - 读取流期间发生网络错误: ${e.message}")
+                    if (!isClosedForSend) { // 检查 Flow 是否已关闭
                         close(
                             IOException(
-                                "Network Error: Stream reading interrupted. ${e.message}",
+                                "网络错误: 流读取中断。${e.message}",
                                 e
                             )
                         )
                     }
                 } catch (e: CoroutineCancellationException) {
-                    // Catch cancellation signal (likely from downstream collector or timeout)
-                    println("ApiClient: Stream reading cancelled. Reason: ${e.message}")
-                    // Re-throw cancellation so channelFlow handles it correctly
+                    // 捕获取消信号 (可能来自下游收集器或超时)
+                    Log.i("ApiClient", "流读取已取消。原因: ${e.message}")
+                    // 重新抛出取消异常，以便 channelFlow 正确处理
                     throw e
                 } catch (e: Exception) {
-                    // Catch any other unexpected errors during reading loop
-                    println("ApiClient: ERROR - Unexpected error during stream reading: ${e.message}")
-                    e.printStackTrace()
+                    // 捕获读取循环期间的任何其他意外错误
+                    Log.e("ApiClient", "错误 - 读取流期间发生意外错误: ${e.message}", e)
+                    // e.printStackTrace()
                     if (!isClosedForSend) {
-                        close(IOException("Unexpected stream reading error: ${e.message}", e))
+                        close(IOException("意外的流读取错误: ${e.message}", e))
                     }
                 } finally {
-                    println("ApiClient: Exiting response execution block.")
-                    // Ensure resources are released? Ktor's execute block should handle response closure.
+                    Log.d("ApiClient", "退出响应执行块。")
+                    // Ktor 的 execute 块应处理响应的关闭。
                 }
-            } // End execute block
+            } // 结束 execute 块
         } catch (e: CoroutineCancellationException) {
-            // Catch cancellation during request setup/connection phase
-            println("ApiClient: Request setup cancelled. Reason: ${e.message}")
-            // Re-throw cancellation for proper handling by caller
+            // 捕获请求设置/连接阶段的取消
+            Log.i("ApiClient", "请求设置已取消。原因: ${e.message}")
+            // 重新抛出取消异常，以便调用者正确处理
             throw e
         } catch (e: IOException) {
-            // Catch network errors during request setup/connection (e.g., DNS resolution, connection refused)
-            println("ApiClient: ERROR - Network error during request setup/execution: ${e.message}")
+            // 捕获请求设置/连接期间的网络错误 (例如，DNS 解析、连接被拒)
+            Log.e("ApiClient", "错误 - 请求设置/执行期间发生网络错误: ${e.message}")
             if (!isClosedForSend) {
-                close(IOException("Network Setup/Execution Error: ${e.message}", e))
+                close(IOException("网络设置/执行错误: ${e.message}", e))
             }
         } catch (e: Exception) {
-            // Catch other unexpected errors during request setup/execution
-            println("ApiClient: ERROR - Unexpected error during request setup/execution: ${e.message}")
-            e.printStackTrace()
+            // 捕获请求设置/执行期间的其他意外错误
+            Log.e("ApiClient", "错误 - 请求设置/执行期间发生意外错误: ${e.message}", e)
+            // e.printStackTrace()
             if (!isClosedForSend) {
-                // Include response status if available
-                val statusInfo = response?.status?.let { " (Status: ${it.value})" } ?: ""
-                close(IOException("Unexpected API Client Error$statusInfo: ${e.message}", e))
+                // 如果可用，包含响应状态信息
+                val statusInfo = response?.status?.let { " (状态: ${it.value})" } ?: ""
+                close(IOException("意外的 API 客户端错误$statusInfo: ${e.message}", e))
             }
         } finally {
-            println("ApiClient: Exiting channelFlow block.")
-            // channelFlow ensures the channel is closed when the block exits or an error occurs.
+            Log.d("ApiClient", "退出 channelFlow 块。")
+            // channelFlow 确保在块退出或发生错误时关闭通道。
         }
-    }.flowOn(Dispatchers.IO) // Ensure network operations run on the IO dispatcher
+    }.flowOn(Dispatchers.IO) // 确保网络操作在 IO 调度器上运行
 }
