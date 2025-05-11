@@ -44,11 +44,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            isProfileable = true
-            signingConfig = signingConfigs.getByName("debug")// <<=== 确保这个为 true
         }
         debug {
-            isProfileable = true // debug 构建也可以设为 profileable，方便测试
+            isProfileable = false // debug 构建也可以设为 profileable，方便测试
         }
         create("benchmark") {
             initWith(buildTypes.getByName("release"))
@@ -100,6 +98,8 @@ android {
         implementation("androidx.compose.material3:material3:1.3.2")
         debugImplementation("androidx.compose.ui:ui-tooling:1.8.1")
         implementation("androidx.compose.ui:ui-tooling-preview:1.8.1")
+        implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.0")
+        implementation("androidx.activity:activity-compose:1.10.1")
 
         // Core Android & Lifecycle (从你的 libs.versions.toml 获取)
         implementation(libs.androidx.core.ktx)

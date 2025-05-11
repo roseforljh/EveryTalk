@@ -174,10 +174,8 @@ class HistoryManager(
                 Log.d("HistoryManager", "历史记录已清除，重置 loadedHistoryIndex。")
             }
             persistenceManager.saveChatHistory() // 持久化清除操作
-            viewModelScope.launch { stateHolder._snackbarMessage.emit("所有历史记录已清除") } // 显示提示
         } else {
             Log.d("HistoryManager", "没有历史记录可以清除。")
-            viewModelScope.launch { stateHolder._snackbarMessage.emit("没有历史记录可以清除") } // 显示提示
         }
     }
 }
