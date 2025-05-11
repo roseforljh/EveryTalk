@@ -1,25 +1,29 @@
-package com.example.app1.ui.screens
+package com.example.app1.StateControler
 
 import android.util.Log
-import com.example.app1.data.models.ChatRequest
-import com.example.app1.data.models.ApiConfig
-import com.example.app1.data.models.OpenAiStreamChunk
-import com.example.app1.data.models.ApiMessage
-import com.example.app1.data.models.Message
-import com.example.app1.data.models.Sender
+import com.example.app1.data.DataClass.ApiConfig
+import com.example.app1.data.DataClass.ApiMessage
+import com.example.app1.data.DataClass.ChatRequest
+import com.example.app1.data.DataClass.Message
+import com.example.app1.data.DataClass.OpenAiStreamChunk
+import com.example.app1.data.DataClass.Sender
 import com.example.app1.data.network.ApiClient
 import com.example.app1.ui.screens.viewmodel.HistoryManager
-import com.example.app1.ui.screens.viewmodel.state.ViewModelStateHolder
-import io.ktor.client.plugins.*
-import io.ktor.client.statement.*
-import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.*
+import io.ktor.client.plugins.ResponseException
+import io.ktor.client.statement.HttpResponse
+import io.ktor.client.statement.bodyAsText
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.onCompletion
+import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.IOException
 import java.util.UUID
-import kotlinx.coroutines.CancellationException as CoroutineCancellationException
-
+import java.util.concurrent.CancellationException
 
 class ApiHandler(
     private val stateHolder: ViewModelStateHolder, // ViewModel 状态持有者
@@ -92,7 +96,7 @@ class ApiHandler(
         // 如果任务存在且活跃，则取消它
         if (jobToCancel != null && jobToCancel.isActive) {
             Log.d("ApiHandlerCancel", "因原因 '$reason' 取消任务 $jobToCancel")
-            jobToCancel.cancel(CoroutineCancellationException(reason))
+            jobToCancel.cancel(CancellationException(reason))
         } else {
             Log.d(
                 "ApiHandlerCancel",
@@ -126,7 +130,7 @@ class ApiHandler(
         if (stateHolder._isApiCalling.value || stateHolder.apiJob != null || stateHolder._currentStreamingAiMessageId.value != null) {
             Log.w("ApiHandler", "API 状态可能过时。在新的调用前强制重置。")
             stateHolder._isApiCalling.value = false
-            stateHolder.apiJob?.cancel(CoroutineCancellationException("为新流强制重置"))
+            stateHolder.apiJob?.cancel(CancellationException("为新流强制重置"))
             stateHolder.apiJob = null
             stateHolder._currentStreamingAiMessageId.value = null
         }
@@ -245,7 +249,7 @@ class ApiHandler(
 
         // 启动 API 调用协程任务
         stateHolder.apiJob = viewModelScope.launch {
-            val thisJob = coroutineContext[Job] // 获取当前协程任务的引用
+            val thisJob = coroutineContext[Job.Key] // 获取当前协程任务的引用
             Log.d(
                 "ApiHandler",
                 "为 AI 消息 $aiMessageId 启动 API 调用任务 ${
@@ -256,7 +260,7 @@ class ApiHandler(
                 ApiClient.streamChatResponse(requestBody) // 调用 API 客户端进行流式响应
                     .onStart { Log.d("ApiHandler", "流开始处理 $aiMessageId") } // 流开始时的回调
                     .catch { e -> // 捕获流中的异常
-                        if (e !is CoroutineCancellationException) { // 如果不是协程取消异常
+                        if (e !is kotlinx.coroutines.CancellationException) { // 如果不是协程取消异常
                             Log.e("ApiHandler", "流捕获到 $aiMessageId 的异常: ${e.message}", e)
                             launch(Dispatchers.Main.immediate) { // 立即在主线程更新 UI
                                 updateMessageWithError(
@@ -315,7 +319,7 @@ class ApiHandler(
                                         true // 标记动画完成
                                     historyManager.saveCurrentChatToHistoryIfNeeded() // 保存聊天记录
                                 } else if (cause != null) { // 如果有异常或取消
-                                    if (cause is CoroutineCancellationException) { // 如果是取消
+                                    if (cause is kotlinx.coroutines.CancellationException) { // 如果是取消
                                         if (currentRawText != finalTextTrimmed) {
                                             msg = msg.copy(text = finalTextTrimmed)
                                             stateHolder.messages[finalIndexOnComplete] = msg
@@ -373,7 +377,7 @@ class ApiHandler(
                             }
                         }
                     }
-            } catch (e: CoroutineCancellationException) { // 捕获外部任务的取消异常
+            } catch (e: kotlinx.coroutines.CancellationException) { // 捕获外部任务的取消异常
                 Log.d(
                     "ApiHandler",
                     "外部任务 ${

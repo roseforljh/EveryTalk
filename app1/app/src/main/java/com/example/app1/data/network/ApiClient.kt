@@ -19,10 +19,10 @@ import kotlinx.serialization.SerializationException
 import java.io.IOException // 使用 java.io.IOException
 
 // 导入项目特定的数据模型
-import com.example.app1.data.models.ChatRequest
-import com.example.app1.data.models.OpenAiStreamChunk
-import com.example.app1.data.models.OpenAiChoice
-import com.example.app1.data.models.OpenAiDelta
+import com.example.app1.data.DataClass.ChatRequest
+import com.example.app1.data.DataClass.OpenAiStreamChunk
+import com.example.app1.data.DataClass.OpenAiChoice
+import com.example.app1.data.DataClass.OpenAiDelta
 
 // 显式使用 kotlinx.coroutines.CancellationException 以避免歧义
 import kotlinx.coroutines.CancellationException as CoroutineCancellationException

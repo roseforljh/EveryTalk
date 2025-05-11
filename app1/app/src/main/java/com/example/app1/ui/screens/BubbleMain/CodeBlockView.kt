@@ -1,4 +1,4 @@
-package com.example.app1.ui.chat.views // 替换为你的实际包名基础 + .ui.chat.views
+package com.example.app1.ui.screens.BubbleMain // 替换为你的实际包名基础 + .ui.chat.views
 
 import android.util.Log
 import android.widget.Toast

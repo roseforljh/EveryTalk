@@ -37,8 +37,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
-import com.example.app1.data.models.Message
-import com.example.app1.ui.chat.views.MyCodeBlockComposable // 假设这个路径是正确的
+import com.example.app1.data.DataClass.Message
+import com.example.app1.ui.screens.BubbleMain.MyCodeBlockComposable // 假设这个路径是正确的
 import com.example.app1.ui.screens.BubbleMain.TextSegment // 假设这是你 MarkdownUtils 的正确路径
 import com.example.app1.ui.screens.BubbleMain.ThreeDotsLoadingAnimation // 假设这是你 Animations 的正确路径
 import com.example.app1.ui.screens.BubbleMain.extractStreamingCodeContent // 假设这是你 MarkdownUtils 的正确路径

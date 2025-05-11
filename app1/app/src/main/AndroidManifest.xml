@@ -22,7 +22,7 @@
             tools:targetApi="q" />
 
         <activity
-            android:name=".MainActivity"
+            android:name=".StateControler.MainActivity"
             android:exported="true"
             android:theme="@style/Theme.App1"
             android:windowSoftInputMode="adjustResize"

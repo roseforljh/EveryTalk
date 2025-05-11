@@ -1,4 +1,4 @@
-package com.example.app1.ui.screens.viewmodel.state
+package com.example.app1.StateControler
 
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.DrawerValue
@@ -6,9 +6,9 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.snapshots.SnapshotStateMap
-import com.example.app1.data.models.ApiConfig
-import com.example.app1.data.models.Message
-import com.example.app1.ui.screens.viewmodel.AppView
+import com.example.app1.data.DataClass.ApiConfig
+import com.example.app1.data.DataClass.Message
+import com.example.app1.navigation.AppView
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow

@@ -1,334 +1,281 @@
 package com.example.app1.data.local
 
 import android.content.Context
-import android.util.Log // 使用 Android Log
+import android.util.Log
 import androidx.core.content.edit
-import com.example.app1.data.models.ApiConfig // 确认导入 ApiConfig
-import com.example.app1.data.models.Message // 确认导入 Message
-import kotlinx.serialization.encodeToString
+import com.example.app1.data.DataClass.ApiConfig
+import com.example.app1.data.DataClass.Message
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.SerializationException // 虽然未使用，但保留以备将来可能发生的特定序列化异常处理
-import kotlinx.serialization.builtins.ListSerializer // 用于 List<ApiConfig> 和 List<List<Message>>
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.SetSerializer
 import kotlinx.serialization.builtins.serializer
 
 // --- 常量定义 ---
-private const val TAG = "SPDataSource" // 日志标签
-private const val PREFS_NAME = "app_settings" // SharedPreferences 文件名
-private const val KEY_API_CONFIG_LIST = "api_config_list_v2" // API 配置列表 Key (v2)
-private const val KEY_SELECTED_API_CONFIG_ID = "selected_api_config_id_v1" // 选中配置 ID Key
-private const val KEY_CHAT_HISTORY = "chat_history_v1" // 聊天记录 Key
-private const val KEY_SAVED_MODEL_NAMES_BY_PROVIDER =
-    "saved_model_names_by_provider_v1" // 模型名称建议 Key
+private const val TAG = "SPDataSource"
+private const val PREFS_NAME = "app_settings"
+private const val KEY_API_CONFIG_LIST = "api_config_list_v2"
+private const val KEY_SELECTED_API_CONFIG_ID = "selected_api_config_id_v1"
+private const val KEY_CHAT_HISTORY = "chat_history_v1"
+private const val KEY_SAVED_MODEL_NAMES_BY_PROVIDER = "saved_model_names_by_provider_v1"
+// BEGIN: 新增用于 DataPersistenceManager 的通用键 (虽然现在没直接用到，但为了统一)
+private const val KEY_LAST_OPEN_CHAT = "last_open_chat_v1" // 与 DataPersistenceManager 保持一致
+private const val KEY_UI_THEME_COLOR = "ui_theme_color_v1" // 与 DataPersistenceManager 保持一致
+// END: 新增
 
-// --- Json 配置实例 ---
-// 配置 Kotlinx Serialization Json 实例
-// ignoreUnknownKeys = true: 忽略JSON中存在但数据类中没有的字段，增强向前兼容性
-// prettyPrint = false: 生成紧凑的JSON字符串，节省空间
-// encodeDefaults = true: 序列化时包含具有默认值的属性
 private val json = Json {
     ignoreUnknownKeys = true
     prettyPrint = false
     encodeDefaults = true
 }
 
-// --- DataSource 类定义 ---
 class SharedPreferencesDataSource(context: Context) {
-    // 获取 SharedPreferences 实例
     private val sharedPrefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    // --- 序列化器定义 (提前定义更清晰，避免重复创建) ---
-    // ApiConfig 列表的序列化器
     private val apiConfigListSerializer = ListSerializer(ApiConfig.serializer())
-
-    // 聊天历史 (消息列表的列表) 的序列化器
     private val chatHistorySerializer = ListSerializer(ListSerializer(Message.serializer()))
-
-    // 模型名称映射 (Provider名称 -> 模型名称集合) 的序列化器
     private val modelNamesMapSerializer =
         MapSerializer(String.serializer(), SetSerializer(String.serializer()))
+    // BEGIN: 为 lastOpenChat 添加序列化器 (如果它与 chatHistory 中的单个聊天结构不同)
+    // 如果 lastOpenChat 就是 List<Message>，则可以使用 ListSerializer(Message.serializer())
+    private val singleChatSerializer = ListSerializer(Message.serializer())
+    // END
+
+    // =================================
+    // ===== 通用 SharedPreferences 存取方法 =====
+    // =================================
+    fun saveString(key: String, value: String?) {
+        sharedPrefs.edit { putString(key, value) }
+        Log.d(TAG, "saveString: Key '$key' saved. Value starts with: ${value?.take(50)}")
+    }
+
+    fun getString(key: String, defaultValue: String?): String? {
+        val value = sharedPrefs.getString(key, defaultValue)
+        Log.d(TAG, "getString: Key '$key' loaded. Value starts with: ${value?.take(50)}")
+        return value
+    }
+
+    fun saveInt(key: String, value: Int) {
+        sharedPrefs.edit { putInt(key, value) }
+        Log.d(TAG, "saveInt: Key '$key' saved with value: $value")
+    }
+
+    fun getInt(key: String, defaultValue: Int): Int {
+        val value = sharedPrefs.getInt(key, defaultValue)
+        Log.d(TAG, "getInt: Key '$key' loaded with value: $value")
+        return value
+    }
+
+    fun remove(key: String) {
+        sharedPrefs.edit { remove(key) }
+        Log.d(TAG, "remove: Key '$key' removed.")
+    }
 
 
     // ================================
     // ===== API 配置相关方法 =========
     // ================================
-
-    /**
-     * 从 SharedPreferences 加载 API 配置列表。
-     * @return 返回 ApiConfig 列表，如果出错或未找到则返回空列表。
-     */
     fun loadApiConfigs(): List<ApiConfig> {
-        val jsonString = sharedPrefs.getString(KEY_API_CONFIG_LIST, null)
-        Log.d(
-            TAG,
-            "loadApiConfigs: 从键 '$KEY_API_CONFIG_LIST' 加载的JSON字符串: ${jsonString?.take(100)}..."
-        ) // 日志记录加载的JSON（部分）
+        val jsonString = getString(KEY_API_CONFIG_LIST, null) // 使用封装的方法
+        Log.d(TAG, "loadApiConfigs: JSON from '$KEY_API_CONFIG_LIST': ${jsonString?.take(100)}...")
         return if (!jsonString.isNullOrEmpty()) {
             try {
                 json.decodeFromString(apiConfigListSerializer, jsonString).also {
-                    Log.i(TAG, "loadApiConfigs: 成功解码 ${it.size} 个 API 配置。")
+                    Log.i(TAG, "loadApiConfigs: Decoded ${it.size} configs.")
                 }
-            } catch (e: Exception) { // 捕获更广泛的异常，如 JsonDecodingException, IllegalArgumentException 等
-                Log.e(TAG, "loadApiConfigs: 加载/解码 API 配置时出错: ${e.message}", e)
-                // clearApiConfigs() // 考虑错误时是否清除，当前不清除以避免数据丢失
+            } catch (e: Exception) {
+                Log.e(TAG, "loadApiConfigs: Error: ${e.message}", e)
                 emptyList()
             }
         } else {
-            Log.i(TAG, "loadApiConfigs: 未找到 API 配置数据。")
+            Log.i(TAG, "loadApiConfigs: No data found.")
             emptyList()
         }
     }
 
-    /**
-     * 将 API 配置列表保存到 SharedPreferences。
-     * @param configs 要保存的 ApiConfig 列表。
-     */
     fun saveApiConfigs(configs: List<ApiConfig>) {
         try {
             val jsonString = json.encodeToString(apiConfigListSerializer, configs)
-            sharedPrefs.edit { putString(KEY_API_CONFIG_LIST, jsonString) }
-            Log.i(
-                TAG,
-                "saveApiConfigs: 已保存 ${configs.size} 个 API 配置到键 '$KEY_API_CONFIG_LIST'。"
-            )
+            saveString(KEY_API_CONFIG_LIST, jsonString) // 使用封装的方法
+            Log.i(TAG, "saveApiConfigs: Saved ${configs.size} configs to '$KEY_API_CONFIG_LIST'.")
         } catch (e: Exception) {
-            Log.e(TAG, "saveApiConfigs: 保存 API 配置时出错: ${e.message}", e)
+            Log.e(TAG, "saveApiConfigs: Error: ${e.message}", e)
         }
     }
 
-    /**
-     * 清除存储的 API 配置列表。
-     */
     fun clearApiConfigs() {
-        sharedPrefs.edit { remove(KEY_API_CONFIG_LIST) }
-        Log.i(TAG, "clearApiConfigs: 已清除键 '$KEY_API_CONFIG_LIST' 的 API 配置。")
+        remove(KEY_API_CONFIG_LIST) // 使用封装的方法
+        Log.i(TAG, "clearApiConfigs: Cleared '$KEY_API_CONFIG_LIST'.")
     }
 
-    /**
-     * 加载当前选中的 API 配置的 ID。
-     * @return 返回选中的配置 ID 字符串，如果未设置则返回 null。
-     */
     fun loadSelectedConfigId(): String? {
-        val id = sharedPrefs.getString(KEY_SELECTED_API_CONFIG_ID, null)
-        Log.d(
-            TAG,
-            "loadSelectedConfigId: 从键 '$KEY_SELECTED_API_CONFIG_ID' 加载的选中配置 ID: $id"
-        )
+        val id = getString(KEY_SELECTED_API_CONFIG_ID, null) // 使用封装的方法
+        Log.d(TAG, "loadSelectedConfigId: ID from '$KEY_SELECTED_API_CONFIG_ID': $id")
         return id
     }
 
-    /**
-     * 保存当前选中的 API 配置的 ID。
-     * @param configId 要保存的配置 ID，可以为 null 来清除。
-     */
     fun saveSelectedConfigId(configId: String?) {
-        sharedPrefs.edit { putString(KEY_SELECTED_API_CONFIG_ID, configId) }
-        Log.i(
-            TAG,
-            "saveSelectedConfigId: 已将选中配置 ID '$configId' 保存到键 '$KEY_SELECTED_API_CONFIG_ID'。"
-        )
+        saveString(KEY_SELECTED_API_CONFIG_ID, configId) // 使用封装的方法
+        Log.i(TAG, "saveSelectedConfigId: Saved ID '$configId' to '$KEY_SELECTED_API_CONFIG_ID'.")
     }
 
     // ================================
     // ===== 聊天记录相关方法 =========
     // ================================
-
-    /**
-     * 从 SharedPreferences 加载聊天记录。
-     * @return 返回 List<List<Message>>，如果出错或未找到则返回空列表。
-     */
-    // 在 SharedPreferencesDataSource.kt
     fun loadChatHistory(): List<List<Message>> {
-        Log.e(TAG, "loadChatHistory: ++++++++++++++ 方法开始执行 ++++++++++++++") // 使用Error级别使其在Logcat中更显眼
-        val jsonString = sharedPrefs.getString(KEY_CHAT_HISTORY, null)
-        Log.d(TAG, "loadChatHistory: 从键 '$KEY_CHAT_HISTORY' 加载的JSON字符串（部分）: ${jsonString?.take(150)}...")
+        Log.e(TAG, "loadChatHistory: ++++++++++++++ START ++++++++++++++")
+        val jsonString = getString(KEY_CHAT_HISTORY, null) // 使用封装的方法
+        Log.d(TAG, "loadChatHistory: JSON from '$KEY_CHAT_HISTORY' (partial): ${jsonString?.take(150)}...")
 
         if (!jsonString.isNullOrEmpty()) {
             try {
                 val decodedList = json.decodeFromString(chatHistorySerializer, jsonString)
-                Log.i(TAG, "loadChatHistory: 成功解码 ${decodedList.size} 条聊天对话。")
+                Log.i(TAG, "loadChatHistory: Decoded ${decodedList.size} conversations.")
                 decodedList.forEachIndexed { index, conversation ->
-                    Log.d(TAG, "loadChatHistory: 对话 $index 包含 ${conversation.size} 条消息。首条预览: '${conversation.firstOrNull()?.text?.take(30)}'")
+                    Log.d(TAG, "loadChatHistory: Conv $index: ${conversation.size} msgs. Preview: '${conversation.firstOrNull()?.text?.take(30)}'")
                 }
-                Log.e(TAG, "loadChatHistory: ++++++++++++++ 方法正常返回 (解码成功) - 大小: ${decodedList.size} ++++++++++++++")
+                Log.e(TAG, "loadChatHistory: ++++++++++++++ SUCCESS - Size: ${decodedList.size} ++++++++++++++")
                 return decodedList
             } catch (e: Exception) {
-                Log.e(TAG, "loadChatHistory: 加载/解码聊天记录时出错: ${e.message}", e)
-                Log.e(TAG, "loadChatHistory: ++++++++++++++ 方法因异常返回空列表 ++++++++++++++")
+                Log.e(TAG, "loadChatHistory: Error decoding: ${e.message}", e)
+                Log.e(TAG, "loadChatHistory: ++++++++++++++ ERROR RETURN EMPTY ++++++++++++++")
                 return emptyList()
             }
         } else {
-            Log.i(TAG, "loadChatHistory: 未找到聊天记录数据 (JSON字符串为空或null)。")
-            Log.e(TAG, "loadChatHistory: ++++++++++++++ 方法因JSON为空返回空列表 ++++++++++++++")
+            Log.i(TAG, "loadChatHistory: No data (JSON null/empty).")
+            Log.e(TAG, "loadChatHistory: ++++++++++++++ JSON EMPTY RETURN EMPTY ++++++++++++++")
             return emptyList()
         }
     }
 
-    /**
-     * 将完整的聊天记录列表保存到 SharedPreferences。
-     * @param history 要保存的 List<List<Message>>。
-     */
     fun saveChatHistory(history: List<List<Message>>) {
         try {
-            Log.i(TAG, "saveChatHistory: 准备序列化 ${history.size} 条对话。")
+            Log.i(TAG, "saveChatHistory: Serializing ${history.size} conversations.")
             history.forEachIndexed { index, conversation ->
-                Log.d(TAG, "saveChatHistory: 序列化对话 $index, 包含 ${conversation.size} 条消息。")
+                Log.d(TAG, "saveChatHistory: Serializing conv $index, ${conversation.size} msgs.")
             }
             val jsonString = json.encodeToString(chatHistorySerializer, history)
-            // Log.d(TAG, "saveChatHistory: Serialized JSON to save: ${jsonString.take(500)}") // 可选：打印部分JSON用于调试
-            sharedPrefs.edit { putString(KEY_CHAT_HISTORY, jsonString) }
-            Log.i(
-                TAG,
-                "saveChatHistory: 已将 ${history.size} 条聊天对话保存到键 '$KEY_CHAT_HISTORY'。"
-            )
+            saveString(KEY_CHAT_HISTORY, jsonString) // 使用封装的方法
+            Log.i(TAG, "saveChatHistory: Saved ${history.size} conversations to '$KEY_CHAT_HISTORY'.")
         } catch (e: Exception) {
-            Log.e(TAG, "saveChatHistory: 保存聊天记录时出错: ${e.message}", e)
+            Log.e(TAG, "saveChatHistory: Error: ${e.message}", e)
         }
     }
 
-    /**
-     * 清除存储的聊天记录。
-     */
     fun clearChatHistory() {
-        sharedPrefs.edit { remove(KEY_CHAT_HISTORY) }
-        Log.i(TAG, "clearChatHistory: 已清除键 '$KEY_CHAT_HISTORY' 的聊天记录。")
+        remove(KEY_CHAT_HISTORY) // 使用封装的方法
+        Log.i(TAG, "clearChatHistory: Cleared '$KEY_CHAT_HISTORY'.")
     }
-
 
     // ==============================================
     // ===== 按 Provider 保存的模型名称相关方法 =====
     // ==============================================
-
-    /**
-     * 加载按 Provider 分类的已保存模型名称。
-     * @return 返回 Map<Provider名称, Set<模型名称>>，如果出错或未找到则返回空 Map。
-     */
     fun loadSavedModelNamesByProvider(): Map<String, Set<String>> {
-        val jsonString = sharedPrefs.getString(KEY_SAVED_MODEL_NAMES_BY_PROVIDER, null)
-        Log.d(
-            TAG,
-            "loadSavedModelNamesByProvider: 从键 '$KEY_SAVED_MODEL_NAMES_BY_PROVIDER' 加载的JSON: ${
-                jsonString?.take(100)
-            }..."
-        )
+        val jsonString = getString(KEY_SAVED_MODEL_NAMES_BY_PROVIDER, null) // 使用封装的方法
+        Log.d(TAG, "loadSavedModelNamesByProvider: JSON from '$KEY_SAVED_MODEL_NAMES_BY_PROVIDER': ${jsonString?.take(100)}...")
         return if (!jsonString.isNullOrEmpty()) {
             try {
                 json.decodeFromString(modelNamesMapSerializer, jsonString).also {
-                    Log.i(
-                        TAG,
-                        "loadSavedModelNamesByProvider: 已为 ${it.keys.size} 个提供商加载已保存的模型名称。"
-                    )
+                    Log.i(TAG, "loadSavedModelNamesByProvider: Loaded names for ${it.keys.size} providers.")
                 }
             } catch (e: Exception) {
-                Log.e(
-                    TAG,
-                    "loadSavedModelNamesByProvider: 加载/解码已保存的模型名称时出错: ${e.message}",
-                    e
-                )
+                Log.e(TAG, "loadSavedModelNamesByProvider: Error: ${e.message}", e)
                 emptyMap()
             }
         } else {
-            Log.i(TAG, "loadSavedModelNamesByProvider: 未找到已保存的模型名称。")
+            Log.i(TAG, "loadSavedModelNamesByProvider: No data found.")
             emptyMap()
         }
     }
 
-    /**
-     * (私有) 保存按 Provider 分类的模型名称 Map。
-     * @param modelNamesMap 要保存的 Map<String, Set<String>>。
-     */
     private fun saveModelNamesMap(modelNamesMap: Map<String, Set<String>>) {
         try {
             val jsonString = json.encodeToString(modelNamesMapSerializer, modelNamesMap)
-            sharedPrefs.edit { putString(KEY_SAVED_MODEL_NAMES_BY_PROVIDER, jsonString) }
-            Log.i(
-                TAG,
-                "saveModelNamesMap: 已保存模型名称映射到键 '$KEY_SAVED_MODEL_NAMES_BY_PROVIDER'。"
-            )
+            saveString(KEY_SAVED_MODEL_NAMES_BY_PROVIDER, jsonString) // 使用封装的方法
+            Log.i(TAG, "saveModelNamesMap: Saved map to '$KEY_SAVED_MODEL_NAMES_BY_PROVIDER'.")
         } catch (e: Exception) {
-            Log.e(TAG, "saveModelNamesMap: 保存模型名称映射时出错: ${e.message}", e)
+            Log.e(TAG, "saveModelNamesMap: Error: ${e.message}", e)
         }
     }
 
-    /**
-     * 添加一个模型名称到指定 Provider 的集合中。
-     * @param provider Provider 名称。
-     * @param modelName 要添加的模型名称。
-     */
     fun addSavedModelName(provider: String, modelName: String) {
         val trimmedProvider = provider.trim()
         val trimmedModelName = modelName.trim()
         if (trimmedProvider.isBlank() || trimmedModelName.isBlank()) {
-            Log.w(
-                TAG,
-                "addSavedModelName: 提供商或模型名称为空，不添加。Provider: '$provider', ModelName: '$modelName'"
-            )
+            Log.w(TAG, "addSavedModelName: Blank provider or modelName. Provider: '$provider', ModelName: '$modelName'")
             return
         }
         val currentMap = loadSavedModelNamesByProvider().toMutableMap()
         val currentSet = currentMap.getOrDefault(trimmedProvider, emptySet()).toMutableSet()
-        if (currentSet.add(trimmedModelName)) { // 如果成功添加（即之前不存在）
+        if (currentSet.add(trimmedModelName)) {
             currentMap[trimmedProvider] = currentSet
             saveModelNamesMap(currentMap)
-            Log.i(
-                TAG,
-                "addSavedModelName: 已为提供商 '$trimmedProvider' 添加模型名称 '$trimmedModelName'。"
-            )
+            Log.i(TAG, "addSavedModelName: Added '$trimmedModelName' for provider '$trimmedProvider'.")
         } else {
-            Log.d(
-                TAG,
-                "addSavedModelName: 模型名称 '$trimmedModelName' 已存在于提供商 '$trimmedProvider'，未重复添加。"
-            )
+            Log.d(TAG, "addSavedModelName: '$trimmedModelName' already exists for '$trimmedProvider'.")
         }
     }
 
-    /**
-     * 从指定 Provider 的集合中移除一个模型名称。
-     * @param provider Provider 名称。
-     * @param modelName 要移除的模型名称。
-     */
     fun removeSavedModelName(provider: String, modelName: String) {
         val trimmedProvider = provider.trim()
         val trimmedModelName = modelName.trim()
         if (trimmedProvider.isBlank() || trimmedModelName.isBlank()) {
-            Log.w(
-                TAG,
-                "removeSavedModelName: 提供商或模型名称为空，不移除。Provider: '$provider', ModelName: '$modelName'"
-            )
+            Log.w(TAG, "removeSavedModelName: Blank provider or modelName. Provider: '$provider', ModelName: '$modelName'")
             return
         }
         val currentMap = loadSavedModelNamesByProvider().toMutableMap()
-        val currentSet = currentMap[trimmedProvider]?.toMutableSet() // 获取可变副本
-        if (currentSet != null && currentSet.remove(trimmedModelName)) { // 如果集合存在且成功移除
-            if (currentSet.isEmpty()) { // 如果移除后集合为空，则从Map中移除该Provider
+        val currentSet = currentMap[trimmedProvider]?.toMutableSet()
+        if (currentSet != null && currentSet.remove(trimmedModelName)) {
+            if (currentSet.isEmpty()) {
                 currentMap.remove(trimmedProvider)
-                Log.d(
-                    TAG,
-                    "removeSavedModelName: 移除模型名称 '$trimmedModelName' 后，提供商 '$trimmedProvider' 的集合为空，已移除该提供商。"
-                )
+                Log.d(TAG, "removeSavedModelName: Provider '$trimmedProvider' set empty, removed provider.")
             } else {
-                currentMap[trimmedProvider] = currentSet // 更新Map中的集合
+                currentMap[trimmedProvider] = currentSet
             }
-            saveModelNamesMap(currentMap) // 保存更新后的Map
-            Log.i(
-                TAG,
-                "removeSavedModelName: 已从提供商 '$trimmedProvider' 移除模型名称 '$trimmedModelName'。"
-            )
+            saveModelNamesMap(currentMap)
+            Log.i(TAG, "removeSavedModelName: Removed '$trimmedModelName' from '$trimmedProvider'.")
         } else {
-            Log.d(
-                TAG,
-                "removeSavedModelName: 模型名称 '$trimmedModelName' 在提供商 '$trimmedProvider' 中未找到，或提供商不存在，未移除。"
-            )
+            Log.d(TAG, "removeSavedModelName: '$trimmedModelName' not found for '$trimmedProvider' or provider not found.")
         }
     }
 
-    /**
-     * 清除所有与此应用相关的 SharedPreferences 数据。
-     * **注意：** 这会清除所有 API 配置、选中的配置 ID、聊天记录和模型名称建议！
-     */
+    // ==============================================
+    // ===== 特定用于 DataPersistenceManager 的方法（如果需要更细粒度的控制） =====
+    // 这些键名应该与 DataPersistenceManager 中使用的键名一致
+    // ==============================================
+
+    fun saveLastOpenChatInternal(messages: List<Message>) {
+        try {
+            if (messages.isEmpty()) {
+                remove(KEY_LAST_OPEN_CHAT)
+                Log.d(TAG, "saveLastOpenChatInternal: Last open chat empty, removed key '$KEY_LAST_OPEN_CHAT'.")
+            } else {
+                val chatJson = json.encodeToString(singleChatSerializer, messages)
+                saveString(KEY_LAST_OPEN_CHAT, chatJson)
+                Log.d(TAG, "saveLastOpenChatInternal: Saved last open chat (${messages.size} msgs) to '$KEY_LAST_OPEN_CHAT'.")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "saveLastOpenChatInternal: Error saving last open chat: ${e.message}", e)
+        }
+    }
+
+    fun loadLastOpenChatInternal(): List<Message> {
+        val chatJson = getString(KEY_LAST_OPEN_CHAT, null)
+        return if (chatJson != null) {
+            try {
+                json.decodeFromString<List<Message>>(singleChatSerializer, chatJson) ?: emptyList()
+            } catch (e: Exception) {
+                Log.e(TAG, "loadLastOpenChatInternal: Error decoding last open chat: ${e.message}", e)
+                emptyList()
+            }
+        } else {
+            emptyList()
+        }
+    }
+
+
     fun clearAllData() {
-        sharedPrefs.edit { clear() } // clear() 会移除此 SharedPreferences 文件中的所有键值对
-        Log.w(TAG, "clearAllData: 已清除文件 '$PREFS_NAME' 中的所有应用设置数据！")
+        sharedPrefs.edit { clear() }
+        Log.w(TAG, "clearAllData: Cleared all data from '$PREFS_NAME'!")
     }
 }

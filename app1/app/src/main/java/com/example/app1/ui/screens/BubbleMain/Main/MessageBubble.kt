@@ -11,27 +11,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.example.app1.AppViewModel
-import com.example.app1.data.models.Message
-import com.example.app1.data.models.Sender
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlin.coroutines.cancellation.CancellationException
-
-// 主要常量保留或根据需要移至更具体的文件
-private const val TYPEWRITER_DELAY_MS_REASONING = 15L
-private const val TYPEWRITER_DELAY_MS_MAIN_CONTENT = 10L
+import com.example.app1.StateControler.AppViewModel
+import com.example.app1.data.DataClass.Message
+import com.example.app1.data.DataClass.Sender
 
 @OptIn(ExperimentalAnimationApi::class)
 @Composable
 fun MessageBubble(
     message: Message,
     viewModel: AppViewModel,
-    isMainContentStreaming: Boolean,
+    isMainContentStreaming: Boolean, // 仍然可以用来判断是否正在接收，以显示加载指示等
     isReasoningStreaming: Boolean,
     isReasoningComplete: Boolean,
-    isManuallyExpanded: Boolean,
-    onToggleReasoning: () -> Unit,
     onUserInteraction: () -> Unit,
     maxWidth: Dp,
     codeBlockFixedWidth: Dp,
@@ -42,7 +33,7 @@ fun MessageBubble(
 ) {
     Log.d(
         "MessageBubbleRecomp",
-        "ID: ${message.id.take(8)}, Sender: ${message.sender}, TextLen: ${message.text.length}, Streaming: $isMainContentStreaming, ContentStarted: ${message.contentStarted}, Error: ${message.isError}"
+        "ID: ${message.id.take(8)}, Sender: ${message.sender}, TextLen: ${message.text.length}, MainStream: $isMainContentStreaming, ReasoningStream: $isReasoningStreaming, ContentStarted: ${message.contentStarted}, Error: ${message.isError}"
     )
 
     val isAI = message.sender == Sender.AI
@@ -54,103 +45,59 @@ fun MessageBubble(
         mutableStateOf(animationInitiallyPlayedByVM)
     }
 
+    // displayedMainTextState 将直接反映 message.text (trimmed)
     var displayedMainTextState by remember(currentMessageId, message.sender) {
-        mutableStateOf(
-            if (isAI && isMainContentStreaming && message.contentStarted && !message.isError) ""
-            else message.text.trim()
-        )
+        mutableStateOf(message.text.trim()) // 初始化为当前 message.text
     }
     var displayedReasoningText by remember(currentMessageId, message.sender) {
-        mutableStateOf(if (isAI && message.contentStarted) message.reasoning?.trim() ?: "" else "")
+        mutableStateOf(
+            if (isAI && message.contentStarted) message.reasoning?.trim() ?: ""
+            else ""
+        )
     }
 
     val showMainBubbleLoadingDots = isAI && !showLoadingBubble && !message.isError &&
             !message.contentStarted && (message.text.isBlank() && message.reasoning.isNullOrBlank())
 
-    // 主内容打字机效果
+    // 主内容更新逻辑 - 直接显示，取消打字机
     LaunchedEffect(
-        currentMessageId,
-        message.text,
-        isMainContentStreaming,
-        isAI,
-        message.contentStarted,
-        message.isError,
-        showLoadingBubble
+        currentMessageId, message.text, // 主要依赖 message.text 的变化
+        isAI, message.contentStarted, message.isError, showLoadingBubble
     ) {
+        Log.d(
+            "MessageBubbleDirectDisplay", "Effect launched for ID: ${currentMessageId.take(8)}. " +
+                    "message.text length: ${message.text.length}, " +
+                    "isStreaming: $isMainContentStreaming, contentStarted: ${message.contentStarted}, isError: ${message.isError}"
+        )
+
         if (showLoadingBubble) {
             if (displayedMainTextState.isNotEmpty()) displayedMainTextState = ""
             return@LaunchedEffect
         }
+
         val fullMainTextTrimmed = message.text.trim()
-        if (message.isError) {
-            if (displayedMainTextState != fullMainTextTrimmed) displayedMainTextState =
-                fullMainTextTrimmed
-            if (!localAnimationTriggeredOrCompleted) {
-                localAnimationTriggeredOrCompleted = true
-                if (!animationInitiallyPlayedByVM) viewModel.onAnimationComplete(currentMessageId)
-            }
-            return@LaunchedEffect
+
+        // 直接更新 displayedMainTextState 为最新的 message.text (trimmed)
+        if (displayedMainTextState != fullMainTextTrimmed) {
+            displayedMainTextState = fullMainTextTrimmed
+            Log.d(
+                "MessageBubbleDirectDisplay",
+                "Updated displayedMainTextState for ${currentMessageId.take(8)} to: '${
+                    fullMainTextTrimmed.take(50)
+                }'"
+            )
         }
-        if (isAI && isMainContentStreaming && message.contentStarted) {
-            val rawFullText = message.text
-            if (rawFullText.isNotEmpty()) {
-                if (displayedMainTextState.length < rawFullText.length) {
-                    var currentDisplayProgress = displayedMainTextState
-                    try {
-                        for (i in currentDisplayProgress.length until rawFullText.length) {
-                            if (!isActive) throw CancellationException("Main text typewriter for $currentMessageId cancelled (not active)")
-                            currentDisplayProgress = rawFullText.substring(0, i + 1)
-                            displayedMainTextState = currentDisplayProgress
-                            delay(TYPEWRITER_DELAY_MS_MAIN_CONTENT)
-                        }
-                        if (isActive && displayedMainTextState.trim() != fullMainTextTrimmed) displayedMainTextState =
-                            fullMainTextTrimmed
-                    } catch (e: CancellationException) {
-                        if (isActive && displayedMainTextState.trim() != fullMainTextTrimmed) displayedMainTextState =
-                            fullMainTextTrimmed
-                    } finally {
-                        if (isActive && !localAnimationTriggeredOrCompleted && displayedMainTextState.trim() == fullMainTextTrimmed && fullMainTextTrimmed.isNotBlank()) {
-                            localAnimationTriggeredOrCompleted = true
-                            if (!animationInitiallyPlayedByVM) viewModel.onAnimationComplete(
-                                currentMessageId
-                            )
-                        }
-                    }
-                } else if (displayedMainTextState.trim() != fullMainTextTrimmed) {
-                    displayedMainTextState = fullMainTextTrimmed
-                    if (!localAnimationTriggeredOrCompleted && fullMainTextTrimmed.isNotEmpty()) {
-                        localAnimationTriggeredOrCompleted = true
-                        if (!animationInitiallyPlayedByVM) viewModel.onAnimationComplete(
-                            currentMessageId
-                        )
-                    }
-                } else if (fullMainTextTrimmed.isNotEmpty() && !localAnimationTriggeredOrCompleted) {
-                    localAnimationTriggeredOrCompleted = true
-                    if (!animationInitiallyPlayedByVM) viewModel.onAnimationComplete(
-                        currentMessageId
+
+        // 动画完成标记逻辑 (当文本最终确定，并且非空或内容已开始或错误时)
+        if (!localAnimationTriggeredOrCompleted) {
+            if (message.isError || !isAI || (isAI && message.contentStarted && !isMainContentStreaming)) {
+                // 如果是错误，或者不是AI，或者AI内容已开始且流已结束
+                if (fullMainTextTrimmed.isNotBlank() || message.isError || (isAI && message.contentStarted && fullMainTextTrimmed.isBlank() && !isMainContentStreaming)) {
+                    // 有文本，或者是错误，或者是AI回复完成但为空
+                    Log.d(
+                        "MessageBubbleDirectDisplay",
+                        "Animation marked complete for ${currentMessageId.take(8)}"
                     )
-                }
-            } else {
-                if (displayedMainTextState.isNotEmpty()) displayedMainTextState = ""
-                if (!localAnimationTriggeredOrCompleted && message.contentStarted) {
-                    localAnimationTriggeredOrCompleted = true
-                    if (!animationInitiallyPlayedByVM) viewModel.onAnimationComplete(
-                        currentMessageId
-                    )
-                }
-            }
-        } else if (isAI && !message.contentStarted && displayedMainTextState.isNotEmpty()) {
-            displayedMainTextState = ""
-        } else {
-            if (displayedMainTextState.trim() != fullMainTextTrimmed) displayedMainTextState =
-                fullMainTextTrimmed
-            if (!localAnimationTriggeredOrCompleted) {
-                if (fullMainTextTrimmed.isNotBlank() || !isAI || message.isError) {
-                    localAnimationTriggeredOrCompleted = true
-                    if (!animationInitiallyPlayedByVM) viewModel.onAnimationComplete(
-                        currentMessageId
-                    )
-                } else if (isAI && message.contentStarted && fullMainTextTrimmed.isBlank()) {
                     localAnimationTriggeredOrCompleted = true
                     if (!animationInitiallyPlayedByVM) viewModel.onAnimationComplete(
                         currentMessageId
@@ -160,39 +107,12 @@ fun MessageBubble(
         }
     }
 
-    // 推理文本打字机效果
-    LaunchedEffect(
-        currentMessageId,
-        message.reasoning,
-        isReasoningStreaming,
-        isAI,
-        message.contentStarted
-    ) {
+    // 推理文本更新逻辑 (保持不变)
+    LaunchedEffect(currentMessageId, message.reasoning, isAI, message.contentStarted) {
         if (isAI && message.contentStarted) {
             val fullReasoningTextTrimmed = message.reasoning?.trim() ?: ""
-            if (fullReasoningTextTrimmed.isNotEmpty()) {
-                val rawReasoningText = message.reasoning ?: ""
-                if (isReasoningStreaming && displayedReasoningText.length < rawReasoningText.length) {
-                    var currentDisplay = displayedReasoningText
-                    try {
-                        for (i in displayedReasoningText.length until rawReasoningText.length) {
-                            if (!isActive) throw CancellationException("Reasoning typewriter for $currentMessageId cancelled (not active)")
-                            currentDisplay = rawReasoningText.substring(0, i + 1)
-                            displayedReasoningText = currentDisplay
-                            delay(TYPEWRITER_DELAY_MS_REASONING)
-                        }
-                        if (isActive && displayedReasoningText.trim() != fullReasoningTextTrimmed) displayedReasoningText =
-                            fullReasoningTextTrimmed
-                    } catch (e: CancellationException) {
-                        if (isActive && displayedReasoningText.trim() != fullReasoningTextTrimmed) displayedReasoningText =
-                            fullReasoningTextTrimmed
-                    }
-                } else {
-                    if (displayedReasoningText.trim() != fullReasoningTextTrimmed) displayedReasoningText =
-                        fullReasoningTextTrimmed
-                }
-            } else {
-                if (displayedReasoningText.isNotEmpty()) displayedReasoningText = ""
+            if (displayedReasoningText != fullReasoningTextTrimmed) {
+                displayedReasoningText = fullReasoningTextTrimmed
             }
         } else if (isAI && !message.contentStarted && displayedReasoningText.isNotEmpty()) {
             displayedReasoningText = ""
@@ -210,8 +130,6 @@ fun MessageBubble(
     val codeBlockUnifiedContentColor = Color.Black
     val reasoningTextColor = Color(0xFF444444)
     val codeBlockCornerRadius = 16.dp
-    val reasoningBubbleColor = Color(red = 200, green = 200, blue = 200, alpha = 128)
-
 
     Column(modifier = modifier.fillMaxWidth()) {
         if (isAI && showLoadingBubble) {
@@ -237,44 +155,39 @@ fun MessageBubble(
                             strokeWidth = 1.dp
                         )
                         Spacer(Modifier.width(12.dp))
-                        Text(
-                            text = "正在连接大模型...",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
+                        Text("正在连接大模型...", style = MaterialTheme.typography.bodyMedium)
                     }
                 }
             }
             return@Column
         }
 
-        val shouldShowReasoningToggle =
-            isAI && message.contentStarted && (message.reasoning != null || isReasoningStreaming)
-        if (shouldShowReasoningToggle) {
+        val shouldShowReasoningComponents =
+            isAI && message.contentStarted && (displayedReasoningText.isNotBlank() || isReasoningStreaming)
+
+        if (shouldShowReasoningComponents) {
             ReasoningToggleAndContent(
                 currentMessageId = currentMessageId,
                 displayedReasoningText = displayedReasoningText,
                 isReasoningStreaming = isReasoningStreaming,
                 isReasoningComplete = isReasoningComplete,
-                isManuallyExpanded = isManuallyExpanded,
                 messageContentStarted = message.contentStarted,
                 messageIsError = message.isError,
-                fullReasoningTextProvider = { message.reasoning },
-                onToggleReasoning = onToggleReasoning,
-                reasoningBubbleColor = reasoningBubbleColor,
                 reasoningTextColor = reasoningTextColor,
-                reasoningToggleDotColor = aiContentColor, // Toggle dot color matches AI content
-                modifier = Modifier // ReasoningToggleAndContent handles its own alignment via .align(Alignment.Start)
+                reasoningToggleDotColor = aiContentColor,
+                modifier = Modifier
             )
         }
 
         val shouldShowMainBubbleSurface =
             !showLoadingBubble && ((isAI && message.contentStarted) || !isAI || message.isError)
+
         if (shouldShowMainBubbleSurface) {
             if (isAI && !message.isError) {
                 AiMessageContent(
-                    messageText = message.text,
-                    displayedText = displayedMainTextState,
-                    isStreaming = isMainContentStreaming,
+                    messageText = message.text, // 传递原始文本供 Markdown 解析
+                    displayedText = displayedMainTextState, // 直接显示处理后的文本
+                    isStreaming = isMainContentStreaming, // 用于UI指示，例如省略号或其他加载状态
                     showLoadingDots = showMainBubbleLoadingDots,
                     bubbleColor = aiBubbleColor,
                     contentColor = aiContentColor,
@@ -282,19 +195,19 @@ fun MessageBubble(
                     codeBlockContentColor = codeBlockUnifiedContentColor,
                     codeBlockCornerRadius = codeBlockCornerRadius,
                     codeBlockFixedWidth = codeBlockFixedWidth,
-                    modifier = Modifier.align(Alignment.Start) // AI content is generally start aligned
+                    modifier = Modifier.align(Alignment.Start)
                 )
-            } else { // User bubble OR AI Error bubble
+            } else {
                 val actualBubbleColor =
                     if (message.isError) aiBubbleColor else userBubbleBackgroundColor
                 val actualContentColor = if (message.isError) errorTextColor else userContentColor
                 UserOrErrorMessageContent(
                     message = message,
                     displayedText = displayedMainTextState,
-                    showLoadingDots = showMainBubbleLoadingDots && !isAI, // User bubble specific loading dots
+                    showLoadingDots = showMainBubbleLoadingDots && !isAI,
                     bubbleColor = actualBubbleColor,
                     contentColor = actualContentColor,
-                    isError = message.isError, // Pass error state for context menu logic
+                    isError = message.isError,
                     maxWidth = maxWidth,
                     onUserInteraction = onUserInteraction,
                     onEditRequest = onEditRequest,

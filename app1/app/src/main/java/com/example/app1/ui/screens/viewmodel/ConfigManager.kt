@@ -1,9 +1,8 @@
 package com.example.app1.ui.screens.viewmodel
 
-import com.example.app1.data.models.ApiConfig
-import com.example.app1.ui.screens.ApiHandler
-import com.example.app1.ui.screens.viewmodel.data.DataPersistenceManager
-import com.example.app1.ui.screens.viewmodel.state.ViewModelStateHolder
+import com.example.app1.data.DataClass.ApiConfig
+import com.example.app1.StateControler.ApiHandler
+import com.example.app1.StateControler.ViewModelStateHolder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.update
@@ -26,8 +25,10 @@ class ConfigManager(
                 existingConfig ->
             existingConfig.address.trim().equals(configToAdd.address.trim(), ignoreCase = true) &&
                     existingConfig.key.trim() == configToAdd.key.trim() &&
-                    existingConfig.model.trim().equals(configToAdd.model.trim(), ignoreCase = true) &&
-                    existingConfig.provider.trim().equals(configToAdd.provider.trim(), ignoreCase = true)
+                    existingConfig.model.trim()
+                        .equals(configToAdd.model.trim(), ignoreCase = true) &&
+                    existingConfig.provider.trim()
+                        .equals(configToAdd.provider.trim(), ignoreCase = true)
         }
 
         if (!contentExists) {
@@ -46,8 +47,6 @@ class ConfigManager(
             // --- End 修改点 1 ---
 
             persistenceManager.saveApiConfigs()
-            viewModelScope.launch { stateHolder._snackbarMessage.emit("Config '${finalConfig.model}' saved" + if(wasSelected) " and selected." else ".") }
-            println("ConfigManager: Added config '${finalConfig.model}'. Auto-selected: $wasSelected")
         } else {
             viewModelScope.launch { stateHolder._snackbarMessage.emit("Configuration with same content already exists") }
             println("ConfigManager: Config add attempt failed - duplicate content.")
@@ -69,7 +68,9 @@ class ConfigManager(
                     }
                     updated = true
                     mutableConfigs
-                } else { currentConfigs }
+                } else {
+                    currentConfigs
+                }
             } else {
                 viewModelScope.launch { stateHolder._snackbarMessage.emit("Update failed: Config not found") }
                 currentConfigs
@@ -103,7 +104,6 @@ class ConfigManager(
                 }
                 mutableConfigs
             } else {
-                viewModelScope.launch { stateHolder._snackbarMessage.emit("Delete failed: Config not found") }
                 currentConfigs
             }
         }
@@ -153,7 +153,6 @@ class ConfigManager(
             // --- End 修改点 3 ---
             stateHolder._showSettingsDialog.value = false
             println("ConfigManager: Selected config: ${config.model} (${config.provider}). ID saved.")
-            viewModelScope.launch { stateHolder._snackbarMessage.emit("Selected: ${config.model}") }
         } else {
             stateHolder._showSettingsDialog.value = false
             println("ConfigManager: Config already selected.")

@@ -1,4 +1,4 @@
-package com.example.app1.data.models
+package com.example.app1.data.DataClass
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -22,9 +22,6 @@ data class OpenAiStreamChunk(
     val choices: List<OpenAiChoice>? = null,
     @SerialName("system_fingerprint")
     val systemFingerprint: String? = null
-    // To add usage, uncomment below:
-    // @SerialName("usage")
-    // val usage: OpenAiUsage? = null
 )
 
 @Serializable

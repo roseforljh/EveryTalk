@@ -1,5 +1,5 @@
 // File: app/src/main/java/com/example/app1/data/models/Message.kt
-package com.example.app1.data.models
+package com.example.app1.data.DataClass
 
 import kotlinx.serialization.Serializable
 import java.util.UUID

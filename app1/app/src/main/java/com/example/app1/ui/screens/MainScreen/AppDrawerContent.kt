@@ -1,4 +1,4 @@
-package com.example.app1.ui.screens.viewmodel
+package com.example.app1.ui.screens.MainScreen
 
 import android.util.Log
 import androidx.activity.compose.BackHandler
@@ -6,7 +6,7 @@ import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.animateFloatAsState // 重新引入
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -56,12 +56,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
-import com.example.app1.data.models.Message
-import com.example.app1.data.models.Sender
+import com.example.app1.data.DataClass.Message
+import com.example.app1.data.DataClass.Sender
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.max
+import kotlin.math.min //确保 min 被导入
 import kotlin.math.roundToInt
 
 // --- 常量定义 ---
@@ -70,15 +71,14 @@ private val defaultDrawerWidth = 280.dp
 private const val EXPAND_ANIMATION_DURATION_MS = 300
 private const val CONTENT_CHANGE_ANIMATION_DURATION_MS = 200
 
-private const val CUSTOM_RIPPLE_ANIMATION_DURATION_MS = 350 // 涟漪动画总时长
-private val CUSTOM_RIPPLE_COLOR = Color.Black // 涟漪的基础颜色
-private const val CUSTOM_RIPPLE_START_ALPHA = 0.12f // 涟漪开始时的 Alpha
-private const val CUSTOM_RIPPLE_END_ALPHA = 0f    // 涟漪结束时的 Alpha (淡出到透明)
+private const val CUSTOM_RIPPLE_ANIMATION_DURATION_MS = 350
+private val CUSTOM_RIPPLE_COLOR = Color.Black
+private const val CUSTOM_RIPPLE_START_ALPHA = 0.12f
+private const val CUSTOM_RIPPLE_END_ALPHA = 0f
 
-// --- 用于自定义涟漪的状态 ---
 sealed class CustomRippleState {
-    object Idle : CustomRippleState() // 静止状态
-    data class Animating(val pressPosition: Offset) : CustomRippleState() // 动画进行中，存储按压位置
+    object Idle : CustomRippleState()
+    data class Animating(val pressPosition: Offset) : CustomRippleState()
 }
 
 data class FilteredConversationItem(
@@ -139,6 +139,10 @@ private fun rememberGeneratedPreviewSnippet(
 fun AppDrawerContent(
     historicalConversations: List<List<Message>>,
     loadedHistoryIndex: Int?,
+    isSearchActive: Boolean, // 从 ViewModel 获取
+    currentSearchQuery: String, // 从 ViewModel 获取
+    onSearchActiveChange: (Boolean) -> Unit, // 回调到 ViewModel
+    onSearchQueryChange: (String) -> Unit, // 回调到 ViewModel
     onConversationClick: (Int) -> Unit,
     onNewChatClick: () -> Unit,
     onRenameRequest: (index: Int) -> Unit,
@@ -152,8 +156,6 @@ fun AppDrawerContent(
     var showClearAllConfirm by remember { mutableStateOf(false) }
     var longPressPosition by remember { mutableStateOf<Offset?>(null) }
     var showPopupForIndex by remember { mutableStateOf<Int?>(null) }
-    var searchQuery by remember { mutableStateOf("") }
-    var isSearchActive by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
@@ -169,12 +171,17 @@ fun AppDrawerContent(
             if (expandedItemIndex != null) {
                 expandedItemIndex = null; changed = true
             }
-            if (isSearchActive) {
-                isSearchActive = false; changed = true
-            }
-            if (changed) Log.d("AppDrawerContent", "因 loadedHistoryIndex 变为 null，已清除状态。")
+            // isSearchActive 和 currentSearchQuery 由 ViewModel 控制，
+            // 当通过点击 "新建会话" 或加载历史记录导致抽屉关闭时，
+            // ViewModel 中的相应方法 (startNewChat, loadConversationFromHistory)
+            // 应该负责调用 onSearchActiveChange(false)
+            if (changed) Log.d(
+                "AppDrawerContent",
+                "因 loadedHistoryIndex 变为 null，已清除部分UI状态。"
+            )
         }
     }
+
     LaunchedEffect(expandedItemIndex) {
         if (expandedItemIndex == null) {
             longPressPosition = null
@@ -184,40 +191,49 @@ fun AppDrawerContent(
             showPopupForIndex = null
         }
     }
+
     LaunchedEffect(isSearchActive, keyboardController) {
         if (isSearchActive) {
             Log.d("AppDrawerContent", "搜索激活，请求焦点并尝试显示键盘...")
-            delay(60)
+            delay(100) // 增加延迟以确保UI准备好
             focusRequester.requestFocus()
-            keyboardController?.show()
+            val shown = keyboardController?.show()
+            Log.d("AppDrawerContent", "键盘显示请求结果: $shown")
         } else {
             Log.d("AppDrawerContent", "搜索取消，隐藏键盘并清除焦点")
             keyboardController?.hide()
             focusManager.clearFocus(force = true)
-            searchQuery = ""
+            // onSearchQueryChange("") // ViewModel 会在 onSearchActiveChange(false) 时处理清空
         }
     }
-    val filteredItems = remember(searchQuery, historicalConversations, isSearchActive) {
-        if (!isSearchActive || searchQuery.isBlank()) {
+
+    val filteredItems = remember(currentSearchQuery, historicalConversations, isSearchActive) {
+        if (!isSearchActive || currentSearchQuery.isBlank()) {
             historicalConversations.mapIndexed { index, conversation ->
                 FilteredConversationItem(index, conversation)
             }
         } else {
             historicalConversations.mapIndexedNotNull { index, conversation ->
                 val matches = conversation.any { message ->
-                    message.text.contains(searchQuery, ignoreCase = true)
+                    message.text.contains(currentSearchQuery, ignoreCase = true)
                 }
                 if (matches) FilteredConversationItem(index, conversation) else null
             }
         }
     }
+
     val targetWidth = if (isSearchActive) screenWidth else defaultDrawerWidth
     val animatedWidth by animateDpAsState(
         targetValue = targetWidth,
         animationSpec = tween(durationMillis = EXPAND_ANIMATION_DURATION_MS),
         label = "drawerWidthAnimation"
     )
-    BackHandler(enabled = isSearchActive) { isSearchActive = false }
+
+    // 当抽屉内容处于搜索激活状态时，系统返回键应首先关闭搜索模式
+    BackHandler(enabled = isSearchActive) {
+        onSearchActiveChange(false)
+        Log.d("AppDrawerContent", "返回键按下，抽屉内搜索模式停用。")
+    }
 
     ModalDrawerSheet(
         modifier = modifier
@@ -242,7 +258,7 @@ fun AppDrawerContent(
 
             LaunchedEffect(isTextFieldFocused) {
                 if (isTextFieldFocused && !isSearchActive) {
-                    isSearchActive = true
+                    onSearchActiveChange(true)
                 }
             }
 
@@ -254,11 +270,11 @@ fun AppDrawerContent(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 OutlinedTextField(
-                    value = searchQuery,
+                    value = currentSearchQuery, // 使用 ViewModel 的 searchQuery
                     onValueChange = {
-                        searchQuery = it
+                        onSearchQueryChange(it) // 更新 ViewModel 的 searchQuery
                         if (it.isNotBlank() && !isSearchActive) {
-                            isSearchActive = true
+                            onSearchActiveChange(true) // 如果输入且未激活搜索，则激活
                         }
                     },
                     modifier = Modifier
@@ -274,7 +290,7 @@ fun AppDrawerContent(
                         ) { active ->
                             if (active) {
                                 IconButton(
-                                    onClick = { isSearchActive = false },
+                                    onClick = { onSearchActiveChange(false) }, // 点击后退，停用搜索模式
                                     modifier = Modifier.size(24.dp)
                                 ) {
                                     Icon(
@@ -285,7 +301,7 @@ fun AppDrawerContent(
                                 }
                             } else {
                                 IconButton(
-                                    onClick = { isSearchActive = true },
+                                    onClick = { onSearchActiveChange(true) }, // 点击搜索图标，激活搜索模式
                                     modifier = Modifier.size(24.dp)
                                 ) {
                                     Icon(
@@ -298,8 +314,8 @@ fun AppDrawerContent(
                         }
                     },
                     trailingIcon = {
-                        if (searchQuery.isNotEmpty()) {
-                            IconButton(onClick = { searchQuery = "" }) {
+                        if (currentSearchQuery.isNotEmpty()) {
+                            IconButton(onClick = { onSearchQueryChange("") }) { // 清空搜索查询
                                 Icon(
                                     Icons.Filled.Close,
                                     "清除搜索"
@@ -317,7 +333,9 @@ fun AppDrawerContent(
                     ),
                     singleLine = true, interactionSource = textFieldInteractionSource,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() })
+                    keyboardActions = KeyboardActions(onSearch = {
+                        focusManager.clearFocus() // 搜索操作后清除焦点，隐藏键盘
+                    })
                 )
             }
 
@@ -325,7 +343,9 @@ fun AppDrawerContent(
             Column {
                 Spacer(Modifier.height(8.dp))
                 Button(
-                    onClick = onNewChatClick,
+                    onClick = {
+                        onNewChatClick() // ViewModel.startNewChat() 应该处理 onSearchActiveChange(false)
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp)
@@ -424,7 +444,7 @@ fun AppDrawerContent(
                         }
                     }
 
-                    isSearchActive && searchQuery.isNotBlank() && filteredItems.isEmpty() -> {
+                    isSearchActive && currentSearchQuery.isNotBlank() && filteredItems.isEmpty() -> {
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -443,15 +463,15 @@ fun AppDrawerContent(
                                 val originalIndex = itemData.originalIndex
                                 val conversation = itemData.conversation
                                 val previewTextToShow: AnnotatedString? =
-                                    if (isSearchActive && searchQuery.isNotBlank()) {
+                                    if (isSearchActive && currentSearchQuery.isNotBlank()) {
                                         conversation.firstNotNullOfOrNull { msg ->
                                             if (msg.text.contains(
-                                                    searchQuery,
+                                                    currentSearchQuery,
                                                     ignoreCase = true
                                                 )
                                             ) rememberGeneratedPreviewSnippet(
                                                 msg.text,
-                                                searchQuery
+                                                currentSearchQuery
                                             ) else null
                                         }
                                     } else {
@@ -464,7 +484,6 @@ fun AppDrawerContent(
                                         CustomRippleState.Idle
                                     )
                                 }
-                                // Storing pressPosition separately because rippleState changes and would reset it for drawBehind.
                                 var currentPressPosition by remember { mutableStateOf(Offset.Zero) }
 
                                 val animationProgress by animateFloatAsState(
@@ -473,18 +492,8 @@ fun AppDrawerContent(
                                         durationMillis = CUSTOM_RIPPLE_ANIMATION_DURATION_MS,
                                         easing = LinearEasing
                                     ),
-                                    finishedListener = { progressValue ->
-                                        // When the animation finishes (either expanding or contracting)
-                                        if (progressValue == 0f && rippleState is CustomRippleState.Idle) {
-                                            // Fully faded out, already Idle.
-                                        } else if (progressValue == 1f && rippleState is CustomRippleState.Animating) {
-                                            // Fully expanded. If no long press occurred, it should start fading out.
-                                            // This is handled by the onPress job setting state to Idle.
-                                        }
-                                        // If the animation naturally reaches 0 (fades out), ensure state is Idle.
-                                        if (rippleState !is CustomRippleState.Idle && progressValue == 0f) {
-                                            // This can happen if state was Animating but targetValue changed to 0f.
-                                            // To be safe, ensure it's Idle.
+                                    finishedListener = {
+                                        if (rippleState !is CustomRippleState.Idle && it == 0f) {
                                             rippleState = CustomRippleState.Idle
                                         }
                                     },
@@ -498,46 +507,35 @@ fun AppDrawerContent(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clipToBounds()
-                                        .pointerInput(originalIndex) { // Key by originalIndex if needed
+                                        .pointerInput(originalIndex) {
                                             detectTapGestures(
                                                 onPress = { offset ->
-                                                    pressAndHoldJob?.cancel() // Cancel any existing job
-                                                    currentPressPosition =
-                                                        offset // Store for drawing
+                                                    pressAndHoldJob?.cancel()
+                                                    currentPressPosition = offset
                                                     rippleState =
                                                         CustomRippleState.Animating(offset)
-
                                                     pressAndHoldJob = scope.launch {
                                                         try {
-                                                            // `this` inside onPress is PressGestureScope
                                                             this@detectTapGestures.awaitRelease()
-                                                            // If awaitRelease completes, means it was a tap or release, not a cancellation by long press.
-                                                            // Start fade out by setting state to Idle.
-                                                            // The animationProgress target will become 0f.
                                                             rippleState = CustomRippleState.Idle
                                                         } catch (e: GestureCancellationException) {
-                                                            // Gesture was cancelled (e.g., by scroll, or long press starting)
                                                             rippleState = CustomRippleState.Idle
                                                         }
                                                     }
                                                 },
                                                 onTap = {
-                                                    // onPress already handled starting the ripple.
-                                                    // The ripple will fade out due to awaitRelease() completing.
                                                     val wasExpanded =
                                                         expandedItemIndex == originalIndex
-                                                    expandedItemIndex =
-                                                        null // Clear any long-press state
+                                                    expandedItemIndex = null
                                                     if (!wasExpanded) {
                                                         selectedSet.clear()
+                                                        // onConversationClick() 应该处理 onSearchActiveChange(false)
                                                         onConversationClick(originalIndex)
                                                     }
                                                 },
                                                 onLongPress = { offset ->
-                                                    pressAndHoldJob?.cancel() // Cancel the press-and-hold job.
-                                                    rippleState =
-                                                        CustomRippleState.Idle // Immediately stop ripple animation.
-
+                                                    pressAndHoldJob?.cancel()
+                                                    rippleState = CustomRippleState.Idle
                                                     longPressPosition = offset
                                                     expandedItemIndex = originalIndex
                                                     showPopupForIndex = originalIndex
@@ -545,19 +543,18 @@ fun AppDrawerContent(
                                             )
                                         }
                                         .drawBehind {
-                                            if (animationProgress > 0f) { // Only draw if animation is active
+                                            if (animationProgress > 0f) {
                                                 val rippleRadius = max(
                                                     size.width,
                                                     size.height
-                                                ) * animationProgress * 0.8f // Ripple expands
+                                                ) * animationProgress * 0.8f
                                                 val alpha =
-                                                    CUSTOM_RIPPLE_START_ALPHA * (1f - animationProgress) // Fades out as it expands
-
-                                                if (alpha > 0f) { // Only draw if visible
+                                                    CUSTOM_RIPPLE_START_ALPHA * (1f - animationProgress)
+                                                if (alpha > 0f) {
                                                     drawCircle(
                                                         color = CUSTOM_RIPPLE_COLOR,
                                                         radius = rippleRadius,
-                                                        center = currentPressPosition, // Use the stored press position
+                                                        center = currentPressPosition,
                                                         alpha = alpha.coerceIn(
                                                             CUSTOM_RIPPLE_END_ALPHA,
                                                             CUSTOM_RIPPLE_START_ALPHA
@@ -576,9 +573,7 @@ fun AppDrawerContent(
                                             if (isActuallyActive) {
                                                 Spacer(Modifier.width(16.dp)); Box(
                                                     modifier = Modifier
-                                                        .size(
-                                                            8.dp
-                                                        )
+                                                        .size(8.dp)
                                                         .background(Color.Black, CircleShape)
                                                 ); Spacer(Modifier.width(8.dp))
                                             } else {
@@ -613,7 +608,6 @@ fun AppDrawerContent(
                                             )
                                         }
 
-                                        // --- 长按弹窗 ---
                                         if (showPopupForIndex == originalIndex && longPressPosition != null) {
                                             val currentLongPressPosition = longPressPosition!!
                                             Popup(
@@ -641,13 +635,12 @@ fun AppDrawerContent(
                                                     }
                                                 },
                                                 onDismissRequest = { expandedItemIndex = null },
-                                                properties = PopupProperties(focusable = false)
+                                                properties = PopupProperties(focusable = false) // focusable = false, damit Popup nicht den Fokus für BackHandler stiehlt
                                             ) {
                                                 val isRenameEnabledForThisPopup =
                                                     !selectedSet.contains(originalIndex)
                                                 Surface(
-                                                    color = Color.White,
-                                                    shadowElevation = 8.dp,
+                                                    color = Color.White, shadowElevation = 8.dp,
                                                     shape = RoundedCornerShape(12.dp),
                                                     modifier = Modifier.widthIn(max = 120.dp)
                                                 ) {
@@ -667,8 +660,8 @@ fun AppDrawerContent(
                                                                         if (isRenameEnabledForThisPopup) {
                                                                             onRenameRequest(
                                                                                 originalIndex
-                                                                            ); expandedItemIndex =
-                                                                                null
+                                                                            )
+                                                                            expandedItemIndex = null
                                                                         }
                                                                     },
                                                                     interactionSource = remember { MutableInteractionSource() },
@@ -699,11 +692,12 @@ fun AppDrawerContent(
                                                                             )
                                                                         ) selectedSet.add(
                                                                             originalIndex
-                                                                        ); if (selectedSet.isEmpty() && expandedItemIndex != null) selectedSet.add(
-                                                                        expandedItemIndex!!
-                                                                    ); expandedItemIndex =
-                                                                        null; showDeleteConfirm =
-                                                                        true
+                                                                        )
+                                                                        if (selectedSet.isEmpty() && expandedItemIndex != null) selectedSet.add(
+                                                                            expandedItemIndex!!
+                                                                        )
+                                                                        expandedItemIndex = null
+                                                                        showDeleteConfirm = true
                                                                     },
                                                                     interactionSource = remember { MutableInteractionSource() },
                                                                     indication = null
@@ -716,8 +710,7 @@ fun AppDrawerContent(
                                                                 tint = Color.Black,
                                                                 modifier = Modifier.size(20.dp)
                                                             ); Spacer(Modifier.width(12.dp)); Text(
-                                                            "删除",
-                                                            color = Color.Black,
+                                                            "删除", color = Color.Black,
                                                             style = MaterialTheme.typography.bodyMedium
                                                         )
                                                         }
@@ -734,7 +727,6 @@ fun AppDrawerContent(
             }
         }
 
-        // --- AlertDialogs ---
         if (showDeleteConfirm) {
             AlertDialog(
                 onDismissRequest = { showDeleteConfirm = false; selectedSet.clear() },
@@ -743,21 +735,18 @@ fun AppDrawerContent(
                     TextButton(
                         onClick = {
                             val indicesToDelete =
-                                selectedSet.toList(); selectedSet.clear(); expandedItemIndex =
-                            null; showDeleteConfirm = false; indicesToDelete.sortedDescending()
+                                selectedSet.toList(); selectedSet.clear(); expandedItemIndex = null
+                            showDeleteConfirm = false; indicesToDelete.sortedDescending()
                             .forEach(onDeleteRequest)
                         },
                         colors = ButtonDefaults.textButtonColors(contentColor = Color.Red)
                     ) { Text("确定") }
                 },
                 dismissButton = {
-                    TextButton(onClick = {
-                        showDeleteConfirm = false; selectedSet.clear()
-                    }, colors = ButtonDefaults.textButtonColors(contentColor = Color.Black)) {
-                        Text(
-                            "取消"
-                        )
-                    }
+                    TextButton(
+                        onClick = { showDeleteConfirm = false; selectedSet.clear() },
+                        colors = ButtonDefaults.textButtonColors(contentColor = Color.Black)
+                    ) { Text("取消") }
                 },
                 containerColor = Color.White,
                 titleContentColor = Color.Black,
