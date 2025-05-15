@@ -1,24 +1,24 @@
-package com.example.app1.ui.screens.MainScreen // 确保包名正确
+package com.example.app1.ui.screens.MainScreen
 
 import android.util.Log
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.animation.*
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items // AndroidX Compose Foundation
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.North
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -38,32 +38,29 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
-import com.example.app1.data.DataClass.Sender
-import com.example.app1.navigation.Screen // 假设你的 Screen 对象在这里定义导航路由
-import com.example.app1.ui.components.AppTopBar
 import com.example.app1.StateControler.AppViewModel
-import com.example.app1.ui.screens.BubbleMain.Main.MessageBubble // 确保这个路径正确
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
+import com.example.app1.data.DataClass.Message
+import com.example.app1.data.DataClass.Sender
+import com.example.app1.navigation.Screen
+import com.example.app1.ui.components.AppTopBar
+import com.example.app1.ui.screens.BubbleMain.Main.MessageBubble
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.pow
+import kotlin.math.roundToInt
 
-// 常量
-private const val CHAT_SCREEN_AUTO_SCROLL_DELAY_MS = 100L
-private const val CHAT_SCREEN_STREAMING_SCROLL_INTERVAL_MS = 150L
-private const val USER_INACTIVITY_TIMEOUT_MS = 1000L
+private const val USER_INACTIVITY_TIMEOUT_MS = 3000L // 用户不活动超时时间
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -72,8 +69,7 @@ fun ChatScreen(
     navController: NavController,
     modifier: Modifier = Modifier
 ) {
-    Log.d("ChatScreen", "Recomposing. ViewModel ID: ${viewModel.viewModelInstanceIdForLogging}")
-    val messages = viewModel.messages
+    val messages: List<Message> = viewModel.messages
     val text by viewModel.text.collectAsState()
     val selectedApiConfig by viewModel.selectedApiConfig.collectAsState()
     val isApiCalling by viewModel.isApiCalling.collectAsState()
@@ -85,354 +81,238 @@ fun ChatScreen(
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     val density = LocalDensity.current
+    val configuration = LocalConfiguration.current
 
-    var userManuallyScrolledUp by remember { mutableStateOf(false) }
+    // 状态：用户是否手动将列表从底部向上滚动了
+    var userManuallyScrolledAwayFromBottom by remember { mutableStateOf(false) }
     var ongoingScrollJob by remember { mutableStateOf<Job?>(null) }
-    var programmaticallyScrolling by remember { mutableStateOf(false) } // 新增: 标记程序是否正在滚动
+    var programmaticallyScrolling by remember { mutableStateOf(false) }
 
+    // 状态：用户最后交互时间 和 用户是否被认为活跃
     var lastInteractionTime by remember { mutableStateOf(System.currentTimeMillis()) }
-    var isUserActive by remember { mutableStateOf(true) }
+    var isUserConsideredActive by remember { mutableStateOf(true) }
 
-    val imeWindowInsets = WindowInsets.ime
-    val isKeyboardVisible by remember(imeWindowInsets, density) {
-        derivedStateOf { imeWindowInsets.getBottom(density) > 0 }
-    }
+    val imeInsets = WindowInsets.ime
     var pendingMessageText by remember { mutableStateOf<String?>(null) }
 
+    val normalBottomPaddingForAIChat = 16.dp
+    val estimatedInputAreaHeight = remember { 100.dp } // 用于FAB的垂直位置调整
+
+    // 重置用户不活动计时器的函数
     val resetInactivityTimer: () -> Unit = {
         lastInteractionTime = System.currentTimeMillis()
-        if (!isUserActive) {
-            isUserActive = true
-            Log.d("FAB_Inactivity", "User became active. Resetting inactivity timer.")
+        if (!isUserConsideredActive) { // 如果之前是不活跃状态，立即更新为活跃
+            isUserConsideredActive = true
+            Log.d("UserActivity", "User became active.")
         }
     }
 
+    // LaunchedEffect 用于处理用户不活动计时
     LaunchedEffect(lastInteractionTime) {
-        isUserActive = true
-        Log.d(
-            "FAB_Inactivity",
-            "User activity detected or timer restarted. Active for ${USER_INACTIVITY_TIMEOUT_MS}ms."
-        )
-        delay(USER_INACTIVITY_TIMEOUT_MS)
-        if (isActive) {
-            isUserActive = false
-            Log.d(
-                "FAB_Inactivity",
-                "User became inactive after ${USER_INACTIVITY_TIMEOUT_MS}ms timeout. FAB may appear if not at bottom."
-            )
+        // 每次 lastInteractionTime 更新时（意味着有新的交互），
+        // 先将用户标记为活跃，然后启动一个延迟任务。
+        isUserConsideredActive = true // 立即标记为活跃
+        Log.d("UserActivity", "Inactivity timer reset. User is active.")
+        delay(USER_INACTIVITY_TIMEOUT_MS) // 等待超时
+        if (isActive) { // 检查协程是否仍然活跃（未被新的交互取消）
+            // 如果协程在延迟后仍然活跃，说明超时时间内没有新的交互
+            isUserConsideredActive = false
+            Log.d("UserActivity", "User became inactive due to timeout.")
         }
     }
 
-    LaunchedEffect(pendingMessageText, imeWindowInsets, density) {
-        snapshotFlow { imeWindowInsets.getBottom(density) > 0 }
+    // 处理软键盘隐藏后发送待处理消息的逻辑 (保持不变)
+    LaunchedEffect(pendingMessageText, imeInsets, density) {
+        snapshotFlow { imeInsets.getBottom(density) > 0 }
             .distinctUntilChanged()
-            .filter { isVisible: Boolean -> !isVisible && pendingMessageText != null }
-            .collect { _ ->
-                pendingMessageText?.let { messageToSend ->
-                    Log.d(
-                        "ChatScreen",
-                        "Keyboard hidden or hiding, sending pending message: $messageToSend"
-                    )
-                    viewModel.onSendMessage(messageText = messageToSend)
+            .filter { isVisible -> !isVisible && pendingMessageText != null }
+            .collect {
+                pendingMessageText?.let { msg ->
+                    viewModel.onSendMessage(msg)
                     pendingMessageText = null
                 }
             }
     }
 
+    // 文本输入时重置不活动计时器 (保持不变)
     LaunchedEffect(text) {
         if (text.isNotEmpty() || (text.isEmpty() && viewModel.text.value.isNotEmpty())) {
             resetInactivityTimer()
         }
     }
 
-    val configuration = LocalConfiguration.current
     val screenWidth = configuration.screenWidthDp.dp
     val bubbleMaxWidth = remember(screenWidth) { (screenWidth * 0.8f).coerceAtMost(600.dp) }
     val codeBlockViewWidth = remember(screenWidth) { (screenWidth * 0.9f).coerceAtMost(700.dp) }
 
-    val overscrollConsumingConnection = remember {
+    // NestedScrollConnection 用于检测用户手动滚动行为
+    val nestedScrollConnection = remember {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                if (source == NestedScrollSource.Drag) resetInactivityTimer()
-                if (!listState.canScrollBackward && available.y < 0 && source == NestedScrollSource.Drag) {
-                    return available
+                if (source == NestedScrollSource.Drag) { // 用户拖动列表
+                    resetInactivityTimer() // 用户操作，重置计时器
+                    if (available.y < 0 && listState.canScrollForward) { // 用户向上滚动，并且列表可以向上滚动
+                        if (!userManuallyScrolledAwayFromBottom) {
+                            userManuallyScrolledAwayFromBottom = true
+                            Log.d("ScrollState", "用户向上拖动，标记为手动离开底部。")
+                        }
+                    }
                 }
                 return Offset.Zero
             }
 
             override suspend fun onPreFling(available: Velocity): Velocity {
-                if (listState.isScrollInProgress) resetInactivityTimer() // Fling 也是一种交互
-                if (!listState.canScrollBackward && available.y < 0) {
-                    return available
+                if (listState.isScrollInProgress) { // 列表正在滚动（通常是Fling）
+                    resetInactivityTimer() // 用户操作，重置计时器
+                    if (available.y < -50 && listState.canScrollForward) { // 用户快速向上滑动
+                        if (!userManuallyScrolledAwayFromBottom) {
+                            userManuallyScrolledAwayFromBottom = true
+                            Log.d("ScrollState", "用户向上Fling，标记为手动离开底部。")
+                        }
+                    }
                 }
                 return Velocity.Zero
             }
-
-            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
-                if (!listState.canScrollBackward && available.y < 0) {
-                    return available
-                }
-                return super.onPostFling(consumed, available)
-            }
-
-            override fun onPostScroll(
-                consumed: Offset,
-                available: Offset,
-                source: NestedScrollSource
-            ): Offset {
-                if (!listState.canScrollBackward && available.y < 0 && source == NestedScrollSource.Drag) {
-                    return available
-                }
-                return Offset.Zero
-            }
         }
     }
 
-    val isListActuallyScrolling by remember { // 更精确的滚动状态
-        derivedStateOf { listState.isScrollInProgress }
-    }
-
-    // 检测用户手动向上滚动
-    LaunchedEffect(listState, messages.size, programmaticallyScrolling) {
-        var lastKnownFirstVisibleIndex = listState.firstVisibleItemIndex
-        var lastKnownScrollOffset = listState.firstVisibleItemScrollOffset
-
-        snapshotFlow {
-            Triple(
-                listState.firstVisibleItemIndex,
-                listState.firstVisibleItemScrollOffset,
-                listState.isScrollInProgress
-            )
-        }
-            .collect { (currentIndex, currentOffset, isScrollingNow) ->
-                if (isScrollingNow) { // 只要在滚动，就重置不活动计时器
-                    resetInactivityTimer()
-                }
-
-                if (messages.isEmpty() || programmaticallyScrolling || !isScrollingNow) { // 如果是程序滚动或列表已停止，则不判断为用户手动滚动
-                    if (!isScrollingNow && userManuallyScrolledUp && currentIndex == 0 && currentOffset == 0) {
-                        // 如果滚动停止了，并且在底部，并且之前是手动上滑状态，则重置
-                        Log.d(
-                            "ChatScroll",
-                            "Manually scrolled list stopped at bottom. Resetting userManuallyScrolledUp."
-                        )
-                        userManuallyScrolledUp = false
-                    }
-                    lastKnownFirstVisibleIndex = currentIndex
-                    lastKnownScrollOffset = currentOffset
-                    return@collect
-                }
-
-
-                val scrolledUp =
-                    (currentIndex > lastKnownFirstVisibleIndex) || (currentIndex == lastKnownFirstVisibleIndex && currentOffset < lastKnownScrollOffset)
-                val scrolledAwayFromBottom =
-                    currentIndex > 0 || (currentIndex == 0 && currentOffset > 0)
-
-                if (scrolledAwayFromBottom && scrolledUp) {
-                    if (!userManuallyScrolledUp) {
-                        userManuallyScrolledUp = true
-                        Log.d(
-                            "ChatScroll",
-                            "User MANUALLY scrolled up. Cancelling ongoing auto-scroll job."
-                        )
-                        ongoingScrollJob?.cancel(CancellationException("User manually scrolled up (detected in snapshotFlow)"))
-                    }
-                }
-                lastKnownFirstVisibleIndex = currentIndex
-                lastKnownScrollOffset = currentOffset
-            }
-    }
-
-
-    // 自动滚动逻辑
-    LaunchedEffect(messages.size, currentStreamingAiMessageId, isApiCalling) {
-        val isStreamingThisMessage = currentStreamingAiMessageId != null &&
-                isApiCalling &&
-                messages.firstOrNull()?.id == currentStreamingAiMessageId
-
-        // 条件1: 用户没有手动向上滚动
-        // 条件2: 或者，如果正在流式传输当前最新的消息，则忽略用户手动上滚状态，强制滚动
-        if (!userManuallyScrolledUp || isStreamingThisMessage) {
-            if (isListActuallyScrolling && !isStreamingThisMessage) { // 如果列表已在滚动（非流式强制），则不启动新滚动
-                Log.d(
-                    "ChatScroll",
-                    "Auto scroll SKIPPED: List is already scrolling and not force-streaming."
-                )
-                return@LaunchedEffect
-            }
-
-            ongoingScrollJob?.cancel(CancellationException("New auto scroll event"))
-            if (messages.isEmpty()) {
-                if (userManuallyScrolledUp) userManuallyScrolledUp = false
-                return@LaunchedEffect
-            }
-
-            ongoingScrollJob = coroutineScope.launch {
-                programmaticallyScrolling = true // 标记程序开始滚动
-                delay(CHAT_SCREEN_AUTO_SCROLL_DELAY_MS)
-
-                // 在实际滚动前再次检查，特别是用户手动滚动状态
-                if (!isActive || (userManuallyScrolledUp && !isStreamingThisMessage) || (isListActuallyScrolling && !isStreamingThisMessage)) {
-                    Log.d(
-                        "ChatScroll",
-                        "Auto scroll CANCELLED before execution: isActive=$isActive, userManuallyScrolledUp=$userManuallyScrolledUp, isStreamingThisMessage=$isStreamingThisMessage, isListScrolling=$isListActuallyScrolling"
-                    )
-                    programmaticallyScrolling = false
-                    return@launch
-                }
-
-                Log.d(
-                    "ChatScroll",
-                    "EXECUTING auto scroll. UserManuallyScrolledUp: $userManuallyScrolledUp, IsStreamingThis: $isStreamingThisMessage"
-                )
-                try {
-                    listState.animateScrollToItem(index = 0)
-                    if (isActive) {
-                        val actuallyAtBottom =
-                            listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
-                        if (actuallyAtBottom) {
-                            // 关键：如果是因为流式传输而强制滚动，并且用户之前是手动上滑的，
-                            // 那么滚动完成后，我们不应该清除 userManuallyScrolledUp，
-                            // 否则用户稍微上滑一点，FAB又不会出来了。
-                            // 只有在非流式强制滚动，或者用户本来就没上滑时，才清除。
-                            if (!isStreamingThisMessage && userManuallyScrolledUp) {
-                                Log.d(
-                                    "ChatScroll",
-                                    "Auto scrolled to bottom (non-streaming override), resetting userManuallyScrolledUp."
-                                )
-                                userManuallyScrolledUp = false
-                            } else if (userManuallyScrolledUp && !isStreamingThisMessage) { // 普通新消息滚动到底部
-                                Log.d(
-                                    "ChatScroll",
-                                    "Auto scrolled to bottom, resetting userManuallyScrolledUp."
-                                )
-                                userManuallyScrolledUp = false
-                            }
-                        } else if (!userManuallyScrolledUp && !isStreamingThisMessage) {
-                            Log.w(
-                                "ChatScroll",
-                                "Auto scroll completed but not precisely at bottom and was not overridden."
-                            )
-                        }
-                    }
-                } catch (e: CancellationException) {
-                    Log.d("ChatScroll", "Auto scroll animation was cancelled: ${e.message}")
-                } catch (e: Exception) {
-                    Log.e("ChatScroll", "Error during auto scroll animation: ${e.message}", e)
-                } finally {
-                    programmaticallyScrolling = false // 标记程序滚动结束
-                }
-
-                // 持续流式滚动部分
-                if (isStreamingThisMessage && isActive) {
-                    Log.d("ChatScroll", "Starting CONTINUOUS streaming scroll loop.")
-                    try {
-                        while (isActive && currentStreamingAiMessageId != null && isApiCalling && !userManuallyScrolledUp && !isListActuallyScrolling) {
-                            programmaticallyScrolling = true
-                            val firstVisible = listState.firstVisibleItemIndex
-                            val firstVisibleOffset = listState.firstVisibleItemScrollOffset
-                            if (firstVisible > 0 || firstVisibleOffset > with(density) { 1.dp.toPx() }) {
-                                Log.d("ChatScroll", "Streaming loop: Not at bottom, scrolling.")
-                                listState.animateScrollToItem(index = 0)
-                            }
-                            programmaticallyScrolling = false // 在delay前标记结束本次程序滚动
-                            delay(CHAT_SCREEN_STREAMING_SCROLL_INTERVAL_MS)
-                        }
-                        if (userManuallyScrolledUp || isListActuallyScrolling) {
-                            Log.d(
-                                "ChatScroll",
-                                "Streaming scroll loop TERMINATED: userManuallyScrolledUp=$userManuallyScrolledUp, isListScrolling=$isListActuallyScrolling"
-                            )
-                        }
-                    } catch (e: CancellationException) {
-                        Log.d("ChatScroll", "Continuous streaming scroll loop cancelled.")
-                    } catch (e: Exception) {
-                        Log.e(
-                            "ChatScroll",
-                            "Error in continuous streaming scroll loop: ${e.message}",
-                            e
-                        )
-                    } finally {
-                        programmaticallyScrolling = false
-                    }
-                }
-            }.also { job ->
-                job.invokeOnCompletion {
-                    if (ongoingScrollJob === job) ongoingScrollJob =
-                        null; programmaticallyScrolling = false
-                }
-            }
-        } else {
-            Log.d(
-                "ChatScroll",
-                "Auto scroll SKIPPED: userManuallyScrolledUp=$userManuallyScrolledUp, isStreamingThisMessage=$isStreamingThisMessage"
-            )
-        }
-    }
-
-
-    LaunchedEffect(Unit) {
-        viewModel.scrollToBottomEvent.collectLatest {
-            Log.d(
-                "ChatScroll",
-                "Received scrollToBottomEvent from ViewModel (e.g., after sending a message)."
-            )
-            ongoingScrollJob?.cancel(CancellationException("Force scroll event (scrollToBottom) from ViewModel"))
-            ongoingScrollJob = coroutineScope.launch {
-                programmaticallyScrolling = true
-                try {
-                    if (messages.isNotEmpty()) listState.animateScrollToItem(0)
-                    userManuallyScrolledUp = false // ViewModel 要求滚动到底部，通常意味着用户意图在底部
-                } catch (e: Exception) {
-                    Log.e("ChatScroll", "Force scroll (scrollToBottom) error: ${e.message}", e)
-                } finally {
-                    programmaticallyScrolling = false
-                }
-            }.also { job ->
-                job.invokeOnCompletion {
-                    if (ongoingScrollJob === job) ongoingScrollJob =
-                        null; programmaticallyScrolling = false
-                }
-            }
-        }
-    }
-
+    // 判断列表是否在最底部 (使用Footer锚点方案)
     val isAtBottom by remember {
         derivedStateOf {
-            if (messages.isEmpty()) true
-            else listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
-        }
-    }
-
-    // 当列表滚动停止，并且我们位于底部时，才重置 userManuallyScrolledUp
-    LaunchedEffect(isAtBottom, userManuallyScrolledUp, isListActuallyScrolling) {
-        if (isAtBottom && userManuallyScrolledUp && !isListActuallyScrolling) {
-            Log.d("ChatScroll", "List stopped at bottom, resetting userManuallyScrolledUp.")
-            userManuallyScrolledUp = false
-        }
-    }
-
-    val scrollToBottomButtonVisible by remember(
-        userManuallyScrolledUp,
-        isAtBottom,
-        isUserActive,
-        messages.size,
-        isListActuallyScrolling
-    ) {
-        derivedStateOf {
-            if (messages.isEmpty() || isListActuallyScrolling) {
-                false
+            val layoutInfo = listState.layoutInfo
+            if (messages.isEmpty() || layoutInfo.visibleItemsInfo.isEmpty()) {
+                true // 空列表或无可见项时，视作在底部
             } else {
-                !isAtBottom && (userManuallyScrolledUp || !isUserActive)
+                // 检查索引为 messages.size (即Footer Spacer) 的项是否可见
+                layoutInfo.visibleItemsInfo.any { it.index == messages.size }
             }
         }
     }
-    LaunchedEffect(scrollToBottomButtonVisible) {
-        Log.d(
-            "FAB_Visibility",
-            "scrollToBottomButtonVisible: $scrollToBottomButtonVisible (isAtBottom: $isAtBottom, userManuallyScrolledUp: $userManuallyScrolledUp, isUserActive: $isUserActive, messagesEmpty: ${messages.isEmpty()}, isListScrolling: $isListActuallyScrolling)"
-        )
+
+    // 当列表滚动状态改变或是否在底部状态改变时，更新 userManuallyScrolledAwayFromBottom
+    LaunchedEffect(isAtBottom, listState.isScrollInProgress, programmaticallyScrolling) {
+        if (!listState.isScrollInProgress && !programmaticallyScrolling) { // 仅当列表静止且非程序化滚动时
+            if (isAtBottom) {
+                if (userManuallyScrolledAwayFromBottom) {
+                    userManuallyScrolledAwayFromBottom = false
+                    Log.d(
+                        "ScrollState",
+                        "已到达底部，重置 userManuallyScrolledAwayFromBottom = false"
+                    )
+                }
+            }
+            // 注意: 用户向上滚动导致 !isAtBottom 的情况由 nestedScrollConnection 处理
+        }
+    }
+
+    // 滚动到列表底部的函数 (使用Footer锚点)
+    fun scrollToBottomWithFooter(reason: String = "UserInteraction") {
+        val currentJob: Job? = ongoingScrollJob
+        if (currentJob != null && currentJob.isActive) {
+            currentJob.cancel(CancellationException("新的滚动请求 ($reason) 取代了旧任务。"))
+            Log.d("ScrollJob", "旧的滚动任务已为 '$reason' 取消。")
+        }
+        ongoingScrollJob = coroutineScope.launch {
+            programmaticallyScrolling = true
+            Log.d(
+                "ScrollJob",
+                "launchScrollJobToBottom ($reason) - programmaticallyScrolling = true."
+            )
+            try {
+                if (messages.isNotEmpty()) {
+                    listState.animateScrollToItem(messages.size) // 滚动到Footer的索引
+                    // 成功滚动到底部后，用户不再是“手动离开底部”的状态
+                    userManuallyScrolledAwayFromBottom = false
+                    Log.d(
+                        "ScrollJob",
+                        "滚动到Footer完成 ($reason)。userManuallyScrolledAwayFromBottom = false"
+                    )
+                } else {
+                    listState.animateScrollToItem(0) // 空列表滚动到顶部
+                    Log.d("ScrollJob", "列表为空，滚动到索引0 ($reason)。")
+                }
+            } catch (e: CancellationException) {
+                Log.d("ScrollJob", "滚动任务 ($reason) 被取消: ${e.message}")
+            } catch (e: Exception) {
+                Log.e("ScrollJob", "滚动任务 ($reason) 发生错误: ${e.message}", e)
+            } finally {
+                if (ongoingScrollJob === this.coroutineContext[Job]) {
+                    programmaticallyScrolling = false
+                    ongoingScrollJob = null
+                    Log.d(
+                        "ScrollJob",
+                        "launchScrollJobToBottom ($reason) - programmaticallyScrolling = false (任务自结束)."
+                    )
+                }
+            }
+        }
+    }
+
+    // ViewModel 请求滚动到底部事件 (保持不变，使用新的滚动函数)
+    LaunchedEffect(Unit) {
+        viewModel.scrollToBottomEvent.collectLatest {
+            resetInactivityTimer()
+            // 只有当确实不在底部或列表为空时才执行滚动，避免不必要的重绘/滚动
+            if (!isAtBottom || messages.isEmpty()) {
+                Log.d("ViewModelScroll", "ViewModel请求滚动到底部。")
+                scrollToBottomWithFooter("ViewModelEvent")
+            } else {
+                Log.d("ViewModelScroll", "ViewModel请求滚动到底部，但已在底部，不执行滚动。")
+                // 如果已经在底部，确保 userManuallyScrolledAwayFromBottom 为 false
+                if (userManuallyScrolledAwayFromBottom) {
+                    userManuallyScrolledAwayFromBottom = false
+                }
+            }
+        }
+    }
+
+    // AI 响应完成后自动滚动到底部 (保持不变，使用新的滚动函数)
+    LaunchedEffect(messages.size, isApiCalling) { // 依赖 messages.size 确保消息更新时能触发
+        snapshotFlow { isApiCalling }
+            .distinctUntilChanged()
+            .collect { currentIsApiCalling ->
+                // 此处 viewModel.isApiCalling.value 获取的是 snapshotFlow 闭包创建时的值，
+                // currentIsApiCalling 是最新的值。
+                // 我们需要比较的是前一个状态和当前状态。
+                // 一个更简单的方法是直接使用 currentIsApiCalling 来判断是否刚结束。
+                // 但为了确保逻辑与之前版本类似（检查从true到false的转变），我们可能需要一个 previousIsApiCalling 状态。
+                // 或者，更简单地，如果 !currentIsApiCalling 且之前是 isApiCalling (通过ViewModel的StateFlow)，则表示刚结束。
+                // 这里我们假设 viewModel.isApiCalling.value 能反映上一个状态，但这不完全准确。
+                // 一个更健壮的方式是使用 pairWithPrevious 或类似的 Flow 操作符，或者在 LaunchedEffect 外部维护一个 previousIsApiCalling。
+                // 为了简化，我们暂时依赖 viewModel.isApiCalling.value 作为“旧值”的近似。
+
+                val wasApiCallingPreviously = viewModel.isApiCalling.value // 这是个近似值
+                if (!currentIsApiCalling && wasApiCallingPreviously && messages.isNotEmpty()) {
+                    val lastMessage = messages.last()
+                    // 只有当AI响应结束，且用户没有手动向上滚动时才自动滚动
+                    if (lastMessage.sender == Sender.AI && !userManuallyScrolledAwayFromBottom) {
+                        Log.d("ScrollLogic", "AI响应完成，用户未手动滚动，准备检查是否滚动。")
+                        delay(100) // 给UI一点时间反应，例如消息高度计算
+                        if (!isAtBottom && isActive) { // 再次检查是否在底部，并确保协程仍活跃
+                            Log.d("ScrollLogic", "AI响应完成，滚动到AI消息。")
+                            resetInactivityTimer()
+                            scrollToBottomWithFooter("AI响应完成")
+                        } else {
+                            Log.d("ScrollLogic", "AI响应完成，但已在底部或协程不再活跃，无需滚动。")
+                        }
+                    }
+                }
+            }
+    }
+
+    // FAB 的可见性逻辑
+    val scrollToBottomButtonVisible by remember {
+        derivedStateOf {
+            if (messages.isEmpty()) {
+                false // 列表为空时不显示
+            } else {
+                // 条件1: 不在底部 并且 用户是活跃的 并且 用户确实向上滚动过
+                val condition1 =
+                    !isAtBottom && isUserConsideredActive && userManuallyScrolledAwayFromBottom
+                // (可以根据需要添加其他条件，例如列表必须有一定数量的消息才显示)
+                condition1
+            }
+        }
     }
 
     val showEditDialog by viewModel.showEditDialog.collectAsState()
@@ -441,70 +321,37 @@ fun ChatScreen(
     Scaffold(
         modifier = modifier
             .fillMaxSize()
-            .pointerInput(Unit) { detectTapGestures(onTap = { resetInactivityTimer() }) },
+            .pointerInput(Unit) { detectTapGestures(onTap = { resetInactivityTimer() }) }, // 点击屏幕任何地方重置计时器
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         containerColor = Color.White,
         topBar = {
             AppTopBar(
                 selectedConfigName = selectedApiConfig?.model ?: "选择配置",
                 onMenuClick = { coroutineScope.launch { viewModel.drawerState.open() } },
-                onSettingsClick = { navController.navigate(Screen.SETTINGS_SCREEN) })
+                onSettingsClick = { navController.navigate(Screen.SETTINGS_SCREEN) }
+            )
         },
         floatingActionButton = {
             AnimatedVisibility(
                 visible = scrollToBottomButtonVisible,
-                enter = fadeIn(
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioLowBouncy,
-                        stiffness = Spring.StiffnessMedium
-                    )
-                ) +
-                        scaleIn(
-                            animationSpec = spring(
-                                dampingRatio = Spring.DampingRatioLowBouncy,
-                                stiffness = Spring.StiffnessMedium
-                            ), initialScale = 0.9f
-                        ) +
-                        slideInVertically(
-                            animationSpec = spring(
-                                dampingRatio = Spring.DampingRatioNoBouncy,
-                                stiffness = Spring.StiffnessMediumLow
-                            )
-                        ) { it / 4 },
-                exit = fadeOut(animationSpec = tween(150, easing = FastOutSlowInEasing)) +
-                        scaleOut(
-                            animationSpec = tween(150, easing = FastOutSlowInEasing),
-                            targetScale = 0.9f
-                        ) +
-                        slideOutVertically(
-                            animationSpec = tween(
-                                150,
-                                easing = FastOutSlowInEasing
-                            )
-                        ) { it / 4 }
+                enter = fadeIn(animationSpec = tween(220)), // 简化进入动画
+                exit = fadeOut(animationSpec = tween(150))  // 简化退出动画
             ) {
                 FloatingActionButton(
                     onClick = {
-                        resetInactivityTimer()
-                        coroutineScope.launch {
-                            ongoingScrollJob?.cancel(CancellationException("FAB (scroll to bottom) clicked"))
-                            programmaticallyScrolling = true
-                            if (messages.isNotEmpty()) listState.animateScrollToItem(0)
-                            userManuallyScrolledUp = false
-                            programmaticallyScrolling = false // 标记结束
-                        }
+                        resetInactivityTimer() // 用户点击FAB，是用户操作
+                        Log.d("FAB_Click", "FAB点击，滚动到Footer。")
+                        scrollToBottomWithFooter("FAB_Click")
                     },
-                    modifier = Modifier.padding(bottom = 160.dp),
-                    shape = RoundedCornerShape(16.dp),
-                    containerColor = Color.White,
-                    contentColor = Color.Black,
+                    modifier = Modifier.padding(bottom = estimatedInputAreaHeight + 16.dp + 15.dp),
+                    shape = RoundedCornerShape(28.dp),
+                    containerColor = Color.White, // Material 3 推荐使用主题色或Surface色
+                    contentColor = Color.Black,   // Material 3 推荐使用主题色或OnSurface色
                     elevation = FloatingActionButtonDefaults.elevation(
-                        defaultElevation = 0.dp,
-                        pressedElevation = 0.dp,
-                        focusedElevation = 0.dp,
-                        hoveredElevation = 0.dp
+                        defaultElevation = 4.dp, // 减小默认阴影，使其不那么突出
+                        pressedElevation = 6.dp  // 按下时的阴影
                     )
-                ) { Icon(Icons.Filled.ArrowDownward, contentDescription = "滚动到底部") }
+                ) { Icon(Icons.Filled.ArrowDownward, "滚动到底部") }
             }
         },
         floatingActionButtonPosition = FabPosition.End
@@ -513,300 +360,253 @@ fun ChatScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(scaffoldPaddingValues)
-                .windowInsetsPadding(WindowInsets.ime)
+                .background(Color.White)
+                .imePadding()
                 .navigationBarsPadding()
         ) {
-            LazyColumn(
+            Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .nestedScroll(overscrollConsumingConnection)
-                    .padding(horizontal = 6.dp),
-                state = listState,
-                reverseLayout = true,
-                contentPadding = PaddingValues(top = 12.dp, bottom = 12.dp)
             ) {
-                items(items = messages, key = { message -> message.id }) { message ->
-                    val isMainContentStreaming =
-                        message.sender == Sender.AI && message.id == currentStreamingAiMessageId && isApiCalling && message.contentStarted
-                    MessageBubble(
-                        message = message,
-                        viewModel = viewModel,
-                        onUserInteraction = { resetInactivityTimer() },
-                        isMainContentStreaming = isMainContentStreaming,
-                        isReasoningStreaming = (message.sender == Sender.AI && message.id == currentStreamingAiMessageId && isApiCalling && !message.reasoning.isNullOrBlank() && !(reasoningCompleteMap[message.id]
-                            ?: false) && message.contentStarted),
-                        isReasoningComplete = reasoningCompleteMap[message.id] ?: false,
-                        maxWidth = bubbleMaxWidth,
-                        codeBlockFixedWidth = codeBlockViewWidth,
-                        showLoadingBubble = (message.sender == Sender.AI && message.id == currentStreamingAiMessageId && isApiCalling && !message.contentStarted && message.text.isBlank() && message.reasoning.isNullOrBlank()),
-                        onEditRequest = { msgToEdit ->
-                            resetInactivityTimer(); viewModel.requestEditMessage(
-                            msgToEdit
-                        )
-                        },
-                        onRegenerateRequest = { userMessageForRegen ->
-                            resetInactivityTimer(); viewModel.regenerateAiResponse(
-                            userMessageForRegen
-                        )
-                        }
-                    )
-                }
                 if (messages.isEmpty()) {
-                    item {
-                        Box(
-                            modifier = Modifier
-                                .fillParentMaxSize()
-                                .padding(16.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.Bottom,
-                                horizontalArrangement = Arrangement.Center
-                            ) {
-                                val textStyle = LocalTextStyle.current.copy(
-                                    fontSize = 36.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = Color.Black
+                    EmptyChatAnimation(density = density)
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.White)
+                            .nestedScroll(nestedScrollConnection) // 应用 nestedScrollConnection
+                            .padding(horizontal = 8.dp),
+                        state = listState,
+                        reverseLayout = false,
+                        contentPadding = PaddingValues(
+                            top = 8.dp,
+                            bottom = normalBottomPaddingForAIChat // 列表底部内边距
+                        )
+                    ) {
+                        items(items = messages, key = { it.id }) { message ->
+                            // MessageBubble 渲染 (保持不变)
+                            val isStreamingThis =
+                                message.sender == Sender.AI && message.id == currentStreamingAiMessageId && isApiCalling && message.contentStarted
+                            val showLoading =
+                                message.sender == Sender.AI && message.id == currentStreamingAiMessageId && isApiCalling && !message.contentStarted && message.text.isBlank() && message.reasoning.isNullOrBlank()
+                            MessageBubble(
+                                message = message,
+                                viewModel = viewModel,
+                                onUserInteraction = { resetInactivityTimer() }, // 消息气泡内的交互也重置计时器
+                                isMainContentStreaming = isStreamingThis,
+                                isReasoningStreaming = (message.sender == Sender.AI && message.id == currentStreamingAiMessageId && isApiCalling && !message.reasoning.isNullOrBlank() && !(reasoningCompleteMap[message.id]
+                                    ?: false) && message.contentStarted),
+                                isReasoningComplete = (reasoningCompleteMap[message.id] ?: false),
+                                maxWidth = bubbleMaxWidth,
+                                codeBlockFixedWidth = codeBlockViewWidth,
+                                showLoadingBubble = showLoading,
+                                onEditRequest = { msg ->
+                                    resetInactivityTimer(); viewModel.requestEditMessage(
+                                    msg
                                 )
-                                Text(text = "你好", style = textStyle)
-                                val initialAmplitudeDp = (-8).dp;
-                                val amplitudeDecayFactor = 0.7f;
-                                val numCycles = 5;
-                                val initialBouncePhaseDurationMs = 250;
-                                val finalBouncePhaseDurationMs = 600;
-                                val dotInterDelayMs = 150L
-                                val initialAmplitudePx = with(density) { initialAmplitudeDp.toPx() }
-                                val dot1OffsetY = remember { Animatable(0f) };
-                                val dot2OffsetY = remember { Animatable(0f) };
-                                val dot3OffsetY = remember { Animatable(0f) }
-                                LaunchedEffect(Unit) {
-                                    dot1OffsetY.snapTo(0f); dot2OffsetY.snapTo(0f); dot3OffsetY.snapTo(
-                                    0f
-                                ); repeat(numCycles) { cycleIndex ->
-                                    val currentCycleAmplitudePx =
-                                        initialAmplitudePx * (amplitudeDecayFactor.pow(cycleIndex));
-                                    val progress =
-                                        if (numCycles > 1) cycleIndex.toFloat() / (numCycles - 1) else 0f;
-                                    val currentBouncePhaseDurationMs =
-                                        (initialBouncePhaseDurationMs + (finalBouncePhaseDurationMs - initialBouncePhaseDurationMs) * progress).toInt();
-                                    coroutineScope {
-                                        launch {
-                                            dot1OffsetY.animateTo(
-                                                currentCycleAmplitudePx,
-                                                tween(
-                                                    currentBouncePhaseDurationMs,
-                                                    easing = FastOutSlowInEasing
-                                                )
-                                            ); dot1OffsetY.animateTo(
-                                            0f,
-                                            tween(
-                                                currentBouncePhaseDurationMs,
-                                                easing = FastOutSlowInEasing
-                                            )
-                                        )
-                                        };
-                                        launch {
-                                            delay(dotInterDelayMs); dot2OffsetY.animateTo(
-                                            currentCycleAmplitudePx,
-                                            tween(
-                                                currentBouncePhaseDurationMs,
-                                                easing = FastOutSlowInEasing
-                                            )
-                                        ); dot2OffsetY.animateTo(
-                                            0f,
-                                            tween(
-                                                currentBouncePhaseDurationMs,
-                                                easing = FastOutSlowInEasing
-                                            )
-                                        )
-                                        };
-                                        launch {
-                                            delay(dotInterDelayMs * 2); dot3OffsetY.animateTo(
-                                            currentCycleAmplitudePx,
-                                            tween(
-                                                currentBouncePhaseDurationMs,
-                                                easing = FastOutSlowInEasing
-                                            )
-                                        ); dot3OffsetY.animateTo(
-                                            0f,
-                                            tween(
-                                                currentBouncePhaseDurationMs,
-                                                easing = FastOutSlowInEasing
-                                            )
-                                        )
-                                        }
-                                    }
+                                },
+                                onRegenerateRequest = { userMsg ->
+                                    resetInactivityTimer(); viewModel.regenerateAiResponse(
+                                    userMsg
+                                )
                                 }
-                                }
-                                Text(
-                                    ".",
-                                    style = textStyle,
-                                    modifier = Modifier.offset(y = with(density) { dot1OffsetY.value.toDp() })
-                                )
-                                Text(
-                                    ".",
-                                    style = textStyle,
-                                    modifier = Modifier.offset(y = with(density) { dot2OffsetY.value.toDp() })
-                                )
-                                Text(
-                                    ".",
-                                    style = textStyle,
-                                    modifier = Modifier.offset(y = with(density) { dot3OffsetY.value.toDp() })
-                                )
-                            }
+                            )
+                        }
+                        // =========== Footer: 关键！=============
+                        item(key = "footer") { // 用于精确滚动到底部的锚点
+                            Spacer(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(0.dp) // 高度为0，不可见
+                            )
                         }
                     }
                 }
             }
+
+            // 输入区域 (保持不变)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .shadow(
-                        elevation = 8.dp,
-                        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-                        clip = false
-                    )
-                    .background(
-                        color = Color.White,
-                        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
-                    )
+                    .shadow(6.dp, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp), false)
+                    .background(Color.White, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
                     .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
                     .padding(horizontal = 8.dp, vertical = 8.dp)
+                    .heightIn(min = estimatedInputAreaHeight)
             ) {
                 OutlinedTextField(
-                    value = text, onValueChange = { viewModel.onTextChange(it) },
+                    value = text,
+                    onValueChange = { viewModel.onTextChange(it); resetInactivityTimer() }, // 输入时重置计时器
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(focusRequester)
-                        .onFocusChanged { if (it.isFocused) resetInactivityTimer() }
-                        .padding(bottom = 4.dp),
+                        .onFocusChanged { if (it.isFocused) resetInactivityTimer() } // 获取焦点时重置计时器
+                        .padding(bottom = 1.dp),
                     placeholder = { Text("输入消息…") },
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = Color.Transparent,
-                        disabledContainerColor = Color.Transparent,
                         focusedTextColor = MaterialTheme.colorScheme.onSurface,
-                        unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                        unfocusedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        focusedContainerColor = Color.White,
+                        unfocusedContainerColor = Color.White,
                         cursorColor = MaterialTheme.colorScheme.primary,
                         focusedBorderColor = Color.Transparent,
                         unfocusedBorderColor = Color.Transparent,
-                        focusedLabelColor = MaterialTheme.colorScheme.primary,
-                        unfocusedLabelColor = Color.Gray
+                        disabledBorderColor = Color.Transparent,
+                        errorBorderColor = MaterialTheme.colorScheme.error,
                     ),
                     minLines = 1, maxLines = 5,
+                    shape = RoundedCornerShape(16.dp),
                     trailingIcon = {
-                        val showClearButton = text.isNotBlank() && !isApiCalling
-                        AnimatedVisibility(
-                            visible = showClearButton,
-                            enter = fadeIn(tween(200)) + scaleIn(tween(200), initialScale = 0.9f),
-                            exit = fadeOut(tween(150)) + scaleOut(tween(150), targetScale = 0.7f)
-                        ) {
+                        if (text.isNotEmpty()) {
                             IconButton(
-                                onClick = { viewModel.onTextChange(""); resetInactivityTimer() },
-                                modifier = Modifier.size(30.dp)
+                                onClick = { viewModel.onTextChange(""); resetInactivityTimer() }, // 清除文本时重置计时器
+                                modifier = Modifier.size(40.dp)
                             ) {
                                 Icon(
                                     Icons.Filled.Clear,
                                     "清除内容",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(20.dp)
+                                    Modifier.size(20.dp),
+                                    MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
                     }
                 )
                 Box(
-                    modifier = Modifier
+                    Modifier
                         .fillMaxWidth()
-                        .padding(top = 0.dp, end = 8.dp, bottom = 8.dp),
-                    contentAlignment = Alignment.CenterEnd
+                        .padding(top = 4.dp, end = 8.dp, bottom = 4.dp),
+                    Alignment.CenterEnd
                 ) {
-                    IconButton(
+                    val isKeyboardVisible by remember(imeInsets, density) {
+                        derivedStateOf { imeInsets.getBottom(density) > 0 }
+                    }
+                    FilledIconButton(
                         onClick = {
-                            resetInactivityTimer()
+                            resetInactivityTimer() // 发送/停止按钮点击时重置计时器
                             if (isApiCalling) {
                                 viewModel.onCancelAPICall()
-                            } else if (viewModel.text.value.isNotBlank() && selectedApiConfig != null) {
-                                val currentText = viewModel.text.value
+                            } else if (text.isNotBlank() && selectedApiConfig != null) {
                                 if (isKeyboardVisible) {
-                                    pendingMessageText =
-                                        currentText; viewModel.onTextChange(""); keyboardController?.hide(); Log.d(
-                                        "ChatScreen",
-                                        "Keyboard visible. Hiding keyboard, message pending: $currentText"
-                                    )
+                                    pendingMessageText = text
+                                    viewModel.onTextChange("")
+                                    keyboardController?.hide()
                                 } else {
-                                    Log.d(
-                                        "ChatScreen",
-                                        "Keyboard hidden. Sending message directly: $currentText"
-                                    ); viewModel.onSendMessage(messageText = currentText)
+                                    viewModel.onSendMessage(text)
                                 }
-                            }
+                            } else if (selectedApiConfig == null) viewModel.showSnackbar("请先选择 API 配置")
+                            else viewModel.showSnackbar("请输入消息内容")
                         },
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(CircleShape)
-                            .background(Color.Black),
-                        colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
+                        modifier = Modifier.size(44.dp), shape = CircleShape,
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = Color.Black,
+                            contentColor = Color.White,
+                            disabledContainerColor = Color.DarkGray,
+                            disabledContentColor = Color.LightGray
+                        )
                     ) {
                         Icon(
-                            if (isApiCalling) Icons.Filled.Stop else Icons.Filled.North,
+                            if (isApiCalling) Icons.Filled.Stop else Icons.Filled.ArrowUpward,
                             if (isApiCalling) "停止" else "发送",
-                            modifier = Modifier.size(24.dp)
+                            Modifier.size(20.dp)
                         )
                     }
                 }
             }
         }
+
+        // 编辑对话框 (保持不变)
         if (showEditDialog) {
             AlertDialog(
                 onDismissRequest = { viewModel.dismissEditDialog() },
+                containerColor = Color.White,
                 title = { Text("编辑消息", color = Color.Black) },
                 text = {
                     OutlinedTextField(
                         value = editDialogInputText,
-                        onValueChange = { viewModel.onEditDialogTextChanged(it) },
+                        onValueChange = viewModel::onEditDialogTextChanged,
                         modifier = Modifier.fillMaxWidth(),
-                        label = { Text("消息内容", color = Color.DarkGray) },
-                        textStyle = TextStyle(color = Color.Black, fontSize = 16.sp),
+                        label = { Text("消息内容") },
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedTextColor = Color.Black,
                             unfocusedTextColor = Color.Black,
-                            cursorColor = MaterialTheme.colorScheme.primary,
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = Color.LightGray,
+                            cursorColor = Color.Black,
                             focusedContainerColor = Color.White,
                             unfocusedContainerColor = Color.White,
                             disabledContainerColor = Color.White,
-                            focusedLabelColor = MaterialTheme.colorScheme.primary,
-                            unfocusedLabelColor = Color.Gray
+                            focusedBorderColor = Color.Black,
+                            unfocusedBorderColor = Color.Black,
                         ),
-                        singleLine = false,
-                        maxLines = 5,
-                        shape = RoundedCornerShape(8.dp)
+                        singleLine = false, maxLines = 5, shape = RoundedCornerShape(8.dp)
                     )
                 },
                 confirmButton = {
-                    TextButton(onClick = { viewModel.confirmMessageEdit() }) {
-                        Text(
-                            "确定",
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
+                    TextButton(
+                        onClick = { viewModel.confirmMessageEdit() },
+                        colors = ButtonDefaults.textButtonColors(contentColor = Color.Black)
+                    ) { Text("确定") }
                 },
                 dismissButton = {
-                    TextButton(onClick = { viewModel.dismissEditDialog() }) {
-                        Text(
-                            "取消",
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
+                    TextButton(
+                        onClick = { viewModel.dismissEditDialog() },
+                        colors = ButtonDefaults.textButtonColors(contentColor = Color.Black)
+                    ) { Text("取消") }
                 },
-                shape = RoundedCornerShape(20.dp),
-                containerColor = Color.White,
-                titleContentColor = Color.Black,
-                textContentColor = Color.Black
+                shape = RoundedCornerShape(20.dp)
             )
+        }
+    }
+}
+
+// EmptyChatAnimation (保持不变)
+@Composable
+fun EmptyChatAnimation(density: Density) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .padding(16.dp), Alignment.Center
+    ) {
+        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.Center) {
+            val style = LocalTextStyle.current.copy(
+                fontSize = 36.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = Color.Black,
+                fontFamily = FontFamily.SansSerif
+            )
+            Text("你好", style = style)
+            val animY = remember { List(3) { Animatable(0f) } }
+            LaunchedEffect(Unit) {
+                animY.forEach { it.snapTo(0f) }
+                try {
+                    repeat(5) { cycle ->
+                        if (!isActive) throw CancellationException("你好动画取消")
+                        val amp = with(density) { (-8).dp.toPx() } * (0.7f.pow(cycle))
+                        val dur =
+                            (250 + (600 - 250) * (if (4 > 0) cycle.toFloat() / 4f else 0f)).toInt()
+                        coroutineScope {
+                            animY.forEachIndexed { i, a ->
+                                launch {
+                                    delay(150L * i)
+                                    a.animateTo(amp, tween(dur, easing = FastOutSlowInEasing))
+                                    a.animateTo(0f, tween(dur, easing = FastOutSlowInEasing))
+                                }
+                            }
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    Log.d("Animation", "你好动画已取消")
+                    animY.forEach { it.snapTo(0f) }
+                }
+            }
+            animY.forEach {
+                Text(
+                    ".",
+                    style = style,
+                    modifier = Modifier.offset(y = with(density) { it.value.toDp() })
+                )
+            }
         }
     }
 }

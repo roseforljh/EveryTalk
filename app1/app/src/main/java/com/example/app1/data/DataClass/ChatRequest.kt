@@ -34,12 +34,6 @@ data class ChatRequest(
 
     // --- Tool Calling 支持字段 ---
     @SerialName("tools")
-    // 使用 @Contextual Any 允许 Map 包含任意类型的值。
-    // 你需要在序列化器配置中注册 Any 的上下文序列化器，或者更倾向于使用 JsonElement。
-    // 为了简单起见，如果你不需要强类型检查 Map 内容，可以考虑使用 JsonElement：
-    // val tools: List<Map<String, kotlinx.serialization.json.JsonElement>>? = null
-    // 或者，如果 Map 值类型已知且简单 (如 String, Int, Boolean, List, Map)，这可能直接工作。
-    // 我们先尝试 @Contextual Any，如果遇到序列化问题，再考虑 JsonElement。
     val tools: List<Map<String, @Contextual Any>>? = null, // 可空列表
 
     @SerialName("tool_config") // 注意 SerialName 匹配后端 snake_case

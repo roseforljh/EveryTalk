@@ -3,185 +3,180 @@ package com.example.app1.ui.screens.viewmodel
 import android.util.Log
 import com.example.app1.data.DataClass.Message
 import com.example.app1.data.DataClass.Sender
-import com.example.app1.StateControler.ViewModelStateHolder
-import kotlinx.coroutines.CoroutineScope
+import com.example.app1.StateControler.ViewModelStateHolder // 更正包名
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/**
- * 管理聊天历史操作，如保存、加载、删除和清除。
- */
 class HistoryManager(
-    private val stateHolder: ViewModelStateHolder,          // ViewModel 状态持有者
-    private val persistenceManager: DataPersistenceManager, // 数据持久化管理器
-    private val viewModelScope: CoroutineScope,             // ViewModel 的协程作用域
-    // 接收一个比较函数，用于比较消息列表的实质内容
+    private val stateHolder: ViewModelStateHolder,
+    private val persistenceManager: DataPersistenceManager,
     private val compareMessageLists: (List<Message>?, List<Message>?) -> Boolean
 ) {
 
-    /** 过滤适合保存到历史记录的消息。 */
     private fun filterMessagesForSaving(messagesToFilter: List<Message>): List<Message> {
         return messagesToFilter.filter { msg ->
-            msg.sender != Sender.System && // 排除系统消息
-                    !msg.isError && // 排除错误消息
-                    // 包含用户消息，或已开始内容、有推理或有文本的 AI 消息
-                    (msg.sender == Sender.User || msg.contentStarted || !msg.reasoning.isNullOrBlank() || msg.text.isNotBlank())
+            (msg.sender != Sender.System || msg.isPlaceholderName) &&
+                    !msg.isError &&
+                    (msg.sender == Sender.User ||
+                            (msg.sender == Sender.AI &&
+                                    (msg.contentStarted || msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank())
+                                    ) ||
+                            (msg.sender == Sender.System && msg.isPlaceholderName)
+                            )
         }.toList()
     }
 
-    /**
-     * 如果需要，将当前聊天 (`messages`) 保存到 `_historicalConversations`。
-     * 更新或添加到历史列表。更新 `_loadedHistoryIndex`。
-     * @param forceSave 如果为 true，即使内容可能与现有历史记录重复（当 loadedIndex 为 null 时），也会尝试保存（通常用于编辑后确保更新）。
-     * @return 如果历史列表结构被修改（添加/更新），则返回 true。
-     */
-    fun saveCurrentChatToHistoryIfNeeded(forceSave: Boolean = false): Boolean {
+    fun findChatInHistory(messagesToFind: List<Message>): Int {
+        val filteredMessagesToFind = filterMessagesForSaving(messagesToFind)
+        if (filteredMessagesToFind.isEmpty() && messagesToFind.isNotEmpty()) { // 如果原始列表非空但过滤后为空，则不应该匹配任何实质性历史
+            return -1
+        }
+        if (filteredMessagesToFind.isEmpty()) return -1
+
+
+        return stateHolder._historicalConversations.value.indexOfFirst { historyChat ->
+            compareMessageLists(filterMessagesForSaving(historyChat), filteredMessagesToFind)
+        }
+    }
+
+    suspend fun saveCurrentChatToHistoryIfNeeded(forceSave: Boolean = false): Boolean {
         val currentMessagesSnapshot = stateHolder.messages.toList()
         val messagesToSave = filterMessagesForSaving(currentMessagesSnapshot)
-        var historyListModified = false // 跟踪历史列表是否真的被修改（添加/更新）
-        var loadedIndexChanged = false // 跟踪 loadedHistoryIndex 是否发生变化
+        var historyListModified = false
+        var loadedIndexChanged = false
 
         Log.d(
-            "HistoryManager",
-            "saveCurrentChatToHistoryIfNeeded: " +
-                    "Snapshot size=${currentMessagesSnapshot.size}, " +
-                    "Filtered size=${messagesToSave.size}, " +
-                    "forceSave=$forceSave, " +
-                    "currentLoadedIndex=${stateHolder._loadedHistoryIndex.value}"
+            "HistoryManagerSM",
+            "saveCurrent: snap=${currentMessagesSnapshot.size}, saveSize=${messagesToSave.size}, force=$forceSave, loadedIdx=${stateHolder._loadedHistoryIndex.value}"
         )
 
-        if (messagesToSave.isEmpty() && !forceSave) { // 如果没有有效消息且非强制保存（允许强制保存空列表以清空历史项）
-            Log.d("HistoryManager", "没有有效的消息可以保存，且非强制保存空列表，不执行保存。")
-            // 如果 loadedIndex 指向一个非空历史，而当前 messages 为空，
-            // 且不是 forceSave，我们不应该修改历史。
-            // 但如果 forceSave 为 true 且 messagesToSave 为空，我们可能想用空列表更新历史项。
+        if (messagesToSave.isEmpty() && !forceSave) {
+            Log.d(
+                "HistoryManagerSM",
+                "No valid messages to save, and not forcing save of empty list."
+            )
+            // 即使不保存到历史列表，也确保“最后打开的聊天”是空的，以实现下次启动为新对话
+            withContext(Dispatchers.IO) {
+                persistenceManager.saveLastOpenChat(emptyList())
+            }
+            Log.d(
+                "HistoryManagerSM",
+                "Last open chat slot cleared (no valid messages to save to history)."
+            )
             return false
         }
 
-        // 在协程中更新 StateFlow 和执行持久化
-        // 注意：StateFlow 更新应该在主线程，但可以在这里准备数据
-        // 这里我们将整个逻辑放在 viewModelScope.launch(Dispatchers.IO) 中，并在需要时切换回 Main
-
-        // viewModelScope.launch(Dispatchers.IO) { // 移到外部调用者决定线程，或保持在IO
-        // 对于直接从ViewModel调用的情况，ViewModel的协程作用域通常是合适的。
-
-        var finalNewLoadedIndex: Int? = stateHolder._loadedHistoryIndex.value // 初始化为当前值
+        var finalNewLoadedIndex: Int? = stateHolder._loadedHistoryIndex.value
         var needsPersistenceSave = false
 
         stateHolder._historicalConversations.update { currentHistory ->
             val mutableHistory = currentHistory.toMutableList()
-            val currentLoadedIdx = stateHolder._loadedHistoryIndex.value // 获取最新的 loadedHistoryIndex
+            val currentLoadedIdx = stateHolder._loadedHistoryIndex.value
 
             if (currentLoadedIdx != null && currentLoadedIdx >= 0 && currentLoadedIdx < mutableHistory.size) {
-                // 情况 1: 当前正在查看一个已加载的历史项
-                val existingChatInHistory = mutableHistory[currentLoadedIdx]
-                if (forceSave || !compareMessageLists(messagesToSave, existingChatInHistory)) {
+                val existingChatInHistoryFiltered =
+                    filterMessagesForSaving(mutableHistory[currentLoadedIdx])
+                if (forceSave || !compareMessageLists(
+                        messagesToSave,
+                        existingChatInHistoryFiltered
+                    )
+                ) {
                     Log.d(
-                        "HistoryManager",
-                        "更新历史索引 $currentLoadedIdx。ForceSave: $forceSave. 内容变化: ${
+                        "HistoryManagerSM",
+                        "Updating history at index $currentLoadedIdx. Force: $forceSave. Content changed: ${
                             !compareMessageLists(
                                 messagesToSave,
-                                existingChatInHistory
+                                existingChatInHistoryFiltered
                             )
                         }"
                     )
                     mutableHistory[currentLoadedIdx] = messagesToSave
                     historyListModified = true
                     needsPersistenceSave = true
-                    // finalNewLoadedIndex 保持 currentLoadedIdx
                 } else {
-                    Log.d("HistoryManager", "历史索引 $currentLoadedIdx 未更改且非强制保存，不更新。")
-                    return@update currentHistory // 未修改，返回原列表
+                    Log.d(
+                        "HistoryManagerSM",
+                        "History index $currentLoadedIdx not changed and not force save."
+                    )
+                    // 即使历史记录中的当前聊天没有变化，我们仍然要确保“最后打开”为空
+                    // （这一步将在下面的 saveLastOpenChat 中统一处理）
+                    return@update currentHistory
                 }
             } else {
-                // 情况 2: 当前聊天是新的 (loadedHistoryIndex is null) 或加载的索引无效
-                if (messagesToSave.isNotEmpty()) { // 只有当有实际内容要保存时才处理新聊天
-                    // 检查是否与历史记录中已有的任何一项重复 (除非是强制保存新聊天)
-                    val duplicateIndex = if (forceSave && currentLoadedIdx == null) {
-                        -1 // 强制保存新的，不检查重复
-                    } else {
-                        mutableHistory.indexOfFirst { compareMessageLists(it, messagesToSave) }
-                    }
+                if (messagesToSave.isNotEmpty() || forceSave) {
+                    val duplicateIndex =
+                        if (forceSave && currentLoadedIdx == null) -1 else findChatInHistory(
+                            messagesToSave
+                        ) // findChatInHistory 使用过滤后的 messagesToSave
 
                     if (duplicateIndex == -1) {
-                        // 不重复，或强制保存：添加为新的历史条目 (在开头)
                         Log.d(
-                            "HistoryManager",
-                            "添加新对话到历史记录 (索引 0)。消息数: ${messagesToSave.size}"
+                            "HistoryManagerSM",
+                            "Adding new conversation to history (index 0). Msg count: ${messagesToSave.size}"
                         )
                         mutableHistory.add(0, messagesToSave)
-                        finalNewLoadedIndex = 0 // 新项目在索引 0
+                        finalNewLoadedIndex = 0
                         historyListModified = true
                         needsPersistenceSave = true
                     } else {
-                        // 找到重复项 (且非强制保存新聊天)
                         Log.d(
-                            "HistoryManager",
-                            "新对话与历史索引 $duplicateIndex 重复。不添加，将 loadedIndex 指向它。"
+                            "HistoryManagerSM",
+                            "New conversation is duplicate of history index $duplicateIndex. Pointing loadedIndex to it."
                         )
-                        finalNewLoadedIndex = duplicateIndex // 指向已存在的重复项
-                        // historyListModified 保持 false，因为列表结构未变
-                        return@update currentHistory // 列表未修改，返回原列表
+                        finalNewLoadedIndex = duplicateIndex
+                        // 即使是重复的，也要确保“最后打开”为空
+                        // （这一步将在下面的 saveLastOpenChat 中统一处理）
+                        return@update currentHistory
                     }
                 } else {
-                    // messagesToSave 为空，并且 loadedHistoryIndex 为 null (全新空聊天)，不保存。
-                    Log.d("HistoryManager", "新聊天为空，不添加到历史记录。")
+                    Log.d(
+                        "HistoryManagerSM",
+                        "New conversation is empty and not force saving, not adding to history."
+                    )
+                    // 即使不添加到历史，也要确保“最后打开的聊天”是空的
+                    // （这一步将在下面的 saveLastOpenChat 中统一处理）
                     return@update currentHistory
                 }
             }
-            mutableHistory // 返回修改后的列表
-        } // end of _historicalConversations.update
+            mutableHistory
+        }
 
-        // 更新 loadedHistoryIndex (如果在 update 块内改变了它)
         if (stateHolder._loadedHistoryIndex.value != finalNewLoadedIndex) {
             stateHolder._loadedHistoryIndex.value = finalNewLoadedIndex
             loadedIndexChanged = true
-            Log.d("HistoryManager", "LoadedHistoryIndex 更新为: $finalNewLoadedIndex")
+            Log.d("HistoryManagerSM", "LoadedHistoryIndex updated to: $finalNewLoadedIndex")
         }
 
         if (needsPersistenceSave) {
-            persistenceManager.saveChatHistory()
-            Log.d("HistoryManager", "Chat history persisted.")
+            withContext(Dispatchers.IO) {
+                persistenceManager.saveChatHistory()
+            }
+            Log.d("HistoryManagerSM", "Chat history persisted.")
         }
 
-        // 总是保存最后打开的聊天，即使它没有成为历史记录的一部分或没有修改历史记录
-        // （例如，用户打开一个历史，不做修改，然后退出，下次应该还是打开这个历史）
-        // 但只有当 messagesToSave 非空时才有意义
-        if (messagesToSave.isNotEmpty()) {
-            persistenceManager.saveLastOpenChat(messagesToSave)
-            Log.d(
-                "HistoryManager",
-                "Last open chat (filtered) persisted. Size: ${messagesToSave.size}"
-            )
-        } else if (currentMessagesSnapshot.isNotEmpty()) {
-            // 如果过滤后为空，但原始快照不为空 (例如全是系统消息)，
-            // 那么“最后打开”的应该是这个原始状态，而不是空的。
-            // 但我们通常不保存只含系统消息的聊天。
-            // 决定：如果过滤后为空，则认为最后打开的是空的，这会清除 lastOpenChat。
+        // --- 核心改动点 ---
+        // 无论当前聊天内容是什么，总是将“最后打开的聊天”保存为空列表
+        // 这样下次APP启动时，加载的就是一个空对话状态
+        withContext(Dispatchers.IO) {
             persistenceManager.saveLastOpenChat(emptyList())
-            Log.d("HistoryManager", "Last open chat persisted as empty (filtered was empty).")
         }
+        Log.d(
+            "HistoryManagerSM",
+            "Last open chat slot explicitly cleared to ensure new chat on next app start."
+        )
+        // --- 核心改动点结束 ---
 
 
         Log.d(
-            "HistoryManager",
-            "saveCurrentChatToHistoryIfNeeded completed. HistoryListModified: $historyListModified, LoadedIndexChanged: $loadedIndexChanged"
+            "HistoryManagerSM",
+            "saveIfNeeded completed. Modified: $historyListModified, IdxChanged: $loadedIndexChanged"
         )
-        return historyListModified || loadedIndexChanged // 如果列表或索引有变，都算作“修改”了整体状态
-        // } // end of viewModelScope.launch
-        // return false // 如果移到协程内，外部同步返回可能不准确
+        return historyListModified || loadedIndexChanged
     }
 
-
-    /**
-     * 删除指定索引处的历史对话。
-     * @param indexToDelete 要删除的历史对话的索引。
-     */
-    fun deleteConversation(indexToDelete: Int) {
-        // viewModelScope.launch(Dispatchers.IO) { // 同上，线程管理
-        Log.d("HistoryManager", "请求删除历史索引 $indexToDelete。")
+    suspend fun deleteConversation(indexToDelete: Int) {
+        Log.d("HistoryManagerDEL", "Request to delete history index $indexToDelete.")
         var successfullyDeleted = false
         var finalLoadedIndexAfterDelete: Int? = stateHolder._loadedHistoryIndex.value
 
@@ -190,27 +185,29 @@ class HistoryManager(
                 val mutableHistory = currentHistory.toMutableList()
                 mutableHistory.removeAt(indexToDelete)
                 successfullyDeleted = true
-                Log.d("HistoryManager", "已从列表删除历史索引 $indexToDelete。")
+                Log.d("HistoryManagerDEL", "Removed history index $indexToDelete from list.")
 
-                val currentLoadedIdx = stateHolder._loadedHistoryIndex.value // 获取删除操作前的 loadedIndex
+                val currentLoadedIdx = stateHolder._loadedHistoryIndex.value
                 if (currentLoadedIdx == indexToDelete) {
-                    finalLoadedIndexAfterDelete = null // 删除的是当前加载的项
-                    Log.d("HistoryManager", "删除的是当前加载项, newLoadedIndex设为null。")
-                } else if (currentLoadedIdx != null && currentLoadedIdx > indexToDelete) {
-                    finalLoadedIndexAfterDelete = currentLoadedIdx - 1 // 删除的项在当前加载项之前
+                    finalLoadedIndexAfterDelete = null
                     Log.d(
-                        "HistoryManager",
-                        "删除项在当前加载项之前, newLoadedIndex递减为 $finalLoadedIndexAfterDelete。"
+                        "HistoryManagerDEL",
+                        "Deleted current loaded item, newLoadedIndex set to null."
+                    )
+                } else if (currentLoadedIdx != null && currentLoadedIdx > indexToDelete) {
+                    finalLoadedIndexAfterDelete = currentLoadedIdx - 1
+                    Log.d(
+                        "HistoryManagerDEL",
+                        "Deleted item before current, newLoadedIndex decremented to $finalLoadedIndexAfterDelete."
                     )
                 }
-                // else loadedIndex 不受影响
                 mutableHistory
             } else {
                 Log.w(
-                    "HistoryManager",
-                    "无效的删除请求：索引 $indexToDelete 超出范围 ${currentHistory.size}。"
+                    "HistoryManagerDEL",
+                    "Invalid delete request: index $indexToDelete out of bounds ${currentHistory.size}."
                 )
-                currentHistory // 返回原始列表
+                currentHistory
             }
         }
 
@@ -218,33 +215,38 @@ class HistoryManager(
             if (stateHolder._loadedHistoryIndex.value != finalLoadedIndexAfterDelete) {
                 stateHolder._loadedHistoryIndex.value = finalLoadedIndexAfterDelete
                 Log.d(
-                    "HistoryManager",
-                    "LoadedHistoryIndex 更新为: $finalLoadedIndexAfterDelete (因删除)"
+                    "HistoryManagerDEL",
+                    "LoadedHistoryIndex updated to: $finalLoadedIndexAfterDelete (due to deletion)"
                 )
             }
-            persistenceManager.saveChatHistory()
+            withContext(Dispatchers.IO) {
+                persistenceManager.saveChatHistory()
+                // 当删除一个对话后，也应确保“最后打开的聊天”被清空，
+                // 除非ViewModel有其他逻辑来决定在删除后加载哪个聊天。
+                // 为保持一致性，这里也清空它。
+                if (stateHolder._loadedHistoryIndex.value == null) { // 如果删除后当前没有加载任何聊天
+                    persistenceManager.saveLastOpenChat(emptyList())
+                    Log.d(
+                        "HistoryManagerDEL",
+                        "Last open chat slot cleared as current loaded chat was deleted or became null."
+                    )
+                }
+            }
         }
-        // }
     }
 
-    /**
-     * 清除所有历史记录。
-     */
-    fun clearAllHistory() {
-        // viewModelScope.launch(Dispatchers.IO) { // 同上
-        Log.d("HistoryManager", "请求清除所有历史记录。")
-        if (stateHolder._historicalConversations.value.isNotEmpty()) {
+    suspend fun clearAllHistory() {
+        Log.d("HistoryManagerCLR", "Request to clear all history.")
+        if (stateHolder._historicalConversations.value.isNotEmpty() || stateHolder._loadedHistoryIndex.value != null) {
             stateHolder._historicalConversations.value = emptyList()
-            if (stateHolder._loadedHistoryIndex.value != null) {
-                stateHolder._loadedHistoryIndex.value = null
-                Log.d("HistoryManager", "历史记录已清除，loadedHistoryIndex 重置为 null。")
+            stateHolder._loadedHistoryIndex.value = null
+            Log.d("HistoryManagerCLR", "History cleared, loadedHistoryIndex reset to null.")
+            withContext(Dispatchers.IO) {
+                persistenceManager.saveChatHistory() // 保存空的历史列表
+                persistenceManager.saveLastOpenChat(emptyList()) // 确保最后打开的也是空的
             }
-            persistenceManager.saveChatHistory()
-            // 清除历史后，也应该清除 "lastOpenChat"
-            persistenceManager.saveLastOpenChat(emptyList())
         } else {
-            Log.d("HistoryManager", "没有历史记录可以清除。")
+            Log.d("HistoryManagerCLR", "No history to clear.")
         }
-        // }
     }
 }

@@ -84,34 +84,35 @@ android {
         implementation(platform("androidx.compose:compose-bom:2025.05.00")) // 使用你指定的版本
         androidTestImplementation(platform("androidx.compose:compose-bom:2025.05.00"))
 
-        // Compose UI
-        implementation(libs.androidx.ui) // 假设 libs.versions.toml 中有这些别名，否则直接写字符串
-        implementation(libs.androidx.ui.graphics)
-        implementation(libs.androidx.ui.tooling.preview)
-        implementation(libs.androidx.material3)
-        implementation("androidx.compose.material:material-icons-core")
-        implementation("androidx.compose.material:material-icons-extended")
-        implementation("androidx.compose.foundation:foundation") // 这个 BOM 应该已经包含了，可以考虑移除显式声明
-        implementation("androidx.compose.animation:animation")
-        implementation("androidx.compose.ui:ui-text:1.8.1")
-        implementation("androidx.compose.ui:ui:1.8.1")
-        implementation("androidx.compose.material3:material3:1.3.2")
-        debugImplementation("androidx.compose.ui:ui-tooling:1.8.1")
-        implementation("androidx.compose.ui:ui-tooling-preview:1.8.1")
-        implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.0")
-        implementation("androidx.activity:activity-compose:1.10.1")
+        implementation(platform("androidx.compose:compose-bom:2025.05.00"))
+        androidTestImplementation(platform("androidx.compose:compose-bom:2025.05.00"))
 
-        // Core Android & Lifecycle (从你的 libs.versions.toml 获取)
+        // Compose UI - 让BOM管理版本
+        implementation(libs.androidx.ui) // 或者 "androidx.compose.ui:ui"
+        implementation(libs.androidx.ui.graphics) // 或者 "androidx.compose.ui:ui-graphics"
+        implementation(libs.androidx.ui.tooling.preview) // 或者 "androidx.compose.ui:ui-tooling-preview"
+        implementation(libs.androidx.material3) // 或者 "androidx.compose.material3:material3" <--- 移除版本号
+
+        implementation("androidx.compose.material:material-icons-core") // 这些通常也由BOM管理或有自己的稳定版本线
+        implementation("androidx.compose.material:material-icons-extended")
+        implementation("androidx.compose.foundation:foundation") // BOM 会管理
+        implementation("androidx.compose.animation:animation")   // BOM 会管理
+
+        debugImplementation("androidx.compose.ui:ui-tooling") // BOM 会管理
+
+
+        implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.0") // 或使用 libs.androidx.lifecycle.viewmodel.compose
+        implementation("androidx.activity:activity-compose:1.10.1")         // 或使用 libs.androidx.activity.compose
+
+        // Core Android & Lifecycle (从你的 libs.versions.toml 获取，通常这些不由Compose BOM管理)
         implementation(libs.androidx.core.ktx)
         implementation(libs.androidx.lifecycle.runtime.ktx)
-        implementation(libs.androidx.activity.compose)
-        implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
 
         // Kotlinx Serialization
         implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
 
         // Coroutines
-        implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3") // 建议考虑升级到 1.8.x
+        implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
         implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
         // Ktor
@@ -121,22 +122,19 @@ android {
         implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.11")
         implementation("io.ktor:ktor-client-logging:2.3.11")
 
-
         // Testing
         testImplementation(libs.junit)
         androidTestImplementation(libs.androidx.junit)
         androidTestImplementation(libs.androidx.espresso.core)
         androidTestImplementation(libs.androidx.ui.test.junit4) // BOM 会管理版本
-        debugImplementation(libs.androidx.ui.tooling)          // BOM 会管理版本
+        // debugImplementation(libs.androidx.ui.tooling)          // 上面已声明，BOM 会管理版本
         debugImplementation(libs.androidx.ui.test.manifest)    // BOM 会管理版本
 
-
         implementation("androidx.navigation:navigation-compose:2.7.7")
-        implementation("com.halilibo.compose-richtext:richtext-ui-material3:0.20.0") // 或者最新版本
-        implementation("com.halilibo.compose-richtext:richtext-commonmark:0.20.0") // Markdown 解析器
+        implementation("com.halilibo.compose-richtext:richtext-ui-material3:0.20.0")
+        implementation("com.halilibo.compose-richtext:richtext-commonmark:0.20.0")
 
         implementation(libs.androidx.profileinstaller)
-
         implementation ("org.slf4j:slf4j-nop:2.0.12")
 
     }

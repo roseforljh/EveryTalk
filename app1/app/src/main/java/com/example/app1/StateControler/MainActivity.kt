@@ -1,18 +1,20 @@
-package com.example.app1.StateControler // Passe den Paketnamen an
+package com.example.app1.StateControler // 您提供的包名，如果MainActivity实际位置不同请调整
 
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.EnterTransition // 新增：导入无动画过渡
+import androidx.compose.animation.ExitTransition  // 新增：导入无动画过渡
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
@@ -35,7 +37,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.input.ImeAction
 
-// ViewModel Factory (wie in deiner ursprünglichen Datei)
+// ViewModel 工厂 (保持不变)
 class AppViewModelFactory(private val dataSource: SharedPreferencesDataSource) :
     ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -43,30 +45,33 @@ class AppViewModelFactory(private val dataSource: SharedPreferencesDataSource) :
             @Suppress("UNCHECKED_CAST")
             return AppViewModel(dataSource) as T
         }
-        throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
+        throw IllegalArgumentException("未知的 ViewModel 类: ${modelClass.name}")
     }
 }
 
-private val defaultDrawerWidth = 280.dp // Drawer-Standardbreite
+private val defaultDrawerWidth = 280.dp // 抽屉默认宽度 (与AppDrawerContent中一致)
 
 @OptIn(ExperimentalMaterial3Api::class)
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        enableEdgeToEdge() // 启用边缘到边缘显示
         setContent {
-            App1Theme {
-                val snackbarHostState = remember { SnackbarHostState() }
-                val navController = rememberNavController()
-                val coroutineScope = rememberCoroutineScope()
+            App1Theme { // 应用您的主题
+                val snackbarHostState = remember { SnackbarHostState() } // Snackbar状态
+                val navController = rememberNavController() // 导航控制器
+                val coroutineScope = rememberCoroutineScope() // 协程作用域
 
+                // 获取ViewModel实例
                 val appViewModel: AppViewModel = viewModel(
                     factory = AppViewModelFactory(SharedPreferencesDataSource(applicationContext))
                 )
 
+                // 收集抽屉搜索相关的状态
                 val isSearchActiveInDrawer by appViewModel.isSearchActiveInDrawer.collectAsState()
                 val searchQueryInDrawer by appViewModel.searchQueryInDrawer.collectAsState()
 
+                // 处理Snackbar消息
                 LaunchedEffect(appViewModel.snackbarMessage, snackbarHostState) {
                     appViewModel.snackbarMessage.collectLatest { message ->
                         if (message.isNotBlank() && snackbarHostState.currentSnackbarData?.visuals?.message != message) {
@@ -77,50 +82,55 @@ class MainActivity : ComponentActivity() {
 
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
-                    snackbarHost = {
+                    snackbarHost = { // Snackbar容器
                         SnackbarHost(
                             hostState = snackbarHostState,
-                            modifier = Modifier.padding(bottom = 16.dp)
+                            modifier = Modifier.padding(bottom = 16.dp) // Snackbar距离底部的边距
                         ) { snackbarData ->
-                            Snackbar(snackbarData = snackbarData)
+                            Snackbar(snackbarData = snackbarData) // Material 3 Snackbar
                         }
                     }
-                ) { _ ->
+                ) { _ -> // Scaffold的content lambda，忽略其padding参数，因为我们自己处理
                     val density = LocalDensity.current
                     val configuration = LocalConfiguration.current
                     val screenWidthDp = configuration.screenWidthDp.dp
 
-                    // Effekt zum Zurücksetzen des Suchmodus, wenn der Drawer durch Geste geschlossen wird
+                    // 当抽屉通过手势关闭且之前搜索模式是激活的，则停用搜索模式
                     LaunchedEffect(appViewModel.drawerState.isClosed, isSearchActiveInDrawer) {
-                        // Nur handeln, wenn der Drawer geschlossen IST und der Suchmodus VORHER aktiv WAR
                         if (appViewModel.drawerState.isClosed && isSearchActiveInDrawer) {
                             Log.d(
                                 "MainActivity",
-                                "Drawer wurde geschlossen (isClosed=true), Suchmodus war aktiv. Deaktiviere Suchmodus."
+                                "抽屉已关闭 (isClosed=true)，搜索模式之前已激活。正在停用搜索模式。"
                             )
                             appViewModel.setSearchActiveInDrawer(false)
                         }
                     }
 
+                    // 计算主内容区域的X轴偏移量（用于抽屉拉出效果）
                     val contentOffsetX by remember(
                         appViewModel.drawerState.currentValue,
                         appViewModel.drawerState.offset.value,
                         isSearchActiveInDrawer
                     ) {
                         derivedStateOf {
-                            val drawerOffsetPx = appViewModel.drawerState.offset.value
-                            val actualDrawerVisibleWidthPx = if (isSearchActiveInDrawer) {
-                                val screenWidthPx = with(density) { screenWidthDp.toPx() }
-                                screenWidthPx + drawerOffsetPx // drawerOffsetPx ist negativ oder 0
-                            } else {
-                                val defaultDrawerWidthPx =
-                                    with(density) { defaultDrawerWidth.toPx() }
-                                defaultDrawerWidthPx + drawerOffsetPx // drawerOffsetPx ist negativ oder 0
+                            val drawerOffsetPx =
+                                appViewModel.drawerState.offset.value
+                            val actualDrawerVisibleWidthPx =
+                                if (isSearchActiveInDrawer) {
+                                    val screenWidthPx = with(density) { screenWidthDp.toPx() }
+                                    screenWidthPx + drawerOffsetPx
+                                } else {
+                                    val defaultDrawerWidthPx =
+                                        with(density) { defaultDrawerWidth.toPx() }
+                                    defaultDrawerWidthPx + drawerOffsetPx
+                                }
+                            with(density) {
+                                actualDrawerVisibleWidthPx.coerceAtLeast(0f).toDp()
                             }
-                            with(density) { actualDrawerVisibleWidthPx.coerceAtLeast(0f).toDp() }
                         }
                     }
 
+                    // 计算遮罩层的进度和颜色
                     val calculatedScrimProgress by remember(
                         appViewModel.drawerState.offset.value,
                         isSearchActiveInDrawer
@@ -162,30 +172,45 @@ class MainActivity : ComponentActivity() {
                                     appViewModel.onDrawerSearchQueryChange(query)
                                 },
                                 onConversationClick = { index ->
-                                    appViewModel.loadConversationFromHistory(index) // Sollte isSearchActive zurücksetzen
+                                    appViewModel.loadConversationFromHistory(index)
                                     coroutineScope.launch { appViewModel.drawerState.close() }
                                 },
                                 onNewChatClick = {
-                                    appViewModel.startNewChat() // Sollte isSearchActive zurücksetzen
+                                    appViewModel.startNewChat()
                                     coroutineScope.launch { appViewModel.drawerState.close() }
                                 },
                                 onRenameRequest = { index -> appViewModel.showRenameDialog(index) },
                                 onDeleteRequest = { index -> appViewModel.deleteConversation(index) },
                                 onClearAllConversationsRequest = { appViewModel.clearAllConversations() },
+                                getPreviewForIndex = { index ->
+                                    appViewModel.getConversationPreviewText(index)
+                                }
                             )
                         }
-                    ) {
+                    ) { // 主内容区域
                         NavHost(
                             navController = navController,
                             startDestination = Screen.CHAT_SCREEN,
                             modifier = Modifier
                                 .fillMaxSize()
-                                .offset(x = contentOffsetX)
+                                .graphicsLayer {
+                                    translationX = with(density) { contentOffsetX.toPx() }
+                                }
+                            // 注意：这里没有在NavHost级别设置全局的过渡动画，
+                            // 动画移除仅针对 SettingsScreen 的 composable。
                         ) {
                             composable(Screen.CHAT_SCREEN) {
                                 ChatScreen(viewModel = appViewModel, navController = navController)
                             }
-                            composable(Screen.SETTINGS_SCREEN) {
+                            composable(
+                                route = Screen.SETTINGS_SCREEN,
+                                // --- 唯一的修改在这里，移除了进入和退出动画 ---
+                                enterTransition = { EnterTransition.None },
+                                exitTransition = { ExitTransition.None },
+                                popEnterTransition = { EnterTransition.None },
+                                popExitTransition = { ExitTransition.None }
+                                // ---------------------------------------
+                            ) {
                                 SettingsScreen(
                                     viewModel = appViewModel,
                                     navController = navController
@@ -193,6 +218,7 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
+                    // 重命名对话框的调用 (它会根据ViewModel中的状态自行显示)
                     RenameDialogInternal(viewModel = appViewModel)
                 }
             }
@@ -221,11 +247,17 @@ private fun RenameDialogInternal(viewModel: AppViewModel) {
                     modifier = Modifier.focusRequester(focusRequester),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     keyboardActions = KeyboardActions(onDone = {
-                        renameIndex?.let { idx -> viewModel.renameConversation(idx, renameText) }
+                        renameIndex?.let { idx ->
+                            if (renameText.isNotBlank()) {
+                                viewModel.renameConversation(idx, renameText)
+                            }
+                        }
                     }),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = Color.Black,
                         unfocusedTextColor = Color.Black,
+                        focusedContainerColor = Color.White,
+                        unfocusedContainerColor = Color.White,
                         focusedLabelColor = MaterialTheme.colorScheme.primary,
                         unfocusedLabelColor = Color.Gray,
                         cursorColor = MaterialTheme.colorScheme.primary,

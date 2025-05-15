@@ -1,4 +1,3 @@
-// File: app/src/main/java/com/example/app1/data/models/Message.kt
 package com.example.app1.data.DataClass
 
 import kotlinx.serialization.Serializable
@@ -17,8 +16,9 @@ data class Message(
     val reasoning: String? = null,
     var contentStarted: Boolean = false,
     var isError: Boolean = false,
-    var isCanceled: Boolean = false, // 标记消息是否被取消
-    val name: String? = null,
+    var isCanceled: Boolean = false,
+    val name: String? = null, // 如果是ApiConfig.name相关的报错，请确保ApiConfig类中有name属性
     var hasPendingToolCall: Boolean = false,
-    val timestamp: Long = System.currentTimeMillis() // 添加 Long 类型的 timestamp，并提供默认值
+    val timestamp: Long = System.currentTimeMillis(),
+    val isPlaceholderName: Boolean = false // 确保这个属性存在，用于重命名逻辑
 )

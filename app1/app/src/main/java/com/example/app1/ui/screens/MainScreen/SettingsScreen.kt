@@ -2,7 +2,6 @@ package com.example.app1.ui.screens // 确保包名正确
 
 import android.annotation.SuppressLint
 import android.util.Log
-import android.widget.Toast // 保留 Toast，因为顶部栏复制功能还在使用
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
@@ -17,7 +16,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString // 保留 Toast 相关的 AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp

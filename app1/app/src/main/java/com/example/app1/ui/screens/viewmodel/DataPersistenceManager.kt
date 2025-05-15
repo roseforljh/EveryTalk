@@ -8,7 +8,6 @@ import com.example.app1.data.DataClass.Sender // 确保导入 Sender
 import com.example.app1.StateControler.ViewModelStateHolder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
