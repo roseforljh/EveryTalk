@@ -3,14 +3,11 @@ package com.example.app1.ui.screens.MainScreen
 import android.util.Log
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.animation.*
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -41,7 +38,6 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Density
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -58,9 +54,10 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.pow
-import kotlin.math.roundToInt
 
-private const val USER_INACTIVITY_TIMEOUT_MS = 3000L // 用户不活动超时时间
+private const val USER_INACTIVITY_TIMEOUT_MS = 2000L // 用户不活动超时时间 (毫秒)
+private const val REALTIME_SCROLL_CHECK_DELAY_MS = 50L // AI流式输出时，检查是否需要实时滚动的延迟 (毫秒)
+private const val FINAL_SCROLL_DELAY_MS = 150L       // AI响应完全结束后，执行最终滚动的延迟 (毫秒)
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -83,46 +80,31 @@ fun ChatScreen(
     val density = LocalDensity.current
     val configuration = LocalConfiguration.current
 
-    // 状态：用户是否手动将列表从底部向上滚动了
     var userManuallyScrolledAwayFromBottom by remember { mutableStateOf(false) }
     var ongoingScrollJob by remember { mutableStateOf<Job?>(null) }
-    var programmaticallyScrolling by remember { mutableStateOf(false) }
+    var programmaticallyScrolling by remember { mutableStateOf(false) } // 标记是否正在程序化滚动
 
-    // 状态：用户最后交互时间 和 用户是否被认为活跃
     var lastInteractionTime by remember { mutableStateOf(System.currentTimeMillis()) }
     var isUserConsideredActive by remember { mutableStateOf(true) }
 
     val imeInsets = WindowInsets.ime
-    var pendingMessageText by remember { mutableStateOf<String?>(null) }
+    var pendingMessageText by remember { mutableStateOf<String?>(null) } // 键盘隐藏时待发送消息
 
     val normalBottomPaddingForAIChat = 16.dp
-    val estimatedInputAreaHeight = remember { 100.dp } // 用于FAB的垂直位置调整
+    val estimatedInputAreaHeight = remember { 100.dp } // 用于FAB垂直位置调整
 
-    // 重置用户不活动计时器的函数
     val resetInactivityTimer: () -> Unit = {
         lastInteractionTime = System.currentTimeMillis()
-        if (!isUserConsideredActive) { // 如果之前是不活跃状态，立即更新为活跃
-            isUserConsideredActive = true
-            Log.d("UserActivity", "User became active.")
-        }
+        if (!isUserConsideredActive) isUserConsideredActive = true
     }
 
-    // LaunchedEffect 用于处理用户不活动计时
     LaunchedEffect(lastInteractionTime) {
-        // 每次 lastInteractionTime 更新时（意味着有新的交互），
-        // 先将用户标记为活跃，然后启动一个延迟任务。
-        isUserConsideredActive = true // 立即标记为活跃
-        Log.d("UserActivity", "Inactivity timer reset. User is active.")
-        delay(USER_INACTIVITY_TIMEOUT_MS) // 等待超时
-        if (isActive) { // 检查协程是否仍然活跃（未被新的交互取消）
-            // 如果协程在延迟后仍然活跃，说明超时时间内没有新的交互
-            isUserConsideredActive = false
-            Log.d("UserActivity", "User became inactive due to timeout.")
-        }
+        isUserConsideredActive = true
+        delay(USER_INACTIVITY_TIMEOUT_MS)
+        if (isActive) isUserConsideredActive = false
     }
 
-    // 处理软键盘隐藏后发送待处理消息的逻辑 (保持不变)
-    LaunchedEffect(pendingMessageText, imeInsets, density) {
+    LaunchedEffect(pendingMessageText, imeInsets, density) { // 软键盘隐藏后发送待处理消息
         snapshotFlow { imeInsets.getBottom(density) > 0 }
             .distinctUntilChanged()
             .filter { isVisible -> !isVisible && pendingMessageText != null }
@@ -134,8 +116,7 @@ fun ChatScreen(
             }
     }
 
-    // 文本输入时重置不活动计时器 (保持不变)
-    LaunchedEffect(text) {
+    LaunchedEffect(text) { // 文本输入时重置不活动计时器
         if (text.isNotEmpty() || (text.isEmpty() && viewModel.text.value.isNotEmpty())) {
             resetInactivityTimer()
         }
@@ -145,30 +126,25 @@ fun ChatScreen(
     val bubbleMaxWidth = remember(screenWidth) { (screenWidth * 0.8f).coerceAtMost(600.dp) }
     val codeBlockViewWidth = remember(screenWidth) { (screenWidth * 0.9f).coerceAtMost(700.dp) }
 
-    // NestedScrollConnection 用于检测用户手动滚动行为
-    val nestedScrollConnection = remember {
+    val nestedScrollConnection = remember { // 检测用户手动滚动行为
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                if (source == NestedScrollSource.Drag) { // 用户拖动列表
-                    resetInactivityTimer() // 用户操作，重置计时器
-                    if (available.y < 0 && listState.canScrollForward) { // 用户向上滚动，并且列表可以向上滚动
-                        if (!userManuallyScrolledAwayFromBottom) {
-                            userManuallyScrolledAwayFromBottom = true
-                            Log.d("ScrollState", "用户向上拖动，标记为手动离开底部。")
-                        }
+                if (source == NestedScrollSource.Drag) {
+                    resetInactivityTimer()
+                    if (available.y < 0 && listState.canScrollForward && !userManuallyScrolledAwayFromBottom) {
+                        userManuallyScrolledAwayFromBottom = true
+                        Log.d("ScrollState", "用户向上拖动，标记手动离开底部。")
                     }
                 }
                 return Offset.Zero
             }
 
             override suspend fun onPreFling(available: Velocity): Velocity {
-                if (listState.isScrollInProgress) { // 列表正在滚动（通常是Fling）
-                    resetInactivityTimer() // 用户操作，重置计时器
-                    if (available.y < -50 && listState.canScrollForward) { // 用户快速向上滑动
-                        if (!userManuallyScrolledAwayFromBottom) {
-                            userManuallyScrolledAwayFromBottom = true
-                            Log.d("ScrollState", "用户向上Fling，标记为手动离开底部。")
-                        }
+                if (listState.isScrollInProgress) {
+                    resetInactivityTimer()
+                    if (available.y < -50 && listState.canScrollForward && !userManuallyScrolledAwayFromBottom) {
+                        userManuallyScrolledAwayFromBottom = true
+                        Log.d("ScrollState", "用户向上Fling，标记手动离开底部。")
                     }
                 }
                 return Velocity.Zero
@@ -176,142 +152,108 @@ fun ChatScreen(
         }
     }
 
-    // 判断列表是否在最底部 (使用Footer锚点方案)
     val isAtBottom by remember {
         derivedStateOf {
             val layoutInfo = listState.layoutInfo
-            if (messages.isEmpty() || layoutInfo.visibleItemsInfo.isEmpty()) {
-                true // 空列表或无可见项时，视作在底部
-            } else {
-                // 检查索引为 messages.size (即Footer Spacer) 的项是否可见
-                layoutInfo.visibleItemsInfo.any { it.index == messages.size }
-            }
+            if (messages.isEmpty() || layoutInfo.visibleItemsInfo.isEmpty()) true
+            else layoutInfo.visibleItemsInfo.any { it.index == messages.size }
         }
     }
 
-    // 当列表滚动状态改变或是否在底部状态改变时，更新 userManuallyScrolledAwayFromBottom
     LaunchedEffect(isAtBottom, listState.isScrollInProgress, programmaticallyScrolling) {
-        if (!listState.isScrollInProgress && !programmaticallyScrolling) { // 仅当列表静止且非程序化滚动时
-            if (isAtBottom) {
-                if (userManuallyScrolledAwayFromBottom) {
-                    userManuallyScrolledAwayFromBottom = false
-                    Log.d(
-                        "ScrollState",
-                        "已到达底部，重置 userManuallyScrolledAwayFromBottom = false"
-                    )
-                }
-            }
-            // 注意: 用户向上滚动导致 !isAtBottom 的情况由 nestedScrollConnection 处理
+        // 当列表静止且非程序化滚动，并且已到达底部时，重置手动滚动标记
+        if (!listState.isScrollInProgress && !programmaticallyScrolling && isAtBottom && userManuallyScrolledAwayFromBottom) {
+            userManuallyScrolledAwayFromBottom = false
+            Log.d("ScrollState", "到达底部，重置 userManuallyScrolledAwayFromBottom = false")
         }
     }
 
-    // 滚动到列表底部的函数 (使用Footer锚点)
-    fun scrollToBottomWithFooter(reason: String = "UserInteraction") {
-        val currentJob: Job? = ongoingScrollJob
-        if (currentJob != null && currentJob.isActive) {
-            currentJob.cancel(CancellationException("新的滚动请求 ($reason) 取代了旧任务。"))
-            Log.d("ScrollJob", "旧的滚动任务已为 '$reason' 取消。")
-        }
+    fun scrollToBottomWithFooter(reason: String = "Unknown") {
+        ongoingScrollJob?.cancel(CancellationException("新的滚动请求 ($reason) 取代了旧任务。"))
         ongoingScrollJob = coroutineScope.launch {
             programmaticallyScrolling = true
-            Log.d(
-                "ScrollJob",
-                "launchScrollJobToBottom ($reason) - programmaticallyScrolling = true."
-            )
             try {
-                if (messages.isNotEmpty()) {
-                    listState.animateScrollToItem(messages.size) // 滚动到Footer的索引
-                    // 成功滚动到底部后，用户不再是“手动离开底部”的状态
-                    userManuallyScrolledAwayFromBottom = false
-                    Log.d(
-                        "ScrollJob",
-                        "滚动到Footer完成 ($reason)。userManuallyScrolledAwayFromBottom = false"
-                    )
-                } else {
-                    listState.animateScrollToItem(0) // 空列表滚动到顶部
-                    Log.d("ScrollJob", "列表为空，滚动到索引0 ($reason)。")
-                }
+                listState.animateScrollToItem(if (messages.isNotEmpty()) messages.size else 0) // 滚动到Footer或顶部
+                userManuallyScrolledAwayFromBottom = false // 成功滚动到底部后重置标记
+                Log.d("ScrollJob", "滚动到Footer/顶部完成 ($reason).")
             } catch (e: CancellationException) {
                 Log.d("ScrollJob", "滚动任务 ($reason) 被取消: ${e.message}")
             } catch (e: Exception) {
-                Log.e("ScrollJob", "滚动任务 ($reason) 发生错误: ${e.message}", e)
+                Log.e("ScrollJob", "滚动任务 ($reason) 错误: ${e.message}", e)
             } finally {
-                if (ongoingScrollJob === this.coroutineContext[Job]) {
+                if (ongoingScrollJob === this.coroutineContext[Job]) { // 确保是当前job结束
                     programmaticallyScrolling = false
                     ongoingScrollJob = null
-                    Log.d(
-                        "ScrollJob",
-                        "launchScrollJobToBottom ($reason) - programmaticallyScrolling = false (任务自结束)."
-                    )
                 }
             }
         }
     }
 
-    // ViewModel 请求滚动到底部事件 (保持不变，使用新的滚动函数)
-    LaunchedEffect(Unit) {
+    LaunchedEffect(Unit) { // ViewModel 请求滚动到底部事件
         viewModel.scrollToBottomEvent.collectLatest {
             resetInactivityTimer()
-            // 只有当确实不在底部或列表为空时才执行滚动，避免不必要的重绘/滚动
             if (!isAtBottom || messages.isEmpty()) {
-                Log.d("ViewModelScroll", "ViewModel请求滚动到底部。")
                 scrollToBottomWithFooter("ViewModelEvent")
-            } else {
-                Log.d("ViewModelScroll", "ViewModel请求滚动到底部，但已在底部，不执行滚动。")
-                // 如果已经在底部，确保 userManuallyScrolledAwayFromBottom 为 false
-                if (userManuallyScrolledAwayFromBottom) {
-                    userManuallyScrolledAwayFromBottom = false
-                }
+            } else if (userManuallyScrolledAwayFromBottom) {
+                userManuallyScrolledAwayFromBottom = false // 已在底部，但重置标记
             }
         }
     }
 
-    // AI 响应完成后自动滚动到底部 (保持不变，使用新的滚动函数)
-    LaunchedEffect(messages.size, isApiCalling) { // 依赖 messages.size 确保消息更新时能触发
-        snapshotFlow { isApiCalling }
-            .distinctUntilChanged()
-            .collect { currentIsApiCalling ->
-                // 此处 viewModel.isApiCalling.value 获取的是 snapshotFlow 闭包创建时的值，
-                // currentIsApiCalling 是最新的值。
-                // 我们需要比较的是前一个状态和当前状态。
-                // 一个更简单的方法是直接使用 currentIsApiCalling 来判断是否刚结束。
-                // 但为了确保逻辑与之前版本类似（检查从true到false的转变），我们可能需要一个 previousIsApiCalling 状态。
-                // 或者，更简单地，如果 !currentIsApiCalling 且之前是 isApiCalling (通过ViewModel的StateFlow)，则表示刚结束。
-                // 这里我们假设 viewModel.isApiCalling.value 能反映上一个状态，但这不完全准确。
-                // 一个更健壮的方式是使用 pairWithPrevious 或类似的 Flow 操作符，或者在 LaunchedEffect 外部维护一个 previousIsApiCalling。
-                // 为了简化，我们暂时依赖 viewModel.isApiCalling.value 作为“旧值”的近似。
+    // ==== 新增：找到当前流式AI消息 ====
+    val streamingAiMessage = remember(messages, currentStreamingAiMessageId) {
+        messages.find { it.id == currentStreamingAiMessageId }
+    }
 
-                val wasApiCallingPreviously = viewModel.isApiCalling.value // 这是个近似值
-                if (!currentIsApiCalling && wasApiCallingPreviously && messages.isNotEmpty()) {
+    // ==== 修正后的流式滚动 effect ====
+    LaunchedEffect(
+        streamingAiMessage?.text,
+        isApiCalling,
+        userManuallyScrolledAwayFromBottom,
+        isAtBottom
+    ) {
+        if (
+            isApiCalling &&
+            streamingAiMessage != null &&
+            streamingAiMessage.sender == Sender.AI &&
+            !userManuallyScrolledAwayFromBottom
+        ) {
+            delay(REALTIME_SCROLL_CHECK_DELAY_MS)
+            if (isActive && !isAtBottom && !userManuallyScrolledAwayFromBottom) {
+                Log.d("RealtimeScroll", "AI流式输出内容变化, 自动滚动...")
+                scrollToBottomWithFooter("AI_Streaming_RealTime_Fix")
+            }
+        }
+    }
+
+    // AI 响应完全结束后，执行最终滚动 (如果需要)
+    LaunchedEffect(isApiCalling) {
+        snapshotFlow { isApiCalling }
+            .filter { !it } // 只关心 isApiCalling 变为 false
+            .distinctUntilChanged()
+            .collectLatest {
+                // 此时 isApiCalling 刚从 true 变为 false
+                if (messages.isNotEmpty()) {
                     val lastMessage = messages.last()
-                    // 只有当AI响应结束，且用户没有手动向上滚动时才自动滚动
                     if (lastMessage.sender == Sender.AI && !userManuallyScrolledAwayFromBottom) {
-                        Log.d("ScrollLogic", "AI响应完成，用户未手动滚动，准备检查是否滚动。")
-                        delay(100) // 给UI一点时间反应，例如消息高度计算
-                        if (!isAtBottom && isActive) { // 再次检查是否在底部，并确保协程仍活跃
-                            Log.d("ScrollLogic", "AI响应完成，滚动到AI消息。")
+                        Log.d(
+                            "ScrollLogic",
+                            "AI response likely finished, checking for final scroll."
+                        )
+                        delay(FINAL_SCROLL_DELAY_MS)
+                        if (isActive && !isAtBottom && !userManuallyScrolledAwayFromBottom) {
+                            Log.d("ScrollLogic", "AI response finished, performing final scroll.")
                             resetInactivityTimer()
-                            scrollToBottomWithFooter("AI响应完成")
-                        } else {
-                            Log.d("ScrollLogic", "AI响应完成，但已在底部或协程不再活跃，无需滚动。")
+                            scrollToBottomWithFooter("AI_Response_Fully_Completed")
                         }
                     }
                 }
             }
     }
 
-    // FAB 的可见性逻辑
     val scrollToBottomButtonVisible by remember {
         derivedStateOf {
-            if (messages.isEmpty()) {
-                false // 列表为空时不显示
-            } else {
-                // 条件1: 不在底部 并且 用户是活跃的 并且 用户确实向上滚动过
-                val condition1 =
-                    !isAtBottom && isUserConsideredActive && userManuallyScrolledAwayFromBottom
-                // (可以根据需要添加其他条件，例如列表必须有一定数量的消息才显示)
-                condition1
-            }
+            !messages.isEmpty() && !isAtBottom && isUserConsideredActive && userManuallyScrolledAwayFromBottom
         }
     }
 
@@ -321,7 +263,7 @@ fun ChatScreen(
     Scaffold(
         modifier = modifier
             .fillMaxSize()
-            .pointerInput(Unit) { detectTapGestures(onTap = { resetInactivityTimer() }) }, // 点击屏幕任何地方重置计时器
+            .pointerInput(Unit) { detectTapGestures(onTap = { resetInactivityTimer() }) },
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         containerColor = Color.White,
         topBar = {
@@ -334,22 +276,21 @@ fun ChatScreen(
         floatingActionButton = {
             AnimatedVisibility(
                 visible = scrollToBottomButtonVisible,
-                enter = fadeIn(animationSpec = tween(220)), // 简化进入动画
-                exit = fadeOut(animationSpec = tween(150))  // 简化退出动画
+                enter = fadeIn(animationSpec = tween(220)),
+                exit = fadeOut(animationSpec = tween(150))
             ) {
                 FloatingActionButton(
                     onClick = {
-                        resetInactivityTimer() // 用户点击FAB，是用户操作
-                        Log.d("FAB_Click", "FAB点击，滚动到Footer。")
+                        resetInactivityTimer()
                         scrollToBottomWithFooter("FAB_Click")
                     },
                     modifier = Modifier.padding(bottom = estimatedInputAreaHeight + 16.dp + 15.dp),
                     shape = RoundedCornerShape(28.dp),
-                    containerColor = Color.White, // Material 3 推荐使用主题色或Surface色
-                    contentColor = Color.Black,   // Material 3 推荐使用主题色或OnSurface色
+                    containerColor = Color.White,
+                    contentColor = Color.Black,
                     elevation = FloatingActionButtonDefaults.elevation(
-                        defaultElevation = 4.dp, // 减小默认阴影，使其不那么突出
-                        pressedElevation = 6.dp  // 按下时的阴影
+                        defaultElevation = 4.dp,
+                        pressedElevation = 6.dp
                     )
                 ) { Icon(Icons.Filled.ArrowDownward, "滚动到底部") }
             }
@@ -376,17 +317,15 @@ fun ChatScreen(
                         modifier = Modifier
                             .fillMaxSize()
                             .background(Color.White)
-                            .nestedScroll(nestedScrollConnection) // 应用 nestedScrollConnection
+                            .nestedScroll(nestedScrollConnection)
                             .padding(horizontal = 8.dp),
                         state = listState,
-                        reverseLayout = false,
                         contentPadding = PaddingValues(
                             top = 8.dp,
-                            bottom = normalBottomPaddingForAIChat // 列表底部内边距
+                            bottom = normalBottomPaddingForAIChat
                         )
                     ) {
                         items(items = messages, key = { it.id }) { message ->
-                            // MessageBubble 渲染 (保持不变)
                             val isStreamingThis =
                                 message.sender == Sender.AI && message.id == currentStreamingAiMessageId && isApiCalling && message.contentStarted
                             val showLoading =
@@ -394,7 +333,7 @@ fun ChatScreen(
                             MessageBubble(
                                 message = message,
                                 viewModel = viewModel,
-                                onUserInteraction = { resetInactivityTimer() }, // 消息气泡内的交互也重置计时器
+                                onUserInteraction = { resetInactivityTimer() },
                                 isMainContentStreaming = isStreamingThis,
                                 isReasoningStreaming = (message.sender == Sender.AI && message.id == currentStreamingAiMessageId && isApiCalling && !message.reasoning.isNullOrBlank() && !(reasoningCompleteMap[message.id]
                                     ?: false) && message.contentStarted),
@@ -414,19 +353,18 @@ fun ChatScreen(
                                 }
                             )
                         }
-                        // =========== Footer: 关键！=============
-                        item(key = "footer") { // 用于精确滚动到底部的锚点
+                        item(key = "footer") {
                             Spacer(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(0.dp) // 高度为0，不可见
+                                    .height(0.dp)
                             )
                         }
                     }
                 }
             }
 
-            // 输入区域 (保持不变)
+            // 输入区域
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -438,11 +376,11 @@ fun ChatScreen(
             ) {
                 OutlinedTextField(
                     value = text,
-                    onValueChange = { viewModel.onTextChange(it); resetInactivityTimer() }, // 输入时重置计时器
+                    onValueChange = { viewModel.onTextChange(it); resetInactivityTimer() },
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(focusRequester)
-                        .onFocusChanged { if (it.isFocused) resetInactivityTimer() } // 获取焦点时重置计时器
+                        .onFocusChanged { if (it.isFocused) resetInactivityTimer() }
                         .padding(bottom = 1.dp),
                     placeholder = { Text("输入消息…") },
                     colors = OutlinedTextFieldDefaults.colors(
@@ -461,7 +399,7 @@ fun ChatScreen(
                     trailingIcon = {
                         if (text.isNotEmpty()) {
                             IconButton(
-                                onClick = { viewModel.onTextChange(""); resetInactivityTimer() }, // 清除文本时重置计时器
+                                onClick = { viewModel.onTextChange(""); resetInactivityTimer() },
                                 modifier = Modifier.size(40.dp)
                             ) {
                                 Icon(
@@ -485,7 +423,7 @@ fun ChatScreen(
                     }
                     FilledIconButton(
                         onClick = {
-                            resetInactivityTimer() // 发送/停止按钮点击时重置计时器
+                            resetInactivityTimer()
                             if (isApiCalling) {
                                 viewModel.onCancelAPICall()
                             } else if (text.isNotBlank() && selectedApiConfig != null) {
@@ -517,7 +455,6 @@ fun ChatScreen(
             }
         }
 
-        // 编辑对话框 (保持不变)
         if (showEditDialog) {
             AlertDialog(
                 onDismissRequest = { viewModel.dismissEditDialog() },
@@ -560,7 +497,6 @@ fun ChatScreen(
     }
 }
 
-// EmptyChatAnimation (保持不变)
 @Composable
 fun EmptyChatAnimation(density: Density) {
     Box(
@@ -570,10 +506,8 @@ fun EmptyChatAnimation(density: Density) {
     ) {
         Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.Center) {
             val style = LocalTextStyle.current.copy(
-                fontSize = 36.sp,
-                fontWeight = FontWeight.ExtraBold,
-                color = Color.Black,
-                fontFamily = FontFamily.SansSerif
+                fontSize = 36.sp, fontWeight = FontWeight.ExtraBold,
+                color = Color.Black, fontFamily = FontFamily.SansSerif
             )
             Text("你好", style = style)
             val animY = remember { List(3) { Animatable(0f) } }
@@ -583,8 +517,7 @@ fun EmptyChatAnimation(density: Density) {
                     repeat(5) { cycle ->
                         if (!isActive) throw CancellationException("你好动画取消")
                         val amp = with(density) { (-8).dp.toPx() } * (0.7f.pow(cycle))
-                        val dur =
-                            (250 + (600 - 250) * (if (4 > 0) cycle.toFloat() / 4f else 0f)).toInt()
+                        val dur = (250 + (600 - 250) * (cycle.toFloat() / 4f)).toInt()
                         coroutineScope {
                             animY.forEachIndexed { i, a ->
                                 launch {

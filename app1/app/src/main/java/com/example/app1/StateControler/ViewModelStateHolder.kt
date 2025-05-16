@@ -1,89 +1,61 @@
-package com.example.app1.StateControler
+package com.example.app1.StateControler // 包名根据你的实际情况
 
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.DrawerValue
 import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.snapshots.SnapshotStateList
-import androidx.compose.runtime.snapshots.SnapshotStateMap
 import com.example.app1.data.DataClass.ApiConfig
 import com.example.app1.data.DataClass.Message
-import com.example.app1.navigation.AppView // 确保这个 import 路径正确
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 
-/**
- * 持有 AppViewModel 的核心可变状态。
- */
 class ViewModelStateHolder {
+    // --- 抽屉相关 ---
+    val drawerState: DrawerState = DrawerState(initialValue = DrawerValue.Closed)
 
-    // --- 抽屉状态 ---
-    val drawerState = DrawerState(DrawerValue.Closed)
-
-    // --- 核心状态 ---
+    // --- 输入和消息列表 ---
     val _text = MutableStateFlow("")
-    val messages: SnapshotStateList<Message> = mutableStateListOf() // 消息列表，oldest-first (新消息在末尾)
-    val _currentView = MutableStateFlow(AppView.CurrentChat)
-    val _historicalConversations =
-        MutableStateFlow<List<List<Message>>>(emptyList()) // 内部列表也应是 oldest-first
+    val messages: SnapshotStateList<Message> = mutableStateListOf()
+
+    // --- 历史记录 ---
+    val _historicalConversations = MutableStateFlow<List<List<Message>>>(emptyList())
     val _loadedHistoryIndex = MutableStateFlow<Int?>(null)
+
+    // --- API 配置 ---
     val _apiConfigs = MutableStateFlow<List<ApiConfig>>(emptyList())
     val _selectedApiConfig = MutableStateFlow<ApiConfig?>(null)
-    val _showSettingsDialog = MutableStateFlow(false)
-    val _isApiCalling = MutableStateFlow(false)
-    val _currentStreamingAiMessageId = MutableStateFlow<String?>(null)
-    val expandedReasoningStates: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
-    val reasoningCompleteMap: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
-    val messageAnimationStates: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
 
-    // --- 编辑和重命名相关的状态 ---
+    // --- API 调用状态 ---
+    val _isApiCalling = MutableStateFlow(false)
+    var apiJob: Job? = null
+    val _currentStreamingAiMessageId = MutableStateFlow<String?>(null)
+    val reasoningCompleteMap: MutableMap<String, Boolean> = mutableMapOf()
+    val expandedReasoningStates: MutableMap<String, Boolean> = mutableMapOf()
+    val messageAnimationStates: MutableMap<String, Boolean> = mutableMapOf()
+
+    // --- UI 事件 ---
+    val _snackbarMessage = MutableSharedFlow<String>(replay = 0)
+    val _scrollToBottomEvent = MutableSharedFlow<Unit>(replay = 0)
+
+    // --- 编辑/重命名对话框相关 ---
     val _editDialogInputText = MutableStateFlow("")
     val _renameInputText = MutableStateFlow("")
 
-    // --- API任务跟踪 ---
-    var apiJob: Job? = null
+    // --- **新增：设置对话框显示状态** ---
+    val _showSettingsDialog = MutableStateFlow(false) // <--- 添加这一行
+    // --- **结束新增** ---
 
-    // --- UI事件 ---
-    val _snackbarMessage = MutableSharedFlow<String>(
-        replay = 0,
-        extraBufferCapacity = 1,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST
-    )
-
-    // 滚动事件，用于滚动到底部
-    val _scrollToBottomEvent = MutableSharedFlow<Unit>(
-        replay = 0,
-        extraBufferCapacity = 1,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST
-    )
 
     fun clearForNewChat() {
-        messages.clear()
         _text.value = ""
-        _loadedHistoryIndex.value = null
-        expandedReasoningStates.clear()
-        reasoningCompleteMap.clear()
-        messageAnimationStates.clear()
-        _editDialogInputText.value = ""
-        _renameInputText.value = ""
-        clearApiState()
-    }
-
-    fun clearApiState() {
+        messages.clear()
         _isApiCalling.value = false
-        _currentStreamingAiMessageId.value = null
         apiJob?.cancel()
         apiJob = null
-    }
-
-    fun clearAllUiStateForNewSession() {
-        clearForNewChat()
-        _historicalConversations.value = emptyList()
-        _apiConfigs.value = emptyList()
-        _selectedApiConfig.value = null
-        _currentView.value = AppView.CurrentChat
-        _showSettingsDialog.value = false
+        _currentStreamingAiMessageId.value = null
+        reasoningCompleteMap.clear()
+        expandedReasoningStates.clear()
+        // _showSettingsDialog.value = false // 可选：在新聊天时也关闭设置对话框
     }
 }

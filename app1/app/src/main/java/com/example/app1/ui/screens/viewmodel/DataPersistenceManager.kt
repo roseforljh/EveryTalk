@@ -54,7 +54,6 @@ class DataPersistenceManager(
                 }
 
                 var finalSelectedConfig = selectedConfigFromDataSource
-                // var selectionActuallyChangedInThisLoad = false // 这个变量的逻辑有点复杂且不一定必要，简化
 
                 if (finalSelectedConfig == null && loadedConfigs.isNotEmpty()) {
                     finalSelectedConfig = loadedConfigs.first()
@@ -83,7 +82,6 @@ class DataPersistenceManager(
                     "loadInitialData: 最后打开的聊天加载完成。消息数量: ${lastOpenChatMessages.size}"
                 )
                 // --- END: 加载最后打开的聊天 ---
-
 
                 // --- 更新 StateHolder (在主线程) ---
                 withContext(Dispatchers.Main.immediate) {
@@ -219,15 +217,4 @@ class DataPersistenceManager(
         }
     }
 
-    /** 清除所有应用数据（如果 dataSource 支持）。 */
-    fun clearAllApplicationData() {
-        viewModelScope.launch(Dispatchers.IO) {
-            Log.w(
-                TAG,
-                "clearAllApplicationData: 请求 dataSource 清除所有应用数据！"
-            ) // 使用警告级别，因为这是个危险操作
-            dataSource.clearAllData() // 假设 dataSource 有这个方法
-            Log.w(TAG, "clearAllApplicationData: 所有应用数据已通过 dataSource 清除！")
-        }
-    }
 }

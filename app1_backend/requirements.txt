@@ -1,5 +1,5 @@
-# requirements.txt
 fastapi>=0.100.0
 uvicorn[standard]>=0.20.0
 httpx[http2]>=0.24.0
 orjson>=3.8.0
+

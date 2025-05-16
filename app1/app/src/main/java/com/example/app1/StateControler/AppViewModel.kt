@@ -1,17 +1,18 @@
-package com.example.app1.StateControler
+package com.example.app1.StateControler // 包名根据你的实际情况
 
 import android.util.Log
-import androidx.compose.material3.DrawerState // 假设 DrawerState 是 Material 3 的
+import androidx.compose.material3.DrawerState
+import androidx.compose.runtime.snapshots.SnapshotStateList // 确保导入
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.app1.data.local.SharedPreferencesDataSource
 import com.example.app1.data.DataClass.ApiConfig
 import com.example.app1.data.DataClass.Message
 import com.example.app1.data.DataClass.Sender
-import com.example.app1.data.network.ApiClient
+import com.example.app1.data.network.ApiClient // 假设ApiClient存在
 import com.example.app1.ui.screens.viewmodel.ConfigManager
-import com.example.app1.ui.screens.viewmodel.HistoryManager
 import com.example.app1.ui.screens.viewmodel.DataPersistenceManager
+import com.example.app1.ui.screens.viewmodel.HistoryManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -20,71 +21,60 @@ import java.util.UUID
 
 class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewModel() {
 
-    private val instanceId = UUID.randomUUID().toString() // ViewModel 实例的唯一ID，用于日志区分
-    val viewModelInstanceIdForLogging: String get() = instanceId // 公开 ViewModel 实例ID
+    private val instanceId = UUID.randomUUID().toString()
+    val viewModelInstanceIdForLogging: String get() = instanceId
 
-    // 假设 ViewModelStateHolder 内部的 _historicalConversations 是 MutableStateFlow
-    // 例如: val _historicalConversations = MutableStateFlow<List<List<Message>>>(emptyList())
-    private val stateHolder = ViewModelStateHolder() // 状态容器实例
-    private val persistenceManager =
-        DataPersistenceManager(dataSource, stateHolder, viewModelScope) // 数据持久化管理器
-
-    // 历史记录管理器，传入比较消息列表的函数引用
+    private val stateHolder = ViewModelStateHolder()
+    private val persistenceManager = DataPersistenceManager(dataSource, stateHolder, viewModelScope)
     private val historyManager: HistoryManager =
-        HistoryManager(
+        HistoryManager(stateHolder, persistenceManager, ::areMessageListsEffectivelyEqual)
+    private val apiHandler: ApiHandler by lazy {
+        ApiHandler(
+            stateHolder,
+            viewModelScope,
+            historyManager
+        )
+    }
+    private val configManager: ConfigManager by lazy {
+        ConfigManager(
             stateHolder,
             persistenceManager,
-            ::areMessageListsEffectivelyEqual // 消息列表比较函数的引用
+            apiHandler,
+            viewModelScope
         )
-
-    // API处理器，懒加载
-    private val apiHandler: ApiHandler by lazy {
-        ApiHandler(stateHolder, viewModelScope, historyManager)
     }
 
-    // 配置管理器，懒加载
-    private val configManager: ConfigManager by lazy {
-        ConfigManager(stateHolder, persistenceManager, apiHandler, viewModelScope)
-    }
+    val drawerState: DrawerState get() = stateHolder.drawerState
+    val text: StateFlow<String> get() = stateHolder._text.asStateFlow()
+    val messages: SnapshotStateList<Message> get() = stateHolder.messages // <--- 类型改变
 
-    // --- 公开的StateFlow和SharedFlow，供UI观察 ---
-    val drawerState: DrawerState get() = stateHolder.drawerState // 抽屉状态
-    val text: StateFlow<String> get() = stateHolder._text.asStateFlow() // 输入框文本
-    val messages: MutableList<Message> get() = stateHolder.messages // 当前聊天消息列表 (最旧的在前)
-    // 注意: 为使Compose UI正确响应列表的添加、删除和修改操作,
-    // ViewModelStateHolder 中的 'messages' 应为 SnapshotStateList (如 mutableStateListOf())。
+    val historicalConversations: StateFlow<List<List<Message>>> get() = stateHolder._historicalConversations.asStateFlow()
+    val loadedHistoryIndex: StateFlow<Int?> get() = stateHolder._loadedHistoryIndex.asStateFlow()
+    val apiConfigs: StateFlow<List<ApiConfig>> get() = stateHolder._apiConfigs.asStateFlow()
+    val selectedApiConfig: StateFlow<ApiConfig?> get() = stateHolder._selectedApiConfig.asStateFlow()
+    val isApiCalling: StateFlow<Boolean> get() = stateHolder._isApiCalling.asStateFlow()
+    val currentStreamingAiMessageId: StateFlow<String?> get() = stateHolder._currentStreamingAiMessageId.asStateFlow()
+    val reasoningCompleteMap: Map<String, Boolean> get() = stateHolder.reasoningCompleteMap
+    val expandedReasoningStates: MutableMap<String, Boolean> get() = stateHolder.expandedReasoningStates
 
-    val historicalConversations: StateFlow<List<List<Message>>> get() = stateHolder._historicalConversations.asStateFlow() // 历史对话列表
-    val loadedHistoryIndex: StateFlow<Int?> get() = stateHolder._loadedHistoryIndex.asStateFlow() // 当前加载的历史对话索引
-    val apiConfigs: StateFlow<List<ApiConfig>> get() = stateHolder._apiConfigs.asStateFlow() // API配置列表
-    val selectedApiConfig: StateFlow<ApiConfig?> get() = stateHolder._selectedApiConfig.asStateFlow() // 当前选中的API配置
-    val isApiCalling: StateFlow<Boolean> get() = stateHolder._isApiCalling.asStateFlow() // API是否正在调用中
-    val currentStreamingAiMessageId: StateFlow<String?> get() = stateHolder._currentStreamingAiMessageId.asStateFlow() // 当前正在流式输出的AI消息ID
-    val reasoningCompleteMap: Map<String, Boolean> get() = stateHolder.reasoningCompleteMap // 推理过程是否完成的映射表
-    val expandedReasoningStates: MutableMap<String, Boolean> get() = stateHolder.expandedReasoningStates // 推理过程是否展开的映射表
+    val snackbarMessage: SharedFlow<String> get() = stateHolder._snackbarMessage.asSharedFlow()
+    val scrollToBottomEvent: SharedFlow<Unit> get() = stateHolder._scrollToBottomEvent.asSharedFlow()
 
-    val snackbarMessage: SharedFlow<String> get() = stateHolder._snackbarMessage.asSharedFlow() // Snackbar提示消息
-    val scrollToBottomEvent: SharedFlow<Unit> get() = stateHolder._scrollToBottomEvent.asSharedFlow() // 滚动到底部事件
-
-    // 编辑消息相关的状态
     private val _showEditDialog = MutableStateFlow(false)
     val showEditDialog: StateFlow<Boolean> = _showEditDialog.asStateFlow()
     private val _editingMessageId = MutableStateFlow<String?>(null)
     val editDialogInputText: StateFlow<String> get() = stateHolder._editDialogInputText.asStateFlow()
 
-    // 重命名对话相关的状态
     private val _showRenameDialogState = MutableStateFlow(false)
     val showRenameDialogState: StateFlow<Boolean> = _showRenameDialogState.asStateFlow()
     private val _renamingIndexState = MutableStateFlow<Int?>(null)
     val renamingIndexState: StateFlow<Int?> = _renamingIndexState.asStateFlow()
     val renameInputText: StateFlow<String> get() = stateHolder._renameInputText.asStateFlow()
 
-    // 抽屉内搜索相关的状态
     private val _isSearchActiveInDrawer = MutableStateFlow(false)
     val isSearchActiveInDrawer: StateFlow<Boolean> = _isSearchActiveInDrawer.asStateFlow()
     private val _searchQueryInDrawer = MutableStateFlow("")
     val searchQueryInDrawer: StateFlow<String> = _searchQueryInDrawer.asStateFlow()
-
 
     private fun areMessageListsEffectivelyEqual(
         list1: List<Message>?,
@@ -122,14 +112,13 @@ class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewMo
         Log.d("AppViewModel", "[ID:$instanceId] ViewModel 初始化开始")
         viewModelScope.launch(Dispatchers.IO) {
             ApiClient.preWarm()
-            apiHandler // 触发懒加载
-            configManager // 触发懒加载
+            apiHandler
+            configManager
         }
         persistenceManager.loadInitialData { initialConfigPresent, historyPresent ->
             val currentChatMessagesFromPersistence =
-                stateHolder.messages.toList()
-            val historicalConversationsFromPersistence =
-                stateHolder._historicalConversations.value
+                stateHolder.messages.toList() // toList() is fine here
+            val historicalConversationsFromPersistence = stateHolder._historicalConversations.value
 
             if (currentChatMessagesFromPersistence.isNotEmpty() && historyPresent) {
                 val matchedIndex =
@@ -149,9 +138,8 @@ class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewMo
                 if (!initialConfigPresent && stateHolder._apiConfigs.value.isEmpty()) {
                     showSnackbar("请添加 API 配置")
                 } else if (stateHolder._selectedApiConfig.value == null && stateHolder._apiConfigs.value.isNotEmpty()) {
-                    val configToSelect =
-                        stateHolder._apiConfigs.value.firstOrNull { it.isValid }
-                            ?: stateHolder._apiConfigs.value.firstOrNull()
+                    val configToSelect = stateHolder._apiConfigs.value.firstOrNull { it.isValid }
+                        ?: stateHolder._apiConfigs.value.firstOrNull()
                     configToSelect?.let { selectConfig(it) }
                 }
             }
@@ -188,12 +176,8 @@ class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewMo
         }
         viewModelScope.launch(Dispatchers.Main.immediate) {
             val newUserMessage =
-                Message(
-                    text = textToActuallySend,
-                    sender = Sender.User,
-                    contentStarted = true
-                )
-            stateHolder.messages.add(newUserMessage)
+                Message(text = textToActuallySend, sender = Sender.User, contentStarted = true)
+            stateHolder.messages.add(newUserMessage) // 操作 SnapshotStateList
 
             if (!isFromRegeneration) stateHolder._text.value = ""
             triggerScrollToBottom()
@@ -229,8 +213,7 @@ class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewMo
             showSnackbar("消息内容不能为空"); return
         }
         viewModelScope.launch {
-            val messageIndex =
-                stateHolder.messages.indexOfFirst { it.id == messageIdToEdit }
+            val messageIndex = stateHolder.messages.indexOfFirst { it.id == messageIdToEdit }
             if (messageIndex != -1) {
                 val originalMessage = stateHolder.messages[messageIndex]
                 if (originalMessage.text != updatedText) {
@@ -290,16 +273,12 @@ class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewMo
                 stateHolder.messages.removeAt(finalUserMessageIndex)
                 Log.d("ViewModelRegen", "为重新生成移除了原始用户消息。")
             } else {
-                Log.e(
-                    "ViewModelRegen",
-                    "严重错误：为重新生成移除AI消息后，未找到原始用户消息。"
-                )
+                Log.e("ViewModelRegen", "严重错误：为重新生成移除AI消息后，未找到原始用户消息。")
             }
             historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
             onSendMessage(messageText = originalUserMessageText, isFromRegeneration = true)
         }
     }
-
 
     fun triggerScrollToBottom() {
         stateHolder._scrollToBottomEvent.tryEmit(Unit)
@@ -400,28 +379,18 @@ class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewMo
         stateHolder.messageAnimationStates[messageId] ?: false
 
     fun getConversationPreviewText(index: Int): String {
-        val conversation =
-            stateHolder._historicalConversations.value.getOrNull(index)
-
-        // 1. 优先使用 Sender.System 且 isPlaceholderName=true 的消息文本 (这是重命名后设置的标题)
+        val conversation = stateHolder._historicalConversations.value.getOrNull(index)
         val placeholderTitleMsg =
             conversation?.firstOrNull { it.sender == Sender.System && it.isPlaceholderName && it.text.isNotBlank() }?.text?.trim()
         if (!placeholderTitleMsg.isNullOrBlank()) return placeholderTitleMsg
-
-        // 2. 其次使用第一条用户消息作为预览
         val firstUserMsg =
             conversation?.firstOrNull { it.sender == Sender.User && it.text.isNotBlank() }?.text?.trim()
         if (!firstUserMsg.isNullOrBlank()) return firstUserMsg
-
-        // 3. 再次使用第一条AI消息
         val firstAiMsg =
             conversation?.firstOrNull { it.sender == Sender.AI && it.text.isNotBlank() }?.text?.trim()
         if (!firstAiMsg.isNullOrBlank()) return firstAiMsg
-
-        // 4. 默认预览文本
         return "对话 ${index + 1}"
     }
-
 
     fun onRenameInputTextChange(newName: String) {
         stateHolder._renameInputText.value = newName
@@ -431,12 +400,10 @@ class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewMo
         if (index >= 0 && index < stateHolder._historicalConversations.value.size) {
             _renamingIndexState.value = index
             val currentPreview = getConversationPreviewText(index)
-            // 如果当前预览名是默认的"对话 X"格式，则输入框为空以鼓励用户输入新名称，否则显示当前名称
             val isDefaultPreview = currentPreview.startsWith("对话 ") &&
                     runCatching {
                         currentPreview.substringAfter("对话 ").toIntOrNull() == index + 1
                     }.getOrElse { false }
-
             stateHolder._renameInputText.value = if (isDefaultPreview) "" else currentPreview
             _showRenameDialogState.value = true
         } else {
@@ -450,7 +417,6 @@ class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewMo
         stateHolder._renameInputText.value = ""
     }
 
-    // --- 重命名对话的核心逻辑 ---
     fun renameConversation(index: Int, newName: String) {
         val trimmedNewName = newName.trim()
         if (trimmedNewName.isBlank()) {
@@ -461,65 +427,46 @@ class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewMo
             if (index < 0 || index >= currentHistoricalConvos.size) {
                 withContext(Dispatchers.Main) { showSnackbar("无法重命名：对话索引错误") }; return@launch
             }
-
             val originalConversationAtIndex = currentHistoricalConvos[index]
-            // 创建一个新的消息列表来存放修改后的对话，而不是直接修改原始列表的副本
             val newMessagesForThisConversation = mutableListOf<Message>()
-
             var titleMessageUpdatedOrAdded = false
 
-            // 检查原始对话的第一条消息是否是系统占位符标题
-            if (originalConversationAtIndex.isNotEmpty() &&
-                originalConversationAtIndex.first().sender == Sender.System &&
-                originalConversationAtIndex.first().isPlaceholderName
-            ) {
-                // 如果是，则更新这条消息
+            if (originalConversationAtIndex.isNotEmpty() && originalConversationAtIndex.first().sender == Sender.System && originalConversationAtIndex.first().isPlaceholderName) {
                 newMessagesForThisConversation.add(
-                    originalConversationAtIndex.first().copy(
-                        text = trimmedNewName,
-                        timestamp = System.currentTimeMillis() // 更新时间戳
-                        // isPlaceholderName 保持 true
-                    )
+                    originalConversationAtIndex.first()
+                        .copy(text = trimmedNewName, timestamp = System.currentTimeMillis())
                 )
-                // 添加原始对话中除了第一条（旧标题）之外的所有其他消息
                 newMessagesForThisConversation.addAll(originalConversationAtIndex.drop(1))
                 titleMessageUpdatedOrAdded = true
             }
 
             if (!titleMessageUpdatedOrAdded) {
-                // 如果原始对话没有系统占位符标题，或者第一条不是，则在最前面插入一条新的标题消息
                 val titleMessage = Message(
-                    id = "title_${UUID.randomUUID()}", // 为标题消息生成唯一ID
+                    id = "title_${UUID.randomUUID()}",
                     text = trimmedNewName,
                     sender = Sender.System,
-                    timestamp = System.currentTimeMillis() - 1, // 时间戳略早，以确保如果需要排序时它在前面
-                    contentStarted = true, // 标记内容有效
-                    isPlaceholderName = true // 明确标记为占位符名称（自定义标题）
+                    timestamp = System.currentTimeMillis() - 1,
+                    contentStarted = true,
+                    isPlaceholderName = true
                 )
                 newMessagesForThisConversation.add(titleMessage)
-                // 添加所有原始对话的消息
                 newMessagesForThisConversation.addAll(originalConversationAtIndex)
             }
 
-            // 创建包含已修改对话的新的历史对话全列表
             val updatedHistoricalConversationsList = currentHistoricalConvos.toMutableList().apply {
-                this[index] = newMessagesForThisConversation.toList() // 用新的对话消息列表替换指定索引处的旧列表
+                this[index] = newMessagesForThisConversation.toList()
             }
-
-            // 【关键】通过给 StateFlow 的 value 赋一个新的列表实例来触发UI更新
             stateHolder._historicalConversations.value = updatedHistoricalConversationsList.toList()
 
-            // 持久化更改
             withContext(Dispatchers.IO) {
-                // 确保 persistenceManager.saveChatHistory() 保存的是 stateHolder._historicalConversations.value 的最新状态
                 persistenceManager.saveChatHistory()
-                if (stateHolder._loadedHistoryIndex.value == index) { // 如果重命名的是当前加载的对话
-                    persistenceManager.saveLastOpenChat(newMessagesForThisConversation.toList()) // 更新“最后打开的聊天”
+                if (stateHolder._loadedHistoryIndex.value == index) {
+                    persistenceManager.saveLastOpenChat(newMessagesForThisConversation.toList())
                 }
             }
             withContext(Dispatchers.Main) {
                 showSnackbar("对话已重命名为 '$trimmedNewName'")
-                dismissRenameDialog() // 关闭重命名对话框
+                dismissRenameDialog()
             }
         }
     }

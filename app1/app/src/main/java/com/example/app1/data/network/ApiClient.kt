@@ -22,8 +22,10 @@ import com.example.app1.data.DataClass.ChatRequest
 import com.example.app1.data.DataClass.OpenAiStreamChunk
 import com.example.app1.data.DataClass.OpenAiChoice
 import com.example.app1.data.DataClass.OpenAiDelta
+import io.ktor.client.network.sockets.ConnectTimeoutException
 import kotlinx.coroutines.channels.Channel
 
+// 重命名以避免与 java.util.concurrent.CancellationException 混淆
 import kotlinx.coroutines.CancellationException as CoroutineCancellationException
 
 object ApiClient {
@@ -44,12 +46,23 @@ object ApiClient {
                 json(jsonParser)
             }
             install(HttpTimeout) {
-                requestTimeoutMillis = 300_000
-                connectTimeoutMillis = 60_000
-                socketTimeoutMillis = 300_000
+                requestTimeoutMillis = 300_000 // 整体请求超时（包括流传输完成）
+                connectTimeoutMillis = 15_000   // 连接超时缩短，以便更快地尝试下一个服务器
+                socketTimeoutMillis = 300_000  // socket 读取超时（单个数据包之间）
             }
         }
     }
+
+    // --- 新增：后端服务器 URL 列表 ---
+    // 你可以从配置、远端或硬编码这些 URL
+    // 列表中的顺序将是尝试连接的顺序
+    private val backendProxyUrls = listOf(
+        "https://backdaitalk-production.up.railway.app/chat",//railway
+        "https://kunze999-backendai.hf.space/chat",//hugging face
+
+    )
+    // --- 新增结束 ---
+
 
     @Serializable
     data class BackendStreamChunk(
@@ -66,7 +79,7 @@ object ApiClient {
         val jsonInstance = jsonParser
         Log.d("ApiClient", "Json 解析器实例已访问: $jsonInstance")
         try {
-            @kotlinx.serialization.Serializable
+            @Serializable
             data class PreWarmTestData(val status: String)
 
             val testJsonString = """{"status":"ok"}"""
@@ -80,23 +93,28 @@ object ApiClient {
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    fun streamChatResponse(request: ChatRequest): Flow<OpenAiStreamChunk> = channelFlow {
-        val backendProxyUrl = "https://backdaitalk-production.up.railway.app/chat"
+    private fun streamChatResponseInternal(
+        backendProxyUrl: String,
+        request: ChatRequest
+    ): Flow<OpenAiStreamChunk> = channelFlow {
         var response: HttpResponse? = null
 
         try {
-            Log.d("ApiClient", "准备向 $backendProxyUrl 发起 POST 请求")
+            Log.d(
+                "ApiClient",
+                "准备向 $backendProxyUrl 发起 POST 请求, API Key: ${request.apiKey?.takeLast(4)}"
+            )
             client.preparePost(backendProxyUrl) {
                 contentType(ContentType.Application.Json)
-                setBody(request)
-                header("X-API-Key", request.apiKey ?: "")
+                setBody(request) // request 包含了 apiKey
                 accept(ContentType.Text.EventStream)
                 timeout {
+
                     requestTimeoutMillis = 310_000
                 }
             }.execute { receivedResponse ->
                 response = receivedResponse
-                Log.d("ApiClient", "收到响应状态: ${response?.status}")
+                Log.d("ApiClient", "收到来自 $backendProxyUrl 的响应状态: ${response?.status}")
 
                 if (response?.status?.isSuccess() != true) {
                     val errorBody = try {
@@ -104,93 +122,96 @@ object ApiClient {
                     } catch (e: Exception) {
                         "(读取错误响应体失败: ${e.message})"
                     }
-                    Log.e("ApiClient", "代理错误 ${response?.status}. 响应体: $errorBody")
-                    close(IOException("代理错误: ${response?.status?.value} - $errorBody"))
-                    return@execute
+                    Log.e(
+                        "ApiClient",
+                        "代理错误 $backendProxyUrl ${response?.status}. 响应体: $errorBody"
+                    )
+                    throw IOException("代理错误 ($backendProxyUrl): ${response?.status?.value} - $errorBody")
                 }
 
                 val channel: ByteReadChannel = response?.bodyAsChannel() ?: run {
-                    Log.e("ApiClient", "错误 - 响应体通道为 null。")
-                    close(IOException("获取响应体通道失败。"))
-                    return@execute
+                    Log.e("ApiClient", "错误 - 来自 $backendProxyUrl 的响应体通道为 null。")
+                    throw IOException("获取来自 $backendProxyUrl 的响应体通道失败。")
                 }
-                Log.d("ApiClient", "开始读取流通道...")
+                Log.d("ApiClient", "开始从 $backendProxyUrl 读取流通道...")
 
-                // ------ 优化数据读取，及时按字节累计处理 ------
                 val buf = ByteArray(1024)
                 val sb = StringBuilder()
                 try {
                     while (isActive && !channel.isClosedForRead) {
                         val bytesRead = channel.readAvailable(buf, 0, buf.size)
-                        if (bytesRead == -1) break
+                        if (bytesRead == -1) break // End of stream
                         if (bytesRead > 0) {
                             sb.append(String(buf, 0, bytesRead, Charsets.UTF_8))
-                            while (true) {
-                                val idx = sb.indexOf("\n")
-                                if (idx == -1) break
-                                var line = sb.substring(0, idx).trim()
-                                sb.delete(0, idx + 1)
-                                if (line.isNotEmpty()) {
-                                    if (line.startsWith("data:")) line = line.substring(5).trim()
-                                    // 打印带时间戳的日志（便于你分析流速和“堵塞点”!!!）
-                                    Log.d(
-                                        "ApiClient",
-                                        "[流块收到] ${System.currentTimeMillis() % 100000} $line"
-                                    )
+                            var lineBreakIndex: Int
+                            while (sb.indexOf("\n").also { lineBreakIndex = it } != -1) {
+                                var line = sb.substring(0, lineBreakIndex).trim()
+                                sb.delete(0, lineBreakIndex + 1)
 
-                                    if (line.isNotEmpty()) {
-                                        try {
-                                            val backendChunk = jsonParser.decodeFromString(
-                                                BackendStreamChunk.serializer(),
-                                                line
-                                            )
-                                            val openAiChunk = OpenAiStreamChunk(
-                                                choices = listOf(
-                                                    OpenAiChoice(
-                                                        index = 0,
-                                                        delta = OpenAiDelta(
-                                                            content = if (backendChunk.type == "content") backendChunk.text else null,
-                                                            reasoningContent = if (backendChunk.type == "reasoning") backendChunk.text else null
-                                                        ),
-                                                        finishReason = backendChunk.finishReason
-                                                    )
+                                if (line.isEmpty()) continue // Skip empty lines (e.g., consecutive newlines)
+
+                                if (line.startsWith("data:")) {
+                                    line = line.substring(5).trim()
+                                }
+
+                                Log.v(
+                                    "ApiClientStream", // 使用更详细的日志标签
+                                    "[流块收到 $backendProxyUrl] ${System.currentTimeMillis() % 100000} $line"
+                                )
+
+                                if (line.isNotEmpty()) { // 确保 "data: " 去掉后还有内容
+                                    try {
+                                        val backendChunk = jsonParser.decodeFromString(
+                                            BackendStreamChunk.serializer(),
+                                            line
+                                        )
+                                        val openAiChunk = OpenAiStreamChunk(
+                                            choices = listOf(
+                                                OpenAiChoice(
+                                                    index = 0,
+                                                    delta = OpenAiDelta(
+                                                        content = if (backendChunk.type == "content") backendChunk.text else null,
+                                                        reasoningContent = if (backendChunk.type == "reasoning") backendChunk.text else null
+                                                    ),
+                                                    finishReason = backendChunk.finishReason
                                                 )
                                             )
-                                            val sendResult = trySend(openAiChunk)
-                                            if (!sendResult.isSuccess) {
-                                                Log.w(
-                                                    "ApiClient",
-                                                    "下游收集器已关闭或失败。停止读取流。原因: $sendResult"
-                                                )
-                                                channel.cancel(CoroutineCancellationException("下游已关闭: ${sendResult.toString()}"))
-                                                return@execute
+                                        )
+                                        val sendResult = trySend(openAiChunk)
+                                        if (!sendResult.isSuccess) {
+                                            Log.w(
+                                                "ApiClient",
+                                                "下游收集器 ($backendProxyUrl) 已关闭或失败。停止读取流。原因: ${sendResult}. Closed for send: ${isClosedForSend}"
+                                            )
+                                            if (!isClosedForSend) { // 避免在已经关闭时再次尝试关闭或取消
+                                                channel.cancel(CoroutineCancellationException("下游 ($backendProxyUrl) 已关闭: $sendResult"))
                                             }
-                                        } catch (e: SerializationException) {
-                                            Log.e(
-                                                "ApiClient",
-                                                "错误 - 解析流 JSON 块失败。原始 JSON: '$line'。错误: ${e.message}"
-                                            )
-                                            close(
-                                                IOException(
-                                                    "解析流 JSON 块失败: '${line.take(100)}...'. 错误: ${e.message}",
-                                                    e
-                                                )
-                                            )
-                                            return@execute
-                                        } catch (e: Exception) {
-                                            Log.e(
-                                                "ApiClient",
-                                                "错误 - 处理块 '$line' 时发生意外错误。错误: ${e.message}",
-                                                e
-                                            )
-                                            close(
-                                                IOException(
-                                                    "处理块时发生意外错误: ${e.message}",
-                                                    e
-                                                )
-                                            )
-                                            return@execute
+                                            return@execute // 退出 execute 块
                                         }
+                                    } catch (e: SerializationException) {
+                                        Log.e(
+                                            "ApiClient",
+                                            "错误 - 解析来自 $backendProxyUrl 的流 JSON 块失败。原始 JSON: '$line'。错误: ${e.message}"
+                                        )
+                                        // 抛出异常，让外部的 streamChatResponse 知道此URL失败
+                                        throw IOException(
+                                            "解析来自 $backendProxyUrl 的流 JSON 块失败: '${
+                                                line.take(
+                                                    100
+                                                )
+                                            }...'. 错误: ${e.message}",
+                                            e
+                                        )
+                                    } catch (e: Exception) { // 捕获所有其他在处理块时可能发生的异常
+                                        Log.e(
+                                            "ApiClient",
+                                            "错误 - 处理来自 $backendProxyUrl 的块 '$line' 时发生意外错误。错误: ${e.message}",
+                                            e
+                                        )
+                                        throw IOException(
+                                            "处理来自 $backendProxyUrl 的块时发生意外错误: ${e.message}",
+                                            e
+                                        )
                                     }
                                 }
                             }
@@ -198,34 +219,160 @@ object ApiClient {
                     }
                     Log.d(
                         "ApiClient",
-                        "完成读取流通道 (isActive=$isActive, isClosedForRead=${channel.isClosedForRead})."
+                        "完成从 $backendProxyUrl 读取流通道 (isActive=$isActive, isClosedForRead=${channel.isClosedForRead}, sb_remaining='${
+                            sb.toString().take(50)
+                        }')."
                     )
+                    // 处理 StringBuilder 中可能剩余的最后一部分数据（如果没有以\n结尾）
+                    if (sb.isNotEmpty() && isActive && !isClosedForSend) {
+                        var line = sb.toString().trim()
+                        if (line.startsWith("data:")) line = line.substring(5).trim()
+                        Log.v(
+                            "ApiClientStream",
+                            "[流块收到 $backendProxyUrl EOF] ${System.currentTimeMillis() % 100000} $line"
+                        )
+                        if (line.isNotEmpty()) {
+                            try {
+                                val backendChunk = jsonParser.decodeFromString(
+                                    BackendStreamChunk.serializer(),
+                                    line
+                                )
+                                val openAiChunk = OpenAiStreamChunk(
+                                    choices = listOf(
+                                        OpenAiChoice(
+                                            index = 0,
+                                            delta = OpenAiDelta(
+                                                content = if (backendChunk.type == "content") backendChunk.text else null,
+                                                reasoningContent = if (backendChunk.type == "reasoning") backendChunk.text else null
+                                            ),
+                                            finishReason = backendChunk.finishReason
+                                        )
+                                    )
+                                )
+                                trySend(openAiChunk) // 不检查结果，因为这可能是最后一条
+                            } catch (e: SerializationException) {
+                                Log.e(
+                                    "ApiClient",
+                                    "错误 - 解析来自 $backendProxyUrl 的流 JSON 块 (EOF) 失败。原始 JSON: '$line'. 错误: ${e.message}"
+                                )
+                                // 不再抛出，因为流可能已结束
+                            }
+                        }
+                    }
+
                 } catch (e: IOException) {
-                    Log.e("ApiClient", "错误 - 读取流期间发生网络错误: ${e.message}")
-                    if (!isClosedForSend) close(IOException("网络错误: 流读取中断。${e.message}", e))
+                    Log.e(
+                        "ApiClient",
+                        "错误 - 从 $backendProxyUrl 读取流期间发生网络错误: ${e.message}"
+                    )
+                    if (!isClosedForSend) throw IOException(
+                        "网络错误 ($backendProxyUrl): 流读取中断。${e.message}",
+                        e
+                    )
                 } catch (e: CoroutineCancellationException) {
-                    Log.i("ApiClient", "流读取已取消。原因: ${e.message}")
-                    throw e
+                    Log.i("ApiClient", "从 $backendProxyUrl 的流读取已取消。原因: ${e.message}")
+                    throw e // 重新抛出，由外部协程处理
                 } catch (e: Exception) {
-                    Log.e("ApiClient", "错误 - 读取流期间发生意外错误: ${e.message}", e)
-                    if (!isClosedForSend) close(IOException("意外的流读取错误: ${e.message}", e))
+                    Log.e(
+                        "ApiClient",
+                        "错误 - 从 $backendProxyUrl 读取流期间发生意外错误: ${e.message}",
+                        e
+                    )
+                    if (!isClosedForSend) throw IOException(
+                        "意外的流读取错误 ($backendProxyUrl): ${e.message}",
+                        e
+                    )
+                } finally {
+                    Log.d("ApiClient", "读取 $backendProxyUrl 流的 execute 块完成或异常退出。")
+                    // channelFlow 会在协程体完成时自动关闭通道
                 }
-                // ------ 优化 END ------
             }
         } catch (e: CoroutineCancellationException) {
-            Log.i("ApiClient", "请求设置已取消。原因: ${e.message}")
-            throw e
+            Log.i("ApiClient", "到 $backendProxyUrl 的请求设置已取消。原因: ${e.message}")
+            throw e // 重新抛出
+        } catch (e: HttpRequestTimeoutException) {
+            Log.e("ApiClient", "错误 - 到 $backendProxyUrl 的请求超时: ${e.message}")
+            throw IOException("请求超时 ($backendProxyUrl): ${e.message}", e) // 包装成 IOException
+        } catch (e: ConnectTimeoutException) {
+            Log.e("ApiClient", "错误 - 到 $backendProxyUrl 的连接超时: ${e.message}")
+            throw IOException("连接超时 ($backendProxyUrl): ${e.message}", e) // 包装成 IOException
         } catch (e: IOException) {
-            Log.e("ApiClient", "错误 - 请求设置/执行期间发生网络错误: ${e.message}")
-            if (!isClosedForSend) close(IOException("网络设置/执行错误: ${e.message}", e))
+            Log.e(
+                "ApiClient",
+                "错误 - 到 $backendProxyUrl 的请求设置/执行期间发生网络错误: ${e.message}"
+            )
+            throw IOException("网络设置/执行错误 ($backendProxyUrl): ${e.message}", e) // 重新抛出
         } catch (e: Exception) {
-            Log.e("ApiClient", "错误 - 请求设置/执行期间发生意外错误: ${e.message}", e)
-            if (!isClosedForSend) {
-                val statusInfo = response?.status?.let { " (状态: ${it.value})" } ?: ""
-                close(IOException("意外的 API 客户端错误$statusInfo: ${e.message}", e))
+            Log.e(
+                "ApiClient",
+                "错误 - 到 $backendProxyUrl 的请求设置/执行期间发生意外错误: ${e.message}",
+                e
+            )
+            val statusInfo = response?.status?.let { " (状态: ${it.value})" } ?: ""
+            throw IOException(
+                "意外的 API 客户端错误 ($backendProxyUrl)$statusInfo: ${e.message}",
+                e
+            ) // 重新抛出
+        }
+        // channelFlow 会在协程体正常完成或因异常退出时自动关闭。
+        // 如果成功执行到这里，表示流已正常结束。
+        Log.d("ApiClient", "streamChatResponseInternal for $backendProxyUrl 正常完成。")
+    }
+
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun streamChatResponse(request: ChatRequest): Flow<OpenAiStreamChunk> = flow {
+        var lastError: Exception? = null
+        val successfulUrls = mutableListOf<String>() // 用于记录成功连接的URL（可选）
+
+        if (backendProxyUrls.isEmpty()) {
+            Log.e("ApiClient", "没有配置后端代理服务器 URL。")
+            throw IOException("没有后端服务器URL可供尝试。")
+        }
+
+        for (url in backendProxyUrls) {
+            Log.i("ApiClient", "尝试连接到后端: $url")
+            try {
+                // 调用内部方法，尝试从此 URL 获取流
+                // emitAll 会收集内部流并重新发射其元素。
+                // 如果 streamChatResponseInternal 成功开始发射数据，此循环将在此处“暂停”直到流完成。
+                // 如果 streamChatResponseInternal 抛出异常（例如连接失败），则会被 catch 块捕获。
+                streamChatResponseInternal(url, request).collect { chunk ->
+                    if (successfulUrls.isEmpty()) { // 第一次成功收到数据块
+                        Log.i("ApiClient", "成功从 $url 收到第一个数据块。将使用此服务器。")
+                        successfulUrls.add(url)
+                    }
+                    emit(chunk)
+                }
+                // 如果 collect 完成没有抛出异常，意味着这个 URL 的流成功完成了
+                Log.i("ApiClient", "成功完成从 $url 的流式传输。")
+                return@flow // 成功，不再尝试其他 URL
+            } catch (e: CoroutineCancellationException) {
+                Log.i("ApiClient", "尝试 $url 时发生协程取消: ${e.message}")
+                throw e // 立即重新抛出取消异常，停止所有尝试
+            } catch (e: IOException) { // 主要捕获网络相关和特定业务逻辑的IO异常
+                Log.w("ApiClient", "连接或流式传输 $url 失败 (IO): ${e.message}")
+                lastError = e
+                // 继续尝试下一个 URL
+            } catch (e: Exception) { // 捕获其他意外异常
+                Log.e("ApiClient", "连接或流式传输 $url 失败 (其他异常): ${e.message}", e)
+                lastError = e
+                // 继续尝试下一个 URL
             }
         }
+
+        // 如果循环完成，表示所有 URL 都尝试失败
+        Log.e("ApiClient", "所有后端服务器均连接或流式传输失败。")
+        if (lastError != null) {
+            Log.e("ApiClient", "最后记录的错误: ${lastError.message}")
+            throw lastError // 抛出最后遇到的错误
+        } else {
+            // 理论上不应该到这里，除非 backendProxyUrls 为空（已在前面处理）
+            // 或者所有尝试都因 CoroutineCancellationException 失败（已重新抛出）
+            Log.e("ApiClient", "所有后端服务器均尝试完毕，但没有记录到明确的IO或常规异常。")
+            throw IOException("无法连接到任何可用的后端服务器。")
+        }
     }
-        .buffer(Channel.BUFFERED)
-        .flowOn(Dispatchers.IO)
+        .buffer(Channel.BUFFERED) // 保持原有的 buffer
+        .flowOn(Dispatchers.IO) // 在IO线程执行网络操作和流处理
 }
