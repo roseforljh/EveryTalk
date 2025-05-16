@@ -1,5 +1,3 @@
-import com.android.build.api.dsl.Packaging
-
 // app/build.gradle.kts
 
 // 用于解决 org.jetbrains:annotations 版本冲突 (如果需要)
@@ -20,11 +18,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.app1" // 确认这是你的包名
+    namespace = "com.anyaitalked.everytalk" // 确认这是你的包名
     compileSdk = 35 // 建议与 targetSdk 和 Compose BOM 推荐的 SDK 版本对齐
 
     defaultConfig {
-        applicationId = "com.example.app1" // 确认这是你的 applicationId
+        applicationId = "com.anyaitalked.everytalk" // 确认这是你的 applicationId
         minSdk = 27
         //noinspection OldTargetApi
         targetSdk = 35 // 通常与 compileSdk 一致

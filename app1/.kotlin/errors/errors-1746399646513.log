@@ -49,7 +49,7 @@ error message: org.jetbrains.kotlin.utils.exceptions.KotlinIllegalArgumentExcept
 	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1144)
 	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:642)
 	at java.base/java.lang.Thread.run(Thread.java:1570)
-Caused by: java.lang.IllegalStateException: IrConstructorSymbolImpl is already bound. Signature: null. Owner: CONSTRUCTOR GENERATED[org.jetbrains.kotlinx.serialization.compiler.fir.SerializationPluginKey] visibility:private <> () returnType:com.example.app1.ui.screens.viewmodel.ApiHandler.BackendErrorContent.Companion [primary]
+Caused by: java.lang.IllegalStateException: IrConstructorSymbolImpl is already bound. Signature: null. Owner: CONSTRUCTOR GENERATED[org.jetbrains.kotlinx.serialization.compiler.fir.SerializationPluginKey] visibility:private <> () returnType:EveryTalk.ui.screens.viewmodel.ApiHandler.BackendErrorContent.Companion [primary]
 	at org.jetbrains.kotlin.ir.symbols.impl.IrSymbolBase.bind(IrSymbolImpl.kt:67)
 	at org.jetbrains.kotlin.ir.declarations.impl.IrConstructorImpl.<init>(IrConstructorImpl.kt:62)
 	at org.jetbrains.kotlin.ir.declarations.IrFactory.createConstructor(IrFactory.kt:104)

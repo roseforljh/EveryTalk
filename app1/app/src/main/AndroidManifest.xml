@@ -22,7 +22,7 @@
             tools:targetApi="q" />
 
         <activity
-            android:name=".StateControler.MainActivity"
+            android:name="com.example.everytalk.StateControler.MainActivity"
             android:exported="true"
             android:theme="@style/Theme.App1"
             android:windowSoftInputMode="adjustResize"
@@ -36,3 +36,4 @@
     </application>
 
 </manifest>
+
