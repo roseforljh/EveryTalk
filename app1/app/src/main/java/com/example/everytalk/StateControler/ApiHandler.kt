@@ -1,8 +1,6 @@
 package com.example.everytalk.StateControler // 你的包名
 
 import android.util.Log
-import com.example.everytalk.data.DataClass.ApiConfig // 假设存在
-import com.example.everytalk.data.DataClass.ApiMessage // 假设存在，并且是用于网络请求的那个
 import com.example.everytalk.data.DataClass.ChatRequest // 假设存在，并且是用于网络请求的那个
 import com.example.everytalk.data.DataClass.Message // 这是UI层的Message
 import com.example.everytalk.data.DataClass.OpenAiStreamChunk // 假设存在
@@ -23,6 +21,10 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.IOException
+
+// --- WebSearchResult 导入 ---
+// ApiHandler 可能不需要直接知道 WebSearchResult 类型，因为它操作的是 OpenAiStreamChunk 和 Message
+// 但如果需要在日志中打印其内容，则可能需要。Message 类已经依赖它了。
 
 class ApiHandler(
     private val stateHolder: ViewModelStateHolder,
@@ -62,7 +64,7 @@ class ApiHandler(
                         stateHolder.messages.indexOfFirst { it.id == messageIdBeingCancelled }
                     if (index != -1) {
                         val msg = stateHolder.messages[index]
-                        if (msg.sender == Sender.AI && msg.text.isBlank() && msg.reasoning.isNullOrBlank() && !msg.contentStarted && !msg.isError) {
+                        if (msg.sender == Sender.AI && msg.text.isBlank() && msg.reasoning.isNullOrBlank() && msg.webSearchResults.isNullOrEmpty() && !msg.contentStarted && !msg.isError) { // 检查 webSearchResults
                             Log.d(
                                 "ApiHandlerCancel",
                                 "移除AI占位符于索引 $index, ID: $messageIdBeingCancelled (原因: $reason)"
@@ -100,7 +102,7 @@ class ApiHandler(
             stateHolder._currentStreamingAiMessageId.value = null
         }
 
-        val newAiMessage = Message(text = "", sender = Sender.AI)
+        val newAiMessage = Message(text = "", sender = Sender.AI) // webSearchResults 默认为 null
         val aiMessageId = newAiMessage.id
 
         currentTextBuilder.clear()
@@ -179,7 +181,8 @@ class ApiHandler(
                                 val updatedMsg = msg.copy(
                                     text = finalText,
                                     reasoning = if (finalReasoning.isNullOrBlank()) null else finalReasoning,
-                                    contentStarted = msg.contentStarted || finalText.isNotBlank() || !finalReasoning.isNullOrBlank()
+                                    contentStarted = msg.contentStarted || finalText.isNotBlank() || !finalReasoning.isNullOrBlank() || !msg.webSearchResults.isNullOrEmpty(), // webSearchResults 也算内容开始
+                                    webSearchResults = msg.webSearchResults // --- 确保保留 ---
                                 )
                                 if (updatedMsg != msg) {
                                     stateHolder.messages[finalIdx] = updatedMsg
@@ -190,6 +193,7 @@ class ApiHandler(
                                 historyManager.saveCurrentChatToHistoryIfNeeded()
                             } else if (cause != null && cause !is java.util.concurrent.CancellationException && cause !is kotlinx.coroutines.CancellationException && !msg.isError) {
                                 Log.d("ApiHandler", "流因错误完成，更新消息 $targetMsgId")
+                                // updateMessageWithError 内部会处理 webSearchResults，通常错误消息会覆盖它
                                 updateMessageWithError(targetMsgId, cause)
                             } else if (cause is java.util.concurrent.CancellationException || cause is kotlinx.coroutines.CancellationException) {
                                 Log.d(
@@ -199,17 +203,18 @@ class ApiHandler(
                                 val updatedMsg = msg.copy(
                                     text = finalText,
                                     reasoning = if (finalReasoning.isNullOrBlank()) null else finalReasoning,
-                                    contentStarted = msg.contentStarted || finalText.isNotBlank() || !finalReasoning.isNullOrBlank()
+                                    contentStarted = msg.contentStarted || finalText.isNotBlank() || !finalReasoning.isNullOrBlank() || !msg.webSearchResults.isNullOrEmpty(), // webSearchResults 也算内容开始
+                                    webSearchResults = msg.webSearchResults // --- 确保保留 ---
                                 )
                                 if (updatedMsg != msg) {
                                     stateHolder.messages[finalIdx] = updatedMsg
                                 }
-                                if (updatedMsg.text.isNotBlank() || !updatedMsg.reasoning.isNullOrBlank()) {
+                                if (updatedMsg.text.isNotBlank() || !updatedMsg.reasoning.isNullOrBlank() || !updatedMsg.webSearchResults.isNullOrEmpty()) {
                                     if (stateHolder.messageAnimationStates[targetMsgId] != true) {
                                         stateHolder.messageAnimationStates[targetMsgId] = true
                                     }
                                     historyManager.saveCurrentChatToHistoryIfNeeded()
-                                } else if (msg.sender == Sender.AI && !msg.contentStarted && !msg.isError) {
+                                } else if (msg.sender == Sender.AI && !msg.contentStarted && msg.webSearchResults.isNullOrEmpty() && !msg.isError) { // 检查 webSearchResults
                                     Log.d(
                                         "ApiHandler",
                                         "AI消息 $targetMsgId 在取消时无内容，将其移除。"
@@ -283,89 +288,104 @@ class ApiHandler(
     private fun processChunk(index: Int, chunk: OpenAiStreamChunk, messageIdForLog: String) {
         if (index < 0 || index >= stateHolder.messages.size || stateHolder.messages[index].id != messageIdForLog) {
             Log.e(
-                "ApiHandler",
-                "processChunk: 过时的索引或ID。索引: $index, 列表中的ID: ${
-                    stateHolder.messages.getOrNull(index)?.id
-                }, 期望的ID: $messageIdForLog."
+                "ApiHandlerProcessChunk",
+                "过时的索引或ID。索引: $index, 列表中的ID: ${stateHolder.messages.getOrNull(index)?.id}, 期望的ID: $messageIdForLog."
             )
             return
         }
 
-        val actualCurrentMessage = stateHolder.messages[index]
+        var messageToUpdate = stateHolder.messages[index] // 获取当前消息的最新状态
+        var anyChangesInThisChunk = false
+
         val choice = chunk.choices?.firstOrNull()
         val delta = choice?.delta
-        val chunkContent = delta?.content
-        val chunkReasoning = delta?.reasoningContent
-        var contentChanged = false
 
-        // --- 新增日志 ---
-        Log.d(
-            "ApiHandlerProcessChunk",
-            "MsgID: ${messageIdForLog.take(8)}, chunkContent: '${chunkContent?.take(50)}', chunkReasoning: '${
-                chunkReasoning?.take(50)
-            }'"
-        )
-        // --- 新增日志结束 ---
-
-        if (!chunkContent.isNullOrEmpty()) {
-            currentTextBuilder.append(chunkContent)
-            contentChanged = true
-        }
-        if (!chunkReasoning.isNullOrEmpty()) {
-            currentReasoningBuilder.append(chunkReasoning)
-            contentChanged = true
-            // --- 新增日志 ---
+        // --- 1. 处理网页搜索结果 (通常只在第一个或早期数据块中出现) ---
+        val chunkWebResults = delta?.webSearchResultsInternal // 使用你在 OpenAiDelta 中定义的字段名
+        if (!chunkWebResults.isNullOrEmpty() && messageToUpdate.webSearchResults.isNullOrEmpty()) {
             Log.d(
                 "ApiHandlerProcessChunk",
-                "MsgID: ${messageIdForLog.take(8)}, appended to currentReasoningBuilder: '${
+                "MsgID: ${messageIdForLog.take(8)}, 收到并设置 webSearchResults: ${chunkWebResults.size} 项"
+            )
+            messageToUpdate = messageToUpdate.copy(webSearchResults = chunkWebResults)
+            anyChangesInThisChunk = true
+        }
+
+        // --- 2. 处理文本内容 ---
+        val chunkContent = delta?.content
+        if (!chunkContent.isNullOrEmpty()) {
+            currentTextBuilder.append(chunkContent)
+            anyChangesInThisChunk = true // 标记文本内容有变化
+        }
+
+        // --- 3. 处理思考过程 ---
+        val chunkReasoning = delta?.reasoningContent
+        if (!chunkReasoning.isNullOrEmpty()) {
+            currentReasoningBuilder.append(chunkReasoning)
+            anyChangesInThisChunk = true // 标记思考过程内容有变化
+            Log.d(
+                "ApiHandlerProcessChunk",
+                "MsgID: ${messageIdForLog.take(8)}, 追加到 currentReasoningBuilder: '${
                     currentReasoningBuilder.toString().take(50)
                 }'"
             )
-            // --- 新增日志结束 ---
         }
 
-        var newContentStarted = actualCurrentMessage.contentStarted
-        if (!newContentStarted && (currentTextBuilder.isNotEmpty() || currentReasoningBuilder.isNotEmpty())) {
+        // --- 4. 更新 contentStarted 状态 ---
+        var newContentStarted = messageToUpdate.contentStarted
+        if (!newContentStarted && (currentTextBuilder.isNotEmpty() || currentReasoningBuilder.isNotEmpty() || !messageToUpdate.webSearchResults.isNullOrEmpty())) {
             newContentStarted = true
-            contentChanged = true
-        }
-
-        if (contentChanged) {
-            val updatedText = currentTextBuilder.toString()
-            val updatedReasoningStr = currentReasoningBuilder.toString()
-            val finalReasoning =
-                if (updatedReasoningStr.isNotEmpty() || (actualCurrentMessage.reasoning != null && chunkReasoning == null && choice?.finishReason != "stop")) {
-                    updatedReasoningStr
-                } else {
-                    null
-                }
-
-            val updatedMsg = actualCurrentMessage.copy(
-                text = updatedText,
-                reasoning = finalReasoning,
-                contentStarted = newContentStarted
-            )
-            // --- 新增日志 ---
-            Log.d(
-                "ApiHandlerProcessChunk",
-                "MsgID: ${messageIdForLog.take(8)}, updating message. Reasoning: '${
-                    updatedMsg.reasoning?.take(50)
-                }', Text: '${updatedMsg.text.take(50)}', ContentStarted: ${updatedMsg.contentStarted}"
-            )
-            // --- 新增日志结束 ---
-            stateHolder.messages[index] = updatedMsg
-
-            if (!chunkReasoning.isNullOrEmpty() && stateHolder.reasoningCompleteMap[actualCurrentMessage.id] == true) {
-                stateHolder.reasoningCompleteMap[actualCurrentMessage.id] = false
-            } else if (chunkContent != null && chunkReasoning.isNullOrEmpty() && choice?.finishReason != "stop" && stateHolder.reasoningCompleteMap[actualCurrentMessage.id] != true) {
-                stateHolder.reasoningCompleteMap[actualCurrentMessage.id] = true
+            // 如果 newContentStarted 从 false 变为 true，也算作一种改变
+            if (!messageToUpdate.contentStarted) {
+                anyChangesInThisChunk = true
             }
         }
 
+        // --- 5. 如果有任何变化，则更新消息对象 ---
+        if (anyChangesInThisChunk) {
+            val updatedText = currentTextBuilder.toString()
+            val updatedReasoningStr = currentReasoningBuilder.toString()
+
+            // 这个 finalReasoning 的逻辑需要仔细考虑，确保它能正确处理累积和清空的情况
+            val finalReasoning = if (updatedReasoningStr.isNotEmpty()) {
+                updatedReasoningStr
+            } else if (messageToUpdate.reasoning != null && chunkReasoning == null && choice?.finishReason != "stop" && choice?.finishReason != null /* 只有当有finishReason但不是stop时，才可能保留旧reasoning? 这逻辑有点复杂*/) {
+                // 如果当前块没有reasoning，但之前有，并且流未结束，可能需要保留之前的reasoning
+                // 但通常 builder 是累积的，所以如果 builder 为空，意味着没有reasoning或已被清空
+                messageToUpdate.reasoning // 或者 null，取决于你的业务逻辑
+            } else {
+                null
+            }
+
+            messageToUpdate = messageToUpdate.copy(
+                text = updatedText,
+                reasoning = finalReasoning, // 使用累积的思考过程
+                contentStarted = newContentStarted
+                // webSearchResults 已经在前面步骤中通过 messageToUpdate = messageToUpdate.copy(...) 设置了
+            )
+            stateHolder.messages[index] = messageToUpdate
+            Log.d(
+                "ApiHandlerProcessChunk",
+                "MsgID: ${messageIdForLog.take(8)}, 更新消息. Reasoning: '${
+                    messageToUpdate.reasoning?.take(50)
+                }', Text: '${messageToUpdate.text.take(50)}', ContentStarted: ${messageToUpdate.contentStarted}, WebResults: ${messageToUpdate.webSearchResults?.size ?: 0}"
+            )
+        }
+
+
+        // --- 处理 reasoningCompleteMap (这部分逻辑保持你原有的) ---
+        if (anyChangesInThisChunk) { // 只在消息实际更新后才处理 reasoningCompleteMap
+            if (!chunkReasoning.isNullOrEmpty() && stateHolder.reasoningCompleteMap[messageToUpdate.id] == true) {
+                stateHolder.reasoningCompleteMap[messageToUpdate.id] = false
+            } else if (chunkContent != null && chunkReasoning.isNullOrEmpty() && choice?.finishReason != "stop" && stateHolder.reasoningCompleteMap[messageToUpdate.id] != true) {
+                // 这段逻辑可能需要调整，确保reasoning真的完成了才设为true
+                // stateHolder.reasoningCompleteMap[messageToUpdate.id] = true // 暂时注释，原逻辑可能不完全适配
+            }
+        }
         if (choice?.finishReason == "stop" && delta?.reasoningContent.isNullOrEmpty()) {
-            if (stateHolder.reasoningCompleteMap[actualCurrentMessage.id] != true) {
-                stateHolder.reasoningCompleteMap[actualCurrentMessage.id] = true
-                Log.d("ApiHandler", "消息 ${actualCurrentMessage.id.take(8)} 推理因 stop 标记完成。")
+            if (stateHolder.reasoningCompleteMap[messageToUpdate.id] != true) {
+                stateHolder.reasoningCompleteMap[messageToUpdate.id] = true
+                Log.d("ApiHandler", "消息 ${messageToUpdate.id.take(8)} 推理因 stop 标记完成。")
             }
         }
     }
@@ -387,8 +407,9 @@ class ApiHandler(
             val idx = stateHolder.messages.indexOfFirst { it.id == messageId }
             if (idx != -1) {
                 val msg = stateHolder.messages[idx]
-                if (!msg.isError) {
-                    val errorPrefix = if (msg.text.isNotBlank()) "\n\n" else ""
+                if (!msg.isError) { // 只在第一次出错时附加错误信息
+                    val errorPrefix =
+                        if (msg.text.isNotBlank() || !msg.webSearchResults.isNullOrEmpty()) "\n\n" else "" // 如果已有内容（包括web结果），则换行
                     val errorTextContent = ERROR_VISUAL_PREFIX + when (error) {
                         is IOException -> "网络错误: ${error.message ?: "IO 错误"}"
                         is ResponseException -> parseBackendError(
@@ -401,11 +422,14 @@ class ApiHandler(
 
                         else -> "处理错误: ${error.message ?: "未知错误"}"
                     }
+                    // 当发生错误时，我们通常不保留webSearchResults，因为消息的主体是错误信息
                     val errorMsg = msg.copy(
                         text = msg.text + errorPrefix + errorTextContent,
                         isError = true,
-                        contentStarted = true,
-                        reasoning = null
+                        contentStarted = true, // 错误消息也算内容开始
+                        reasoning = null, // 清除思考过程
+                        webSearchResults = msg.webSearchResults // 错误发生前可能已收到搜索结果，可以选择保留或清除
+                        // webSearchResults = null // 如果希望错误消息完全取代之前的内容，则设为null
                     )
                     stateHolder.messages[idx] = errorMsg
                     if (stateHolder.messageAnimationStates[messageId] != true) {

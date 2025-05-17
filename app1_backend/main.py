@@ -9,7 +9,7 @@ import httpx
 import logging
 from contextlib import asynccontextmanager
 import asyncio
-import re
+# import re # Removed as no longer needed
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -78,7 +78,7 @@ async def lifespan(app_instance: FastAPI):
         logger.info("Lifespan: HTTP client was not initialized or already closed.")
     logger.info("Lifespan: Shutdown complete.")
 
-APP_VERSION = "1.9.9.3" # Increment version for this change
+APP_VERSION = "1.9.9.4" # Incremented version for this change
 app = FastAPI(
     title="EzTalk Proxy",
     description=f"Proxy for OpenAI, Google Gemini, etc., with Web Search. Version: {APP_VERSION}",
@@ -241,10 +241,12 @@ def is_valid_real_url(url):
     """判断是不是 http:// 或 https:// 链接，且非 #"""
     return isinstance(url, str) and url.lower().startswith(("http://", "https://")) and url != "#"
 
-async def process_openai_sse_line(line_bytes: bytes, request_id: str, search_results_for_linking: Optional[List[Dict[str, str]]] = None) -> AsyncGenerator[bytes, None]:
-    if not line_bytes.startswith(b"data: ") or line_bytes.endswith(b"[DONE]"): return
+async def process_openai_sse_line(line_bytes: bytes, request_id: str) -> AsyncGenerator[bytes, None]:
+    if not line_bytes.startswith(b"data: ") or line_bytes.endswith(b"[DONE]"):
+        return
     raw_data = line_bytes[len(b"data: "):].strip()
-    if not raw_data: return
+    if not raw_data:
+        return
     try:
         data = orjson.loads(raw_data)
         for choice in data.get('choices', []):
@@ -257,59 +259,8 @@ async def process_openai_sse_line(line_bytes: bytes, request_id: str, search_res
                 yield orjson_dumps_bytes_wrapper({"type": "reasoning", "text": delta["reasoning_content"]})
 
             if "content" in delta and delta["content"] is not None:
-                original_content_from_delta = delta["content"]
-                # logger.info(f"RID-{request_id}: RAW DELTA CONTENT FROM AI: '{original_content_from_delta}'") # Can be noisy
-
-                content_to_send = original_content_from_delta
-
-                # ----- MODIFIED: Convert (Source X) to plain text [Source X] -----
-                if search_results_for_linking and content_to_send and "Source" in content_to_send:
-                    def replace_source_markers_with_plain_text(match_obj):
-                        matched_text = match_obj.group(0)
-                        numbers_text = match_obj.group(1) # e.g., "3，4，5" or "3、4、5"
-
-                        numbers = re.findall(r'[0-9０-９]+', numbers_text)
-
-                        if not numbers:
-                            logger.warning(f"RID-{request_id}: replace_source_markers: No numbers found in numbers_text='{numbers_text}'. Original: '{matched_text}'")
-                            return matched_text # Return original if no numbers parsed
-
-                        processed_numbers = []
-                        for num_str in numbers:
-                            try:
-                                # Validate if the number (1-based) is within the range of available search results
-                                source_idx_1_based = int(num_str)
-                                if 1 <= source_idx_1_based <= len(search_results_for_linking):
-                                    processed_numbers.append(str(source_idx_1_based))
-                                else:
-                                    logger.warning(f"RID-{request_id}: Invalid source number {source_idx_1_based} (max: {len(search_results_for_linking)}) in '{matched_text}'. Omitting from marker.")
-                                    # Optionally, include an error marker: processed_numbers.append(f"{num_str}[invalid]")
-                            except ValueError:
-                                logger.warning(f"RID-{request_id}: Could not convert source number '{num_str}' to int in '{matched_text}'. Omitting from marker.")
-                                # Optionally: processed_numbers.append(f"{num_str}[err]")
-                        
-                        if not processed_numbers: # If all numbers were invalid or unparsable
-                            return matched_text # Or some other fallback like "[Invalid Source Ref]"
-
-                        # Determine bracket type based on original
-                        bracket_open = "（" if matched_text.startswith("（") else "("
-                        bracket_close = "）" if matched_text.endswith("）") else ")"
-                        
-                        # Join valid numbers with a comma
-                        return f"{bracket_open}Source {', '.join(processed_numbers)}{bracket_close}"
-
-
-                    source_pattern_multi = r"[（(][\*]*Source\s*([0-9０-９、,，\s和]+)[\*]*[)）]"
-                    
-                    temp_content_to_send = re.sub(source_pattern_multi, replace_source_markers_with_plain_text, content_to_send)
-
-                    if temp_content_to_send != content_to_send:
-                        # logger.info(f"RID-{request_id}: Content after plain text source marker replacement: '{temp_content_to_send}'")
-                        content_to_send = temp_content_to_send
-                    elif "Source" in original_content_from_delta:
-                         logger.warning(f"RID-{request_id}: 'Source' found but no replacement made by plain text marker logic: '{original_content_from_delta[:120]}...'")
-                # ----- END MODIFICATION -----
-
+                content_to_send = delta["content"]
+                # logger.info(f"RID-{request_id}: RAW DELTA CONTENT FROM AI: '{content_to_send}'") # Can be noisy
                 yield orjson_dumps_bytes_wrapper({"type": "content", "text": content_to_send})
 
             finish_reason = choice.get("finish_reason") or delta.get("finish_reason")
@@ -354,16 +305,17 @@ async def chat_proxy(request_data: ChatRequest, client: Optional[httpx.AsyncClie
     search_results_for_linking_this_request: List[Dict[str, str]] = []
 
     if request_data.use_web_search and GOOGLE_API_KEY and GOOGLE_CSE_ID:
-        user_query = "";
+        user_query = ""
         for msg_obj in reversed(request_data.messages):
             if msg_obj.role == "user" and msg_obj.content: user_query = msg_obj.content.strip(); break
         if user_query:
             search_results = await perform_web_search_google(user_query, request_id)
-            # Store the full results with 1-based index for linking/display
             search_results_for_linking_this_request = search_results
             if search_results:
-                # The system prompt for the AI still asks it to cite (Source X)
-                search_context_parts = [f"You are an AI assistant. Please use the following web search results to answer the user's query: '{user_query}'. When referencing information from a specific search result in your answer, please cite it using (Source X) where X is the number of the source. Search Results:"]
+                # MODIFIED: System prompt no longer asks AI to cite (Source X)
+                search_context_parts = [
+                    f"You are an AI assistant. Please use the following web search results to inform your answer to the user's query: '{user_query}'. Search Results:"
+                ]
                 for res in search_results: # Iterate through the results which now have 'index'
                     search_context_parts.append(f"{res['index']}. Title: {res.get('title', 'N/A')}\n   Snippet: {res.get('snippet', 'N/A')}\n   Source URL (for your reference, do not output directly): {res.get('href', 'N/A')}")
                 search_context_msg_content = "\n\n".join(search_context_parts)
@@ -381,10 +333,10 @@ async def chat_proxy(request_data: ChatRequest, client: Optional[httpx.AsyncClie
                         logger.info(f"RID-{request_id}: Google Web search context added as new leading system message for DeepSeek model.")
                 else:
                     last_user_msg_idx = next((i for i, msg_d in reversed(list(enumerate(processed_messages_dicts))) if msg_d.get("role") == "user"), -1)
-                    insert_pos = last_user_msg_idx if last_user_msg_idx != -1 else 0
+                    # insert_pos = last_user_msg_idx if last_user_msg_idx != -1 else 0 # This variable was not used
                     if last_user_msg_idx != -1:
                         processed_messages_dicts.insert(last_user_msg_idx, system_search_context_msg_dict)
-                    else:
+                    else: # Should not happen if there's a user query, but as a fallback
                         processed_messages_dicts.insert(0, system_search_context_msg_dict)
                     logger.info(f"RID-{request_id}: Google Web search context added (standard placement).")
             else: logger.info(f"RID-{request_id}: No Google Web search results for '{user_query}', or search failed.")
@@ -405,7 +357,7 @@ async def chat_proxy(request_data: ChatRequest, client: Optional[httpx.AsyncClie
             is_openai_provider = False; url = f"{GOOGLE_API_BASE_URL}/v1beta/models/{request_data.model}:streamGenerateContent"; params = {"key": request_data.api_key, "alt": "sse"}
             temp_api_messages_for_google_conversion = [ApiMessage(**msg_dict) for msg_dict in processed_messages_dicts]
             payload["contents"] = _convert_api_messages_to_gemini_contents(temp_api_messages_for_google_conversion, request_id)
-            gemini_declarations = [];
+            gemini_declarations = []
             if request_data.tools:
                 gemini_declarations = _convert_openai_tools_to_gemini_declarations(request_data.tools, request_id)
                 if gemini_declarations: payload["tools"] = [{"functionDeclarations": gemini_declarations}]
@@ -423,14 +375,12 @@ async def chat_proxy(request_data: ChatRequest, client: Optional[httpx.AsyncClie
     async def stream_generator() -> AsyncGenerator[bytes, None]:
         buffer = bytearray(); upstream_ok = False
         try:
-            # MODIFIED: Send web search results first if available
             if request_data.use_web_search and search_results_for_linking_this_request:
                 logger.info(f"RID-{request_id}: Sending web_search_results event with {len(search_results_for_linking_this_request)} items.")
                 yield orjson_dumps_bytes_wrapper({
                     "type": "web_search_results", 
                     "results": search_results_for_linking_this_request
                 })
-            # END MODIFICATION
 
             logger.info(f"RID-{request_id}: POST to {url}, provider: {request_data.provider}")
             async with client.stream("POST", url, headers=headers, json=payload, params=params) as resp:
@@ -448,18 +398,20 @@ async def chat_proxy(request_data: ChatRequest, client: Optional[httpx.AsyncClie
                     for line_bytes in lines:
                         if not line_bytes.strip(): continue
                         if is_openai_provider:
-                            # Pass search_results_for_linking_this_request for validation purposes
-                            async for formatted_chunk in process_openai_sse_line(line_bytes, request_id, search_results_for_linking_this_request if request_data.use_web_search else None):
+                            # MODIFIED: Call to process_openai_sse_line no longer passes search_results_for_linking_this_request
+                            async for formatted_chunk in process_openai_sse_line(line_bytes, request_id):
                                 yield formatted_chunk
                         else:
                             async for formatted_chunk in process_google_sse_line(line_bytes, request_id):
                                 yield formatted_chunk
-                    await asyncio.sleep(0.0001)
-                if buffer:
-                    line_bytes = buffer.strip()
+                    await asyncio.sleep(0.0001) # Allow other tasks to run, e.g. client disconnect
+                
+                if buffer: # Process any remaining data in buffer
+                    line_bytes = buffer.strip() # Assuming last line doesn't need to be split by newline
                     if line_bytes:
                         if is_openai_provider:
-                            async for formatted_chunk in process_openai_sse_line(line_bytes, request_id, search_results_for_linking_this_request if request_data.use_web_search else None): yield formatted_chunk
+                             # MODIFIED: Call to process_openai_sse_line no longer passes search_results_for_linking_this_request
+                            async for formatted_chunk in process_openai_sse_line(line_bytes, request_id): yield formatted_chunk
                         else:
                             async for formatted_chunk in process_google_sse_line(line_bytes, request_id): yield formatted_chunk
         except httpx.TimeoutException as e: logger.error(f"RID-{request_id}: Timeout: {e}", exc_info=True); yield orjson_dumps_bytes_wrapper({"type": "error", "message": f"Upstream timeout: {str(e)}"}); yield orjson_dumps_bytes_wrapper({"type": "finish", "reason": "timeout_error"})
@@ -467,8 +419,8 @@ async def chat_proxy(request_data: ChatRequest, client: Optional[httpx.AsyncClie
         except asyncio.CancelledError: logger.info(f"RID-{request_id}: Stream cancelled by client or shutdown.")
         except Exception as e:
             logger.error(f"RID-{request_id}: Unexpected streaming error: {e}", exc_info=True)
-            if not upstream_ok:
-                 yield orjson_dumps_bytes_wrapper({"type": "error", "message": f"Internal streaming error: {str(e)}"}); yield orjson_dumps_bytes_wrapper({"type": "finish", "reason": "internal_error"})
+            if not upstream_ok: # Only send error if we haven't successfully connected to upstream
+                yield orjson_dumps_bytes_wrapper({"type": "error", "message": f"Internal streaming error: {str(e)}"}); yield orjson_dumps_bytes_wrapper({"type": "finish", "reason": "internal_error"})
         finally: logger.info(f"RID-{request_id}: Stream generator finished. Upstream successful: {upstream_ok}")
 
     streaming_headers = COMMON_HEADERS.copy(); streaming_headers.update({"Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache", "Connection": "keep-alive"})
@@ -482,10 +434,7 @@ if __name__ == "__main__":
     log_config["formatters"]["access"]["fmt"] = '%(asctime)s %(levelname)-8s [%(name)s:%(module)s:%(lineno)d] - %(client_addr)s - "%(request_line)s" %(status_code)s'; log_config["formatters"]["access"]["datefmt"] = "%Y-%m-%d %H:%M:%S"
     if "EzTalkProxy" not in log_config["loggers"]: log_config["loggers"]["EzTalkProxy"] = {}
     log_config["loggers"]["EzTalkProxy"]["handlers"] = ["default"]; log_config["loggers"]["EzTalkProxy"]["level"] = LOG_LEVEL_FROM_ENV; log_config["loggers"]["EzTalkProxy"]["propagate"] = False
-    log_config["loggers"]["uvicorn.error"]["level"] = "INFO"; log_config["loggers"]["uvicorn.access"]["level"] = "WARNING"
+    log_config["loggers"]["uvicorn.error"]["level"] = "INFO"; log_config["loggers"]["uvicorn.access"]["level"] = "WARNING" # Default is INFO, making it WARNING
     logger.info(f"Starting Uvicorn: http://{APP_HOST}:{APP_PORT}. Reload: {DEV_RELOAD}. Log Level (EzTalkProxy): {LOG_LEVEL_FROM_ENV}")
     uvicorn.run("main:app", host=APP_HOST, port=APP_PORT, log_config=log_config, reload=DEV_RELOAD, lifespan="on")
-    
-    
-    
     

@@ -11,6 +11,8 @@ import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.DataClass.Sender
 import com.example.everytalk.data.DataClass.ChatRequest
 import com.example.everytalk.data.DataClass.ApiMessage as DataClassApiMessage // 重命名导入
+// --- 新增：导入 WebSearchResult ---
+import com.example.everytalk.data.DataClass.WebSearchResult // 确保这个路径正确
 
 import com.example.everytalk.data.network.ApiClient
 import com.example.everytalk.ui.screens.viewmodel.ConfigManager
@@ -108,6 +110,21 @@ class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewMo
     // 联网搜索状态
     val isWebSearchEnabled: StateFlow<Boolean> get() = stateHolder._isWebSearchEnabled.asStateFlow()
 
+    // --- 新增：暴露“查看来源”对话框的状态 ---
+    /**
+     * 控制网页搜索结果来源对话框是否显示。
+     * UI层应观察此StateFlow。
+     */
+    val showSourcesDialog: StateFlow<Boolean> get() = stateHolder._showSourcesDialog.asStateFlow()
+
+    /**
+     * 当前要在来源对话框中显示的网页搜索结果列表。
+     * UI层应观察此StateFlow。
+     */
+    val sourcesForDialog: StateFlow<List<WebSearchResult>> get() = stateHolder._sourcesForDialog.asStateFlow()
+    // --- 新增状态暴露结束 ---
+
+
     // --- 初始化块 ---
     init {
         Log.d("AppViewModel", "[ID:$instanceId] ViewModel 初始化开始")
@@ -125,14 +142,10 @@ class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewMo
                 // stateHolder._isWebSearchEnabled.value = dataSource.loadWebSearchPreference()
             }
 
-            // 检查 stateHolder.messages (由 loadInitialData 内部通过 dataSource.loadLastOpenChat() 填充)
-            // 如果 loadLastOpenChat() 返回空列表 (因为我们的策略是总清空它)，
-            // 那么 currentChatMessagesFromPersistence 将是空的。
             val currentChatMessagesFromPersistence = stateHolder.messages.toList()
             val historicalConversationsFromPersistence = stateHolder._historicalConversations.value
 
             if (currentChatMessagesFromPersistence.isNotEmpty() && historyPresent) {
-                // 这段逻辑理论上不应执行，因为 currentChatMessagesFromPersistence 应该是空的
                 val matchedIndex =
                     historicalConversationsFromPersistence.indexOfFirst { historicalChat ->
                         areMessageListsEffectivelyEqual(
@@ -154,11 +167,9 @@ class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewMo
                     )
                 }
             } else {
-                // 这是预期的路径：lastOpenChat 为空，所以 loadedHistoryIndex 为 null
                 stateHolder._loadedHistoryIndex.value = null
             }
 
-            // 初始化完成后选择一个API配置（如果需要）
             viewModelScope.launch(Dispatchers.Main) {
                 if (!initialConfigPresent && stateHolder._apiConfigs.value.isEmpty()) {
                     showSnackbar("请添加 API 配置")
@@ -185,8 +196,7 @@ class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewMo
         for (i in filteredList1.indices) {
             val msg1 = filteredList1[i];
             val msg2 = filteredList2[i]
-            // 比较关键字段，忽略时间戳等易变字段，根据需要调整
-            if (msg1.id != msg2.id || // 如果ID是稳定的，可以比较ID
+            if (msg1.id != msg2.id ||
                 msg1.sender != msg2.sender ||
                 msg1.text.trim() != msg2.text.trim() ||
                 msg1.reasoning?.trim() != msg2.reasoning?.trim() ||
@@ -197,7 +207,6 @@ class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewMo
     }
 
     private fun filterMessagesForComparison(messagesToFilter: List<Message>): List<Message> {
-        // 过滤规则与 HistoryManager 中的 filterMessagesForSaving 保持一致或类似
         return messagesToFilter.filter { msg ->
             (msg.sender != Sender.System || msg.isPlaceholderName) &&
                     (msg.sender == Sender.User || (msg.sender == Sender.AI && (msg.contentStarted || msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank())) || (msg.sender == Sender.System && msg.isPlaceholderName) || msg.isError)
@@ -210,12 +219,9 @@ class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewMo
     fun toggleWebSearchMode(enabled: Boolean) {
         stateHolder._isWebSearchEnabled.value = enabled
         showSnackbar("联网搜索已 ${if (enabled) "开启" else "关闭"}")
-        // 可选：持久化用户对联网搜索的偏好
-        // viewModelScope.launch(Dispatchers.IO) { dataSource.saveWebSearchPreference(enabled) }
     }
 
     fun addProvider(providerName: String) {
-        // ... (此方法未改变，省略以保持简洁)
         val trimmedName = providerName.trim()
         if (trimmedName.isNotBlank()) {
             viewModelScope.launch(Dispatchers.IO) {
@@ -263,10 +269,7 @@ class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewMo
         stateHolder._text.value = newText
     }
 
-    // 发送消息
     fun onSendMessage(messageText: String, isFromRegeneration: Boolean = false) {
-        // ... (此方法内部逻辑未改变，依赖 ApiHandler 和 ChatRequest 构建，省略以保持简洁)
-        // 确保 ChatRequest 正确使用了 isWebSearchEnabled
         val textToActuallySend = messageText.trim()
         if (textToActuallySend.isEmpty()) {
             if (!isFromRegeneration) showSnackbar("请输入消息内容")
@@ -341,15 +344,12 @@ class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewMo
                 userMessageTextForContext = textToActuallySend,
                 afterUserMessageId = newUserMessage.id,
                 onMessagesProcessed = {
-                    // 流处理开始后，可以立即尝试保存历史（如果策略如此）
-                    // HistoryManager 的 saveIfNeeded 会处理去重和是否真的需要保存的逻辑
                     viewModelScope.launch { historyManager.saveCurrentChatToHistoryIfNeeded() }
                 }
             )
         }
     }
 
-    // 编辑消息相关
     fun onEditDialogTextChanged(newText: String) {
         stateHolder._editDialogInputText.value = newText
     }
@@ -377,9 +377,8 @@ class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewMo
                 if (originalMessage.text != updatedText) {
                     stateHolder.messages[messageIndex] = originalMessage.copy(
                         text = updatedText,
-                        timestamp = System.currentTimeMillis() // 更新时间戳
+                        timestamp = System.currentTimeMillis()
                     )
-                    // 强制保存到历史，因为用户明确编辑了内容
                     historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
                     showSnackbar("消息已更新")
                 }
@@ -394,9 +393,7 @@ class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewMo
         stateHolder._editDialogInputText.value = ""
     }
 
-    // 重新生成AI回答
     fun regenerateAiResponse(originalUserMessage: Message) {
-        // ... (此方法未改变，省略以保持简洁)
         if (originalUserMessage.sender != Sender.User) {
             showSnackbar("只能为您的消息重新生成回答"); return
         }
@@ -411,7 +408,6 @@ class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewMo
             if (userMessageIndex == -1) {
                 showSnackbar("无法重新生成：原始用户消息未找到。"); return@launch
             }
-            // 移除此用户消息之后可能存在的AI回答
             if (userMessageIndex < stateHolder.messages.size - 1) {
                 val nextMessageIndex = userMessageIndex + 1
                 if (stateHolder.messages[nextMessageIndex].sender == Sender.AI) {
@@ -425,25 +421,6 @@ class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewMo
                     stateHolder.messages.removeAt(nextMessageIndex)
                 }
             }
-            // 重要：在重新发送用户消息前，应该先将当前聊天状态（移除了旧AI回复后）保存一次
-            // 这样历史记录能反映出用户在重新生成前的状态。
-            // forceSave=true 确保即使内容看起来没变（只是少了AI回复），也会记录这个状态。
-            // historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true) // 这行可能导致问题，如果用户快速操作
-            // 暂时注释掉，因为onSendMessage内部的onMessagesProcessed会调用saveIfNeeded
-
-            // 重新发送原始用户消息文本
-            // 注意：我们不再移除并重新添加用户消息，而是直接基于其文本调用onSendMessage
-            // onSendMessage 会将这个文本作为新消息处理（但上下文历史是基于当前messages列表的）
-            // onSendMessage(messageText = originalUserMessageText, isFromRegeneration = true)
-
-            // 修正后的重新生成逻辑：
-            // 1. 保留原始用户消息。
-            // 2. 删除其后的AI消息（如果存在）。
-            // 3. 调用onSendMessage，它会将原始用户消息文本作为最新的用户输入。
-            //    onSendMessage内部构建的API历史将包含这条用户消息作为最后一条。
-
-            // 确保在调用onSendMessage前，当前聊天状态（删除了旧AI回复）已通过HistoryManager处理
-            // （HistoryManager的saveIfNeeded会清空lastOpenChat）
             historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
             onSendMessage(messageText = originalUserMessageText, isFromRegeneration = true)
         }
@@ -457,27 +434,23 @@ class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewMo
         apiHandler.cancelCurrentApiJob("用户取消操作")
     }
 
-    // 开始新聊天
     fun startNewChat() {
-        dismissEditDialog() // 关闭可能打开的编辑对话框
-        apiHandler.cancelCurrentApiJob("开始新聊天") // 取消正在进行的API调用
+        dismissEditDialog()
+        // --- 修改：确保来源对话框也关闭 ---
+        dismissSourcesDialog()
+        // --- 修改结束 ---
+        apiHandler.cancelCurrentApiJob("开始新聊天")
         viewModelScope.launch {
-            // 1. 将当前聊天（如果有内容）保存到历史记录。
-            //    HistoryManager的saveIfNeeded方法内部会处理是否真的需要保存，并最终清空“最后打开的聊天”。
             historyManager.saveCurrentChatToHistoryIfNeeded()
-
-            // 2. 在主线程上立即清空UI状态和相关ViewModel状态。
             withContext(Dispatchers.Main.immediate) {
-                stateHolder.clearForNewChat() // 清空输入框、消息列表等
-                triggerScrollToBottom() // 滚动到底部（空列表的顶部）
-                if (_isSearchActiveInDrawer.value) setSearchActiveInDrawer(false) // 关闭抽屉搜索
-                stateHolder._loadedHistoryIndex.value = null // 明确当前没有加载任何历史
+                stateHolder.clearForNewChat()
+                triggerScrollToBottom()
+                if (_isSearchActiveInDrawer.value) setSearchActiveInDrawer(false)
+                stateHolder._loadedHistoryIndex.value = null
             }
-            // persistenceManager.saveLastOpenChat(emptyList()) 这一步已由 historyManager 完成
         }
     }
 
-    // 从历史加载对话
     fun loadConversationFromHistory(index: Int) {
         val conversationList = stateHolder._historicalConversations.value
         if (index < 0 || index >= conversationList.size) {
@@ -485,35 +458,28 @@ class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewMo
         }
         val conversationToLoad = conversationList[index]
         dismissEditDialog()
+        // --- 修改：确保来源对话框也关闭 ---
+        dismissSourcesDialog()
+        // --- 修改结束 ---
         apiHandler.cancelCurrentApiJob("加载历史索引 $index")
 
         viewModelScope.launch {
-            // 1. 在加载新对话前，处理当前对话：将其保存到历史（如果需要），并清空“最后打开的聊天”。
             historyManager.saveCurrentChatToHistoryIfNeeded()
-
-            // 2. 在主线程上清空当前UI，并加载历史对话。
             withContext(Dispatchers.Main.immediate) {
-                stateHolder.clearForNewChat() // 清空当前UI状态
-                // 加载历史消息到UI列表
+                stateHolder.clearForNewChat()
                 stateHolder.messages.addAll(conversationToLoad.map { msg -> msg.copy(contentStarted = msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || msg.isError) })
-                // 确保动画状态等为已播放
                 stateHolder.messages.forEach { msg ->
                     stateHolder.messageAnimationStates[msg.id] = true
                 }
-                stateHolder._loadedHistoryIndex.value = index // 设置当前加载的历史索引
+                stateHolder._loadedHistoryIndex.value = index
                 triggerScrollToBottom()
             }
-
-            // 移除下面这行：不应在加载历史后将其设为“最后打开的聊天”，因为我们希望下次启动是新会话。
-            // withContext(Dispatchers.IO) { persistenceManager.saveLastOpenChat(stateHolder.messages.toList()) }
-
-            if (_isSearchActiveInDrawer.value) { // 如果抽屉搜索是激活的，关闭它
+            if (_isSearchActiveInDrawer.value) {
                 withContext(Dispatchers.Main.immediate) { setSearchActiveInDrawer(false) }
             }
         }
     }
 
-    // 删除历史对话
     fun deleteConversation(indexToDelete: Int) {
         val currentLoadedIndex = stateHolder._loadedHistoryIndex.value
         if (indexToDelete < 0 || indexToDelete >= stateHolder._historicalConversations.value.size) {
@@ -521,42 +487,65 @@ class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewMo
         }
         viewModelScope.launch {
             val wasCurrentChatDeleted = (currentLoadedIndex == indexToDelete)
-            // HistoryManager 的 deleteConversation 内部会处理历史列表的持久化
-            // 以及“最后打开的聊天”的清空。
             historyManager.deleteConversation(indexToDelete)
-
-            // 如果删除的是当前正在显示的聊天，则需要清空UI并表现为新聊天状态。
             if (wasCurrentChatDeleted) {
                 withContext(Dispatchers.Main.immediate) {
                     dismissEditDialog()
-                    stateHolder.clearForNewChat() // 清空UI
+                    // --- 修改：确保来源对话框也关闭 ---
+                    dismissSourcesDialog()
+                    // --- 修改结束 ---
+                    stateHolder.clearForNewChat()
                     triggerScrollToBottom()
                 }
                 apiHandler.cancelCurrentApiJob("当前聊天(#$indexToDelete)被删除")
-                // persistenceManager.saveLastOpenChat(emptyList()) 已由 historyManager.deleteConversation 处理
             }
             withContext(Dispatchers.Main) { showSnackbar("对话已删除") }
         }
     }
 
-    // 清除所有历史对话
     fun clearAllConversations() {
         dismissEditDialog()
+        // --- 修改：确保来源对话框也关闭 ---
+        dismissSourcesDialog()
+        // --- 修改结束 ---
         apiHandler.cancelCurrentApiJob("清除所有历史记录")
         viewModelScope.launch {
-            // HistoryManager 的 clearAllHistory 内部会处理历史列表的持久化
-            // 以及“最后打开的聊天”的清空。
             historyManager.clearAllHistory()
-
-            // 清空当前UI，表现为新聊天状态
             withContext(Dispatchers.Main.immediate) {
                 stateHolder.clearForNewChat()
                 triggerScrollToBottom()
             }
             withContext(Dispatchers.Main) { showSnackbar("所有对话已清除") }
-            // persistenceManager.saveLastOpenChat(emptyList()) 已由 historyManager.clearAllHistory 处理
         }
     }
+
+    // --- 新增：用于控制“查看来源”对话框的公共方法 ---
+    /**
+     * 请求显示网页搜索结果的来源对话框。
+     * @param sources 要在对话框中显示的搜索结果列表。
+     */
+    fun showSourcesDialog(sources: List<WebSearchResult>) {
+        viewModelScope.launch {
+            stateHolder._sourcesForDialog.value = sources
+            stateHolder._showSourcesDialog.value = true
+            Log.d("AppViewModel", "Show sources dialog requested. Sources count: ${sources.size}")
+        }
+    }
+
+    /**
+     * 请求关闭网页搜索结果的来源对话框。
+     */
+    fun dismissSourcesDialog() {
+        viewModelScope.launch {
+            if (stateHolder._showSourcesDialog.value) { // 只在需要时更新
+                stateHolder._showSourcesDialog.value = false
+                // 可选：在关闭对话框时清空来源数据
+                // stateHolder._sourcesForDialog.value = emptyList()
+                Log.d("AppViewModel", "Dismiss sources dialog requested.")
+            }
+        }
+    }
+    // --- 新增公共方法结束 ---
 
     // API 配置管理 (委托给 ConfigManager)
     fun addConfig(config: ApiConfig) = configManager.addConfig(config)
@@ -577,7 +566,6 @@ class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewMo
 
     // 获取历史对话预览文本
     fun getConversationPreviewText(index: Int): String {
-        // ... (此方法未改变，省略以保持简洁)
         val conversation = stateHolder._historicalConversations.value.getOrNull(index)
         val placeholderTitleMsg =
             conversation?.firstOrNull { it.sender == Sender.System && it.isPlaceholderName && it.text.isNotBlank() }?.text?.trim()
@@ -629,10 +617,8 @@ class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewMo
             val originalConversationAtIndex = currentHistoricalConvos[index]
             val newMessagesForThisConversation = mutableListOf<Message>()
 
-            // 构建包含新名称的对话消息列表
             var titleMessageUpdatedOrAdded = false
             if (originalConversationAtIndex.isNotEmpty() && originalConversationAtIndex.first().sender == Sender.System && originalConversationAtIndex.first().isPlaceholderName) {
-                // 更新现有的标题消息
                 newMessagesForThisConversation.add(
                     originalConversationAtIndex.first()
                         .copy(text = trimmedNewName, timestamp = System.currentTimeMillis())
@@ -641,12 +627,11 @@ class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewMo
                 titleMessageUpdatedOrAdded = true
             }
             if (!titleMessageUpdatedOrAdded) {
-                // 添加新的标题消息到对话开头
                 val titleMessage = Message(
-                    id = "title_${UUID.randomUUID()}", // 确保ID唯一
+                    id = "title_${UUID.randomUUID()}",
                     text = trimmedNewName,
                     sender = Sender.System,
-                    timestamp = System.currentTimeMillis() - 1, // 确保比其他消息早一点
+                    timestamp = System.currentTimeMillis() - 1,
                     contentStarted = true,
                     isPlaceholderName = true
                 )
@@ -654,29 +639,22 @@ class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewMo
                 newMessagesForThisConversation.addAll(originalConversationAtIndex)
             }
 
-            // 更新历史对话列表
             val updatedHistoricalConversationsList = currentHistoricalConvos.toMutableList().apply {
                 this[index] = newMessagesForThisConversation.toList()
             }
             stateHolder._historicalConversations.value = updatedHistoricalConversationsList.toList()
 
-            // 持久化历史列表的更改
             withContext(Dispatchers.IO) {
                 persistenceManager.saveChatHistory()
-                // 不再需要下面这部分，因为我们不希望重命名操作将当前会话设为“最后打开的会话”
-                // if (stateHolder._loadedHistoryIndex.value == index) {
-                //     persistenceManager.saveLastOpenChat(newMessagesForThisConversation.toList())
-                // }
             }
 
-            // 如果重命名的是当前正在UI上显示的对话，则更新UI
             if (stateHolder._loadedHistoryIndex.value == index) {
                 withContext(Dispatchers.Main.immediate) {
                     stateHolder.messages.clear()
                     stateHolder.messages.addAll(
                         newMessagesForThisConversation.toList()
                             .map { msg -> msg.copy(contentStarted = msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || msg.isError) })
-                    stateHolder.messages.forEach { msg -> // 重置动画状态等
+                    stateHolder.messages.forEach { msg ->
                         stateHolder.messageAnimationStates[msg.id] = true
                     }
                 }
@@ -693,30 +671,23 @@ class AppViewModel(private val dataSource: SharedPreferencesDataSource) : ViewMo
     // --- ViewModel 清理 ---
     override fun onCleared() {
         Log.d("AppViewModel", "[ID:$instanceId] onCleared 开始")
-        dismissEditDialog() // 关闭可能存在的对话框
-        apiHandler.cancelCurrentApiJob("ViewModel cleared") // 取消API调用
+        dismissEditDialog()
+        // --- 修改：确保来源对话框也关闭 ---
+        dismissSourcesDialog()
+        // --- 修改结束 ---
+        apiHandler.cancelCurrentApiJob("ViewModel cleared")
 
-        // 在ViewModel销毁前，调用HistoryManager来处理当前会话的保存（如果需要）
-        // 并确保“最后打开的会话”被清空。
-        // 这个操作需要在协程中执行，因为它可能涉及IO。
-        // 使用viewModelScope确保在ViewModel的生命周期内完成。
         viewModelScope.launch {
             Log.d(
                 "AppViewModel",
                 "[ID:$instanceId] onCleared: 调用 historyManager.saveCurrentChatToHistoryIfNeeded"
             )
-            // forceSave = false: 只有当内容有实际变化或当前不在历史中时才保存到历史列表。
-            // 但无论如何，saveCurrentChatToHistoryIfNeeded 内部会调用 persistenceManager.saveLastOpenChat(emptyList())。
             historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = false)
             Log.d(
                 "AppViewModel",
                 "[ID:$instanceId] onCleared: historyManager.saveCurrentChatToHistoryIfNeeded 调用完成"
             )
         }
-        // 注意：上面的 launch 是异步的。如果App进程立即被杀死，这个协程可能不会执行完毕。
-        // 对于关键的持久化操作，如果需要确保在进程退出前完成，可能需要更强的同步机制或依赖Android的生命周期回调如 onStop/onDestroy（但这在ViewModel中不直接可用）。
-        // 然而，对于“下次打开新会话”，只要 saveLastOpenChat(emptyList()) 在多数正常退出场景下能执行即可。
-
         super.onCleared()
         Log.d("AppViewModel", "[ID:$instanceId] ViewModel onCleared 结束.")
     }

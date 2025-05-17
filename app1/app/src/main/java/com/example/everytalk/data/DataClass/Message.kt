@@ -17,8 +17,10 @@ data class Message(
     var contentStarted: Boolean = false,
     var isError: Boolean = false,
     var isCanceled: Boolean = false,
-    val name: String? = null, // 如果是ApiConfig.name相关的报错，请确保ApiConfig类中有name属性
+    val name: String? = null,
     var hasPendingToolCall: Boolean = false,
     val timestamp: Long = System.currentTimeMillis(),
-    val isPlaceholderName: Boolean = false // 确保这个属性存在，用于重命名逻辑
+    val isPlaceholderName: Boolean = false,
+    // --- 新增字段 ---
+    val webSearchResults: List<WebSearchResult>? = null // 用于存储关联的网页搜索结果
 )

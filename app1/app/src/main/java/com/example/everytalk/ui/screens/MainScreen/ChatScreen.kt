@@ -2,7 +2,7 @@ package com.example.everytalk.ui.screens.MainScreen
 
 import android.util.Log
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.ExperimentalAnimationApi
+// import androidx.compose.animation.ExperimentalAnimationApi // 你已经有了这个
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.Animatable
@@ -54,6 +54,8 @@ import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.DataClass.Sender
 import com.example.everytalk.navigation.Screen
 import com.example.everytalk.ui.components.AppTopBar
+// --- 新增：导入 WebSourcesDialog ---
+import com.example.everytalk.ui.components.WebSourcesDialog // 确保这个路径和你在上一步创建的文件路径一致
 import com.example.everytalk.ui.screens.BubbleMain.Main.MessageBubble
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collectLatest
@@ -111,7 +113,6 @@ fun ChatScreen(
                 delay(16L)
                 val items = listState.layoutInfo.visibleItemsInfo
                 reached = items.any { it.index == bottomIndex }
-                // 首帧 visibleItemsInfo 为空要继续重试
                 if (reached && items.isNotEmpty()) {
                     Log.d("ScrollJob", "成功将 footer 滚动可见 ($reason retry=$i)")
                     userManuallyScrolledAwayFromBottom = false
@@ -120,7 +121,6 @@ fun ChatScreen(
                     return@launch
                 }
             }
-            // 还没到底，再最后兜底一波
             delay(40)
             listState.animateScrollToItem(bottomIndex)
             userManuallyScrolledAwayFromBottom = false
@@ -273,6 +273,11 @@ fun ChatScreen(
     val showEditDialog by viewModel.showEditDialog.collectAsState()
     val editDialogInputText by viewModel.editDialogInputText.collectAsState()
 
+    // --- 新增：收集“查看来源”对话框的状态 ---
+    val showSourcesDialog by viewModel.showSourcesDialog.collectAsState()
+    val sourcesForDialog by viewModel.sourcesForDialog.collectAsState()
+    // --- 新增结束 ---
+
     Scaffold(
         modifier = modifier
             .fillMaxSize()
@@ -294,51 +299,51 @@ fun ChatScreen(
             ) {
                 FloatingActionButton(
                     onClick = { resetInactivityTimer(); scrollToBottomGuaranteed("FAB_Click") },
-                    modifier = Modifier.padding(bottom = estimatedInputAreaHeight + 16.dp + 15.dp),
-                    shape = RoundedCornerShape(28.dp),
-                    containerColor = Color.White, contentColor = Color.Black,
+                    modifier = Modifier.padding(bottom = estimatedInputAreaHeight + 16.dp + 15.dp), // 调整FAB位置以避开输入区域
+                    shape = RoundedCornerShape(28.dp), // FAB形状
+                    containerColor = Color.White, contentColor = Color.Black, // FAB颜色
                     elevation = FloatingActionButtonDefaults.elevation(
                         defaultElevation = 4.dp,
                         pressedElevation = 6.dp
-                    )
+                    ) // FAB阴影
                 ) { Icon(Icons.Filled.ArrowDownward, "滚动到底部") }
             }
         },
-        floatingActionButtonPosition = FabPosition.End
+        floatingActionButtonPosition = FabPosition.End // FAB位置
     ) { scaffoldPaddingValues ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(scaffoldPaddingValues)
-                .background(Color.White)
-                .imePadding()
-                .navigationBarsPadding()
+                .padding(scaffoldPaddingValues) // 应用Scaffold提供的padding
+                .background(Color.White) // 背景色
+                .imePadding() // 为输入法留出空间
+                .navigationBarsPadding() // 为导航栏留出空间
         ) {
             Box(
                 modifier = Modifier
-                    .weight(1f)
+                    .weight(1f) // 占据剩余空间
                     .fillMaxWidth()
             ) {
                 if (messages.isEmpty()) {
-                    EmptyChatAnimation(density = density)
+                    EmptyChatAnimation(density = density) // 空聊天动画
                 } else {
                     LazyColumn(
                         modifier = Modifier
                             .fillMaxSize()
                             .background(Color.White)
-                            .nestedScroll(nestedScrollConnection)
+                            .nestedScroll(nestedScrollConnection) // 嵌套滚动连接
                             .padding(horizontal = 8.dp),
-                        state = listState,
+                        state = listState, // LazyList状态
                         contentPadding = PaddingValues(
                             top = 8.dp,
                             bottom = normalBottomPaddingForAIChat
-                        )
+                        ) // 内容边距
                     ) {
                         items(items = messages, key = { it.id }) { message ->
                             val isStreamingThis =
                                 message.sender == Sender.AI && message.id == currentStreamingAiMessageId && isApiCalling && message.contentStarted
                             val showLoading =
-                                message.sender == Sender.AI && message.id == currentStreamingAiMessageId && isApiCalling && !message.contentStarted && message.text.isBlank() && message.reasoning.isNullOrBlank()
+                                message.sender == Sender.AI && message.id == currentStreamingAiMessageId && isApiCalling && !message.contentStarted && message.text.isBlank() && message.reasoning.isNullOrBlank() && message.webSearchResults.isNullOrEmpty() // 加入webSearchResults判断
                             MessageBubble(
                                 message = message,
                                 viewModel = viewModel,
@@ -362,12 +367,10 @@ fun ChatScreen(
                                 }
                             )
                         }
-                        item(key = "footer") {
-                            Spacer(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(0.dp)
-                            )
+                        item(key = "footer") { // 滚动占位符
+                            Spacer(modifier = Modifier
+                                .fillMaxWidth()
+                                .height(0.dp))
                         }
                     }
                 }
@@ -377,35 +380,43 @@ fun ChatScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .shadow(6.dp, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp), false)
-                    .background(Color.White, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
-                    .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
-                    .padding(horizontal = 8.dp, vertical = 8.dp)
-                    .heightIn(min = estimatedInputAreaHeight)
+                    .shadow(
+                        6.dp,
+                        RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+                        false
+                    ) // 顶部阴影
+                    .background(
+                        Color.White,
+                        RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+                    ) // 背景和圆角
+                    .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)) // 裁剪圆角
+                    .padding(horizontal = 8.dp, vertical = 8.dp) // 内边距
+                    .heightIn(min = estimatedInputAreaHeight) // 最小高度
             ) {
                 OutlinedTextField(
                     value = text,
                     onValueChange = { viewModel.onTextChange(it); resetInactivityTimer() },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .focusRequester(focusRequester)
-                        .onFocusChanged { if (it.isFocused) resetInactivityTimer() }
-                        .padding(bottom = 1.dp),
-                    placeholder = { Text("输入消息…") },
+                        .focusRequester(focusRequester) // 焦点请求器
+                        .onFocusChanged { if (it.isFocused) resetInactivityTimer() } // 焦点变化时重置计时器
+                        .padding(bottom = 1.dp), // 底部边距
+                    placeholder = { Text("输入消息…") }, // 占位符
                     colors = OutlinedTextFieldDefaults.colors(
+                        // 文本框颜色
                         focusedTextColor = MaterialTheme.colorScheme.onSurface,
                         unfocusedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
                         focusedContainerColor = Color.White,
                         unfocusedContainerColor = Color.White,
                         cursorColor = MaterialTheme.colorScheme.primary,
-                        focusedBorderColor = Color.Transparent,
+                        focusedBorderColor = Color.Transparent, // 透明边框
                         unfocusedBorderColor = Color.Transparent,
                         disabledBorderColor = Color.Transparent,
                         errorBorderColor = MaterialTheme.colorScheme.error,
                     ),
-                    minLines = 1, maxLines = 5,
-                    shape = RoundedCornerShape(16.dp),
-                    trailingIcon = {
+                    minLines = 1, maxLines = 5, // 最小/最大行数
+                    shape = RoundedCornerShape(16.dp), // 文本框形状
+                    trailingIcon = { // 尾部图标
                         if (text.isNotEmpty()) {
                             IconButton(
                                 onClick = { viewModel.onTextChange(""); resetInactivityTimer() },
@@ -424,14 +435,10 @@ fun ChatScreen(
                 Box(
                     Modifier
                         .fillMaxWidth()
-                        .padding(top = 4.dp, bottom = 4.dp)
+                        .padding(top = 4.dp, bottom = 4.dp) // 内边距
                 ) {
-                    // 联网搜索按钮
-                    IconButton(
-                        onClick = {
-                            resetInactivityTimer()
-                            viewModel.toggleWebSearchMode(!isWebSearchEnabled)
-                        },
+                    IconButton( // 联网搜索按钮
+                        onClick = { resetInactivityTimer(); viewModel.toggleWebSearchMode(!isWebSearchEnabled) },
                         modifier = Modifier
                             .align(Alignment.CenterStart)
                             .padding(start = 8.dp)
@@ -445,11 +452,11 @@ fun ChatScreen(
                         )
                     }
 
-                    // 发送/停止按钮
-                    val isKeyboardVisible by remember(imeInsets, density) {
-                        derivedStateOf { imeInsets.getBottom(density) > 0 }
-                    }
-                    FilledIconButton(
+                    val isKeyboardVisible by remember(
+                        imeInsets,
+                        density
+                    ) { derivedStateOf { imeInsets.getBottom(density) > 0 } }
+                    FilledIconButton( // 发送/停止按钮
                         onClick = {
                             resetInactivityTimer()
                             if (isApiCalling) {
@@ -469,8 +476,8 @@ fun ChatScreen(
                             .align(Alignment.CenterEnd)
                             .padding(end = 8.dp)
                             .size(44.dp),
-                        shape = CircleShape,
-                        colors = IconButtonDefaults.filledIconButtonColors(
+                        shape = CircleShape, // 按钮形状
+                        colors = IconButtonDefaults.filledIconButtonColors( // 按钮颜色
                             containerColor = Color.Black,
                             contentColor = Color.White,
                             disabledContainerColor = Color.DarkGray,
@@ -487,6 +494,7 @@ fun ChatScreen(
             }
         }
 
+        // 编辑消息对话框 (你已有的逻辑)
         if (showEditDialog) {
             AlertDialog(
                 onDismissRequest = { viewModel.dismissEditDialog() },
@@ -522,19 +530,26 @@ fun ChatScreen(
                         colors = ButtonDefaults.textButtonColors(contentColor = Color.Black)
                     ) { Text("取消") }
                 },
-                shape = RoundedCornerShape(20.dp)
+                shape = RoundedCornerShape(20.dp) // 对话框形状
             )
         }
+
+        // --- 新增：条件性地显示“查看来源”对话框 ---
+        if (showSourcesDialog) {
+            WebSourcesDialog(
+                sources = sourcesForDialog,
+                onDismissRequest = { viewModel.dismissSourcesDialog() }
+            )
+        }
+        // --- 新增结束 ---
     }
 }
 
 @Composable
 fun EmptyChatAnimation(density: Density) {
-    Box(
-        Modifier
-            .fillMaxSize()
-            .padding(16.dp), Alignment.Center
-    ) {
+    Box(Modifier
+        .fillMaxSize()
+        .padding(16.dp), Alignment.Center) {
         Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.Center) {
             val style = LocalTextStyle.current.copy(
                 fontSize = 36.sp,
