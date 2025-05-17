@@ -33,11 +33,9 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight // MyCodeBlockComposable 需要
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -45,16 +43,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.example.everytalk.data.DataClass.Message
-// import com.example.com.aiwithtalk.com.talkwithai.everytalk.ui.screens.BubbleMain.MyCodeBlockComposable // 已在本文件中定义
-// import com.example.com.aiwithtalk.com.talkwithai.everytalk.ui.screens.BubbleMain.TextSegment // 已在本文件中定义
-// import com.example.com.aiwithtalk.com.talkwithai.everytalk.ui.screens.BubbleMain.ThreeDotsLoadingAnimation // 已在本文件中定义
-// import com.example.com.aiwithtalk.com.talkwithai.everytalk.ui.screens.BubbleMain.extractStreamingCodeContent // 在本文件中定义但AiMessageContent不再直接调用
-// import com.example.com.aiwithtalk.com.talkwithai.everytalk.ui.screens.BubbleMain.parseMarkdownSegments // 已在本文件中定义
-
-import com.halilibo.richtext.markdown.Markdown // RichText 相关导入
-import com.halilibo.richtext.ui.RichTextStyle
-import com.halilibo.richtext.ui.material3.RichText
-import com.halilibo.richtext.ui.string.RichTextStringStyle
 
 // 从 BubbleMain.kt 移过来的常量 (用于上下文菜单)
 private const val CONTEXT_MENU_ANIMATION_DURATION_MS = 150 // 上下文菜单动画持续时间（毫秒）
@@ -63,156 +51,6 @@ private val CONTEXT_MENU_ITEM_ICON_SIZE = 20.dp            // 上下文菜单项
 private val CONTEXT_MENU_FINE_TUNE_OFFSET_X = (-120).dp    // 上下文菜单X轴微调偏移量
 private val CONTEXT_MENU_FINE_TUNE_OFFSET_Y = (-8).dp     // 上下文菜单Y轴微调偏移量
 private val CONTEXT_MENU_FIXED_WIDTH = 120.dp              // 上下文菜单固定宽度
-
-/**
- * Composable 用于渲染 AI 消息的内容（包括普通文本和代码块）。
- * 这是经过优化的版本，旨在减少流式输出结束时的“闪烁”。
- */
-@Composable
-internal fun AiMessageContent(
-    // messageText: String, // 原始消息文本。在当前方案中，displayedText是主要数据源。保留它以备将来可能需要区分原始文本和显示文本的场景。
-    displayedText: String,    // 当前用于显示的文本（流式传输时会逐步更新，结束后为最终文本）
-    isStreaming: Boolean,     // 指示源数据是否仍在流式传输（可用于UI提示，但不再用于切换解析逻辑）
-    showLoadingDots: Boolean, // 指示是否在气泡内容完全为空时显示初始加载点
-    bubbleColor: Color,       // 气泡背景色
-    contentColor: Color,      // 主要内容颜色（文本等）
-    codeBlockBackgroundColor: Color, // 代码块背景色
-    codeBlockContentColor: Color,    // 代码块内容颜色
-    codeBlockCornerRadius: Dp,       // 代码块圆角
-    codeBlockFixedWidth: Dp,         // 代码块固定宽度
-    modifier: Modifier = Modifier    // 应用于此Composable根Column的修饰符
-) {
-    Column(modifier = modifier) { // AiMessageContent 的根是一个 Column
-        if (showLoadingDots && displayedText.isBlank()) { // 如果需要显示初始加载点且当前无任何显示文本
-            Surface( // 加载点的容器 Surface
-                color = bubbleColor,
-                contentColor = contentColor,
-                shape = RoundedCornerShape(18.dp),
-                tonalElevation = 0.dp, // 通常加载动画不需要额外的色调抬高
-                modifier = Modifier
-                    .align(Alignment.Start) // AI消息，加载点也靠左
-                    .widthIn(min = 80.dp)   // 给加载气泡一个最小宽度，避免太窄
-                    .padding(horizontal = 8.dp, vertical = 2.dp)
-            ) {
-                Box( // 包裹加载动画的Box，用于内容对齐和最小尺寸
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .padding(horizontal = 12.dp, vertical = 10.dp)
-                        .defaultMinSize(minHeight = 28.dp) // 确保加载气泡有一定高度
-                ) {
-                    ThreeDotsLoadingAnimation( // 三点加载动画
-                        dotColor = contentColor,
-                        modifier = Modifier.offset(y = (-6).dp) // 轻微向上偏移以优化视觉效果
-                    )
-                }
-            }
-        } else if (displayedText.isNotBlank()) { // 如果有要显示的文本（无论是流式还是最终）
-            // --- 核心修改：始终基于 displayedText 解析片段 ---
-            // `remember` 确保 `parseMarkdownSegments` 仅在 `displayedText` 变化时才重新执行
-            val segments = remember(displayedText) {
-                Log.d(
-                    "AiMessageContent_Parse",
-                    "解析 displayedText (长度 ${displayedText.length}): '${
-                        displayedText.take(100).replace("\n", "\\n")
-                    }'"
-                )
-                parseMarkdownSegments(displayedText.trim()) // 对当前显示的、裁剪过的文本进行解析
-            }
-
-            // 如果解析后没有片段，但原始显示文本（裁剪后）并不为空，
-            // 这可能意味着解析器未能处理某些边缘情况，或者文本只有空白。
-            // 作为回退，直接显示原始裁剪文本。
-            if (segments.isEmpty() && displayedText.trim().isNotBlank()) {
-                Surface(
-                    color = bubbleColor,
-                    contentColor = contentColor,
-                    shape = RoundedCornerShape(18.dp),
-                    tonalElevation = 0.dp,
-                    modifier = Modifier
-                        .align(Alignment.Start)
-                        .widthIn(max = codeBlockFixedWidth + 30.dp) // 确保与代码块最大宽度行为一致
-                        .padding(horizontal = 8.dp, vertical = 2.dp)
-                ) {
-                    Box(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                        RichText( // 使用RichText渲染Markdown
-                            style = RichTextStyle.Default.copy( // 自定义RichText样式
-                                stringStyle = (RichTextStyle.Default.stringStyle
-                                    ?: RichTextStringStyle.Default).copy(
-                                    codeStyle = SpanStyle( //行内代码样式
-                                        fontFamily = FontFamily.Monospace,
-                                        background = Color.Transparent, // 或特定的行内代码背景色
-                                        color = Color(0xFF5e5e5e),      // 行内代码文字颜色
-                                        fontSize = 14.sp
-                                    ),
-                                    linkStyle = SpanStyle( //链接样式
-                                        color = Color(0xFF4078f3),
-                                        textDecoration = TextDecoration.None
-                                    )
-                                )
-                            )
-                        ) { Markdown(content = displayedText.trim()) } // 渲染裁剪过的原始显示文本
-                    }
-                }
-            } else { // 如果成功解析出片段
-                // 遍历并渲染每个片段
-                segments.forEachIndexed { index, segment ->
-                    when (segment) {
-                        is TextSegment.Normal -> { // 普通文本片段
-                            if (segment.text.isNotBlank()) { // 确保普通文本片段非空
-                                Surface( // 普通文本的容器 Surface
-                                    color = bubbleColor,
-                                    contentColor = contentColor,
-                                    shape = RoundedCornerShape(18.dp),
-                                    tonalElevation = 0.dp,
-                                    modifier = Modifier
-                                        .align(Alignment.Start) // AI消息，文本靠左
-                                        .widthIn(max = codeBlockFixedWidth + 30.dp) // 最大宽度
-                                        .padding( // 根据相邻片段调整垂直间距
-                                            start = 8.dp, end = 8.dp,
-                                            top = if (index > 0 && segments.getOrNull(index - 1) is TextSegment.CodeBlock) 4.dp else 2.dp,
-                                            bottom = if (index < segments.size - 1 && segments.getOrNull(
-                                                    index + 1
-                                                ) is TextSegment.CodeBlock
-                                            ) 4.dp else 2.dp
-                                        )
-                                ) {
-                                    Box( // 内边距容器
-                                        modifier = Modifier.padding(
-                                            horizontal = 12.dp,
-                                            vertical = 8.dp
-                                        )
-                                    ) {
-                                        RichText(style = RichTextStyle.Default.copy( /* ... 您的RichText样式 ... */)) {
-                                            Markdown(content = segment.text) // 渲染Markdown普通文本
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        is TextSegment.CodeBlock -> { // 代码块片段
-                            MyCodeBlockComposable( // 调用自定义代码块组件
-                                language = segment.language,
-                                code = segment.code, // 代码内容（在流式传输时可能是部分的）
-                                backgroundColor = codeBlockBackgroundColor,
-                                contentColor = codeBlockContentColor,
-                                cornerRadius = codeBlockCornerRadius,
-                                fixedWidth = codeBlockFixedWidth,
-                                showTopBar = true, // 是否显示代码块顶部栏（语言、复制按钮）
-                                modifier = Modifier
-                                    .align(Alignment.CenterHorizontally) // 代码块可以水平居中（相对于AI消息的起始位置）
-                                    .padding(vertical = 4.dp, horizontal = 8.dp) // 外边距
-                            )
-                        }
-                    }
-                }
-            }
-        }
-        // 如果 displayedText 为空且不显示初始加载点 (showLoadingDots == false)，
-        // 则此处不渲染任何内容。这种情况可能发生在AI回复了一个合法的空消息，
-        // 或者发生了错误但错误状态由 UserOrErrorMessageContent 处理。
-    }
-}
 
 
 /**

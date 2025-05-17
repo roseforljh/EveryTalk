@@ -2,7 +2,7 @@
 <network-security-config>
     <!-- 允许连接到局域网 IP (用于 Wi-Fi 测试) -->
     <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">192.168.0.3</domain>
+        <domain includeSubdomains="false">192.168.0.2</domain>
     </domain-config>
     <!-- 允许连接到模拟器 (可选) -->
     <domain-config cleartextTrafficPermitted="true">

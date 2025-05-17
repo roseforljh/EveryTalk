@@ -2,9 +2,9 @@ package com.example.everytalk.StateControler // 你的包名
 
 import android.util.Log
 import com.example.everytalk.data.DataClass.ApiConfig // 假设存在
-import com.example.everytalk.data.DataClass.ApiMessage // 假设存在
-import com.example.everytalk.data.DataClass.ChatRequest // 假设存在
-import com.example.everytalk.data.DataClass.Message
+import com.example.everytalk.data.DataClass.ApiMessage // 假设存在，并且是用于网络请求的那个
+import com.example.everytalk.data.DataClass.ChatRequest // 假设存在，并且是用于网络请求的那个
+import com.example.everytalk.data.DataClass.Message // 这是UI层的Message
 import com.example.everytalk.data.DataClass.OpenAiStreamChunk // 假设存在
 import com.example.everytalk.data.DataClass.Sender
 import com.example.everytalk.data.network.ApiClient // 假设存在
@@ -67,7 +67,7 @@ class ApiHandler(
                                 "ApiHandlerCancel",
                                 "移除AI占位符于索引 $index, ID: $messageIdBeingCancelled (原因: $reason)"
                             )
-                            stateHolder.messages.removeAt(index) // 操作 SnapshotStateList
+                            stateHolder.messages.removeAt(index)
                         }
                     }
                 }
@@ -79,17 +79,16 @@ class ApiHandler(
     }
 
     fun streamChatResponse(
+        requestBody: ChatRequest,
+        @Suppress("UNUSED_PARAMETER")
         userMessageTextForContext: String,
         afterUserMessageId: String?,
         onMessagesProcessed: () -> Unit
     ) {
-        val currentConfig = stateHolder._selectedApiConfig.value ?: run {
-            viewModelScope.launch { stateHolder._snackbarMessage.tryEmit("请先选择或添加一个 API 配置") }
-            return
-        }
-
+        val contextForLog =
+            requestBody.messages.lastOrNull { it.role == "user" }?.content?.take(30) ?: "N/A"
         cancelCurrentApiJob(
-            "开始新的流式传输，上下文: '${userMessageTextForContext.take(30)}'",
+            "开始新的流式传输，上下文: '$contextForLog'",
             isNewMessageSend = true
         )
 
@@ -122,7 +121,7 @@ class ApiHandler(
                 }
             }
             insertAtIndex = insertAtIndex.coerceAtMost(stateHolder.messages.size)
-            stateHolder.messages.add(insertAtIndex, newAiMessage) // 操作 SnapshotStateList
+            stateHolder.messages.add(insertAtIndex, newAiMessage)
             Log.d(
                 "ApiHandler",
                 "新的AI消息 (ID: $aiMessageId) 添加到索引 $insertAtIndex. 列表大小: ${stateHolder.messages.size}."
@@ -136,78 +135,31 @@ class ApiHandler(
             onMessagesProcessed()
         }
 
-        val messagesSnapshotForHistory =
-            stateHolder.messages.toList() // toList() on SnapshotStateList
-        val apiHistoryMessages = mutableListOf<ApiMessage>()
-        var historyMessageCount = 0
-        val maxHistoryMessages = 20
-        val relevantHistory =
-            messagesSnapshotForHistory.filterNot { it.id == aiMessageId && it.sender == Sender.AI && it.text.isBlank() }
-
-        for (msg in relevantHistory.asReversed().take(maxHistoryMessages * 2)) {
-            if (historyMessageCount >= maxHistoryMessages) break
-            val apiMsg = when {
-                msg.sender == Sender.User && msg.text.isNotBlank() -> ApiMessage(
-                    "user",
-                    msg.text.trim()
-                )
-
-                msg.sender == Sender.AI && (msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank()) && !msg.isError -> ApiMessage(
-                    "assistant",
-                    msg.text.trim()
-                )
-
-                else -> null
-            }
-            apiMsg?.let { apiHistoryMessages.add(0, it); historyMessageCount++ }
-        }
-        if (apiHistoryMessages.size > maxHistoryMessages) {
-            repeat(apiHistoryMessages.size - maxHistoryMessages) { apiHistoryMessages.removeAt(0) }
-        }
-
-        val lastUserMsgInApiHistory = apiHistoryMessages.lastOrNull { it.role == "user" }
-        if (apiHistoryMessages.isEmpty() || lastUserMsgInApiHistory?.content != userMessageTextForContext.trim()) {
-            if (apiHistoryMessages.isNotEmpty() && apiHistoryMessages.last().role == "user") {
-                apiHistoryMessages[apiHistoryMessages.lastIndex] =
-                    ApiMessage("user", userMessageTextForContext.trim())
-            } else {
-                apiHistoryMessages.add(ApiMessage("user", userMessageTextForContext.trim()))
-            }
-            if (apiHistoryMessages.size > maxHistoryMessages && apiHistoryMessages.isNotEmpty()) {
-                repeat(apiHistoryMessages.size - maxHistoryMessages) { apiHistoryMessages.removeAt(0) }
-            }
-        }
-
-        val confirmedConfig: ApiConfig = stateHolder._selectedApiConfig.value ?: return
-        val requestBody = ChatRequest(
-            messages = apiHistoryMessages,
-            provider = if (confirmedConfig.provider.equals(
-                    "google",
-                    ignoreCase = true
-                )
-            ) "google" else "openai",
-            apiAddress = confirmedConfig.address,
-            apiKey = confirmedConfig.key,
-            model = confirmedConfig.model
-        )
-
         stateHolder.apiJob = viewModelScope.launch {
             val thisJob = coroutineContext[Job.Key]
             try {
                 ApiClient.streamChatResponse(requestBody)
                     .onStart { Log.d("ApiHandler", "流式传输开始，消息ID: $aiMessageId") }
                     .catch { e ->
-                        if (e !is java.util.concurrent.CancellationException) {
+                        if (e !is java.util.concurrent.CancellationException && e !is kotlinx.coroutines.CancellationException) {
                             updateMessageWithError(aiMessageId, e)
                         } else {
-                            Log.d("ApiHandler", "流式传输被取消，消息ID: $aiMessageId")
+                            Log.d(
+                                "ApiHandler",
+                                "流式传输被取消 (catch)，消息ID: $aiMessageId. 原因: ${e.message}"
+                            )
                         }
                     }
                     .onCompletion { cause ->
                         val targetMsgId = aiMessageId
-                        val isThisJobStillActive = stateHolder.apiJob == thisJob
+                        val isThisJobStillTheOne = stateHolder.apiJob == thisJob
 
-                        if (isThisJobStillActive) {
+                        Log.d(
+                            "ApiHandler",
+                            "流 onCompletion. Cause: $cause, TargetMsgId: $targetMsgId, isThisJobStillTheOne: $isThisJobStillTheOne"
+                        )
+
+                        if (isThisJobStillTheOne) {
                             stateHolder._isApiCalling.value = false
                             if (stateHolder._currentStreamingAiMessageId.value == targetMsgId) {
                                 stateHolder._currentStreamingAiMessageId.value = null
@@ -223,60 +175,91 @@ class ApiHandler(
                             val finalReasoning = msg.reasoning?.trim()
 
                             if (cause == null && !msg.isError) {
+                                Log.d("ApiHandler", "流正常完成，更新消息 $targetMsgId")
                                 val updatedMsg = msg.copy(
                                     text = finalText,
                                     reasoning = if (finalReasoning.isNullOrBlank()) null else finalReasoning,
                                     contentStarted = msg.contentStarted || finalText.isNotBlank() || !finalReasoning.isNullOrBlank()
                                 )
                                 if (updatedMsg != msg) {
-                                    stateHolder.messages[finalIdx] =
-                                        updatedMsg // 操作 SnapshotStateList
+                                    stateHolder.messages[finalIdx] = updatedMsg
                                 }
                                 if (stateHolder.messageAnimationStates[targetMsgId] != true) {
                                     stateHolder.messageAnimationStates[targetMsgId] = true
                                 }
                                 historyManager.saveCurrentChatToHistoryIfNeeded()
-                            } else if (cause != null && cause !is java.util.concurrent.CancellationException && !msg.isError) {
+                            } else if (cause != null && cause !is java.util.concurrent.CancellationException && cause !is kotlinx.coroutines.CancellationException && !msg.isError) {
+                                Log.d("ApiHandler", "流因错误完成，更新消息 $targetMsgId")
                                 updateMessageWithError(targetMsgId, cause)
-                            } else if (cause is java.util.concurrent.CancellationException) {
+                            } else if (cause is java.util.concurrent.CancellationException || cause is kotlinx.coroutines.CancellationException) {
+                                Log.d(
+                                    "ApiHandler",
+                                    "流被取消 (onCompletion)，更新消息 $targetMsgId。当前文本: '$finalText'"
+                                )
                                 val updatedMsg = msg.copy(
                                     text = finalText,
                                     reasoning = if (finalReasoning.isNullOrBlank()) null else finalReasoning,
                                     contentStarted = msg.contentStarted || finalText.isNotBlank() || !finalReasoning.isNullOrBlank()
                                 )
                                 if (updatedMsg != msg) {
-                                    stateHolder.messages[finalIdx] =
-                                        updatedMsg // 操作 SnapshotStateList
+                                    stateHolder.messages[finalIdx] = updatedMsg
                                 }
-                                if (stateHolder.messageAnimationStates[targetMsgId] != true) {
-                                    stateHolder.messageAnimationStates[targetMsgId] = true
+                                if (updatedMsg.text.isNotBlank() || !updatedMsg.reasoning.isNullOrBlank()) {
+                                    if (stateHolder.messageAnimationStates[targetMsgId] != true) {
+                                        stateHolder.messageAnimationStates[targetMsgId] = true
+                                    }
+                                    historyManager.saveCurrentChatToHistoryIfNeeded()
+                                } else if (msg.sender == Sender.AI && !msg.contentStarted && !msg.isError) {
+                                    Log.d(
+                                        "ApiHandler",
+                                        "AI消息 $targetMsgId 在取消时无内容，将其移除。"
+                                    )
+                                    stateHolder.messages.removeAt(finalIdx)
                                 }
-                                historyManager.saveCurrentChatToHistoryIfNeeded()
                             }
+                        } else {
+                            Log.w(
+                                "ApiHandler",
+                                "onCompletion: 未找到消息ID $targetMsgId 进行最终更新。"
+                            )
                         }
                     }
                     .collect { chunk ->
                         if (stateHolder.apiJob != thisJob || stateHolder._currentStreamingAiMessageId.value != aiMessageId) {
                             Log.w(
                                 "ApiHandler",
-                                "接收到过时或无效数据块，消息ID: $aiMessageId, 当前流式ID: ${stateHolder._currentStreamingAiMessageId.value}"
+                                "接收到过时或无效数据块，消息ID: $aiMessageId, 当前流式ID: ${stateHolder._currentStreamingAiMessageId.value}, 当前Job: ${stateHolder.apiJob}, 此块Job: $thisJob"
                             )
-                            thisJob?.cancel(java.util.concurrent.CancellationException("API job changed during collection"))
+                            thisJob?.cancel(java.util.concurrent.CancellationException("API job 或 streaming ID 已更改，停止收集旧数据块"))
                             return@collect
                         }
+
                         val currentChunkIndex =
                             stateHolder.messages.indexOfFirst { it.id == aiMessageId }
                         if (currentChunkIndex != -1) {
                             processChunk(currentChunkIndex, chunk, aiMessageId)
                         } else {
-                            Log.e("ApiHandler", "在collect中未找到消息ID $aiMessageId 进行块处理。")
+                            Log.e(
+                                "ApiHandler",
+                                "在collect中未找到消息ID $aiMessageId 进行块处理。列表大小: ${stateHolder.messages.size}"
+                            )
+                            thisJob?.cancel(java.util.concurrent.CancellationException("目标消息 $aiMessageId 在收集中途消失"))
+                            return@collect
                         }
                     }
             } catch (e: java.util.concurrent.CancellationException) {
-                Log.d("ApiHandler", "外部作业 $aiMessageId 被取消: ${e.message}")
+                Log.d("ApiHandler", "外部作业 (流处理协程 $aiMessageId) 被取消: ${e.message}")
+                currentTextBuilder.clear()
+                currentReasoningBuilder.clear()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                Log.d(
+                    "ApiHandler",
+                    "外部作业 (流处理协程 $aiMessageId) 被Ktor/coroutine取消: ${e.message}"
+                )
                 currentTextBuilder.clear()
                 currentReasoningBuilder.clear()
             } catch (e: Exception) {
+                Log.e("ApiHandler", "流处理协程 $aiMessageId 发生未捕获的异常: ${e.message}", e)
                 updateMessageWithError(aiMessageId, e)
                 currentTextBuilder.clear()
                 currentReasoningBuilder.clear()
@@ -286,11 +269,12 @@ class ApiHandler(
                     if (stateHolder._isApiCalling.value && stateHolder._currentStreamingAiMessageId.value == aiMessageId) {
                         stateHolder._isApiCalling.value = false
                         stateHolder._currentStreamingAiMessageId.value = null
+                        Log.d("ApiHandler", "在 finally 中重置了消息 $aiMessageId 的 API 调用状态。")
                     }
                 }
                 Log.d(
                     "ApiHandler",
-                    "流处理协程 $aiMessageId (job: $thisJob) 完成/结束。当前apiJob: ${stateHolder.apiJob}"
+                    "流处理协程 $aiMessageId (job: $thisJob) 完成/结束 (finally)。当前apiJob: ${stateHolder.apiJob}"
                 )
             }
         }
@@ -307,12 +291,21 @@ class ApiHandler(
             return
         }
 
-        val actualCurrentMessage = stateHolder.messages[index] // 操作 SnapshotStateList
+        val actualCurrentMessage = stateHolder.messages[index]
         val choice = chunk.choices?.firstOrNull()
         val delta = choice?.delta
         val chunkContent = delta?.content
         val chunkReasoning = delta?.reasoningContent
         var contentChanged = false
+
+        // --- 新增日志 ---
+        Log.d(
+            "ApiHandlerProcessChunk",
+            "MsgID: ${messageIdForLog.take(8)}, chunkContent: '${chunkContent?.take(50)}', chunkReasoning: '${
+                chunkReasoning?.take(50)
+            }'"
+        )
+        // --- 新增日志结束 ---
 
         if (!chunkContent.isNullOrEmpty()) {
             currentTextBuilder.append(chunkContent)
@@ -321,6 +314,14 @@ class ApiHandler(
         if (!chunkReasoning.isNullOrEmpty()) {
             currentReasoningBuilder.append(chunkReasoning)
             contentChanged = true
+            // --- 新增日志 ---
+            Log.d(
+                "ApiHandlerProcessChunk",
+                "MsgID: ${messageIdForLog.take(8)}, appended to currentReasoningBuilder: '${
+                    currentReasoningBuilder.toString().take(50)
+                }'"
+            )
+            // --- 新增日志结束 ---
         }
 
         var newContentStarted = actualCurrentMessage.contentStarted
@@ -333,17 +334,30 @@ class ApiHandler(
             val updatedText = currentTextBuilder.toString()
             val updatedReasoningStr = currentReasoningBuilder.toString()
             val finalReasoning =
-                if (updatedReasoningStr.isEmpty() && actualCurrentMessage.reasoning == null && chunkReasoning.isNullOrEmpty()) null else updatedReasoningStr
+                if (updatedReasoningStr.isNotEmpty() || (actualCurrentMessage.reasoning != null && chunkReasoning == null && choice?.finishReason != "stop")) {
+                    updatedReasoningStr
+                } else {
+                    null
+                }
+
             val updatedMsg = actualCurrentMessage.copy(
                 text = updatedText,
                 reasoning = finalReasoning,
                 contentStarted = newContentStarted
             )
-            stateHolder.messages[index] = updatedMsg // 操作 SnapshotStateList
+            // --- 新增日志 ---
+            Log.d(
+                "ApiHandlerProcessChunk",
+                "MsgID: ${messageIdForLog.take(8)}, updating message. Reasoning: '${
+                    updatedMsg.reasoning?.take(50)
+                }', Text: '${updatedMsg.text.take(50)}', ContentStarted: ${updatedMsg.contentStarted}"
+            )
+            // --- 新增日志结束 ---
+            stateHolder.messages[index] = updatedMsg
 
-            if (chunkContent != null && !chunkReasoning.isNullOrEmpty() && stateHolder.reasoningCompleteMap[actualCurrentMessage.id] == true) {
+            if (!chunkReasoning.isNullOrEmpty() && stateHolder.reasoningCompleteMap[actualCurrentMessage.id] == true) {
                 stateHolder.reasoningCompleteMap[actualCurrentMessage.id] = false
-            } else if (chunkContent != null && (chunkReasoning.isNullOrEmpty() && choice?.finishReason != "stop") && stateHolder.reasoningCompleteMap[actualCurrentMessage.id] != true) {
+            } else if (chunkContent != null && chunkReasoning.isNullOrEmpty() && choice?.finishReason != "stop" && stateHolder.reasoningCompleteMap[actualCurrentMessage.id] != true) {
                 stateHolder.reasoningCompleteMap[actualCurrentMessage.id] = true
             }
         }
@@ -351,6 +365,7 @@ class ApiHandler(
         if (choice?.finishReason == "stop" && delta?.reasoningContent.isNullOrEmpty()) {
             if (stateHolder.reasoningCompleteMap[actualCurrentMessage.id] != true) {
                 stateHolder.reasoningCompleteMap[actualCurrentMessage.id] = true
+                Log.d("ApiHandler", "消息 ${actualCurrentMessage.id.take(8)} 推理因 stop 标记完成。")
             }
         }
     }
@@ -360,8 +375,14 @@ class ApiHandler(
     }
 
     private suspend fun updateMessageWithError(messageId: String, error: Throwable) {
+        Log.e(
+            "ApiHandler",
+            "updateMessageWithError 为消息 $messageId, 错误: ${error.message}",
+            error
+        )
         currentTextBuilder.clear()
         currentReasoningBuilder.clear()
+
         withContext(Dispatchers.Main.immediate) {
             val idx = stateHolder.messages.indexOfFirst { it.id == messageId }
             if (idx != -1) {
@@ -378,7 +399,7 @@ class ApiHandler(
                             }
                         )
 
-                        else -> "错误: ${error.message ?: "未知错误"}"
+                        else -> "处理错误: ${error.message ?: "未知错误"}"
                     }
                     val errorMsg = msg.copy(
                         text = msg.text + errorPrefix + errorTextContent,
@@ -386,14 +407,17 @@ class ApiHandler(
                         contentStarted = true,
                         reasoning = null
                     )
-                    stateHolder.messages[idx] = errorMsg // 操作 SnapshotStateList
-                    stateHolder.messageAnimationStates[messageId] = true
+                    stateHolder.messages[idx] = errorMsg
+                    if (stateHolder.messageAnimationStates[messageId] != true) {
+                        stateHolder.messageAnimationStates[messageId] = true
+                    }
                 }
             }
             if (stateHolder._currentStreamingAiMessageId.value == messageId && stateHolder._isApiCalling.value) {
                 stateHolder._isApiCalling.value = false
                 stateHolder._currentStreamingAiMessageId.value = null
-                stateHolder.apiJob?.cancel(java.util.concurrent.CancellationException("流处理中发生错误: ${error.message}"))
+                stateHolder.apiJob?.cancel(java.util.concurrent.CancellationException("流处理中发生错误，已更新UI: ${error.message}"))
+                Log.d("ApiHandler", "错误处理后重置了消息 $messageId 的 API 调用状态。")
             }
         }
     }
@@ -403,7 +427,7 @@ class ApiHandler(
             val errorJson = jsonParserForError.decodeFromString<BackendErrorContent>(errorBody)
             "后端错误: ${errorJson.message ?: response.status.description} (状态码: ${response.status.value}, 内部代码: ${errorJson.code ?: "N/A"})"
         } catch (e: Exception) {
-            "后端错误 ${response.status.value}: ${errorBody.take(150)}${if (errorBody.length > 150) "..." else ""}"
+            "后端服务错误 ${response.status.value}: ${errorBody.take(150)}${if (errorBody.length > 150) "..." else ""}"
         }
     }
 }

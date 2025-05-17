@@ -1,6 +1,6 @@
-# .gitignore 文件内容
+
 venv/
 __pycache__/
 *.pyc
-.env  # 非常重要！阻止 API 密钥被提交
+.env  
 .vercel

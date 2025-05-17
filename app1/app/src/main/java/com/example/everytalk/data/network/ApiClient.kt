@@ -54,15 +54,12 @@ object ApiClient {
     }
 
     // --- 新增：后端服务器 URL 列表 ---
-    // 你可以从配置、远端或硬编码这些 URL
-    // 列表中的顺序将是尝试连接的顺序
     private val backendProxyUrls = listOf(
-        "https://backdaitalk-production.up.railway.app/chat",//railway
         "https://kunze999-backendai.hf.space/chat",//hugging face
-
+        "https://backdaitalk-production.up.railway.app/chat",//railway
+        "http://192.168.0.2:8000/chat"
     )
     // --- 新增结束 ---
-
 
     @Serializable
     data class BackendStreamChunk(

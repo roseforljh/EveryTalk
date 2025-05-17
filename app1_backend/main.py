@@ -1,19 +1,22 @@
-# --- main.py: EzTalk Proxy v1.8.14 (SSE极致优化、小bug修复、增强lifespan日志) ---
-
 import os
 import orjson
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Literal, Optional, AsyncGenerator
+from typing import List, Dict, Any, Literal, Optional, AsyncGenerator, Union
 import httpx
 import logging
 from contextlib import asynccontextmanager
 import asyncio
-import logging
+import re
 
-# ==== 日志配置 ====
+from dotenv import load_dotenv
+load_dotenv()
+
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
 LOG_LEVEL_FROM_ENV = os.getenv("LOG_LEVEL", "INFO").upper()
 numeric_level = getattr(logging, LOG_LEVEL_FROM_ENV, logging.INFO)
 logging.basicConfig(
@@ -25,74 +28,60 @@ logger = logging.getLogger("EzTalkProxy")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 logging.getLogger("uvicorn.error").setLevel(logging.INFO)
+logging.getLogger("googleapiclient.discovery_cache").setLevel(logging.ERROR)
 
-# ==== 全局 HTTP 客户端 ====
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID")
+
+if not GOOGLE_API_KEY:
+    logger.critical("CRITICAL: GOOGLE_API_KEY is not set. Google Web Search will FAIL.")
+if not GOOGLE_CSE_ID:
+    logger.critical("CRITICAL: GOOGLE_CSE_ID is not set. Google Web Search will FAIL.")
+
 http_client: Optional[httpx.AsyncClient] = None
 
-print("VERCEL_MAIN_PY_LOADED_TEST: Top of main.py reached.")
-logger = logging.getLogger("EzTalkProxy") # 确保 logger 在使用前已定义
-logger.critical("VERCEL_MAIN_PY_LOGGER_CRITICAL_TEST: Logger active at top of main.py.")
-# ==== Lifespan 管理器 ====
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
     global http_client
-    logger.info("Lifespan: Starting up, attempting to initialize HTTP client...")
+    logger.info("Lifespan: Initializing HTTP client...")
     try:
-        # --- BEGIN: 增强日志 ---
-        raw_api_timeout = os.getenv("API_TIMEOUT", "300")
-        raw_read_timeout = os.getenv("READ_TIMEOUT", "60.0")
-        raw_max_connections = os.getenv("MAX_CONNECTIONS", "200")
-
-        logger.info(f"Lifespan: Raw API_TIMEOUT from env: '{raw_api_timeout}' (defaulting to '300')")
-        logger.info(f"Lifespan: Raw READ_TIMEOUT from env: '{raw_read_timeout}' (defaulting to '60.0')")
-        logger.info(f"Lifespan: Raw MAX_CONNECTIONS from env: '{raw_max_connections}' (defaulting to '200')")
-
-        api_timeout = int(raw_api_timeout)
-        read_timeout = float(raw_read_timeout)
-        max_connections = int(raw_max_connections)
-
-        logger.info(f"Lifespan: Parsed API_TIMEOUT: {api_timeout}")
-        logger.info(f"Lifespan: Parsed READ_TIMEOUT: {read_timeout}")
-        logger.info(f"Lifespan: Parsed MAX_CONNECTIONS: {max_connections}")
-        # --- END: 增强日志 ---
-
+        api_timeout_str = os.getenv("API_TIMEOUT", "300")
+        read_timeout_str = os.getenv("READ_TIMEOUT", "60.0")
+        max_connections_str = os.getenv("MAX_CONNECTIONS", "200")
+        api_timeout = int(api_timeout_str)
+        read_timeout = float(read_timeout_str)
+        max_connections = int(max_connections_str)
+        logger.info(f"Lifespan: HTTP Client Config - API Timeout: {api_timeout}s, Read Timeout: {read_timeout}s, Max Connections: {max_connections}")
         http_client = httpx.AsyncClient(
             timeout=httpx.Timeout(api_timeout, read=read_timeout),
             limits=httpx.Limits(max_connections=max_connections),
-            http2=True,
-            follow_redirects=True,
-            trust_env=False # 通常建议保持 False 以避免意外的系统代理影响
+            http2=True, follow_redirects=True, trust_env=False
         )
-        logger.info(f"Lifespan: HTTP client initialized successfully. Client object: {http_client}")
-    except ValueError as ve: # 更具体地捕获值转换错误
-        logger.error(f"Lifespan: HTTP client initialization failed due to ValueError (likely invalid environment variable format): {ve}", exc_info=True)
+        logger.info("Lifespan: HTTP client initialized successfully.")
+    except ValueError as ve:
+        logger.error(f"Lifespan: HTTP client init failed (ValueError): {ve}", exc_info=True)
         http_client = None
     except Exception as e:
-        logger.error(f"Lifespan: HTTP client initialization failed with an unexpected error: {e}", exc_info=True)
+        logger.error(f"Lifespan: HTTP client init failed (Unexpected error): {e}", exc_info=True)
         http_client = None
-    
-    yield # 应用运行
-
-    logger.info("Lifespan: Shutting down, attempting to close HTTP client...")
+    yield
+    logger.info("Lifespan: Shutting down HTTP client...")
     if http_client:
         try:
             await http_client.aclose()
-            logger.info("Lifespan: HTTP client closed successfully.")
+            logger.info("Lifespan: HTTP client closed.")
         except Exception as e:
-            logger.error(f"Lifespan: Error during HTTP client close: {e}", exc_info=True)
+            logger.error(f"Lifespan: Error closing HTTP client: {e}", exc_info=True)
         finally:
-            http_client = None # 确保在关闭后也设置为 None
-            logger.info("Lifespan: HTTP client set to None after close attempt.")
+            http_client = None
     else:
-        logger.info("Lifespan: HTTP client was None, no closing needed.")
+        logger.info("Lifespan: HTTP client was not initialized or already closed.")
     logger.info("Lifespan: Shutdown complete.")
 
-
-# ==== FastAPI 应用 ====
-APP_VERSION = "1.8.14"
+APP_VERSION = "1.9.9.3" # Increment version for this change
 app = FastAPI(
     title="EzTalk Proxy",
-    description="Proxy for OpenAI, Google etc.",
+    description=f"Proxy for OpenAI, Google Gemini, etc., with Web Search. Version: {APP_VERSION}",
     version=APP_VERSION,
     lifespan=lifespan,
     docs_url="/docs",
@@ -106,31 +95,20 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["*"]
 )
-logger.info("FastAPI application with CORS ready.")
+logger.info(f"FastAPI EzTalk Proxy v{APP_VERSION} initialized with CORS.")
 
-# ==== 常量 ====
 DEFAULT_OPENAI_API_BASE_URL = "https://api.openai.com"
 GOOGLE_API_BASE_URL = "https://generativelanguage.googleapis.com"
 OPENAI_COMPATIBLE_PATH = "/v1/chat/completions"
 COMMON_HEADERS = {"X-Accel-Buffering": "no"}
+MAX_SSE_LINE_LENGTH = 24 * 1024
+SEARCH_RESULT_COUNT = 5
+SEARCH_SNIPPET_MAX_LENGTH = 300
 
-# ==== 数据模型 ====
-class ApiMessage(BaseModel):
-    role: str
-    content: Optional[str] = None
-    name: Optional[str] = None
-
-class ChatRequest(BaseModel):
-    api_address: Optional[str] = None
-    messages: List[ApiMessage]
-    provider: Literal["openai", "google"]
-    model: str
-    api_key: str
-    temperature: Optional[float] = Field(None, ge=0.0, le=2.0)
-    top_p: Optional[float] = Field(None, ge=0.0, le=1.0)
-    max_tokens: Optional[int] = Field(None, gt=0)
-    tools: Optional[List[Dict[str, Any]]] = None
-    tool_config: Optional[Dict[str, Any]] = None
+class OpenAIToolCallFunction(BaseModel): name: Optional[str] = None; arguments: Optional[str] = None
+class OpenAIToolCall(BaseModel): index: Optional[int] = None; id: Optional[str] = None; type: Optional[Literal["function"]] = "function"; function: OpenAIToolCallFunction
+class ApiMessage(BaseModel): role: str; content: Optional[str] = None; name: Optional[str] = None; tool_call_id: Optional[str] = None; tool_calls: Optional[List[OpenAIToolCall]] = None
+class ChatRequest(BaseModel): api_address: Optional[str] = None; messages: List[ApiMessage]; provider: Literal["openai", "google"]; model: str; api_key: str; temperature: Optional[float] = Field(None, ge=0.0, le=2.0); top_p: Optional[float] = Field(None, ge=0.0, le=1.0); max_tokens: Optional[int] = Field(None, gt=0); tools: Optional[List[Dict[str, Any]]] = None; tool_choice: Optional[Union[str, Dict[str, Any]]] = None; use_web_search: Optional[bool] = Field(None, alias="useWebSearch")
 
 def orjson_dumps_bytes_wrapper(data: Any) -> bytes:
     return orjson.dumps(data, option=orjson.OPT_NON_STR_KEYS | orjson.OPT_PASSTHROUGH_DATETIME | orjson.OPT_APPEND_NEWLINE)
@@ -140,271 +118,374 @@ def error_response(code: int, msg: str, headers: Optional[Dict[str, str]] = None
     if headers:
         final_headers.update(headers)
     logger.warning(f"Responding error {code}: {msg}")
-    error_content = {"error": {"message": msg, "code": code, "type": "proxy_error"}}
-    return JSONResponse(
-        status_code=code,
-        content=error_content,
-        headers=final_headers
-    )
-
-# ==== 辅助SSE切包 ====
-MAX_SSE_LINE_LENGTH = 24 * 1024
+    return JSONResponse(status_code=code, content={"error": {"message": msg, "code": code, "type": "proxy_error"}}, headers=final_headers)
 
 def extract_sse_lines(buffer: bytearray):
     lines = []
     start = 0
     while True:
         idx = buffer.find(b'\n', start)
-        if idx == -1: break
-        lin = buffer[start:idx]
-        if lin.endswith(b'\r'): lin = lin[:-1]
-        if len(lin) > MAX_SSE_LINE_LENGTH:
-            logger.warning(f"SSE line too long ({len(lin)}), skipping.")
-            start = idx + 1
-            continue
-        lines.append(lin)
+        if idx == -1:
+            break
+        line = buffer[start:idx].removesuffix(b'\r')
+        if len(line) > MAX_SSE_LINE_LENGTH:
+            logger.warning(f"SSE line too long ({len(line)} bytes), skipping.")
+        else:
+            lines.append(line)
         start = idx + 1
-    rest = buffer[start:]
-    return lines, rest
+    return lines, buffer[start:]
 
-# ==== 流解析 ====
-async def process_sse_line(line_bytes: bytes) -> AsyncGenerator[bytes, None]:
-    event_start = b"data: "
-    done_marker = b"[DONE]"
-    if not line_bytes or not line_bytes.startswith(event_start):
-        return
-    raw_data_bytes = line_bytes[len(event_start):].strip()
-    if not raw_data_bytes or raw_data_bytes == done_marker:
-        return
+async def perform_web_search_google(query: str, request_id: str, num_results: int = SEARCH_RESULT_COUNT) -> List[Dict[str, str]]:
+    logger.info(f"RID-{request_id}: Performing Google Web Search for query: '{query}' (max {num_results} results)")
+    results = []
+    if not GOOGLE_API_KEY or not GOOGLE_CSE_ID:
+        logger.error(f"RID-{request_id}: Google API Key or CSE ID not configured.")
+        return results
+    if not query:
+        logger.warning(f"RID-{request_id}: Google Web Search with empty query.")
+        return results
     try:
-        data = orjson.loads(raw_data_bytes)
+        def search_sync():
+            service = build("customsearch", "v1", developerKey=GOOGLE_API_KEY, cache_discovery=False)
+            res = service.cse().list(q=query, cx=GOOGLE_CSE_ID, num=min(num_results, 10)).execute()
+            return res.get('items', [])
+        search_items = await asyncio.to_thread(search_sync)
+        for i, item in enumerate(search_items): # Add index to search results
+            snippet = item.get('snippet', 'N/A')
+            if len(snippet) > SEARCH_SNIPPET_MAX_LENGTH:
+                snippet = snippet[:SEARCH_SNIPPET_MAX_LENGTH] + "..."
+            results.append({
+                "index": i + 1, # 1-based index for display
+                "title": item.get('title', 'N/A'),
+                "href": item.get('link', 'N/A'),
+                "snippet": snippet
+            })
+        logger.info(f"RID-{request_id}: Google Web Search successful, found {len(results)} results for '{query}'.")
+    except HttpError as e:
+        logger.error(f"RID-{request_id}: Google Web Search HttpError for '{query}': {e.resp.status} {e._get_reason()}", exc_info=False)
+        try:
+            content = orjson.loads(e.content)
+            error_details = content.get("error", {}).get("message", "Unknown Google API error")
+        except:
+            error_details = "Could not parse Google API error content."
+        logger.error(f"RID-{request_id}: Google API error details: {error_details}")
+    except Exception as search_exc:
+        logger.error(f"RID-{request_id}: Google Web Search failed for '{query}': {search_exc}", exc_info=True)
+    return results
+
+def _convert_openai_tools_to_gemini_declarations(openai_tools: List[Dict[str, Any]], request_id: str) -> List[Dict[str, Any]]:
+    declarations = []
+    if not openai_tools:
+        return []
+    for tool_def in openai_tools:
+        if tool_def.get("type") == "function" and "function" in tool_def:
+            func_spec = tool_def["function"]
+            declaration = {
+                "name": func_spec.get("name"),
+                "description": func_spec.get("description"),
+                "parameters": func_spec.get("parameters")
+            }
+            declaration = {k: v for k, v in declaration.items() if v is not None}
+            if declaration.get("name"):
+                declarations.append(declaration)
+            else:
+                logger.warning(f"RID-{request_id}: Google tool conversion: Tool definition missing name: {func_spec}")
+    return declarations
+
+def _convert_openai_tool_choice_to_gemini_tool_config(openai_tool_choice: Union[str, Dict[str, Any]], gemini_declarations: List[Dict[str, Any]], request_id: str) -> Optional[Dict[str, Any]]:
+    if not openai_tool_choice: return None
+    mode = "AUTO"; allowed_function_names = []
+    if isinstance(openai_tool_choice, str):
+        if openai_tool_choice == "none": mode = "NONE"
+        elif openai_tool_choice == "auto": mode = "AUTO"
+        elif openai_tool_choice == "required": mode = "ANY" if gemini_declarations else "AUTO"
+        else: logger.warning(f"RID-{request_id}: Google tool_choice: Unsupported str value '{openai_tool_choice}', defaulting to AUTO."); mode = "AUTO"
+    elif isinstance(openai_tool_choice, dict) and openai_tool_choice.get("type") == "function":
+        func_name = openai_tool_choice.get("function", {}).get("name")
+        if func_name:
+            if any(decl["name"] == func_name for decl in gemini_declarations): mode = "ANY"; allowed_function_names = [func_name]
+            else: logger.warning(f"RID-{request_id}: Google tool_choice: Specified func '{func_name}' not in declared tools. Defaulting to AUTO."); mode = "AUTO"
+        else: mode = "AUTO"
+    else: logger.warning(f"RID-{request_id}: Google tool_choice: Invalid format {openai_tool_choice}. Defaulting to AUTO."); mode = "AUTO"
+    function_calling_config = {"mode": mode}
+    if mode == "ANY" and allowed_function_names: function_calling_config["allowed_function_names"] = allowed_function_names
+    return {"function_calling_config": function_calling_config}
+
+def _convert_api_messages_to_gemini_contents(messages: List[ApiMessage], request_id: str) -> List[Dict[str, Any]]:
+    gemini_contents = []
+    for i, msg in enumerate(messages):
+        if msg.role == "user": gemini_contents.append({"role": "user", "parts": [{"text": msg.content or ""}]})
+        elif msg.role == "system":
+            if msg.content: gemini_contents.append({"role": "user", "parts": [{"text": f"[System Instruction or Context]\n{msg.content}"}]})
+        elif msg.role == "assistant":
+            parts = []
+            if msg.content is not None: parts.append({"text": msg.content})
+            if msg.tool_calls:
+                for tc in msg.tool_calls:
+                    if tc.type == "function" and tc.function.name and tc.function.arguments is not None:
+                        try: args_obj = orjson.loads(tc.function.arguments)
+                        except orjson.JSONDecodeError: logger.warning(f"RID-{request_id}: Google msg conversion: Invalid JSON args for '{tc.function.name}'. Args: {tc.function.arguments[:100]}"); args_obj = {}
+                        parts.append({"functionCall": {"name": tc.function.name, "args": args_obj}})
+                    else: logger.warning(f"RID-{request_id}: Google msg conversion: Incomplete assistant tool_call: {tc.model_dump_json(exclude_none=True)}")
+            if parts: gemini_contents.append({"role": "model", "parts": parts})
+            elif not msg.content and not msg.tool_calls: logger.debug(f"RID-{request_id}: Google msg conversion: Assistant message empty. Original: {msg.model_dump_json(exclude_none=True)}")
+        elif msg.role == "tool":
+            if msg.name and msg.content is not None:
+                try: response_obj = orjson.loads(msg.content)
+                except orjson.JSONDecodeError: logger.error(f"RID-{request_id}: Google msg conversion: 'tool' content for '{msg.name}' not valid JSON: {msg.content[:100]}"); continue
+                gemini_contents.append({"role": "user", "parts": [{"functionResponse": {"name": msg.name, "response": response_obj}}]})
+            else: logger.warning(f"RID-{request_id}: Google msg conversion: 'tool' message missing 'name' or 'content': {msg.model_dump_json(exclude_none=True)}")
+    return gemini_contents
+
+def is_valid_real_url(url):
+    """判断是不是 http:// 或 https:// 链接，且非 #"""
+    return isinstance(url, str) and url.lower().startswith(("http://", "https://")) and url != "#"
+
+async def process_openai_sse_line(line_bytes: bytes, request_id: str, search_results_for_linking: Optional[List[Dict[str, str]]] = None) -> AsyncGenerator[bytes, None]:
+    if not line_bytes.startswith(b"data: ") or line_bytes.endswith(b"[DONE]"): return
+    raw_data = line_bytes[len(b"data: "):].strip()
+    if not raw_data: return
+    try:
+        data = orjson.loads(raw_data)
         for choice in data.get('choices', []):
             delta = choice.get('delta', {})
+
+            if "tool_calls" in delta and delta["tool_calls"]:
+                yield orjson_dumps_bytes_wrapper({"type": "tool_calls_chunk", "data": delta["tool_calls"]})
+
             if "reasoning_content" in delta and delta["reasoning_content"]:
                 yield orjson_dumps_bytes_wrapper({"type": "reasoning", "text": delta["reasoning_content"]})
-            if "content" in delta and delta["content"]:
-                yield orjson_dumps_bytes_wrapper({"type": "content", "text": delta["content"]})
-            finish_reason = delta.get("finish_reason") or choice.get("finish_reason")
+
+            if "content" in delta and delta["content"] is not None:
+                original_content_from_delta = delta["content"]
+                # logger.info(f"RID-{request_id}: RAW DELTA CONTENT FROM AI: '{original_content_from_delta}'") # Can be noisy
+
+                content_to_send = original_content_from_delta
+
+                # ----- MODIFIED: Convert (Source X) to plain text [Source X] -----
+                if search_results_for_linking and content_to_send and "Source" in content_to_send:
+                    def replace_source_markers_with_plain_text(match_obj):
+                        matched_text = match_obj.group(0)
+                        numbers_text = match_obj.group(1) # e.g., "3，4，5" or "3、4、5"
+
+                        numbers = re.findall(r'[0-9０-９]+', numbers_text)
+
+                        if not numbers:
+                            logger.warning(f"RID-{request_id}: replace_source_markers: No numbers found in numbers_text='{numbers_text}'. Original: '{matched_text}'")
+                            return matched_text # Return original if no numbers parsed
+
+                        processed_numbers = []
+                        for num_str in numbers:
+                            try:
+                                # Validate if the number (1-based) is within the range of available search results
+                                source_idx_1_based = int(num_str)
+                                if 1 <= source_idx_1_based <= len(search_results_for_linking):
+                                    processed_numbers.append(str(source_idx_1_based))
+                                else:
+                                    logger.warning(f"RID-{request_id}: Invalid source number {source_idx_1_based} (max: {len(search_results_for_linking)}) in '{matched_text}'. Omitting from marker.")
+                                    # Optionally, include an error marker: processed_numbers.append(f"{num_str}[invalid]")
+                            except ValueError:
+                                logger.warning(f"RID-{request_id}: Could not convert source number '{num_str}' to int in '{matched_text}'. Omitting from marker.")
+                                # Optionally: processed_numbers.append(f"{num_str}[err]")
+                        
+                        if not processed_numbers: # If all numbers were invalid or unparsable
+                            return matched_text # Or some other fallback like "[Invalid Source Ref]"
+
+                        # Determine bracket type based on original
+                        bracket_open = "（" if matched_text.startswith("（") else "("
+                        bracket_close = "）" if matched_text.endswith("）") else ")"
+                        
+                        # Join valid numbers with a comma
+                        return f"{bracket_open}Source {', '.join(processed_numbers)}{bracket_close}"
+
+
+                    source_pattern_multi = r"[（(][\*]*Source\s*([0-9０-９、,，\s和]+)[\*]*[)）]"
+                    
+                    temp_content_to_send = re.sub(source_pattern_multi, replace_source_markers_with_plain_text, content_to_send)
+
+                    if temp_content_to_send != content_to_send:
+                        # logger.info(f"RID-{request_id}: Content after plain text source marker replacement: '{temp_content_to_send}'")
+                        content_to_send = temp_content_to_send
+                    elif "Source" in original_content_from_delta:
+                         logger.warning(f"RID-{request_id}: 'Source' found but no replacement made by plain text marker logic: '{original_content_from_delta[:120]}...'")
+                # ----- END MODIFICATION -----
+
+                yield orjson_dumps_bytes_wrapper({"type": "content", "text": content_to_send})
+
+            finish_reason = choice.get("finish_reason") or delta.get("finish_reason")
             if finish_reason:
                 yield orjson_dumps_bytes_wrapper({"type": "finish", "reason": finish_reason})
     except orjson.JSONDecodeError:
-        logger.warning(f"process_sse_line: orjson parse error. {line_bytes[:100]!r}")
+        logger.warning(f"RID-{request_id}: OpenAI SSE: JSON parse error. Data: {raw_data[:100]!r}")
     except Exception as e:
-        logger.error(f"process_sse_line: Unexpected error {e}", exc_info=True)
+        logger.error(f"RID-{request_id}: OpenAI SSE: Error processing line: {e}", exc_info=True)
 
-async def process_google_sse_line(line_bytes: bytes) -> AsyncGenerator[bytes, None]:
-    event_start = b"data: "
-    if not line_bytes.startswith(event_start):
-        return
-    data_bytes = line_bytes[len(event_start):].strip()
-    if not data_bytes:
-        return
+async def process_google_sse_line(line_bytes: bytes, request_id: str) -> AsyncGenerator[bytes, None]:
+    if not line_bytes.startswith(b"data: "): return
+    raw_data = line_bytes[len(b"data: "):].strip()
+    if not raw_data: return
     try:
-        data = orjson.loads(data_bytes)
+        data = orjson.loads(raw_data)
         for candidate in data.get('candidates', []):
-            content_part = candidate.get('content', {}).get('parts', [{}])[0]
-            text_content = content_part.get('text', '')
-            if text_content:
-                yield orjson_dumps_bytes_wrapper({"type": "content", "text": text_content})
+            text_content = ""; function_calls_parts = []
+            if candidate.get("content", {}).get("parts"):
+                for part in candidate["content"]["parts"]:
+                    if "text" in part: text_content += part["text"]
+                    if "functionCall" in part: function_calls_parts.append(part["functionCall"])
+            if text_content: yield orjson_dumps_bytes_wrapper({"type": "content", "text": text_content})
+            for fc_part in function_calls_parts:
+                proxy_fc_id = f"gemini_fc_{os.urandom(4).hex()}"
+                yield orjson_dumps_bytes_wrapper({"type": "google_function_call_request", "id": proxy_fc_id, "name": fc_part.get("name"), "arguments_obj": fc_part.get("args", {})})
             finish_reason = candidate.get('finishReason')
-            if finish_reason:
-                yield orjson_dumps_bytes_wrapper({"type": "finish", "reason": finish_reason})
-    except orjson.JSONDecodeError:
-        logger.warning(f"process_google_sse_line: orjson parse error. {data_bytes[:100]!r}")
-    except Exception as e:
-        logger.error(f"process_google_sse_line: Unexpected error {e}", exc_info=True)
+            if finish_reason: yield orjson_dumps_bytes_wrapper({"type": "finish", "reason": finish_reason})
+    except orjson.JSONDecodeError: logger.warning(f"RID-{request_id}: Google SSE: JSON parse error. Data: {raw_data[:100]!r}")
+    except Exception as e: logger.error(f"RID-{request_id}: Google SSE: Error processing line: {e}", exc_info=True)
 
-# 在你的 FastAPI app 定义之后 (例如，在 @app.post("/chat") 之前或之后)
-@app.get("/health", status_code=200, include_in_schema=False) # include_in_schema=False 使其不显示在API文档中
-async def health_check():
-    if http_client is None: # 简单的检查 http_client 是否已初始化
-         return {"status": "warning", "detail": "HTTP client not initialized"}
-    return {"status": "ok"}
-# ==== 主接口 ====
-@app.post("/chat", response_class=StreamingResponse, summary="Proxy for AI Chat", tags=["AI Proxy"])
-async def chat_proxy(
-    request_data: ChatRequest,
-    current_http_client: Optional[httpx.AsyncClient] = Depends(lambda: http_client)
-):
+@app.get("/health", status_code=200, include_in_schema=False)
+async def health_check(): return {"status": "ok" if http_client else "warning", "detail": "HTTP client " + ("initialized" if http_client else "not initialized")}
+
+@app.post("/chat", response_class=StreamingResponse, summary="Proxy for AI Chat Completions", tags=["AI Proxy"])
+async def chat_proxy(request_data: ChatRequest, client: Optional[httpx.AsyncClient] = Depends(lambda: http_client)):
     request_id = os.urandom(8).hex()
-    logger.info(f"RID-{request_id}: Received /chat {request_data.provider} {request_data.model}")
+    logger.info(f"RID-{request_id}: Received /chat for {request_data.provider} model {request_data.model}. WebSearch: {request_data.use_web_search}")
+    if not client: return error_response(503, "Service unavailable: HTTP client not initialized.")
+    payload: Dict[str, Any] = {}; url: str = ""; headers: Dict[str, str] = {"Content-Type": "application/json"}; params: Optional[Dict[str, str]] = None; is_openai_provider: bool = False
+    processed_messages_dicts = [m.model_dump(exclude_none=True) for m in request_data.messages]
+    search_results_for_linking_this_request: List[Dict[str, str]] = []
 
-    if current_http_client is None: # 简化检查，因为类型检查由 Depends 和类型提示处理
-        logger.error(f"RID-{request_id}: HTTP client is None. Cannot process request.")
-        return error_response(503, "Service unavailable: HTTP client not initialized properly.")
-    if not isinstance(current_http_client, httpx.AsyncClient): # 双重保险
-        logger.error(f"RID-{request_id}: current_http_client is not an AsyncClient instance. Type: {type(current_http_client)}")
-        return error_response(503, "Service unavailable: HTTP client in unexpected state.")
-
+    if request_data.use_web_search and GOOGLE_API_KEY and GOOGLE_CSE_ID:
+        user_query = "";
+        for msg_obj in reversed(request_data.messages):
+            if msg_obj.role == "user" and msg_obj.content: user_query = msg_obj.content.strip(); break
+        if user_query:
+            search_results = await perform_web_search_google(user_query, request_id)
+            # Store the full results with 1-based index for linking/display
+            search_results_for_linking_this_request = search_results
+            if search_results:
+                # The system prompt for the AI still asks it to cite (Source X)
+                search_context_parts = [f"You are an AI assistant. Please use the following web search results to answer the user's query: '{user_query}'. When referencing information from a specific search result in your answer, please cite it using (Source X) where X is the number of the source. Search Results:"]
+                for res in search_results: # Iterate through the results which now have 'index'
+                    search_context_parts.append(f"{res['index']}. Title: {res.get('title', 'N/A')}\n   Snippet: {res.get('snippet', 'N/A')}\n   Source URL (for your reference, do not output directly): {res.get('href', 'N/A')}")
+                search_context_msg_content = "\n\n".join(search_context_parts)
+                system_search_context_msg_dict = ApiMessage(role="system", content=search_context_msg_content).model_dump(exclude_none=True)
+                
+                model_name_lower = request_data.model.lower()
+                is_deepseek_reasoner_like = ("deepseek-reasoner" in model_name_lower or "deepseek" in model_name_lower) and request_data.provider == "openai"
+                if is_deepseek_reasoner_like:
+                    if processed_messages_dicts and processed_messages_dicts[0].get("role") == "system":
+                        existing_system_content = processed_messages_dicts[0].get("content", "")
+                        processed_messages_dicts[0]["content"] = f"{search_context_msg_content}\n\n{existing_system_content}".strip()
+                        logger.info(f"RID-{request_id}: Google Web search context merged into existing leading system message for DeepSeek model.")
+                    else:
+                        processed_messages_dicts.insert(0, system_search_context_msg_dict)
+                        logger.info(f"RID-{request_id}: Google Web search context added as new leading system message for DeepSeek model.")
+                else:
+                    last_user_msg_idx = next((i for i, msg_d in reversed(list(enumerate(processed_messages_dicts))) if msg_d.get("role") == "user"), -1)
+                    insert_pos = last_user_msg_idx if last_user_msg_idx != -1 else 0
+                    if last_user_msg_idx != -1:
+                        processed_messages_dicts.insert(last_user_msg_idx, system_search_context_msg_dict)
+                    else:
+                        processed_messages_dicts.insert(0, system_search_context_msg_dict)
+                    logger.info(f"RID-{request_id}: Google Web search context added (standard placement).")
+            else: logger.info(f"RID-{request_id}: No Google Web search results for '{user_query}', or search failed.")
+        elif request_data.use_web_search: logger.warning(f"RID-{request_id}: Web search requested, but no user query found.")
+    elif request_data.use_web_search: logger.warning(f"RID-{request_id}: Web search requested, but GOOGLE_API_KEY or GOOGLE_CSE_ID not configured.")
 
     try:
         if request_data.provider == "openai":
-            target_base_url = request_data.api_address.strip() if request_data.api_address else DEFAULT_OPENAI_API_BASE_URL
-            url = f"{target_base_url.rstrip('/')}{OPENAI_COMPATIBLE_PATH}"
-            headers = {"Content-Type": "application/json", "Accept": "application/json"} # OpenAI 通常接受 application/json
-            headers.update({"Authorization": f"Bearer {request_data.api_key}"})
-            payload = {
-                "model": request_data.model,
-                "messages": [m.model_dump(exclude_unset=True, exclude_none=True) for m in request_data.messages],
-                "stream": True
-            }
+            is_openai_provider = True; base = request_data.api_address.strip() if request_data.api_address else DEFAULT_OPENAI_API_BASE_URL
+            url = f"{base.rstrip('/')}{OPENAI_COMPATIBLE_PATH}"; headers["Authorization"] = f"Bearer {request_data.api_key}"
+            payload = {"model": request_data.model, "messages": processed_messages_dicts, "stream": True}
             if request_data.temperature is not None: payload["temperature"] = request_data.temperature
             if request_data.top_p is not None: payload["top_p"] = request_data.top_p
             if request_data.max_tokens is not None: payload["max_tokens"] = request_data.max_tokens
-            if request_data.tools is not None: payload["tools"] = request_data.tools
-            if request_data.tool_config is not None: payload["tool_config"] = request_data.tool_config
-            is_openai_provider = True; params = None
+            if request_data.tools: payload["tools"] = request_data.tools
+            if request_data.tool_choice: payload["tool_choice"] = request_data.tool_choice
         elif request_data.provider == "google":
-            url = f"{GOOGLE_API_BASE_URL}/v1beta/models/{request_data.model}:streamGenerateContent"
-            headers = {"Content-Type": "application/json"} # Google API 通常用 application/json 作为请求体
-                                                           # Accept header for SSE is handled by httpx when streaming
-            params = {"key": request_data.api_key, "alt": "sse"}
-            contents = []
-            google_role_map = {"assistant": "model", "user": "user", "tool": "function"} # "tool" 角色对 Google GenAI 可能需要特殊处理
-            for msg in request_data.messages:
-                google_role = google_role_map.get(msg.role)
-                if google_role and msg.content: # 确保有内容
-                    contents.append({"role": google_role, "parts": [{"text": msg.content}]})
-                # 注意：Google GenAI 对 "tool" 角色的支持可能与 OpenAI 不同，这里简化处理
-            payload = {"contents": contents}
+            is_openai_provider = False; url = f"{GOOGLE_API_BASE_URL}/v1beta/models/{request_data.model}:streamGenerateContent"; params = {"key": request_data.api_key, "alt": "sse"}
+            temp_api_messages_for_google_conversion = [ApiMessage(**msg_dict) for msg_dict in processed_messages_dicts]
+            payload["contents"] = _convert_api_messages_to_gemini_contents(temp_api_messages_for_google_conversion, request_id)
+            gemini_declarations = [];
+            if request_data.tools:
+                gemini_declarations = _convert_openai_tools_to_gemini_declarations(request_data.tools, request_id)
+                if gemini_declarations: payload["tools"] = [{"functionDeclarations": gemini_declarations}]
+            if request_data.tool_choice:
+                gemini_tool_config = _convert_openai_tool_choice_to_gemini_tool_config(request_data.tool_choice, gemini_declarations, request_id)
+                if gemini_tool_config: payload["toolConfig"] = gemini_tool_config
             generation_config = {}
             if request_data.temperature is not None: generation_config["temperature"] = request_data.temperature
             if request_data.top_p is not None: generation_config["topP"] = request_data.top_p
             if request_data.max_tokens is not None: generation_config["maxOutputTokens"] = request_data.max_tokens
             if generation_config: payload["generationConfig"] = generation_config
-            if request_data.tools: payload["tools"] = request_data.tools # Google GenAI 的 tools 格式可能也不同
-            is_openai_provider = False
-        else:
-            logger.warning(f"RID-{request_id}: Invalid provider specified: {request_data.provider}")
-            return error_response(400, f"Invalid provider specified: {request_data.provider}")
-    except Exception as e:
-        logger.error(f"RID-{request_id}: Error preparing payload for {request_data.provider}: {e}", exc_info=True)
-        return error_response(500, f"Internal error during request preparation: {str(e)}")
+        else: return error_response(400, f"Invalid provider: {request_data.provider}")
+    except Exception as e: logger.error(f"RID-{request_id}: Error preparing payload for {request_data.provider}: {e}", exc_info=True); return error_response(500, f"Internal error during request preparation: {str(e)}")
 
     async def stream_generator() -> AsyncGenerator[bytes, None]:
-        buffer = bytearray()
-        upstream_request_successful = False
+        buffer = bytearray(); upstream_ok = False
         try:
-            logger.info(f"RID-{request_id}: Making POST request to URL: {url} with params: {params}")
-            # logger.debug(f"RID-{request_id}: Payload: {payload}") # 注意：API Key 在 payload 或 headers 中，按需取消注释
-            async with current_http_client.stream("POST", url, headers=headers, json=payload, params=params) as resp:
-                logger.info(f"RID-{request_id}: Upstream response status: {resp.status_code}")
-                logger.debug(f"RID-{request_id}: Upstream response headers: {resp.headers}")
+            # MODIFIED: Send web search results first if available
+            if request_data.use_web_search and search_results_for_linking_this_request:
+                logger.info(f"RID-{request_id}: Sending web_search_results event with {len(search_results_for_linking_this_request)} items.")
+                yield orjson_dumps_bytes_wrapper({
+                    "type": "web_search_results", 
+                    "results": search_results_for_linking_this_request
+                })
+            # END MODIFICATION
+
+            logger.info(f"RID-{request_id}: POST to {url}, provider: {request_data.provider}")
+            async with client.stream("POST", url, headers=headers, json=payload, params=params) as resp:
+                logger.info(f"RID-{request_id}: Upstream status: {resp.status_code}")
                 if not (200 <= resp.status_code < 300):
-                    error_body_bytes = await resp.aread()
-                    error_text = error_body_bytes.decode("utf-8", errors="replace")
-                    logger.error(f"RID-{request_id}: Upstream API request failed! Status: {resp.status_code}, Response: {error_text[:500]}")
-                    try:
-                        upstream_error_data = orjson.loads(error_text)
-                        err_msg_detail = upstream_error_data.get("error", {}).get("message") or upstream_error_data.get("message", error_text[:200])
-                        yield orjson_dumps_bytes_wrapper({"type": "error", "message": err_msg_detail, "upstream_status": resp.status_code})
-                    except Exception as parse_exc:
-                        logger.warning(f"RID-{request_id}: Could not parse upstream error JSON: {parse_exc}. Raw error: {error_text[:200]}")
-                        yield orjson_dumps_bytes_wrapper({"type": "error", "message": f"Upstream error {resp.status_code}: {error_text[:200]}", "upstream_status": resp.status_code})
-                    yield orjson_dumps_bytes_wrapper({"type": "finish", "reason": "error"})
-                    return
-
-                upstream_request_successful = True
-                logger.info(f"RID-{request_id}: Successfully connected to upstream. Starting to stream response.")
+                    err_body = await resp.aread(); err_text = err_body.decode("utf-8", errors="replace")
+                    logger.error(f"RID-{request_id}: Upstream error {resp.status_code}: {err_text[:500]}")
+                    try: err_data = orjson.loads(err_text); msg = err_data.get("error", {}).get("message", err_text[:200])
+                    except: msg = err_text[:200]
+                    yield orjson_dumps_bytes_wrapper({"type": "error", "message": msg, "upstream_status": resp.status_code}); yield orjson_dumps_bytes_wrapper({"type": "finish", "reason": "error"}); return
+                upstream_ok = True
                 async for chunk in resp.aiter_raw():
-                    if not chunk:
-                        # logger.debug(f"RID-{request_id}: Received empty chunk from upstream.") # 可能过于频繁
-                        continue
-                    # logger.debug(f"RID-{request_id}: Received chunk of size {len(chunk)} from upstream.")
-                    buffer.extend(chunk)
-                    lines, buffer = extract_sse_lines(buffer) # 使用之前定义的函数
-                    has_lines = False
-                    for line in lines:
-                        if not line.strip(): continue
-                        has_lines = True
+                    if not chunk: continue
+                    buffer.extend(chunk); lines, buffer = extract_sse_lines(buffer)
+                    for line_bytes in lines:
+                        if not line_bytes.strip(): continue
                         if is_openai_provider:
-                            async for formatted_chunk in process_sse_line(line):
+                            # Pass search_results_for_linking_this_request for validation purposes
+                            async for formatted_chunk in process_openai_sse_line(line_bytes, request_id, search_results_for_linking_this_request if request_data.use_web_search else None):
                                 yield formatted_chunk
                         else:
-                            async for formatted_chunk in process_google_sse_line(line):
+                            async for formatted_chunk in process_google_sse_line(line_bytes, request_id):
                                 yield formatted_chunk
-                    if has_lines or len(chunk) > 256: # 如果有解析出行或者原始块较大，则让步
-                        await asyncio.sleep(0.0001)
-
-                # 处理 buffer 中剩余的最后数据 (如果上游没有以 \n 结尾)
+                    await asyncio.sleep(0.0001)
                 if buffer:
-                    logger.info(f"RID-{request_id}: Processing remaining buffer data of size {len(buffer)} after stream end.")
-                    line = buffer.strip() # 通常 SSE 最后一行也是 data: ...
-                    if line:
+                    line_bytes = buffer.strip()
+                    if line_bytes:
                         if is_openai_provider:
-                            async for formatted_chunk in process_sse_line(line):
-                                yield formatted_chunk
+                            async for formatted_chunk in process_openai_sse_line(line_bytes, request_id, search_results_for_linking_this_request if request_data.use_web_search else None): yield formatted_chunk
                         else:
-                            async for formatted_chunk in process_google_sse_line(line):
-                                yield formatted_chunk
-                    buffer.clear()
-
-
-        except httpx.TimeoutException as e:
-            logger.error(f"RID-{request_id}: HTTPX TimeoutException during upstream request to {url}: {e}", exc_info=True)
-            yield orjson_dumps_bytes_wrapper({"type": "error", "message": f"Upstream timeout: {str(e)}"})
-            yield orjson_dumps_bytes_wrapper({"type": "finish", "reason": "timeout_error"})
-        except httpx.RequestError as e: # 包括 ConnectError, ReadError 等
-            logger.error(f"RID-{request_id}: HTTPX RequestError during upstream request to {url}: {e}", exc_info=True)
-            yield orjson_dumps_bytes_wrapper({"type": "error", "message": f"Network error communicating with upstream: {str(e)}"})
-            yield orjson_dumps_bytes_wrapper({"type": "finish", "reason": "network_error"})
-        except asyncio.CancelledError:
-            logger.info(f"RID-{request_id}: Stream generation cancelled by client or server shutdown.")
-            # 通常不需要发送 'finish'，因为连接可能已断开
-            # yield orjson_dumps_bytes_wrapper({"type": "finish", "reason": "cancelled"})
+                            async for formatted_chunk in process_google_sse_line(line_bytes, request_id): yield formatted_chunk
+        except httpx.TimeoutException as e: logger.error(f"RID-{request_id}: Timeout: {e}", exc_info=True); yield orjson_dumps_bytes_wrapper({"type": "error", "message": f"Upstream timeout: {str(e)}"}); yield orjson_dumps_bytes_wrapper({"type": "finish", "reason": "timeout_error"})
+        except httpx.RequestError as e: logger.error(f"RID-{request_id}: Network error: {e}", exc_info=True); yield orjson_dumps_bytes_wrapper({"type": "error", "message": f"Upstream network error: {str(e)}"}); yield orjson_dumps_bytes_wrapper({"type": "finish", "reason": "network_error"})
+        except asyncio.CancelledError: logger.info(f"RID-{request_id}: Stream cancelled by client or shutdown.")
         except Exception as e:
-            logger.error(f"RID-{request_id}: Unexpected exception in stream_generator for {url}: {e}", exc_info=True)
-            # 仅当上游请求未成功时才发送此通用错误，否则可能是客户端断开连接等。
-            if not upstream_request_successful:
-                yield orjson_dumps_bytes_wrapper({"type": "error", "message": f"Internal streaming error: {str(e)}"})
-                yield orjson_dumps_bytes_wrapper({"type": "finish", "reason": "internal_error"})
-        finally:
-            logger.info(f"RID-{request_id}: Stream_generator for {url} finished. Upstream request was successful: {upstream_request_successful}")
+            logger.error(f"RID-{request_id}: Unexpected streaming error: {e}", exc_info=True)
+            if not upstream_ok:
+                 yield orjson_dumps_bytes_wrapper({"type": "error", "message": f"Internal streaming error: {str(e)}"}); yield orjson_dumps_bytes_wrapper({"type": "finish", "reason": "internal_error"})
+        finally: logger.info(f"RID-{request_id}: Stream generator finished. Upstream successful: {upstream_ok}")
 
-    streaming_headers = COMMON_HEADERS.copy()
-    streaming_headers["Content-Type"] = "text/event-stream; charset=utf-8"
-    streaming_headers["Cache-Control"] = "no-cache"
-    streaming_headers["Connection"] = "keep-alive" # 确保连接保持
+    streaming_headers = COMMON_HEADERS.copy(); streaming_headers.update({"Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache", "Connection": "keep-alive"})
+    return StreamingResponse(stream_generator(), media_type="text/event-stream", headers=streaming_headers)
 
-    logger.info(f"RID-{request_id}: Returning StreamingResponse to client with headers: {streaming_headers}")
-    return StreamingResponse(
-        stream_generator(),
-        media_type="text/event-stream", # media_type 必须是 text/event-stream
-        headers=streaming_headers
-    )
-
-# ==== 本地调试入口 ====
 if __name__ == "__main__":
     import uvicorn
-    APP_HOST = os.getenv("HOST", "0.0.0.0")
-    APP_PORT = int(os.getenv("PORT", 8000))
-    DEV_RELOAD = os.getenv("DEV_RELOAD", "false").lower() == "true"
-    
-    # 使用 uvicorn 自己的 log_config，它会覆盖 basicConfig
+    APP_HOST = os.getenv("HOST", "0.0.0.0"); APP_PORT = int(os.getenv("PORT", 8000)); DEV_RELOAD = os.getenv("DEV_RELOAD", "false").lower() == "true"
     log_config = uvicorn.config.LOGGING_CONFIG
-    log_config["formatters"]["default"]["fmt"] = "%(asctime)s %(levelname)-8s [%(name)s:%(module)s:%(lineno)d] - %(message)s"
-    log_config["formatters"]["default"]["datefmt"] = "%Y-%m-%d %H:%M:%S"
-    log_config["formatters"]["access"]["fmt"] = '%(asctime)s %(levelname)-8s [%(name)s:%(module)s:%(lineno)d] - %(client_addr)s - "%(request_line)s" %(status_code)s'
-    log_config["formatters"]["access"]["datefmt"] = "%Y-%m-%d %H:%M:%S"
+    log_config["formatters"]["default"]["fmt"] = "%(asctime)s %(levelname)-8s [%(name)s:%(module)s:%(lineno)d] - %(message)s"; log_config["formatters"]["default"]["datefmt"] = "%Y-%m-%d %H:%M:%S"
+    log_config["formatters"]["access"]["fmt"] = '%(asctime)s %(levelname)-8s [%(name)s:%(module)s:%(lineno)d] - %(client_addr)s - "%(request_line)s" %(status_code)s'; log_config["formatters"]["access"]["datefmt"] = "%Y-%m-%d %H:%M:%S"
+    if "EzTalkProxy" not in log_config["loggers"]: log_config["loggers"]["EzTalkProxy"] = {}
+    log_config["loggers"]["EzTalkProxy"]["handlers"] = ["default"]; log_config["loggers"]["EzTalkProxy"]["level"] = LOG_LEVEL_FROM_ENV; log_config["loggers"]["EzTalkProxy"]["propagate"] = False
+    log_config["loggers"]["uvicorn.error"]["level"] = "INFO"; log_config["loggers"]["uvicorn.access"]["level"] = "WARNING"
+    logger.info(f"Starting Uvicorn: http://{APP_HOST}:{APP_PORT}. Reload: {DEV_RELOAD}. Log Level (EzTalkProxy): {LOG_LEVEL_FROM_ENV}")
+    uvicorn.run("main:app", host=APP_HOST, port=APP_PORT, log_config=log_config, reload=DEV_RELOAD, lifespan="on")
     
-    # 确保我们自定义的 logger 也使用 uvicorn 的 handler 和 formatter
-    log_config["loggers"]["EzTalkProxy"] = {
-        "handlers": ["default"], # uvicorn 的 'default' handler
-        "level": LOG_LEVEL_FROM_ENV,
-        "propagate": False # 避免重复日志
-    }
-
-    logger.info(f"Starting Uvicorn server on http://{APP_HOST}:{APP_PORT}")
-    logger.info(f"Development reload is {'ENABLED' if DEV_RELOAD else 'DISABLED'}")
-    logger.info(f"Application log level (EzTalkProxy) set to: {LOG_LEVEL_FROM_ENV}")
     
-    uvicorn.run(
-        "main:app", # app 实例的路径
-        host=APP_HOST,
-        port=APP_PORT,
-        log_config=log_config,
-        reload=DEV_RELOAD,
-    )
-
     
-
+    

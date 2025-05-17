@@ -43,8 +43,11 @@ class ViewModelStateHolder {
     val _renameInputText = MutableStateFlow("")
 
     // --- **新增：设置对话框显示状态** ---
-    val _showSettingsDialog = MutableStateFlow(false) // <--- 添加这一行
-    // --- **结束新增** ---
+    val _showSettingsDialog = MutableStateFlow(false)
+
+    // 新增：联网搜索模式状态
+    val _isWebSearchEnabled = MutableStateFlow(false)
+
 
 
     fun clearForNewChat() {

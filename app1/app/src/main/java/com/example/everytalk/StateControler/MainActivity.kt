@@ -28,7 +28,7 @@ import com.example.everytalk.data.local.SharedPreferencesDataSource
 import com.example.everytalk.navigation.Screen
 import com.example.everytalk.ui.screens.MainScreen.AppDrawerContent
 import com.example.everytalk.ui.screens.MainScreen.ChatScreen
-import com.example.everytalk.ui.screens.SettingsScreen
+import com.example.everytalk.ui.screens.settings.SettingsScreen
 import com.example.everytalk.ui.theme.App1Theme
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
