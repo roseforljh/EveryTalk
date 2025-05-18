@@ -1,7 +1,7 @@
 package com.example.everytalk.ui.screens.BubbleMain.Main // 您的实际包名
 
 import android.util.Log
-import androidx.compose.animation.ExperimentalAnimationApi // 实验性动画API
+import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -11,115 +11,104 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.example.everytalk.data.DataClass.Message // 确保 Message 类被正确导入
-import com.example.everytalk.data.DataClass.Sender  // 确保 Sender 枚举被正确导入
-import com.example.everytalk.StateControler.AppViewModel // 确保 AppViewModel 被正确导入
+import com.example.everytalk.data.DataClass.Message
+import com.example.everytalk.data.DataClass.Sender
+import com.example.everytalk.StateControler.AppViewModel
+
+// 确保您的 ReasoningToggleAndContent 子组件导入路径正确
+// import com.example.everytalk.ui.screens.BubbleMain.Reasoning.ReasoningToggleAndContent
+// 其他子组件 AiMessageContent, UserOrErrorMessageContent 也确保路径正确
 
 @OptIn(ExperimentalAnimationApi::class)
 @Composable
 fun MessageBubble(
     message: Message,
     viewModel: AppViewModel,
-    isMainContentStreaming: Boolean,    // 主内容是否正在流式传输
-    isReasoningStreaming: Boolean,     // 推理过程是否正在流式传输
-    isReasoningComplete: Boolean,      // 推理过程是否已完成
-    onUserInteraction: () -> Unit,     // 用户交互回调 (将传递给 AI 和用户气泡)
-    maxWidth: Dp,                      // 气泡最大宽度
-    codeBlockFixedWidth: Dp,           // 代码块固定宽度
-    onEditRequest: (Message) -> Unit,  // 请求编辑消息的回调 (仅用户消息使用)
-    onRegenerateRequest: (Message) -> Unit, // 请求重新生成AI回答的回调 (仅用户消息使用)
+    isMainContentStreaming: Boolean,
+    isReasoningStreaming: Boolean,
+    isReasoningComplete: Boolean,
+    onUserInteraction: () -> Unit,
+    maxWidth: Dp,
+    codeBlockFixedWidth: Dp,
+    onEditRequest: (Message) -> Unit,
+    onRegenerateRequest: (Message) -> Unit,
     modifier: Modifier = Modifier,
-    showLoadingBubble: Boolean = false // 是否显示“连接中”的加载气泡
+    showLoadingBubble: Boolean = false
 ) {
     Log.d(
         "MessageBubbleRecomp",
-        "ID: ${message.id.take(8)}, Sender: ${message.sender}, TextLen: ${message.text.length}, MainStream: $isMainContentStreaming, ReasoningStream: $isReasoningStreaming, ContentStarted: ${message.contentStarted}, Error: ${message.isError}, ReasoningTextLen: ${message.reasoning?.length ?: 0}, WebResults: ${message.webSearchResults?.size ?: "N/A"}"
+        "ID: ${message.id.take(8)}, Sender: ${message.sender}, TextLen: ${message.text.length}, " +
+                "MainStream: $isMainContentStreaming, ReasoningStream: $isReasoningStreaming, " +
+                "MsgCS: ${message.contentStarted}, Err: ${message.isError}, " +
+                "ReasonLen: ${message.reasoning?.length ?: 0}, WebRes: ${message.webSearchResults?.size ?: "N/A"}, " +
+                "WebStage: ${message.currentWebSearchStage}, showLoadingBubbleFlag: $showLoadingBubble"
     )
 
     val isAI = message.sender == Sender.AI
     val currentMessageId = message.id
 
-    val animationInitiallyPlayedByVM =
-        remember(currentMessageId) { viewModel.hasAnimationBeenPlayed(currentMessageId) }
-    var localAnimationTriggeredOrCompleted by remember(currentMessageId, message.sender) {
-        mutableStateOf(animationInitiallyPlayedByVM)
-    }
-
-    var displayedMainTextState by remember(currentMessageId, message.sender, message.text) {
+    var displayedMainTextState by remember(currentMessageId, message.text) {
         mutableStateOf(message.text.trim())
     }
-    var displayedReasoningText by remember(currentMessageId, message.sender, message.reasoning) {
-        mutableStateOf(
-            if (isAI && message.contentStarted) message.reasoning?.trim() ?: ""
-            else ""
-        )
+    var displayedReasoningText by remember(currentMessageId, message.reasoning) {
+        mutableStateOf(message.reasoning?.trim() ?: "")
     }
 
-    val showMainBubbleLoadingDots = isAI && !showLoadingBubble && !message.isError &&
-            !message.contentStarted && (message.text.isBlank() && message.reasoning.isNullOrBlank())
+    LaunchedEffect(currentMessageId, message.text, showLoadingBubble) {
+        if (!showLoadingBubble) {
+            val fullMainTextTrimmed = message.text.trim()
+            if (displayedMainTextState != fullMainTextTrimmed) {
+                displayedMainTextState = fullMainTextTrimmed
+            }
+        } else {
+            if (displayedMainTextState.isNotEmpty()) displayedMainTextState = ""
+        }
+    }
+
+    LaunchedEffect(currentMessageId, message.reasoning) {
+        val fullReasoningTextTrimmed = message.reasoning?.trim() ?: ""
+        if (displayedReasoningText != fullReasoningTextTrimmed) {
+            displayedReasoningText = fullReasoningTextTrimmed
+        }
+    }
+
+    val animationInitiallyPlayedByVM =
+        remember(currentMessageId) { viewModel.hasAnimationBeenPlayed(currentMessageId) }
+    var localAnimationTriggeredOrCompleted by remember(currentMessageId) {
+        mutableStateOf(
+            animationInitiallyPlayedByVM
+        )
+    }
 
     LaunchedEffect(
         currentMessageId,
         message.text,
-        isAI,
-        message.contentStarted,
+        message.reasoning,
+        message.webSearchResults,
         message.isError,
-        showLoadingBubble,
-        isMainContentStreaming
+        isMainContentStreaming,
+        showLoadingBubble
     ) {
-        Log.d(
-            "MessageBubbleDirectDisplay",
-            "Effect for ID: ${currentMessageId.take(8)}. message.text length: ${message.text.length}, isMainStreaming: $isMainContentStreaming, contentStarted: ${message.contentStarted}, isError: ${message.isError}"
-        )
         if (showLoadingBubble) {
-            if (displayedMainTextState.isNotEmpty()) displayedMainTextState = ""
             return@LaunchedEffect
-        }
-        val fullMainTextTrimmed = message.text.trim()
-        if (displayedMainTextState != fullMainTextTrimmed) {
-            displayedMainTextState = fullMainTextTrimmed
-            Log.d(
-                "MessageBubbleDirectDisplay",
-                "Updated displayedMainTextState for ${currentMessageId.take(8)} to: '${
-                    fullMainTextTrimmed.take(50)
-                }'"
-            )
         }
         if (!localAnimationTriggeredOrCompleted) {
             val isStable =
-                message.isError || !isMainContentStreaming || (isAI && message.contentStarted) // isMainContentStreaming is key here
-            val hasContent =
-                fullMainTextTrimmed.isNotBlank() || (isAI && message.reasoning?.isNotBlank() == true) || (isAI && !message.webSearchResults.isNullOrEmpty())
+                message.isError || !isMainContentStreaming || (isAI && message.contentStarted)
+            val hasContent = message.text.trim().isNotBlank() ||
+                    (isAI && message.reasoning?.isNotBlank() == true) ||
+                    (isAI && !message.webSearchResults.isNullOrEmpty())
             if (isStable && (hasContent || message.isError)) {
-                Log.d(
-                    "MessageBubbleAnimation",
-                    "Animation marked complete for ${currentMessageId.take(8)} because stable and has content/error/webResults."
-                )
                 localAnimationTriggeredOrCompleted = true
                 if (!animationInitiallyPlayedByVM) {
                     viewModel.onAnimationComplete(currentMessageId)
                 }
-            } else if (isAI && !isMainContentStreaming && message.contentStarted && fullMainTextTrimmed.isBlank() && message.reasoning.isNullOrBlank() && message.webSearchResults.isNullOrEmpty() && !message.isError) {
-                Log.d(
-                    "MessageBubbleAnimation",
-                    "Animation marked complete for ${currentMessageId.take(8)} (AI finished with empty content and no web results)."
-                )
+            } else if (isAI && !isMainContentStreaming && message.contentStarted && message.text.isBlank() && message.reasoning.isNullOrBlank() && message.webSearchResults.isNullOrEmpty() && !message.isError) {
                 localAnimationTriggeredOrCompleted = true
                 if (!animationInitiallyPlayedByVM) {
                     viewModel.onAnimationComplete(currentMessageId)
                 }
             }
-        }
-    }
-
-    LaunchedEffect(currentMessageId, message.reasoning, isAI, message.contentStarted) {
-        if (isAI && message.contentStarted) {
-            val fullReasoningTextTrimmed = message.reasoning?.trim() ?: ""
-            if (displayedReasoningText != fullReasoningTextTrimmed) {
-                displayedReasoningText = fullReasoningTextTrimmed
-            }
-        } else if (displayedReasoningText.isNotEmpty()) {
-            displayedReasoningText = ""
         }
     }
 
@@ -137,126 +126,170 @@ fun MessageBubble(
         modifier = modifier.fillMaxWidth(),
         horizontalAlignment = if (isAI) Alignment.Start else Alignment.End
     ) {
+        // --- 1. 显示主加载状态文本行 ---
         if (isAI && showLoadingBubble) {
             Row(
                 modifier = Modifier
-                    .padding(vertical = 1.dp)
-                    .wrapContentWidth()
                     .align(Alignment.Start)
+                    .wrapContentWidth()
+                    .padding(vertical = 4.dp, horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Surface(
                     shape = RoundedCornerShape(18.dp),
-                    color = Color.White,
-                    shadowElevation = 4.dp,
-                    contentColor = Color.Black
+                    color = aiBubbleColor,
+                    shadowElevation = 2.dp,
+                    contentColor = aiContentColor
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            color = Color.Black,
-                            strokeWidth = 1.dp
+                            modifier = Modifier.size(16.dp),
+                            color = aiContentColor,
+                            strokeWidth = 1.5.dp
                         )
-                        Spacer(Modifier.width(12.dp))
-                        Text("正在连接大模型...", style = MaterialTheme.typography.bodyMedium)
+                        Spacer(Modifier.width(10.dp))
+                        val loadingText = remember(
+                            message.currentWebSearchStage,
+                            message.webSearchResults,
+                            message.reasoning,
+                            isReasoningStreaming,
+                            isReasoningComplete // << 新增依赖：确保思考完成后文本能正确更新
+                        ) {
+                            when (message.currentWebSearchStage) {
+                                "web_indexing_started" -> "正在索引网页..."
+                                "web_analysis_started" -> "正在分析网页..."
+                                "web_analysis_complete" -> {
+                                    if (isReasoningStreaming) { // 如果仍在流式传输思考过程
+                                        "大模型思考中..."
+                                    } else if (!message.reasoning.isNullOrBlank() && !isReasoningComplete) { // 有思考文本但未完成(可能暂停)
+                                        "大模型思考中..." // 或者可以考虑 "思考暂停..."
+                                    } else if (!message.reasoning.isNullOrBlank() && isReasoningComplete) { // 有思考文本且已完成
+                                        "思考完成" // 思考结束，等待主要内容
+                                    } else { // 没有思考文本，或思考文本为空且已完成
+                                        "分析完成" // 网页分析完成，没有后续思考，等待主要内容
+                                    }
+                                }
+
+                                else -> { // currentWebSearchStage 为 null (非联网或非常初始阶段)
+                                    if (isReasoningStreaming) {
+                                        "大模型思考中..."
+                                    } else if (!message.reasoning.isNullOrBlank() && !isReasoningComplete) {
+                                        "大模型思考中..."
+                                    } else if (!message.reasoning.isNullOrBlank() && isReasoningComplete) {
+                                        "思考完成"
+                                    } else {
+                                        "正在连接大模型..." // 默认初始状态
+                                    }
+                                }
+                            }
+                        }
+                        Text(text = loadingText, style = MaterialTheme.typography.bodyMedium)
                     }
                 }
             }
-            return@Column
-        }
+        } // 主加载状态文本显示结束
 
-        val shouldShowReasoningComponents = isAI && message.contentStarted &&
-                (displayedReasoningText.isNotBlank() || isReasoningStreaming || viewModel.expandedReasoningStates[currentMessageId] == true)
+        // --- 2. 显示“思考过程框” (即改造后的 ReasoningToggleAndContent) ---
+        val shouldDisplayReasoningComponentBox = isAI &&
+                (!message.reasoning.isNullOrBlank() || isReasoningStreaming)
 
-        Log.d(
-            "MsgBubbleReasoning", "ID: ${message.id.take(8)}, " +
-                    "shouldShowReasoningComponents: $shouldShowReasoningComponents, " +
-                    "isAI: $isAI, contentStarted: ${message.contentStarted}, " +
-                    "displayedReasoningText.isNotBlank: ${displayedReasoningText.isNotBlank()}, " +
-                    "isReasoningStreaming: $isReasoningStreaming, " +
-                    "expanded: ${viewModel.expandedReasoningStates[currentMessageId]}"
-        )
-
-        if (shouldShowReasoningComponents) {
+        if (shouldDisplayReasoningComponentBox) {
             ReasoningToggleAndContent(
+                modifier = Modifier
+                    .align(Alignment.Start)
+                    .padding(top = if (isAI && showLoadingBubble) 6.dp else 0.dp),
                 currentMessageId = currentMessageId,
                 displayedReasoningText = displayedReasoningText,
                 isReasoningStreaming = isReasoningStreaming,
                 isReasoningComplete = isReasoningComplete,
-                messageContentStarted = message.contentStarted,
                 messageIsError = message.isError,
+                // --- 修复点：正确传递 mainContentHasStarted 参数 ---
+                // message.contentStarted 准确反映了主要回复文本是否已开始
+                mainContentHasStarted = message.contentStarted,
+                // -------------------------------------------------
                 reasoningTextColor = reasoningTextColor,
-                reasoningToggleDotColor = aiContentColor,
-                modifier = Modifier.align(Alignment.Start)
+                reasoningToggleDotColor = aiContentColor
             )
         }
 
-        val shouldShowMainBubbleSurface = !showLoadingBubble &&
-                ((isAI && message.contentStarted) || !isAI || message.isError || (isAI && !message.contentStarted && (message.text.isNotBlank() || !message.reasoning.isNullOrBlank() || !message.webSearchResults.isNullOrEmpty())))
-
-        if (shouldShowMainBubbleSurface) {
-            if (isAI && !message.isError) {
-                AiMessageContent(
-                    fullMessageTextToCopy = message.text,
-                    displayedText = displayedMainTextState,
-                    isStreaming = isMainContentStreaming, // isMainContentStreaming is crucial here
-                    showLoadingDots = showMainBubbleLoadingDots,
-                    bubbleColor = aiBubbleColor,
-                    contentColor = aiContentColor,
-                    codeBlockBackgroundColor = codeBlockUnifiedBackgroundColor,
-                    codeBlockContentColor = codeBlockUnifiedContentColor,
-                    codeBlockCornerRadius = codeBlockCornerRadius,
-                    codeBlockFixedWidth = codeBlockFixedWidth,
-                    onUserInteraction = onUserInteraction,
-                    modifier = Modifier.align(Alignment.Start)
-                )
-
-                // --- 修改：“查看来源”按钮的显示条件 ---
-                // 只为AI消息显示，并且当它有搜索结果，AI消息不是错误，且当前消息主要内容没有在流式传输，并且内容已经开始加载
-                val showSourcesButton = !message.webSearchResults.isNullOrEmpty() &&
-                        !isMainContentStreaming && // 关键：当前消息不处于主要内容流式传输状态
-                        message.contentStarted      // 关键：确保消息不是一个空的、未处理的占位符
-
-                if (showSourcesButton) {
-                    Spacer(Modifier.height(4.dp))
-                    TextButton(
-                        onClick = {
-                            onUserInteraction()
-                            viewModel.showSourcesDialog(message.webSearchResults!!)
-                            Log.d(
-                                "MessageBubble",
-                                "查看来源按钮点击，来源数量: ${message.webSearchResults!!.size}"
-                            )
-                        },
-                        modifier = Modifier
-                            .align(Alignment.Start)
-                            .padding(start = 8.dp, end = 8.dp)
-                    ) {
-                        Text("查看参考来源 (${message.webSearchResults!!.size})")
-                    }
-                }
-                // --- 修改结束 ---
-
-            } else {
-                val actualBubbleColor =
-                    if (message.isError) aiBubbleColor else userBubbleBackgroundColor
-                val actualContentColor = if (message.isError) errorTextColor else userContentColor
-                UserOrErrorMessageContent(
-                    message = message,
-                    displayedText = displayedMainTextState,
-                    showLoadingDots = showMainBubbleLoadingDots && !isAI,
-                    bubbleColor = actualBubbleColor,
-                    contentColor = actualContentColor,
-                    isError = message.isError,
-                    maxWidth = maxWidth,
-                    onUserInteraction = onUserInteraction,
-                    onEditRequest = onEditRequest,
-                    onRegenerateRequest = onRegenerateRequest,
-                    modifier = Modifier.align(if (isAI && message.isError) Alignment.Start else Alignment.End)
-                )
-            }
+        // --- 3. 守卫逻辑：如果仍在主加载阶段且主要文本未开始，则不渲染后续的主要内容区 ---
+        if (isAI && showLoadingBubble && !message.contentStarted) {
+            return@Column
         }
-    }
+
+        // --- 4. 显示主要消息内容区 ---
+        val showActualAiTextContent = isAI && !message.isError &&
+                (message.contentStarted && message.text.isNotBlank()) &&
+                !showLoadingBubble
+
+        val showUserMessage = !isAI && !message.isError
+        val showErrorBubble = message.isError && !showLoadingBubble
+
+        if (showActualAiTextContent) {
+            AiMessageContent(
+                fullMessageTextToCopy = message.text,
+                displayedText = displayedMainTextState,
+                isStreaming = isMainContentStreaming,
+                showLoadingDots = isAI && !showLoadingBubble && !message.isError && !message.contentStarted && message.text.isBlank() && message.reasoning.isNullOrBlank(),
+                bubbleColor = aiBubbleColor,
+                contentColor = aiContentColor,
+                codeBlockBackgroundColor = codeBlockUnifiedBackgroundColor,
+                codeBlockContentColor = codeBlockUnifiedContentColor,
+                codeBlockCornerRadius = codeBlockCornerRadius,
+                codeBlockFixedWidth = codeBlockFixedWidth,
+                onUserInteraction = onUserInteraction,
+                modifier = Modifier.align(Alignment.Start)
+            )
+
+            val showSourcesButton = !message.webSearchResults.isNullOrEmpty() &&
+                    !isMainContentStreaming &&
+                    !showLoadingBubble
+            if (showSourcesButton) {
+                Spacer(Modifier.height(4.dp))
+                TextButton(
+                    onClick = {
+                        onUserInteraction()
+                        viewModel.showSourcesDialog(message.webSearchResults!!)
+                    },
+                    modifier = Modifier
+                        .align(Alignment.Start)
+                        .padding(start = 8.dp, end = 8.dp)
+                ) {
+                    Text("查看参考来源 (${message.webSearchResults!!.size})")
+                }
+            }
+
+        } else if (showUserMessage) {
+            UserOrErrorMessageContent( // (参数与之前一致)
+                message = message,
+                displayedText = displayedMainTextState,
+                showLoadingDots = false,
+                bubbleColor = userBubbleBackgroundColor,
+                contentColor = userContentColor,
+                isError = false,
+                maxWidth = maxWidth,
+                onUserInteraction = onUserInteraction,
+                onEditRequest = onEditRequest,
+                onRegenerateRequest = onRegenerateRequest,
+                modifier = Modifier.align(Alignment.End)
+            )
+        } else if (showErrorBubble) {
+            UserOrErrorMessageContent( // (参数与之前一致)
+                message = message,
+                displayedText = displayedMainTextState,
+                showLoadingDots = false,
+                bubbleColor = aiBubbleColor,
+                contentColor = errorTextColor,
+                isError = true,
+                maxWidth = maxWidth,
+                onUserInteraction = onUserInteraction,
+                onEditRequest = onEditRequest,
+                onRegenerateRequest = onRegenerateRequest,
+                modifier = Modifier.align(Alignment.Start)
+            )
+        }
+    } // 根Column结束
 }
