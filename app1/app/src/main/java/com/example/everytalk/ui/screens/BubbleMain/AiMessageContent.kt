@@ -60,7 +60,7 @@ private val CONTEXT_MENU_FIXED_WIDTH = 160.dp              // 上下文菜单固
  * 可动画的下拉菜单项。
  */
 @Composable
-internal fun AnimatedDropdownMenuItem( /* ... 实现与之前相同，注释已为中文 ... */
+internal fun AnimatedDropdownMenuItem(
                                        visibleState: MutableTransitionState<Boolean>,
                                        delay: Int = 0,
                                        text: @Composable () -> Unit,
