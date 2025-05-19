@@ -74,7 +74,9 @@ internal fun ReasoningToggleAndContent(
     val boxBackgroundColor = Color.White.copy(alpha = 0.95f)
     val scrimColor = boxBackgroundColor
     val scrimHeight = 28.dp
-
+    LaunchedEffect(currentMessageId, displayedReasoningText, isReasoningStreaming) {
+        Log.d("REASON_DBG", "ShowBox=$showInlineStreamingBox, streaming=$isReasoningStreaming, contentStarted=$mainContentHasStarted, text='${displayedReasoningText.take(40)}'")
+    }
     Column(
         modifier = modifier,
         horizontalAlignment = Alignment.Start

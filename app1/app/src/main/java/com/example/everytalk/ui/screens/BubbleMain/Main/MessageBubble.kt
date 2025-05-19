@@ -50,9 +50,8 @@ fun MessageBubble(
     var displayedMainTextState by remember(currentMessageId, message.text) {
         mutableStateOf(message.text.trim())
     }
-    var displayedReasoningText by remember(currentMessageId, message.reasoning) {
-        mutableStateOf(message.reasoning?.trim() ?: "")
-    }
+    var displayedReasoningText = message.reasoning?.trim() ?: ""
+
 
     LaunchedEffect(currentMessageId, message.text, showLoadingBubble) {
         if (!showLoadingBubble) {

@@ -11,6 +11,8 @@ from contextlib import asynccontextmanager
 import asyncio
 import datetime
 from dotenv import load_dotenv
+import re
+
 load_dotenv()
 
 from googleapiclient.discovery import build
@@ -101,10 +103,11 @@ DEFAULT_OPENAI_API_BASE_URL = "https://api.openai.com"
 GOOGLE_API_BASE_URL = "https://generativelanguage.googleapis.com"
 OPENAI_COMPATIBLE_PATH = "/v1/chat/completions"
 COMMON_HEADERS = {"X-Accel-Buffering": "no"}
-MAX_SSE_LINE_LENGTH = 24 * 1024
+MAX_SSE_LINE_LENGTH = 1024 * 1024
 SEARCH_RESULT_COUNT = 5
-SEARCH_SNIPPET_MAX_LENGTH = 300
-THINKING_PROCESS_SEPARATOR = "[[[FINAL-ANSWER]]]"
+SEARCH_SNIPPET_MAX_LENGTH = 200
+
+THINKING_PROCESS_SEPARATOR = "--- FINAL ANSWER ---"
 
 class OpenAIToolCallFunction(BaseModel):
     name: Optional[str] = None
@@ -164,6 +167,57 @@ def extract_sse_lines(buffer: bytearray):
             lines.append(line)
         start = idx + 1
     return lines, buffer[start:]
+
+def strip_prompt_noise(text: str) -> str:
+    noise_patterns = [
+        r"(?:only\s+after.*?)?print\s+exactly:?.*?final answer.*?do not repeat.*",
+        r"please first think.*?but do not say the final answer yet.*",
+        r"then,?\s*write only.*",
+        r"do not .+",
+        r"do not include instructions.*",
+        r"do not output.*",
+        r"now,.*",
+        r"output .+",
+        r"say .+",
+        r"\(do not .+\)",
+        r"\[do not .+\]",
+        r"do not repeat.+",
+        r"just output.+",
+        r"your response should only include.+",
+        r"your answer must be in the following format.+",
+        r"only provide the final answer.+",
+        r"print only the.+",
+        r"print just.+",
+        r"provide only the answer.+",
+        r".+",
+    ]
+    result = text
+    for pat in noise_patterns:
+        result = re.sub(pat, "", result, flags=re.IGNORECASE | re.MULTILINE)
+    result = re.sub(r"\n{3,}", "\n\n", result)
+    return result.strip("\n ")
+
+def convert_math_symbols(text: str) -> str:
+    # 角符号
+    text = re.sub(r"angle\s*([A-Za-z]+)", r"∠\1", text, flags=re.IGNORECASE)
+    text = re.sub(r"\\angle\s*([A-Za-z]+)", r"∠\1", text, flags=re.IGNORECASE)
+    # 三角形
+    text = re.sub(r"\btriangle\s*([A-Za-z]+)", r"△\1", text, flags=re.IGNORECASE)
+    text = re.sub(r"\\triangle\s*([A-Za-z]+)", r"△\1", text)
+    # 度数
+    text = re.sub(r"(\d+)\s*(degrees|degree|deg|°)", r"\1°", text, flags=re.IGNORECASE)
+    text = re.sub(r"\^{\\circ}", "°", text)
+    text = re.sub(r"(\d+)\s*\^\\circ", r"\1°", text)
+    # 根号
+    text = re.sub(r"\\sqrt\{([^\}]+)\}", r"√\1", text)
+    text = re.sub(r"sqrt\s*\(?([0-9a-zA-Z]+)\)?", r"√\1", text)
+    # 分数
+    text = re.sub(r"\\frac\{([^\}]+)\}\{([^\}]+)\}", r"\1/\2", text)
+    # 常用
+    text = text.replace("\\angle", "∠")
+    text = text.replace("\\times", "×")
+    text = text.replace("pi", "π")
+    return text
 
 def _convert_openai_tools_to_gemini_declarations(openai_tools: List[Dict[str, Any]], request_id: str) -> List[Dict[str, Any]]:
     declarations = []
@@ -230,8 +284,8 @@ async def process_openai_sse_line_standard(line_bytes: bytes, request_id: str) -
         for choice in data.get('choices', []):
             delta = choice.get('delta', {})
             if "tool_calls" in delta and delta["tool_calls"]: yield orjson_dumps_bytes_wrapper({"type": "tool_calls_chunk", "data": delta["tool_calls"], "timestamp": current_time_iso})
-            if "reasoning_content" in delta and delta["reasoning_content"]: yield orjson_dumps_bytes_wrapper({"type": "reasoning", "text": delta["reasoning_content"], "timestamp": current_time_iso})
-            if "content" in delta and delta["content"] is not None: yield orjson_dumps_bytes_wrapper({"type": "content", "text": delta["content"], "timestamp": current_time_iso})
+            if "reasoning_content" in delta and delta["reasoning_content"]: yield orjson_dumps_bytes_wrapper({"type": "reasoning", "text": convert_math_symbols(delta["reasoning_content"]), "timestamp": current_time_iso})
+            if "content" in delta and delta["content"] is not None: yield orjson_dumps_bytes_wrapper({"type": "content", "text": convert_math_symbols(delta["content"]), "timestamp": current_time_iso})
             finish_reason = choice.get("finish_reason") or delta.get("finish_reason")
             if finish_reason: yield orjson_dumps_bytes_wrapper({"type": "finish", "reason": finish_reason, "timestamp": current_time_iso})
     except orjson.JSONDecodeError: logger.warning(f"RID-{request_id}: OpenAI SSE (standard): JSON parse error. Data: {raw_data[:100]!r}")
@@ -250,7 +304,7 @@ async def process_google_sse_line_standard(line_bytes: bytes, request_id: str) -
                 for part in candidate["content"]["parts"]:
                     if "text" in part: text_content += part["text"]
                     if "functionCall" in part: function_calls_parts.append(part["functionCall"])
-            if text_content: yield orjson_dumps_bytes_wrapper({"type": "content", "text": text_content, "timestamp": current_time_iso})
+            if text_content: yield orjson_dumps_bytes_wrapper({"type": "content", "text": convert_math_symbols(text_content), "timestamp": current_time_iso})
             for fc_part in function_calls_parts:
                 proxy_fc_id = f"gemini_fc_{os.urandom(4).hex()}"
                 yield orjson_dumps_bytes_wrapper({"type": "google_function_call_request", "id": proxy_fc_id, "name": fc_part.get("name"), "arguments_obj": fc_part.get("args", {}), "timestamp": current_time_iso})
@@ -330,6 +384,8 @@ async def chat_proxy(request_data: ChatRequest, client: Optional[httpx.AsyncClie
         apply_guided_reasoning_logic = False
         found_reasoning_separator = False
         accumulated_text_for_reasoning = ""
+        last_reasoning = None
+        last_final_answer = None
 
         def get_current_time_iso(): return datetime.datetime.utcnow().isoformat() + "Z"
 
@@ -362,10 +418,10 @@ async def chat_proxy(request_data: ChatRequest, client: Optional[httpx.AsyncClie
 
                 search_results_this_stream = await perform_web_search_google(user_query_for_search, request_id)
                 if search_results_this_stream:
-                    search_context_parts = [f"你可以结合以下最新网页搜索结果，用于辅助你的回答：'{user_query_for_search}'。优先整合如下信息："]
+                    search_context_parts = [f"Combine the latest Web search results below for '{user_query_for_search}', and use as much information as needed:"]
                     for res_idx, res_item in enumerate(search_results_this_stream):
                         search_context_parts.append(
-                            f"{res_item.get('index', res_idx + 1)}. 标题: {res_item.get('title', 'N/A')}\n   摘要: {res_item.get('snippet', 'N/A')}\n   来源(仅供AI理解，不要直接引用): {res_item.get('href', 'N/A')}"
+                            f"{res_item.get('index', res_idx + 1)}. Title: {res_item.get('title', 'N/A')}\n   Summary: {res_item.get('snippet', 'N/A')}\n   Source link (for AI use only, do NOT cite directly): {res_item.get('href', 'N/A')}"
                         )
                     search_context_msg_content = "\n\n".join(search_context_parts)
                     system_search_context_msg_dict = ApiMessage(role="system", content=search_context_msg_content).model_dump(exclude_none=True)
@@ -379,10 +435,8 @@ async def chat_proxy(request_data: ChatRequest, client: Optional[httpx.AsyncClie
             if request_data.use_web_search and user_query_for_search:
                 yield orjson_dumps_bytes_wrapper({"type": "status_update", "stage": "web_analysis_started", "timestamp": get_current_time_iso()})
 
-            # === 分流条件 ===
             model_name_lower = request_data.model.lower()
             force = request_data.force_google_reasoning_prompt
-
             if force is True:
                 apply_guided_reasoning_logic = True
             elif force is False:
@@ -392,13 +446,12 @@ async def chat_proxy(request_data: ChatRequest, client: Optional[httpx.AsyncClie
             else:
                 apply_guided_reasoning_logic = False
 
-            # -------- 推理分隔指令优化 --------
             instruction_text = (
-                f"\n\nFirst, think out loud and explain your reasoning step by step. Do not give the final answer yet. "
-                f"Only after you have finished your detailed reasoning, output a single separate line with only '{THINKING_PROCESS_SEPARATOR}', "
-                f"then write your final structured answer below this line. "
-                f"Do not repeat this separator more than once, and do not show any instructions to the user."
-                                )   
+                f"\n\nPlease first think step by step and write out your reasoning process explicitly, but DO NOT say the final answer yet. "
+                f"ONLY AFTER the reasoning, on a new line, print exactly:\n{THINKING_PROCESS_SEPARATOR}\n"
+                "Then, write ONLY your final answer below this line, and DO NOT repeat the separator anywhere. "
+                "Do NOT include instructions or any tags like <think>, and do not repeat any output."
+            )
 
             if apply_guided_reasoning_logic:
                 last_user_idx_prompt = next((i for i, msg_d in reversed(list(enumerate(current_llm_messages_or_contents))) if msg_d.get("role") == "user"), -1)
@@ -422,6 +475,15 @@ async def chat_proxy(request_data: ChatRequest, client: Optional[httpx.AsyncClie
             logger.info(f"RID-{request_id}: POST to {url}. Provider: {request_data.provider}. Applying Guided Reasoning: {apply_guided_reasoning_logic}")
 
             first_chunk_received = False
+
+            def split_once_by_sep(text, sep):
+                idx = text.find(sep)
+                if idx == -1:
+                    return text, None
+                before = text[:idx]
+                after = text[idx+len(sep):]
+                return before, after
+
             async with client.stream("POST", url, headers=headers, json=final_api_payload, params=params) as resp:
                 logger.info(f"RID-{request_id}: LLM Upstream status: {resp.status_code}")
                 if not (200 <= resp.status_code < 300):
@@ -438,14 +500,6 @@ async def chat_proxy(request_data: ChatRequest, client: Optional[httpx.AsyncClie
                     return
                 upstream_ok = True
 
-                def split_once_by_sep(text, sep):
-                    idx = text.find(sep)
-                    if idx == -1:
-                        return text, None
-                    before = text[:idx]
-                    after = text[idx+len(sep):]
-                    return before, after
-
                 async for raw_chunk_bytes in resp.aiter_raw():
                     if not raw_chunk_bytes:
                         continue
@@ -457,10 +511,10 @@ async def chat_proxy(request_data: ChatRequest, client: Optional[httpx.AsyncClie
                     buffer.extend(raw_chunk_bytes)
                     sse_lines, buffer = extract_sse_lines(buffer)
                     for sse_line_bytes in sse_lines:
+                        logger.info(f"RID-{request_id}: raw SSE line {sse_line_bytes}")
                         if not sse_line_bytes.strip():
                             continue
 
-                        # ========== 推理和结论分隔 ==========
                         if apply_guided_reasoning_logic:
                             sse_data_bytes = b""
                             if sse_line_bytes.startswith(b"data: "): sse_data_bytes = sse_line_bytes[len(b"data: "):].strip()
@@ -470,7 +524,10 @@ async def chat_proxy(request_data: ChatRequest, client: Optional[httpx.AsyncClie
                             current_parsing_provider = request_data.provider
                             if current_parsing_provider == "openai" and sse_data_bytes.strip() == b"[DONE]":
                                 if not found_reasoning_separator and accumulated_text_for_reasoning.strip():
-                                    yield orjson_dumps_bytes_wrapper({"type": "reasoning", "text": accumulated_text_for_reasoning, "timestamp": get_current_time_iso()})
+                                    reasoning_to_yield = strip_prompt_noise(accumulated_text_for_reasoning.strip())
+                                    if reasoning_to_yield and reasoning_to_yield != last_reasoning:
+                                        yield orjson_dumps_bytes_wrapper({"type": "reasoning", "text": convert_math_symbols(reasoning_to_yield), "timestamp": get_current_time_iso()})
+                                        last_reasoning = reasoning_to_yield
                                     accumulated_text_for_reasoning = ""
                                 yield orjson_dumps_bytes_wrapper({"type": "finish", "reason": "stop", "timestamp": get_current_time_iso()})
                                 continue
@@ -507,34 +564,58 @@ async def chat_proxy(request_data: ChatRequest, client: Optional[httpx.AsyncClie
                                     if sep_idx != -1:
                                         found_reasoning_separator = True
                                         before, after = split_once_by_sep(current_acc, THINKING_PROCESS_SEPARATOR)
-                                        if before.strip():
-                                            yield orjson_dumps_bytes_wrapper({"type": "reasoning", "text": before, "timestamp": get_current_time_iso()})
-                                        content_after = after
-                                        while content_after and THINKING_PROCESS_SEPARATOR in content_after:
-                                            before_more, after_more = split_once_by_sep(content_after, THINKING_PROCESS_SEPARATOR)
-                                            if before_more.strip():
-                                                yield orjson_dumps_bytes_wrapper({"type": "content", "text": before_more, "timestamp": get_current_time_iso()})
-                                            content_after = after_more
-                                        if content_after and content_after.strip():
-                                            yield orjson_dumps_bytes_wrapper({"type": "content", "text": content_after, "timestamp": get_current_time_iso()})
+                                        reasoning_to_yield = strip_prompt_noise(before.strip())
+                                        if reasoning_to_yield and reasoning_to_yield != last_reasoning:
+                                            yield orjson_dumps_bytes_wrapper({"type": "reasoning", "text": convert_math_symbols(reasoning_to_yield), "timestamp": get_current_time_iso()})
+                                            last_reasoning = reasoning_to_yield
+
+                                        content_after = after or ""
+                                        if THINKING_PROCESS_SEPARATOR in content_after:
+                                            prev = content_after
+                                            while THINKING_PROCESS_SEPARATOR in content_after:
+                                                _, content_after = split_once_by_sep(content_after, THINKING_PROCESS_SEPARATOR)
+                                                if content_after == prev:
+                                                    break
+                                                prev = content_after
+                                        answer_to_yield = content_after.strip()
+                                        if answer_to_yield and answer_to_yield != last_final_answer:
+                                            yield orjson_dumps_bytes_wrapper({"type": "content", "text": convert_math_symbols(answer_to_yield), "timestamp": get_current_time_iso()})
+                                            last_final_answer = answer_to_yield
+
                                         accumulated_text_for_reasoning = ""
                                     else:
                                         accumulated_text_for_reasoning = current_acc
-                                        if text_delta:
-                                            yield orjson_dumps_bytes_wrapper({"type": "reasoning", "text": text_delta, "timestamp": get_current_time_iso()})
+                                        chunk = strip_prompt_noise(text_delta)
+                                        if chunk and chunk != last_reasoning:
+                                            yield orjson_dumps_bytes_wrapper({"type": "reasoning", "text": convert_math_symbols(chunk), "timestamp": get_current_time_iso()})
+                                            last_reasoning = chunk
                                 else:
-                                    if text_delta:
-                                        yield orjson_dumps_bytes_wrapper({"type": "content", "text": text_delta, "timestamp": get_current_time_iso()})
+                                    chunk = text_delta
+                                    if chunk and chunk != last_final_answer:
+                                        yield orjson_dumps_bytes_wrapper({"type": "content", "text": convert_math_symbols(chunk), "timestamp": get_current_time_iso()})
+                                        last_final_answer = chunk
 
                                 is_reasoning_tool_call = not found_reasoning_separator
                                 if openai_tool_calls:
                                     yield orjson_dumps_bytes_wrapper({"type": "tool_calls_chunk", "data": openai_tool_calls, "timestamp": get_current_time_iso(), "is_reasoning_step": is_reasoning_tool_call})
                                 if google_fc_req:
                                     fcid = f"gemini_fc_{os.urandom(4).hex()}"
-                                    yield orjson_dumps_bytes_wrapper({"type": "google_function_call_request", "id": fcid, "name": google_fc_req.get("name"), "arguments_obj": google_fc_req.get("args", {}), "timestamp": get_current_time_iso(), "is_reasoning_step": is_reasoning_tool_call})
+                                    yield orjson_dumps_bytes_wrapper(
+                                        {
+                                            "type": "google_function_call_request",
+                                            "id": fcid,
+                                            "name": google_fc_req.get("name"),
+                                            "arguments_obj": google_fc_req.get("args", {}),
+                                            "timestamp": get_current_time_iso(),
+                                            "is_reasoning_step": is_reasoning_tool_call
+                                        }
+                                    )
                                 if finish_reason:
                                     if not found_reasoning_separator and accumulated_text_for_reasoning.strip():
-                                        yield orjson_dumps_bytes_wrapper({"type": "reasoning", "text": accumulated_text_for_reasoning, "timestamp": get_current_time_iso()})
+                                        reasoning_to_yield = strip_prompt_noise(accumulated_text_for_reasoning.strip())
+                                        if reasoning_to_yield and reasoning_to_yield != last_reasoning:
+                                            yield orjson_dumps_bytes_wrapper({"type": "reasoning", "text": convert_math_symbols(reasoning_to_yield), "timestamp": get_current_time_iso()})
+                                            last_reasoning = reasoning_to_yield
                                     yield orjson_dumps_bytes_wrapper({"type": "finish", "reason": finish_reason, "timestamp": get_current_time_iso()})
                             except orjson.JSONDecodeError:
                                 logger.warning(f"RID-{request_id}: SSE (guided/{current_parsing_provider}) JSON parse error. Data: {sse_data_bytes[:100]!r}")
@@ -559,16 +640,26 @@ async def chat_proxy(request_data: ChatRequest, client: Optional[httpx.AsyncClie
                                 sep_idx_final = final_str.find(THINKING_PROCESS_SEPARATOR)
                                 if sep_idx_final != -1:
                                     before, after = split_once_by_sep(final_str, THINKING_PROCESS_SEPARATOR)
-                                    if before.strip():
-                                        yield orjson_dumps_bytes_wrapper({"type": "reasoning", "text": before, "timestamp": get_current_time_iso()})
-                                    if after and after.strip():
-                                        yield orjson_dumps_bytes_wrapper({"type": "content", "text": after, "timestamp": get_current_time_iso()})
+                                    reasoning_to_yield = strip_prompt_noise(before.strip())
+                                    if reasoning_to_yield and reasoning_to_yield != last_reasoning:
+                                        yield orjson_dumps_bytes_wrapper({"type": "reasoning", "text": convert_math_symbols(reasoning_to_yield), "timestamp": get_current_time_iso()})
+                                        last_reasoning = reasoning_to_yield
+                                    answer_to_yield = (after or "").strip()
+                                    if answer_to_yield and answer_to_yield != last_final_answer:
+                                        yield orjson_dumps_bytes_wrapper({"type": "content", "text": convert_math_symbols(answer_to_yield), "timestamp": get_current_time_iso()})
+                                        last_final_answer = answer_to_yield
                                 else:
                                     if final_str.strip():
-                                        yield orjson_dumps_bytes_wrapper({"type": "reasoning", "text": final_str, "timestamp": get_current_time_iso()})
+                                        reasoning_to_yield = strip_prompt_noise(final_str.strip())
+                                        if reasoning_to_yield and reasoning_to_yield != last_reasoning:
+                                            yield orjson_dumps_bytes_wrapper({"type": "reasoning", "text": convert_math_symbols(reasoning_to_yield), "timestamp": get_current_time_iso()})
+                                            last_reasoning = reasoning_to_yield
                             else:
                                 if final_str.strip():
-                                    yield orjson_dumps_bytes_wrapper({"type": "content", "text": final_str, "timestamp": get_current_time_iso()})
+                                    answer_to_yield = final_str.strip()
+                                    if answer_to_yield and answer_to_yield != last_final_answer:
+                                        yield orjson_dumps_bytes_wrapper({"type": "content", "text": convert_math_symbols(answer_to_yield), "timestamp": get_current_time_iso()})
+                                        last_final_answer = answer_to_yield
 
         except httpx.TimeoutException as e:
             logger.error(f"RID-{request_id}: Timeout: {e}", exc_info=True)
@@ -587,7 +678,9 @@ async def chat_proxy(request_data: ChatRequest, client: Optional[httpx.AsyncClie
                 yield orjson_dumps_bytes_wrapper({"type": "finish", "reason": "internal_error", "timestamp": get_current_time_iso()})
         finally:
             if apply_guided_reasoning_logic and not found_reasoning_separator and accumulated_text_for_reasoning.strip():
-                yield orjson_dumps_bytes_wrapper({"type": "reasoning", "text": accumulated_text_for_reasoning, "timestamp": get_current_time_iso()})
+                reasoning_to_yield = strip_prompt_noise(accumulated_text_for_reasoning.strip())
+                if reasoning_to_yield and reasoning_to_yield != last_reasoning:
+                    yield orjson_dumps_bytes_wrapper({"type": "reasoning", "text": convert_math_symbols(reasoning_to_yield), "timestamp": get_current_time_iso()})
             logger.info(f"RID-{request_id}: Stream generator finished. Upstream: {upstream_ok}. Applied Guided Reasoning: {apply_guided_reasoning_logic}, Separator Found: {found_reasoning_separator if apply_guided_reasoning_logic else 'N/A'}")
 
     return StreamingResponse(
@@ -615,3 +708,4 @@ if __name__ == "__main__":
     log_config["loggers"]["uvicorn.access"]["level"] = "WARNING"
     logger.info(f"Starting Uvicorn: http://{APP_HOST}:{APP_PORT}. Reload: {DEV_RELOAD}. Log Level (EzTalkProxy): {LOG_LEVEL_FROM_ENV}")
     uvicorn.run("main:app", host=APP_HOST, port=APP_PORT, log_config=log_config, reload=DEV_RELOAD, lifespan="on")
+  

@@ -3,7 +3,6 @@ package com.example.everytalk.StateControler // 您的包名
 import android.util.Log
 import com.example.everytalk.data.DataClass.Message // UI层的Message
 import com.example.everytalk.data.DataClass.Sender
-// import com.example.everytalk.data.DataClass.WebSearchResult // WebSearchResult 已在 Message.kt 中定义或单独引入
 import com.example.everytalk.data.DataClass.ChatRequest // 网络请求的 ChatRequest
 import com.example.everytalk.data.DataClass.AppStreamEvent // 新的事件数据类
 import com.example.everytalk.data.network.ApiClient
@@ -59,11 +58,11 @@ class ApiHandler(
 
         if (messageIdBeingCancelled != null) {
             // 清理与被取消消息相关的状态
-            stateHolder.reasoningCompleteMap.remove(messageIdBeingCancelled) // 清理思考完成状态
-            // stateHolder.expandedReasoningStates.remove(messageIdBeingCancelled) // 如果有展开状态也应清理
-            // stateHolder.messageAnimationStates.remove(messageIdBeingCancelled) // 动画状态
+            stateHolder.reasoningCompleteMap.remove(messageIdBeingCancelled)
+            // stateHolder.expandedReasoningStates.remove(messageIdBeingCancelled)
+            // stateHolder.messageAnimationStates.remove(messageIdBeingCancelled)
 
-            if (!isNewMessageSend) { // 如果不是因为新消息发送（此时新消息会取代旧的占位符）
+            if (!isNewMessageSend) {
                 viewModelScope.launch(Dispatchers.Main.immediate) {
                     val index =
                         stateHolder.messages.indexOfFirst { it.id == messageIdBeingCancelled }
@@ -89,8 +88,8 @@ class ApiHandler(
             }
         }
         jobToCancel?.takeIf { it.isActive }
-            ?.cancel(CancellationException(reason)) // 使用标准 CancellationException
-        stateHolder.apiJob = null // 清理作业引用
+            ?.cancel(CancellationException(reason))
+        stateHolder.apiJob = null
     }
 
     /**
@@ -98,17 +97,16 @@ class ApiHandler(
      */
     fun streamChatResponse(
         requestBody: ChatRequest,
-        @Suppress("UNUSED_PARAMETER") // userMessageTextForContext 目前仅用于日志
-        userMessageTextForContext: String, // 用户原始输入文本，仅用于日志上下文
-        afterUserMessageId: String?, // AI消息应在此用户消息ID之后插入
-        onMessagesProcessed: () -> Unit // 消息列表更新后的回调 (例如，保存历史)
+        @Suppress("UNUSED_PARAMETER") userMessageTextForContext: String,
+        afterUserMessageId: String?,
+        onMessagesProcessed: () -> Unit
     ) {
         val contextForLog =
             requestBody.messages.lastOrNull { it.role == "user" }?.content?.take(30) ?: "N/A"
         cancelCurrentApiJob("开始新的流式传输，上下文: '$contextForLog'", isNewMessageSend = true)
 
         // 创建新的AI消息占位符 (currentWebSearchStage 默认为 null)
-        val newAiMessage = Message(text = "", sender = Sender.AI) // 初始文本为空
+        val newAiMessage = Message(text = "", sender = Sender.AI)
         val aiMessageId = newAiMessage.id
 
         // 清空累积构造器，为新消息做准备
@@ -130,31 +128,30 @@ class ApiHandler(
                     )
                 }
             }
-            insertAtIndex = insertAtIndex.coerceAtMost(stateHolder.messages.size) // 确保索引有效
-            stateHolder.messages.add(insertAtIndex, newAiMessage) // 添加AI消息占位符
+            insertAtIndex = insertAtIndex.coerceAtMost(stateHolder.messages.size)
+            stateHolder.messages.add(insertAtIndex, newAiMessage)
             Log.d(
                 TAG_API_HANDLER,
                 "新的AI消息 (ID: $aiMessageId) 添加到索引 $insertAtIndex. 列表大小: ${stateHolder.messages.size}."
             )
 
-            // 更新API调用状态
             stateHolder._currentStreamingAiMessageId.value = aiMessageId
             stateHolder._isApiCalling.value = true
-            stateHolder.reasoningCompleteMap[aiMessageId] = false // 初始时，认为思考过程未完成
-            // stateHolder.expandedReasoningStates.remove(aiMessageId) // 如果有展开状态，重置
-            // stateHolder.messageAnimationStates.remove(aiMessageId) // 重置动画状态
-            onMessagesProcessed() // 执行回调 (例如通知ViewModel保存历史记录)
+            stateHolder.reasoningCompleteMap[aiMessageId] = false
+            // stateHolder.expandedReasoningStates.remove(aiMessageId)
+            // stateHolder.messageAnimationStates.remove(aiMessageId)
+            onMessagesProcessed()
         }
 
         // 启动协程处理网络请求和流式数据
         stateHolder.apiJob = viewModelScope.launch {
-            val thisJob = coroutineContext[Job.Key] // 获取当前协程的Job实例
+            val thisJob = coroutineContext[Job.Key]
             try {
                 ApiClient.streamChatResponse(requestBody)
                     .onStart { Log.d(TAG_API_HANDLER, "流式传输开始，消息ID: $aiMessageId") }
-                    .catch { e -> // 处理流中的异常
-                        if (e !is CancellationException) { // 排除主动取消的异常
-                            updateMessageWithError(aiMessageId, e) // 用错误信息更新消息UI
+                    .catch { e ->
+                        if (e !is CancellationException) {
+                            updateMessageWithError(aiMessageId, e)
                         } else {
                             Log.d(
                                 TAG_API_HANDLER,
@@ -162,7 +159,7 @@ class ApiHandler(
                             )
                         }
                     }
-                    .onCompletion { cause -> // 当流完成时 (无论正常或异常)
+                    .onCompletion { cause ->
                         val targetMsgId = aiMessageId
                         val isThisJobStillTheOne = stateHolder.apiJob == thisJob
                         Log.d(
@@ -170,15 +167,13 @@ class ApiHandler(
                             "流 onCompletion. Cause: $cause, TargetMsgId: $targetMsgId, isThisJobStillTheOne: $isThisJobStillTheOne"
                         )
 
-                        if (isThisJobStillTheOne) { // 如果当前VM的apiJob仍然是这个，则重置API调用状态
+                        if (isThisJobStillTheOne) {
                             stateHolder._isApiCalling.value = false
                             if (stateHolder._currentStreamingAiMessageId.value == targetMsgId) {
                                 stateHolder._currentStreamingAiMessageId.value = null
                             }
                         }
 
-                        // 无论流如何结束，都确保如果消息还在，并且其 reasoningCompleteMap 不是 true，则设为 true
-                        // 因为流结束意味着思考过程（如果存在且未被 content 事件标记为完成）也必须结束了。
                         if (stateHolder.reasoningCompleteMap[targetMsgId] != true) {
                             stateHolder.reasoningCompleteMap[targetMsgId] = true
                             Log.d(
@@ -187,11 +182,9 @@ class ApiHandler(
                             )
                         }
 
-                        // 清理文本构造器
                         currentTextBuilder.clear()
                         currentReasoningBuilder.clear()
 
-                        // 查找并最终更新消息状态
                         val finalIdx = stateHolder.messages.indexOfFirst { it.id == targetMsgId }
                         if (finalIdx != -1) {
                             val msg = stateHolder.messages[finalIdx]
@@ -200,16 +193,16 @@ class ApiHandler(
                                     !msg.webSearchResults.isNullOrEmpty() ||
                                     (!msg.currentWebSearchStage.isNullOrEmpty() && msg.currentWebSearchStage != "error_occurred")
 
-                            if (cause == null && !msg.isError) { // 流正常完成且消息没有错误
+                            if (cause == null && !msg.isError) {
                                 Log.d(
                                     TAG_API_HANDLER,
                                     "流正常完成，最终消息 $targetMsgId: Text='${msg.text.take(30)}', Stage='${msg.currentWebSearchStage}', ContentStarted=${msg.contentStarted}"
                                 )
                                 val updatedMsg = msg.copy(
-                                    text = msg.text.trim(), // 确保文本是trim过的
+                                    text = msg.text.trim(),
                                     reasoning = msg.reasoning?.trim()
                                         .let { if (it.isNullOrBlank()) null else it },
-                                    contentStarted = msg.contentStarted || msg.text.isNotBlank() // 如果有文本，则视为内容已开始
+                                    contentStarted = msg.contentStarted || msg.text.isNotBlank()
                                 )
                                 if (updatedMsg != msg) {
                                     stateHolder.messages[finalIdx] = updatedMsg
@@ -218,10 +211,10 @@ class ApiHandler(
                                     stateHolder.messageAnimationStates[targetMsgId] = true
                                 }
                                 historyManager.saveCurrentChatToHistoryIfNeeded()
-                            } else if (cause != null && cause !is CancellationException && !msg.isError) { // 流因错误完成
+                            } else if (cause != null && cause !is CancellationException && !msg.isError) {
                                 Log.d(TAG_API_HANDLER, "流因错误完成，更新消息 $targetMsgId")
                                 updateMessageWithError(targetMsgId, cause)
-                            } else if (cause is CancellationException) { // 流被取消
+                            } else if (cause is CancellationException) {
                                 Log.d(
                                     TAG_API_HANDLER,
                                     "流被取消 (onCompletion)，消息 $targetMsgId。当前文本: '${
@@ -257,7 +250,7 @@ class ApiHandler(
                             )
                         }
                     }
-                    .collect { appEvent -> // 现在接收的是 AppStreamEvent
+                    .collect { appEvent ->
                         if (stateHolder.apiJob != thisJob || stateHolder._currentStreamingAiMessageId.value != aiMessageId) {
                             Log.w(
                                 TAG_API_HANDLER,
@@ -274,7 +267,7 @@ class ApiHandler(
                                 currentChunkIndex,
                                 appEvent,
                                 aiMessageId
-                            ) // 调用修改后的 processChunk
+                            )
                         } else {
                             Log.e(
                                 TAG_API_HANDLER,
@@ -284,7 +277,7 @@ class ApiHandler(
                             return@collect
                         }
                     }
-            } catch (e: Exception) { // 捕获协程启动或流收集过程中的其他异常
+            } catch (e: Exception) {
                 currentTextBuilder.clear()
                 currentReasoningBuilder.clear()
                 when (e) {
@@ -305,8 +298,7 @@ class ApiHandler(
                     }
                 }
             } finally {
-                // 无论协程如何结束（正常、异常、取消），都会执行
-                if (stateHolder.apiJob == thisJob) { // 清理当前 job 相关的状态
+                if (stateHolder.apiJob == thisJob) {
                     stateHolder.apiJob = null
                     if (stateHolder._isApiCalling.value && stateHolder._currentStreamingAiMessageId.value == aiMessageId) {
                         stateHolder._isApiCalling.value = false
@@ -336,7 +328,10 @@ class ApiHandler(
         appEvent: AppStreamEvent,
         messageIdForLog: String
     ) {
-        // 安全检查
+
+        if (appEvent.type == "reasoning") {
+            println("收到reasoning块: ${appEvent.text}")
+        }
         if (index < 0 || index >= stateHolder.messages.size || stateHolder.messages[index].id != messageIdForLog) {
             Log.e(
                 TAG_API_HANDLER_CHUNK,
@@ -347,14 +342,14 @@ class ApiHandler(
 
         val originalMessage = stateHolder.messages[index]
 
-        var newText = originalMessage.text // 这是 Message.text，用于最终答案
-        var newReasoning = originalMessage.reasoning // 这是 Message.reasoning，用于思考过程
+        var newText = originalMessage.text
+        var newReasoning = originalMessage.reasoning
         var newContentStarted = originalMessage.contentStarted
         var newWebResults = originalMessage.webSearchResults
         var newWebSearchStage = originalMessage.currentWebSearchStage
 
         when (appEvent.type) {
-            "status_update" -> { // 处理状态更新事件
+            "status_update" -> {
                 if (appEvent.stage != null && newWebSearchStage != appEvent.stage) {
                     newWebSearchStage = appEvent.stage
                     Log.i(
@@ -364,8 +359,8 @@ class ApiHandler(
                 }
             }
 
-            "web_search_results" -> { // 处理网页搜索结果事件
-                if (appEvent.results != null && newWebResults == null) { // 只设置一次，且不为空
+            "web_search_results" -> {
+                if (appEvent.results != null && newWebResults == null) {
                     if (appEvent.results.isNotEmpty()) {
                         newWebResults = appEvent.results
                         Log.i(
@@ -376,14 +371,13 @@ class ApiHandler(
                 }
             }
 
-            "reasoning" -> { // 处理思考过程文本事件
+            "reasoning" -> {
                 if (!appEvent.text.isNullOrEmpty()) {
-                    currentReasoningBuilder.append(appEvent.text) // 追加到思考过程构造器
+                    currentReasoningBuilder.append(appEvent.text)
                     Log.d(
                         TAG_API_HANDLER_CHUNK,
                         "MsgID: ${messageIdForLog.take(8)}, 追加思考过程: '${appEvent.text.take(30)}'"
                     )
-                    // 收到 "reasoning" 事件，表示思考过程正在进行或尚未完成
                     if (stateHolder.reasoningCompleteMap[messageIdForLog] != false) {
                         stateHolder.reasoningCompleteMap[messageIdForLog] = false
                         Log.d(
@@ -394,16 +388,36 @@ class ApiHandler(
                 }
             }
 
-            "content" -> { // 处理最终答案文本事件
+            "content" -> {
                 if (!appEvent.text.isNullOrEmpty()) {
-                    currentTextBuilder.append(appEvent.text) // 追加到最终答案构造器
-                    if (!newContentStarted) { // 如果主要内容（最终答案）第一次开始出现
+                    val incoming = appEvent.text
+
+                    // 找到当前累积内容和新来的内容的最长公共前缀
+                    val prev = currentTextBuilder.toString()
+                    val newSuffix = if (incoming.startsWith(prev)) {
+                        // 完全追加后缀增量
+                        incoming.removePrefix(prev)
+                    } else if (prev.startsWith(incoming)) {
+                        // 连续来重复（如缩短）不处理
+                        ""
+                    } else {
+                        // 极大概率是全量内容，直接覆写
+                        val diffIndex = prev.zip(incoming).indexOfFirst { (a, b) -> a != b }
+                        if (diffIndex > 0) {
+                            incoming.substring(diffIndex)
+                        } else incoming
+                    }
+                    if (newSuffix.isNotEmpty()) {
+                        currentTextBuilder.append(newSuffix)
+                    }
+
+                    // 仅当第一次有text时才设置 contentStarted
+                    if (!newContentStarted && currentTextBuilder.isNotEmpty()) {
                         newContentStarted = true
                         Log.i(
                             TAG_API_HANDLER_CHUNK,
                             "MsgID: ${messageIdForLog.take(8)}, 'contentStarted' 因 'content' 事件而变为 true"
                         )
-                        // 当第一个 'content' 事件到达时，意味着思考过程（如果有的话）已经结束
                         if (stateHolder.reasoningCompleteMap[messageIdForLog] != true) {
                             stateHolder.reasoningCompleteMap[messageIdForLog] = true
                             Log.d(
@@ -415,26 +429,20 @@ class ApiHandler(
                 }
             }
 
-            "tool_calls_chunk", "google_function_call_request" -> { // 处理工具调用事件
+
+            "tool_calls_chunk", "google_function_call_request" -> {
                 Log.d(
                     TAG_API_HANDLER_CHUNK,
                     "MsgID: ${messageIdForLog.take(8)}, 收到工具调用类型: ${appEvent.type}, 是否思考步骤: ${appEvent.isReasoningStep}"
                 )
-                // TODO: 根据 appEvent.isReasoningStep 和具体工具调用信息，决定如何更新UI或累积数据。
-                // 例如，可以将工具调用请求或其初步指示附加到思考过程或主文本中。
-                // 当前后端逻辑主要是在文本流中处理工具调用，前端可能主要消费文本结果。
-                // 如果工具调用发生在思考阶段 (isReasoningStep = true)，并且您想在UI中特别展示这一点，
-                // 可能需要将相关信息（如“正在使用工具X...”）追加到 currentReasoningBuilder。
-                // 如果是最终答案阶段的工具调用，则追加到 currentTextBuilder。
-                // 简单的做法是，如果工具调用本身产生了可见文本（由LLM生成），LLM会将其包含在"reasoning"或"content"流中。
+                // 如需将工具请求流到 reasoning，可加逻辑。默认前端可忽略。
             }
 
-            "finish" -> { // 处理流结束事件
+            "finish" -> {
                 Log.i(
                     TAG_API_HANDLER_CHUNK,
                     "MsgID: ${messageIdForLog.take(8)}, 收到 'finish' 事件, 原因: ${appEvent.reason}"
                 )
-                // 确保思考过程被标记为完成
                 if (stateHolder.reasoningCompleteMap[messageIdForLog] != true) {
                     stateHolder.reasoningCompleteMap[messageIdForLog] = true
                     Log.d(
@@ -442,25 +450,20 @@ class ApiHandler(
                         "MsgID: $messageIdForLog, reasoningCompleteMap 因 'finish' 事件设置为 true"
                     )
                 }
-                // 如果结束原因是 "tool_calls"，并且这些调用是作为最终步骤，则 contentStarted 可能也应为 true（如果之前没有 content）。
-                // 但通常 "tool_calls" 之后会有包含工具结果的 "assistant" 或 "tool" 角色消息，或最终的文本回复。
             }
 
-            "error" -> { // 处理流内错误事件
+            "error" -> {
                 Log.e(
                     TAG_API_HANDLER_CHUNK,
                     "MsgID: ${messageIdForLog.take(8)}, 收到流内错误事件: ${appEvent.message}, 上游状态: ${appEvent.upstreamStatus}"
                 )
-                if (stateHolder.reasoningCompleteMap[messageIdForLog] != true) { // 错误也应终止思考过程
+                if (stateHolder.reasoningCompleteMap[messageIdForLog] != true) {
                     stateHolder.reasoningCompleteMap[messageIdForLog] = true
                     Log.d(
                         TAG_API_HANDLER_CHUNK,
                         "MsgID: $messageIdForLog, reasoningCompleteMap 因流内 'error' 事件设置为 true"
                     )
                 }
-                // 可以在这里触发 updateMessageWithError，或者依赖外层的 catch 和 onCompletion 统一处理。
-                // 为了避免重复处理，通常外层统一处理更佳。但如果流内错误需要立即停止文本累积，则可以在此处理。
-                // 假设外层会处理，这里主要记录日志。
             }
 
             else -> {
@@ -471,7 +474,6 @@ class ApiHandler(
             }
         }
 
-        // 从StringBuilder获取最新的累积文本和思考过程
         val accumulatedText = currentTextBuilder.toString()
         if (newText != accumulatedText) {
             newText = accumulatedText
@@ -484,8 +486,6 @@ class ApiHandler(
             newReasoning = finalAccumulatedReasoning
         }
 
-        // 再次检查 contentStarted，如果主文本非空但 contentStarted 仍为 false (例如，只有 reasoning 后直接 finish，没有 content 事件)
-        // 这种情况下，如果 reasoning 已完成，且主文本非空，则可以认为主文本就是内容。
         if (!newContentStarted && newText.isNotBlank() && (stateHolder.reasoningCompleteMap[messageIdForLog] == true)) {
             newContentStarted = true
             Log.i(
@@ -494,8 +494,6 @@ class ApiHandler(
             )
         }
 
-
-        // 只有当Message对象的任何受追踪的属性确实发生改变时，才更新列表中的对象
         if (newText != originalMessage.text ||
             newReasoning != originalMessage.reasoning ||
             newContentStarted != originalMessage.contentStarted ||
@@ -509,27 +507,25 @@ class ApiHandler(
                 webSearchResults = newWebResults,
                 currentWebSearchStage = newWebSearchStage
             )
-            // （日志可以保持或调整）
         }
     }
 
-    // updateMessageWithError 方法保持不变 (确保注释是中文)
     private suspend fun updateMessageWithError(messageId: String, error: Throwable) {
         Log.e(
             TAG_API_HANDLER,
             "updateMessageWithError 为消息 $messageId, 错误: ${error.message}",
             error
         )
-        currentTextBuilder.clear() // 清空构造器
-        currentReasoningBuilder.clear() // 清空构造器
+        currentTextBuilder.clear()
+        currentReasoningBuilder.clear()
 
         withContext(Dispatchers.Main.immediate) {
             val idx = stateHolder.messages.indexOfFirst { it.id == messageId }
             if (idx != -1) {
                 val msg = stateHolder.messages[idx]
-                if (!msg.isError) { // 只在第一次出错时附加/设置错误信息
+                if (!msg.isError) {
                     val errorPrefix =
-                        if (msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || !msg.webSearchResults.isNullOrEmpty()) "\n\n" else "" // 如果已有内容，则加换行
+                        if (msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || !msg.webSearchResults.isNullOrEmpty()) "\n\n" else ""
                     val errorTextContent = ERROR_VISUAL_PREFIX + when (error) {
                         is IOException -> "网络通讯故障: ${error.message ?: "IO 错误"}"
                         is ResponseException -> parseBackendError(
@@ -545,31 +541,28 @@ class ApiHandler(
                     val errorMsg = msg.copy(
                         text = (msg.text.takeIf { it.isNotBlank() }
                             ?: msg.reasoning?.takeIf { it.isNotBlank() && msg.text.isBlank() }
-                            ?: "") + errorPrefix + errorTextContent, // 将错误信息附加到现有文本（或思考过程，如果文本为空）
+                            ?: "") + errorPrefix + errorTextContent,
                         isError = true,
-                        contentStarted = true, // 错误消息也视为内容已开始，以便显示
-                        reasoning = if (msg.text.isNotBlank()) msg.reasoning else null, // 如果错误附加到主文本，保留思考过程；否则清除
+                        contentStarted = true,
+                        reasoning = if (msg.text.isNotBlank()) msg.reasoning else null,
                         currentWebSearchStage = msg.currentWebSearchStage
-                            ?: "error_occurred" // 可以标记错误阶段
+                            ?: "error_occurred"
                     )
                     stateHolder.messages[idx] = errorMsg
                     if (stateHolder.messageAnimationStates[messageId] != true) {
-                        stateHolder.messageAnimationStates[messageId] = true // 标记动画完成
+                        stateHolder.messageAnimationStates[messageId] = true
                     }
-                    historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true) // 错误也是一种最终状态
+                    historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
                 }
             }
-            // 如果出错的消息是当前正在流式处理的消息，则重置API调用状态
             if (stateHolder._currentStreamingAiMessageId.value == messageId && stateHolder._isApiCalling.value) {
                 stateHolder._isApiCalling.value = false
                 stateHolder._currentStreamingAiMessageId.value = null
-                // 不需要再次取消 stateHolder.apiJob，因为它会在外层的 catch/finally 中处理
                 Log.d(TAG_API_HANDLER, "错误处理后重置了消息 $messageId 的 API 调用状态。")
             }
         }
     }
 
-    // parseBackendError 方法保持不变 (确保注释是中文)
     private fun parseBackendError(response: HttpResponse, errorBody: String): String {
         return try {
             val errorJson = jsonParserForError.decodeFromString<BackendErrorContent>(errorBody)
@@ -579,10 +572,10 @@ class ApiHandler(
         }
     }
 
-    private companion object { // 日志标签
-        private const val TAG_API_HANDLER = "ApiHandler" // 主标签
-        private const val TAG_API_HANDLER_CANCEL = "ApiHandlerCancel" // 取消操作日志
-        private const val TAG_API_HANDLER_CHUNK = "ApiHandlerChunk" // 块处理日志
-        private const val ERROR_VISUAL_PREFIX = "⚠️ " // 错误消息的视觉前缀
+    private companion object {
+        private const val TAG_API_HANDLER = "ApiHandler"
+        private const val TAG_API_HANDLER_CANCEL = "ApiHandlerCancel"
+        private const val TAG_API_HANDLER_CHUNK = "ApiHandlerChunk"
+        private const val ERROR_VISUAL_PREFIX = "⚠️ "
     }
 }
