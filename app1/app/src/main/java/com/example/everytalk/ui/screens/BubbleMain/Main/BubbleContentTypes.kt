@@ -270,7 +270,7 @@ internal fun UserOrErrorMessageContent(
 }
 
 
-// --- Animations.kt 内容 (ThreeDotsLoadingAnimation) ---
+// --- AiMessageContent.kt 内容 (ThreeDotsLoadingAnimation) ---
 // package com.example.com.aiwithtalk.com.talkwithai.everytalk.ui.screens.BubbleMain // 替换为你的实际包名基础 + .ui.common (或Animations)
 
 // (ThreeDotsLoadingAnimation 的 import 已经在文件顶部处理)

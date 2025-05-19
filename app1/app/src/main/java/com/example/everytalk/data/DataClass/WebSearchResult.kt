@@ -19,7 +19,7 @@ data class WebSearchResult( // 我先定义一个WebSearchResult结构，后端�
                     href = map["href"] as? String ?: "N/A",
                     snippet = map["snippet"] as? String ?: "N/A"
                 )
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 // Log.e("WebSearchResult", "Failed to parse from map: $map", e) // 可以在这里添加日志
                 null
             }

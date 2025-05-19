@@ -1,5 +1,3 @@
-// MainScreenDrawerList.kt  例如这个文件名
-
 package com.example.everytalk.ui.screens.MainScreen.drawer
 
 import android.util.Log

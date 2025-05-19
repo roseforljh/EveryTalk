@@ -2,12 +2,7 @@ package com.example.everytalk.data.network
 
 import android.util.Log
 import com.example.everytalk.data.DataClass.ChatRequest
-// 导入我们新定义的、更通用的事件数据类 (假设您已将 OpenAiStreamChunk.kt 修改为此结构)
 import com.example.everytalk.data.DataClass.AppStreamEvent // << 关键：导入新的事件类
-// import com.example.everytalk.data.DataClass.OpenAiChoice // 如果 AppStreamEvent 不再直接使用它，则可能不需要
-// import com.example.everytalk.data.DataClass.OpenAiDelta // 如果 AppStreamEvent 不再直接使用它，则可能不需要
-// import com.example.everytalk.data.DataClass.WebSearchResult // AppStreamEvent 内部会引用 WebSearchResult
-
 import io.ktor.client.*
 import io.ktor.client.engine.android.*
 import io.ktor.client.plugins.*
@@ -24,9 +19,6 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.SerializationException
 import java.io.IOException
 import io.ktor.client.network.sockets.ConnectTimeoutException
-
-
-// 重命名以避免与 java.util.concurrent.CancellationException 混淆
 import kotlinx.coroutines.CancellationException as CoroutineCancellationException
 
 object ApiClient {
@@ -37,7 +29,6 @@ object ApiClient {
             ignoreUnknownKeys = true // 非常重要，因为不同的事件类型会有不同的字段
             isLenient = true
             encodeDefaults = true
-            // classDiscriminator = "type" // 如果你想使用类鉴别器，需要更复杂的设置，暂时不用
         }
     }
 
@@ -61,10 +52,7 @@ object ApiClient {
         "http://192.168.0.2:8000/chat" // 您的本地地址，请确保可访问
     )
 
-    // BackendStreamChunk 类已被移除，因为我们将直接解析为 AppStreamEvent
-
     fun preWarm() {
-        // ... (preWarm 方法内容保持不变) ...
         Log.d("ApiClient", "ApiClient.preWarm() 已调用。")
         val clientInstance = client
         Log.d("ApiClient", "Ktor HttpClient 实例已访问: $clientInstance")

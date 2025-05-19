@@ -10,7 +10,6 @@ data class ApiMessage(
 
     @SerialName("content") // Match backend JSON key
     val content: String?, // Make content nullable for flexibility (e.g., assistant initiating tool call might not have text content)
-    // For role="tool", content will be the result and MUST NOT be null when sent.
 
     @SerialName("name") // Match the expected extra field name for tool role
     val name: String? = null // Nullable: Only relevant and non-null when role is "tool"

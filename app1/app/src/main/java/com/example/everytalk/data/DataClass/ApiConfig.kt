@@ -1,4 +1,3 @@
-// 修改后的 ApiConfig.kt
 package com.example.everytalk.data.DataClass
 
 import kotlinx.serialization.Serializable
