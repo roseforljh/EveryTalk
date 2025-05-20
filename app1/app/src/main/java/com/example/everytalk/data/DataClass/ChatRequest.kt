@@ -2,7 +2,7 @@ package com.example.everytalk.data.DataClass // 请替换为您的实际包名
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
-import kotlinx.serialization.Contextual // 用于 tools 和 toolChoice 字段
+import kotlinx.serialization.Contextual // 用于 tools, toolChoice 以及新添加的 Map<String, Any> 字段
 
 @Serializable // 确保它是可序列化的
 data class ChatRequest(
@@ -21,11 +21,6 @@ data class ChatRequest(
     @SerialName("model")
     val model: String, // 模型名称
 
-    // 用于控制Google提供商是否强制启用引导式推理提示的标志。
-    // 对应后端Pydantic模型中的 `forceGoogleReasoningPrompt` (当 provider='google' 时生效)。
-    // 对于 provider='openai' 且模型名称包含 'gemini' 的情况，后端会自动处理该逻辑，前端通常无需为此标志传递特定值。
-    // 设置为 null 将允许后端根据其内部的启发式规则（例如模型名称是否包含 "pro" 或 "thinking"）来决定是否启用。
-    // 设置为 true 会强制启用，设置为 false 会强制禁用（仅对Google provider）。
     @SerialName("forceGoogleReasoningPrompt")
     val forceGoogleReasoningPrompt: Boolean? = null, // 可选布尔值，用于覆盖后端默认行为
 
@@ -48,5 +43,17 @@ data class ChatRequest(
     val tools: List<Map<String, @Contextual Any>>? = null, // OpenAI样式的工具列表
 
     @SerialName("tool_choice") // OpenAI样式的工具选择，可以是字符串或特定对象结构
-    val toolChoice: @Contextual Any? = null // 类型为 Any，因为它可以是 String 或 Map
+    val toolChoice: @Contextual Any? = null, // 类型为 Any，因为它可以是 String 或 Map
+
+    // --- 新增：允许客户端传递自定义的顶层参数 ---
+    // 这些参数将直接添加到发送给AI服务提供商的请求JSON的顶层。
+    // 例如，用于传递 SiliconFlow Qwen3 模型的 "enable_thinking": false
+    @SerialName("customModelParameters")
+    val customModelParameters: Map<String, Boolean>? = null,
+
+    // --- 新增：允许客户端传递自定义的 extra_body 内容 ---
+    // 这些参数将添加到请求JSON的 "extra_body" 字段中。
+    // 例如，用于传递 DashScope Qwen3 模型的 "enable_thinking": false (如果DashScope需要它在extra_body中)
+    @SerialName("customExtraBody")
+    val customExtraBody: Map<String, Boolean>? = null
 )

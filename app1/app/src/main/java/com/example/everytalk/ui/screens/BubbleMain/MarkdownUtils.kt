@@ -1,172 +1,99 @@
-package com.example.everytalk.ui.screens.BubbleMain // 请将此行替换为您的实际包名基础 + .util.markdown
+package com.example.everytalk.util.markdown
 
 import android.util.Log
 
-// --- 文本片段数据类定义 ---
-sealed class TextSegment { // 密封类，表示文本可以分割成的不同类型片段
-    data class Normal(val text: String) : TextSegment() // 普通文本片段
-    data class CodeBlock(val language: String?, val code: String) : TextSegment() // 代码块片段，包含语言和代码
+//强预处理 + 经典正则分段 + 兜底判断
+// 类型定义
+sealed class TextSegment {
+    data class Normal(val text: String) : TextSegment()
+    data class CodeBlock(val language: String?, val code: String) : TextSegment()
 }
 
-// --- 预编译的正则表达式 ---
-// GFM (GitHub Flavored Markdown) 风格的闭合代码块正则表达式：
-// 捕获语言提示（可选）和代码块内容。
-// `\\w` 包含 [a-zA-Z0-9_]，已额外添加 `.+`
 private val GFM_CLOSED_CODE_BLOCK_REGEX =
-    Regex("```([\\w.+-]*)[ \t]*\\n([\\s\\S]*?)\\n[ \t]*```")
-
-// 匹配代码块开始标记 "```" 的正则表达式，用于处理剩余文本中可能的未闭合代码块
+    Regex("```([\\w.+-]*)[ \\t]*\\n([\\s\\S]*?)\\n[ \\t]*```")
 private val CODE_BLOCK_START_REGEX = Regex("```")
 
 /**
- * 优化版的 Markdown 解析函数。
- * 将输入的Markdown字符串分割成 TextSegment 对象列表。
- * 它能识别GFM风格的闭合代码块以及在文本末尾可能存在的未闭合代码块。
+ * 强力兜底版 Markdown 片段解析函数
+ * - 能预处理AI各种奇葩输出（闭合/未闭合/代码块+描述粘连）
+ * - 输出TextSegment切分段落，适合UI逐段渲染
+ * - 全流程状态日志，方便调试和追踪实际分割效果
  */
 fun parseMarkdownSegments(markdownInput: String): List<TextSegment> {
-    if (markdownInput.isBlank()) { // 如果输入为空或仅包含空白，返回空列表
-        return emptyList()
-    }
+    if (markdownInput.isBlank()) return emptyList()
 
-    val segments = mutableListOf<TextSegment>() // 存储解析出的片段
-    var currentIndex = 0 // 当前处理位置
+    // --- Step 1: 预处理异常markdown（AI标记/描述/粘连全面修复） ---
+    var fixedMd = markdownInput
+        // 让```后不是换行的，都自动换行（如```python代码 会变 ```\npython代码）
+        .replace(Regex("(```)([^\n])"), "$1\n$2")
+        // 让正文or其它后面连着```的结尾，也断开
+        .replace(Regex("([^\n])(```)"), "$1\n$2")
+        // 确保所有```都是独立一行（兜底兜底！）
+        .replace(Regex("[ \\t]*```[ \\t]*"), "\n```\n")
+        // 若```描述、```python输出效果这类形式也都分行
+        .replace(Regex("(```)[ \t]*([^\n ])([^`\n]*)"), "$1\n$2$3")
+        // 清空无意义的缩进空行
+        .replace(Regex("(?m)^[ \\t]+\n"), "\n")
 
     Log.d(
-        "ParseMarkdownOpt",
-        "输入 (长度 ${markdownInput.length}):\nSTART_MD\n${
-            markdownInput.take(200).replace("\n", "\\n") // 日志：预览输入文本
-        }...\nEND_MD"
+        "MarkdownParser",
+        "自动修正Markdown预览（前200字）：${fixedMd.take(200).replace("\n", "\\n")}"
     )
 
-    // 查找第一个GFM风格的闭合代码块
-    var matchResult = GFM_CLOSED_CODE_BLOCK_REGEX.find(markdownInput, currentIndex)
+    val segments = mutableListOf<TextSegment>()
+    var currentIndex = 0
+    var segmentNum = 1
 
-    while (matchResult != null) { // 循环处理找到的闭合代码块
-        val matchStart = matchResult.range.first // 匹配起始索引
-        val matchEnd = matchResult.range.last   // 匹配结束索引
+    // --- Step 2: 按标准GFM闭合代码块正则分割 ---
+    var matchResult = GFM_CLOSED_CODE_BLOCK_REGEX.find(fixedMd, currentIndex)
+    while (matchResult != null) {
+        val matchStart = matchResult.range.first
+        val matchEnd = matchResult.range.last
 
-        Log.d(
-            "ParseMarkdownOpt",
-            "找到闭合代码块. 范围: ${matchResult.range}. 当前索引(之前): $currentIndex"
-        )
-
-        // 1. 处理闭合代码块之前的普通文本
+        // 普通文本
         if (matchStart > currentIndex) {
-            val normalText = markdownInput.substring(currentIndex, matchStart)
-            if (normalText.isNotBlank()) { // 仅添加非纯空白的普通文本
+            val normalText = fixedMd.substring(currentIndex, matchStart)
+            if (normalText.isNotBlank()) {
                 segments.add(TextSegment.Normal(normalText.trim()))
-                Log.d(
-                    "ParseMarkdownOpt",
-                    "添加普通文本 (闭合块之前): '${
-                        normalText.trim().take(50).replace("\n", "\\n") // 日志：记录普通文本
-                    }'"
-                )
+                Log.d("MarkdownParser", "【$segmentNum】普通文本片段 len=${normalText.trim().length}")
+                segmentNum++
             }
         }
-
-        // 2. 处理当前找到的闭合代码块
-        val language = matchResult.groups[1]?.value?.trim()
-            ?.takeIf { it.isNotEmpty() } // 提取语言提示，去除空白，非空则使用
-        val code = matchResult.groups[2]?.value ?: "" // 提取代码内容，保持原始格式
+        // 代码块
+        val language = matchResult.groups[1]?.value?.trim()?.takeIf { it.isNotEmpty() }
+        val code = matchResult.groups[2]?.value ?: ""
         segments.add(TextSegment.CodeBlock(language, code))
         Log.d(
-            "ParseMarkdownOpt",
-            "添加闭合代码块: 语言='$language', 代码='${
-                code.take(50).replace("\n", "\\n") // 日志：记录代码块
-            }'"
+            "MarkdownParser",
+            "【$segmentNum】代码块(闭合) 语言=${language ?: "<无>"} len=${code.length}"
         )
+        segmentNum++
 
-        currentIndex = matchEnd + 1 // 更新当前处理位置
-        matchResult = GFM_CLOSED_CODE_BLOCK_REGEX.find(markdownInput, currentIndex) // 继续查找
+        currentIndex = matchEnd + 1
+        matchResult = GFM_CLOSED_CODE_BLOCK_REGEX.find(fixedMd, currentIndex)
     }
 
-    Log.d(
-        "ParseMarkdownOpt",
-        "闭合代码块循环结束. 当前索引: $currentIndex, Markdown长度: ${markdownInput.length}"
-    )
-
-    // 3. 处理最后一个闭合代码块之后剩余的文本
-    if (currentIndex < markdownInput.length) {
-        val remainingText = markdownInput.substring(currentIndex) // 获取剩余文本
-        Log.d(
-            "ParseMarkdownOpt",
-            "剩余文本 (长度 ${remainingText.length}): '${
-                remainingText.take(100).replace("\n", "\\n") // 日志：记录剩余文本
-            }'"
-        )
-
-        // 尝试在剩余文本中查找未闭合的代码块开始标记 "```"
+    // --- Step 3: 处理末尾未闭合/残留代码块/尾文本 ---
+    if (currentIndex < fixedMd.length) {
+        val remainingText = fixedMd.substring(currentIndex)
+        Log.d("MarkdownParser", "剩余待分析: ${remainingText.take(80).replace("\n", "\\n")}")
         val openBlockMatch = CODE_BLOCK_START_REGEX.find(remainingText)
-        if (openBlockMatch != null) { // 如果找到 "```"
-            val openBlockStartInRemaining = openBlockMatch.range.first // "```" 在剩余文本中的起始位置
-
-            // a. "```" 之前的部分是普通文本
+        if (openBlockMatch != null) {
+            // 前面的普通文本
+            val openBlockStartInRemaining = openBlockMatch.range.first
             if (openBlockStartInRemaining > 0) {
                 val normalPrefix = remainingText.substring(0, openBlockStartInRemaining)
                 if (normalPrefix.isNotBlank()) {
                     segments.add(TextSegment.Normal(normalPrefix.trim()))
                     Log.d(
-                        "ParseMarkdownOpt",
-                        "添加普通文本 (开放代码块前缀): '${
-                            normalPrefix.trim().take(50).replace("\n", "\\n") // 日志
-                        }'"
+                        "MarkdownParser",
+                        "【$segmentNum】普通文本片段(未闭合前) len=${normalPrefix.trim().length}"
                     )
+                    segmentNum++
                 }
             }
-
-            // b. "```" 之后的部分被视为未闭合代码块的内容
-            val codeBlockCandidate =
-                remainingText.substring(openBlockStartInRemaining + 3) // 跳过 "```" 本身
-            val firstNewlineIndex = codeBlockCandidate.indexOf('\n')
-            var lang: String? = null
-            var codeContent: String
-
-            if (firstNewlineIndex != -1) { // 如果 "```lang" 形式后有换行
-                val langLine = codeBlockCandidate.substring(0, firstNewlineIndex).trim()
-                // 验证语言提示 (允许字母、数字、下划线、点、中横线、加号)
-                if (langLine.all { it.isLetterOrDigit() || it == '_' || it == '.' || it == '-' || it == '+' }) {
-                    lang = langLine.takeIf { it.isNotEmpty() }
-                }
-                codeContent = codeBlockCandidate.substring(firstNewlineIndex + 1)
-            } else { // "```lang" 后无换行，整行可能为语言，代码为空或后续流式输入
-                val langLine = codeBlockCandidate.trim()
-                if (langLine.all { it.isLetterOrDigit() || it == '_' || it == '.' || it == '-' || it == '+' }) {
-                    lang = langLine.takeIf { it.isNotEmpty() }
-                }
-                codeContent = "" // 对于无换行跟随的开放代码块，初始代码视为空
-            }
-            segments.add(TextSegment.CodeBlock(lang, codeContent)) // 代码内容不trim
-            Log.d(
-                "ParseMarkdownOpt",
-                "从剩余文本添加开放代码块: 语言='$lang', 代码预览='${
-                    codeContent.take(50).replace("\n", "\\n") // 日志
-                }'"
-            )
-
-        } else { // 剩余文本中没有 "```"，全部是普通文本
-            if (remainingText.isNotBlank()) {
-                segments.add(TextSegment.Normal(remainingText.trim()))
-                Log.d(
-                    "ParseMarkdownOpt",
-                    "剩余文本是普通文本: '${
-                        remainingText.trim().take(50).replace("\n", "\\n") // 日志
-                    }'"
-                )
-            }
-        }
-    }
-
-    // 特殊处理：若解析后segments为空，但原始markdownInput非空白
-    if (segments.isEmpty() && markdownInput.isNotBlank()) {
-        Log.w(
-            "ParseMarkdownOpt",
-            "片段列表为空，但Markdown非空白. Markdown是否以 '```' 开头: ${
-                markdownInput.startsWith("```") // 日志
-            }"
-        )
-        // 通常意味着整个输入是一个未闭合代码块或纯普通文本
-        if (markdownInput.startsWith("```")) { // 整个输入以 "```" 开头
-            val codeBlockCandidate = markdownInput.substring(3)
+            // 后半截未闭合代码块
+            val codeBlockCandidate = remainingText.substring(openBlockStartInRemaining + 3)
             val firstNewlineIndex = codeBlockCandidate.indexOf('\n')
             var lang: String? = null
             var codeContent: String
@@ -185,61 +112,91 @@ fun parseMarkdownSegments(markdownInput: String): List<TextSegment> {
             }
             segments.add(TextSegment.CodeBlock(lang, codeContent))
             Log.d(
-                "ParseMarkdownOpt",
-                "将整个输入添加为开放代码块: 语言='$lang', 代码预览='${
-                    codeContent.take(50).replace("\n", "\\n") // 日志
-                }'"
+                "MarkdownParser",
+                "【$segmentNum】未闭合代码块 语言=${lang ?: "<无>"} len=${codeContent.length}"
             )
-        } else { // 否则，整个输入是普通文本
-            segments.add(TextSegment.Normal(markdownInput.trim()))
+            segmentNum++
+        } else if (remainingText.isNotBlank()) {
+            // 普通文本片段
+            segments.add(TextSegment.Normal(remainingText.trim()))
             Log.d(
-                "ParseMarkdownOpt",
-                "整个输入是普通文本 (片段为空且不以 ``` 开头)." // 日志
+                "MarkdownParser",
+                "【$segmentNum】尾普通文本片段 len=${remainingText.trim().length}"
+            )
+            segmentNum++
+        }
+    }
+
+    // --- Step 4: 万一全被吃没了兜底一刀 ---
+    if (segments.isEmpty() && fixedMd.isNotBlank()) {
+        if (fixedMd.startsWith("```")) {
+            val codeBlockCandidate = fixedMd.substring(3)
+            val firstNewlineIndex = codeBlockCandidate.indexOf('\n')
+            var lang: String? = null
+            var codeContent: String
+            if (firstNewlineIndex != -1) {
+                val langLine = codeBlockCandidate.substring(0, firstNewlineIndex).trim()
+                if (langLine.all { it.isLetterOrDigit() || it == '_' || it == '.' || it == '-' || it == '+' }) {
+                    lang = langLine.takeIf { it.isNotEmpty() }
+                }
+                codeContent = codeBlockCandidate.substring(firstNewlineIndex + 1)
+            } else {
+                val langLine = codeBlockCandidate.trim()
+                if (langLine.all { it.isLetterOrDigit() || it == '_' || it == '.' || it == '-' || it == '+' }) {
+                    lang = langLine.takeIf { it.isNotEmpty() }
+                }
+                codeContent = ""
+            }
+            segments.add(TextSegment.CodeBlock(lang, codeContent))
+            Log.d(
+                "MarkdownParser",
+                "【兜底】全局未闭合代码块 语言=${lang ?: "<无>"} len=${codeContent.length}"
+            )
+        } else {
+            segments.add(TextSegment.Normal(fixedMd.trim()))
+            Log.d(
+                "MarkdownParser",
+                "【兜底】全局普通文本 len=${fixedMd.trim().length}"
             )
         }
     }
 
     Log.i(
-        "ParseMarkdownOpt",
-        "最终片段数量: ${segments.size}, 类型: ${segments.map { it::class.simpleName }}" // 日志：最终结果
+        "MarkdownParser",
+        "分段完毕，最终共${segments.size}段。类型简表: ${
+            segments.map { it::class.simpleName }
+        }"
     )
-    return segments // 返回解析出的片段列表
+    return segments
 }
 
 /**
- * 从已裁剪且以 "```" 开头的文本中提取流式代码内容和语言提示。
- * 此函数在当前AiMessageContent中不直接调用，但保留以备他用或参考。
+ * 辅助函数：解析"AI流式未闭合代码块"（可选；UI流显示一般不用）
+ * Gemini/ChatGLM等模型流返回时容易 `xxx\n```python\ndef ...` 后没闭合
+ * 本函数给你解析出来后处理样式(TableView分割/代码高亮专用)
+ * @param streamingCode 匹配到的未闭合代码块全部内容
+ * @return Pair<程序语言名, 代码内容>
  */
-fun extractStreamingCodeContent(textAlreadyTrimmedAndStartsWithTripleQuote: String): Pair<String?, String> {
-    Log.d(
-        "ExtractStreamCode",
-        "用于提取的输入: \"${
-            textAlreadyTrimmedAndStartsWithTripleQuote.take(30).replace("\n", "\\n") // 日志
-        }\""
-    )
-    val contentAfterTripleTicks =
-        textAlreadyTrimmedAndStartsWithTripleQuote.substring(3)
-    val firstNewlineIndex = contentAfterTripleTicks.indexOf('\n')
-
-    if (firstNewlineIndex != -1) { // ```lang\ncode 形式
-        val langHint = contentAfterTripleTicks.substring(0, firstNewlineIndex).trim()
-        val code = contentAfterTripleTicks.substring(firstNewlineIndex + 1)
-        // 验证语言提示
-        val validatedLangHint =
-            if (langHint.all { it.isLetterOrDigit() || it == '_' || it == '.' || it == '-' || it == '+' }) {
-                langHint.takeIf { it.isNotBlank() }
-            } else {
-                null
-            }
-        return Pair(validatedLangHint, code)
-    } else { // ```lang 或 ``` 形式
-        val langLine = contentAfterTripleTicks.trim()
-        val validatedLangHint =
-            if (langLine.all { it.isLetterOrDigit() || it == '_' || it == '.' || it == '-' || it == '+' }) {
-                langLine.takeIf { it.isNotBlank() }
-            } else {
-                null
-            }
-        return Pair(validatedLangHint, "") // 代码内容视为空
+fun extractStreamingCodeContent(streamingCode: String): Pair<String?, String> {
+    var lang: String? = null
+    var codeBody = ""
+    val firstNewLine = streamingCode.indexOf('\n')
+    if (firstNewLine != -1) {
+        val langLine = streamingCode.substring(0, firstNewLine).trim()
+        // 判断是否可能为纯语言声明，不是内容
+        if (langLine.all { it.isLetterOrDigit() || it == '_' || it == '.' || it == '-' || it == '+' }) {
+            lang = langLine.takeIf { it.isNotEmpty() }
+            codeBody = streamingCode.substring(firstNewLine + 1)
+        } else {
+            // 直接全是代码内容
+            codeBody = streamingCode
+        }
+    } else {
+        lang = streamingCode.trim().takeIf { it.isNotEmpty() }
     }
+    Log.d(
+        "MarkdownParser",
+        "extractStreamingCodeContent: language=${lang ?: "<无>"} code.len=${codeBody.length}"
+    )
+    return lang to codeBody
 }
