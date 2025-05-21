@@ -126,7 +126,6 @@ android {
         androidTestImplementation(libs.androidx.junit)
         androidTestImplementation(libs.androidx.espresso.core)
         androidTestImplementation(libs.androidx.ui.test.junit4) // BOM 会管理版本
-        // debugImplementation(libs.androidx.ui.tooling)          // 上面已声明，BOM 会管理版本
         debugImplementation(libs.androidx.ui.test.manifest)    // BOM 会管理版本
 
         implementation("androidx.navigation:navigation-compose:2.7.7")
@@ -135,5 +134,10 @@ android {
 
         implementation(libs.androidx.profileinstaller)
         implementation ("org.slf4j:slf4j-nop:2.0.12")
+
+        implementation("org.commonmark:commonmark:0.23.0") // 请检查最新版本
+        implementation("org.commonmark:commonmark-ext-gfm-tables:0.23.0")
+        implementation("org.commonmark:commonmark-ext-gfm-strikethrough:0.23.0")
+
 
     }

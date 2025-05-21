@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.example.everytalk.data.DataClass.Message
+import com.example.everytalk.ui.screens.BubbleMain.ThreeDotsLoadingAnimation
 
 // 从 BubbleMain.kt 移过来的常量 (用于上下文菜单)
 private const val CONTEXT_MENU_ANIMATION_DURATION_MS = 150 // 上下文菜单动画持续时间（毫秒）

@@ -410,6 +410,7 @@ class ApiHandler(
             "content" -> {
                 if (!appEvent.text.isNullOrEmpty()) {
                     currentTextBuilder.append(appEvent.text)
+                    Log.d("STREAMPATH", "流式AI内容 += '${appEvent.text}' -> 总长${currentTextBuilder.length}")
                     if (!newContentStarted) {
                         newContentStarted = true
                         Log.i(

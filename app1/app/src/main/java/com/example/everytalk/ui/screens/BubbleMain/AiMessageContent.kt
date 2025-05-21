@@ -1,4 +1,4 @@
-package com.example.everytalk.ui.screens.BubbleMain.Main // 您的实际包名
+package com.example.everytalk.ui.screens.BubbleMain
 
 import android.util.Log
 import android.widget.Toast
@@ -8,12 +8,14 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState // 新增：用于可滚动文本
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.selection.SelectionContainer // 新增：用于文本选择
-import androidx.compose.foundation.verticalScroll // 新增：用于可滚动文本
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.outlined.SelectAll
@@ -27,45 +29,51 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalConfiguration // 新增：用于获取屏幕尺寸
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog // 新增：用于弹出对话框
-import androidx.compose.ui.window.DialogProperties // 新增：用于配置对话框属性
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
-// Markdown 和 RichText 相关导入
-import com.halilibo.richtext.markdown.Markdown
-import com.halilibo.richtext.ui.RichTextStyle
-import com.halilibo.richtext.ui.material3.RichText
-import com.halilibo.richtext.ui.string.RichTextStringStyle
 
-// 常量定义
-private const val CONTEXT_MENU_ANIMATION_DURATION_MS = 150 // 上下文菜单动画持续时间（毫秒）
-private val CONTEXT_MENU_CORNER_RADIUS = 16.dp             // 上下文菜单圆角半径
-private val CONTEXT_MENU_ITEM_ICON_SIZE = 20.dp            // 上下文菜单项图标大小
+import org.commonmark.parser.Parser
+import org.commonmark.renderer.html.HtmlRenderer
+import org.commonmark.ext.gfm.tables.TablesExtension
+import org.commonmark.ext.gfm.strikethrough.StrikethroughExtension
+import java.util.Arrays
+
+import com.example.everytalk.util.markdown.TextSegment
+import com.example.everytalk.util.markdown.parseMarkdownSegments
+import com.example.everytalk.ui.components.PooledKatexWebView
+import com.example.everytalk.data.DataClass.Message
+import com.example.everytalk.StateControler.AppViewModel
+import com.example.everytalk.ui.screens.BubbleMain.Main.MyCodeBlockComposable
+import com.example.everytalk.ui.screens.BubbleMain.Main.toHexCss
+
+private fun convertMarkdownToHtml(markdown: String): String {
+    val extensions = Arrays.asList(TablesExtension.create(), StrikethroughExtension.create())
+    val parser = Parser.builder().extensions(extensions).build()
+    val document = parser.parse(markdown)
+    val renderer = HtmlRenderer.builder().extensions(extensions).build()
+    return renderer.render(document)
+}
+
+private const val CONTEXT_MENU_ANIMATION_DURATION_MS = 150
+private val CONTEXT_MENU_CORNER_RADIUS = 16.dp
+private val CONTEXT_MENU_ITEM_ICON_SIZE = 20.dp
 private val CONTEXT_MENU_FINE_TUNE_OFFSET_X = (-120).dp
 private val CONTEXT_MENU_FINE_TUNE_OFFSET_Y = (-8).dp
-private val CONTEXT_MENU_FIXED_WIDTH = 160.dp              // 上下文菜单固定宽度
+private val CONTEXT_MENU_FIXED_WIDTH = 160.dp
 
-/**
- * 可动画的下拉菜单项。
- */
 @Composable
 internal fun AnimatedDropdownMenuItem(
-                                       visibleState: MutableTransitionState<Boolean>,
-                                       delay: Int = 0,
-                                       text: @Composable () -> Unit,
-                                       onClick: () -> Unit,
-                                       leadingIcon: @Composable (() -> Unit)? = null
+    visibleState: MutableTransitionState<Boolean>, delay: Int = 0,
+    text: @Composable () -> Unit, onClick: () -> Unit, leadingIcon: @Composable (() -> Unit)? = null
 ) {
     AnimatedVisibility(
         visibleState = visibleState,
@@ -106,202 +114,324 @@ internal fun AnimatedDropdownMenuItem(
     }
 }
 
+@Composable
+fun rememberKatexBaseHtmlTemplate(
+    backgroundColor: String, textColor: String, errorColor: String, throwOnError: Boolean
+): String {
+    return remember(backgroundColor, textColor, errorColor, throwOnError) {
+        Log.d(
+            "HTMLTemplate",
+            "Regenerating HTML template for AiMessageContent. BG: $backgroundColor, TC: $textColor, ErrC: $errorColor, ThrErr: $throwOnError"
+        )
+        """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8"/>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+            <link rel="stylesheet" href="file:///android_asset/katex/katex.min.css"/>
+            <script src="file:///android_asset/katex/katex.min.js"></script>
+            <script src="file:///android_asset/katex/contrib/auto-render.min.js"></script>
+            <script src="file:///android_asset/katex/contrib/mhchem.min.js"></script>
+            <style>
+                body { 
+                    margin: 0; 
+                    padding: 8px; 
+                    background-color: $backgroundColor; 
+                    color: $textColor; 
+                    min-height: calc(100vh - 16px); 
+                    overflow-y: auto; 
+                    overflow-x: hidden; 
+                    font-family: sans-serif; 
+                    line-height: 1.5; /* Ensure reasonable line height for text around KaTeX */
+                }
+                #latex_container { 
+                    width: 100%; 
+                    overflow-x: hidden !important; 
+                    overflow-y: hidden; 
+                }
+                /* CSS MODIFICATION: Style .katex for inline behavior, .katex-display as fallback */
+                .katex { /* Primary style for all math, as we force $...$ input to KaTeX */
+                    display: inline-block; 
+                    margin: 0 0.1em;      
+                    padding: 0;
+                    text-align: left;
+                    vertical-align: baseline; 
+                    font-size: 1em;       
+                    line-height: normal;
+                }
+                .katex-display { /* Fallback style if $$ somehow still produces .katex-display */
+                    display: inline !important; 
+                    margin: 0 0.1em !important; 
+                    padding: 0 !important;
+                    text-align: left;
+                    vertical-align: baseline;
+                }
+                #latex_container::-webkit-scrollbar { height: 6px; background-color: #f0f0f0; }
+                #latex_container::-webkit-scrollbar-thumb { background-color: #cccccc; border-radius: 3px; }
+                .error-message { color: $errorColor; font-weight: bold; padding: 10px; border: 1px solid $errorColor; background-color: #fff0f0; margin-bottom: 5px;}
+            </style>
+        </head>
+        <body>
+            <div id="latex_container">
+                <div id="latex_content_target">Loading KaTeX content...</div>
+            </div>
+            <script type="text/javascript">
+                console.log("Base HTML script block executed. Waiting for KaTeX libraries...");
+                var katexRenderQueue = [];
+                var isKaTeXReady = false;
 
-/**
- * 用于显示AI消息内容，并处理长按弹出自定义上下文菜单（包含“复制”和“选择文本”）。
- */
+                function checkKaTeXReady() {
+                    return (typeof renderMathInElement === 'function') &&
+                         (typeof katex === 'object' && katex.render); 
+                }
+
+                function processRenderQueue() {
+                    if (!isKaTeXReady) return;
+                    while(katexRenderQueue.length > 0) {
+                        var item = katexRenderQueue.shift();
+                        renderMixedContentWithLatex(item.rawLatexString, true);
+                    }
+                }
+
+                function renderMixedContentWithLatex(rawLatexString, isRetryAttempt) {
+                    console.log("renderMixedContentWithLatex called:", rawLatexString.substring(0,100));
+                    var target = document.getElementById('latex_content_target');
+                    if (!target) return;
+                    target.innerHTML = rawLatexString; 
+                    if (!isKaTeXReady) {
+                        console.log("KaTeX not ready, queueing render.");
+                        if (!katexRenderQueue.find(x=>x.rawLatexString===rawLatexString)) {
+                            katexRenderQueue.push({rawLatexString, isRetry: true});
+                        }
+                        setTimeout(function() {
+                            if (!isKaTeXReady && target && !target.querySelector('.error-message')) {
+                                target.innerHTML = "<div class='error-message'>KaTeX libraries did not load/initialize in time. Raw content shown below.</div><hr>" + rawLatexString;
+                            }
+                        }, 3000);
+                        return;
+                    }
+                    try {
+                        renderMathInElement(target, {
+                            delimiters: [
+                                {left: "${'$'}", right: "${'$'}", display: false},    // KaTeX will use .katex
+                                {left: "\\(", right: "\\)", display: false},      // KaTeX will use .katex
+                                {left: "\\[", right: "\\]", display: true}       // KaTeX will use .katex-display
+                                        ],
+                            throwOnError: $throwOnError,
+                            errorColor: "$errorColor",
+                            macros: { "\\RR": "\\mathbb{R}" }
+                        });
+                    } catch (e) {
+                        var msg = "Failed to render math: " + (e && e.message ? e.message : e);
+                        if (target && !target.querySelector('.error-message')) {
+                            target.innerHTML = "<div class='error-message'>" + msg + "</div>";
+                        }
+                    }
+                }
+
+                function waitKaTeXAndProcess() {
+                    var attempts = 0, maxAttempts = 30; 
+                    function poll() {
+                        if (checkKaTeXReady()) {
+                            isKaTeXReady = true;
+                            console.log("KaTeX READY. Processing render queue.");
+                            processRenderQueue();
+                        } else if (attempts < maxAttempts) {
+                            attempts++; setTimeout(poll,100);
+                        } else {
+                            console.error("KaTeX libraries not loaded after polling.");
+                            var target = document.getElementById('latex_content_target');
+                            if (target && !target.querySelector('.error-message')) {
+                                target.innerHTML = "<div class='error-message'>KaTeX Libraries failed to load.</div>";
+                            }
+                            processRenderQueue();
+                        }
+                    }
+                    poll();
+                }
+                document.addEventListener("DOMContentLoaded", function() {
+                    waitKaTeXAndProcess();
+                });
+
+                window.renderLatexContent = function(content) {
+                    renderMixedContentWithLatex(content, false);
+                }
+            </script>
+        </body>
+        </html>
+        """.trimIndent()
+    }
+}
+
 @Composable
 internal fun AiMessageContent(
-    fullMessageTextToCopy: String, // 用于复制和在选择文本对话框中显示的完整AI消息文本
-    displayedText: String,         // 当前用于流式显示的文本
-    isStreaming: Boolean,          // 指示源数据是否仍在流式传输
-    showLoadingDots: Boolean,      // 是否在气泡内容完全为空时显示初始加载点
-    bubbleColor: Color,            // 气泡背景色
-    contentColor: Color,           // 主要内容颜色
-    codeBlockBackgroundColor: Color, // 代码块背景色
-    codeBlockContentColor: Color,    // 代码块内容颜色
-    codeBlockCornerRadius: Dp,       // 代码块圆角
-    codeBlockFixedWidth: Dp,         // 代码块固定宽度
-    onUserInteraction: () -> Unit,   // 用户交互回调
+    message: Message,
+    appViewModel: AppViewModel,
+    fullMessageTextToCopy: String,
+    displayedText: String,
+    isStreaming: Boolean,
+    showLoadingDots: Boolean,
+    contentColor: Color,
+    codeBlockBackgroundColor: Color,
+    codeBlockContentColor: Color,
+    codeBlockCornerRadius: Dp,
+    onUserInteraction: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val clipboardManager = LocalClipboardManager.current
-    val context = LocalContext.current
     val density = LocalDensity.current
 
-    // AI气泡上下文菜单的状态
     var isAiContextMenuVisible by remember(fullMessageTextToCopy) { mutableStateOf(false) }
     var pressOffset by remember(fullMessageTextToCopy) { mutableStateOf(Offset.Zero) }
-
-    // 新增：控制“选择文本”对话框的可见性状态
     var showSelectableTextDialog by remember(fullMessageTextToCopy) { mutableStateOf(false) }
 
     Column(
         modifier = modifier.pointerInput(fullMessageTextToCopy) {
-            detectTapGestures(
-                onLongPress = { offsetValue ->
-                    onUserInteraction()
-                    pressOffset = offsetValue
-                    isAiContextMenuVisible = true
-                    Log.d("AiMessageContextMenu", "AI消息长按. Offset: $offsetValue")
-                }
-            )
+            detectTapGestures(onLongPress = { offsetValue ->
+                onUserInteraction(); pressOffset = offsetValue; isAiContextMenuVisible = true
+            })
         }
     ) {
-        // ... [原有的 showLoadingDots 和 displayedText.isNotBlank() 的渲染逻辑保持不变] ...
         if (showLoadingDots && displayedText.isBlank()) {
-            Surface( /* ... 加载点 ... */
-                color = bubbleColor,
-                contentColor = contentColor,
-                shape = RoundedCornerShape(18.dp),
-                tonalElevation = 0.dp,
+            Box(
+                contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .align(Alignment.Start)
-                    .widthIn(min = 80.dp)
-                    .padding(horizontal = 8.dp, vertical = 2.dp)
+                    .fillMaxWidth()
+                    .defaultMinSize(minHeight = 28.dp)
             ) {
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .padding(horizontal = 12.dp, vertical = 10.dp)
-                        .defaultMinSize(minHeight = 28.dp)
-                ) {
-                    ThreeDotsLoadingAnimation(
-                        dotColor = contentColor,
-                        modifier = Modifier.offset(y = (-6).dp)
-                    )
-                }
+                ThreeDotsLoadingAnimation(
+                    dotColor = contentColor,
+                    modifier = Modifier.offset(y = (-6).dp)
+                )
             }
         } else if (displayedText.isNotBlank()) {
             val segments = remember(displayedText) {
-                Log.d(
-                    "AiMessageContent_Parse",
-                    "解析 displayedText (长度 ${displayedText.length}): '${
-                        displayedText.take(100).replace("\n", "\\n")
-                    }'"
-                )
-                parseMarkdownSegments(displayedText.trim())
+                Log.d("AICONTENT", "分段解析流式文本: ${displayedText.takeLast(20)}")
+                parseMarkdownSegments(displayedText.trim()) // Parser now sets isBlock=false for $$
             }
 
+            val textColorHex = remember(contentColor) { contentColor.toHexCss() }
+            val baseHtmlTemplate = rememberKatexBaseHtmlTemplate(
+                backgroundColor = "transparent",
+                textColor = textColorHex,
+                errorColor = "#CD5C5C",
+                throwOnError = false
+            )
+
             if (segments.isEmpty() && displayedText.trim().isNotBlank()) {
-                Surface( /* ... 回退逻辑 ... */
-                    color = bubbleColor,
-                    contentColor = contentColor,
-                    shape = RoundedCornerShape(18.dp),
-                    tonalElevation = 0.dp,
+                val htmlContent =
+                    remember(displayedText) { convertMarkdownToHtml(displayedText.trim()) }
+                val stableKey = "${message.id}_katex_fallback_${htmlContent.hashCode()}"
+                PooledKatexWebView(
+                    appViewModel = appViewModel,
+                    contentId = stableKey,
+                    latexInput = htmlContent,
+                    htmlTemplate = baseHtmlTemplate,
                     modifier = Modifier
-                        .align(Alignment.Start)
-                        .widthIn(max = codeBlockFixedWidth + 30.dp)
-                        .padding(horizontal = 8.dp, vertical = 2.dp)
-                ) {
-                    Box(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                        RichText(
-                            style = RichTextStyle.Default.copy(
-                                stringStyle = (RichTextStyle.Default.stringStyle
-                                    ?: RichTextStringStyle.Default).copy(
-                                    codeStyle = SpanStyle(
-                                        fontFamily = FontFamily.Monospace,
-                                        background = Color.Transparent,
-                                        color = Color(0xFF5e5e5e),
-                                        fontSize = 14.sp
-                                    ),
-                                    linkStyle = SpanStyle(
-                                        color = Color(0xFF4078f3),
-                                        textDecoration = TextDecoration.None
-                                    )
-                                )
-                            )
-                        ) { Markdown(content = displayedText.trim()) }
-                    }
-                }
+                        .heightIn(min = 1.dp)
+                )
             } else {
-                segments.forEachIndexed { index, segment ->
-                    when (segment) {
-                        is TextSegment.Normal -> { /* ... 普通文本渲染 ... */
-                            if (segment.text.isNotBlank()) {
-                                Surface(
-                                    color = bubbleColor,
-                                    contentColor = contentColor,
-                                    shape = RoundedCornerShape(18.dp),
-                                    tonalElevation = 0.dp,
-                                    modifier = Modifier
-                                        .align(Alignment.Start)
-                                        .widthIn(max = codeBlockFixedWidth + 30.dp)
-                                        .padding(
-                                            start = 8.dp, end = 8.dp,
-                                            top = if (index > 0 && segments.getOrNull(index - 1) is TextSegment.CodeBlock) 4.dp else 2.dp,
-                                            bottom = if (index < segments.size - 1 && segments.getOrNull(
-                                                    index + 1
-                                                ) is TextSegment.CodeBlock
-                                            ) 4.dp else 2.dp
-                                        )
-                                ) {
-                                    Box(
-                                        modifier = Modifier.padding(
-                                            horizontal = 12.dp,
-                                            vertical = 8.dp
-                                        )
-                                    ) {
-                                        RichText(
-                                            style = RichTextStyle.Default.copy(
-                                                stringStyle = (RichTextStyle.Default.stringStyle
-                                                    ?: RichTextStringStyle.Default).copy(
-                                                    codeStyle = SpanStyle(
-                                                        fontFamily = FontFamily.Monospace,
-                                                        background = Color.Transparent,
-                                                        color = Color(0xFF5e5e5e),
-                                                        fontSize = 14.sp
-                                                    ),
-                                                    linkStyle = SpanStyle(
-                                                        color = Color(0xFF4078f3),
-                                                        textDecoration = TextDecoration.None
-                                                    )
-                                                )
-                                            )
-                                        ) { Markdown(content = segment.text) }
-                                    }
+                // To achieve inline flow of text and math, Column is not ideal.
+                // For simplicity, we'll keep Column, meaning each segment is still a new "line"
+                // in the Column, but the math itself won't cause extra line breaks within its WebView.
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    segments.forEachIndexed { index, segment ->
+                        when (segment) {
+                            is TextSegment.Normal -> {
+                                if (segment.text.isNotBlank()) {
+                                    val htmlContent =
+                                        remember(segment.text) { convertMarkdownToHtml(segment.text) }
+                                    val stableKey =
+                                        "${message.id}_katex_segment_normal_${index}"
+                                    PooledKatexWebView(
+                                        appViewModel = appViewModel,
+                                        contentId = stableKey,
+                                        latexInput = htmlContent,
+                                        htmlTemplate = baseHtmlTemplate,
+                                        modifier = Modifier
+                                            .heightIn(min = 1.dp)
+                                    )
                                 }
                             }
-                        }
 
-                        is TextSegment.CodeBlock -> { /* ... 代码块渲染 ... */
-                            MyCodeBlockComposable(
-                                language = segment.language,
-                                code = segment.code,
-                                backgroundColor = codeBlockBackgroundColor,
-                                contentColor = codeBlockContentColor,
-                                cornerRadius = codeBlockCornerRadius,
-                                fixedWidth = codeBlockFixedWidth,
-                                showTopBar = true,
-                                modifier = Modifier
-                                    .align(Alignment.CenterHorizontally)
-                                    .padding(vertical = 4.dp, horizontal = 8.dp)
-                            )
+                            is TextSegment.CodeBlock -> {
+                                if (segment.language != null && segment.language.isNotBlank()) {
+                                    Text(
+                                        text = segment.language,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = contentColor.copy(alpha = 0.7f),
+                                        modifier = Modifier.padding(
+                                            top = if (index > 0 && segments[index - 1] !is TextSegment.CodeBlock) 8.dp else 2.dp,
+                                            bottom = 2.dp
+                                        )
+                                    )
+                                }
+                                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                                    MyCodeBlockComposable(
+                                        language = segment.language,
+                                        code = segment.code,
+                                        backgroundColor = codeBlockBackgroundColor,
+                                        contentColor = codeBlockContentColor,
+                                        cornerRadius = codeBlockCornerRadius,
+                                        fixedWidth = this.maxWidth,
+                                        showTopBar = true,
+                                        modifier = Modifier.padding(vertical = 2.dp)
+                                    )
+                                }
+                            }
+
+                            is TextSegment.MathFormula -> {
+                                val latexRaw = segment.latex
+                                // segment.isBlock is now always false from the parser
+                                val stableKey =
+                                    "${message.id}_katex_math_${index}"
+                                PooledKatexWebView(
+                                    appViewModel = appViewModel,
+                                    contentId = stableKey,
+                                    // MODIFICATION: Always use $...$ to ensure KaTeX uses .katex class
+                                    // This aligns with our CSS strategy of primarily styling .katex for inline.
+                                    latexInput = "\$${latexRaw}\$",
+                                    htmlTemplate = baseHtmlTemplate,
+                                    modifier = Modifier
+                                        // .fillMaxWidth() // Removed: allow inline flow if WebView width is not constrained by parent
+                                        .heightIn(min = 1.dp) // Consistent minimal height
+                                        .padding(vertical = 0.dp) // Consistent minimal padding
+                                )
+                            }
+                        }
+                        if (index < segments.size - 1) {
+                            val nextIsCode = segments.getOrNull(index + 1) is TextSegment.CodeBlock
+                            val currentIsCode = segment is TextSegment.CodeBlock
+                            if (currentIsCode || nextIsCode) { // Larger spacer around code blocks
+                                Spacer(modifier = Modifier.height(8.dp))
+                            } else {
+                                // No spacer or very small spacer between normal text and inline math
+                                // to allow them to flow more naturally if they were in a FlowRow.
+                                // Since they are in a Column, this won't make them same-line,
+                                // but reduces vertical gap.
+                                // Spacer(modifier = Modifier.height(1.dp))
+                            }
                         }
                     }
                 }
             }
         }
 
-
-        // AI 消息的上下文菜单
         if (isAiContextMenuVisible) {
-            val aiMenuVisibility = remember { MutableTransitionState(false) }
-            LaunchedEffect(isAiContextMenuVisible) {
-                aiMenuVisibility.targetState = isAiContextMenuVisible
+            val localContextForToast = LocalContext.current
+            val aiMenuVisibility = remember { MutableTransitionState(false) }.apply {
+                targetState = isAiContextMenuVisible
             }
-
             val dropdownMenuOffsetX =
                 with(density) { pressOffset.x.toDp() } + CONTEXT_MENU_FINE_TUNE_OFFSET_X
             val dropdownMenuOffsetY =
                 with(density) { pressOffset.y.toDp() } + CONTEXT_MENU_FINE_TUNE_OFFSET_Y
-
             Popup(
                 alignment = Alignment.TopStart,
                 offset = IntOffset(
                     x = with(density) { dropdownMenuOffsetX.roundToPx() },
-                    y = with(density) { dropdownMenuOffsetY.roundToPx() }
-                ),
+                    y = with(density) { dropdownMenuOffsetY.roundToPx() }),
                 onDismissRequest = { isAiContextMenuVisible = false },
                 properties = PopupProperties(
                     focusable = true,
@@ -313,7 +443,7 @@ internal fun AiMessageContent(
                 Surface(
                     shape = RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS),
                     color = Color.White,
-                    tonalElevation = 0.dp,
+                    tonalElevation = 3.dp,
                     modifier = Modifier
                         .width(CONTEXT_MENU_FIXED_WIDTH)
                         .shadow(
@@ -326,94 +456,106 @@ internal fun AiMessageContent(
                         AnimatedDropdownMenuItem(
                             visibleState = aiMenuVisibility,
                             delay = 0,
-                            text = { Text("复制") }, // 菜单项：复制
+                            text = { Text("复制") },
                             onClick = {
                                 clipboardManager.setText(AnnotatedString(fullMessageTextToCopy))
-                                Toast.makeText(context, "AI回复已复制", Toast.LENGTH_SHORT).show()
-                                Log.d("AiMenu", "AI消息 - 复制操作已触发")
+                                Toast.makeText(
+                                    localContextForToast,
+                                    "AI回复已复制",
+                                    Toast.LENGTH_SHORT
+                                ).show()
                                 isAiContextMenuVisible = false
                             },
                             leadingIcon = {
                                 Icon(
                                     Icons.Filled.ContentCopy,
-                                    contentDescription = "复制AI回复",
+                                    "复制AI回复",
                                     Modifier.size(CONTEXT_MENU_ITEM_ICON_SIZE)
                                 )
-                            }
-                        )
+                            })
                         AnimatedDropdownMenuItem(
                             visibleState = aiMenuVisibility,
                             delay = 30,
-                            text = { Text("选择文本") }, // 菜单项：选择文本
+                            text = { Text("选择文本") },
                             onClick = {
-                                Log.d("AiMenu", "AI消息 - '选择文本' 操作被点击")
-                                showSelectableTextDialog = true // <-- 修改：显示选择文本对话框
-                                isAiContextMenuVisible = false
+                                showSelectableTextDialog = true; isAiContextMenuVisible = false
                             },
                             leadingIcon = {
                                 Icon(
-                                    Icons.Outlined.SelectAll, // 使用全选图标作为示例
-                                    contentDescription = "选择文本",
+                                    Icons.Outlined.SelectAll,
+                                    "选择文本",
                                     Modifier.size(CONTEXT_MENU_ITEM_ICON_SIZE)
                                 )
-                            }
-                        )
+                            })
                     }
                 }
             }
         }
 
-        // --- 新增：用于显示和选择文本的对话框 ---
         if (showSelectableTextDialog) {
             SelectableTextDialog(
-                textToDisplay = fullMessageTextToCopy, // 将完整的AI消息文本传入
-                onDismissRequest = { showSelectableTextDialog = false } // 关闭对话框的回调
-            )
+                textToDisplay = fullMessageTextToCopy,
+                onDismissRequest = { showSelectableTextDialog = false })
         }
     }
 }
 
-/**
- * 新增 Composable：用于显示可选择文本的对话框。
- * @param textToDisplay 需要在对话框中显示的完整文本。
- * @param onDismissRequest 当用户请求关闭对话框时的回调。
- */
 @Composable
-internal fun SelectableTextDialog(
-    textToDisplay: String,
-    onDismissRequest: () -> Unit
-) {
+internal fun SelectableTextDialog(textToDisplay: String, onDismissRequest: () -> Unit) {
     Dialog(
-        onDismissRequest = onDismissRequest, // 用户点击对话框外部或按返回键时调用
+        onDismissRequest = onDismissRequest,
         properties = DialogProperties(
-            dismissOnClickOutside = true,    // 允许点击外部关闭
-            dismissOnBackPress = true,       // 允许按返回键关闭
-            usePlatformDefaultWidth = false  // 不使用平台默认宽度，以便自定义对话框大小
+            dismissOnClickOutside = true,
+            dismissOnBackPress = true,
+            usePlatformDefaultWidth = false
         )
     ) {
-        Card( // 使用Card作为对话框的背景和容器
-            shape = RoundedCornerShape(28.dp), // 大圆角
+        Card(
+            shape = RoundedCornerShape(28.dp),
             modifier = Modifier
-                .fillMaxWidth(0.92f) // 对话框宽度为屏幕宽度的92%
-                .padding(vertical = 24.dp) // 上下留出一些边距，避免过于贴近屏幕边缘
-                .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.75f), // 最大高度为屏幕的75%
-            colors = CardDefaults.cardColors(containerColor = Color.White) // 纯白背景
+                .fillMaxWidth(0.92f)
+                .padding(vertical = 24.dp)
+                .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.75f),
+            colors = CardDefaults.cardColors(containerColor = Color.White)
         ) {
-            // SelectionContainer 使得其内部的Text组件支持文本选择功能
-            SelectionContainer(
-                modifier = Modifier.padding(20.dp) // 内容区域的内边距
-            ) {
+            SelectionContainer(modifier = Modifier.padding(20.dp)) {
                 Text(
-                    text = textToDisplay, // 显示完整的AI消息文本（包含Markdown原文）
-                    modifier = Modifier.verticalScroll(rememberScrollState()), // 如果文本过长，则允许垂直滚动
-                    style = MaterialTheme.typography.bodyLarge // 使用合适、易读的文本样式
+                    text = textToDisplay,
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    style = MaterialTheme.typography.bodyLarge
                 )
             }
         }
     }
 }
 
-
-
-
-
+@Composable
+fun ThreeDotsLoadingAnimation(
+    modifier: Modifier = Modifier,
+    dotColor: Color = MaterialTheme.colorScheme.primary
+) {
+    Row(
+        modifier = modifier.padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        (0..2).forEach { index ->
+            val infiniteTransition =
+                rememberInfiniteTransition(label = "dot_loading_transition_$index")
+            val animatedAlpha by infiniteTransition.animateFloat(
+                initialValue = 0.3f,
+                targetValue = 1f,
+                animationSpec = infiniteRepeatable(animation = keyframes {
+                    durationMillis =
+                        1200; 0.3f at 0 with LinearEasing; 1.0f at 200 with LinearEasing; 0.3f at 400 with LinearEasing; 0.3f at 1200 with LinearEasing
+                }, repeatMode = RepeatMode.Restart, initialStartOffset = StartOffset(index * 150)),
+                label = "dot_alpha_$index"
+            )
+            Box(
+                modifier = Modifier
+                    .size(10.dp)
+                    .background(dotColor.copy(alpha = animatedAlpha), CircleShape)
+            )
+        }
+    }
+}

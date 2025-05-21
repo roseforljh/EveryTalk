@@ -283,9 +283,8 @@ fun ChatScreen(
 
     val screenWidth = configuration.screenWidthDp.dp
     val bubbleMaxWidth =
-        remember(screenWidth) { (screenWidth * 0.8f).coerceAtMost(600.dp) }
-    val codeBlockViewWidth =
-        remember(screenWidth) { (screenWidth * 0.9f).coerceAtMost(700.dp) }
+        remember(screenWidth) { (screenWidth ).coerceAtMost(600.dp) }
+    remember(screenWidth) { (screenWidth).coerceAtMost(700.dp) }
 
     val nestedScrollConnection = remember {
         object : NestedScrollConnection {
@@ -502,7 +501,6 @@ fun ChatScreen(
                                 isReasoningStreaming = isReasoningStreamingThisMessage,
                                 isReasoningComplete = (reasoningCompleteMap[message.id] ?: false),
                                 maxWidth = bubbleMaxWidth,
-                                codeBlockFixedWidth = codeBlockViewWidth,
                                 showLoadingBubble = showLoading,
                                 onEditRequest = { msg ->
                                     resetInactivityTimer(); viewModel.requestEditMessage(msg)

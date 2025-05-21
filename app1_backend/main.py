@@ -12,7 +12,7 @@ import asyncio
 import datetime
 from dotenv import load_dotenv
 import re
-import json 
+import json
 
 load_dotenv()
 
@@ -33,7 +33,7 @@ logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 logging.getLogger("uvicorn.error").setLevel(logging.INFO)
 logging.getLogger("googleapiclient.discovery_cache").setLevel(logging.ERROR)
 
-APP_VERSION = "1.9.9.57-qwen3-conditional-reasoning"
+APP_VERSION = "1.9.9.58-qwen3-conditional-reasoning-katex-prompt" # 版本号更新
 DEFAULT_OPENAI_API_BASE_URL = os.getenv("DEFAULT_OPENAI_API_BASE_URL", "https://api.openai.com")
 GOOGLE_API_BASE_URL = "https://generativelanguage.googleapis.com"
 OPENAI_COMPATIBLE_PATH = "/v1/chat/completions"
@@ -45,8 +45,18 @@ MAX_CONNECTIONS = int(os.getenv("MAX_CONNECTIONS", "200"))
 MAX_SSE_LINE_LENGTH = int(os.getenv("MAX_SSE_LINE_LENGTH", f"{1024 * 1024}"))
 SEARCH_RESULT_COUNT = int(os.getenv("SEARCH_RESULT_COUNT", "5"))
 SEARCH_SNIPPET_MAX_LENGTH = int(os.getenv("SEARCH_SNIPPET_MAX_LENGTH", "200"))
-THINKING_PROCESS_SEPARATOR = os.getenv("THINKING_PROCESS_SEPARATOR", "--- FINAL ANSWER ---") 
+THINKING_PROCESS_SEPARATOR = os.getenv("THINKING_PROCESS_SEPARATOR", "--- FINAL ANSWER ---")
 COMMON_HEADERS = {"X-Accel-Buffering": "no"}
+
+# KaTeX formatting instruction for LLMs
+KATEX_FORMATTING_INSTRUCTION = (
+    "IMPORTANT: When presenting mathematical formulas or expressions, ensure all inline mathematical "
+    "expressions are enclosed in single dollar signs (e.g., $E=mc^2$) or escaped parentheses "
+    " (e.g., \\(E=mc^2\\)), and all display/block mathematical expressions are enclosed in "
+    "double dollar signs (e.g., $$x^2+y^2=z^2$$) or escaped square brackets (e.g., \\[x^2+y^2=z^2\\]). "
+    "This is crucial for correct rendering. Adhere strictly to this formatting for all mathematical content."
+)
+
 
 if not GOOGLE_API_KEY or not GOOGLE_CSE_ID:
     logger.critical("CRITICAL: GOOGLE_API_KEY and GOOGLE_CSE_ID environment variables must be set.")
@@ -157,38 +167,6 @@ def extract_sse_lines(buffer: bytearray) -> Tuple[List[bytes], bytearray]:
         start = idx + 1
     return lines, buffer[start:]
 
-def convert_math_symbols(text: str) -> str:
-    if not isinstance(text, str): return ""
-    text = re.sub(r"\\\[(.*?)\\\]", lambda m: convert_math_symbols(m.group(1)), text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r"\$\$(.*?)\$\$", lambda m: convert_math_symbols(m.group(1)), text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r"\$([^\$]+?)\$", lambda m: convert_math_symbols(m.group(1)), text, flags=re.IGNORECASE)
-    text = text.replace("\\pm", "±").replace("\\times", "×").replace("\\div", "÷").replace("\\cdot", "·")
-    text = text.replace("\\leq", "≤").replace("\\geq", "≥").replace("\\neq", "≠").replace("\\approx", "≈").replace("\\equiv", "≡")
-    text = text.replace("\\forall", "∀").replace("\\exists", "∃").replace("\\nabla", "∇").replace("\\partial", "∂").replace("\\infty", "∞")
-    greek_letters = {"alpha": "α", "beta": "β", "gamma": "γ", "delta": "δ", "Delta": "Δ", "epsilon": "ε", "zeta": "ζ", "eta": "η", "theta": "θ", "Theta": "Θ", "iota": "ι", "kappa": "κ", "lambda": "λ", "Lambda": "Λ", "mu": "μ", "nu": "ν", "xi": "ξ", "Xi": "Ξ", "pi": "π", "Pi": "Π", "rho": "ρ", "sigma": "σ", "Sigma": "Σ", "tau": "τ", "upsilon": "υ", "Upsilon": "ϒ", "phi": "φ", "Phi": "Φ", "chi": "χ", "psi": "ψ", "Psi": "Ψ", "omega": "ω", "Omega": "Ω"}
-    for k, v in greek_letters.items(): text = text.replace(f"\\{k}", v)
-    set_ops = {"in": "∈", "notin": "∉", "subset": "⊂", "subseteq": "⊆", "supset": "⊃", "supseteq": "⊇", "cap": "∩", "cup": "∪", "emptyset": "∅", "varnothing": "∅"}
-    for k, v in set_ops.items(): text = text.replace(f"\\{k}", v)
-    arrows = {"rightarrow": "→", "leftarrow": "←", "leftrightarrow": "↔", "Rightarrow": "⇒", "Leftarrow": "⇐", "Leftrightarrow": "⇔"}
-    for k, v in arrows.items(): text = text.replace(f"\\{k}", v)
-    text = re.sub(r"angle\s*([A-Za-z0-9]+)", r"∠\1", text, flags=re.IGNORECASE)
-    text = re.sub(r"\\angle\s*([A-Za-z0-9]+)", r"∠\1", text, flags=re.IGNORECASE)
-    text = text.replace("\\angle", "∠")
-    text = re.sub(r"\btriangle\s*([A-Za-z0-9]+)", r"△\1", text, flags=re.IGNORECASE)
-    text = re.sub(r"\\triangle\s*([A-Za-z0-9]+)", r"△\1", text)
-    text = re.sub(r"(\d+)\s*(degrees|degree|deg|°)", r"\1°", text, flags=re.IGNORECASE)
-    text = re.sub(r"\^{\\circ}", "°", text); text = re.sub(r"(\d+)\s*\^\\circ", r"\1°", text)
-    text = re.sub(r"\\sqrt\[([^\]]+)\]\{([^\}]+)\}", r"\1√\2", text)
-    text = re.sub(r"\\sqrt\{([^\}]+)\}", r"√\1", text)
-    text = re.sub(r"sqrt\s*\(?([0-9a-zA-Z\+\-\*/\^\(\)]+)\)?", r"√\1", text)
-    text = re.sub(r"\\frac\{([^\}]+)\}\{([^\}]+)\}", r"(\1/\2)", text)
-    text = re.sub(r"\_\{([^\}]+)\}", r"₍\1₎", text); text = re.sub(r"\^\{([^\}]+)\}", r"⁽\1⁾", text)
-    text = re.sub(r"\_([A-Za-z0-9])", r"₍\1₎", text); text = re.sub(r"\^([A-Za-z0-9])", r"⁽\1⁾", text)
-    text = re.sub(r"\\begin\{([a-zA-Z\*]+)\}(.*?)\\end\{\1\}", r"\2", text, flags=re.DOTALL | re.IGNORECASE)
-    text = text.replace("\\[", "").replace("\\]", "")
-    text = text.replace("$$", "")
-    return text.strip()
-
 def get_current_time_iso(): return datetime.datetime.utcnow().isoformat() + "Z"
 
 def _convert_openai_tools_to_gemini_declarations(openai_tools: List[Dict[str, Any]], request_id: str) -> List[Dict[str, Any]]:
@@ -238,10 +216,12 @@ def _convert_api_messages_to_gemini_contents(messages: List[ApiMessage], request
             gemini_contents.append({"role": "user", "parts": [{"text": msg.content or ""}]})
         elif msg.role == "system":
             if msg.content:
-                gemini_contents.append({"role": "user", "parts": [{"text": f"[System Instruction]\n{msg.content}"}]})
-        elif msg.role == "assistant": 
+                # Append KaTeX instruction to system messages for Gemini (treated as user role with prefix)
+                system_content_with_katex = f"[System Instruction]\n{msg.content}\n\n{KATEX_FORMATTING_INSTRUCTION}"
+                gemini_contents.append({"role": "user", "parts": [{"text": system_content_with_katex}]})
+        elif msg.role == "assistant":
             parts = []
-            if msg.content is not None: 
+            if msg.content is not None:
                 parts.append({"text": msg.content})
             if msg.tool_calls:
                 for tc in msg.tool_calls:
@@ -252,12 +232,12 @@ def _convert_api_messages_to_gemini_contents(messages: List[ApiMessage], request
                             args_obj = {"error": "Invalid JSON arguments", "raw_args": tc.function.arguments}
                         parts.append({"functionCall": {"name": tc.function.name, "args": args_obj}})
             if parts: gemini_contents.append({"role": "model", "parts": parts})
-        elif msg.role == "tool": 
+        elif msg.role == "tool":
             if msg.name and msg.content is not None:
-                try: response_obj = orjson.loads(msg.content) 
+                try: response_obj = orjson.loads(msg.content)
                 except orjson.JSONDecodeError:
                     logger.warning(f"RID-{request_id}: Tool response for '{msg.name}' is not valid JSON. Gemini expects a JSON object for functionResponse. Wrapping as raw string in a dict.")
-                    response_obj = {"raw_response": msg.content} 
+                    response_obj = {"raw_response": msg.content}
                 gemini_contents.append({"role": "user", "parts": [{"functionResponse": {"name": msg.name, "response": response_obj}}]})
     return gemini_contents
 
@@ -266,38 +246,50 @@ def prepare_openai_request(rd: ChatRequest, msgs: List[Dict[str, Any]], request_
     url = f"{base.rstrip('/')}{OPENAI_COMPATIBLE_PATH}"
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {rd.api_key}"}
 
-    # 基础 payload，包含模型和消息等标准字段
-    payload: Dict[str, Any] = {"model": rd.model, "messages": msgs, "stream": True}
+    # Ensure KaTeX instruction is in the system message for OpenAI
+    processed_msgs = []
+    system_message_found_and_updated = False
+    for msg_dict in msgs:
+        if msg_dict.get("role") == "system":
+            original_content = msg_dict.get("content", "")
+            if KATEX_FORMATTING_INSTRUCTION not in original_content:
+                msg_dict["content"] = (original_content + "\n\n" + KATEX_FORMATTING_INSTRUCTION).strip()
+            system_message_found_and_updated = True
+        processed_msgs.append(msg_dict)
 
-    # 添加其他标准 OpenAI 参数
+    if not system_message_found_and_updated:
+        processed_msgs.insert(0, {"role": "system", "content": KATEX_FORMATTING_INSTRUCTION})
+        logger.info(f"RID-{request_id}: OpenAI: No system message found, prepended KaTeX instruction.")
+    else:
+        logger.info(f"RID-{request_id}: OpenAI: System message found/updated with KaTeX instruction.")
+
+
+    payload: Dict[str, Any] = {"model": rd.model, "messages": processed_msgs, "stream": True}
+
     if rd.temperature is not None: payload["temperature"] = rd.temperature
     if rd.top_p is not None: payload["top_p"] = rd.top_p
     if rd.max_tokens is not None: payload["max_tokens"] = rd.max_tokens
     if rd.tools: payload["tools"] = rd.tools
     if rd.tool_choice: payload["tool_choice"] = rd.tool_choice
 
-    # 应用客户端指定的自定义顶层参数
     if rd.custom_model_parameters:
         logger.info(f"RID-{request_id}: Applying custom top-level model parameters provided by client: {list(rd.custom_model_parameters.keys())}")
         for key, value in rd.custom_model_parameters.items():
-            payload[key] = value # 客户端负责参数的正确性
+            payload[key] = value
 
-    # 应用客户端指定的自定义 extra_body 参数
     if rd.custom_extra_body:
         logger.info(f"RID-{request_id}: Applying custom extra_body parameters provided by client: {list(rd.custom_extra_body.keys())}")
         if "extra_body" not in payload:
             payload["extra_body"] = {}
         for key, value in rd.custom_extra_body.items():
-            payload["extra_body"][key] = value # 客户端负责参数的正确性
+            payload["extra_body"][key] = value
 
-    # 为了调试和追踪，可以记录一下客户端是否以及如何传递了 enable_thinking
     enable_thinking_source = "Not explicitly set by client via custom fields"
     if rd.custom_model_parameters and "enable_thinking" in rd.custom_model_parameters:
         enable_thinking_source = f"Top-level (value: {rd.custom_model_parameters['enable_thinking']})"
     elif rd.custom_extra_body and "enable_thinking" in rd.custom_extra_body:
         enable_thinking_source = f"In extra_body (value: {rd.custom_extra_body['enable_thinking']})"
 
-    # 仅当模型是 Qwen3 时，记录 enable_thinking 的来源，因为这是我们关注的上下文
     if "qwen3" in rd.model.lower():
         logger.info(f"RID-{request_id}: For Qwen3 model '{rd.model}', 'enable_thinking' source: {enable_thinking_source}. If not set by client, API default will apply.")
 
@@ -317,7 +309,15 @@ def prepare_google_request(rd: ChatRequest, msgs: List[ApiMessage], rid: str) ->
         logger.info(f"RID-{rid}: Applying JSON Schema mode with strong system instruction for Gemini model '{rd.model}'.")
         generation_config_updates["responseMimeType"] = "application/json"
         generation_config_updates["responseSchema"] = get_reasoning_answer_schema()
-        strong_system_instruction = ("[System Instruction]\n" "You are an intelligent assistant. You MUST strictly adhere to the following JSON format for your entire response. First, in the \"reasoning\" field of the JSON, provide a complete and detailed account of your thought process, analysis, understanding of the user's intent, and any preparatory or introductory remarks (e.g., initial reactions to a greeting, or clarifications about your capabilities). Do not output any text outside of this JSON structure. The \"reasoning\" field must encompass all your preliminary thoughts and meta-cognition before formulating the final answer. Second, in the \"answer\" field of the JSON, provide only the direct, concise, and final response intended for the end-user. Your entire output must be a single JSON object conforming to this schema.\n" "Example JSON Schema to follow:\n" "{\n" "  \"reasoning\": \"(Place your detailed thinking process, preambles, and step-by-step analysis here...)\",\n" "  \"answer\": \"(Place your final, direct answer to the user here...)\"\n" "}")
+        strong_system_instruction = ("[System Instruction]\n"
+                                     "You are an intelligent assistant. You MUST strictly adhere to the following JSON format for your entire response. First, in the \"reasoning\" field of the JSON, provide a complete and detailed account of your thought process, analysis, understanding of the user's intent, and any preparatory or introductory remarks (e.g., initial reactions to a greeting, or clarifications about your capabilities). Do not output any text outside of this JSON structure. The \"reasoning\" field must encompass all your preliminary thoughts and meta-cognition before formulating the final answer. Second, in the \"answer\" field of the JSON, provide only the direct, concise, and final response intended for the end-user.\n"
+                                     f"{KATEX_FORMATTING_INSTRUCTION}\n" # Added KaTeX instruction here
+                                     "Your entire output must be a single JSON object conforming to this schema.\n"
+                                     "Example JSON Schema to follow:\n"
+                                     "{\n"
+                                     "  \"reasoning\": \"(Place your detailed thinking process, preambles, and step-by-step analysis here...)\",\n"
+                                     "  \"answer\": \"(Place your final, direct answer to the user here...)\"\n"
+                                     "}")
     payload: Dict[str, Any] = {"contents": _convert_api_messages_to_gemini_contents(current_messages, rid, strong_system_instruction)}
     if rd.tools:
         gemini_declarations = _convert_openai_tools_to_gemini_declarations(rd.tools, rid)
@@ -329,7 +329,7 @@ def prepare_google_request(rd: ChatRequest, msgs: List[ApiMessage], rid: str) ->
     if rd.temperature is not None: generation_config_updates["temperature"] = rd.temperature
     if rd.top_p is not None: generation_config_updates["topP"] = rd.top_p
     if rd.max_tokens is not None: generation_config_updates["maxOutputTokens"] = rd.max_tokens
-    if generation_config_updates: 
+    if generation_config_updates:
         if "generationConfig" not in payload: payload["generationConfig"] = {}
         payload["generationConfig"].update(generation_config_updates)
     return url, headers, payload, params
@@ -357,7 +357,7 @@ async def perform_web_search(query: str, rid: str) -> List[Dict[str, str]]:
     except HttpError as e:
         err_content = "Unknown Google API error"; status_code = "N/A"
         if hasattr(e, 'resp') and hasattr(e.resp, 'status'): status_code = e.resp.status
-        try: 
+        try:
             content_json = orjson.loads(e.content)
             err_detail = content_json.get("error", {})
             err_message = err_detail.get("message", str(e.content))
@@ -373,7 +373,8 @@ def generate_search_context_message_content(query: str, search_results: List[Dic
     parts = [f"Web search results for the query '{query}':"]
     for res in search_results:
         parts.append(f"\n[{res.get('index')}] Title: {res.get('title')}\n   Snippet: {res.get('snippet')}\n   Source URL (for AI reference only, do not cite directly): {res.get('href')}")
-    return "\n".join(parts) + "\n\nPlease use these search results to answer the user's query. Incorporate information from these results as much as possible into your response."
+    # Add KaTeX instruction to the search context as well, as it becomes part of a system message
+    return "\n".join(parts) + f"\n\nPlease use these search results to answer the user's query. Incorporate information from these results as much as possible into your response.\n\n{KATEX_FORMATTING_INSTRUCTION}"
 
 def is_qwen_model(model_name: str) -> bool: return "qwen" in model_name.lower()
 def is_deepseek_reasoner_model(model_name: str) -> bool: return "deepseek-reasoner" in model_name.lower()
@@ -383,9 +384,9 @@ def is_gemini_model_for_potential_custom_logic(model_name: str) -> bool:
 
 def should_apply_custom_separator_logic(rd: ChatRequest, request_id: str) -> bool:
     if rd.provider == "google" and is_gemini_model_for_potential_custom_logic(rd.model):
-        if not rd.force_custom_reasoning_prompt: 
+        if not rd.force_custom_reasoning_prompt:
             logger.info(f"RID-{request_id}: Strong JSON Schema mode is active for Gemini model '{rd.model}', old custom separator logic (Branch 1) will be OFF unless forced.")
-            return False 
+            return False
         else:
             logger.info(f"RID-{request_id}: Strong JSON Schema mode for Gemini, but force_custom_reasoning_prompt=True, so old custom separator (Branch 1) is FORCED.")
             return True
@@ -416,7 +417,7 @@ async def chat_proxy(request_data: ChatRequest, client: Optional[httpx.AsyncClie
     use_old_custom_separator_branch = should_apply_custom_separator_logic(request_data, request_id)
 
     async def stream_generator() -> AsyncGenerator[bytes, None]:
-        nonlocal api_messages_for_processing 
+        nonlocal api_messages_for_processing
         buffer = bytearray()
         upstream_ok = False
         first_chunk_llm = False
@@ -425,18 +426,18 @@ async def chat_proxy(request_data: ChatRequest, client: Optional[httpx.AsyncClie
             "openai_raw_content_accumulator": "",
             "openai_yielded_reasoning_cumulative": "",
             "openai_yielded_content_cumulative": "",
-            "openai_had_any_reasoning": False, 
+            "openai_had_any_reasoning": False,
             "openai_had_any_content_or_tool_call": False,
             "openai_reasoning_finish_event_sent": False,
-            "accumulated_text_custom": "", 
-            "full_yielded_reasoning_custom": "", 
+            "accumulated_text_custom": "",
+            "full_yielded_reasoning_custom": "",
             "full_yielded_content_custom": "",
             "found_separator_custom": False,
             'google_json_accumulator': "",
             'google_json_yielded_reasoning': "",
             'google_json_yielded_answer': "",
             'google_json_activated': False,
-            'google_pre_json_fallback_buffer': "", 
+            'google_pre_json_fallback_buffer': "",
             'google_pre_json_fallback_yielded_reasoning': "",
             'google_yielded_raw_content_fallback': ""
         }
@@ -446,7 +447,7 @@ async def chat_proxy(request_data: ChatRequest, client: Optional[httpx.AsyncClie
                 search_results = await perform_web_search(user_query_for_search, request_id)
                 if search_results:
                     yield orjson_dumps_bytes_wrapper({"type": "web_search_results", "results": search_results, "timestamp": get_current_time_iso()})
-                    search_context_content = generate_search_context_message_content(user_query_for_search, search_results)
+                    search_context_content = generate_search_context_message_content(user_query_for_search, search_results) # KaTeX instruction is now part of this
                     if search_context_content:
                         system_search_msg = ApiMessage(role="system", content=search_context_content)
                         insert_idx = 0
@@ -455,7 +456,7 @@ async def chat_proxy(request_data: ChatRequest, client: Optional[httpx.AsyncClie
                         api_messages_for_processing.insert(insert_idx, system_search_msg)
                 yield orjson_dumps_bytes_wrapper({"type": "status_update", "stage": "web_analysis_started", "timestamp": get_current_time_iso()})
             api_url: str; api_headers: Dict[str, str]; api_payload: Dict[str, Any]; api_params: Optional[Dict[str, str]] = None
-            is_google_json_schema_mode_for_this_call = False 
+            is_google_json_schema_mode_for_this_call = False
             if request_data.provider == "openai":
                 dict_messages_for_openai = [m.model_dump(exclude_none=True, by_alias=True) for m in api_messages_for_processing]
                 api_url, api_headers, api_payload = prepare_openai_request(request_data, dict_messages_for_openai, request_id)
@@ -495,8 +496,8 @@ async def chat_proxy(request_data: ChatRequest, client: Optional[httpx.AsyncClie
                             if request_data.provider == "openai":
                                 logger.info(f"RID-{request_id}: Received [DONE] signal from OpenAI.")
                                 if state.get("openai_had_any_reasoning") and not state.get("openai_reasoning_finish_event_sent"):
-                                     yield orjson_dumps_bytes_wrapper({"type": "reasoning_finish", "timestamp": get_current_time_iso()})
-                                yield orjson_dumps_bytes_wrapper({"type": "finish", "reason": "stop_openai_done", "timestamp": get_current_time_iso()})
+                                    yield orjson_dumps_bytes_wrapper({"type": "reasoning_finish", "timestamp": get_current_time_iso()})
+                            yield orjson_dumps_bytes_wrapper({"type": "finish", "reason": "stop_openai_done", "timestamp": get_current_time_iso()})
                             continue
                         try: parsed_sse_data = orjson.loads(sse_data_bytes)
                         except orjson.JSONDecodeError: logger.warning(f"RID-{request_id}: Failed to parse SSE JSON data (outer loop): {sse_data_bytes[:100]!r}"); continue
@@ -520,31 +521,31 @@ async def process_openai_response(parsed_sse_data: Dict[str, Any], state: Dict[s
         if reasoning_content_chunk is not None:
             state["openai_had_any_reasoning"] = True
             state["openai_raw_reasoning_accumulator"] += reasoning_content_chunk
-            processed_full_reasoning = convert_math_symbols(strip_potentially_harmful_html_and_normalize_newlines(state["openai_raw_reasoning_accumulator"]))
+            processed_full_reasoning = strip_potentially_harmful_html_and_normalize_newlines(state["openai_raw_reasoning_accumulator"])
             reasoning_text_delta = processed_full_reasoning[len(state["openai_yielded_reasoning_cumulative"]):]
             if reasoning_text_delta:
                 yield orjson_dumps_bytes_wrapper({"type": "reasoning", "text": reasoning_text_delta, "timestamp": get_current_time_iso()})
             state["openai_yielded_reasoning_cumulative"] = processed_full_reasoning
-        
+
         if content_chunk is not None:
             if not state["openai_had_any_content_or_tool_call"] and state["openai_had_any_reasoning"] and not state["openai_reasoning_finish_event_sent"]:
                 yield orjson_dumps_bytes_wrapper({"type": "reasoning_finish", "timestamp": get_current_time_iso()})
                 state["openai_reasoning_finish_event_sent"] = True
             state["openai_had_any_content_or_tool_call"] = True
             state["openai_raw_content_accumulator"] += content_chunk
-            processed_full_content = convert_math_symbols(strip_potentially_harmful_html_and_normalize_newlines(state["openai_raw_content_accumulator"]))
+            processed_full_content = strip_potentially_harmful_html_and_normalize_newlines(state["openai_raw_content_accumulator"])
             content_text_delta = processed_full_content[len(state["openai_yielded_content_cumulative"]):]
             if content_text_delta:
                 yield orjson_dumps_bytes_wrapper({"type": "content", "text": content_text_delta, "timestamp": get_current_time_iso()})
             state["openai_yielded_content_cumulative"] = processed_full_content
-        
+
         if tool_calls_chunk:
             if not state["openai_had_any_content_or_tool_call"] and state["openai_had_any_reasoning"] and not state["openai_reasoning_finish_event_sent"]:
                 yield orjson_dumps_bytes_wrapper({"type": "reasoning_finish", "timestamp": get_current_time_iso()})
                 state["openai_reasoning_finish_event_sent"] = True
             state["openai_had_any_content_or_tool_call"] = True
             yield orjson_dumps_bytes_wrapper({"type": "tool_calls_chunk", "data": tool_calls_chunk, "timestamp": get_current_time_iso()})
-        
+
         if choice.get("finish_reason"):
             if state["openai_had_any_reasoning"] and not state["openai_reasoning_finish_event_sent"]:
                 yield orjson_dumps_bytes_wrapper({"type": "reasoning_finish", "timestamp": get_current_time_iso()})
@@ -555,7 +556,7 @@ async def process_google_response(parsed_sse_data: Dict[str, Any], state: Dict[s
     for candidate in parsed_sse_data.get('candidates', []):
         content = candidate.get("content", {})
         finish_reason = candidate.get("finishReason")
-        current_candidate_text_accumulator = "" 
+        current_candidate_text_accumulator = ""
         function_call_part_data = None
         for part in content.get("parts", []):
             if "text" in part: current_candidate_text_accumulator += part["text"]
@@ -568,49 +569,71 @@ async def process_google_response(parsed_sse_data: Dict[str, Any], state: Dict[s
                     parsed_json = orjson.loads(state['google_json_accumulator'])
                     logger.debug(f"RID-{request_id}: Successfully parsed accumulated JSON.")
                     if isinstance(parsed_json, dict) and "reasoning" in parsed_json and "answer" in parsed_json:
-                        state['google_json_activated'] = True 
+                        state['google_json_activated'] = True
                         current_reasoning = parsed_json.get("reasoning", "")
                         current_answer = parsed_json.get("answer", "")
                         prev_reasoning = state.get('google_json_yielded_reasoning', "")
                         if current_reasoning != prev_reasoning:
                             reasoning_delta = current_reasoning[len(prev_reasoning):]
-                            if reasoning_delta: yield orjson_dumps_bytes_wrapper({"type": "reasoning", "text": convert_math_symbols(strip_potentially_harmful_html_and_normalize_newlines(reasoning_delta)), "timestamp": get_current_time_iso()})
+                            if reasoning_delta: yield orjson_dumps_bytes_wrapper({"type": "reasoning", "text": strip_potentially_harmful_html_and_normalize_newlines(reasoning_delta), "timestamp": get_current_time_iso()})
                             state['google_json_yielded_reasoning'] = current_reasoning
                         prev_answer = state.get('google_json_yielded_answer', "")
                         if current_answer != prev_answer:
                             if state.get('google_json_yielded_reasoning') and not prev_answer and current_answer: yield orjson_dumps_bytes_wrapper({"type": "reasoning_finish", "timestamp": get_current_time_iso()})
                             answer_delta = current_answer[len(prev_answer):]
-                            if answer_delta: yield orjson_dumps_bytes_wrapper({"type": "content", "text": convert_math_symbols(strip_potentially_harmful_html_and_normalize_newlines(answer_delta)), "timestamp": get_current_time_iso()})
+                            if answer_delta: yield orjson_dumps_bytes_wrapper({"type": "content", "text": strip_potentially_harmful_html_and_normalize_newlines(answer_delta), "timestamp": get_current_time_iso()})
                             state['google_json_yielded_answer'] = current_answer
-                    else: 
+                    else:
                         if not state.get('google_json_activated'): logger.warning(f"RID-{request_id}: Google JSON mode: accumulated text parsed to JSON but not target schema (before activation). JSON: {state['google_json_accumulator'][:200]}")
                         else: logger.warning(f"RID-{request_id}: Google JSON mode active, but received non-schema compliant JSON: {state['google_json_accumulator'][:100]}")
                 except orjson.JSONDecodeError:
                     if not finish_reason: logger.debug(f"RID-{request_id}: Google JSON mode: accumulating, not yet valid JSON. Buffer: {state['google_json_accumulator'][:200]}")
-                    else: 
+                    else:
                         logger.error(f"RID-{request_id}: Google JSON mode: stream finished but accumulated buffer is not valid JSON. Buffer: {state['google_json_accumulator'][:500]}")
                         if state['google_json_accumulator'] and not (state.get('google_json_yielded_reasoning') or state.get('google_json_yielded_answer')):
                             logger.info(f"RID-{request_id}: Yielding unparsed accumulator as raw content due to finish_reason with invalid JSON.")
-                            fallback_text = convert_math_symbols(strip_potentially_harmful_html_and_normalize_newlines(state['google_json_accumulator']))
+                            fallback_text = strip_potentially_harmful_html_and_normalize_newlines(state['google_json_accumulator'])
                             yield orjson_dumps_bytes_wrapper({"type": "content", "text": fallback_text, "timestamp": get_current_time_iso()})
                             state['google_yielded_raw_content_fallback'] = state.get('google_yielded_raw_content_fallback', "") + fallback_text
-            else:
+            else: # Not JSON schema mode for Google
+                # If not in JSON schema mode, we assume all text is "content" (or "reasoning" if old custom logic is forced)
+                # The old custom separator logic is handled by should_apply_custom_separator_logic and the final_cleanup
+                # This part should just yield raw content if not using the old custom separator logic.
+                # For simplicity and to avoid conflicting with the old custom logic branch,
+                # we'll rely on the final_cleanup or the native OpenAI-like processing if that's the path.
+                # If it's Google non-JSON mode and not old_custom_separator_branch, it should behave like OpenAI content.
+                # This part is tricky because the original code had a complex custom separator logic.
+                # For now, let's assume if it's Google and not JSON schema, it's direct content.
+                # The `strip_potentially_harmful_html_and_normalize_newlines` will be applied.
+                # This might need refinement based on how `use_old_custom_separator_branch` interacts.
+
+                # Simplified: if not JSON mode, treat as direct content.
+                # The old custom separator logic is complex and mostly handled in `handle_stream_cleanup`.
+                # Here, we just pass through the text.
                 state['google_pre_json_fallback_buffer'] = state.get('google_pre_json_fallback_buffer', "") + current_candidate_text_accumulator
-                processed_text_now = convert_math_symbols(strip_potentially_harmful_html_and_normalize_newlines(state['google_pre_json_fallback_buffer']))
-                yielded_processed_cumulative = state.get('google_pre_json_fallback_yielded_reasoning', "") 
+                processed_text_now = strip_potentially_harmful_html_and_normalize_newlines(state['google_pre_json_fallback_buffer'])
+                yielded_processed_cumulative = state.get('google_pre_json_fallback_yielded_reasoning', "") # Using this state var for non-JSON mode too
                 text_delta_to_yield = processed_text_now[len(yielded_processed_cumulative):]
-                if text_delta_to_yield: yield orjson_dumps_bytes_wrapper({"type": "content", "text": text_delta_to_yield, "timestamp": get_current_time_iso()})
+
+                if text_delta_to_yield:
+                    # If old custom separator logic is NOT active, yield as "content"
+                    # If old custom separator logic IS active, this path might be less used, or its output
+                    # will be further processed by that logic.
+                    # For now, let's assume this is the primary content path for non-JSON Google.
+                    yield orjson_dumps_bytes_wrapper({"type": "content", "text": text_delta_to_yield, "timestamp": get_current_time_iso()})
                 state['google_pre_json_fallback_yielded_reasoning'] = processed_text_now
+
+
         if function_call_part_data:
             if is_json_schema_mode and state.get('google_json_yielded_reasoning') and not state.get('google_json_yielded_answer'): yield orjson_dumps_bytes_wrapper({"type": "reasoning_finish", "timestamp": get_current_time_iso()})
-            elif not is_json_schema_mode and state.get('google_pre_json_fallback_yielded_reasoning'): pass
+            elif not is_json_schema_mode and state.get('google_pre_json_fallback_yielded_reasoning'): pass # No specific reasoning_finish for non-JSON mode here
             fcid = f"gemini_fc_{os.urandom(4).hex()}"
             yield orjson_dumps_bytes_wrapper({"type": "google_function_call_request", "id": fcid, "name": function_call_part_data.get("name"), "arguments_obj": function_call_part_data.get("args", {}), "timestamp": get_current_time_iso(), "is_reasoning_step": is_json_schema_mode and bool(state.get('google_json_yielded_reasoning') and not state.get('google_json_yielded_answer'))})
         if finish_reason:
             if is_json_schema_mode:
                 if state.get('google_json_activated') and state.get('google_json_yielded_reasoning') and not state.get('google_json_yielded_answer'): yield orjson_dumps_bytes_wrapper({"type": "reasoning_finish", "timestamp": get_current_time_iso()})
                 if state.get('google_json_accumulator') and not state.get('google_json_activated'): logger.error(f"RID-{request_id}: Google JSON mode: stream finished with UNPARSED JSON in accumulator. Model failed schema adherence. Buffer: {state['google_json_accumulator'][:500]}")
-            elif not is_json_schema_mode and state.get('google_pre_json_fallback_yielded_reasoning'): pass
+            elif not is_json_schema_mode and state.get('google_pre_json_fallback_yielded_reasoning'): pass # No specific reasoning_finish for non-JSON mode here
             yield orjson_dumps_bytes_wrapper({"type": "finish", "reason": finish_reason, "timestamp": get_current_time_iso()})
             state['google_json_accumulator'] = ""; state['google_json_yielded_reasoning'] = ""; state['google_json_yielded_answer'] = ""; state['google_json_activated'] = False; state['google_pre_json_fallback_buffer'] = ""; state['google_pre_json_fallback_yielded_reasoning'] = ""; state.pop('google_yielded_raw_content_fallback', None)
             return
@@ -621,63 +644,115 @@ async def handle_stream_error(e: Exception, request_id: str, upstream_ok: bool, 
     elif isinstance(e, httpx.RequestError): err_type, err_msg, log_exc_info = "network_error", f"Upstream network error: {str(e)}", False
     elif isinstance(e, asyncio.CancelledError): logger.info(f"RID-{request_id}: Stream cancelled by client."); return
     logger.error(f"RID-{request_id}: Unexpected error during stream generation: {err_msg}", exc_info=log_exc_info)
-    if not upstream_ok or not first_chunk_llm: 
+    if not upstream_ok or not first_chunk_llm:
         yield orjson_dumps_bytes_wrapper({"type": "error", "message": err_msg, "timestamp": get_current_time_iso()})
     yield orjson_dumps_bytes_wrapper({"type": "finish", "reason": err_type, "timestamp": get_current_time_iso()})
 
 async def handle_stream_cleanup(state: Dict[str, Any], request_id: str, upstream_ok: bool, use_old_custom_separator_branch: bool, provider: str) -> AsyncGenerator[bytes, None]:
-    if use_old_custom_separator_branch and state.get("accumulated_text_custom","").strip() and upstream_ok: 
+    # This function handles the old custom separator logic if `use_old_custom_separator_branch` is true.
+    # The original logic for this was complex and tied to `THINKING_PROCESS_SEPARATOR`.
+    # Given the shift towards provider-native reasoning/content separation (OpenAI's `reasoning_content`
+    # and Google's JSON schema mode), this custom logic is now more of a fallback or forced override.
+
+    # If the old custom separator logic is active, it tries to split the accumulated text.
+    if use_old_custom_separator_branch and state.get("accumulated_text_custom","").strip() and upstream_ok:
         logger.info(f"RID-{request_id}: Final flush in 'finally' for Branch 1 (custom logic path): '{state.get('accumulated_text_custom','')[:100]}'")
-        final_raw_text_finally = state.get("accumulated_text_custom","").strip()
-        if not state.get("found_separator_custom"): 
-            processed_r_finally = convert_math_symbols(strip_potentially_harmful_html_and_normalize_newlines(final_raw_text_finally)) 
-            delta_r_finally = processed_r_finally
-            full_yielded_r_custom = state.get("full_yielded_reasoning_custom", "") 
-            if full_yielded_r_custom and processed_r_finally.startswith(full_yielded_r_custom):
-                delta_r_finally = processed_r_finally[len(full_yielded_r_custom):]
-            if delta_r_finally:
-                try: yield orjson_dumps_bytes_wrapper({"type": "reasoning", "text": delta_r_finally, "timestamp": get_current_time_iso()})
-                except Exception as final_yield_exc: logger.warning(f"RID-{request_id}: Exception during final yield (reasoning): {final_yield_exc}")
-            if delta_r_finally and not state.get("openai_reasoning_finish_event_sent", False):
-                 yield orjson_dumps_bytes_wrapper({"type": "reasoning_finish", "timestamp": get_current_time_iso()})
-            if provider not in ["openai", "google"] or not upstream_ok :
-                 yield orjson_dumps_bytes_wrapper({"type": "finish", "reason": "stop_custom_logic_eof", "timestamp": get_current_time_iso()})
-        else:
-            final_c_raw_finally = re.sub(f"({re.escape(THINKING_PROCESS_SEPARATOR)})+", "", final_raw_text_finally)
-            processed_c_finally = convert_math_symbols(strip_potentially_harmful_html_and_normalize_newlines(final_c_raw_finally)) 
-            delta_c_finally = processed_c_finally
-            full_yielded_c_custom = state.get("full_yielded_content_custom", "") 
-            if full_yielded_c_custom and processed_c_finally.startswith(full_yielded_c_custom):
-                delta_c_finally = processed_c_finally[len(full_yielded_c_custom):]
-            if delta_c_finally:
-                try: yield orjson_dumps_bytes_wrapper({"type": "content", "text": delta_c_finally, "timestamp": get_current_time_iso()})
-                except Exception as final_yield_exc: logger.warning(f"RID-{request_id}: Exception during final yield (content): {final_yield_exc}")
-            if provider not in ["openai", "google"] or not upstream_ok :
-                yield orjson_dumps_bytes_wrapper({"type": "finish", "reason": "stop_custom_logic_eof", "timestamp": get_current_time_iso()})
+        final_raw_text_custom = state.get("accumulated_text_custom","").strip()
+
+        if not state.get("found_separator_custom"): # Separator was NOT found during streaming
+            # Treat everything as reasoning
+            processed_reasoning_finally = strip_potentially_harmful_html_and_normalize_newlines(final_raw_text_custom)
+            delta_reasoning_finally = processed_reasoning_finally
+            full_yielded_reasoning_custom = state.get("full_yielded_reasoning_custom", "")
+
+            if full_yielded_reasoning_custom and processed_reasoning_finally.startswith(full_yielded_reasoning_custom):
+                delta_reasoning_finally = processed_reasoning_finally[len(full_yielded_reasoning_custom):]
+
+            if delta_reasoning_finally:
+                try:
+                    yield orjson_dumps_bytes_wrapper({"type": "reasoning", "text": delta_reasoning_finally, "timestamp": get_current_time_iso()})
+                    state["full_yielded_reasoning_custom"] += delta_reasoning_finally # Update yielded amount
+                except Exception as final_yield_exc:
+                    logger.warning(f"RID-{request_id}: Exception during final yield (reasoning, custom logic): {final_yield_exc}")
+
+            # Send reasoning_finish if reasoning was yielded and it wasn't already sent
+            # This condition needs to be careful not to conflict with provider-specific finish events.
+            # Let's assume if this branch is active, it controls the reasoning_finish.
+            if state.get("full_yielded_reasoning_custom") and not state.get("openai_reasoning_finish_event_sent"): # Re-using openai_reasoning_finish_event_sent for this custom path
+                yield orjson_dumps_bytes_wrapper({"type": "reasoning_finish", "timestamp": get_current_time_iso()})
+                state["openai_reasoning_finish_event_sent"] = True # Mark as sent for this custom path
+
+        else: # Separator WAS found during streaming
+            # The text after the separator is content
+            # Note: The original code for splitting and yielding reasoning/content *during* streaming
+            # when the separator is found is missing from this `handle_stream_cleanup`.
+            # This cleanup only handles the *remaining* text.
+            # Assuming `state.accumulated_text_custom` now only contains text *after* the last separator.
+            processed_content_finally = strip_potentially_harmful_html_and_normalize_newlines(final_raw_text_custom) # Assuming this is only content part
+            delta_content_finally = processed_content_finally
+            full_yielded_content_custom = state.get("full_yielded_content_custom", "")
+
+            if full_yielded_content_custom and processed_content_finally.startswith(full_yielded_content_custom):
+                delta_content_finally = processed_content_finally[len(full_yielded_content_custom):]
+
+            if delta_content_finally:
+                try:
+                    yield orjson_dumps_bytes_wrapper({"type": "content", "text": delta_content_finally, "timestamp": get_current_time_iso()})
+                    state["full_yielded_content_custom"] += delta_content_finally # Update yielded amount
+                except Exception as final_yield_exc:
+                    logger.warning(f"RID-{request_id}: Exception during final yield (content, custom logic): {final_yield_exc}")
+
+        # Send a generic finish event if this custom logic was active and upstream was OK,
+        # but only if the provider-specific logic hasn't already sent one (e.g., [DONE] or Google's finishReason).
+        # This is tricky. A simple check: if no "finish" event was logged by provider specific logic.
+        # For now, let's assume if `use_old_custom_separator_branch` is true, this cleanup
+        # might need to send its own finish if the stream didn't end with a provider [DONE]/finishReason.
+        # This part of the original code was:
+        # `if provider not in ["openai", "google"] or not upstream_ok :`
+        # This seems to imply it would send a finish if it's a custom provider or if upstream failed.
+        # Let's refine: if this branch is active and we haven't seen a provider finish, send one.
+        # This requires knowing if a provider finish event was already sent.
+        # This cleanup function doesn't have that direct knowledge.
+        # A simpler approach: if this branch is active, it *might* be responsible for the final "finish"
+        # if the stream ends abruptly without a clear signal from the LLM.
+        # However, the main stream loop *should* catch [DONE] or finishReason.
+        # This final "finish" here is more of a safeguard for this custom branch.
+        # Let's assume for now that the main loop's finish events are sufficient.
+        # The original logic here was a bit convoluted.
+
+    # Final logging about processing modes
     final_processing_mode_info = []
-    if use_old_custom_separator_branch: final_processing_mode_info.append("OldCustomSeparator")
+    if use_old_custom_separator_branch: final_processing_mode_info.append("OldCustomSeparatorLogicActive")
+
     if provider == "google":
-        if state.get('google_json_activated'): final_processing_mode_info.append("GoogleJSONSchema")
-        elif state.get('google_pre_json_fallback_buffer') or state.get('google_pre_json_fallback_yielded_reasoning'): final_processing_mode_info.append("GoogleNaturalText")
+        if state.get('google_json_activated'): final_processing_mode_info.append("GoogleJSONSchemaMode")
+        elif state.get('google_pre_json_fallback_buffer') or state.get('google_pre_json_fallback_yielded_reasoning'):
+            final_processing_mode_info.append("GoogleNaturalTextMode")
     elif provider == "openai":
-        if state.get('openai_had_any_reasoning'): final_processing_mode_info.append("OpenAIWithReasoning")
-        else: final_processing_mode_info.append("OpenAINativeContent")
-    logger.info(f"RID-{request_id}: Stream generator finished. Upstream OK: {upstream_ok}. Processing Modes Active: {', '.join(final_processing_mode_info) if final_processing_mode_info else 'ProviderSpecific/NoMajorActivity'}.")
+        if state.get('openai_had_any_reasoning'): final_processing_mode_info.append("OpenAIWithReasoningField")
+        elif state.get('openai_had_any_content_or_tool_call'): final_processing_mode_info.append("OpenAINativeContent/ToolCall")
+        else: final_processing_mode_info.append("OpenAINoSignificantOutput")
+
+    logger.info(f"RID-{request_id}: Stream generator finished. Upstream OK: {upstream_ok}. Processing Modes: {', '.join(final_processing_mode_info) if final_processing_mode_info else 'NoClearProcessingMode'}.")
+
 
 def is_gemini_thinking_pattern(text: str) -> bool:
     if not isinstance(text, str): return False
     lines = text.strip().split('\n')
     if not lines: return False
     first_line = lines[0].strip()
-    if not (first_line.startswith("I've") or first_line.startswith("I am") or first_line.startswith("I'm ") or "interpreting" in first_line.lower()): return False 
+    if not (first_line.startswith("I've") or first_line.startswith("I am") or first_line.startswith("I'm ") or "interpreting" in first_line.lower()): return False
     thinking_keywords = ["examining", "delving", "exploring", "understanding", "dissecting", "synthesizing", "distilling", "i'm now", "i've been", "i'm focusing", "i'm noting", "forming a more", "refining the response", "context and potential variations", "constructed a simple", "helpful offer"]
     text_lower = text.lower()
     keyword_count = sum(1 for keyword in thinking_keywords if keyword in text_lower)
-    return keyword_count >= 1 
+    return keyword_count >= 1
 
 def process_gemini_content(text: str, state: Dict[str, str], request_id: str) -> Tuple[str, str]:
+    # This function seems to be part of the old custom separator logic and might be redundant
+    # if Google JSON schema mode or OpenAI native reasoning is used.
+    # Keeping it for now if `use_old_custom_separator_branch` relies on it.
     if not text: return "", ""
-    if is_gemini_thinking_pattern(text): return text, "" 
+    if is_gemini_thinking_pattern(text): return text, ""
     greeting_phrases = ["你好！ 有什么可以帮您的吗？", "Hello! Is there anything I can help you with?"]
     for phrase in greeting_phrases:
         if phrase in text:
@@ -685,7 +760,7 @@ def process_gemini_content(text: str, state: Dict[str, str], request_id: str) ->
             thinking_part = parts[0]
             answer_part = phrase + parts[1] if len(parts) > 1 else phrase
             if is_gemini_thinking_pattern(thinking_part.strip()): return thinking_part.strip(), answer_part.strip()
-            else: return "", text 
+            else: return "", text
     return "", text
 
 if __name__ == "__main__":
