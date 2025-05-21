@@ -1,4 +1,4 @@
-package com.example.everytalk.ui.screens.BubbleMain.Main
+package com.example.everytalk.ui.screens.BubbleMain.Main // 你的包名
 
 import android.util.Log
 import androidx.compose.animation.ExperimentalAnimationApi
@@ -15,8 +15,12 @@ import androidx.compose.ui.unit.dp
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.DataClass.Sender
 import com.example.everytalk.StateControler.AppViewModel
-import com.example.everytalk.ui.screens.BubbleMain.AiMessageContent
+import com.example.everytalk.ui.screens.BubbleMain.AiMessageContent // 确保导入路径正确
+// 假设 UserOrErrorMessageContent 和 ReasoningToggleAndContent 已正确导入或在此文件定义
+// import com.example.everytalk.ui.screens.BubbleMain.UserOrErrorMessageContent
+// import com.example.everytalk.ui.screens.BubbleMain.ReasoningToggleAndContent
 
+// Color.toHexCss() 定义 (如果它不在此文件，请确保从util导入，例如 import com.example.everytalk.util.toHexCss)
 fun Color.toHexCss(): String {
     return String.format("#%06X", 0xFFFFFF and this.toArgb())
 }
@@ -30,7 +34,7 @@ fun MessageBubble(
     isReasoningStreaming: Boolean,
     isReasoningComplete: Boolean,
     onUserInteraction: () -> Unit,
-    maxWidth: Dp, // 这个是 ChatScreen 传来的 bubbleMaxWidth，AI 消息块的最大宽度
+    maxWidth: Dp,
     onEditRequest: (Message) -> Unit,
     onRegenerateRequest: (Message) -> Unit,
     modifier: Modifier = Modifier,
@@ -50,14 +54,13 @@ fun MessageBubble(
 
     Log.d(
         "MessageBubbleRecomp",
-        "ID: ${message.id.take(8)}, Sender: ${message.sender}, AI_Block_MaxWidth: $aiMessageBlockMaxWidth"
+        "ID: ${message.id.take(8)}, Sender: ${message.sender}, AI_Block_MaxWidth: $aiMessageBlockMaxWidth, showLoadingBubble: $showLoadingBubble, isMainStreaming: $isMainContentStreaming, msg.textBlank: ${message.text.isBlank()}, contentStarted: ${message.contentStarted}"
     )
 
     val isAI = message.sender == Sender.AI
     val currentMessageId = message.id
 
-    // ✅ 直接绑定原始文本字段，不再使用 remember + mutableStateOf 缓存
-    val displayedMainTextState = remember(message.text) { message.text.trim() }
+    val displayedMainTextForUserOrError = remember(message.text) { message.text.trim() }
     val displayedReasoningText = remember(message.reasoning) { message.reasoning?.trim() ?: "" }
 
     val animationInitiallyPlayedByVM =
@@ -68,7 +71,7 @@ fun MessageBubble(
 
     LaunchedEffect(
         currentMessageId, message.text, message.reasoning, message.webSearchResults,
-        message.isError, isMainContentStreaming, showLoadingBubble
+        message.isError, isMainContentStreaming, showLoadingBubble, message.contentStarted
     ) {
         if (showLoadingBubble) return@LaunchedEffect
         if (!localAnimationTriggeredOrCompleted) {
@@ -79,34 +82,34 @@ fun MessageBubble(
             if (isStable && (hasContent || message.isError)) {
                 localAnimationTriggeredOrCompleted = true
                 if (!animationInitiallyPlayedByVM) viewModel.onAnimationComplete(currentMessageId)
-            } else if (isAI && !isMainContentStreaming && message.contentStarted && message.text.isBlank() && message.reasoning.isNullOrBlank() && message.webSearchResults.isNullOrEmpty() && !message.isError) {
+            } else if (isAI && !isMainContentStreaming && message.contentStarted &&
+                message.text.isBlank() && message.reasoning.isNullOrBlank() &&
+                message.webSearchResults.isNullOrEmpty() && !message.isError
+            ) {
                 localAnimationTriggeredOrCompleted = true
                 if (!animationInitiallyPlayedByVM) viewModel.onAnimationComplete(currentMessageId)
             }
         }
     }
 
-    // 根 Column：AI消息整体靠左，用户消息整体靠右
     Column(
         modifier = modifier.fillMaxWidth(),
         horizontalAlignment = if (isAI) Alignment.Start else Alignment.End
     ) {
-        // 内部 Column 用于包裹 AI 的所有组件，并应用 widthIn(max) 约束
         Column(
             modifier = Modifier
-                .widthIn(max = aiMessageBlockMaxWidth) // 【关键】AI 内容块的最大宽度
+                .widthIn(max = aiMessageBlockMaxWidth)
                 .then(if (!isAI) Modifier.align(Alignment.End) else Modifier.align(Alignment.Start)),
-            horizontalAlignment = Alignment.Start // AI 组件在其块内部左对齐
+            horizontalAlignment = Alignment.Start
         ) {
+            // 1. AI 消息的外部加载提示气泡 (showLoadingBubble)
             if (isAI && showLoadingBubble) {
                 Surface(
                     shape = RoundedCornerShape(18.dp),
                     color = aiBubbleColor,
                     shadowElevation = 0.dp,
                     contentColor = aiContentColor,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp)
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
@@ -118,31 +121,21 @@ fun MessageBubble(
                             strokeWidth = 1.5.dp
                         )
                         Spacer(Modifier.width(10.dp))
-                        val loadingText = remember {
+                        val loadingText = remember(message.currentWebSearchStage, isReasoningStreaming, message.reasoning, isReasoningComplete) {
                             when (message.currentWebSearchStage) {
                                 "web_indexing_started" -> "正在索引网页..."
                                 "web_analysis_started" -> "正在分析网页..."
                                 "web_analysis_complete" -> {
-                                    if (isReasoningStreaming) {
-                                        "大模型思考中..."
-                                    } else if (!message.reasoning.isNullOrBlank() && !isReasoningComplete) {
-                                        "大模型思考中..."
-                                    } else if (!message.reasoning.isNullOrBlank() && isReasoningComplete) {
-                                        "思考完成"
-                                    } else {
-                                        "分析完成"
-                                    }
+                                    if (isReasoningStreaming) "大模型思考中..."
+                                    else if (!message.reasoning.isNullOrBlank() && !isReasoningComplete) "大模型思考中..."
+                                    else if (!message.reasoning.isNullOrBlank() && isReasoningComplete) "思考完成"
+                                    else "分析完成"
                                 }
                                 else -> {
-                                    if (isReasoningStreaming) {
-                                        "大模型思考中..."
-                                    } else if (!message.reasoning.isNullOrBlank() && !isReasoningComplete) {
-                                        "大模型思考中..."
-                                    } else if (!message.reasoning.isNullOrBlank() && isReasoningComplete) {
-                                        "思考完成"
-                                    } else {
-                                        "正在连接大模型..."
-                                    }
+                                    if (isReasoningStreaming) "大模型思考中..."
+                                    else if (!message.reasoning.isNullOrBlank() && !isReasoningComplete) "大模型思考中..."
+                                    else if (!message.reasoning.isNullOrBlank() && isReasoningComplete) "思考完成"
+                                    else "正在连接大模型..."
                                 }
                             }
                         }
@@ -151,9 +144,8 @@ fun MessageBubble(
                 }
             }
 
-            val shouldDisplayReasoningComponentBox = isAI &&
-                    (!message.reasoning.isNullOrBlank() || isReasoningStreaming)
-
+            // 2. AI 消息的思考过程部分
+            val shouldDisplayReasoningComponentBox = isAI && (!message.reasoning.isNullOrBlank() || isReasoningStreaming)
             if (shouldDisplayReasoningComponentBox) {
                 ReasoningToggleAndContent(
                     modifier = Modifier
@@ -173,47 +165,43 @@ fun MessageBubble(
                 )
             }
 
-            if (isAI && showLoadingBubble && !message.contentStarted) {
-                // Skip rendering main content
-            }
+            // 3. AI 消息的主要内容展示 (AiMessageContent)
+            val shouldShowAiMessageComponent = isAI && !message.isError && !showLoadingBubble
+            if (shouldShowAiMessageComponent) {
+                // 决定 AiMessageContent 内部是否显示三点加载动画
+                val showDotsInsideAiContent = isMainContentStreaming &&
+                        message.text.isBlank() &&
+                        !message.contentStarted && // 仅当内容尚未开始时，才由isMainContentStreaming决定
+                        !showLoadingBubble // 不与外部加载气泡冲突
 
-            val showActualAiTextContent = isAI && !message.isError &&
-                    (message.contentStarted && message.text.isNotBlank()) &&
-                    !showLoadingBubble
-
-            if (showActualAiTextContent) {
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp),
-                    shape = RoundedCornerShape(
-                        topStart = if (shouldDisplayReasoningComponentBox) 8.dp else 18.dp,
-                        topEnd = 18.dp,
-                        bottomStart = 18.dp,
-                        bottomEnd = 18.dp
-                    ),
-                    color = aiBubbleColor,
-                    contentColor = aiContentColor,
-                    shadowElevation = 0.dp,
-                    border = null
-                ) {
-                    AiMessageContent(
-                        message = message,
-                        appViewModel = viewModel,
-                        fullMessageTextToCopy = message.text,
-                        displayedText = displayedMainTextState,
-                        isStreaming = isMainContentStreaming,
-                        showLoadingDots = isAI && !showLoadingBubble && !message.isError && !message.contentStarted && message.text.isBlank() && message.reasoning.isNullOrBlank(),
-                        contentColor = aiContentColor,
-                        codeBlockBackgroundColor = codeBlockBackgroundColor,
-                        codeBlockContentColor = codeBlockContentColor,
-                        codeBlockCornerRadius = codeBlockCornerRadius,
-                        onUserInteraction = onUserInteraction,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
-                    )
+                // 渲染 AiMessageContent 条件：消息有文本，或者需要显示其内部的加载点
+                if (message.text.isNotBlank() || showDotsInsideAiContent) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        shape = RoundedCornerShape(
+                            topStart = if (shouldDisplayReasoningComponentBox) 8.dp else 18.dp,
+                            topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 18.dp
+                        ),
+                        color = aiBubbleColor, contentColor = aiContentColor,
+                        shadowElevation = 0.dp, border = null
+                    ) {
+                        AiMessageContent(
+                            message = message,
+                            appViewModel = viewModel,
+                            fullMessageTextToCopy = message.text, // 完整的原始文本用于复制
+                            showLoadingDots = showDotsInsideAiContent, // 控制 AiMessageContent 内部的加载点
+                            contentColor = aiContentColor,
+                            codeBlockBackgroundColor = codeBlockBackgroundColor,
+                            codeBlockContentColor = codeBlockContentColor,
+                            codeBlockCornerRadius = codeBlockCornerRadius,
+                            onUserInteraction = onUserInteraction,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                        )
+                    }
                 }
 
                 val showSourcesButton = !message.webSearchResults.isNullOrEmpty() &&
+                        message.contentStarted &&
                         !isMainContentStreaming &&
                         !showLoadingBubble
                 if (showSourcesButton) {
@@ -221,9 +209,7 @@ fun MessageBubble(
                     TextButton(
                         onClick = {
                             onUserInteraction()
-                            message.webSearchResults?.let { results ->
-                                viewModel.showSourcesDialog(results)
-                            }
+                            viewModel.showSourcesDialog(message.webSearchResults!!)
                         },
                         modifier = Modifier.align(Alignment.Start)
                     ) {
@@ -231,13 +217,13 @@ fun MessageBubble(
                     }
                 }
             }
-        } // AI 消息内部 Column 结束
+        }
 
-        // 用户消息和错误消息（直接在根Column下，由其Alignment控制）
+        // 4. 用户消息 或 AI 错误消息
         if (!isAI && !message.isError) {
             UserOrErrorMessageContent(
                 message = message,
-                displayedText = displayedMainTextState,
+                displayedText = displayedMainTextForUserOrError,
                 showLoadingDots = false,
                 bubbleColor = userBubbleBackgroundColor,
                 contentColor = userContentColor,
@@ -257,7 +243,7 @@ fun MessageBubble(
             ) {
                 UserOrErrorMessageContent(
                     message = message,
-                    displayedText = displayedMainTextState,
+                    displayedText = displayedMainTextForUserOrError,
                     showLoadingDots = false,
                     bubbleColor = aiBubbleColor,
                     contentColor = errorTextColor,
@@ -270,5 +256,5 @@ fun MessageBubble(
                 )
             }
         }
-    } // 根 Column 结束
+    }
 }

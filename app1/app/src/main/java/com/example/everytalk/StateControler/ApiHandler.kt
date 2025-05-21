@@ -27,7 +27,8 @@ import java.util.concurrent.CancellationException // 显式导入
 class ApiHandler(
     private val stateHolder: ViewModelStateHolder,
     private val viewModelScope: CoroutineScope,
-    private val historyManager: HistoryManager
+    private val historyManager: HistoryManager,
+    private val onAiMessageFinalizedForProcessing: (messageId: String, fullText: String) -> Unit
 ) {
     private val jsonParserForError = Json { ignoreUnknownKeys = true } // 用于解析特定错误格式
 
@@ -195,8 +196,16 @@ class ApiHandler(
 
                         // 查找并最终更新消息状态
                         val finalIdx = stateHolder.messages.indexOfFirst { it.id == targetMsgId }
+
                         if (finalIdx != -1) {
                             val msg = stateHolder.messages[finalIdx]
+                            if (!msg.isError && msg.text.isNotBlank()) { // 只处理非错误且有文本的AI消息
+                                Log.d(
+                                    TAG_API_HANDLER,
+                                    "onCompletion: Triggering content processing for AI message $targetMsgId"
+                                )
+                                onAiMessageFinalizedForProcessing(targetMsgId, msg.text) // << 调用回调
+                            }
                             val hasMeaningfulContentOrState = msg.text.isNotBlank() ||
                                     !msg.reasoning.isNullOrBlank() ||
                                     !msg.webSearchResults.isNullOrEmpty() ||
@@ -306,6 +315,10 @@ class ApiHandler(
                         updateMessageWithError(aiMessageId, e)
                     }
                 }
+                val idx = stateHolder.messages.indexOfFirst { it.id == aiMessageId }
+                if (idx != -1 && stateHolder.messages[idx].isError && stateHolder.messages[idx].text.isNotBlank()) {
+                    // onAiMessageFinalizedForProcessing(aiMessageId, stateHolder.messages[idx].text) // 如果错误消息也需处理
+                }
             } finally {
                 // 无论协程如何结束（正常、异常、取消），都会执行
                 if (stateHolder.apiJob == thisJob) { // 清理当前 job 相关的状态
@@ -410,7 +423,10 @@ class ApiHandler(
             "content" -> {
                 if (!appEvent.text.isNullOrEmpty()) {
                     currentTextBuilder.append(appEvent.text)
-                    Log.d("STREAMPATH", "流式AI内容 += '${appEvent.text}' -> 总长${currentTextBuilder.length}")
+                    Log.d(
+                        "STREAMPATH",
+                        "流式AI内容 += '${appEvent.text}' -> 总长${currentTextBuilder.length}"
+                    )
                     if (!newContentStarted) {
                         newContentStarted = true
                         Log.i(
