@@ -2,37 +2,38 @@ package com.example.everytalk.StateControler
 
 import android.app.Application
 import android.util.Log
-import androidx.compose.material3.DrawerState // Standard Compose import
-import androidx.compose.runtime.snapshots.SnapshotStateList // Standard Compose import
+import androidx.compose.material3.DrawerState
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.everytalk.data.local.SharedPreferencesDataSource
 import com.example.everytalk.data.DataClass.ApiConfig
+import com.example.everytalk.data.DataClass.ChatRequest
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.DataClass.Sender
-import com.example.everytalk.data.DataClass.ChatRequest
-import com.example.everytalk.data.DataClass.ApiMessage // Using existing alias
 import com.example.everytalk.data.DataClass.WebSearchResult
-// import com.example.everytalk.data.DataClass.ContentPart // No longer directly used for streaming
-
+import com.example.everytalk.data.local.SharedPreferencesDataSource
 import com.example.everytalk.data.network.ApiClient
 import com.example.everytalk.ui.screens.viewmodel.ConfigManager
 import com.example.everytalk.ui.screens.viewmodel.DataPersistenceManager
 import com.example.everytalk.ui.screens.viewmodel.HistoryManager
+import com.example.everytalk.util.convertMarkdownToHtml
+import com.example.everytalk.util.generateKatexBaseHtmlTemplateString
 import com.example.everytalk.webviewpool.WebViewPool
-
-import com.example.everytalk.util.generateKatexBaseHtmlTemplateString // Corrected import path
-// parseMarkdownSegments and TextSegment are not directly used by ViewModel for streaming chunks anymore
-
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job // Keep Job import if other parts of ViewModel still use it
-import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.isActive
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
-import kotlinx.serialization.Contextual // For ChatRequest fields
-import java.util.concurrent.CancellationException
+
 
 class AppViewModel(
     application: Application,
@@ -53,12 +54,13 @@ class AppViewModel(
             ::areMessageListsEffectivelyEqual
         )
 
+    // ApiHandler's callback is now onAiMessageChunkReceived
     private val apiHandler: ApiHandler by lazy {
         ApiHandler(
             stateHolder,
             viewModelScope,
             historyManager,
-            ::onAiMessageChunkReceived // New callback for individual markdown chunks
+            ::onAiMessageFullTextChanged // ★★★ 将这里改为新的回调函数引用 ★★★
         )
     }
     private val configManager: ConfigManager by lazy {
@@ -72,24 +74,16 @@ class AppViewModel(
 
     val webViewPool: WebViewPool by lazy {
         Log.d(TAG_APP_VIEW_MODEL, "Initializing WebViewPool")
-        WebViewPool(getApplication<Application>().applicationContext, maxSize = 8)
+        WebViewPool(getApplication<Application>().applicationContext, maxSize = 8) // Your value
     }
 
-    // --- Streaming Chunk Handling ---
-    // Emits Pair<MessageID, Pair<ChunkTriggerKey, MarkdownChunk>>
-    private val _markdownChunkToAppendFlow = MutableSharedFlow<Pair<String, Pair<String, String>>>(replay = 0, extraBufferCapacity = 128)
-    val markdownChunkToAppendFlow: SharedFlow<Pair<String, Pair<String, String>>> = _markdownChunkToAppendFlow.asSharedFlow()
+    // --- Streaming Raw Markdown Chunk Handling ---
+    // Emits Pair<MessageID, Pair<ChunkTriggerKey, RawMarkdownChunk>>
+    private val _markdownChunkToAppendFlow =
+        MutableSharedFlow<Pair<String, Pair<String, String>>>(replay = 0, extraBufferCapacity = 128)
+    val markdownChunkToAppendFlow: SharedFlow<Pair<String, Pair<String, String>>> =
+        _markdownChunkToAppendFlow.asSharedFlow()
 
-    // Callback for ApiHandler to send individual markdown chunks
-    private fun onAiMessageChunkReceived(messageId: String, markdownChunk: String) {
-        if (markdownChunk.isNotBlank()) {
-            viewModelScope.launch {
-                val chunkTriggerKey = UUID.randomUUID().toString() // Unique key for this chunk
-                Log.d(TAG_APP_VIEW_MODEL, "Emitting markdown chunk for msg $messageId (key ${chunkTriggerKey.take(4)}): \"${markdownChunk.take(30).replace("\n", "\\n")}\"")
-                _markdownChunkToAppendFlow.tryEmit(messageId to (chunkTriggerKey to markdownChunk))
-            }
-        }
-    }
 
     private fun getDefaultKatexHtmlTemplate(): String {
         val defaultBackgroundColor = "transparent"
@@ -137,7 +131,7 @@ class AppViewModel(
     private val _customProviders = MutableStateFlow<Set<String>>(emptySet())
     val allProviders: StateFlow<List<String>> = combine(
         _customProviders
-    ) { customsParamArray ->
+    ) { customsParamArray: Array<Set<String>> ->
         val customs = customsParamArray[0]
         val predefinedPlatforms =
             listOf("openai compatible", "google", "硅基流动", "阿里云百炼", "火山引擎", "深度求索")
@@ -160,54 +154,159 @@ class AppViewModel(
     init {
         Log.d(TAG_APP_VIEW_MODEL, "ViewModel 初始化开始")
 
-        viewModelScope.launch(Dispatchers.IO) {
+        // ★★★ 修改开始：调用 loadInitialData 加载持久化的数据 ★★★
+        persistenceManager.loadInitialData { initialConfigPresent, initialHistoryPresent ->
+            Log.d(
+                TAG_APP_VIEW_MODEL,
+                "初始数据加载完成。配置存在: $initialConfigPresent, 历史存在: $initialHistoryPresent"
+            )
+            // 你可以在这里根据加载结果执行一些额外操作，如果需要的话
+            // 例如，如果 !initialConfigPresent，可以提示用户添加配置
+            if (!initialConfigPresent) {
+                viewModelScope.launch {
+                    // 避免在 ViewModel init 过于早期就直接显示 Snackbar，
+                    // 除非有特定机制确保 UI 此时已准备好接收。
+                    // 此处仅作日志记录或延迟提示。
+                    Log.i(TAG_APP_VIEW_MODEL, "没有检测到已保存的API配置。")
+                    // showSnackbar("请添加您的第一个API配置") // 示例：如果需要，可以延迟执行或通过事件通知UI
+                }
+            }
+        }
+        // ★★★ 修改结束 ★★★
+
+        viewModelScope.launch { // 这个 launch 默认就在主调度器上
             val baseTemplate = getDefaultKatexHtmlTemplate()
             try {
-                this@AppViewModel.webViewPool.warmUp(4, baseTemplate)
+                // 如果 warmUp 内部创建 WebView 不是 suspend，可以直接调用
+                // 如果 warmUp 是 suspend 且内部切换线程，也没问题
+                // 最保险的是确保 WebView 的 new WebView() 调用在主线程
+                withContext(Dispatchers.Main) { // 强制在主线程
+                    Log.d(TAG_APP_VIEW_MODEL, "Warming up WebViewPool on Main thread...")
+                    this@AppViewModel.webViewPool.warmUp(4, baseTemplate)
+                }
                 Log.d(TAG_APP_VIEW_MODEL, "WebViewPool warmed up.")
             } catch (e: Exception) {
                 Log.e(TAG_APP_VIEW_MODEL, "Error warming up WebViewPool", e)
             }
         }
 
+
         viewModelScope.launch(Dispatchers.IO) {
             ApiClient.preWarm()
-            apiHandler // Trigger lazy initialization
-            configManager // Trigger lazy initialization
-            Log.d(TAG_APP_VIEW_MODEL, "ViewModel IO pre-warming of ApiClient, ApiHandler, ConfigManager completed.")
+            apiHandler // 确保 apiHandler 和 configManager 被及早初始化 (如果它们是 lazy 且有IO操作)
+            configManager
+            Log.d(
+                TAG_APP_VIEW_MODEL,
+                "ViewModel IO pre-warming of ApiClient, ApiHandler, ConfigManager completed."
+            )
         }
 
-        persistenceManager.loadInitialData { initialConfigPresent, historyPresent ->
-            viewModelScope.launch(Dispatchers.IO) {
-                val loadedCustomProviders = dataSource.loadCustomProviders()
-                _customProviders.value = loadedCustomProviders
-            }
+        viewModelScope.launch(Dispatchers.Default) { // 使用 Dispatchers.Default 进行CPU密集型转换
+            Log.d(TAG_APP_VIEW_MODEL, "开始后台批量预处理历史消息的 htmlContent...")
+            // 注意: 此时 _historicalConversations 可能尚未被 loadInitialData 完全填充
+            // 如果这个预处理依赖于 loadInitialData 完成后的 _historicalConversations.value，
+            // 那么这个 launch 应该在 loadInitialData 的回调中，或者观察 _historicalConversations 的变化。
+            // 不过，由于 loadInitialData 也是异步的，并且会更新 _historicalConversations，
+            // 这里的逻辑如果依赖最新的历史记录，需要小心时序。
+            // 鉴于后台预处理通常可以处理 "当前已知" 的数据，这里暂时保持原样，但需注意其执行时机。
 
-            val currentChatMessagesFromPersistence = stateHolder.messages.toList()
-            val historicalConversationsFromPersistence = stateHolder._historicalConversations.value
-            if (currentChatMessagesFromPersistence.isNotEmpty() && historyPresent) {
-                val matchedIndex = historicalConversationsFromPersistence.indexOfFirst { historicalChat ->
-                    areMessageListsEffectivelyEqual(currentChatMessagesFromPersistence, historicalChat)
+            val originalLoadedHistory =
+                stateHolder._historicalConversations.value.toList() // 获取当前快照
+
+            if (originalLoadedHistory.isNotEmpty()) { // 仅当有历史记录时才处理
+                val processedHistory = originalLoadedHistory.map { conversation ->
+                    conversation.map { message ->
+                        if (message.sender == Sender.AI && message.text.isNotBlank() && message.htmlContent == null) {
+                            Log.d(
+                                TAG_APP_VIEW_MODEL,
+                                "后台预处理: 为消息 ${message.id.take(4)} 生成 htmlContent"
+                            )
+                            message.copy(
+                                htmlContent = convertMarkdownToHtml(message.text)
+                                // contentStarted 应该在 message 从 SharedPreferences 加载时就已经根据 text/reasoning 设置好了
+                                // 如果没有，确保在 message.copy 时也正确传递或更新它
+                            )
+                        } else {
+                            message
+                        }
+                    }
                 }
-                stateHolder._loadedHistoryIndex.value = if (matchedIndex != -1) matchedIndex else null
+
+                var wasModified = false
+                if (originalLoadedHistory.size == processedHistory.size) { // 确保维度一致
+                    for (i in originalLoadedHistory.indices) {
+                        if (originalLoadedHistory[i].size == processedHistory[i].size) { // 确保子列表维度一致
+                            for (j in originalLoadedHistory[i].indices) {
+                                if (originalLoadedHistory[i][j].htmlContent == null && processedHistory[i][j].htmlContent != null) {
+                                    wasModified = true
+                                    break
+                                }
+                            }
+                        } else {
+                            // 维度不一致，可能意味着在处理过程中历史记录发生了变化，保守起见认为可能已修改或跳过
+                            Log.w(
+                                TAG_APP_VIEW_MODEL,
+                                "后台预处理：历史会话 $i 的消息数量发生变化，跳过修改检测。"
+                            )
+                            // wasModified = true; // 或者根据业务逻辑决定是否标记为修改
+                        }
+                        if (wasModified) break
+                    }
+                } else {
+                    Log.w(TAG_APP_VIEW_MODEL, "后台预处理：历史会话总数发生变化，跳过修改检测。")
+                    // wasModified = true;
+                }
+
+
+                if (wasModified) {
+                    Log.d(TAG_APP_VIEW_MODEL, "后台预处理完成，检测到 htmlContent 更新。")
+                    withContext(Dispatchers.Main.immediate) {
+                        // 再次检查，确保更新的是同一个版本的 historicalConversations
+                        // 如果 stateHolder._historicalConversations.value 在此期间已被 loadInitialData 再次修改，
+                        // 这里的更新可能基于旧数据。更安全的做法是让 loadInitialData 也负责一部分预处理，
+                        // 或者这里的逻辑在 loadInitialData 完成后，基于其结果进行。
+                        // 为简单起见，先直接更新。
+                        stateHolder._historicalConversations.value = processedHistory
+                        Log.d(
+                            TAG_APP_VIEW_MODEL,
+                            "已更新内存中的 _historicalConversations StateFlow。"
+                        )
+                    }
+
+                    withContext(Dispatchers.IO) {
+                        Log.d(
+                            TAG_APP_VIEW_MODEL,
+                            "后台预处理后，正在将更新后的历史记录保存回 SharedPreferences..."
+                        )
+                        try {
+                            persistenceManager.saveChatHistory(processedHistory)
+                            Log.i(
+                                TAG_APP_VIEW_MODEL,
+                                "成功将预处理后的历史记录保存到 SharedPreferences。"
+                            )
+                        } catch (e: Exception) {
+                            Log.e(
+                                TAG_APP_VIEW_MODEL,
+                                "保存预处理后的历史记录到 SharedPreferences 失败。",
+                                e
+                            )
+                        }
+                    }
+                } else {
+                    Log.d(TAG_APP_VIEW_MODEL, "后台预处理完成，未检测到需要更新的 htmlContent。")
+                }
             } else {
-                stateHolder._loadedHistoryIndex.value = null
-            }
-
-            viewModelScope.launch(Dispatchers.Main) {
-                if (!initialConfigPresent && stateHolder._apiConfigs.value.isEmpty()) {
-                    showSnackbar("请添加 API 配置")
-                } else if (stateHolder._selectedApiConfig.value == null && stateHolder._apiConfigs.value.isNotEmpty()) {
-                    val configToSelect = stateHolder._apiConfigs.value.firstOrNull { it.isValid }
-                        ?: stateHolder._apiConfigs.value.firstOrNull()
-                    configToSelect?.let { selectConfig(it) }
-                }
+                Log.d(TAG_APP_VIEW_MODEL, "后台预处理：没有历史记录可供处理。")
             }
         }
         Log.d(TAG_APP_VIEW_MODEL, "ViewModel 初始化逻辑结束.")
     }
 
-    private fun areMessageListsEffectivelyEqual(list1: List<Message>?, list2: List<Message>?): Boolean {
+
+    private fun areMessageListsEffectivelyEqual(
+        list1: List<Message>?,
+        list2: List<Message>?
+    ): Boolean {
         if (list1 == null && list2 == null) return true
         if (list1 == null || list2 == null) return false
         val filteredList1 = filterMessagesForComparison(list1)
@@ -216,11 +315,8 @@ class AppViewModel(
         for (i in filteredList1.indices) {
             val msg1 = filteredList1[i]
             val msg2 = filteredList2[i]
-            if (msg1.id != msg2.id ||
-                msg1.sender != msg2.sender ||
-                msg1.text.trim() != msg2.text.trim() ||
-                msg1.reasoning?.trim() != msg2.reasoning?.trim() ||
-                msg1.isError != msg2.isError
+            if (msg1.id != msg2.id || msg1.sender != msg2.sender || msg1.text.trim() != msg2.text.trim() ||
+                msg1.reasoning?.trim() != msg2.reasoning?.trim() || msg1.isError != msg2.isError
             ) return false
         }
         return true
@@ -236,10 +332,8 @@ class AppViewModel(
         }.toList()
     }
 
-    // --- 【补全】之前省略的函数 ---
     fun toggleWebSearchMode(enabled: Boolean) {
         stateHolder._isWebSearchEnabled.value = enabled
-        showSnackbar("联网搜索已 ${if (enabled) "开启" else "关闭"}")
         Log.d(TAG_APP_VIEW_MODEL, "联网搜索模式切换为: $enabled")
     }
 
@@ -248,7 +342,14 @@ class AppViewModel(
         if (trimmedName.isNotBlank()) {
             viewModelScope.launch(Dispatchers.IO) {
                 val currentCustomProviders = _customProviders.value.toMutableSet()
-                val predefinedForCheck = listOf("openai compatible", "google", "硅基流动", "阿里云百炼", "火山引擎", "深度求索").map { it.lowercase() }
+                val predefinedForCheck = listOf(
+                    "openai compatible",
+                    "google",
+                    "硅基流动",
+                    "阿里云百炼",
+                    "火山引擎",
+                    "深度求索"
+                ).map { it.lowercase() }
                 if (predefinedForCheck.contains(trimmedName.lowercase())) {
                     withContext(Dispatchers.Main) { showSnackbar("平台名称 '$trimmedName' 是预设名称，无法添加。") }
                     return@launch
@@ -300,17 +401,19 @@ class AppViewModel(
         val currentWebSearchEnabled = stateHolder._isWebSearchEnabled.value
 
         viewModelScope.launch(Dispatchers.Main.immediate) {
-            val newUserMessage = Message(text = textToActuallySend, sender = Sender.User, contentStarted = true)
+            val newUserMessage =
+                Message(text = textToActuallySend, sender = Sender.User, contentStarted = true)
             stateHolder.messages.add(newUserMessage)
             if (!isFromRegeneration) stateHolder._text.value = ""
             triggerScrollToBottom()
 
-            val apiHistoryMessages = mutableListOf<com.example.everytalk.data.DataClass.ApiMessage>()
+            val apiHistoryMessages =
+                mutableListOf<com.example.everytalk.data.DataClass.ApiMessage>()
             var historyMessageCount = 0
             val maxHistoryMessages = 20
             val messagesForHistory = stateHolder.messages.toList()
             val relevantMessages = if (messagesForHistory.size > 1) {
-                messagesForHistory.subList(0, messagesForHistory.size -1)
+                messagesForHistory.subList(0, messagesForHistory.size - 1)
             } else {
                 emptyList()
             }
@@ -318,56 +421,100 @@ class AppViewModel(
                 if (historyMessageCount >= maxHistoryMessages) break
                 val apiMsgToAdd: com.example.everytalk.data.DataClass.ApiMessage? = when {
                     msg.sender == Sender.User && msg.text.isNotBlank() ->
-                        com.example.everytalk.data.DataClass.ApiMessage(role = "user", content = msg.text.trim())
+                        com.example.everytalk.data.DataClass.ApiMessage(
+                            role = "user",
+                            content = msg.text.trim()
+                        )
+
                     msg.sender == Sender.AI && !msg.isError && (msg.contentStarted || msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank()) -> {
-                        val contentForApi = if (msg.text.isNotBlank()) msg.text.trim() else msg.reasoning?.trim() ?: ""
-                        if (contentForApi.isNotBlank()) com.example.everytalk.data.DataClass.ApiMessage(role = "assistant", content = contentForApi) else null
+                        val contentForApi =
+                            if (msg.text.isNotBlank()) msg.text.trim() else msg.reasoning?.trim()
+                                ?: ""
+                        if (contentForApi.isNotBlank()) com.example.everytalk.data.DataClass.ApiMessage(
+                            role = "assistant",
+                            content = contentForApi
+                        ) else null
                     }
+
                     else -> null
                 }
                 apiMsgToAdd?.let { apiHistoryMessages.add(0, it); historyMessageCount++ }
             }
-            apiHistoryMessages.add(com.example.everytalk.data.DataClass.ApiMessage(role = "user", content = textToActuallySend))
-            while(apiHistoryMessages.size > maxHistoryMessages && apiHistoryMessages.isNotEmpty()){
+            apiHistoryMessages.add(
+                com.example.everytalk.data.DataClass.ApiMessage(
+                    role = "user",
+                    content = textToActuallySend
+                )
+            )
+            while (apiHistoryMessages.size > maxHistoryMessages && apiHistoryMessages.isNotEmpty()) {
                 apiHistoryMessages.removeAt(0)
             }
 
             var finalCustomModelParameters: Map<String, Boolean>? = null
-            var finalCustomExtraBody: Map<String, Boolean>? = null
+            // var finalCustomExtraBody: Map<String, Boolean>? = null // 如果这个字段没用，可以考虑移除
             val modelNameLower = currentConfig.model.lowercase()
             val apiAddressLower = currentConfig.address?.lowercase() ?: ""
 
+            // 保留 Qwen 特定的 customModelParameters 逻辑，因为有些 Qwen 服务可能依赖这个
+            // 而不是顶层的 useWebSearch。如果你的后端统一处理 useWebSearch，
+            // 并且不再需要 customModelParameters 中的 enable_search，则可以移除下面的 if 块。
+            // 但为了兼容性，暂时保留它可能是个好主意，除非你确定后端不再看它。
             if (modelNameLower.contains("qwen")) {
                 if (apiAddressLower.contains("api.siliconflow.cn")) {
                     val params = mutableMapOf("enable_search" to currentWebSearchEnabled)
                     if (modelNameLower.contains("qwen3")) params["enable_thinking"] = false
                     finalCustomModelParameters = params.ifEmpty { null }
                 } else if (apiAddressLower.contains("dashscope.aliyuncs.com")) {
-                    finalCustomModelParameters = mapOf("enable_search" to currentWebSearchEnabled).ifEmpty { null }
-                } else if (currentConfig.provider.equals("openai compatible", ignoreCase = true) && !apiAddressLower.contains("api.openai.com")) {
+                    finalCustomModelParameters =
+                        mapOf("enable_search" to currentWebSearchEnabled).ifEmpty { null }
+                } else if (currentConfig.provider.equals(
+                        "openai compatible",
+                        ignoreCase = true
+                    ) && !apiAddressLower.contains("api.openai.com") // 假设这些兼容服务也可能看 qwen 的参数
+                ) {
                     val params = mutableMapOf("enable_search" to currentWebSearchEnabled)
                     if (modelNameLower.contains("qwen3")) params["enable_thinking"] = false
                     finalCustomModelParameters = params.ifEmpty { null }
                 }
             }
-            val topLevelUseWebSearch = if (currentConfig.provider.equals("google",ignoreCase = true) || (finalCustomModelParameters?.get("enable_search") == true)) null else currentWebSearchEnabled
+
+
+            val topLevelUseWebSearch = if (currentWebSearchEnabled) true else null
 
             val requestBody = ChatRequest(
                 messages = apiHistoryMessages,
-                provider = if (currentConfig.provider.equals("google", ignoreCase = true)) "google" else "openai",
-                apiAddress = currentConfig.address, apiKey = currentConfig.key, model = currentConfig.model,
-                useWebSearch = topLevelUseWebSearch,
-                customModelParameters = finalCustomModelParameters,
-                customExtraBody = finalCustomExtraBody,
-                forceGoogleReasoningPrompt = null, temperature = null, topP = null, maxTokens = null, tools = null, toolChoice = null // Ensure all fields are covered
+                provider = if (currentConfig.provider.equals(
+                        "google",
+                        ignoreCase = true
+                    )
+                ) "google" else "openai",
+                apiAddress = currentConfig.address,
+                apiKey = currentConfig.key,
+                model = currentConfig.model,
+                useWebSearch = topLevelUseWebSearch, // 使用新的 topLevelUseWebSearch
+                customModelParameters = finalCustomModelParameters, // Qwen 的 enable_search 仍然会在这里
+                forceGoogleReasoningPrompt = null,
+                temperature = null,
+                topP = null,
+                maxTokens = null,
+                tools = null,
+                toolChoice = null
             )
-            Log.d(TAG_APP_VIEW_MODEL, "Sending ChatRequest: Provider=${requestBody.provider}, Model=${requestBody.model}, useWebSearch=${requestBody.useWebSearch}, customModelParams=${requestBody.customModelParameters}")
+            Log.d(
+                TAG_APP_VIEW_MODEL,
+                "Sending ChatRequest: Provider=${requestBody.provider}, Model=${requestBody.model}, useWebSearch=${requestBody.useWebSearch}, customModelParams=${requestBody.customModelParameters}"
+            )
 
             apiHandler.streamChatResponse(
                 requestBody = requestBody,
                 userMessageTextForContext = textToActuallySend,
                 afterUserMessageId = newUserMessage.id,
-                onMessagesProcessed = { viewModelScope.launch { historyManager.saveCurrentChatToHistoryIfNeeded() } }
+                onMessagesProcessed = {
+                    viewModelScope.launch {
+                        historyManager.saveCurrentChatToHistoryIfNeeded()
+                    }
+
+                }
             )
         }
     }
@@ -381,8 +528,6 @@ class AppViewModel(
             _editingMessageId.value = message.id
             stateHolder._editDialogInputText.value = message.text
             _showEditDialog.value = true
-        } else {
-            showSnackbar("只能编辑您发送的消息")
         }
     }
 
@@ -390,17 +535,19 @@ class AppViewModel(
         val messageIdToEdit = _editingMessageId.value ?: return
         val updatedText = stateHolder._editDialogInputText.value.trim()
         if (updatedText.isBlank()) {
-            showSnackbar("消息内容不能为空"); return
+            return
         }
         viewModelScope.launch {
             val messageIndex = stateHolder.messages.indexOfFirst { it.id == messageIdToEdit }
             if (messageIndex != -1) {
                 val originalMessage = stateHolder.messages[messageIndex]
                 if (originalMessage.text != updatedText) {
-                    val updatedMessage = originalMessage.copy(text = updatedText, timestamp = System.currentTimeMillis())
+                    val updatedMessage = originalMessage.copy(
+                        text = updatedText,
+                        timestamp = System.currentTimeMillis()
+                    )
                     stateHolder.messages[messageIndex] = updatedMessage
                     historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
-                    showSnackbar("消息已更新")
                 }
             }
             withContext(Dispatchers.Main.immediate) { dismissEditDialog() }
@@ -413,28 +560,105 @@ class AppViewModel(
         stateHolder._editDialogInputText.value = ""
     }
 
+    // 在 AppViewModel.kt 中
+
     fun regenerateAiResponse(originalUserMessage: Message) {
-        if (originalUserMessage.sender != Sender.User) { showSnackbar("只能为您的消息重新生成回答"); return }
-        if (stateHolder._selectedApiConfig.value == null) { showSnackbar("请先选择 API 配置"); return }
+        if (originalUserMessage.sender != Sender.User) {
+            showSnackbar("只能为您的消息重新生成回答"); return
+        }
+        if (stateHolder._selectedApiConfig.value == null) {
+            showSnackbar("请先选择 API 配置"); return
+        }
 
         val originalUserMessageText = originalUserMessage.text
         val originalUserMessageId = originalUserMessage.id
+        Log.d(
+            TAG_APP_VIEW_MODEL,
+            "regenerateAiResponse: Called for user message ID $originalUserMessageId, Text: '${
+                originalUserMessageText.take(50)
+            }'"
+        )
 
         viewModelScope.launch(Dispatchers.Main.immediate) {
-            val userMessageIndex = stateHolder.messages.indexOfFirst { it.id == originalUserMessageId }
-            if (userMessageIndex == -1) { showSnackbar("无法重新生成：原始用户消息在当前列表中未找到。"); return@launch }
+            val userMessageIndex =
+                stateHolder.messages.indexOfFirst { it.id == originalUserMessageId }
+            Log.d(
+                TAG_APP_VIEW_MODEL,
+                "regenerateAiResponse: Index of original user message: $userMessageIndex"
+            )
 
-            var nextIndex = userMessageIndex + 1
-            // No _messageContentPartsMap to clean up for individual chunks in this model
-            while(nextIndex < stateHolder.messages.size && stateHolder.messages[nextIndex].sender == Sender.AI) {
-                val aiMessageToRemove = stateHolder.messages[nextIndex]
-                if (stateHolder._currentStreamingAiMessageId.value == aiMessageToRemove.id) {
-                    apiHandler.cancelCurrentApiJob("为消息重新生成回答，取消旧AI流", isNewMessageSend = true)
-                }
-                stateHolder.messages.removeAt(nextIndex)
+            if (userMessageIndex == -1) {
+                showSnackbar("无法重新生成：原始用户消息在当前列表中未找到。");
+                Log.e(
+                    TAG_APP_VIEW_MODEL,
+                    "regenerateAiResponse: Original user message ID $originalUserMessageId not found in current messages."
+                )
+                return@launch
             }
-            stateHolder.messages.removeAt(userMessageIndex)
+
+            // --- 修正并明确移除后续AI消息的逻辑 ---
+            // 目的是移除紧跟在当前用户消息之后的所有连续的AI消息
+            var currentIndexToInspect = userMessageIndex + 1
+            while (currentIndexToInspect < stateHolder.messages.size) {
+                if (stateHolder.messages[currentIndexToInspect].sender == Sender.AI) {
+                    val aiMessageToRemove = stateHolder.messages[currentIndexToInspect]
+                    Log.d(
+                        TAG_APP_VIEW_MODEL,
+                        "regenerateAiResponse: Removing subsequent AI message at index $currentIndexToInspect, ID ${aiMessageToRemove.id}"
+                    )
+                    if (stateHolder._currentStreamingAiMessageId.value == aiMessageToRemove.id) {
+                        apiHandler.cancelCurrentApiJob(
+                            "为消息 '${originalUserMessageId.take(4)}' 重新生成回答，取消旧AI流",
+                            isNewMessageSend = true // 标记为新消息发送，以正确处理流状态
+                        )
+                    }
+                    stateHolder.messages.removeAt(currentIndexToInspect)
+                    // 注意：当从列表中移除一个元素时，后续元素的索引会减1。
+                    // 因为我们总是检查新的 currentIndexToInspect，所以不需要显式递减它，
+                    // 下一次循环的 messages.size 会变小，并且 messages[currentIndexToInspect] 会是新的元素。
+                } else {
+                    // 如果遇到的不是AI消息（比如是另一个用户消息），则停止移除。
+                    Log.d(
+                        TAG_APP_VIEW_MODEL,
+                        "regenerateAiResponse: Encountered non-AI message at index $currentIndexToInspect, stopping AI message removal."
+                    )
+                    break
+                }
+            }
+            // --- AI消息移除结束 ---
+
+            // 移除原始的用户消息
+            // 在移除前再次确认ID，以防万一
+            val messageToDelete = stateHolder.messages.getOrNull(userMessageIndex)
+            if (messageToDelete != null && messageToDelete.id == originalUserMessageId) {
+                Log.d(
+                    TAG_APP_VIEW_MODEL,
+                    "regenerateAiResponse: Attempting to remove original user message ID $originalUserMessageId at index $userMessageIndex."
+                )
+                stateHolder.messages.removeAt(userMessageIndex)
+                Log.i(
+                    TAG_APP_VIEW_MODEL,
+                    "regenerateAiResponse: Original user message ID $originalUserMessageId successfully removed from list model."
+                )
+            } else {
+                Log.e(
+                    TAG_APP_VIEW_MODEL,
+                    "regenerateAiResponse: Failed to remove original user message. Expected ID $originalUserMessageId at index $userMessageIndex, but found ${messageToDelete?.id}. List size: ${stateHolder.messages.size}"
+                )
+                showSnackbar("重新生成时移除原消息失败，可能导致显示重复。") // 提示用户潜在问题
+            }
+
+            // 保存移除了AI回复和（理想情况下）原始用户消息之后的状态
             historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
+            Log.d(TAG_APP_VIEW_MODEL, "regenerateAiResponse: Chat history saved after removals.")
+
+            // 使用原始文本重新发送消息（这将添加一个新的用户消息）
+            Log.d(
+                TAG_APP_VIEW_MODEL,
+                "regenerateAiResponse: Calling onSendMessage to resend user text: '${
+                    originalUserMessageText.take(50)
+                }'"
+            )
             onSendMessage(messageText = originalUserMessageText, isFromRegeneration = true)
         }
     }
@@ -444,7 +668,7 @@ class AppViewModel(
     }
 
     fun onCancelAPICall() {
-        apiHandler.cancelCurrentApiJob("用户取消操作"); showSnackbar("已停止回答")
+        apiHandler.cancelCurrentApiJob("用户取消操作")
     }
 
     fun startNewChat() {
@@ -454,7 +678,6 @@ class AppViewModel(
             historyManager.saveCurrentChatToHistoryIfNeeded()
             withContext(Dispatchers.Main.immediate) {
                 stateHolder.clearForNewChat()
-                // _markdownChunkToAppendFlow does not need explicit clearing, new subscribers won't get old values (if not a StateFlow)
                 triggerScrollToBottom()
                 if (_isSearchActiveInDrawer.value) setSearchActiveInDrawer(false)
                 stateHolder._loadedHistoryIndex.value = null
@@ -464,7 +687,9 @@ class AppViewModel(
 
     fun loadConversationFromHistory(index: Int) {
         val conversationList = stateHolder._historicalConversations.value
-        if (index < 0 || index >= conversationList.size) { showSnackbar("无法加载对话：无效的索引"); return }
+        if (index < 0 || index >= conversationList.size) {
+            showSnackbar("无法加载对话：无效的索引"); return
+        }
 
         val conversationToLoad = conversationList[index]
         dismissEditDialog(); dismissSourcesDialog()
@@ -472,15 +697,35 @@ class AppViewModel(
 
         viewModelScope.launch {
             historyManager.saveCurrentChatToHistoryIfNeeded()
+            val processedConversation = withContext(Dispatchers.Default) { // 后台处理转换
+                conversationToLoad.map { msg ->
+                    if (msg.sender == Sender.AI && msg.text.isNotBlank() && msg.htmlContent == null) {
+                        msg.copy(
+                            htmlContent = convertMarkdownToHtml(msg.text), // 假设 convertMarkdownToHtml 在 ViewModel 或 util 中可访问
+                            contentStarted = msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || msg.isError
+                        )
+                    } else {
+                        msg.copy(
+                            contentStarted = msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || msg.isError
+                        )
+                    }
+                }
+            }
             withContext(Dispatchers.Main.immediate) {
                 stateHolder.clearForNewChat()
-                stateHolder.messages.addAll(conversationToLoad.map { msg -> msg.copy(contentStarted = msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || msg.isError) })
-                stateHolder.messages.forEach { msg -> stateHolder.messageAnimationStates[msg.id] = true }
+                stateHolder.messages.addAll(processedConversation)
+
+                stateHolder.messages.forEach { msg ->
+                    stateHolder.messageAnimationStates[msg.id] = true
+                }
                 stateHolder._loadedHistoryIndex.value = index
                 triggerScrollToBottom()
             }
-            // For historical messages, AiMessageContent will use message.text for initialLatexInput
-            if (_isSearchActiveInDrawer.value) withContext(Dispatchers.Main.immediate) { setSearchActiveInDrawer(false) }
+            if (_isSearchActiveInDrawer.value) withContext(Dispatchers.Main.immediate) {
+                setSearchActiveInDrawer(
+                    false
+                )
+            }
         }
     }
 
@@ -491,11 +736,7 @@ class AppViewModel(
         }
         viewModelScope.launch {
             val wasCurrentChatDeleted = (currentLoadedIndex == indexToDelete)
-            // val chatToDelete = stateHolder._historicalConversations.value.getOrNull(indexToDelete) // Not strictly needed here
-
             historyManager.deleteConversation(indexToDelete)
-            // No _messageContentPartsMap to clean up here
-
             if (wasCurrentChatDeleted) {
                 withContext(Dispatchers.Main.immediate) {
                     dismissEditDialog(); dismissSourcesDialog()
@@ -503,7 +744,7 @@ class AppViewModel(
                 }
                 apiHandler.cancelCurrentApiJob("当前聊天(#$indexToDelete)被删除，开始新聊天")
             }
-            withContext(Dispatchers.Main) { showSnackbar("对话已删除") }
+            withContext(Dispatchers.Main) {  }
         }
     }
 
@@ -512,15 +753,15 @@ class AppViewModel(
         apiHandler.cancelCurrentApiJob("清除所有历史记录")
         viewModelScope.launch {
             historyManager.clearAllHistory()
-            // No _messageContentPartsMap to clear
             withContext(Dispatchers.Main.immediate) { stateHolder.clearForNewChat(); triggerScrollToBottom() }
-            withContext(Dispatchers.Main) { showSnackbar("所有对话已清除") }
+            withContext(Dispatchers.Main) {  }
         }
     }
 
     fun showSourcesDialog(sources: List<WebSearchResult>) {
         viewModelScope.launch {
-            stateHolder._sourcesForDialog.value = sources; stateHolder._showSourcesDialog.value = true
+            stateHolder._sourcesForDialog.value = sources; stateHolder._showSourcesDialog.value =
+            true
         }
     }
 
@@ -546,12 +787,16 @@ class AppViewModel(
         stateHolder.messageAnimationStates[messageId] ?: false
 
     fun getConversationPreviewText(index: Int): String {
-        val conversation = stateHolder._historicalConversations.value.getOrNull(index) ?: return "对话 ${index + 1}"
-        val placeholderTitleMsg = conversation.firstOrNull { it.sender == Sender.System && it.isPlaceholderName && it.text.isNotBlank() }?.text?.trim()
+        val conversation = stateHolder._historicalConversations.value.getOrNull(index)
+            ?: return "对话 ${index + 1}"
+        val placeholderTitleMsg =
+            conversation.firstOrNull { it.sender == Sender.System && it.isPlaceholderName && it.text.isNotBlank() }?.text?.trim()
         if (!placeholderTitleMsg.isNullOrBlank()) return placeholderTitleMsg
-        val firstUserMsg = conversation.firstOrNull { it.sender == Sender.User && it.text.isNotBlank() }?.text?.trim()
+        val firstUserMsg =
+            conversation.firstOrNull { it.sender == Sender.User && it.text.isNotBlank() }?.text?.trim()
         if (!firstUserMsg.isNullOrBlank()) return firstUserMsg
-        val firstAiMsg = conversation.firstOrNull { it.sender == Sender.AI && it.text.isNotBlank() }?.text?.trim()
+        val firstAiMsg =
+            conversation.firstOrNull { it.sender == Sender.AI && it.text.isNotBlank() }?.text?.trim()
         if (!firstAiMsg.isNullOrBlank()) return firstAiMsg
         return "对话 ${index + 1}"
     }
@@ -594,55 +839,179 @@ class AppViewModel(
             val originalConversationAtIndex = currentHistoricalConvos[index].toMutableList()
             var titleMessageUpdatedOrAdded = false
 
-            val existingTitleIndex = originalConversationAtIndex.indexOfFirst { it.sender == Sender.System && it.isPlaceholderName }
+            val existingTitleIndex =
+                originalConversationAtIndex.indexOfFirst { it.sender == Sender.System && it.isPlaceholderName }
             if (existingTitleIndex != -1) {
-                originalConversationAtIndex[existingTitleIndex] = originalConversationAtIndex[existingTitleIndex].copy(text = trimmedNewName, timestamp = System.currentTimeMillis())
+                originalConversationAtIndex[existingTitleIndex] =
+                    originalConversationAtIndex[existingTitleIndex].copy(
+                        text = trimmedNewName,
+                        timestamp = System.currentTimeMillis()
+                    )
                 titleMessageUpdatedOrAdded = true
             }
 
             if (!titleMessageUpdatedOrAdded) {
                 val titleMessage = Message(
-                    id = "title_${UUID.randomUUID()}", text = trimmedNewName, sender = Sender.System,
-                    timestamp = System.currentTimeMillis() -1,
-                    contentStarted = true, isPlaceholderName = true
+                    id = "title_${UUID.randomUUID()}",
+                    text = trimmedNewName,
+                    sender = Sender.System,
+                    timestamp = System.currentTimeMillis() - 1,
+                    contentStarted = true,
+                    isPlaceholderName = true
                 )
                 originalConversationAtIndex.add(0, titleMessage)
             }
 
-            val updatedHistoricalConversationsList = currentHistoricalConvos.toMutableList().apply { this[index] = originalConversationAtIndex.toList() }
+            val updatedHistoricalConversationsList = currentHistoricalConvos.toMutableList()
+                .apply { this[index] = originalConversationAtIndex.toList() }
             stateHolder._historicalConversations.value = updatedHistoricalConversationsList.toList()
-            withContext(Dispatchers.IO) { persistenceManager.saveChatHistory() }
+            withContext(Dispatchers.IO) { persistenceManager.saveChatHistory(stateHolder._historicalConversations.value) }
 
             if (stateHolder._loadedHistoryIndex.value == index) {
                 withContext(Dispatchers.Main.immediate) {
                     stateHolder.messages.clear()
-                    stateHolder.messages.addAll(originalConversationAtIndex.toList().map { msg -> msg.copy(contentStarted = msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || msg.isError) })
-                    stateHolder.messages.forEach { msg -> stateHolder.messageAnimationStates[msg.id] = true }
-                    // No specific content part reprocessing needed here for this streaming model
+                    stateHolder.messages.addAll(
+                        originalConversationAtIndex.toList()
+                            .map { msg -> msg.copy(contentStarted = msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || msg.isError) })
+                    stateHolder.messages.forEach { msg ->
+                        stateHolder.messageAnimationStates[msg.id] = true
+                    }
                 }
             }
-            withContext(Dispatchers.Main) { showSnackbar("对话已重命名为 '$trimmedNewName'"); dismissRenameDialog() }
+            withContext(Dispatchers.Main) { dismissRenameDialog() }
+        }
+    }
+
+    // In AppViewModel.kt
+    private fun onAiMessageFullTextChanged(messageId: String, currentFullText: String) {
+        viewModelScope.launch(Dispatchers.Main.immediate) {
+            val messageIndex = stateHolder.messages.indexOfFirst { it.id == messageId }
+            if (messageIndex != -1) {
+                // ApiHandler has already updated stateHolder.messages[messageIndex].text to currentFullText.
+                // The message object reflects the latest text.
+
+                if (currentFullText.isNotBlank()) {
+                    // Since ApiHandler calls this only when text has actually changed,
+                    // we should proceed to generate/update HTML.
+                    Log.d(
+                        TAG_APP_VIEW_MODEL,
+                        "onAiMessageFullTextChanged: For message $messageId, text has changed. New full text length: ${currentFullText.length}. Preparing to update HTML."
+                    )
+                    launch(Dispatchers.Default) { // Background thread for HTML generation
+                        val newHtml = convertMarkdownToHtml(currentFullText)
+                        withContext(Dispatchers.Main.immediate) { // Switch back to main thread to update StateFlow
+                            val freshMessageIndex =
+                                stateHolder.messages.indexOfFirst { it.id == messageId }
+                            if (freshMessageIndex != -1) {
+                                val messageToUpdate = stateHolder.messages[freshMessageIndex]
+                                // Only update if the newly generated HTML is different from the existing one
+                                // or if existing HTML is null. This avoids unnecessary recompositions.
+                                if (messageToUpdate.htmlContent != newHtml) {
+                                    stateHolder.messages[freshMessageIndex] =
+                                        messageToUpdate.copy(htmlContent = newHtml)
+                                    Log.d(
+                                        TAG_APP_VIEW_MODEL,
+                                        "onAiMessageFullTextChanged: Updated htmlContent for message $messageId."
+                                    )
+                                } else {
+                                    Log.d(
+                                        TAG_APP_VIEW_MODEL,
+                                        "onAiMessageFullTextChanged: Generated HTML for $messageId is identical to existing, no view update for htmlContent."
+                                    )
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Full text is now blank, clear the HTML content
+                    val messageToUpdate = stateHolder.messages[messageIndex]
+                    if (messageToUpdate.htmlContent != null) {
+                        stateHolder.messages[messageIndex] =
+                            messageToUpdate.copy(htmlContent = null)
+                        Log.d(
+                            TAG_APP_VIEW_MODEL,
+                            "onAiMessageFullTextChanged: Cleared htmlContent for message $messageId as currentFullText is blank."
+                        )
+                    }
+                }
+            } else {
+                Log.w(
+                    TAG_APP_VIEW_MODEL,
+                    "onAiMessageFullTextChanged: Message ID $messageId not found to update htmlContent."
+                )
+            }
         }
     }
 
     override fun onCleared() {
         Log.d(TAG_APP_VIEW_MODEL, "onCleared 开始, 销毁 WebViewPool")
         try {
-            webViewPool.destroyAll() // Accessing will initialize if not already
+            webViewPool.destroyAll()
             Log.d(TAG_APP_VIEW_MODEL, "WebViewPool destroyed in onCleared.")
         } catch (e: Exception) {
             Log.e(TAG_APP_VIEW_MODEL, "Error destroying WebViewPool in onCleared", e)
         }
-        // messageProcessingJobs was removed.
-        dismissEditDialog(); dismissSourcesDialog()
+
+        dismissEditDialog()
+        dismissSourcesDialog()
+
         apiHandler.cancelCurrentApiJob("ViewModel cleared", isNewMessageSend = false)
-        if (viewModelScope.isActive) {
-            viewModelScope.launch(Dispatchers.IO) {
-                historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = false)
+        Log.d(TAG_APP_VIEW_MODEL, "onCleared: API job cancellation requested.")
+
+        val finalApiConfigs = stateHolder._apiConfigs.value.toList()
+        val finalSelectedConfigId = stateHolder._selectedApiConfig.value?.id
+        val finalCurrentChatMessages = stateHolder.messages.toList()
+
+        Log.i(TAG_APP_VIEW_MODEL, "onCleared: Preparing to save final states synchronously.")
+        Log.i(
+            TAG_APP_VIEW_MODEL,
+            "onCleared: Final configs count: ${finalApiConfigs.size}, Selected ID: $finalSelectedConfigId, Current chat size: ${finalCurrentChatMessages.size}"
+        )
+
+        try {
+            runBlocking(Dispatchers.IO) { // 在 IO 线程上阻塞执行
+                Log.d(
+                    TAG_APP_VIEW_MODEL,
+                    "onCleared: runBlocking(Dispatchers.IO) started for final save."
+                )
+
+                // 1. 保存当前聊天作为"最后打开的聊天"
+                persistenceManager.saveLastOpenChat(finalCurrentChatMessages)
+                Log.i(
+                    TAG_APP_VIEW_MODEL,
+                    "onCleared: Saved last open chat (${finalCurrentChatMessages.size} messages)."
+                )
+
+                // 2. 保存聊天历史
+                historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
+                Log.i(
+                    TAG_APP_VIEW_MODEL,
+                    "onCleared: saveCurrentChatToHistoryIfNeeded(forceSave=true) completed."
+                )
+
+                // 3. 保存API配置列表
+                persistenceManager.saveApiConfigs(finalApiConfigs)
+                Log.i(
+                    TAG_APP_VIEW_MODEL,
+                    "onCleared: Saved API configs list (${finalApiConfigs.size} configs)."
+                )
+
+                // 4. 保存选中的API配置ID
+                persistenceManager.saveSelectedConfigIdentifier(finalSelectedConfigId)
+                Log.i(
+                    TAG_APP_VIEW_MODEL,
+                    "onCleared: Saved selected API config ID ('$finalSelectedConfigId')."
+                )
+
+                Log.d(
+                    TAG_APP_VIEW_MODEL,
+                    "onCleared: runBlocking(Dispatchers.IO) for final save completed."
+                )
             }
-        } else {
-            Log.w(TAG_APP_VIEW_MODEL, "onCleared: viewModelScope 已不活动，跳过最后的历史保存。")
+        } catch (e: Exception) {
+            Log.e(TAG_APP_VIEW_MODEL, "onCleared: Error during runBlocking save operations", e)
         }
+
         super.onCleared()
         Log.d(TAG_APP_VIEW_MODEL, "ViewModel onCleared 结束.")
     }

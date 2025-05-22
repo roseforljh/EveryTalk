@@ -1,6 +1,7 @@
 // com/example/everytalk/ui/components/PooledKatexWebView.kt
 package com.example.everytalk.ui.components
 
+import android.content.Context
 import android.util.Log
 import android.view.ViewGroup
 import android.webkit.WebView
@@ -16,16 +17,15 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.example.everytalk.StateControler.AppViewModel
 import com.example.everytalk.webviewpool.WebViewConfig
 import kotlinx.coroutines.Job
-// import kotlinx.coroutines.delay // No longer using explicit debounce here
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.util.concurrent.CancellationException
+import java.util.concurrent.CancellationException // Ensure this is imported
 
 @Composable
 fun PooledKatexWebView(
     appViewModel: AppViewModel,
     contentId: String,
-    initialLatexInput: String, // For the first full load (e.g., historical message, or initial part of a new message)
+    initialLatexInput: String, // For the first full load
     htmlChunkToAppend: Pair<String, String>?, // Key-Value Pair: <UniqueTriggerKey, HtmlChunkToAppend>
     htmlTemplate: String, // The base HTML structure with JS functions
     modifier: Modifier = Modifier
@@ -33,32 +33,34 @@ fun PooledKatexWebView(
     val webViewTag = "PooledKatexWebView-$contentId"
 
     var webViewInstance by remember(contentId) { mutableStateOf<WebView?>(null) }
-    var isPageReadyForJs by remember(contentId) { mutableStateOf(false) } // HTML base template loaded
-    var isViewAttached by remember(contentId) { mutableStateOf(false) }  // WebView attached to Compose tree
-    var initialContentRendered by remember(contentId) { mutableStateOf(false) } // Tracks if initialLatexInput has been rendered
+    var isPageReadyForJs by remember(contentId) { mutableStateOf(false) }
+    var isViewAttached by remember(contentId) { mutableStateOf(false) }
+    var initialContentRendered by remember(contentId) { mutableStateOf(false) }
 
     val coroutineScope = rememberCoroutineScope()
     var jsFullRenderJob by remember(contentId) { mutableStateOf<Job?>(null) }
     var jsAppendJob by remember(contentId) { mutableStateOf<Job?>(null) }
 
-    // Effect to acquire and release WebView
     DisposableEffect(contentId, htmlTemplate) {
         Log.d(webViewTag, "DisposableEffect: Acquiring WebView for $contentId.")
         isPageReadyForJs = false
-        initialContentRendered = false // Reset for new instance or template change
+        initialContentRendered = false
 
         val wv = appViewModel.webViewPool.acquire(
             contentId,
             WebViewConfig(
                 htmlTemplate,
                 ""
-            ) // Initial config.latexInput is not critical as we use props
+            ) // Initial config.latexInput not critical for JS-driven rendering
         ) { acquiredWebView, success ->
             if (webViewInstance == acquiredWebView || webViewInstance == null) {
                 Log.d(webViewTag, "Pool: onPageFinished for $contentId. Success: $success.")
                 isPageReadyForJs = success
             } else {
-                Log.d(webViewTag, "Pool: onPageFinished for a STALE WebView instance.")
+                Log.d(
+                    webViewTag,
+                    "Pool: onPageFinished for a STALE WebView instance for $contentId."
+                )
             }
         }
         if (!wv.settings.javaScriptEnabled) wv.settings.javaScriptEnabled = true
@@ -80,7 +82,6 @@ fun PooledKatexWebView(
     }
 
     // Effect for INITIAL FULL CONTENT rendering using initialLatexInput
-    // This runs when dependencies change, aiming for a one-time initial render.
     LaunchedEffect(
         webViewInstance,
         initialLatexInput,
@@ -97,39 +98,48 @@ fun PooledKatexWebView(
         )
 
         if (wv != null && isPageReadyForJs && isViewAttached && wv.parent != null && !initialContentRendered) {
-            if (initialLatexInput.isNotBlank()) {
-                jsFullRenderJob?.cancel(CancellationException("New initial full render for $contentId"))
-                jsFullRenderJob = coroutineScope.launch {
-                    Log.i(
-                        webViewTag,
-                        "Performing INITIAL FULL RENDER for $contentId. Length: ${initialLatexInput.length}"
-                    )
-                    val escapedLatex = initialLatexInput
-                        .replace("\\", "\\\\").replace("'", "\\'").replace("`", "\\`")
-                        .replace("\n", "\\n").replace("\r", "")
-                    val script = "renderFullContent(`$escapedLatex`);" // Call new JS function
-                    wv.evaluateJavascript(script) { result ->
-                        Log.d(
-                            webViewTag,
-                            "Initial full render JS for $contentId completed. Result: $result"
-                        )
-                        if (isActive) initialContentRendered = true
-                    }
-                }
-            } else {
-                // If initialLatexInput is blank, consider initial render "done" to allow appends.
+            jsFullRenderJob?.cancel(CancellationException("New initial full render for $contentId"))
+            jsFullRenderJob = coroutineScope.launch {
                 Log.i(
                     webViewTag,
-                    "InitialLatexInput is blank for $contentId, marking initialContentRendered=true."
+                    "Performing INITIAL FULL RENDER for $contentId. Length: ${initialLatexInput.length}. Preview: ${
+                        initialLatexInput.take(100).replace("\n", "\\n")
+                    }"
                 )
-                initialContentRendered = true
+                val escapedLatex = initialLatexInput
+                    .replace("\\", "\\\\").replace("'", "\\'").replace("`", "\\`")
+                    .replace("\n", "\\n").replace("\r", "")
+                val script = "renderFullContent(`$escapedLatex`);"
+                wv.evaluateJavascript(script) { result ->
+                    Log.d(
+                        webViewTag,
+                        "Initial full render JS for $contentId completed. Result: $result"
+                    )
+                    if (isActive) initialContentRendered = true
+                }
+            }
+        } else if (initialLatexInput.isBlank() && wv != null && isPageReadyForJs && isViewAttached && wv.parent != null && !initialContentRendered) {
+            // If initialLatexInput is blank (e.g. new streaming message), still call renderFullContent with empty string
+            // to set up the page and mark initial render "done" to allow appends.
+            jsFullRenderJob?.cancel(CancellationException("New initial (empty) full render for $contentId"))
+            jsFullRenderJob = coroutineScope.launch {
+                Log.i(
+                    webViewTag,
+                    "Performing INITIAL EMPTY RENDER for $contentId to enable appends."
+                )
+                val script = "renderFullContent(``);" // Render with empty string
+                wv.evaluateJavascript(script) { result ->
+                    Log.d(
+                        webViewTag,
+                        "Initial empty render JS for $contentId completed. Result: $result"
+                    )
+                    if (isActive) initialContentRendered = true
+                }
             }
         }
     }
 
     // Effect for APPENDING HTML CHUNKS
-    // Keyed on htmlChunkToAppend to trigger on new chunks.
-    // Also keyed on other states to ensure WebView is ready.
     LaunchedEffect(
         webViewInstance,
         htmlChunkToAppend,
@@ -138,46 +148,44 @@ fun PooledKatexWebView(
         initialContentRendered
     ) {
         val wv = webViewInstance
-        val chunkPair = htmlChunkToAppend // Pair<UniqueTriggerKey, HtmlChunk>
+        val chunkPair = htmlChunkToAppend
         val chunkKey = chunkPair?.first
         val htmlChunk = chunkPair?.second
 
         Log.d(
             webViewTag,
-            "AppendChunkEffect for $contentId. ChunkKey: $chunkKey, ChunkLen: ${htmlChunk?.length}, PageReady: $isPageReadyForJs, Attached: $isViewAttached, WV: ${
+            "AppendChunkEffect for $contentId. ChunkKey: ${chunkKey?.take(4)}, ChunkLen: ${htmlChunk?.length}, PageReady: $isPageReadyForJs, Attached: $isViewAttached, WV: ${
                 System.identityHashCode(wv)
             }, InitialRendered: $initialContentRendered"
         )
 
         if (wv != null && isPageReadyForJs && isViewAttached && wv.parent != null && initialContentRendered && htmlChunk != null && htmlChunk.isNotBlank()) {
-            // Cancel previous append job if a new chunk arrives quickly
             jsAppendJob?.cancel(CancellationException("New append chunk for $contentId"))
             jsAppendJob = coroutineScope.launch {
                 Log.i(
                     webViewTag,
-                    "Performing APPEND for $contentId. Chunk Key: $chunkKey, Chunk Preview: ${
+                    "Performing APPEND for $contentId. Chunk Key: ${chunkKey?.take(4)}, Chunk Preview: ${
                         htmlChunk.take(50).replace("\n", "\\n")
                     }"
                 )
                 val escapedChunk = htmlChunk
                     .replace("\\", "\\\\").replace("'", "\\'").replace("`", "\\`")
                     .replace("\n", "\\n").replace("\r", "")
-                val script = "appendHtmlChunk(`$escapedChunk`);" // Call new JS function
+                val script = "appendHtmlChunk(`$escapedChunk`);"
                 wv.evaluateJavascript(script) { result ->
                     Log.d(
                         webViewTag,
-                        "Append JS for $contentId (Key $chunkKey) completed. Result: $result"
+                        "Append JS for $contentId (Key ${chunkKey?.take(4)}) completed. Result: $result"
                     )
                 }
             }
         }
     }
 
-    // AndroidView to embed the WebView
     val currentWebViewForView = webViewInstance
     if (currentWebViewForView != null) {
         AndroidView(
-            factory = { _ ->
+            factory = { context: Context ->
                 Log.d(
                     webViewTag,
                     "AndroidView Factory for $contentId. WebView: ${
@@ -185,6 +193,10 @@ fun PooledKatexWebView(
                     }. Parent: ${currentWebViewForView.parent}"
                 )
                 (currentWebViewForView.parent as? ViewGroup)?.removeView(currentWebViewForView)
+                currentWebViewForView.layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
                 isViewAttached = true
                 Log.i(webViewTag, "AndroidView Factory: $contentId -> isViewAttached SET TO TRUE.")
                 currentWebViewForView
@@ -205,33 +217,38 @@ fun PooledKatexWebView(
             onRelease = { webView ->
                 Log.i(
                     webViewTag,
-                    "AndroidView onRelease for $contentId. Setting isViewAttached=false."
+                    "AndroidView onRelease for $contentId. Setting isViewAttached=false. WebView: ${
+                        System.identityHashCode(webView)
+                    }"
                 )
                 isViewAttached = false
             },
-            modifier = modifier.heightIn(min = 1.dp) // Small min height for content flow
+            modifier = modifier // Apply the modifier passed from AiMessageContent
         )
     } else {
         Log.d(webViewTag, "WebView for $contentId is NULL, showing Spacer.")
-        Spacer(modifier = modifier.heightIn(min = 1.dp))
+        Spacer(modifier = modifier.heightIn(min = 1.dp)) // Use incoming modifier or a default
     }
 
-    // Lifecycle handling for WebView (onPause, onResume)
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(webViewInstance, lifecycleOwner, isViewAttached) {
         val wv = webViewInstance
         if (wv != null) {
             val observer = LifecycleEventObserver { _, event ->
-                if (isViewAttached && wv.parent != null) { // Check if view is effectively in UI
+                if (isViewAttached && wv.parent != null) {
                     when (event) {
                         Lifecycle.Event.ON_PAUSE -> {
-                            wv.onPause(); wv.pauseTimers()
-                            Log.d(webViewTag, "Lifecycle ON_PAUSE for $contentId processed.")
+                            wv.onPause(); wv.pauseTimers(); Log.d(
+                                webViewTag,
+                                "Lifecycle ON_PAUSE for $contentId processed."
+                            )
                         }
 
                         Lifecycle.Event.ON_RESUME -> {
-                            wv.onResume(); wv.resumeTimers()
-                            Log.d(webViewTag, "Lifecycle ON_RESUME for $contentId processed.")
+                            wv.onResume(); wv.resumeTimers(); Log.d(
+                                webViewTag,
+                                "Lifecycle ON_RESUME for $contentId processed."
+                            )
                         }
 
                         else -> Unit

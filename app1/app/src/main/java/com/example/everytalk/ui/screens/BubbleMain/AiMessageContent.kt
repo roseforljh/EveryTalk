@@ -1,4 +1,3 @@
-// com/example/everytalk/ui/screens/BubbleMain/AiMessageContent.kt
 package com.example.everytalk.ui.screens.BubbleMain
 
 import android.util.Log
@@ -34,42 +33,39 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
-// import androidx.compose.ui.text.font.FontFamily // No longer directly used in this debug version
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-// import androidx.compose.ui.unit.sp // No longer directly used in this debug version
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
-
-import org.commonmark.parser.Parser
-import org.commonmark.renderer.html.HtmlRenderer
-import org.commonmark.ext.gfm.tables.TablesExtension
-import org.commonmark.ext.gfm.strikethrough.StrikethroughExtension
-import java.util.Arrays
-
-// import com.example.everytalk.data.DataClass.ContentPart // No longer using ContentPart list from ViewModel for streaming
-
-import com.example.everytalk.ui.components.PooledKatexWebView // Now using the modified PooledKatexWebView
+import com.example.everytalk.ui.components.PooledKatexWebView // Using the modified PooledKatexWebView
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.StateControler.AppViewModel
 import com.example.everytalk.data.DataClass.Sender
-// import com.example.everytalk.ui.screens.BubbleMain.Main.MyCodeBlockComposable // Code blocks are now part of initialLatexInput or chunks
-import com.example.everytalk.ui.screens.BubbleMain.Main.toHexCss // Assuming path is correct
+import com.example.everytalk.ui.screens.BubbleMain.Main.toHexCss
+import com.example.everytalk.util.convertMarkdownToHtml
+
 import com.example.everytalk.util.generateKatexBaseHtmlTemplateString // Assuming path is correct
 import kotlinx.coroutines.flow.filter
 
 
-// convertMarkdownToHtml 函数保留在此文件内
-private fun convertMarkdownToHtml(markdown: String): String {
-    val extensions = Arrays.asList(TablesExtension.create(), StrikethroughExtension.create())
-    val parser = Parser.builder().extensions(extensions).build()
-    val document = parser.parse(markdown)
-    val renderer = HtmlRenderer.builder().extensions(extensions).build()
-    return renderer.render(document)
+// Attribute provider to add "language-xxx" class to <code> tags within <pre> for Prism.js
+class FencedCodeBlockAttributeProvider : org.commonmark.renderer.html.AttributeProvider {
+    override fun setAttributes(
+        node: org.commonmark.node.Node,
+        tagName: String,
+        attributes: MutableMap<String, String>
+    ) {
+        if (node is org.commonmark.node.FencedCodeBlock && tagName == "code") {
+            val language = node.info // This is the string after ``` (e.g., "java")
+            if (language != null && language.isNotBlank()) {
+                attributes["class"] = "language-$language"
+            }
+        }
+    }
 }
+
 
 private const val CONTEXT_MENU_ANIMATION_DURATION_MS = 150
 private val CONTEXT_MENU_CORNER_RADIUS = 16.dp
@@ -136,11 +132,8 @@ internal fun AiMessageContent(
     message: Message,
     appViewModel: AppViewModel,
     fullMessageTextToCopy: String, // This should be message.text
-    showLoadingDots: Boolean, // True if message.text is blank but AI is active (controlled by MessageBubble)
+    showLoadingDots: Boolean,      // True if message.text is blank but AI is active
     contentColor: Color,
-    codeBlockBackgroundColor: Color, // Will be applied by KaTeX/Highlight.js CSS if code blocks are in markdown
-    codeBlockContentColor: Color,  // Ditto
-    codeBlockCornerRadius: Dp,   // Ditto
     onUserInteraction: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -151,8 +144,7 @@ internal fun AiMessageContent(
     var pressOffset by remember(fullMessageTextToCopy) { mutableStateOf(Offset.Zero) }
     var showSelectableTextDialog by remember(fullMessageTextToCopy) { mutableStateOf(false) }
 
-    // This will be the unique ID for the WebView instance associated with this AiMessageContent
-    val webViewContentId = remember(message.id) { "${message.id}_aistream" }
+    val webViewContentId = remember(message.id) { "${message.id}_ai_content_stream_wv" }
 
     // State for the HTML chunk to append, with a UUID as trigger key
     var htmlChunkToAppendState by remember { mutableStateOf<Pair<String, String>?>(null) }
@@ -162,38 +154,44 @@ internal fun AiMessageContent(
         appViewModel.markdownChunkToAppendFlow
             .filter { (msgId, _) -> msgId == message.id } // Only process chunks for this message
             .collect { (_, markdownChunkPair) -> // markdownChunkPair is Pair<TriggerKey, MarkdownChunk>
+                val triggerKey = markdownChunkPair.first
                 val markdownChunk = markdownChunkPair.second
                 if (markdownChunk.isNotBlank()) {
                     val htmlChunk =
                         convertMarkdownToHtml(markdownChunk) // Convert markdown chunk to HTML
                     Log.d(
                         "AiMessageContent_Stream",
-                        "MsgID ${message.id.take(4)}: Received mdChunk (key ${
-                            markdownChunkPair.first.take(4)
-                        }), converted to htmlChunk (len ${htmlChunk.length}): ${
+                        "MsgID ${message.id.take(4)}: Received mdChunk (key ${triggerKey.take(4)}), converted to htmlChunk (len ${htmlChunk.length}): \"${
                             htmlChunk.take(50).replace("\n", "\\n")
-                        }"
+                        }\""
                     )
                     htmlChunkToAppendState =
-                        markdownChunkPair.first to htmlChunk // Update state to trigger WebView append
+                        triggerKey to htmlChunk // Update state to pass to PooledKatexWebView
                 }
             }
     }
 
-    // The initial/full HTML content derived from message.text
-    // This is used for initial load of PooledKatexWebView or when message.text represents the complete content.
+    // The initial/full HTML content derived from the complete message.text
     val initialOrFullHtmlInput = remember(message.text, message.sender, message.isError) {
-        if (message.sender == Sender.AI && !message.isError && message.text.isNotBlank()) {
-            convertMarkdownToHtml(message.text.trim())
+        if (message.sender == Sender.AI && !message.isError) {
+            if (!message.htmlContent.isNullOrBlank()) { // ★★★ 优先使用预渲染的 HTML ★★★
+                Log.d("AiMessageContent_Full", "Using pre-rendered HTML for MsgID ${message.id.take(4)}")
+                message.htmlContent!!
+            } else if (message.text.isNotBlank()) { // Fallback for older messages or if htmlContent somehow not generated yet
+                Log.d("AiMessageContent_Full", "MsgID ${message.id.take(4)}: Generating initialOrFullHtmlInput from message.text (len ${message.text.length}) as htmlContent is missing.")
+                convertMarkdownToHtml(message.text.trim()) // 这里的 convertMarkdownToHtml 应该也从 util 导入
+            } else {
+                Log.d("AiMessageContent_Full", "MsgID ${message.id.take(4)}: initialOrFullHtmlInput is empty.")
+                "" // Start with empty for new streaming messages or if no text
+            }
         } else {
-            "" // Start with empty if it's a new streaming message with no text yet, or not an AI message
+            Log.d(
+                "AiMessageContent_Full",
+                "MsgID ${message.id.take(4)}: initialOrFullHtmlInput is empty."
+            )
+            "" // Start with empty for new streaming messages or if no text
         }
     }
-    Log.d(
-        "AiMessageContent_Render",
-        "MsgID ${message.id.take(4)}: initialOrFullHtmlInput length ${initialOrFullHtmlInput.length}, showLoadingDots: $showLoadingDots"
-    )
-
 
     Column(
         modifier = modifier.pointerInput(fullMessageTextToCopy) {
@@ -202,7 +200,7 @@ internal fun AiMessageContent(
             })
         }
     ) {
-        if (showLoadingDots && message.text.isBlank() && !message.isError) { // Show loading dots if message text is blank and explicitly told
+        if (showLoadingDots && message.text.isBlank() && !message.isError) {
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
@@ -215,9 +213,8 @@ internal fun AiMessageContent(
                 )
             }
         } else if (message.sender == Sender.AI && !message.isError) {
-            // Render AI content using PooledKatexWebView
-            // It will handle initial load with initialOrFullHtmlInput
-            // and append new chunks via htmlChunkToAppendState
+            // Always render PooledKatexWebView for AI messages if not an error.
+            // It will handle empty initial input gracefully and wait for chunks.
             val textColorHex = remember(contentColor) { contentColor.toHexCss() }
             val baseHtmlTemplate = rememberKatexBaseHtmlTemplate(
                 backgroundColor = "transparent",
@@ -226,27 +223,30 @@ internal fun AiMessageContent(
                 throwOnError = false
             )
 
+            Log.d(
+                "AiMessageContent_Render",
+                "MsgID ${message.id.take(4)}: Rendering PooledKatexWebView. InitialHTML len: ${initialOrFullHtmlInput.length}. Current chunk key: ${
+                    htmlChunkToAppendState?.first?.take(4)
+                }"
+            )
+
             PooledKatexWebView(
                 appViewModel = appViewModel,
-                contentId = webViewContentId, // Use the stable ID for this message's WebView
+                contentId = webViewContentId,
                 initialLatexInput = initialOrFullHtmlInput,
-                htmlChunkToAppend = htmlChunkToAppendState, // Pass the current chunk to append
+                htmlChunkToAppend = htmlChunkToAppendState,
                 htmlTemplate = baseHtmlTemplate,
                 modifier = Modifier.heightIn(min = 1.dp) // Allow content to define its height
             )
-        } else if (message.text.isBlank() && !message.isError && !showLoadingDots) {
-            // AI message with no text, not loading, not error (e.g. stream ended with no content)
-            Spacer(Modifier.height(1.dp)) // Render a minimal space
+        } else if (message.sender == Sender.AI && message.text.isBlank() && !message.isError && !showLoadingDots) {
+            // AI message is blank, not an error, and not in a loading state (e.g., stream ended with no content)
+            Spacer(Modifier.height(1.dp))
             Log.d(
                 "AiMessageContent_Render",
                 "MsgID ${message.id.take(4)}: AI message is blank, not loading, not error. Showing spacer."
             )
         }
-        // Note: Error messages and User messages are typically handled by MessageBubble directly
-        // or via a different Composable like UserOrErrorMessageContent.
-        // This AiMessageContent is specialized for rendering AI's successful, non-error markdown/KaTeX content.
-
-        // Context Menu
+        // Context Menu (remains unchanged)
         if (isAiContextMenuVisible) {
             val localContextForToast = LocalContext.current
             val aiMenuVisibility = remember { MutableTransitionState(false) }.apply {
@@ -321,7 +321,7 @@ internal fun AiMessageContent(
             }
         }
 
-        // Selectable Text Dialog
+        // Selectable Text Dialog (remains unchanged)
         if (showSelectableTextDialog) {
             SelectableTextDialog(
                 textToDisplay = fullMessageTextToCopy,
@@ -330,7 +330,7 @@ internal fun AiMessageContent(
     }
 }
 
-// SelectableTextDialog Composable (remains unchanged from your version)
+// SelectableTextDialog Composable (remains unchanged)
 @Composable
 internal fun SelectableTextDialog(textToDisplay: String, onDismissRequest: () -> Unit) {
     Dialog(
@@ -361,7 +361,7 @@ internal fun SelectableTextDialog(textToDisplay: String, onDismissRequest: () ->
     }
 }
 
-// ThreeDotsLoadingAnimation Composable (remains unchanged from your version)
+// ThreeDotsLoadingAnimation Composable (remains unchanged)
 @Composable
 fun ThreeDotsLoadingAnimation(
     modifier: Modifier = Modifier,

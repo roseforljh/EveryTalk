@@ -7,6 +7,7 @@ import android.net.Uri // 【新增】导入 Uri
 import android.util.Log
 import android.view.ViewGroup
 import android.webkit.WebResourceRequest // 【新增】导入 WebResourceRequest (用于较新API级别)
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import java.util.LinkedHashMap
@@ -44,10 +45,7 @@ class WebViewPool(
             settings.useWideViewPort = true
             settings.textZoom = 100
             setBackgroundColor(android.graphics.Color.TRANSPARENT)
-            // 【可选但推荐】为了更好的用户体验，可以禁用长按WebView选择文本的功能，
-            // 因为你的应用有自己的选择文本机制 (通过上下文菜单)。
-            // isLongClickable = false
-            // setOnLongClickListener { true } // 消耗长按事件
+            settings.layoutAlgorithm = WebSettings.LayoutAlgorithm.TEXT_AUTOSIZING // 尝试这个
         }
     }
 
@@ -132,9 +130,6 @@ class WebViewPool(
                         }
                         return true // 即使无法打开，也消费掉这个事件，避免WebView自己加载
                     }
-                    // 你可以在这里添加对其他scheme的处理，例如：
-                    // if (it.startsWith("mailto:")) { ... return true }
-                    // if (it.startsWith("tel:")) { ... return true }
                 }
                 return false // 对于其他URL（例如，data: URL, file: URL, javascript: URL），让WebView默认处理
             }

@@ -1,5 +1,6 @@
-package com.example.everytalk.ui.screens.viewmodel
+package com.example.everytalk.ui.screens.viewmodel // 请确保包名与你的项目一致
 
+import android.util.Log
 import com.example.everytalk.data.DataClass.ApiConfig
 import com.example.everytalk.StateControler.ApiHandler
 import com.example.everytalk.StateControler.ViewModelStateHolder
@@ -17,12 +18,12 @@ class ConfigManager(
     private val stateHolder: ViewModelStateHolder,
     private val persistenceManager: DataPersistenceManager,
     private val apiHandler: ApiHandler,
-    private val viewModelScope: CoroutineScope
+    private val viewModelScope: CoroutineScope // ViewModel's scope for launching coroutines
 ) {
+    private val TAG_CM = "ConfigManager" // Specific tag for ConfigManager
 
     fun addConfig(configToAdd: ApiConfig) {
-        val contentExists = stateHolder._apiConfigs.value.any { /* ... content check ... */
-                existingConfig ->
+        val contentExists = stateHolder._apiConfigs.value.any { existingConfig ->
             existingConfig.address.trim().equals(configToAdd.address.trim(), ignoreCase = true) &&
                     existingConfig.key.trim() == configToAdd.key.trim() &&
                     existingConfig.model.trim()
@@ -36,126 +37,199 @@ class ConfigManager(
                 configToAdd.copy(id = UUID.randomUUID().toString()) else configToAdd
 
             stateHolder._apiConfigs.update { it + finalConfig }
+            Log.d(TAG_CM, "Added new config '${finalConfig.model}' to in-memory list.")
 
-            var wasSelected = false
-            if (stateHolder._selectedApiConfig.value == null) {
-                stateHolder._selectedApiConfig.value = finalConfig
-                // --- **修改点 1: 保存 ID 而不是 name** ---
-                persistenceManager.saveSelectedConfigIdentifier(finalConfig.id) // 保存 ID
-                wasSelected = true
+            viewModelScope.launch {
+                persistenceManager.saveApiConfigs(stateHolder._apiConfigs.value)
+                Log.d(TAG_CM, "Saved API configs list to persistence after add.")
+
+                if (stateHolder._selectedApiConfig.value == null || stateHolder._apiConfigs.value.size == 1) {
+                    // Update selected config in memory (StateFlow update is main-safe)
+                    stateHolder._selectedApiConfig.value = finalConfig
+                    // Persist the new selection
+                    persistenceManager.saveSelectedConfigIdentifier(finalConfig.id)
+                    Log.d(
+                        TAG_CM,
+                        "Added and selected new config: ${finalConfig.model}. Selection saved."
+                    )
+                }
             }
-            // --- End 修改点 1 ---
+            // UI feedback can be outside the coroutine if it doesn't depend on save completion
+            if (stateHolder._selectedApiConfig.value?.id == finalConfig.id) {
+                Log.d(TAG_CM, "UI feedback: Added and selected new config: ${finalConfig.model}")
+            } else {
+                Log.d(
+                    TAG_CM,
+                    "UI feedback: Added new config: ${finalConfig.model}, selection unchanged."
+                )
+            }
 
-            persistenceManager.saveApiConfigs()
         } else {
-            viewModelScope.launch { stateHolder._snackbarMessage.emit("Configuration with same content already exists") }
-            println("ConfigManager: Config add attempt failed - duplicate content.")
+            viewModelScope.launch { stateHolder._snackbarMessage.emit("具有相同内容的配置已存在") }
+            Log.d(
+                TAG_CM,
+                "Config add attempt failed - duplicate content for: ${configToAdd.model}."
+            )
         }
     }
 
     fun updateConfig(configToUpdate: ApiConfig) {
-        var updated = false
+        var listActuallyUpdated = false
+        val oldSelectedIdInMemory = stateHolder._selectedApiConfig.value?.id
+
         stateHolder._apiConfigs.update { currentConfigs ->
             val index = currentConfigs.indexOfFirst { it.id == configToUpdate.id }
             if (index != -1) {
                 if (currentConfigs[index] != configToUpdate) {
                     val mutableConfigs = currentConfigs.toMutableList()
                     mutableConfigs[index] = configToUpdate
-                    if (stateHolder._selectedApiConfig.value?.id == configToUpdate.id) {
-                        stateHolder._selectedApiConfig.value = configToUpdate
-                        // 保存 ID (通常不变，但安全起见)
-                        persistenceManager.saveSelectedConfigIdentifier(configToUpdate.id)
-                    }
-                    updated = true
+                    listActuallyUpdated = true
+                    Log.d(TAG_CM, "Config '${configToUpdate.model}' updated in memory.")
                     mutableConfigs
                 } else {
+                    Log.d(
+                        TAG_CM,
+                        "Config '${configToUpdate.model}' content identical, no in-memory update."
+                    )
                     currentConfigs
                 }
             } else {
-                viewModelScope.launch { stateHolder._snackbarMessage.emit("Update failed: Config not found") }
+                viewModelScope.launch { stateHolder._snackbarMessage.emit("更新失败：未找到配置 ID ${configToUpdate.id}") }
+                Log.w(TAG_CM, "Update failed: Config not found with ID ${configToUpdate.id}")
                 currentConfigs
             }
         }
-        if (updated) {
-            persistenceManager.saveApiConfigs()
+
+        if (listActuallyUpdated) {
+            viewModelScope.launch {
+                persistenceManager.saveApiConfigs(stateHolder._apiConfigs.value)
+                Log.d(TAG_CM, "Config list updated, saved API configs list to persistence.")
+
+                if (stateHolder._selectedApiConfig.value?.id == configToUpdate.id) {
+                    // Update selected config in memory (if it's the one being edited)
+                    // This ensures the StateFlow holds the exact updated instance.
+                    stateHolder._selectedApiConfig.value = configToUpdate
+
+                    // If the ID of the config itself was part of the update (unlikely but possible)
+                    // and it was the selected one, then the selected ID needs to be re-saved.
+                    if (oldSelectedIdInMemory != configToUpdate.id) {
+                        persistenceManager.saveSelectedConfigIdentifier(configToUpdate.id)
+                        Log.d(
+                            TAG_CM,
+                            "Updated selected config's ID also changed and was saved: ${configToUpdate.id}"
+                        )
+                    }
+                    Log.d(TAG_CM, "Updated config was the selected one: ${configToUpdate.model}")
+                }
+            }
+        } else {
+            Log.d(
+                TAG_CM,
+                "Update called for '${configToUpdate.model}', but no actual changes to save to persistence."
+            )
         }
     }
 
     fun deleteConfig(configToDelete: ApiConfig) {
-        val wasSelected = stateHolder._selectedApiConfig.value?.id == configToDelete.id
-        var deletedName: String? = null
-        var newSelectedConfig: ApiConfig? = null
+        val currentConfigs = stateHolder._apiConfigs.value
+        val indexToDelete = currentConfigs.indexOfFirst { it.id == configToDelete.id }
 
-        stateHolder._apiConfigs.update { currentConfigs ->
-            val index = currentConfigs.indexOfFirst { it.id == configToDelete.id }
-            if (index != -1) {
-                deletedName = currentConfigs[index].model
-                val mutableConfigs = currentConfigs.toMutableList()
-                mutableConfigs.removeAt(index)
+        if (indexToDelete == -1) {
+            Log.w(
+                TAG_CM,
+                "Attempted to delete a config not found in the list: ID=${configToDelete.id}"
+            )
+            viewModelScope.launch { stateHolder._snackbarMessage.emit("删除失败：未找到配置") }
+            return
+        }
 
-                if (wasSelected) {
-                    apiHandler.cancelCurrentApiJob("Selected config deleted")
-                    newSelectedConfig = mutableConfigs.firstOrNull()
-                    stateHolder._selectedApiConfig.value = newSelectedConfig
-                    // --- **修改点 2: 保存新选中的 ID (或 null)** ---
-                    persistenceManager.saveSelectedConfigIdentifier(newSelectedConfig?.id) // 保存 ID 或 null
-                    println("ConfigManager: Deleted selected config. New selection ID: ${newSelectedConfig?.id}")
-                    // --- End 修改点 2 ---
-                }
-                mutableConfigs
-            } else {
-                currentConfigs
+        val wasCurrentlySelected = stateHolder._selectedApiConfig.value?.id == configToDelete.id
+        var newSelectedConfigAfterDeletion: ApiConfig? = null
+
+        // 1. 更新内存中的配置列表
+        val updatedConfigs = currentConfigs.toMutableList().apply {
+            removeAt(indexToDelete)
+        }.toList()
+        stateHolder._apiConfigs.value = updatedConfigs
+        Log.d(
+            TAG_CM,
+            "Config with ID ${configToDelete.id} ('${configToDelete.model}') removed from memory list."
+        )
+
+        // 2. 处理选中状态的变更 (内存)
+        if (wasCurrentlySelected) {
+            apiHandler.cancelCurrentApiJob("Selected config '${configToDelete.model}' was deleted")
+            newSelectedConfigAfterDeletion = updatedConfigs.firstOrNull()
+            stateHolder._selectedApiConfig.value = newSelectedConfigAfterDeletion
+            Log.d(
+                TAG_CM,
+                "Deleted config was selected. New in-memory selection: ${newSelectedConfigAfterDeletion?.model ?: "None"}"
+            )
+        }
+
+        // 3. 持久化所有更改
+        viewModelScope.launch {
+            persistenceManager.saveApiConfigs(updatedConfigs) // 保存更新后的列表
+            Log.d(TAG_CM, "Updated API configs list (after deletion) saved to persistence.")
+            if (wasCurrentlySelected) { // 只有当选中项确实改变了才保存选中ID
+                persistenceManager.saveSelectedConfigIdentifier(newSelectedConfigAfterDeletion?.id)
+                Log.d(
+                    TAG_CM,
+                    "New selected config ID (${newSelectedConfigAfterDeletion?.id ?: "null"}) saved to persistence."
+                )
             }
         }
 
-        if (deletedName != null) {
-            persistenceManager.saveApiConfigs()
-            viewModelScope.launch { /* ... snackbar ... */
-                if (wasSelected) {
-                    stateHolder._snackbarMessage.emit("Selected config '$deletedName' deleted")
-                    delay(250)
-                    if (newSelectedConfig == null) {
-                        stateHolder._snackbarMessage.emit("Please add or select a new API config")
-                    } else {
-                        stateHolder._snackbarMessage.emit("Auto-selected: ${newSelectedConfig.model}")
-                    }
+        // 4. 显示用户提示
+        viewModelScope.launch {
+            if (wasCurrentlySelected) {
+                stateHolder._snackbarMessage.emit("选中的配置 '${configToDelete.model}' 已删除")
+                delay(250)
+                if (newSelectedConfigAfterDeletion == null) {
+                    stateHolder._snackbarMessage.emit("请添加或选择一个新的 API 配置")
                 } else {
-                    stateHolder._snackbarMessage.emit("Config '$deletedName' deleted")
+                    stateHolder._snackbarMessage.emit("已自动选择: ${newSelectedConfigAfterDeletion.model}")
                 }
+            } else {
+                stateHolder._snackbarMessage.emit("配置 '${configToDelete.model}' 已删除")
             }
         }
     }
 
     fun clearAllConfigs() {
-        if (stateHolder._apiConfigs.value.isNotEmpty()) {
+        if (stateHolder._apiConfigs.value.isNotEmpty() || stateHolder._selectedApiConfig.value != null) {
             apiHandler.cancelCurrentApiJob("Clearing all configs")
             stateHolder._apiConfigs.value = emptyList()
             stateHolder._selectedApiConfig.value = null
-            // 调用统一清除方法 (它内部应该清除 ID)
-            persistenceManager.clearAllApiConfigData()
-            println("ConfigManager: Cleared all configs and selection.")
-            viewModelScope.launch { /* ... snackbar ... */
-                stateHolder._snackbarMessage.emit("All configurations cleared")
+            Log.d(TAG_CM, "In-memory configs and selection cleared.")
+
+            viewModelScope.launch {
+                persistenceManager.clearAllApiConfigData() // This is already a suspend fun
+                Log.d(TAG_CM, "Persistence layer notified to clear all config data.")
+                stateHolder._snackbarMessage.emit("所有配置已清除")
                 delay(250)
-                stateHolder._snackbarMessage.emit("Please add an API configuration")
+                stateHolder._snackbarMessage.emit("请添加一个 API 配置")
             }
         } else {
-            viewModelScope.launch { stateHolder._snackbarMessage.emit("No configurations to clear") }
+            viewModelScope.launch { stateHolder._snackbarMessage.emit("没有配置可清除") }
+            Log.d(TAG_CM, "No configs to clear.")
         }
     }
 
     fun selectConfig(config: ApiConfig) {
         if (stateHolder._selectedApiConfig.value?.id != config.id) {
-            apiHandler.cancelCurrentApiJob("Switching selected config")
-            stateHolder._selectedApiConfig.value = config
-            // --- **修改点 3: 保存选中的 ID** ---
-            persistenceManager.saveSelectedConfigIdentifier(config.id) // 保存 ID
-            // --- End 修改点 3 ---
-            stateHolder._showSettingsDialog.value = false
-            println("ConfigManager: Selected config: ${config.model} (${config.provider}). ID saved.")
+            apiHandler.cancelCurrentApiJob("Switching selected config to '${config.model}'")
+            stateHolder._selectedApiConfig.value = config // Update in-memory selection
+            Log.d(TAG_CM, "Selected config in memory: ${config.model} (${config.provider}).")
+
+            viewModelScope.launch {
+                persistenceManager.saveSelectedConfigIdentifier(config.id) // Persist selection
+                Log.d(TAG_CM, "Selected config ID (${config.id}) saved to persistence.")
+            }
+            stateHolder._showSettingsDialog.value = false // UI update
         } else {
-            stateHolder._showSettingsDialog.value = false
-            println("ConfigManager: Config already selected.")
+            stateHolder._showSettingsDialog.value = false // UI update
+            Log.d(TAG_CM, "Config '${config.model}' was already selected.")
         }
     }
 }

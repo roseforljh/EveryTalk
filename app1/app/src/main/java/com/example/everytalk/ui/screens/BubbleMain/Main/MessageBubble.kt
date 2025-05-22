@@ -16,11 +16,8 @@ import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.DataClass.Sender
 import com.example.everytalk.StateControler.AppViewModel
 import com.example.everytalk.ui.screens.BubbleMain.AiMessageContent // 确保导入路径正确
-// 假设 UserOrErrorMessageContent 和 ReasoningToggleAndContent 已正确导入或在此文件定义
-// import com.example.everytalk.ui.screens.BubbleMain.UserOrErrorMessageContent
-// import com.example.everytalk.ui.screens.BubbleMain.ReasoningToggleAndContent
 
-// Color.toHexCss() 定义 (如果它不在此文件，请确保从util导入，例如 import com.example.everytalk.util.toHexCss)
+
 fun Color.toHexCss(): String {
     return String.format("#%06X", 0xFFFFFF and this.toArgb())
 }
@@ -46,9 +43,10 @@ fun MessageBubble(
     val userBubbleBackgroundColor = Color(0xFFF3F3F3)
     val userContentColor = Color.Black
     val reasoningTextColor = Color(0xFF444444)
-    val codeBlockBackgroundColor = Color(0xFF2B2B2B)
-    val codeBlockContentColor = Color(0xFFA9B7C6)
-    val codeBlockCornerRadius = 8.dp
+    // 这些颜色和圆角值现在由 AiMessageContent 内部定义，不再从这里传递
+    // val codeBlockBackgroundColor = Color(0xFF2B2B2B)
+    // val codeBlockContentColor = Color(0xFFA9B7C6)
+    // val codeBlockCornerRadius = 8.dp
 
     val aiMessageBlockMaxWidth = maxWidth
 
@@ -75,7 +73,8 @@ fun MessageBubble(
     ) {
         if (showLoadingBubble) return@LaunchedEffect
         if (!localAnimationTriggeredOrCompleted) {
-            val isStable = message.isError || !isMainContentStreaming || (isAI && message.contentStarted)
+            val isStable =
+                message.isError || !isMainContentStreaming || (isAI && message.contentStarted)
             val hasContent = message.text.trim().isNotBlank() ||
                     (isAI && message.reasoning?.isNotBlank() == true) ||
                     (isAI && !message.webSearchResults.isNullOrEmpty())
@@ -102,14 +101,15 @@ fun MessageBubble(
                 .then(if (!isAI) Modifier.align(Alignment.End) else Modifier.align(Alignment.Start)),
             horizontalAlignment = Alignment.Start
         ) {
-            // 1. AI 消息的外部加载提示气泡 (showLoadingBubble)
             if (isAI && showLoadingBubble) {
                 Surface(
                     shape = RoundedCornerShape(18.dp),
                     color = aiBubbleColor,
                     shadowElevation = 0.dp,
                     contentColor = aiContentColor,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
@@ -121,7 +121,12 @@ fun MessageBubble(
                             strokeWidth = 1.5.dp
                         )
                         Spacer(Modifier.width(10.dp))
-                        val loadingText = remember(message.currentWebSearchStage, isReasoningStreaming, message.reasoning, isReasoningComplete) {
+                        val loadingText = remember(
+                            message.currentWebSearchStage,
+                            isReasoningStreaming,
+                            message.reasoning,
+                            isReasoningComplete
+                        ) {
                             when (message.currentWebSearchStage) {
                                 "web_indexing_started" -> "正在索引网页..."
                                 "web_analysis_started" -> "正在分析网页..."
@@ -131,6 +136,7 @@ fun MessageBubble(
                                     else if (!message.reasoning.isNullOrBlank() && isReasoningComplete) "思考完成"
                                     else "分析完成"
                                 }
+
                                 else -> {
                                     if (isReasoningStreaming) "大模型思考中..."
                                     else if (!message.reasoning.isNullOrBlank() && !isReasoningComplete) "大模型思考中..."
@@ -144,8 +150,8 @@ fun MessageBubble(
                 }
             }
 
-            // 2. AI 消息的思考过程部分
-            val shouldDisplayReasoningComponentBox = isAI && (!message.reasoning.isNullOrBlank() || isReasoningStreaming)
+            val shouldDisplayReasoningComponentBox =
+                isAI && (!message.reasoning.isNullOrBlank() || isReasoningStreaming)
             if (shouldDisplayReasoningComponentBox) {
                 ReasoningToggleAndContent(
                     modifier = Modifier
@@ -165,19 +171,18 @@ fun MessageBubble(
                 )
             }
 
-            // 3. AI 消息的主要内容展示 (AiMessageContent)
             val shouldShowAiMessageComponent = isAI && !message.isError && !showLoadingBubble
             if (shouldShowAiMessageComponent) {
-                // 决定 AiMessageContent 内部是否显示三点加载动画
                 val showDotsInsideAiContent = isMainContentStreaming &&
                         message.text.isBlank() &&
-                        !message.contentStarted && // 仅当内容尚未开始时，才由isMainContentStreaming决定
-                        !showLoadingBubble // 不与外部加载气泡冲突
+                        !message.contentStarted &&
+                        !showLoadingBubble
 
-                // 渲染 AiMessageContent 条件：消息有文本，或者需要显示其内部的加载点
                 if (message.text.isNotBlank() || showDotsInsideAiContent) {
                     Surface(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
                         shape = RoundedCornerShape(
                             topStart = if (shouldDisplayReasoningComponentBox) 8.dp else 18.dp,
                             topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 18.dp
@@ -188,12 +193,9 @@ fun MessageBubble(
                         AiMessageContent(
                             message = message,
                             appViewModel = viewModel,
-                            fullMessageTextToCopy = message.text, // 完整的原始文本用于复制
-                            showLoadingDots = showDotsInsideAiContent, // 控制 AiMessageContent 内部的加载点
-                            contentColor = aiContentColor,
-                            codeBlockBackgroundColor = codeBlockBackgroundColor,
-                            codeBlockContentColor = codeBlockContentColor,
-                            codeBlockCornerRadius = codeBlockCornerRadius,
+                            fullMessageTextToCopy = message.text,
+                            showLoadingDots = showDotsInsideAiContent,
+                            contentColor = aiContentColor, // This is for main text, code block colors are now internal to AiMessageContent
                             onUserInteraction = onUserInteraction,
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
                         )
@@ -219,7 +221,6 @@ fun MessageBubble(
             }
         }
 
-        // 4. 用户消息 或 AI 错误消息
         if (!isAI && !message.isError) {
             UserOrErrorMessageContent(
                 message = message,

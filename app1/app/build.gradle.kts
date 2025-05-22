@@ -139,5 +139,5 @@ android {
         implementation("org.commonmark:commonmark-ext-gfm-tables:0.23.0")
         implementation("org.commonmark:commonmark-ext-gfm-strikethrough:0.23.0")
 
-
+        implementation("org.jsoup:jsoup:1.17.2")
     }

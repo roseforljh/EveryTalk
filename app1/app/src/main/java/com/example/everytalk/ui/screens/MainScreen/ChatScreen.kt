@@ -3,22 +3,25 @@ package com.example.everytalk.ui.screens.MainScreen
 
 import android.util.Log
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState // 导入
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ArrowDownward
-import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.TravelExplore
@@ -55,29 +58,23 @@ import com.example.everytalk.ui.components.AppTopBar
 import com.example.everytalk.ui.components.WebSourcesDialog
 import com.example.everytalk.ui.screens.BubbleMain.Main.MessageBubble
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.*
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.pow
-import kotlinx.coroutines.yield
 
 private const val USER_INACTIVITY_TIMEOUT_MS = 2000L
-private const val REALTIME_SCROLL_CHECK_DELAY_MS = 50L
+private const val REALTIME_SCROLL_CHECK_DELAY_MS = 100L // 稍微增加延迟，减少 Effect 重启频率
 private const val FINAL_SCROLL_DELAY_MS = 150L
-private const val SESSION_SWITCH_SCROLL_DELAY_MS = 250L // 新增：会话切换时的滚动延迟
+private const val SESSION_SWITCH_SCROLL_DELAY_MS = 250L
 
-@OptIn(
-    ExperimentalMaterial3Api::class,
-    ExperimentalLayoutApi::class
-)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
     viewModel: AppViewModel,
     navController: NavController,
     modifier: Modifier = Modifier
 ) {
-    val messages: List<Message> = viewModel.messages
+    val messages: List<Message> = viewModel.messages // messages is a SnapshotStateList, good!
     val text by viewModel.text.collectAsState()
     val selectedApiConfig by viewModel.selectedApiConfig.collectAsState()
     val isApiCalling by viewModel.isApiCalling.collectAsState()
@@ -86,12 +83,16 @@ fun ChatScreen(
     val isWebSearchEnabled by viewModel.isWebSearchEnabled.collectAsState()
 
     val listState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
 
     val loadedHistoryIndex by viewModel.loadedHistoryIndex.collectAsState()
-    // 用于跟踪 loadedHistoryIndex 的上一个值，以判断是否发生了会话切换
-    var previousLoadedHistoryIndexState by remember { mutableStateOf(loadedHistoryIndex) }
+    var previousLoadedHistoryIndexState by remember(loadedHistoryIndex) {
+        mutableStateOf(
+            loadedHistoryIndex
+        )
+    }
 
-    val coroutineScope = rememberCoroutineScope()
+
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     val density = LocalDensity.current
@@ -101,140 +102,154 @@ fun ChatScreen(
     var ongoingScrollJob by remember { mutableStateOf<Job?>(null) }
     var programmaticallyScrolling by remember { mutableStateOf(false) }
 
-    fun scrollToBottomGuaranteed(reason: String = "Unknown") {
-        ongoingScrollJob?.cancel()
+    fun scrollToBottomGuaranteed(
+        reason: String = "Unknown",
+        listStateRef: LazyListState = listState,
+        messagesRef: List<Message> = messages
+    ) {
+        ongoingScrollJob?.cancel(CancellationException("New scroll request: $reason"))
         ongoingScrollJob = coroutineScope.launch {
+            if (messagesRef.isEmpty()) {
+                Log.d("ScrollJob", "Messages empty, cannot scroll to bottom ($reason)")
+                programmaticallyScrolling = false // Ensure reset if no scroll happens
+                return@launch
+            }
             programmaticallyScrolling = true
-            val bottomIndex = messages.size
-            var reached = false
-            repeat(12) { i ->
-                yield()
-                if (i == 0) {
-                    listState.scrollToItem(bottomIndex)
+            // Target the actual last item index, or a "footer" index if you have one beyond messages.size
+            // Assuming 'messages.size' is the key for the footer spacer or the index after the last message.
+            val targetIndex = messagesRef.size // If footer is item messages.size
+
+            var reachedEnd = false
+            var attempts = 0
+            val maxAttempts = 12 // Max retries for scrolling
+
+            // Initial immediate scroll attempt
+            try {
+                Log.d(
+                    "ScrollJob",
+                    "Attempting immediate scrollToItem to $targetIndex ($reason, attempt 0)"
+                )
+                listStateRef.scrollToItem(targetIndex)
+                delay(32) // Short delay to allow layout pass
+                val layoutInfo = listStateRef.layoutInfo
+                if (layoutInfo.visibleItemsInfo.isNotEmpty() && layoutInfo.visibleItemsInfo.any { it.index == targetIndex }) {
+                    reachedEnd = true
+                    Log.d(
+                        "ScrollJob",
+                        "Immediate scrollToItem SUCCESS to $targetIndex ($reason, attempt 0)"
+                    )
                 } else {
-                    listState.animateScrollToItem(bottomIndex)
+                    Log.d(
+                        "ScrollJob",
+                        "Immediate scrollToItem to $targetIndex might not have reached ($reason, attempt 0)"
+                    )
                 }
-                delay(16L)
-                val items = listState.layoutInfo.visibleItemsInfo
-                reached = items.any { it.index == bottomIndex }
-                if (reached && items.isNotEmpty()) {
-                    Log.d("ScrollJob", "成功将 footer 滚动可见 ($reason retry=$i)")
-                    userManuallyScrolledAwayFromBottom = false
-                    programmaticallyScrolling = false
-                    ongoingScrollJob = null
-                    return@launch
+            } catch (e: Exception) {
+                Log.e(
+                    "ScrollJob",
+                    "Immediate scrollToItem to $targetIndex FAILED ($reason, attempt 0): ${e.message}",
+                    e
+                )
+            }
+
+
+            // Animated scroll attempts if immediate failed or to ensure visibility
+            while (!reachedEnd && attempts < maxAttempts && isActive) {
+                attempts++
+                try {
+                    Log.d(
+                        "ScrollJob",
+                        "Attempting animateScrollToItem to $targetIndex ($reason, attempt $attempts)"
+                    )
+                    listStateRef.animateScrollToItem(targetIndex) // animateScrollToItem has its own internal retry/check
+                    delay(100) // Shorter delay, animateScrollToItem is more robust
+
+                    val layoutInfo = listStateRef.layoutInfo
+                    if (layoutInfo.visibleItemsInfo.isNotEmpty() && layoutInfo.visibleItemsInfo.any { it.index == targetIndex }) {
+                        reachedEnd = true
+                        Log.d(
+                            "ScrollJob",
+                            "AnimateScrollToItem SUCCESS to $targetIndex ($reason, attempt $attempts)"
+                        )
+                        break // Exit loop if reached
+                    } else {
+                        Log.d(
+                            "ScrollJob",
+                            "AnimateScrollToItem to $targetIndex might not have reached ($reason, attempt $attempts)"
+                        )
+                    }
+                } catch (e: CancellationException) {
+                    Log.d(
+                        "ScrollJob",
+                        "Scroll attempt to $targetIndex CANCELLED ($reason, attempt $attempts)"
+                    )
+                    throw e // Re-throw cancellation
+                } catch (e: Exception) {
+                    Log.e(
+                        "ScrollJob",
+                        "Scroll attempt to $targetIndex FAILED ($reason, attempt $attempts): ${e.message}",
+                        e
+                    )
+                    delay(50) // Delay before next retry on generic exception
                 }
             }
-            delay(40)
-            listState.animateScrollToItem(bottomIndex)
-            userManuallyScrolledAwayFromBottom = false
-            Log.d("ScrollJob", "最终兜底滚动 footer ($reason)")
+
+            if (reachedEnd) {
+                userManuallyScrolledAwayFromBottom = false
+            } else if (isActive) { // Check isActive before logging final failure
+                Log.w(
+                    "ScrollJob",
+                    "Failed to scroll to $targetIndex after $maxAttempts attempts ($reason)."
+                )
+            }
             programmaticallyScrolling = false
-            ongoingScrollJob = null
+            ongoingScrollJob = null // Clear the job reference
         }
     }
 
-    // --- ★★★ 修改点 2: 调整初始滚动逻辑，为会话切换添加延迟 ★★★ ---
-    LaunchedEffect(key1 = loadedHistoryIndex, key2 = messages) {
+    // Initial scroll logic when conversation or messages change
+    LaunchedEffect(
+        key1 = loadedHistoryIndex,
+        key2 = messages.size
+    ) { // Use messages.size for more stable key if messages is SnapshotStateList
         val currentLoadedIndex = loadedHistoryIndex
-        // 判断是否是由于 loadedHistoryIndex 变化（即会话切换）导致的 Effect 触发
         val sessionJustChanged = previousLoadedHistoryIndexState != currentLoadedIndex
 
         if (sessionJustChanged) {
             Log.d(
                 "ChatScreenInitScroll",
-                "会话已切换 (loadedHistoryIndex: $previousLoadedHistoryIndexState -> $currentLoadedIndex)。应用延迟 (${SESSION_SWITCH_SCROLL_DELAY_MS}ms)。"
+                "Session changed ($previousLoadedHistoryIndexState -> $currentLoadedIndex). Delaying scroll by ${SESSION_SWITCH_SCROLL_DELAY_MS}ms."
             )
-            delay(SESSION_SWITCH_SCROLL_DELAY_MS) // 为侧边栏动画等留出时间
+            delay(SESSION_SWITCH_SCROLL_DELAY_MS)
+            previousLoadedHistoryIndexState =
+                currentLoadedIndex // Update after delay, before scroll
         }
-        previousLoadedHistoryIndexState = currentLoadedIndex
+
 
         if (messages.isNotEmpty()) {
-            val targetIndex = messages.size
             Log.d(
                 "ChatScreenInitScroll",
-                "会话变更/消息列表变更 (延迟后)。尝试立即滚动到底部 (目标索引: $targetIndex)。 loadedHistoryIndex: $currentLoadedIndex, messages.size: ${messages.size}"
+                "Messages not empty (size: ${messages.size}). Scrolling to bottom. loadedHistoryIndex: $currentLoadedIndex"
             )
-
-            coroutineScope.launch {
-                programmaticallyScrolling = true
-                userManuallyScrolledAwayFromBottom = false
-
-                var attempts = 0
-                var successfullyScrolled = false
-                val maxImmediateAttempts = 3
-
-                while (attempts < maxImmediateAttempts && !successfullyScrolled && isActive) {
-                    attempts++
-                    try {
-                        Log.d(
-                            "ChatScreenInitScroll",
-                            "尝试无动画 scrollToItem (第 $attempts 次) 到索引 $targetIndex"
-                        )
-                        listState.scrollToItem(targetIndex)
-                        delay(if (attempts == 1) 50L else 32L)
-
-                        val layoutInfo = listState.layoutInfo
-                        if (layoutInfo.visibleItemsInfo.isNotEmpty()) {
-                            successfullyScrolled =
-                                layoutInfo.visibleItemsInfo.any { it.index == targetIndex }
-                        }
-
-                        if (successfullyScrolled) {
-                            Log.d(
-                                "ChatScreenInitScroll",
-                                "无动画 scrollToItem 在第 $attempts 次尝试后成功到达底部。"
-                            )
-                        } else if (isActive) {
-                            Log.d(
-                                "ChatScreenInitScroll",
-                                "无动画 scrollToItem 第 $attempts 次尝试后未到达底部。"
-                            )
-                        }
-                    } catch (e: CancellationException) {
-                        Log.d("ChatScreenInitScroll", "初始滚动 scrollToItem 尝试被取消。")
-                        throw e
-                    } catch (e: Exception) {
-                        if (isActive) {
-                            Log.e(
-                                "ChatScreenInitScroll",
-                                "无动画 scrollToItem 第 $attempts 次尝试失败: ${e.message}",
-                                e
-                            )
-                        }
-                        break
-                    }
-                }
-
-                if (!successfullyScrolled && isActive) {
-                    Log.w(
-                        "ChatScreenInitScroll",
-                        "多次无动画 scrollToItem 尝试后仍未到达底部。将调用 scrollToBottomGuaranteed 作为最终手段。"
-                    )
-                    scrollToBottomGuaranteed("InitialScroll_FallbackAfterImmediateAttempts")
-                } else if (successfullyScrolled) {
-                    programmaticallyScrolling = false
-                } else if (!isActive) {
-                    Log.d(
-                        "ChatScreenInitScroll",
-                        "初始滚动协程在完成前被取消。确保 programmaticallyScrolling 已重置。"
-                    )
-                    if (programmaticallyScrolling) programmaticallyScrolling = false
-                }
-            }
-
-        } else { // messages is empty
+            // For initial load or session switch, a slightly more robust scroll might be needed
+            // than just one immediate attempt.
+            scrollToBottomGuaranteed("InitialOrSessionChange")
+        } else {
             Log.d(
                 "ChatScreenInitScroll",
-                "消息列表为空 (延迟后)。滚动到顶部。loadedHistoryIndex: $currentLoadedIndex, messages.size: ${messages.size}"
+                "Messages empty. Scrolling to top. loadedHistoryIndex: $currentLoadedIndex"
             )
-            coroutineScope.launch {
+            coroutineScope.launch { // Ensure this is also on a coroutine
                 programmaticallyScrolling = true
-                userManuallyScrolledAwayFromBottom = false
+                userManuallyScrolledAwayFromBottom = false // Reset this too
                 try {
                     listState.scrollToItem(0)
                 } catch (e: Exception) {
-                    Log.e("ChatScreenInitScroll", "滚动到顶部失败 (空列表): ${e.message}", e)
+                    Log.e(
+                        "ChatScreenInitScroll",
+                        "Scroll to top (empty list) failed: ${e.message}",
+                        e
+                    )
                 } finally {
                     programmaticallyScrolling = false
                 }
@@ -242,60 +257,60 @@ fun ChatScreen(
         }
     }
 
-
     var lastInteractionTime by remember { mutableStateOf(System.currentTimeMillis()) }
     var isUserConsideredActive by remember { mutableStateOf(true) }
 
-    val imeInsets = WindowInsets.ime
-    var pendingMessageText by remember { mutableStateOf<String?>(null) }
-
-    val normalBottomPaddingForAIChat = 16.dp
-    val estimatedInputAreaHeight = remember { 100.dp }
-
     val resetInactivityTimer: () -> Unit = {
         lastInteractionTime = System.currentTimeMillis()
-        if (!isUserConsideredActive) isUserConsideredActive = true
+        // No need to set isUserConsideredActive = true here,
+        // the LaunchedEffect(lastInteractionTime) will handle it.
     }
 
     LaunchedEffect(lastInteractionTime) {
         isUserConsideredActive = true
         delay(USER_INACTIVITY_TIMEOUT_MS)
-        if (isActive) isUserConsideredActive = false
+        if (isActive) { // Check isActive before changing state
+            isUserConsideredActive = false
+        }
     }
 
-    LaunchedEffect(pendingMessageText, imeInsets, density) {
+    val imeInsets = WindowInsets.ime
+    var pendingMessageText by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(Unit) { // Observe IME and pending text
         snapshotFlow { imeInsets.getBottom(density) > 0 }
             .distinctUntilChanged()
-            .filter { isVisible -> !isVisible && pendingMessageText != null }
+            .filter { isKeyboardVisible -> !isKeyboardVisible && pendingMessageText != null }
             .collect {
                 pendingMessageText?.let { msg ->
+                    Log.d("ChatScreen", "Keyboard hidden, sending pending message.")
                     viewModel.onSendMessage(msg)
-                    pendingMessageText = null
+                    pendingMessageText = null // Clear after sending
                 }
             }
     }
-
-    LaunchedEffect(text) {
-        if (text.isNotEmpty() || (text.isEmpty() && viewModel.text.value.isNotEmpty())) {
+    LaunchedEffect(text) { // Reset inactivity on text input
+        if (text.isNotEmpty()) { // Only reset if text actually changes to non-empty
             resetInactivityTimer()
         }
     }
 
+
     val screenWidth = configuration.screenWidthDp.dp
-    val bubbleMaxWidth =
-        remember(screenWidth) { (screenWidth ).coerceAtMost(600.dp) }
-    remember(screenWidth) { (screenWidth).coerceAtMost(700.dp) }
+    val bubbleMaxWidth = remember(screenWidth) { screenWidth.coerceAtMost(600.dp) }
+    // Removed unused second remember for screenWidth
+
 
     val nestedScrollConnection = remember {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                if (source == NestedScrollSource.Drag) {
+                if (source == NestedScrollSource.Drag && !programmaticallyScrolling) {
                     resetInactivityTimer()
                     if (available.y < -0.5f && !userManuallyScrolledAwayFromBottom) {
                         userManuallyScrolledAwayFromBottom = true
                         Log.d(
                             "ScrollState",
-                            "用户向上拖动 (available.y: ${available.y}), 设置 userManuallyScrolledAwayFromBottom = true"
+                            "User dragging up (available.y: ${available.y}), userManuallyScrolledAwayFromBottom = true"
                         )
                     }
                 }
@@ -303,13 +318,14 @@ fun ChatScreen(
             }
 
             override suspend fun onPreFling(available: Velocity): Velocity {
-                if (listState.isScrollInProgress) {
+                // Check !programmaticallyScrolling to avoid interference
+                if (listState.isScrollInProgress && !programmaticallyScrolling) {
                     resetInactivityTimer()
                     if (available.y < -50f && !userManuallyScrolledAwayFromBottom) {
                         userManuallyScrolledAwayFromBottom = true
                         Log.d(
                             "ScrollState",
-                            "用户向上Fling (available.y: ${available.y}), 设置 userManuallyScrolledAwayFromBottom = true"
+                            "User flinging up (available.y: ${available.y}), userManuallyScrolledAwayFromBottom = true"
                         )
                     }
                 }
@@ -321,8 +337,12 @@ fun ChatScreen(
     val isAtBottom by remember {
         derivedStateOf {
             val layoutInfo = listState.layoutInfo
-            if (messages.isEmpty() || layoutInfo.visibleItemsInfo.isEmpty()) true
-            else layoutInfo.visibleItemsInfo.any { it.index == messages.size }
+            if (messages.isEmpty() || layoutInfo.visibleItemsInfo.isEmpty()) {
+                true // Considered at bottom if list is empty
+            } else {
+                // Check if the "footer" item (index messages.size) is visible
+                layoutInfo.visibleItemsInfo.any { it.index == messages.size }
+            }
         }
     }
 
@@ -330,21 +350,20 @@ fun ChatScreen(
         if (!listState.isScrollInProgress && !programmaticallyScrolling && isAtBottom && userManuallyScrolledAwayFromBottom) {
             Log.d(
                 "ScrollState",
-                "用户手动滚动到底部或程序滚动结束后在底部，重置 userManuallyScrolledAwayFromBottom = false"
+                "Reached bottom by user or after programmatic scroll, resetting userManuallyScrolledAwayFromBottom = false"
             )
             userManuallyScrolledAwayFromBottom = false
         }
     }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(Unit) { // For ViewModel events
         viewModel.scrollToBottomEvent.collectLatest {
-            Log.d("ChatScreen", "收到 scrollToBottomEvent from ViewModel.")
+            Log.d("ChatScreen", "Received scrollToBottomEvent from ViewModel.")
             resetInactivityTimer()
-            if (!isAtBottom || messages.isEmpty()) {
-                scrollToBottomGuaranteed("ViewModelEvent")
-            } else if (userManuallyScrolledAwayFromBottom) {
-                userManuallyScrolledAwayFromBottom = false
-            }
+            // No need to check isAtBottom here, scrollToBottomGuaranteed will handle empty list
+            scrollToBottomGuaranteed("ViewModelEvent")
+            // If it was a user initiated scroll event from ViewModel, we might want to clear userManuallyScrolledAwayFromBottom
+            // but scrollToBottomGuaranteed already does it if successful.
         }
     }
 
@@ -352,35 +371,49 @@ fun ChatScreen(
         messages.find { it.id == currentStreamingAiMessageId }
     }
 
+    // Simpler key, actual text changes are frequent. Let's react to ID and API state.
+    // Scroll will happen if needed.
     LaunchedEffect(
-        streamingAiMessage?.text,
+        currentStreamingAiMessageId,
         isApiCalling,
         userManuallyScrolledAwayFromBottom,
         isAtBottom
     ) {
-        if (isApiCalling && streamingAiMessage != null && streamingAiMessage.sender == Sender.AI && !userManuallyScrolledAwayFromBottom) {
-            delay(REALTIME_SCROLL_CHECK_DELAY_MS)
-            if (isActive && !isAtBottom && !userManuallyScrolledAwayFromBottom) {
-                Log.d("RealtimeScroll", "AI流式输出内容变化, 自动滚动...")
-                scrollToBottomGuaranteed("AI_Streaming_RealTime_Fix")
-            }
+        if (isApiCalling && currentStreamingAiMessageId != null && !userManuallyScrolledAwayFromBottom) {
+            // This effect will re-evaluate if any of these keys change.
+            // If AI is streaming (isApiCalling true, currentStreamingAiMessageId not null)
+            // and user hasn't scrolled away, and we are not at bottom, then try to scroll.
+            // The actual text content change will make `isAtBottom` potentially false.
+            snapshotFlow { streamingAiMessage?.text?.length } // Observe text length
+                .distinctUntilChanged()
+                .collect { _ -> // We only care that it changed
+                    if (isActive && isApiCalling && !userManuallyScrolledAwayFromBottom && !isAtBottom) {
+                        delay(REALTIME_SCROLL_CHECK_DELAY_MS) // Small delay to batch UI updates
+                        if (isActive && !isAtBottom && !userManuallyScrolledAwayFromBottom) { // Re-check after delay
+                            Log.d("RealtimeScroll", "AI streaming, text changed, auto-scrolling...")
+                            scrollToBottomGuaranteed("AI_Streaming_TextChanged")
+                        }
+                    }
+                }
         }
     }
 
-    LaunchedEffect(isApiCalling) {
+
+    LaunchedEffect(isApiCalling) { // Scroll when API call finishes
         snapshotFlow { isApiCalling }
-            .filter { !it }
+            .filter { !it } // Only when isApiCalling becomes false
             .distinctUntilChanged()
-            .collectLatest {
+            .collectLatest { // Use collectLatest to cancel previous if isApiCalling toggles quickly
+                // Check if the last message is an AI message and we should scroll
                 if (messages.isNotEmpty()) {
                     val lastMessage = messages.last()
                     if (lastMessage.sender == Sender.AI && !userManuallyScrolledAwayFromBottom) {
                         Log.d(
                             "ScrollLogic",
-                            "AI response likely finished, checking for final scroll."
+                            "AI response finished, delaying for final scroll check."
                         )
                         delay(FINAL_SCROLL_DELAY_MS)
-                        if (isActive && !isAtBottom && !userManuallyScrolledAwayFromBottom) {
+                        if (isActive && !isAtBottom && !userManuallyScrolledAwayFromBottom) { // Re-check after delay
                             Log.d("ScrollLogic", "AI response finished, performing final scroll.")
                             resetInactivityTimer()
                             scrollToBottomGuaranteed("AI_Response_Fully_Completed")
@@ -392,17 +425,13 @@ fun ChatScreen(
 
     val scrollToBottomButtonVisible by remember {
         derivedStateOf {
-            val result = messages.isNotEmpty() &&
-                    !isAtBottom &&
-                    isUserConsideredActive &&
-                    userManuallyScrolledAwayFromBottom
-            Log.d(
-                "FABVisibility",
-                "messagesNotEmpty: ${messages.isNotEmpty()}, notAtBottom: ${!isAtBottom}, userActive: $isUserConsideredActive, manuallyScrolledAway: $userManuallyScrolledAwayFromBottom -> Visible: $result"
-            )
-            result
+            messages.isNotEmpty() &&
+                    !isAtBottom && // Only show if not already at the bottom
+                    isUserConsideredActive && // Only if user is active
+                    userManuallyScrolledAwayFromBottom // Only if user has scrolled away
         }
     }
+    // Removed Log from derivedStateOf for scrollToBottomButtonVisible for cleaner release logs
 
     val showEditDialog by viewModel.showEditDialog.collectAsState()
     val editDialogInputText by viewModel.editDialogInputText.collectAsState()
@@ -413,8 +442,13 @@ fun ChatScreen(
         modifier = modifier
             .fillMaxSize()
             .pointerInput(Unit) { detectTapGestures(onTap = { resetInactivityTimer() }) },
-        contentWindowInsets = WindowInsets(0, 0, 0, 0),
-        containerColor = Color.White,
+        contentWindowInsets = WindowInsets(
+            0,
+            0,
+            0,
+            0
+        ), // Handle insets manually with imePadding etc.
+        containerColor = MaterialTheme.colorScheme.surface, // Use theme color
         topBar = {
             AppTopBar(
                 selectedConfigName = selectedApiConfig?.model ?: "选择配置",
@@ -425,18 +459,34 @@ fun ChatScreen(
         floatingActionButton = {
             AnimatedVisibility(
                 visible = scrollToBottomButtonVisible,
-                enter = fadeIn(animationSpec = tween(220)),
-                exit = fadeOut(animationSpec = tween(150))
+                enter = fadeIn(
+                    animationSpec = tween(
+                        durationMillis = 150, // 你可以调整动画时长
+                        easing = LinearOutSlowInEasing // 可选，选择一个缓动函数
+                    )
+                ),
+                exit = fadeOut(
+                    animationSpec = tween(
+                        durationMillis = 150, // 你可以调整动画时长
+                        easing = FastOutLinearInEasing // 可选
+                    )
+                )
+
             ) {
                 FloatingActionButton(
-                    onClick = { resetInactivityTimer(); scrollToBottomGuaranteed("FAB_Click") },
-                    modifier = Modifier.padding(bottom = estimatedInputAreaHeight + 16.dp + 15.dp),
-                    shape = RoundedCornerShape(28.dp),
+                    onClick = {
+                        resetInactivityTimer()
+                        scrollToBottomGuaranteed("FAB_Click")
+                    },
+                    modifier = Modifier.padding(bottom = 100.dp + 16.dp + 15.dp),
+                    shape = CircleShape,
                     containerColor = Color.White,
                     contentColor = Color.Black,
                     elevation = FloatingActionButtonDefaults.elevation(
-                        defaultElevation = 4.dp,
-                        pressedElevation = 6.dp
+                        defaultElevation = 0.dp,
+                        pressedElevation = 0.dp,
+                        focusedElevation = 0.dp,
+                        hoveredElevation = 0.dp
                     )
                 ) { Icon(Icons.Filled.ArrowDownward, "滚动到底部") }
             }
@@ -446,10 +496,10 @@ fun ChatScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(scaffoldPaddingValues)
-                .background(Color.White)
-                .imePadding()
-                .navigationBarsPadding()
+                .padding(scaffoldPaddingValues) // Apply padding from Scaffold
+                .background(Color.White) // Use theme color
+                .imePadding() // Handles IME insets
+                .navigationBarsPadding() // Handles navigation bar insets
         ) {
             Box(
                 modifier = Modifier
@@ -462,80 +512,72 @@ fun ChatScreen(
                     LazyColumn(
                         modifier = Modifier
                             .fillMaxSize()
-                            .background(Color.White)
+                            // .background(MaterialTheme.colorScheme.surface) // Already on parent Column
                             .nestedScroll(nestedScrollConnection)
-                            .padding(horizontal = 8.dp),
+                            .padding(horizontal = 8.dp), // Keep horizontal padding
                         state = listState,
                         contentPadding = PaddingValues(
                             top = 8.dp,
-                            bottom = normalBottomPaddingForAIChat
+                            // normalBottomPaddingForAIChat was 16.dp, let's keep it or make it more dynamic
+                            bottom = 16.dp
                         )
                     ) {
-                        items(items = messages, key = { it.id }) { message ->
-                            val showLoading =
-                                message.sender == Sender.AI &&
-                                        message.id == currentStreamingAiMessageId &&
-                                        isApiCalling &&
-                                        !message.contentStarted &&
-                                        message.text.isBlank() &&
-                                        !message.isError
-
-                            val isMainContentStreamingThisMessage =
-                                message.sender == Sender.AI &&
-                                        message.id == currentStreamingAiMessageId &&
-                                        isApiCalling &&
-                                        message.contentStarted
-
-                            val isReasoningStreamingThisMessage =
-                                message.sender == Sender.AI &&
-                                        message.id == currentStreamingAiMessageId &&
-                                        isApiCalling &&
-                                        !message.reasoning.isNullOrBlank() &&
-                                        !(reasoningCompleteMap[message.id] ?: false)
+                        items(items = messages, key = { message -> message.id }) { message ->
+                            // Determine loading states based on ViewModel state
+                            val isLoadingMessage =
+                                message.id == currentStreamingAiMessageId && isApiCalling
+                            val showLoadingDots =
+                                isLoadingMessage && message.text.isBlank() && !message.contentStarted && !message.isError
 
                             MessageBubble(
                                 message = message,
                                 viewModel = viewModel,
                                 onUserInteraction = { resetInactivityTimer() },
-                                isMainContentStreaming = isMainContentStreamingThisMessage,
-                                isReasoningStreaming = isReasoningStreamingThisMessage,
+                                isMainContentStreaming = isLoadingMessage && message.contentStarted, // Simplified
+                                isReasoningStreaming = isLoadingMessage && !message.reasoning.isNullOrBlank() && !(reasoningCompleteMap[message.id]
+                                    ?: false), // Simplified
                                 isReasoningComplete = (reasoningCompleteMap[message.id] ?: false),
                                 maxWidth = bubbleMaxWidth,
-                                showLoadingBubble = showLoading,
+                                showLoadingBubble = showLoadingDots, // Use the calculated var
                                 onEditRequest = { msg ->
-                                    resetInactivityTimer(); viewModel.requestEditMessage(msg)
+                                    resetInactivityTimer()
+                                    viewModel.requestEditMessage(msg)
                                 },
                                 onRegenerateRequest = { userMsg ->
-                                    resetInactivityTimer(); viewModel.regenerateAiResponse(userMsg)
+                                    resetInactivityTimer()
+                                    viewModel.regenerateAiResponse(userMsg)
                                 }
                             )
                         }
-                        item(key = "footer") {
-                            Spacer(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(0.dp)
-                            )
+                        // Footer Spacer for robust scrolling to the very end
+                        item(key = "chat_screen_footer_spacer") { // More descriptive key
+                            Spacer(modifier = Modifier.height(1.dp)) // Minimal height, just needs to be targetable
                         }
                     }
                 }
             }
 
+            // Input Area
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .shadow(
-                        6.dp,
-                        RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+                    .shadow( // Shadow for visual separation
+                        elevation = 6.dp,
+                        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
                         clip = false
                     )
                     .background(
                         Color.White,
                         RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
                     )
-                    .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
-                    .padding(horizontal = 8.dp, vertical = 8.dp)
-                    .heightIn(min = estimatedInputAreaHeight)
+                    .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)) // Clip contents
+                    .padding(
+                        start = 8.dp,
+                        end = 8.dp,
+                        top = 8.dp,
+                        bottom = 8.dp
+                    ) // Consistent padding
+                // .heightIn(min = estimatedInputAreaHeight) // Let it wrap content naturally
             ) {
                 OutlinedTextField(
                     value = text,
@@ -544,93 +586,85 @@ fun ChatScreen(
                         .fillMaxWidth()
                         .focusRequester(focusRequester)
                         .onFocusChanged { if (it.isFocused) resetInactivityTimer() }
-                        .padding(bottom = 1.dp),
+                        .padding(bottom = 4.dp), // Space before buttons
                     placeholder = { Text("输入消息…") },
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = MaterialTheme.colorScheme.onSurface,
-                        unfocusedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        // Use OutlinedTextFieldDefaults.colors
+                        focusedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        unfocusedTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                         focusedContainerColor = Color.White,
                         unfocusedContainerColor = Color.White,
                         cursorColor = MaterialTheme.colorScheme.primary,
-                        focusedBorderColor = Color.Transparent,
-                        unfocusedBorderColor = Color.Transparent,
-                        disabledBorderColor = Color.Transparent,
-                        errorBorderColor = MaterialTheme.colorScheme.error,
+                        focusedBorderColor = Color.Transparent, // No border when focused
+                        unfocusedBorderColor = Color.Transparent, // No border when unfocused
                     ),
                     minLines = 1, maxLines = 5,
-                    shape = RoundedCornerShape(16.dp),
-                    trailingIcon = {
-                        if (text.isNotEmpty()) {
-                            IconButton(
-                                onClick = { viewModel.onTextChange(""); resetInactivityTimer() },
-                                modifier = Modifier.size(40.dp)
-                            ) {
-                                Icon(
-                                    Icons.Filled.Clear,
-                                    "清除内容",
-                                    Modifier.size(20.dp),
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
+                    shape = RoundedCornerShape(16.dp) // Rounded corners for text field
                 )
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(top = 4.dp, bottom = 4.dp)
+                Row( // Buttons in a Row for better alignment
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(
-                        onClick = { resetInactivityTimer(); viewModel.toggleWebSearchMode(!isWebSearchEnabled) },
-                        modifier = Modifier
-                            .align(Alignment.CenterStart)
-                            .padding(start = 8.dp)
-                            .size(44.dp)
+                        onClick = {
+                            resetInactivityTimer()
+                            viewModel.toggleWebSearchMode(!isWebSearchEnabled)
+                        },
+                        // modifier = Modifier.size(44.dp) // Let IconButton define its own size usually
                     ) {
                         Icon(
                             imageVector = Icons.Filled.TravelExplore,
                             contentDescription = if (isWebSearchEnabled) "关闭联网搜索" else "开启联网搜索",
                             tint = if (isWebSearchEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(24.dp)
+                            // modifier = Modifier.size(24.dp) // Default size is fine
                         )
                     }
 
-                    val isKeyboardVisible by remember(imeInsets, density) {
-                        derivedStateOf { imeInsets.getBottom(density) > 0 }
-                    }
-                    FilledIconButton(
-                        onClick = {
-                            resetInactivityTimer()
-                            if (isApiCalling) {
-                                viewModel.onCancelAPICall()
-                            } else if (text.isNotBlank() && selectedApiConfig != null) {
-                                if (isKeyboardVisible) {
-                                    pendingMessageText = text
-                                    viewModel.onTextChange("")
-                                    keyboardController?.hide()
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (text.isNotEmpty()) {
+                            IconButton(
+                                onClick = { viewModel.onTextChange(""); resetInactivityTimer() }
+                            ) {
+                                Icon(
+                                    Icons.Filled.Clear, "清除内容",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Spacer(Modifier.width(4.dp)) // Space between clear and send
+                        FilledIconButton(
+                            onClick = {
+                                resetInactivityTimer()
+                                if (isApiCalling) {
+                                    viewModel.onCancelAPICall()
+                                } else if (text.isNotBlank() && selectedApiConfig != null) {
+                                    val isKeyboardCurrentlyVisible =
+                                        imeInsets.getBottom(density) > 0
+                                    if (isKeyboardCurrentlyVisible) {
+                                        pendingMessageText = text // Store text
+                                        viewModel.onTextChange("") // Clear current input
+                                        keyboardController?.hide() // Hide keyboard
+                                    } else {
+                                        viewModel.onSendMessage(text) // Send directly
+                                    }
+                                } else if (selectedApiConfig == null) {
+                                    viewModel.showSnackbar("请先选择 API 配置")
                                 } else {
-                                    viewModel.onSendMessage(text)
+                                    viewModel.showSnackbar("请输入消息内容")
                                 }
-                            } else if (selectedApiConfig == null) viewModel.showSnackbar("请先选择 API 配置")
-                            else viewModel.showSnackbar("请输入消息内容")
-                        },
-                        modifier = Modifier
-                            .align(Alignment.CenterEnd)
-                            .padding(end = 8.dp)
-                            .size(44.dp),
-                        shape = CircleShape,
-                        colors = IconButtonDefaults.filledIconButtonColors(
-                            containerColor = Color.Black,
-                            contentColor = Color.White,
-                            disabledContainerColor = Color.DarkGray,
-                            disabledContentColor = Color.LightGray
-                        )
-                    ) {
-                        Icon(
-                            if (isApiCalling) Icons.Filled.Stop else Icons.Filled.ArrowUpward,
-                            if (isApiCalling) "停止" else "发送",
-                            Modifier.size(20.dp)
-                        )
+                            },
+                            shape = CircleShape,
+                            colors = IconButtonDefaults.filledIconButtonColors(
+                                containerColor = Color.Black,
+                                contentColor = Color.White
+                            )
+                        ) {
+                            Icon(
+                                if (isApiCalling) Icons.Filled.Stop else Icons.AutoMirrored.Filled.Send, // AutoMirrored.Filled.Send for LTR/RTL
+                                if (isApiCalling) "停止" else "发送"
+                            )
+                        }
                     }
                 }
             }
@@ -640,35 +674,31 @@ fun ChatScreen(
             AlertDialog(
                 onDismissRequest = { viewModel.dismissEditDialog() },
                 containerColor = Color.White,
-                title = { Text("编辑消息", color = Color.Black) },
+                title = { Text("编辑消息", color = MaterialTheme.colorScheme.onSurface) },
                 text = {
                     OutlinedTextField(
                         value = editDialogInputText,
                         onValueChange = viewModel::onEditDialogTextChanged,
-                        modifier = Modifier.fillMaxWidth(), label = { Text("消息内容") },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("消息内容") },
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = Color.Black,
-                            unfocusedTextColor = Color.Black,
-                            cursorColor = Color.Black,
-                            focusedContainerColor = Color.White,
-                            unfocusedContainerColor = Color.White,
-                            disabledContainerColor = Color.White,
-                            focusedBorderColor = Color.Black,
-                            unfocusedBorderColor = Color.Black,
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            // other colors will use defaults or inherit
                         ),
-                        singleLine = false, maxLines = 5, shape = RoundedCornerShape(8.dp)
+                        singleLine = false, maxLines = 5,
+                        shape = RoundedCornerShape(8.dp)
                     )
                 },
                 confirmButton = {
                     TextButton(
                         onClick = { viewModel.confirmMessageEdit() },
-                        colors = ButtonDefaults.textButtonColors(contentColor = Color.Black)
+                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.primary)
                     ) { Text("确定") }
                 },
                 dismissButton = {
                     TextButton(
                         onClick = { viewModel.dismissEditDialog() },
-                        colors = ButtonDefaults.textButtonColors(contentColor = Color.Black)
+                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant)
                     ) { Text("取消") }
                 },
                 shape = RoundedCornerShape(20.dp)
@@ -689,42 +719,54 @@ fun EmptyChatAnimation(density: Density) {
     Box(
         Modifier
             .fillMaxSize()
-            .padding(16.dp), Alignment.Center
+            .padding(16.dp),
+        contentAlignment = Alignment.Center
     ) {
         Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.Center) {
-            val style = LocalTextStyle.current.copy(
-                fontSize = 36.sp,
+            val style = MaterialTheme.typography.displayMedium.copy(
+                // Use MaterialTheme typography
                 fontWeight = FontWeight.ExtraBold,
-                color = Color.Black,
-                fontFamily = FontFamily.SansSerif
+                // color = MaterialTheme.colorScheme.onSurface // Color will be inherited
             )
             Text("你好", style = style)
             val animY = remember { List(3) { Animatable(0f) } }
             LaunchedEffect(Unit) {
-                animY.forEach { it.snapTo(0f) }
+                animY.forEach { it.snapTo(0f) } // Initialize
                 try {
-                    repeat(5) { cycle ->
+                    // Simplified animation, can be made more elaborate if needed
+                    repeat(Int.MAX_VALUE) { // Loop indefinitely or for a fixed number of cycles
                         if (!isActive) throw CancellationException("你好动画取消")
-                        val amp = with(density) { (-8).dp.toPx() } * (0.7f.pow(cycle))
-                        val dur = (250 + (600 - 250) * (cycle.toFloat() / 4f)).toInt()
-                        coroutineScope {
-                            animY.forEachIndexed { i, a ->
-                                launch {
-                                    delay(150L * i); a.animateTo(
-                                    amp,
-                                    tween(dur, easing = FastOutSlowInEasing)
-                                ); a.animateTo(0f, tween(dur, easing = FastOutSlowInEasing))
-                                }
+                        animY.forEachIndexed { index, anim ->
+                            launch {
+                                delay((index * 150L) % 450) // Staggered start
+                                anim.animateTo(
+                                    targetValue = with(density) { (-6).dp.toPx() },
+                                    animationSpec = tween(
+                                        durationMillis = 300,
+                                        easing = FastOutSlowInEasing
+                                    )
+                                )
+                                anim.animateTo(
+                                    targetValue = 0f,
+                                    animationSpec = tween(
+                                        durationMillis = 450,
+                                        easing = FastOutSlowInEasing
+                                    )
+                                )
+                                if (index == animY.lastIndex) delay(600) // Pause at the end of a full cycle
                             }
                         }
+                        delay(1200) // Wait for one full cycle of all dots to roughly complete + pause
                     }
                 } catch (e: CancellationException) {
-                    Log.d("Animation", "你好动画已取消"); animY.forEach { it.snapTo(0f) }
+                    Log.d("Animation", "你好动画已取消")
+                    // Ensure dots reset on cancellation
+                    coroutineScope { animY.forEach { launch { it.snapTo(0f) } } }
                 }
             }
             animY.forEach {
                 Text(
-                    ".",
+                    text = ".",
                     style = style,
                     modifier = Modifier.offset(y = with(density) { it.value.toDp() })
                 )

@@ -12,7 +12,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavController
 import com.example.everytalk.StateControler.AppViewModel
 import com.example.everytalk.data.local.SharedPreferencesDataSource
-import java.util.UUID
 
 
 @OptIn(ExperimentalMaterial3Api::class)

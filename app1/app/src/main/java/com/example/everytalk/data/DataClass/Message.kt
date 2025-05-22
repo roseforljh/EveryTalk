@@ -38,6 +38,7 @@ data class Message(
     // --- Web搜索相关字段 ---
     val webSearchResults: List<WebSearchResult>? = null, // 存储从后端接收到的Web搜索结果
 
-    var currentWebSearchStage: String? = null // 当前Web搜索/分析阶段 (例如："web_indexing_started", "web_analysis_complete")
+    var currentWebSearchStage: String? = null, // 当前Web搜索/分析阶段 (例如："web_indexing_started", "web_analysis_complete")
+    val htmlContent: String? = null
 )
 
