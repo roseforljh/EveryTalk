@@ -39,32 +39,16 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
-import com.example.everytalk.ui.components.PooledKatexWebView // Using the modified PooledKatexWebView
+import com.example.everytalk.ui.components.PooledKatexWebView
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.StateControler.AppViewModel
 import com.example.everytalk.data.DataClass.Sender
 import com.example.everytalk.ui.screens.BubbleMain.Main.toHexCss
 import com.example.everytalk.util.convertMarkdownToHtml
-
-import com.example.everytalk.util.generateKatexBaseHtmlTemplateString // Assuming path is correct
+import com.example.everytalk.util.convertMarkdownToPlainText // Import the new utility
+import com.example.everytalk.util.generateKatexBaseHtmlTemplateString
+import kotlinx.coroutines.delay // 确保这个导入存在
 import kotlinx.coroutines.flow.filter
-
-
-// Attribute provider to add "language-xxx" class to <code> tags within <pre> for Prism.js
-class FencedCodeBlockAttributeProvider : org.commonmark.renderer.html.AttributeProvider {
-    override fun setAttributes(
-        node: org.commonmark.node.Node,
-        tagName: String,
-        attributes: MutableMap<String, String>
-    ) {
-        if (node is org.commonmark.node.FencedCodeBlock && tagName == "code") {
-            val language = node.info // This is the string after ``` (e.g., "java")
-            if (language != null && language.isNotBlank()) {
-                attributes["class"] = "language-$language"
-            }
-        }
-    }
-}
 
 
 private const val CONTEXT_MENU_ANIMATION_DURATION_MS = 150
@@ -73,6 +57,7 @@ private val CONTEXT_MENU_ITEM_ICON_SIZE = 20.dp
 private val CONTEXT_MENU_FINE_TUNE_OFFSET_X = (-120).dp
 private val CONTEXT_MENU_FINE_TUNE_OFFSET_Y = (-8).dp
 private val CONTEXT_MENU_FIXED_WIDTH = 160.dp
+private const val TYPEWRITER_DELAY_MS = 10L // 调整为50L或更高以便观察
 
 @Composable
 internal fun AnimatedDropdownMenuItem(
@@ -131,12 +116,19 @@ fun rememberKatexBaseHtmlTemplate(
 internal fun AiMessageContent(
     message: Message,
     appViewModel: AppViewModel,
-    fullMessageTextToCopy: String, // This should be message.text
-    showLoadingDots: Boolean,      // True if message.text is blank but AI is active
+    fullMessageTextToCopy: String, // This is message.text (raw Markdown)
+    showLoadingDots: Boolean,      // True if AI is active for this message
     contentColor: Color,
     onUserInteraction: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    Log.d(
+        "AiMessageContent_Lifecycle",
+        "Composing for MsgID ${message.id.take(4)}. showLoadingDots: $showLoadingDots, message.text blank: ${message.text.isBlank()}, message.text='${
+            message.text.take(30).replace("\n", "\\n")
+        }'"
+    )
+
     val clipboardManager = LocalClipboardManager.current
     val density = LocalDensity.current
 
@@ -144,52 +136,155 @@ internal fun AiMessageContent(
     var pressOffset by remember(fullMessageTextToCopy) { mutableStateOf(Offset.Zero) }
     var showSelectableTextDialog by remember(fullMessageTextToCopy) { mutableStateOf(false) }
 
-    val webViewContentId = remember(message.id) { "${message.id}_ai_content_stream_wv" }
+    var displayedTextForTypewriter by remember(message.id) { mutableStateOf("") }
+    var targetPlainTextMessage by remember(message.id) { mutableStateOf("") }
 
-    // State for the HTML chunk to append, with a UUID as trigger key
-    var htmlChunkToAppendState by remember { mutableStateOf<Pair<String, String>?>(null) }
+    val webViewContentId = remember(message.id) { "${message.id}_ai_content_wv_final" }
 
-    // Subscribe to markdown chunks from ViewModel for this specific message
     LaunchedEffect(message.id, appViewModel.markdownChunkToAppendFlow) {
+        var accumulatedPlainText = ""
+        Log.d(
+            "AiMessageContent_Stream",
+            "MsgID ${message.id.take(4)}: Subscribing to markdown chunks."
+        )
         appViewModel.markdownChunkToAppendFlow
-            .filter { (msgId, _) -> msgId == message.id } // Only process chunks for this message
-            .collect { (_, markdownChunkPair) -> // markdownChunkPair is Pair<TriggerKey, MarkdownChunk>
+            .filter { (msgId, _) -> msgId == message.id }
+            .collect { (msgIdFromFlow, markdownChunkPair) ->
                 val triggerKey = markdownChunkPair.first
                 val markdownChunk = markdownChunkPair.second
+                Log.d(
+                    "AiMessageContent_Stream",
+                    "MsgID ${message.id.take(4)} (Flow MsgID ${msgIdFromFlow.take(4)}): Received mdChunk (key ${
+                        triggerKey.take(4)
+                    }, len ${markdownChunk.length}): \"${
+                        markdownChunk.take(50).replace("\n", "\\n")
+                    }\""
+                )
                 if (markdownChunk.isNotBlank()) {
-                    val htmlChunk =
-                        convertMarkdownToHtml(markdownChunk) // Convert markdown chunk to HTML
+                    val plainTextChunk = convertMarkdownToPlainText(markdownChunk)
                     Log.d(
                         "AiMessageContent_Stream",
-                        "MsgID ${message.id.take(4)}: Received mdChunk (key ${triggerKey.take(4)}), converted to htmlChunk (len ${htmlChunk.length}): \"${
-                            htmlChunk.take(50).replace("\n", "\\n")
+                        "MsgID ${message.id.take(4)}: Converted to plainTextChunk (len ${plainTextChunk.length}): \"${
+                            plainTextChunk.take(50).replace("\n", "\\n")
                         }\""
                     )
-                    htmlChunkToAppendState =
-                        triggerKey to htmlChunk // Update state to pass to PooledKatexWebView
+                    if (plainTextChunk.isNotBlank()) {
+                        accumulatedPlainText += plainTextChunk
+                        targetPlainTextMessage = accumulatedPlainText
+                        Log.d(
+                            "AiMessageContent_Stream",
+                            "MsgID ${message.id.take(4)}: Updated targetPlainTextMessage (len ${targetPlainTextMessage.length}): \"${
+                                targetPlainTextMessage.take(50).replace("\n", "\\n")
+                            }\""
+                        )
+                    } else {
+                        Log.d(
+                            "AiMessageContent_Stream",
+                            "MsgID ${message.id.take(4)}: plainTextChunk was blank after conversion."
+                        )
+                    }
+                } else {
+                    Log.d(
+                        "AiMessageContent_Stream",
+                        "MsgID ${message.id.take(4)}: Received blank mdChunk."
+                    )
                 }
             }
+        Log.d(
+            "AiMessageContent_Stream",
+            "MsgID ${message.id.take(4)}: Finished collecting markdown chunks (flow might have completed or coroutine cancelled)."
+        )
     }
 
-    // The initial/full HTML content derived from the complete message.text
-    val initialOrFullHtmlInput = remember(message.text, message.sender, message.isError) {
-        if (message.sender == Sender.AI && !message.isError) {
-            if (!message.htmlContent.isNullOrBlank()) { // ★★★ 优先使用预渲染的 HTML ★★★
-                Log.d("AiMessageContent_Full", "Using pre-rendered HTML for MsgID ${message.id.take(4)}")
-                message.htmlContent!!
-            } else if (message.text.isNotBlank()) { // Fallback for older messages or if htmlContent somehow not generated yet
-                Log.d("AiMessageContent_Full", "MsgID ${message.id.take(4)}: Generating initialOrFullHtmlInput from message.text (len ${message.text.length}) as htmlContent is missing.")
-                convertMarkdownToHtml(message.text.trim()) // 这里的 convertMarkdownToHtml 应该也从 util 导入
+    LaunchedEffect(targetPlainTextMessage) {
+        Log.d(
+            "AiMessageContent_Typewriter",
+            "Effect run for MsgID ${message.id.take(4)}. showLoadingDots: $showLoadingDots. Target='${
+                targetPlainTextMessage.take(50).replace("\n", "\\n")
+            }'. CurrentDisplay='${displayedTextForTypewriter.take(50).replace("\n", "\\n")}'"
+        )
+        if (showLoadingDots) {
+            if (displayedTextForTypewriter.length < targetPlainTextMessage.length) {
+                val newChars = targetPlainTextMessage.substring(displayedTextForTypewriter.length)
+                Log.d(
+                    "AiMessageContent_Typewriter",
+                    "MsgID ${message.id.take(4)}: New chars to type: '${
+                        newChars.take(50).replace("\n", "\\n")
+                    }'"
+                )
+                newChars.forEach { char ->
+                    displayedTextForTypewriter += char
+                    // Log.d("AiMessageContent_Typewriter", "MsgID ${message.id.take(4)}: Typed '$char'. Current: '${displayedTextForTypewriter.take(50).replace("\n", "\\n")}'") // Very verbose
+                    delay(TYPEWRITER_DELAY_MS)
+                }
+                Log.d(
+                    "AiMessageContent_Typewriter",
+                    "MsgID ${message.id.take(4)}: Finished typing loop. Displayed: '${
+                        displayedTextForTypewriter.take(50).replace("\n", "\\n")
+                    }'"
+                )
+            } else if (displayedTextForTypewriter.length > targetPlainTextMessage.length) {
+                Log.d(
+                    "AiMessageContent_Typewriter",
+                    "MsgID ${message.id.take(4)}: Target is shorter. Resetting displayed text to target."
+                )
+                displayedTextForTypewriter = targetPlainTextMessage
             } else {
-                Log.d("AiMessageContent_Full", "MsgID ${message.id.take(4)}: initialOrFullHtmlInput is empty.")
-                "" // Start with empty for new streaming messages or if no text
+                Log.d(
+                    "AiMessageContent_Typewriter",
+                    "MsgID ${message.id.take(4)}: No new chars to type or target is not shorter."
+                )
             }
         } else {
             Log.d(
-                "AiMessageContent_Full",
-                "MsgID ${message.id.take(4)}: initialOrFullHtmlInput is empty."
+                "AiMessageContent_Typewriter",
+                "MsgID ${message.id.take(4)}: Not in showLoadingDots mode. CurrentDisplay='${
+                    displayedTextForTypewriter.take(50).replace("\n", "\\n")
+                }'. message.text blank: ${message.text.isBlank()}"
             )
-            "" // Start with empty for new streaming messages or if no text
+            // If not streaming, and the final message.text is available,
+            // we might want to ensure displayedTextForTypewriter is cleared or reflects final plain text if needed for some edge case.
+            // However, the main UI will switch to WebView, so this might not be strictly necessary.
+            // if (message.text.isBlank() || message.sender != Sender.AI || message.isError) {
+            //    displayedTextForTypewriter = "" // Example: clear if not a valid AI message for typewriter
+            // }
+        }
+    }
+
+
+    val finalHtmlInput = remember(
+        message.text,
+        message.htmlContent,
+        message.sender,
+        message.isError,
+        showLoadingDots
+    ) {
+        if (message.sender == Sender.AI && !message.isError && !showLoadingDots) {
+            if (!message.htmlContent.isNullOrBlank()) {
+                Log.d(
+                    "AiMessageContent_FinalHTML",
+                    "Using pre-rendered HTML for MsgID ${message.id.take(4)}"
+                )
+                message.htmlContent!!
+            } else if (message.text.isNotBlank()) {
+                Log.d(
+                    "AiMessageContent_FinalHTML",
+                    "MsgID ${message.id.take(4)}: Generating finalHtmlInput from message.text (len ${message.text.length})"
+                )
+                convertMarkdownToHtml(message.text.trim())
+            } else {
+                Log.d(
+                    "AiMessageContent_FinalHTML",
+                    "MsgID ${message.id.take(4)}: Final HTML is empty because message.text is blank."
+                )
+                ""
+            }
+        } else {
+            Log.d(
+                "AiMessageContent_FinalHTML",
+                "MsgID ${message.id.take(4)}: Not generating final HTML. sender=${message.sender}, isError=${message.isError}, showLoadingDots=$showLoadingDots"
+            )
+            ""
         }
     }
 
@@ -200,53 +295,116 @@ internal fun AiMessageContent(
             })
         }
     ) {
-        if (showLoadingDots && message.text.isBlank() && !message.isError) {
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .defaultMinSize(minHeight = 28.dp)
-            ) {
-                ThreeDotsLoadingAnimation(
-                    dotColor = contentColor,
-                    modifier = Modifier.offset(y = (-6).dp)
+        Log.d(
+            "AiMessageContent_Render",
+            "Rendering Column for MsgID ${message.id.take(4)}. showLoadingDots: $showLoadingDots. displayedText='${
+                displayedTextForTypewriter.take(30).replace("\n", "\\n")
+            }', targetText='${
+                targetPlainTextMessage.take(30).replace("\n", "\\n")
+            }', finalHtmlInput blank: ${finalHtmlInput.isBlank()}"
+        )
+
+        if (showLoadingDots) {
+            if (displayedTextForTypewriter.isBlank() && targetPlainTextMessage.isBlank()) {
+                // Stream started, but no text received/processed yet
+                Log.d(
+                    "AiMessageContent_Render",
+                    "MsgID ${message.id.take(4)}: Showing loading dots (initial stream)."
                 )
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .defaultMinSize(minHeight = 28.dp)
+                ) {
+                    ThreeDotsLoadingAnimation(
+                        dotColor = contentColor,
+                        modifier = Modifier.offset(y = (-6).dp)
+                    )
+                }
+            } else {
+                // Streaming, show typewriter text
+                Log.d(
+                    "AiMessageContent_Render",
+                    "MsgID ${message.id.take(4)}: Showing typewriter text (len ${displayedTextForTypewriter.length}): '${
+                        displayedTextForTypewriter.take(50).replace("\n", "\\n")
+                    }'"
+                )
+                SelectionContainer(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = displayedTextForTypewriter.trimStart().ifEmpty { " " },
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = contentColor,
+                        modifier = Modifier
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                            .defaultMinSize(minHeight = 20.dp)
+                    )
+                }
             }
-        } else if (message.sender == Sender.AI && !message.isError) {
-            // Always render PooledKatexWebView for AI messages if not an error.
-            // It will handle empty initial input gracefully and wait for chunks.
-            val textColorHex = remember(contentColor) { contentColor.toHexCss() }
-            val baseHtmlTemplate = rememberKatexBaseHtmlTemplate(
-                backgroundColor = "transparent",
-                textColor = textColorHex,
-                errorColor = "#CD5C5C",
-                throwOnError = false
-            )
-
-            Log.d(
-                "AiMessageContent_Render",
-                "MsgID ${message.id.take(4)}: Rendering PooledKatexWebView. InitialHTML len: ${initialOrFullHtmlInput.length}. Current chunk key: ${
-                    htmlChunkToAppendState?.first?.take(4)
-                }"
-            )
-
-            PooledKatexWebView(
-                appViewModel = appViewModel,
-                contentId = webViewContentId,
-                initialLatexInput = initialOrFullHtmlInput,
-                htmlChunkToAppend = htmlChunkToAppendState,
-                htmlTemplate = baseHtmlTemplate,
-                modifier = Modifier.heightIn(min = 1.dp) // Allow content to define its height
-            )
-        } else if (message.sender == Sender.AI && message.text.isBlank() && !message.isError && !showLoadingDots) {
-            // AI message is blank, not an error, and not in a loading state (e.g., stream ended with no content)
-            Spacer(Modifier.height(1.dp))
-            Log.d(
-                "AiMessageContent_Render",
-                "MsgID ${message.id.take(4)}: AI message is blank, not loading, not error. Showing spacer."
-            )
+        } else { // AI generation finished for this message (or message was not streaming)
+            if (message.sender == Sender.AI && !message.isError) {
+                if (finalHtmlInput.isNotBlank()) {
+                    Log.d(
+                        "AiMessageContent_Render",
+                        "MsgID ${message.id.take(4)}: Rendering PooledKatexWebView with final HTML (len ${finalHtmlInput.length})."
+                    )
+                    val textColorHex = remember(contentColor) { contentColor.toHexCss() }
+                    val baseHtmlTemplate = rememberKatexBaseHtmlTemplate(
+                        backgroundColor = "transparent",
+                        textColor = textColorHex,
+                        errorColor = "#CD5C5C",
+                        throwOnError = false
+                    )
+                    PooledKatexWebView(
+                        appViewModel = appViewModel,
+                        contentId = webViewContentId,
+                        initialLatexInput = finalHtmlInput,
+                        htmlChunkToAppend = null,
+                        htmlTemplate = baseHtmlTemplate,
+                        modifier = Modifier.heightIn(min = 1.dp)
+                    )
+                } else if (message.text.isBlank()) {
+                    Log.d(
+                        "AiMessageContent_Render",
+                        "MsgID ${message.id.take(4)}: AI finished, message is blank. Showing spacer."
+                    )
+                    Spacer(Modifier.height(1.dp))
+                } else {
+                    Log.d(
+                        "AiMessageContent_Render",
+                        "MsgID ${message.id.take(4)}: AI finished, finalHtmlInput is blank but message.text is not. Fallback to plain text."
+                    )
+                    Text(
+                        text = convertMarkdownToPlainText(message.text.trimStart()),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = contentColor,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                    )
+                }
+            } else {
+                Log.d(
+                    "AiMessageContent_Render",
+                    "MsgID ${message.id.take(4)}: Not AI or isError. sender=${message.sender}, isError=${message.isError}"
+                )
+                if (message.isError && message.text.isNotBlank()) {
+                    Text(
+                        text = message.text,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                    )
+                } else if (message.sender != Sender.AI && message.text.isNotBlank()) { // Handle non-AI messages if this composable is ever used for them
+                    Text(
+                        text = message.text,
+                        color = contentColor,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                    )
+                } else {
+                    Spacer(Modifier.height(1.dp))
+                }
+            }
         }
-        // Context Menu (remains unchanged)
+
+        // Context Menu
         if (isAiContextMenuVisible) {
             val localContextForToast = LocalContext.current
             val aiMenuVisibility = remember { MutableTransitionState(false) }.apply {
@@ -321,7 +479,7 @@ internal fun AiMessageContent(
             }
         }
 
-        // Selectable Text Dialog (remains unchanged)
+        // Selectable Text Dialog
         if (showSelectableTextDialog) {
             SelectableTextDialog(
                 textToDisplay = fullMessageTextToCopy,

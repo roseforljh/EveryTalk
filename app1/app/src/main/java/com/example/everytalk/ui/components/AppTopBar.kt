@@ -1,25 +1,19 @@
 package com.example.everytalk.ui.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
+import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -34,85 +28,97 @@ fun AppTopBar(
     selectedConfigName: String,
     onMenuClick: () -> Unit,
     onSettingsClick: () -> Unit,
+    onTitleClick: () -> Unit, // 新增：点击标题/模型名称的回调
     modifier: Modifier = Modifier,
-    barHeight: Dp = 85.dp, // 您期望的顶栏整体高度
-    contentPaddingHorizontal: Dp = 8.dp, // 内容区域左右的内边距
-    bottomAlignPadding: Dp = 12.dp,       // 元素与底部的间距
-    titleFontSize: TextUnit = 17.sp, // 标题字体大小
-    iconButtonSize: Dp = 36.dp, // IconButton 的尺寸 (影响触摸区域)
-    iconSize: Dp = 22.dp // Icon 本身的尺寸
+    barHeight: Dp = 85.dp,
+    contentPaddingHorizontal: Dp = 8.dp,
+    bottomAlignPadding: Dp = 12.dp,
+    titleFontSize: TextUnit = 12.sp, // 稍微调小一点以便适应胶囊
+    iconButtonSize: Dp = 36.dp,
+    iconSize: Dp = 22.dp
 ) {
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .height(barHeight) // 1. 设置顶栏的整体高度
-            .background(Color.White), // 背景色直接在 Surface 上设置，如果需要的话
-        color = Color.White, // Surface 的容器颜色
+            .height(barHeight)
+            .background(Color.White),
+
+        color = Color.White,
     ) {
         Row(
             modifier = Modifier
-                .fillMaxSize() // 填满 Surface
-                .padding(horizontal = contentPaddingHorizontal), // 2. 设置内容区域的左右内边距
-            // verticalAlignment 现在不再是 CenterVertically，而是通过 Box 的对齐来控制
-            horizontalArrangement = Arrangement.SpaceBetween // 使标题能占据中间，图标在两边
+                .fillMaxSize()
+                .padding(horizontal = contentPaddingHorizontal),
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            // Navigation Icon - 对齐到底部
+            // Navigation Icon
             Box(
                 modifier = Modifier
-                    .size(iconButtonSize) // IconButton 的尺寸
-                    .align(Alignment.Bottom) // 使整个 Box 在 Row 中底部对齐
-                    .padding(bottom = bottomAlignPadding), // Box 内容与底部的间距
-                contentAlignment = Alignment.Center // Icon 在 IconButton 的 Box 内居中
+                    .size(iconButtonSize)
+                    .align(Alignment.Bottom)
+                    .padding(bottom = bottomAlignPadding),
+                contentAlignment = Alignment.Center
             ) {
-                IconButton(
-                    onClick = onMenuClick,
-                    // IconButton 本身会填满 Box
-                ) {
+                IconButton(onClick = onMenuClick) {
                     Icon(
                         imageVector = Icons.Filled.Menu,
                         contentDescription = "打开导航菜单",
                         tint = Color.Black,
-                        modifier = Modifier.size(iconSize) // 设置 Icon 尺寸
+                        modifier = Modifier.size(iconSize)
                     )
                 }
             }
 
-            // Title - 对齐到底部
+            // Title as a Capsule Button
             Box(
                 modifier = Modifier
-                    .weight(1f) // 让标题占据 IconButton 之间的剩余空间
-                    .fillMaxHeight() // 填充垂直空间，以便使用 align 控制
-                    .padding(horizontal = 8.dp), // 标题与图标之间的间距
-                contentAlignment = Alignment.BottomCenter // 内容在 Box 内底部居中
+                    .weight(1f)
+                    .height(barHeight) // 让Box和Bar一样高，方便垂直居中胶囊
+                    .padding(horizontal = 4.dp) // 给胶囊一些呼吸空间
+                    .align(Alignment.Bottom) // 确保胶囊在底部对齐线上
+                    .padding(bottom = bottomAlignPadding - 4.dp), // 调整胶囊的底部对齐，使其视觉上更协调
+                contentAlignment = Alignment.BottomCenter // 胶囊按钮在Box中底部居中
             ) {
-                Text(
-                    text = selectedConfigName,
-                    color = Color.Black,
-                    fontSize = titleFontSize,
-                    fontWeight = FontWeight.Medium,
-                    textAlign = TextAlign.Center,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(bottom = bottomAlignPadding) // 文本与底部的间距
-                )
+                Surface( // 使用Surface制作胶囊背景和形状
+                    shape = CircleShape, // 胶囊形状 (等同于 RoundedCornerShape(percent = 50))
+                    color = Color(0xffececec), // 胶囊背景色
+                    modifier = Modifier
+                        .height(28.dp) // 胶囊的高度
+                        .wrapContentWidth(unbounded = false) //修饰符以显式声明包裹内容宽度,确保它不超过父容器允许的宽度
+                        .clip(CircleShape) // 确保点击效果也在胶囊内
+                        .clickable(onClick = onTitleClick) // 点击事件
+                ) {
+                    Text(
+                        text = selectedConfigName,
+                        color = Color(0xff57585d),
+                        fontSize = titleFontSize,
+                        fontWeight = FontWeight.Medium,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .padding(horizontal = 12.dp, vertical = 4.dp) // 胶囊内部文字的 padding
+                            .align(Alignment.Center) // 文字在Surface内居中
+                            .offset(y = (-1.8).dp)
+                    )
+                }
             }
 
-            // Action Icon - 对齐到底部
+
+            // Action Icon
             Box(
                 modifier = Modifier
-                    .size(iconButtonSize) // IconButton 的尺寸
-                    .align(Alignment.Bottom) // 使整个 Box 在 Row 中底部对齐
-                    .padding(bottom = bottomAlignPadding), // Box 内容与底部的间距
-                contentAlignment = Alignment.Center // Icon 在 IconButton 的 Box 内居中
+                    .size(iconButtonSize)
+                    .align(Alignment.Bottom)
+                    .padding(bottom = bottomAlignPadding),
+                contentAlignment = Alignment.Center
             ) {
-                IconButton(
-                    onClick = onSettingsClick,
-                ) {
+                IconButton(onClick = onSettingsClick) {
                     Icon(
                         imageVector = Icons.Filled.Settings,
                         contentDescription = "设置",
                         tint = Color.Black,
-                        modifier = Modifier.size(iconSize) // 设置 Icon 尺寸
+                        modifier = Modifier.size(iconSize)
                     )
                 }
             }

@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import androidx.compose.material3.DrawerState
 import androidx.compose.runtime.snapshots.SnapshotStateList
+import androidx.compose.runtime.snapshots.SnapshotStateMap // 确保导入
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.everytalk.data.DataClass.ApiConfig
@@ -54,13 +55,12 @@ class AppViewModel(
             ::areMessageListsEffectivelyEqual
         )
 
-    // ApiHandler's callback is now onAiMessageChunkReceived
     private val apiHandler: ApiHandler by lazy {
         ApiHandler(
             stateHolder,
             viewModelScope,
             historyManager,
-            ::onAiMessageFullTextChanged // ★★★ 将这里改为新的回调函数引用 ★★★
+            ::onAiMessageFullTextChanged
         )
     }
     private val configManager: ConfigManager by lazy {
@@ -74,11 +74,9 @@ class AppViewModel(
 
     val webViewPool: WebViewPool by lazy {
         Log.d(TAG_APP_VIEW_MODEL, "Initializing WebViewPool")
-        WebViewPool(getApplication<Application>().applicationContext, maxSize = 8) // Your value
+        WebViewPool(getApplication<Application>().applicationContext, maxSize = 8)
     }
 
-    // --- Streaming Raw Markdown Chunk Handling ---
-    // Emits Pair<MessageID, Pair<ChunkTriggerKey, RawMarkdownChunk>>
     private val _markdownChunkToAppendFlow =
         MutableSharedFlow<Pair<String, Pair<String, String>>>(replay = 0, extraBufferCapacity = 128)
     val markdownChunkToAppendFlow: SharedFlow<Pair<String, Pair<String, String>>> =
@@ -97,7 +95,6 @@ class AppViewModel(
         )
     }
 
-    // --- ViewModel State Properties (Getters for values in ViewModelStateHolder) ---
     val drawerState: DrawerState get() = stateHolder.drawerState
     val text: StateFlow<String> get() = stateHolder._text.asStateFlow()
     val messages: SnapshotStateList<Message> get() = stateHolder.messages
@@ -107,8 +104,12 @@ class AppViewModel(
     val selectedApiConfig: StateFlow<ApiConfig?> get() = stateHolder._selectedApiConfig.asStateFlow()
     val isApiCalling: StateFlow<Boolean> get() = stateHolder._isApiCalling.asStateFlow()
     val currentStreamingAiMessageId: StateFlow<String?> get() = stateHolder._currentStreamingAiMessageId.asStateFlow()
-    val reasoningCompleteMap: Map<String, Boolean> get() = stateHolder.reasoningCompleteMap
-    val expandedReasoningStates: MutableMap<String, Boolean> get() = stateHolder.expandedReasoningStates
+
+    // ▼▼▼ Getter for SnapshotStateMap ▼▼▼
+    val reasoningCompleteMap: SnapshotStateMap<String, Boolean> get() = stateHolder.reasoningCompleteMap
+    val expandedReasoningStates: SnapshotStateMap<String, Boolean> get() = stateHolder.expandedReasoningStates
+    // ▲▲▲ Getter for SnapshotStateMap ▲▲▲
+
     val snackbarMessage: SharedFlow<String> get() = stateHolder._snackbarMessage.asSharedFlow()
     val scrollToBottomEvent: SharedFlow<Unit> get() = stateHolder._scrollToBottomEvent.asSharedFlow()
 
@@ -154,33 +155,66 @@ class AppViewModel(
     init {
         Log.d(TAG_APP_VIEW_MODEL, "ViewModel 初始化开始")
 
-        // ★★★ 修改开始：调用 loadInitialData 加载持久化的数据 ★★★
         persistenceManager.loadInitialData { initialConfigPresent, initialHistoryPresent ->
             Log.d(
                 TAG_APP_VIEW_MODEL,
                 "初始数据加载完成。配置存在: $initialConfigPresent, 历史存在: $initialHistoryPresent"
             )
-            // 你可以在这里根据加载结果执行一些额外操作，如果需要的话
-            // 例如，如果 !initialConfigPresent，可以提示用户添加配置
             if (!initialConfigPresent) {
                 viewModelScope.launch {
-                    // 避免在 ViewModel init 过于早期就直接显示 Snackbar，
-                    // 除非有特定机制确保 UI 此时已准备好接收。
-                    // 此处仅作日志记录或延迟提示。
                     Log.i(TAG_APP_VIEW_MODEL, "没有检测到已保存的API配置。")
-                    // showSnackbar("请添加您的第一个API配置") // 示例：如果需要，可以延迟执行或通过事件通知UI
                 }
             }
-        }
-        // ★★★ 修改结束 ★★★
 
-        viewModelScope.launch { // 这个 launch 默认就在主调度器上
+            // ▼▼▼ 新增：恢复 reasoningCompleteMap 和 messageAnimationStates ▼▼▼
+            viewModelScope.launch(Dispatchers.Main.immediate) { // 确保在主线程操作SnapshotStateMap
+                Log.d(
+                    TAG_APP_VIEW_MODEL,
+                    "Restoring reasoningCompleteMap and animation states for loaded messages..."
+                )
+                stateHolder.messages.forEach { msg ->
+                    val hasContentOrError = msg.contentStarted || msg.isError
+                    val hasReasoning = !msg.reasoning.isNullOrBlank()
+
+                    if (msg.sender == Sender.AI && hasReasoning && !this@AppViewModel.isApiCalling.value) { // 或者直接 !isApiCalling.value
+                        stateHolder.reasoningCompleteMap[msg.id] = true
+                        Log.d(
+                            TAG_APP_VIEW_MODEL,
+                            "Set reasoningCompleteMap for AI Msg ${msg.id.take(4)} to true (hasReasoning=true, not streaming)"
+                        )
+                    } else if (msg.sender == Sender.AI && this@AppViewModel.isApiCalling.value && this@AppViewModel.currentStreamingAiMessageId.value == msg.id) { // 或者直接 isApiCalling.value 和 currentStreamingAiMessageId.value
+                        stateHolder.reasoningCompleteMap.remove(msg.id)
+                        Log.d(
+                            TAG_APP_VIEW_MODEL,
+                            "Msg ${msg.id.take(4)} is currently streaming, reasoningComplete managed by ApiHandler."
+                        )
+                    }
+
+
+                    // 恢复动画状态
+                    // 如果消息已经有内容，或者有错误，或者有思考过程，就标记动画已播放
+                    val animationPlayedCondition =
+                        hasContentOrError || (msg.sender == Sender.AI && hasReasoning)
+                    if (animationPlayedCondition) {
+                        stateHolder.messageAnimationStates[msg.id] = true
+                        Log.d(
+                            TAG_APP_VIEW_MODEL,
+                            "Set messageAnimationStates for Msg ${msg.id.take(4)} to true"
+                        )
+                    }
+                }
+                Log.d(
+                    TAG_APP_VIEW_MODEL,
+                    "Finished restoring reasoningCompleteMap and animation states after initial load."
+                )
+            }
+            // ▲▲▲ 新增结束 ▲▲▲
+        }
+
+        viewModelScope.launch {
             val baseTemplate = getDefaultKatexHtmlTemplate()
             try {
-                // 如果 warmUp 内部创建 WebView 不是 suspend，可以直接调用
-                // 如果 warmUp 是 suspend 且内部切换线程，也没问题
-                // 最保险的是确保 WebView 的 new WebView() 调用在主线程
-                withContext(Dispatchers.Main) { // 强制在主线程
+                withContext(Dispatchers.Main) {
                     Log.d(TAG_APP_VIEW_MODEL, "Warming up WebViewPool on Main thread...")
                     this@AppViewModel.webViewPool.warmUp(4, baseTemplate)
                 }
@@ -190,10 +224,9 @@ class AppViewModel(
             }
         }
 
-
         viewModelScope.launch(Dispatchers.IO) {
             ApiClient.preWarm()
-            apiHandler // 确保 apiHandler 和 configManager 被及早初始化 (如果它们是 lazy 且有IO操作)
+            apiHandler
             configManager
             Log.d(
                 TAG_APP_VIEW_MODEL,
@@ -201,19 +234,11 @@ class AppViewModel(
             )
         }
 
-        viewModelScope.launch(Dispatchers.Default) { // 使用 Dispatchers.Default 进行CPU密集型转换
+        viewModelScope.launch(Dispatchers.Default) {
             Log.d(TAG_APP_VIEW_MODEL, "开始后台批量预处理历史消息的 htmlContent...")
-            // 注意: 此时 _historicalConversations 可能尚未被 loadInitialData 完全填充
-            // 如果这个预处理依赖于 loadInitialData 完成后的 _historicalConversations.value，
-            // 那么这个 launch 应该在 loadInitialData 的回调中，或者观察 _historicalConversations 的变化。
-            // 不过，由于 loadInitialData 也是异步的，并且会更新 _historicalConversations，
-            // 这里的逻辑如果依赖最新的历史记录，需要小心时序。
-            // 鉴于后台预处理通常可以处理 "当前已知" 的数据，这里暂时保持原样，但需注意其执行时机。
+            val originalLoadedHistory = stateHolder._historicalConversations.value.toList()
 
-            val originalLoadedHistory =
-                stateHolder._historicalConversations.value.toList() // 获取当前快照
-
-            if (originalLoadedHistory.isNotEmpty()) { // 仅当有历史记录时才处理
+            if (originalLoadedHistory.isNotEmpty()) {
                 val processedHistory = originalLoadedHistory.map { conversation ->
                     conversation.map { message ->
                         if (message.sender == Sender.AI && message.text.isNotBlank() && message.htmlContent == null) {
@@ -221,11 +246,7 @@ class AppViewModel(
                                 TAG_APP_VIEW_MODEL,
                                 "后台预处理: 为消息 ${message.id.take(4)} 生成 htmlContent"
                             )
-                            message.copy(
-                                htmlContent = convertMarkdownToHtml(message.text)
-                                // contentStarted 应该在 message 从 SharedPreferences 加载时就已经根据 text/reasoning 设置好了
-                                // 如果没有，确保在 message.copy 时也正确传递或更新它
-                            )
+                            message.copy(htmlContent = convertMarkdownToHtml(message.text))
                         } else {
                             message
                         }
@@ -233,9 +254,9 @@ class AppViewModel(
                 }
 
                 var wasModified = false
-                if (originalLoadedHistory.size == processedHistory.size) { // 确保维度一致
+                if (originalLoadedHistory.size == processedHistory.size) {
                     for (i in originalLoadedHistory.indices) {
-                        if (originalLoadedHistory[i].size == processedHistory[i].size) { // 确保子列表维度一致
+                        if (originalLoadedHistory[i].size == processedHistory[i].size) {
                             for (j in originalLoadedHistory[i].indices) {
                                 if (originalLoadedHistory[i][j].htmlContent == null && processedHistory[i][j].htmlContent != null) {
                                     wasModified = true
@@ -243,36 +264,26 @@ class AppViewModel(
                                 }
                             }
                         } else {
-                            // 维度不一致，可能意味着在处理过程中历史记录发生了变化，保守起见认为可能已修改或跳过
                             Log.w(
                                 TAG_APP_VIEW_MODEL,
                                 "后台预处理：历史会话 $i 的消息数量发生变化，跳过修改检测。"
                             )
-                            // wasModified = true; // 或者根据业务逻辑决定是否标记为修改
                         }
                         if (wasModified) break
                     }
                 } else {
                     Log.w(TAG_APP_VIEW_MODEL, "后台预处理：历史会话总数发生变化，跳过修改检测。")
-                    // wasModified = true;
                 }
-
 
                 if (wasModified) {
                     Log.d(TAG_APP_VIEW_MODEL, "后台预处理完成，检测到 htmlContent 更新。")
                     withContext(Dispatchers.Main.immediate) {
-                        // 再次检查，确保更新的是同一个版本的 historicalConversations
-                        // 如果 stateHolder._historicalConversations.value 在此期间已被 loadInitialData 再次修改，
-                        // 这里的更新可能基于旧数据。更安全的做法是让 loadInitialData 也负责一部分预处理，
-                        // 或者这里的逻辑在 loadInitialData 完成后，基于其结果进行。
-                        // 为简单起见，先直接更新。
                         stateHolder._historicalConversations.value = processedHistory
                         Log.d(
                             TAG_APP_VIEW_MODEL,
                             "已更新内存中的 _historicalConversations StateFlow。"
                         )
                     }
-
                     withContext(Dispatchers.IO) {
                         Log.d(
                             TAG_APP_VIEW_MODEL,
@@ -403,7 +414,10 @@ class AppViewModel(
         viewModelScope.launch(Dispatchers.Main.immediate) {
             val newUserMessage =
                 Message(text = textToActuallySend, sender = Sender.User, contentStarted = true)
+            // 在添加新用户消息时，标记其动画已播放
+            stateHolder.messageAnimationStates[newUserMessage.id] = true
             stateHolder.messages.add(newUserMessage)
+
             if (!isFromRegeneration) stateHolder._text.value = ""
             triggerScrollToBottom()
 
@@ -451,14 +465,9 @@ class AppViewModel(
             }
 
             var finalCustomModelParameters: Map<String, Boolean>? = null
-            // var finalCustomExtraBody: Map<String, Boolean>? = null // 如果这个字段没用，可以考虑移除
             val modelNameLower = currentConfig.model.lowercase()
             val apiAddressLower = currentConfig.address?.lowercase() ?: ""
 
-            // 保留 Qwen 特定的 customModelParameters 逻辑，因为有些 Qwen 服务可能依赖这个
-            // 而不是顶层的 useWebSearch。如果你的后端统一处理 useWebSearch，
-            // 并且不再需要 customModelParameters 中的 enable_search，则可以移除下面的 if 块。
-            // 但为了兼容性，暂时保留它可能是个好主意，除非你确定后端不再看它。
             if (modelNameLower.contains("qwen")) {
                 if (apiAddressLower.contains("api.siliconflow.cn")) {
                     val params = mutableMapOf("enable_search" to currentWebSearchEnabled)
@@ -470,14 +479,13 @@ class AppViewModel(
                 } else if (currentConfig.provider.equals(
                         "openai compatible",
                         ignoreCase = true
-                    ) && !apiAddressLower.contains("api.openai.com") // 假设这些兼容服务也可能看 qwen 的参数
+                    ) && !apiAddressLower.contains("api.openai.com")
                 ) {
                     val params = mutableMapOf("enable_search" to currentWebSearchEnabled)
                     if (modelNameLower.contains("qwen3")) params["enable_thinking"] = false
                     finalCustomModelParameters = params.ifEmpty { null }
                 }
             }
-
 
             val topLevelUseWebSearch = if (currentWebSearchEnabled) true else null
 
@@ -491,8 +499,8 @@ class AppViewModel(
                 apiAddress = currentConfig.address,
                 apiKey = currentConfig.key,
                 model = currentConfig.model,
-                useWebSearch = topLevelUseWebSearch, // 使用新的 topLevelUseWebSearch
-                customModelParameters = finalCustomModelParameters, // Qwen 的 enable_search 仍然会在这里
+                useWebSearch = topLevelUseWebSearch,
+                customModelParameters = finalCustomModelParameters,
                 forceGoogleReasoningPrompt = null,
                 temperature = null,
                 topP = null,
@@ -513,7 +521,6 @@ class AppViewModel(
                     viewModelScope.launch {
                         historyManager.saveCurrentChatToHistoryIfNeeded()
                     }
-
                 }
             )
         }
@@ -547,6 +554,10 @@ class AppViewModel(
                         timestamp = System.currentTimeMillis()
                     )
                     stateHolder.messages[messageIndex] = updatedMessage
+                    // 编辑用户消息后，标记其动画已播放 (如果之前未播放)
+                    if (stateHolder.messageAnimationStates[updatedMessage.id] != true) {
+                        stateHolder.messageAnimationStates[updatedMessage.id] = true
+                    }
                     historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
                 }
             }
@@ -559,8 +570,6 @@ class AppViewModel(
         _editingMessageId.value = null
         stateHolder._editDialogInputText.value = ""
     }
-
-    // 在 AppViewModel.kt 中
 
     fun regenerateAiResponse(originalUserMessage: Message) {
         if (originalUserMessage.sender != Sender.User) {
@@ -596,8 +605,6 @@ class AppViewModel(
                 return@launch
             }
 
-            // --- 修正并明确移除后续AI消息的逻辑 ---
-            // 目的是移除紧跟在当前用户消息之后的所有连续的AI消息
             var currentIndexToInspect = userMessageIndex + 1
             while (currentIndexToInspect < stateHolder.messages.size) {
                 if (stateHolder.messages[currentIndexToInspect].sender == Sender.AI) {
@@ -609,15 +616,15 @@ class AppViewModel(
                     if (stateHolder._currentStreamingAiMessageId.value == aiMessageToRemove.id) {
                         apiHandler.cancelCurrentApiJob(
                             "为消息 '${originalUserMessageId.take(4)}' 重新生成回答，取消旧AI流",
-                            isNewMessageSend = true // 标记为新消息发送，以正确处理流状态
+                            isNewMessageSend = true
                         )
                     }
+                    // 在移除前，也从状态map中移除相关条目
+                    stateHolder.reasoningCompleteMap.remove(aiMessageToRemove.id)
+                    stateHolder.expandedReasoningStates.remove(aiMessageToRemove.id)
+                    stateHolder.messageAnimationStates.remove(aiMessageToRemove.id)
                     stateHolder.messages.removeAt(currentIndexToInspect)
-                    // 注意：当从列表中移除一个元素时，后续元素的索引会减1。
-                    // 因为我们总是检查新的 currentIndexToInspect，所以不需要显式递减它，
-                    // 下一次循环的 messages.size 会变小，并且 messages[currentIndexToInspect] 会是新的元素。
                 } else {
-                    // 如果遇到的不是AI消息（比如是另一个用户消息），则停止移除。
                     Log.d(
                         TAG_APP_VIEW_MODEL,
                         "regenerateAiResponse: Encountered non-AI message at index $currentIndexToInspect, stopping AI message removal."
@@ -625,16 +632,14 @@ class AppViewModel(
                     break
                 }
             }
-            // --- AI消息移除结束 ---
 
-            // 移除原始的用户消息
-            // 在移除前再次确认ID，以防万一
             val messageToDelete = stateHolder.messages.getOrNull(userMessageIndex)
             if (messageToDelete != null && messageToDelete.id == originalUserMessageId) {
                 Log.d(
                     TAG_APP_VIEW_MODEL,
                     "regenerateAiResponse: Attempting to remove original user message ID $originalUserMessageId at index $userMessageIndex."
                 )
+                stateHolder.messageAnimationStates.remove(originalUserMessageId) // 移除动画状态
                 stateHolder.messages.removeAt(userMessageIndex)
                 Log.i(
                     TAG_APP_VIEW_MODEL,
@@ -645,14 +650,12 @@ class AppViewModel(
                     TAG_APP_VIEW_MODEL,
                     "regenerateAiResponse: Failed to remove original user message. Expected ID $originalUserMessageId at index $userMessageIndex, but found ${messageToDelete?.id}. List size: ${stateHolder.messages.size}"
                 )
-                showSnackbar("重新生成时移除原消息失败，可能导致显示重复。") // 提示用户潜在问题
+                showSnackbar("重新生成时移除原消息失败，可能导致显示重复。")
             }
 
-            // 保存移除了AI回复和（理想情况下）原始用户消息之后的状态
             historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
             Log.d(TAG_APP_VIEW_MODEL, "regenerateAiResponse: Chat history saved after removals.")
 
-            // 使用原始文本重新发送消息（这将添加一个新的用户消息）
             Log.d(
                 TAG_APP_VIEW_MODEL,
                 "regenerateAiResponse: Calling onSendMessage to resend user text: '${
@@ -675,12 +678,12 @@ class AppViewModel(
         dismissEditDialog(); dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("开始新聊天")
         viewModelScope.launch {
-            historyManager.saveCurrentChatToHistoryIfNeeded()
+            historyManager.saveCurrentChatToHistoryIfNeeded() // 保存当前聊天（如果需要）
             withContext(Dispatchers.Main.immediate) {
-                stateHolder.clearForNewChat()
+                stateHolder.clearForNewChat() // 这会清空 messages, reasoningCompleteMap, messageAnimationStates 等
                 triggerScrollToBottom()
                 if (_isSearchActiveInDrawer.value) setSearchActiveInDrawer(false)
-                stateHolder._loadedHistoryIndex.value = null
+                // _loadedHistoryIndex.value 已经在 clearForNewChat 中设为 null
             }
         }
     }
@@ -697,34 +700,59 @@ class AppViewModel(
 
         viewModelScope.launch {
             historyManager.saveCurrentChatToHistoryIfNeeded()
-            val processedConversation = withContext(Dispatchers.Default) { // 后台处理转换
+            val processedConversation = withContext(Dispatchers.Default) {
                 conversationToLoad.map { msg ->
+                    val updatedContentStarted =
+                        msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || msg.isError
                     if (msg.sender == Sender.AI && msg.text.isNotBlank() && msg.htmlContent == null) {
                         msg.copy(
-                            htmlContent = convertMarkdownToHtml(msg.text), // 假设 convertMarkdownToHtml 在 ViewModel 或 util 中可访问
-                            contentStarted = msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || msg.isError
+                            htmlContent = convertMarkdownToHtml(msg.text),
+                            contentStarted = updatedContentStarted
                         )
                     } else {
-                        msg.copy(
-                            contentStarted = msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || msg.isError
-                        )
+                        msg.copy(contentStarted = updatedContentStarted)
                     }
                 }
             }
             withContext(Dispatchers.Main.immediate) {
-                stateHolder.clearForNewChat()
+                stateHolder.clearForNewChat() // 清空当前状态
                 stateHolder.messages.addAll(processedConversation)
 
+                // ▼▼▼ 新增：恢复 reasoningCompleteMap 和 messageAnimationStates ▼▼▼
+                Log.d(
+                    TAG_APP_VIEW_MODEL,
+                    "Restoring reasoningCompleteMap and animation states for history index $index..."
+                )
                 stateHolder.messages.forEach { msg ->
-                    stateHolder.messageAnimationStates[msg.id] = true
+                    val hasContentOrError = msg.contentStarted || msg.isError
+                    val hasReasoning = !msg.reasoning.isNullOrBlank()
+
+                    if (msg.sender == Sender.AI && hasReasoning) {
+                        stateHolder.reasoningCompleteMap[msg.id] = true
+                        Log.d(
+                            TAG_APP_VIEW_MODEL,
+                            "Set reasoningCompleteMap for HIST AI Msg ${msg.id.take(4)} to true"
+                        )
+                    }
+
+                    val animationPlayedCondition =
+                        hasContentOrError || (msg.sender == Sender.AI && hasReasoning)
+                    if (animationPlayedCondition) {
+                        stateHolder.messageAnimationStates[msg.id] = true
+                        Log.d(
+                            TAG_APP_VIEW_MODEL,
+                            "Set messageAnimationStates for HIST Msg ${msg.id.take(4)} to true"
+                        )
+                    }
                 }
+                Log.d(TAG_APP_VIEW_MODEL, "Finished restoring states for history index $index.")
+                // ▲▲▲ 新增结束 ▲▲▲
+
                 stateHolder._loadedHistoryIndex.value = index
                 triggerScrollToBottom()
             }
             if (_isSearchActiveInDrawer.value) withContext(Dispatchers.Main.immediate) {
-                setSearchActiveInDrawer(
-                    false
-                )
+                setSearchActiveInDrawer(false)
             }
         }
     }
@@ -736,15 +764,30 @@ class AppViewModel(
         }
         viewModelScope.launch {
             val wasCurrentChatDeleted = (currentLoadedIndex == indexToDelete)
-            historyManager.deleteConversation(indexToDelete)
+            // 在删除历史记录前，获取被删除对话的消息ID列表，以便稍后清理状态map
+            val idsInDeletedConversation =
+                stateHolder._historicalConversations.value.getOrNull(indexToDelete)?.map { it.id }
+                    ?: emptyList()
+
+            historyManager.deleteConversation(indexToDelete) // 这会更新 _historicalConversations 和 _loadedHistoryIndex
+
             if (wasCurrentChatDeleted) {
                 withContext(Dispatchers.Main.immediate) {
                     dismissEditDialog(); dismissSourcesDialog()
-                    stateHolder.clearForNewChat(); triggerScrollToBottom()
+                    stateHolder.clearForNewChat(); triggerScrollToBottom() // 清空当前聊天状态
                 }
                 apiHandler.cancelCurrentApiJob("当前聊天(#$indexToDelete)被删除，开始新聊天")
+            } else {
+                // 如果删除的不是当前加载的聊天，但可能需要清理这些已删除消息的状态
+                withContext(Dispatchers.Main.immediate) {
+                    idsInDeletedConversation.forEach { id ->
+                        stateHolder.reasoningCompleteMap.remove(id)
+                        stateHolder.expandedReasoningStates.remove(id)
+                        stateHolder.messageAnimationStates.remove(id)
+                    }
+                }
             }
-            withContext(Dispatchers.Main) {  }
+            showSnackbar("对话已删除")
         }
     }
 
@@ -752,9 +795,11 @@ class AppViewModel(
         dismissEditDialog(); dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("清除所有历史记录")
         viewModelScope.launch {
-            historyManager.clearAllHistory()
-            withContext(Dispatchers.Main.immediate) { stateHolder.clearForNewChat(); triggerScrollToBottom() }
-            withContext(Dispatchers.Main) {  }
+            historyManager.clearAllHistory() // 这会清空 _historicalConversations 和 _loadedHistoryIndex
+            withContext(Dispatchers.Main.immediate) {
+                stateHolder.clearForNewChat(); triggerScrollToBottom() // 清空当前聊天状态
+            }
+            showSnackbar("所有对话已清除")
         }
     }
 
@@ -777,14 +822,27 @@ class AppViewModel(
     fun clearAllConfigs() = configManager.clearAllConfigs()
     fun selectConfig(config: ApiConfig) = configManager.selectConfig(config)
 
+    // onAnimationComplete 由 MessageBubble 调用，当它认为动画该结束了
+    // (例如，非流式AI消息有内容，或流式AI消息开始有内容，或错误消息)
     fun onAnimationComplete(messageId: String) {
         viewModelScope.launch(Dispatchers.Main.immediate) {
-            stateHolder.messageAnimationStates[messageId] = true
+            if (stateHolder.messageAnimationStates[messageId] != true) {
+                stateHolder.messageAnimationStates[messageId] = true
+                Log.d(
+                    TAG_APP_VIEW_MODEL,
+                    "onAnimationComplete called for Msg $messageId, set to true."
+                )
+            }
         }
     }
 
-    fun hasAnimationBeenPlayed(messageId: String): Boolean =
-        stateHolder.messageAnimationStates[messageId] ?: false
+    // hasAnimationBeenPlayed 由 MessageBubble 读取，以决定是否立即显示内容
+    fun hasAnimationBeenPlayed(messageId: String): Boolean {
+        val played = stateHolder.messageAnimationStates[messageId] ?: false
+        // Log.d(TAG_APP_VIEW_MODEL, "hasAnimationBeenPlayed for Msg $messageId: $played") // 可以取消注释进行调试
+        return played
+    }
+
 
     fun getConversationPreviewText(index: Int): String {
         val conversation = stateHolder._historicalConversations.value.getOrNull(index)
@@ -870,42 +928,47 @@ class AppViewModel(
             if (stateHolder._loadedHistoryIndex.value == index) {
                 withContext(Dispatchers.Main.immediate) {
                     stateHolder.messages.clear()
-                    stateHolder.messages.addAll(
-                        originalConversationAtIndex.toList()
-                            .map { msg -> msg.copy(contentStarted = msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || msg.isError) })
-                    stateHolder.messages.forEach { msg ->
-                        stateHolder.messageAnimationStates[msg.id] = true
+                    val reloadedConversation = originalConversationAtIndex.toList().map { msg ->
+                        val updatedContentStarted =
+                            msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || msg.isError
+                        msg.copy(contentStarted = updatedContentStarted)
+                    }
+                    stateHolder.messages.addAll(reloadedConversation)
+                    // 重新加载后，恢复动画和思考完成状态
+                    reloadedConversation.forEach { msg ->
+                        val hasContentOrError = msg.contentStarted || msg.isError
+                        val hasReasoning = !msg.reasoning.isNullOrBlank()
+                        if (msg.sender == Sender.AI && hasReasoning) {
+                            stateHolder.reasoningCompleteMap[msg.id] = true
+                        }
+                        val animationPlayedCondition =
+                            hasContentOrError || (msg.sender == Sender.AI && hasReasoning)
+                        if (animationPlayedCondition) {
+                            stateHolder.messageAnimationStates[msg.id] = true
+                        }
                     }
                 }
             }
-            withContext(Dispatchers.Main) { dismissRenameDialog() }
+            withContext(Dispatchers.Main) { dismissRenameDialog(); showSnackbar("对话已重命名") }
         }
     }
 
-    // In AppViewModel.kt
     private fun onAiMessageFullTextChanged(messageId: String, currentFullText: String) {
         viewModelScope.launch(Dispatchers.Main.immediate) {
             val messageIndex = stateHolder.messages.indexOfFirst { it.id == messageId }
             if (messageIndex != -1) {
-                // ApiHandler has already updated stateHolder.messages[messageIndex].text to currentFullText.
-                // The message object reflects the latest text.
-
                 if (currentFullText.isNotBlank()) {
-                    // Since ApiHandler calls this only when text has actually changed,
-                    // we should proceed to generate/update HTML.
                     Log.d(
                         TAG_APP_VIEW_MODEL,
                         "onAiMessageFullTextChanged: For message $messageId, text has changed. New full text length: ${currentFullText.length}. Preparing to update HTML."
                     )
-                    launch(Dispatchers.Default) { // Background thread for HTML generation
+                    launch(Dispatchers.Default) {
                         val newHtml = convertMarkdownToHtml(currentFullText)
-                        withContext(Dispatchers.Main.immediate) { // Switch back to main thread to update StateFlow
+                        withContext(Dispatchers.Main.immediate) {
                             val freshMessageIndex =
                                 stateHolder.messages.indexOfFirst { it.id == messageId }
                             if (freshMessageIndex != -1) {
                                 val messageToUpdate = stateHolder.messages[freshMessageIndex]
-                                // Only update if the newly generated HTML is different from the existing one
-                                // or if existing HTML is null. This avoids unnecessary recompositions.
                                 if (messageToUpdate.htmlContent != newHtml) {
                                     stateHolder.messages[freshMessageIndex] =
                                         messageToUpdate.copy(htmlContent = newHtml)
@@ -923,7 +986,6 @@ class AppViewModel(
                         }
                     }
                 } else {
-                    // Full text is now blank, clear the HTML content
                     val messageToUpdate = stateHolder.messages[messageIndex]
                     if (messageToUpdate.htmlContent != null) {
                         stateHolder.messages[messageIndex] =
@@ -969,24 +1031,24 @@ class AppViewModel(
         )
 
         try {
-            runBlocking(Dispatchers.IO) { // 在 IO 线程上阻塞执行
+            runBlocking(Dispatchers.IO) {
                 Log.d(
                     TAG_APP_VIEW_MODEL,
                     "onCleared: runBlocking(Dispatchers.IO) started for final save."
                 )
 
-                // 1. 保存当前聊天作为"最后打开的聊天"
-                persistenceManager.saveLastOpenChat(finalCurrentChatMessages)
-                Log.i(
-                    TAG_APP_VIEW_MODEL,
-                    "onCleared: Saved last open chat (${finalCurrentChatMessages.size} messages)."
-                )
-
-                // 2. 保存聊天历史
+                // 1. 首先，处理历史记录的保存。
                 historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
                 Log.i(
                     TAG_APP_VIEW_MODEL,
-                    "onCleared: saveCurrentChatToHistoryIfNeeded(forceSave=true) completed."
+                    "onCleared: saveCurrentChatToHistoryIfNeeded(forceSave=true) completed. (This might have cleared last open chat)"
+                )
+
+                // 2. 然后，（再次）保存当前聊天作为"最后打开的聊天"。
+                persistenceManager.saveLastOpenChat(finalCurrentChatMessages)
+                Log.i(
+                    TAG_APP_VIEW_MODEL,
+                    "onCleared: Saved last open chat (${finalCurrentChatMessages.size} messages) *after* history save."
                 )
 
                 // 3. 保存API配置列表

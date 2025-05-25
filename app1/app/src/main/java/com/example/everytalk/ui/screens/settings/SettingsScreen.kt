@@ -1,17 +1,17 @@
 package com.example.everytalk.ui.screens.settings
 
 import android.util.Log
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.* // Keep this for PaddingValues if SettingsScreenContent uses it from here
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavController
 import com.example.everytalk.StateControler.AppViewModel
-import com.example.everytalk.data.local.SharedPreferencesDataSource
+import com.example.everytalk.data.DataClass.ApiConfig
+import java.util.UUID
 
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -23,87 +23,43 @@ fun SettingsScreen(
 ) {
     Log.i("ScreenComposition", "SettingsScreen Composing/Recomposing.")
     val savedConfigs by viewModel.apiConfigs.collectAsState()
-    val selectedConfig by viewModel.selectedApiConfig.collectAsState()
+    val selectedConfigForApp by viewModel.selectedApiConfig.collectAsState()
     val allProviders by viewModel.allProviders.collectAsState()
 
-    var editApiAddress by remember { mutableStateOf<String>("") }
-    var editApiKey by remember { mutableStateOf<String>("") }
-    var editModel by remember { mutableStateOf<String>("") }
-    var editProvider by remember(allProviders) {
-        mutableStateOf<String>(allProviders.firstOrNull() ?: "openai compatible")
-    }
-    var currentEditingConfigId by remember { mutableStateOf<String?>(null) }
-
-    var showAddProviderDialog by remember { mutableStateOf<Boolean>(false) }
-    var newProviderNameInput by remember { mutableStateOf<String>("") }
-
-    val context = LocalContext.current
-    val dataSource = remember(context) { SharedPreferencesDataSource(context.applicationContext) }
-    val savedModelNamesMapByAddress = remember { mutableStateMapOf<String, Set<String>>() }
-
-    var backButtonEnabled by remember { mutableStateOf<Boolean>(true) }
-
-    LaunchedEffect(Unit) { // 加载模型名称历史
-        savedModelNamesMapByAddress.putAll(dataSource.loadSavedModelNamesByApiAddress())
+    val apiConfigsByApiKey = remember(savedConfigs) {
+        savedConfigs.groupBy { it.key }.filterValues { it.isNotEmpty() }
     }
 
-    LaunchedEffect(allProviders, Unit) { // 同步 editProvider
-        val currentEditProvider = editProvider
-        if (allProviders.isNotEmpty() && !allProviders.contains(currentEditProvider)) {
-            editProvider = allProviders.first()
-        } else if (allProviders.isEmpty() && currentEditProvider != "openai compatible") {
-            editProvider = "openai compatible"
-        }
-    }
-
-    LaunchedEffect(currentEditingConfigId, savedConfigs, editProvider) {
-        Log.d(
-            "SettingsScreenEffect",
-            "Config/Provider changed. EditingId: $currentEditingConfigId, Provider: $editProvider"
+    var showAddFullConfigDialog by remember { mutableStateOf(false) }
+    var newFullConfigProvider by remember(allProviders) {
+        mutableStateOf(
+            allProviders.firstOrNull() ?: "openai compatible"
         )
-        val configToEdit = savedConfigs.find { it.id == currentEditingConfigId }
-        if (configToEdit != null) {
-            Log.d("SettingsScreenEffect", "Loading config to edit: ${configToEdit.id}")
-            editApiAddress = configToEdit.address
-            editApiKey = configToEdit.key
-            editModel = configToEdit.model
-            if (editProvider != configToEdit.provider) {
-                Log.d(
-                    "SettingsScreenEffect",
-                    "Syncing editProvider from '${editProvider}' to '${configToEdit.provider}'"
-                )
-                editProvider = configToEdit.provider
-            }
-        } else {
-            Log.d(
-                "SettingsScreenEffect",
-                "Not editing. Applying defaults for provider: $editProvider"
-            )
-            val providerKey = editProvider.lowercase().trim()
-            // 只有当地址确实需要根据平台改变时才更新，避免覆盖用户可能刚输入的值
-            val expectedAddress = defaultApiAddresses[providerKey] ?: ""
-            if (editApiAddress != expectedAddress && defaultApiAddresses.containsKey(providerKey)) {
-                editApiAddress = expectedAddress
-            } else if (!defaultApiAddresses.containsKey(providerKey) && currentEditingConfigId == null) {
-                // 如果不是已知平台的默认地址，并且不是在编辑，则清空地址 (例如自定义平台)
-                // 但如果用户正在输入地址，则不应该清空
-            }
-            // 清空 Key 和 Model，因为是“新”状态或基于新平台的默认状态
-            editApiKey = ""
-            editModel = ""
-            Log.d(
-                "SettingsScreenEffect",
-                "Applied defaults: Address='${editApiAddress}', Key='', Model=''"
-            )
-        }
     }
+    var newFullConfigAddress by remember(newFullConfigProvider) {
+        mutableStateOf(
+            defaultApiAddresses[newFullConfigProvider.lowercase().trim()] ?: ""
+        )
+    }
+    var newFullConfigKey by remember { mutableStateOf("") }
+
+    var showAddModelToKeyDialog by remember { mutableStateOf(false) }
+    var addModelToKeyTargetApiKey by remember { mutableStateOf("") }
+    var addModelToKeyTargetProvider by remember { mutableStateOf("") }
+    var addModelToKeyTargetAddress by remember { mutableStateOf("") }
+    var addModelToKeyNewModelName by remember { mutableStateOf("") }
+
+    var showAddCustomProviderDialog by remember { mutableStateOf(false) }
+    var newCustomProviderNameInput by remember { mutableStateOf("") }
+
+    var backButtonEnabled by remember { mutableStateOf(true) }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
         containerColor = Color.White,
         topBar = {
             TopAppBar(
-                title = { Text("API 配置管理", color = Color.Black) },
+                title = { Text("API 配置", color = Color.Black) }, // Title from your latest snippet
                 navigationIcon = {
                     IconButton(onClick = {
                         if (backButtonEnabled) {
@@ -127,115 +83,93 @@ fun SettingsScreen(
     ) { paddingValues ->
         SettingsScreenContent(
             paddingValues = paddingValues,
-            savedConfigs = savedConfigs,
-            onAddConfig = { configToAdd ->
-                viewModel.addConfig(configToAdd)
-                val trimmedModel = configToAdd.model.trim()
-                val trimmedAddress = configToAdd.address.trim()
-                if (trimmedModel.isNotEmpty() && trimmedAddress.isNotEmpty()) {
-                    dataSource.addSavedModelNameForApiAddress(trimmedAddress, trimmedModel)
-                    savedModelNamesMapByAddress.compute(trimmedAddress) { _, set ->
-                        (set ?: emptySet()) + trimmedModel
-                    }
-                }
-                currentEditingConfigId = null
-                val providerKey = editProvider.lowercase().trim()
-                editApiAddress = defaultApiAddresses[providerKey] ?: ""
-                editApiKey = ""
-                editModel = ""
+            apiConfigsByApiKey = apiConfigsByApiKey,
+            onAddFullConfigClick = {
+                newFullConfigProvider = allProviders.firstOrNull() ?: "openai compatible"
+                newFullConfigAddress =
+                    defaultApiAddresses[newFullConfigProvider.lowercase().trim()] ?: ""
+                newFullConfigKey = ""
+                showAddFullConfigDialog = true
             },
-            onUpdateConfig = { configToUpdate ->
-                viewModel.updateConfig(configToUpdate)
-                val trimmedModel = configToUpdate.model.trim()
-                val trimmedAddress = configToUpdate.address.trim()
-                if (trimmedModel.isNotEmpty() && trimmedAddress.isNotEmpty()) {
-                    dataSource.addSavedModelNameForApiAddress(trimmedAddress, trimmedModel)
-                    savedModelNamesMapByAddress.compute(trimmedAddress) { _, set ->
-                        (set ?: emptySet()) + trimmedModel
-                    }
-                }
-                currentEditingConfigId = null
+            onSelectConfig = { configToSelect ->
+                viewModel.selectConfig(configToSelect)
             },
-            onDeleteConfig = { configToDelete ->
+            selectedConfigIdInApp = selectedConfigForApp?.id,
+            onAddModelForApiKeyClick = { apiKey, existingProvider, existingAddress ->
+                addModelToKeyTargetApiKey = apiKey
+                addModelToKeyTargetProvider = existingProvider
+                addModelToKeyTargetAddress = existingAddress
+                addModelToKeyNewModelName = ""
+                showAddModelToKeyDialog = true
+            },
+            onDeleteModelForApiKey = { configToDelete ->
                 viewModel.deleteConfig(configToDelete)
-                if (configToDelete.id == currentEditingConfigId) currentEditingConfigId = null
-            },
-            onClearAll = {
-                viewModel.clearAllConfigs()
-                currentEditingConfigId = null
-            },
-            onConfigSelectForEdit = { config -> currentEditingConfigId = config.id },
-            editApiAddress = editApiAddress,
-            onEditApiAddressChange = { newAddress ->
-                // 允许用户自由修改地址，地址变化会自然影响模型名称列表的获取
-                if (editApiAddress != newAddress) editApiAddress = newAddress
-            },
-            editApiKey = editApiKey, onEditApiKeyChange = { editApiKey = it },
-            editModel = editModel, onEditModelChange = { editModel = it },
-            editProvider = editProvider,
-            onEditProviderChange = { newProvider ->
-                if (editProvider != newProvider) {
-                    Log.d(
-                        "SettingsScreen",
-                        "Provider changed by user from '$editProvider' to '$newProvider'"
-                    )
-                    editProvider = newProvider
-                    val providerKey = newProvider.lowercase().trim()
-                    val newDefaultAddress = defaultApiAddresses[providerKey] ?: ""
+            }
+        )
+    }
 
-                    // 只有当地址确实因平台切换而需要改变时才更新
-                    if (editApiAddress != newDefaultAddress && (defaultApiAddresses.containsKey(
-                            providerKey
-                        ) || newDefaultAddress.isEmpty())
-                    ) {
-                        editApiAddress = newDefaultAddress
-                    }
-                    // 清空模型和API密钥，因为平台变了
-                    editModel = ""
-                    editApiKey = ""
-                    if (currentEditingConfigId != null) {
-                        Log.d(
-                            "SettingsScreen",
-                            "Exiting edit mode (was $currentEditingConfigId) due to provider change."
-                        )
-                        currentEditingConfigId = null
-                    }
-                }
+    // Conditional Dialog displays - their definitions must be in another file
+    if (showAddFullConfigDialog) {
+        AddNewFullConfigDialog(
+            provider = newFullConfigProvider,
+            onProviderChange = { selectedProvider ->
+                newFullConfigProvider = selectedProvider
+                newFullConfigAddress =
+                    defaultApiAddresses[selectedProvider.lowercase().trim()] ?: ""
             },
-            currentEditingConfigId = currentEditingConfigId,
-            onClearEditFields = {
-                currentEditingConfigId = null
-                val providerKey = editProvider.lowercase().trim()
-                editApiAddress = defaultApiAddresses[providerKey] ?: ""
-                editApiKey = ""
-                editModel = ""
-            },
-            onSelectConfig = { configToSelect -> viewModel.selectConfig(configToSelect) },
-            selectedConfigIdInApp = selectedConfig?.id,
             allProviders = allProviders,
-            onShowAddProviderDialogChange = { showAddProviderDialog = it },
-            savedModelNamesForProvider = savedModelNamesMapByAddress[editApiAddress.trim()]
-                ?: emptySet(),
-            onDeleteSavedModelName = { modelNameToDelete -> // 回调简化，API地址从 editApiAddress 获取
-                val currentTrimmedAddress = editApiAddress.trim()
-                if (currentTrimmedAddress.isNotEmpty()) {
-                    dataSource.removeSavedModelNameForApiAddress(
-                        currentTrimmedAddress,
-                        modelNameToDelete
-                    )
-                    savedModelNamesMapByAddress.computeIfPresent(currentTrimmedAddress) { _, set -> set - modelNameToDelete }
+            onShowAddCustomProviderDialog = { showAddCustomProviderDialog = true },
+            apiAddress = newFullConfigAddress,
+            onApiAddressChange = { newFullConfigAddress = it },
+            apiKey = newFullConfigKey,
+            onApiKeyChange = { newFullConfigKey = it },
+            onDismissRequest = { showAddFullConfigDialog = false },
+            onConfirm = {
+                if (newFullConfigKey.isNotBlank() && newFullConfigProvider.isNotBlank() && newFullConfigAddress.isNotBlank()) {
+                    showAddFullConfigDialog = false
+                    addModelToKeyTargetApiKey = newFullConfigKey.trim()
+                    addModelToKeyTargetProvider = newFullConfigProvider.trim()
+                    addModelToKeyTargetAddress = newFullConfigAddress.trim()
+                    addModelToKeyNewModelName = ""
+                    showAddModelToKeyDialog = true
                 }
             }
         )
     }
 
-    if (showAddProviderDialog) {
-        AddProviderDialog(
-            newProviderName = newProviderNameInput,
-            onNewProviderNameChange = { newProviderNameInput = it },
-            onDismissRequest = { showAddProviderDialog = false; newProviderNameInput = "" },
+    if (showAddModelToKeyDialog) {
+        AddModelToExistingKeyDialog(
+            targetProvider = addModelToKeyTargetProvider,
+            targetAddress = addModelToKeyTargetAddress,
+            newModelName = addModelToKeyNewModelName,
+            onNewModelNameChange = { addModelToKeyNewModelName = it },
+            onDismissRequest = { showAddModelToKeyDialog = false },
             onConfirm = {
-                val trimmedName = newProviderNameInput.trim()
+                if (addModelToKeyNewModelName.isNotBlank()) {
+                    val newConfig = ApiConfig(
+                        id = UUID.randomUUID().toString(),
+                        address = addModelToKeyTargetAddress.trim(),
+                        key = addModelToKeyTargetApiKey.trim(),
+                        model = addModelToKeyNewModelName.trim(),
+                        provider = addModelToKeyTargetProvider.trim(),
+                        name = addModelToKeyNewModelName.trim()
+                    )
+                    viewModel.addConfig(newConfig)
+                    showAddModelToKeyDialog = false
+                }
+            }
+        )
+    }
+
+    if (showAddCustomProviderDialog) {
+        AddProviderDialog(
+            newProviderName = newCustomProviderNameInput,
+            onNewProviderNameChange = { newCustomProviderNameInput = it },
+            onDismissRequest = {
+                showAddCustomProviderDialog = false; newCustomProviderNameInput = ""
+            },
+            onConfirm = {
+                val trimmedName = newCustomProviderNameInput.trim()
                 if (trimmedName.isNotBlank() && !allProviders.any {
                         it.equals(
                             trimmedName,
@@ -243,17 +177,13 @@ fun SettingsScreen(
                         )
                     }) {
                     viewModel.addProvider(trimmedName)
-                    if (editProvider != trimmedName) {
-                        editProvider = trimmedName
-                        val providerKey = trimmedName.lowercase().trim()
-                        editApiAddress = defaultApiAddresses[providerKey] ?: "" // 新平台默认地址
-                        editModel = ""
-                        editApiKey = ""
-                        if (currentEditingConfigId != null) currentEditingConfigId = null
+                    if (showAddFullConfigDialog && newFullConfigProvider != trimmedName) {
+                        newFullConfigProvider = trimmedName
+                        newFullConfigAddress =
+                            defaultApiAddresses[trimmedName.lowercase().trim()] ?: ""
                     }
-                    showAddProviderDialog = false; newProviderNameInput = ""
-                } else {
-                    Log.w("SettingsScreen", "平台名称无效或已存在: $trimmedName")
+                    showAddCustomProviderDialog = false
+                    newCustomProviderNameInput = ""
                 }
             }
         )

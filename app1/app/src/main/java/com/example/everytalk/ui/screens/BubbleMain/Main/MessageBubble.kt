@@ -2,6 +2,7 @@ package com.example.everytalk.ui.screens.BubbleMain.Main // 你的包名
 
 import android.util.Log
 import androidx.compose.animation.ExperimentalAnimationApi
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -9,13 +10,14 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.DataClass.Sender
 import com.example.everytalk.StateControler.AppViewModel
-import com.example.everytalk.ui.screens.BubbleMain.AiMessageContent // 确保导入路径正确
+import com.example.everytalk.ui.screens.BubbleMain.AiMessageContent
 
 
 fun Color.toHexCss(): String {
@@ -43,10 +45,6 @@ fun MessageBubble(
     val userBubbleBackgroundColor = Color(0xFFF3F3F3)
     val userContentColor = Color.Black
     val reasoningTextColor = Color(0xFF444444)
-    // 这些颜色和圆角值现在由 AiMessageContent 内部定义，不再从这里传递
-    // val codeBlockBackgroundColor = Color(0xFF2B2B2B)
-    // val codeBlockContentColor = Color(0xFFA9B7C6)
-    // val codeBlockCornerRadius = 8.dp
 
     val aiMessageBlockMaxWidth = maxWidth
 
@@ -102,58 +100,73 @@ fun MessageBubble(
             horizontalAlignment = Alignment.Start
         ) {
             if (isAI && showLoadingBubble) {
-                Surface(
-                    shape = RoundedCornerShape(18.dp),
-                    color = aiBubbleColor,
-                    shadowElevation = 0.dp,
-                    contentColor = aiContentColor,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp)
+                // ***** 在这里进行修改：添加一个Box来包裹Surface，并给Box设置左边距 *****
+                Box(
+                    modifier = Modifier.padding(start = 16.dp) // 例如，左边距16.dp，您可以按需调整
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                    Surface(
+                        shape = RoundedCornerShape(14.dp), // 您设置的圆角
+                        color = aiBubbleColor,
+                        shadowElevation = 4.dp, // 您设置的阴影
+                        contentColor = aiContentColor,
+                        modifier = Modifier
+                            .fillMaxWidth(0.42f) // Surface宽度现在是其父Box(已padding)宽度的0.4倍
+                            .padding(vertical = 4.dp) // Surface自身的垂直padding
                     ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            color = aiContentColor,
-                            strokeWidth = 1.5.dp
-                        )
-                        Spacer(Modifier.width(10.dp))
-                        val loadingText = remember(
-                            message.currentWebSearchStage,
-                            isReasoningStreaming,
-                            message.reasoning,
-                            isReasoningComplete
+                        Column(
+                            modifier = Modifier
+                                .padding(horizontal = 12.dp, vertical = 8.dp), // 您设置的内边距
+                            horizontalAlignment = Alignment.Start
                         ) {
-                            when (message.currentWebSearchStage) {
-                                "web_indexing_started" -> "正在索引网页..."
-                                "web_analysis_started" -> "正在分析网页..."
-                                "web_analysis_complete" -> {
-                                    if (isReasoningStreaming) "大模型思考中..."
-                                    else if (!message.reasoning.isNullOrBlank() && !isReasoningComplete) "大模型思考中..."
-                                    else if (!message.reasoning.isNullOrBlank() && isReasoningComplete) "思考完成"
-                                    else "分析完成"
-                                }
+                            val loadingText = remember(
+                                message.currentWebSearchStage,
+                                isReasoningStreaming,
+                                message.reasoning,
+                                isReasoningComplete
+                            ) {
+                                when (message.currentWebSearchStage) {
+                                    "web_indexing_started" -> "正在索引网页..."
+                                    "web_analysis_started" -> "正在分析网页..."
+                                    "web_analysis_complete" -> {
+                                        if (isReasoningStreaming) "大模型思考中..."
+                                        else if (!message.reasoning.isNullOrBlank() && !isReasoningComplete) "大模型思考中..."
+                                        else if (!message.reasoning.isNullOrBlank() && isReasoningComplete) "思考完成"
+                                        else "分析完成"
+                                    }
 
-                                else -> {
-                                    if (isReasoningStreaming) "大模型思考中..."
-                                    else if (!message.reasoning.isNullOrBlank() && !isReasoningComplete) "大模型思考中..."
-                                    else if (!message.reasoning.isNullOrBlank() && isReasoningComplete) "思考完成"
-                                    else "正在连接大模型..."
+                                    else -> {
+                                        if (isReasoningStreaming) "大模型思考中..."
+                                        else if (!message.reasoning.isNullOrBlank() && !isReasoningComplete) "大模型思考中..."
+                                        else if (!message.reasoning.isNullOrBlank() && isReasoningComplete) "思考完成"
+                                        else "正在连接大模型..."
+                                    }
                                 }
                             }
+                            Text(
+                                text = loadingText,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = aiContentColor
+                            )
+                            Spacer(Modifier.height(5.dp)) // 您设置的间距
+                            LinearProgressIndicator(
+                                modifier = Modifier
+                                    .fillMaxWidth() // 进度条充满其父Column的宽度
+                                    .graphicsLayer {
+                                        scaleY = 0.5f;  // 您设置的厚度
+                                    },
+                                color = Color.Black, // 您设置的颜色
+                                trackColor = Color(0xffd0d0d0) // 您设置的轨道颜色
+                            )
                         }
-                        Text(text = loadingText, style = MaterialTheme.typography.bodyMedium)
                     }
                 }
+                // ***** 修改结束 *****
             }
 
             val shouldDisplayReasoningComponentBox =
                 isAI && (!message.reasoning.isNullOrBlank() || isReasoningStreaming)
             if (shouldDisplayReasoningComponentBox) {
-                ReasoningToggleAndContent(
+                ReasoningToggleAndContent( // 您的实际组件
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(
@@ -178,7 +191,7 @@ fun MessageBubble(
                         !message.contentStarted &&
                         !showLoadingBubble
 
-                if (message.text.isNotBlank() || showDotsInsideAiContent) {
+                if (message.text.isNotBlank() || (message.contentStarted && message.text.isBlank()) || showDotsInsideAiContent) {
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -188,18 +201,20 @@ fun MessageBubble(
                             topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 18.dp
                         ),
                         color = aiBubbleColor, contentColor = aiContentColor,
-                        shadowElevation = 0.dp, border = null
+                        shadowElevation = 0.dp,
                     ) {
                         AiMessageContent(
                             message = message,
                             appViewModel = viewModel,
                             fullMessageTextToCopy = message.text,
                             showLoadingDots = showDotsInsideAiContent,
-                            contentColor = aiContentColor, // This is for main text, code block colors are now internal to AiMessageContent
+                            contentColor = aiContentColor,
                             onUserInteraction = onUserInteraction,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 0.dp)
                         )
                     }
+                } else if (message.contentStarted && message.text.isBlank() && isMainContentStreaming) {
+                    // Fallback or placeholder if needed
                 }
 
                 val showSourcesButton = !message.webSearchResults.isNullOrEmpty() &&
@@ -218,9 +233,27 @@ fun MessageBubble(
                         Text("查看参考来源 (${message.webSearchResults?.size ?: 0})")
                     }
                 }
+
+                val showStreamingDotsBelowMainContent = message.contentStarted &&
+                        isMainContentStreaming &&
+                        !message.isError
+
+                if (showStreamingDotsBelowMainContent) {
+                    Spacer(Modifier.height(8.dp))
+                    ThreeDotsWaveAnimation( // 您的实际组件
+                        modifier = Modifier
+                            .padding(start = 12.dp, bottom = 4.dp)
+                            .align(Alignment.Start),
+                        dotColor = aiContentColor,
+                        dotSize = 7.dp,
+                        spacing = 5.dp
+                    )
+                    Spacer(Modifier.height(4.dp))
+                }
             }
         }
 
+        // 用户消息 或 AI错误消息
         if (!isAI && !message.isError) {
             UserOrErrorMessageContent(
                 message = message,

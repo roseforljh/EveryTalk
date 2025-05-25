@@ -1,4 +1,3 @@
-// com/example/everytalk/ui/components/PooledKatexWebView.kt
 package com.example.everytalk.ui.components
 
 import android.content.Context

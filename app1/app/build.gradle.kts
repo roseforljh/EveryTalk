@@ -73,6 +73,10 @@ android {
     packaging{
         resources{
             excludes += "/META-INF/{AL2.0,LGPL2.1}" // 排除 AL2.0 和 LGPL2.1 许可证文件
+            pickFirsts += "META-INF/LICENSE-LGPL-3.txt"
+            pickFirsts += "META-INF/DEPENDENCIES"
+            pickFirsts+="META-INF/LICENSE-LGPL-2.1.txt"
+            pickFirsts+="META-INF/LICENSE-W3C-TEST"
         }
     }
 }
@@ -140,4 +144,5 @@ android {
         implementation("org.commonmark:commonmark-ext-gfm-strikethrough:0.23.0")
 
         implementation("org.jsoup:jsoup:1.17.2")
+        implementation ("com.vladsch.flexmark:flexmark-all:0.64.8")
     }
