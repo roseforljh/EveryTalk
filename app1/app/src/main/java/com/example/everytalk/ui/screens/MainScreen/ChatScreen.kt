@@ -416,35 +416,11 @@ fun ChatScreen(
         }
     }
 
-    LaunchedEffect(isApiCalling) {
-        snapshotFlow { isApiCalling }
-            .filter { !it }
-            .distinctUntilChanged()
-            .collectLatest {
-                if (messages.isNotEmpty()) {
-                    val lastMessage = messages.last()
-                    if (lastMessage.sender == Sender.AI && !userManuallyScrolledAwayFromBottom) {
-                        Log.d(
-                            "ScrollLogic",
-                            "AI response finished, delaying for final scroll check."
-                        )
-                        delay(FINAL_SCROLL_DELAY_MS)
-                        if (isActive && !isAtBottom && !userManuallyScrolledAwayFromBottom) {
-                            Log.d("ScrollLogic", "AI response finished, performing final scroll.")
-                            resetInactivityTimer()
-                            scrollToBottomGuaranteed("AI_Response_Fully_Completed")
-                        }
-                    }
-                }
-            }
-    }
-
     val scrollToBottomButtonVisible by remember {
         derivedStateOf {
+            Log.d("FAB_VISIBILITY_DEBUG", "Checking FAB: messagesNotEmpty=${messages.isNotEmpty()}, isAtBottom=$isAtBottom, userActive=$isUserConsideredActive, scrolledUp=$userManuallyScrolledAwayFromBottom")
             messages.isNotEmpty() &&
-                    !isAtBottom &&
-                    isUserConsideredActive &&
-                    userManuallyScrolledAwayFromBottom
+                    userManuallyScrolledAwayFromBottom // 只保留这两个，先看滚动后是否出现
         }
     }
 
@@ -469,7 +445,6 @@ fun ChatScreen(
                 onTitleClick = {
                     resetInactivityTimer()
                     coroutineScope.launch {
-                        // VVVVVV 使用过滤后的列表判断是否显示弹窗 VVVVVV
                         Log.d(
                             "ChatScreen_FilterDebug",
                             "TopBar clicked. 'filteredModelsForBottomSheet' has ${filteredModelsForBottomSheet.size} items."
@@ -560,9 +535,9 @@ fun ChatScreen(
             ChatInputArea(
                 text = text,
                 onTextChange = { viewModel.onTextChange(it); resetInactivityTimer() },
-                onSendMessageRequest = { messageText, _ ->
+                onSendMessageRequest = { messageText,isKeyboardVisible, images ->
                     resetInactivityTimer()
-                    viewModel.onSendMessage(messageText)
+                    viewModel.onSendMessage(messageText, images=images)
                 },
                 isApiCalling = isApiCalling,
                 isWebSearchEnabled = isWebSearchEnabled,

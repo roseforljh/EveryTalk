@@ -26,8 +26,8 @@ android {
         minSdk = 27
         //noinspection OldTargetApi
         targetSdk = 35 // 通常与 compileSdk 一致
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 5946
+        versionName = "1.25.0506"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -139,10 +139,14 @@ android {
         implementation(libs.androidx.profileinstaller)
         implementation ("org.slf4j:slf4j-nop:2.0.12")
 
-        implementation("org.commonmark:commonmark:0.23.0") // 请检查最新版本
-        implementation("org.commonmark:commonmark-ext-gfm-tables:0.23.0")
-        implementation("org.commonmark:commonmark-ext-gfm-strikethrough:0.23.0")
+        implementation("org.commonmark:commonmark:0.24.0") // 请检查最新版本
+        implementation("org.commonmark:commonmark-ext-gfm-tables:0.24.0")
+        implementation("org.commonmark:commonmark-ext-gfm-strikethrough:0.24.0")
+        implementation("org.commonmark:commonmark-ext-autolink:0.24.0")
 
         implementation("org.jsoup:jsoup:1.17.2")
-        implementation ("com.vladsch.flexmark:flexmark-all:0.64.8")
+
+        implementation("io.coil-kt.coil3:coil-compose:3.2.0")
+        implementation("io.coil-kt.coil3:coil-network-okhttp:3.2.0")
+
     }

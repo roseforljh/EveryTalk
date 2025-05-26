@@ -360,7 +360,7 @@ internal fun AddNewFullConfigDialog(
                     containerColor = Color.Black,
                     contentColor = Color.White
                 )
-            ) { Text("下一步：添加模型") }
+            ) { Text("添加模型") }
         },
         dismissButton = {
             TextButton(

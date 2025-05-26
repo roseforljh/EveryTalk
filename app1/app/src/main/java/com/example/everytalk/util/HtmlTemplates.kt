@@ -11,7 +11,7 @@ fun generateKatexBaseHtmlTemplateString(
 ): String {
     Log.d(
         "HTMLTemplateUtil",
-        "Generating KaTeX+Prism HTML template string (Simplified JS, relying on AI prompt and auto-render). BG: $backgroundColor, TC: $textColor, ErrC: $errorColor, ThrErr: $throwOnError"
+        "Generating KaTeX+Prism HTML template string. BG: $backgroundColor, TC: $textColor, ErrC: $errorColor, ThrErr: $throwOnError"
     )
     return """
     <!DOCTYPE html>
@@ -35,7 +35,7 @@ fun generateKatexBaseHtmlTemplateString(
             }
             p {
                 margin-top: 0 !important;
-                margin-bottom: 0 !important; /* 也改为0测试 */
+                margin-bottom: 0 !important;
                 padding-top: 0 !important;
                 padding-bottom: 0 !important;
             }
@@ -43,14 +43,14 @@ fun generateKatexBaseHtmlTemplateString(
             #latex_content_target { /* No specific height restrictions */ }
 
             .katex { display:inline-block; margin:0 0.1em; padding:0; text-align:left; vertical-align:baseline; font-size:1em; line-height:normal; white-space:normal; }
+            /* Ensure .katex-display from MathNodeRenderer has similar base margin to auto-render's default for $$ */
             .katex-display { display:block; margin:0.8em 0.1em !important; padding:0 !important; text-align:left; overflow-x:auto; overflow-y:auto; max-width: 100%; }
             .error-message { color:$errorColor; font-weight:bold; padding:10px; border:1px solid $errorColor; background-color:#fff0f0; margin-bottom:5px; }
             a, a:link, a:visited { color:#4A90E2; text-decoration:none; }
             a:hover, a:active { text-decoration:underline; }
             pre[class*="language-"] { padding:1em; margin:.5em 0; overflow:auto; border-radius:1em; font-size: 1em; background-color:#f4f4f4; }
-            /* For ```math blocks, ensure they don't get Prism's pre/code styling if KaTeX replaces the pre */
-            pre.language-math { /* KaTeX will replace this, so no specific style needed here usually */ }
-            code.language-math { /* KaTeX will extract text from this, so no specific style needed here usually */ }
+            pre.language-math { /* KaTeX will replace this */ }
+            code.language-math { /* KaTeX will extract text from this */ }
 
             code[class*="language-"]:not(.language-math), pre[class*="language-"]:not(.language-math) code {
                 font-family: 'JetBrains Mono', 'Fira Code', 'Source Code Pro', 'Droid Sans Mono', 'Noto Sans Mono', 'Noto Sans Mono CJK SC', 'Ubuntu Mono', Consolas, Monaco, monospace;
@@ -68,18 +68,15 @@ fun generateKatexBaseHtmlTemplateString(
             var isPrismReady = false;
             var renderOptions = {
                 delimiters: [
-                    // Standard delimiters for auto-render.min.js
                     {left: "${'$'}", right: "${'$'}", display: false},
                     {left: "\\(", right: "\\)", display: false},
                     {left: "\\[", right: "\\]", display: true},
                     {left: "${'$'}${'$'}", right: "${'$'}${'$'}", display: true}
-                    // We are NOT adding custom delimiters for ```math here because we handle it manually.
                 ],
                 throwOnError: $throwOnError,
                 errorColor: "$errorColor",
                 macros: {"\\RR":"\\mathbb{R}"}
-                // trust: true, // Consider if facing issues with complex commands from ```math blocks,
-                               // but be aware of security. For file:/// content, it's generally safer.
+                // trust: true, // Consider if true is needed, especially for mhchem or complex user macros
             };
 
             function checkLibraryStates() {
@@ -99,17 +96,16 @@ fun generateKatexBaseHtmlTemplateString(
 
             function processNodeWithLibraries(node) {
                 if (!node) { console.warn("processNodeWithLibraries: Node is null."); return; }
+                if (!checkLibraryStates()) {
+                    console.warn("processNodeWithLibraries: KaTeX or Prism not ready. Aborting for node:", node.nodeName);
+                    return;
+                }
 
-                // 1. KaTeX Auto-Rendering for standard delimiters ( $...$, \(...\), $$...$$, \[...\] )
-                // This will process the content of the node for these delimiters.
-                if (isKaTeXReady) {
+                // 1. KaTeX Auto-Rendering (for LaTeX with delimiters directly in text nodes)
+                if (isKaTeXReady && typeof renderMathInElement === 'function') {
                     try {
-                        // Important: renderMathInElement processes the *children* of the node if it's an element,
-                        // or the node itself if it's a text node.
-                        // If 'node' is the main container (like 'latex_content_target'), this is correct.
-                        // If 'node' is a newly appended smaller fragment, this will scan that fragment.
                         renderMathInElement(node, renderOptions);
-                        console.log("KaTeX auto-render executed on node:", node.nodeName);
+                        console.log("KaTeX auto-render attempted on node:", node.nodeName);
                     } catch (e) {
                         var errorMsgText = "KaTeX Auto-Render Error: " + (e.message || e);
                         console.error(errorMsgText, e);
@@ -118,27 +114,22 @@ fun generateKatexBaseHtmlTemplateString(
                              errorDiv.textContent = errorMsgText; node.appendChild(errorDiv);
                         }
                     }
-                } else { console.warn("KaTeX not ready for auto-render on:", node); }
+                } else { console.warn("KaTeX auto-render not available or not ready for node:", node); }
 
-                // 2. PrismJS for syntax highlighting (for non-math code blocks)
+                // 2. PrismJS for syntax highlighting (excluding our manually handled math blocks)
                 if (isPrismReady) {
                     try {
                         var codeElementsToHighlight = [];
-                        // Selector for standard code blocks, excluding our manually handled math blocks
                         var selector = 'pre > code[class*="language-"]:not(.language-math), pre > code:not([class])';
-
                         if (node.nodeName === 'PRE' && node.firstChild && node.firstChild.nodeName === 'CODE' &&
                             (!node.firstChild.classList || !node.firstChild.classList.contains('language-math'))) {
                             codeElementsToHighlight.push(node.firstChild);
-                        } else if (node.querySelectorAll) { // If node itself is a container
+                        } else if (node.querySelectorAll) {
                             node.querySelectorAll(selector).forEach(function(el) { codeElementsToHighlight.push(el); });
-                        }
-                        // If node is a <code> element passed directly (less common for this function's typical use)
-                        else if (node.nodeName === 'CODE' && node.parentElement && node.parentElement.nodeName === 'PRE' &&
+                        } else if (node.nodeName === 'CODE' && node.parentElement && node.parentElement.nodeName === 'PRE' &&
                                  (!node.classList || !node.classList.contains('language-math'))) {
                              codeElementsToHighlight.push(node);
                         }
-
                         if (codeElementsToHighlight.length > 0) {
                             codeElementsToHighlight.forEach(function(el) { Prism.highlightElement(el); });
                             console.log("Prism highlighting executed on", codeElementsToHighlight.length, "elements.");
@@ -147,89 +138,110 @@ fun generateKatexBaseHtmlTemplateString(
                 } else { console.warn("Prism not ready for highlighting on:", node); }
 
                 // 3. Manual KaTeX Rendering for ```math blocks (pre > code.language-math)
-                // This should run AFTER auto-render, or be structured so they don't interfere.
-                // Since we replace the <pre> element, it's fine.
                 if (isKaTeXReady) {
                     var mathCodeElements = [];
-                    // Find 'code' elements with 'language-math' class, typically inside 'pre'
-                    // If 'node' is the main container:
-                    if (node.querySelectorAll) {
+                    if (node.nodeType === Node.ELEMENT_NODE && node.classList && node.classList.contains('language-math') && node.parentNode && node.parentNode.nodeName === 'PRE') {
+                         mathCodeElements.push(node); // Node itself is code.language-math
+                    } else if (node.nodeName === 'PRE' && node.firstChild && node.firstChild.nodeName === 'CODE' && node.firstChild.classList && node.firstChild.classList.contains('language-math')) {
+                         mathCodeElements.push(node.firstChild); // Node is PRE containing code.language-math
+                    } else if (node.querySelectorAll) { // Node is a container
                         node.querySelectorAll('pre > code.language-math').forEach(function(el) { mathCodeElements.push(el); });
                     }
-                    // If 'node' itself is a 'code.language-math' (less likely for typical call)
-                    else if (node.nodeName === 'CODE' && node.classList && node.classList.contains('language-math') &&
-                             node.parentNode && node.parentNode.nodeName === 'PRE') {
-                        mathCodeElements.push(node);
-                    }
-                    // If 'node' is a 'pre' containing 'code.language-math'
-                    else if (node.nodeName === 'PRE' && node.firstChild && node.firstChild.nodeName === 'CODE' &&
-                             node.firstChild.classList && node.firstChild.classList.contains('language-math')) {
-                        mathCodeElements.push(node.firstChild);
-                    }
-
 
                     if (mathCodeElements.length > 0) console.log("Found", mathCodeElements.length, "language-math blocks to process manually.");
                     mathCodeElements.forEach(function(codeElement) {
                         var latexSource = codeElement.textContent || "";
-                        // Basic script tag removal from LaTeX source, just in case.
                         var SCRIPT_REGEX_IN_LATEX = /<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi;
                         latexSource = latexSource.replace(SCRIPT_REGEX_IN_LATEX, "");
-
-                        if (latexSource.trim() === "") {
-                            console.warn("KaTeX Manual Render: Empty LaTeX source in language-math block.");
-                            // Optionally remove the empty pre block or leave it.
-                            // if (codeElement.parentNode) codeElement.parentNode.remove();
-                            return;
-                        }
-
-                        var displayMode = true; // Always display mode for ```math blocks
-                        var parentPre = codeElement.parentNode; // This should be the <pre> element
-
+                        if (latexSource.trim() === "") { console.warn("KaTeX Manual Render: Empty LaTeX source in language-math block."); return; }
+                        var parentPre = codeElement.parentNode;
                         var katexOutputDiv = document.createElement('div');
-                        katexOutputDiv.className = 'katex-display'; // Use KaTeX's standard class for display math
-
+                        // katexOutputDiv.className = 'katex-display'; // KaTeX.render in displayMode will add this itself or similar structure
                         try {
                             katex.render(latexSource, katexOutputDiv, {
-                                throwOnError: renderOptions.throwOnError,
-                                errorColor: renderOptions.errorColor,
-                                macros: renderOptions.macros,
-                                displayMode: displayMode
-                                // trust: true, // Consider if needed for complex commands
+                                throwOnError: renderOptions.throwOnError, errorColor: renderOptions.errorColor,
+                                macros: renderOptions.macros, displayMode: true
                             });
-
                             if (parentPre && parentPre.parentNode) {
                                 parentPre.parentNode.replaceChild(katexOutputDiv, parentPre);
                                 console.log("KaTeX: Manually rendered and replaced language-math block. Source:", latexSource.substring(0,30)+"...");
-                            } else {
-                                console.warn("KaTeX Manual Render: Could not find parent <pre> to replace for", codeElement);
-                                // Fallback: replace content of code (less ideal as <pre> styling remains)
-                                codeElement.innerHTML = '';
-                                codeElement.appendChild(katexOutputDiv);
                             }
-                        } catch (e) {
-                            var errorMsgText = "KaTeX Manual Render Error (language-math): " + (e.message || e);
-                            console.error(errorMsgText, e, "Problematic LaTeX Source:", latexSource);
-                            var errorDiv = document.createElement('div');
-                            errorDiv.className = 'error-message';
-                            errorDiv.textContent = errorMsgText + "\nSource: " + latexSource.substring(0, 100) + (latexSource.length > 100 ? "..." : "");
-
-                            if (parentPre && parentPre.parentNode) {
-                                parentPre.parentNode.insertBefore(errorDiv, parentPre.nextSibling);
-                            } else if (codeElement.parentNode) { // Should be parentPre
-                                codeElement.parentNode.insertBefore(errorDiv, codeElement.nextSibling);
-                            } else { // Should not happen
-                                document.body.appendChild(errorDiv);
-                            }
-                        }
+                        } catch (e) { /* ... error handling ... */ }
                     });
                 } else { console.warn("KaTeX not ready for manual ```math render on:", node); }
-            }
+
+                // 4. NEW: Manual KaTeX Rendering for elements with 'katex-math-inline' and 'katex-math-display' classes
+                if (isKaTeXReady) {
+                    // Inline Math
+                    var inlineMathElements = [];
+                    if (node.nodeType === Node.ELEMENT_NODE && node.classList && node.classList.contains('katex-math-inline')) {
+                        inlineMathElements.push(node);
+                    } else if (node.querySelectorAll) {
+                        node.querySelectorAll('span.katex-math-inline').forEach(function(el) { inlineMathElements.push(el); });
+                    }
+
+                    if (inlineMathElements.length > 0) console.log("Found", inlineMathElements.length, "custom 'katex-math-inline' elements to process.");
+                    inlineMathElements.forEach(function(element) {
+                        if (element.querySelector('.katex-html')) { // Check if already rendered
+                            console.log("KaTeX Manual Render: katex-math-inline element already contains .katex-html, skipping.", element);
+                            return;
+                        }
+                        var latexSource = element.textContent || "";
+                        if (latexSource.trim() === "") { console.warn("KaTeX Manual Render: Empty LaTeX source in katex-math-inline span:", element); return; }
+                        try {
+                            katex.render(latexSource, element, {
+                                throwOnError: renderOptions.throwOnError, errorColor: renderOptions.errorColor,
+                                macros: renderOptions.macros, displayMode: false
+                            });
+                            console.log("KaTeX: Manually rendered katex-math-inline. Source:", latexSource.substring(0,30)+"...");
+                        } catch (e) {
+                            var errorMsgText = "KaTeX Manual Render Error (katex-math-inline): " + (e.message || e);
+                            console.error(errorMsgText, e, "Problematic LaTeX Source:", latexSource, "Element:", element);
+                            element.textContent = "[KaTeX Error]"; // Simplified error display
+                            element.style.color = renderOptions.errorColor;
+                        }
+                    });
+
+                    // Display Math
+                    var displayMathElements = [];
+                     if (node.nodeType === Node.ELEMENT_NODE && node.classList && node.classList.contains('katex-math-display')) {
+                        displayMathElements.push(node);
+                    } else if (node.querySelectorAll) {
+                        node.querySelectorAll('div.katex-math-display').forEach(function(el) { displayMathElements.push(el); });
+                    }
+
+                    if (displayMathElements.length > 0) console.log("Found", displayMathElements.length, "custom 'katex-math-display' elements to process.");
+                    displayMathElements.forEach(function(element) {
+                         if (element.querySelector('.katex-html')) { // Check if already rendered
+                            console.log("KaTeX Manual Render: katex-math-display element already contains .katex-html, skipping.", element);
+                            return;
+                        }
+                        var latexSource = element.textContent || "";
+                        if (latexSource.trim() === "") { console.warn("KaTeX Manual Render: Empty LaTeX source in katex-math-display div:", element); return; }
+                        try {
+                            katex.render(latexSource, element, {
+                                throwOnError: renderOptions.throwOnError, errorColor: renderOptions.errorColor,
+                                macros: renderOptions.macros, displayMode: true
+                            });
+                            console.log("KaTeX: Manually rendered katex-math-display. Source:", latexSource.substring(0,30)+"...");
+                        } catch (e) {
+                            var errorMsgText = "KaTeX Manual Render Error (katex-math-display): " + (e.message || e);
+                            console.error(errorMsgText, e, "Problematic LaTeX Source:", latexSource, "Element:", element);
+                            element.textContent = "[KaTeX Error]"; // Simplified error display
+                            element.style.color = renderOptions.errorColor;
+                        }
+                    });
+                } else { console.warn("KaTeX not ready for manual .katex-math-* class render on:", node); }
+            } // end of processNodeWithLibraries
 
             function sanitizeHtmlInput(htmlString) {
                 if (typeof htmlString !== 'string') return '';
+                // Basic script tag removal. Consider a more robust sanitizer if input can be complex/untrusted.
                 var SCRIPT_REGEX = /<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi;
                 var sanitizedString = htmlString.replace(SCRIPT_REGEX, "");
+                // Remove on<event> handlers
                 sanitizedString = sanitizedString.replace(/ on\w+\s*=\s*['"][^'"]*['"]/gi, '');
+                // Neutralize javascript: hrefs
                 sanitizedString = sanitizedString.replace(/ href\s*=\s*['"]javascript:[^'"]*['"]/gi, ' href="#"');
                 return sanitizedString;
             }
@@ -238,11 +250,11 @@ fun generateKatexBaseHtmlTemplateString(
                 console.log("renderFullContent called. HTML length:", fullHtmlString.length);
                 var target = document.getElementById('latex_content_target');
                 if (!target) { console.error("Target 'latex_content_target' not found."); return; }
-                target.innerHTML = sanitizeHtmlInput(fullHtmlString); // Set the full HTML
-                if (checkLibraryStates()) {
-                    processNodeWithLibraries(target); // Process the entire new content
+                target.innerHTML = sanitizeHtmlInput(fullHtmlString);
+                if (checkLibraryStates()) { // Ensure libs are ready before processing
+                    processNodeWithLibraries(target);
                 } else {
-                    console.warn("renderFullContent: Libs not ready. Content set but not processed.");
+                    console.warn("renderFullContent: Libs not ready. Content set but not fully processed.");
                 }
             };
 
@@ -253,24 +265,15 @@ fun generateKatexBaseHtmlTemplateString(
                 var sanitizedChunk = sanitizeHtmlInput(htmlChunk);
                 if (sanitizedChunk.trim() === "") { console.log("appendHtmlChunk: Empty after sanitization."); return; }
 
-                // Create a temporary div to hold the new chunk's nodes
                 var tempDiv = document.createElement('div');
                 tempDiv.innerHTML = sanitizedChunk;
-
-                // Append new nodes and collect them for processing
                 var appendedNodes = [];
                 while (tempDiv.firstChild) {
                     appendedNodes.push(target.appendChild(tempDiv.firstChild));
                 }
 
-                if (checkLibraryStates()) {
-                    // Process each newly appended top-level node/fragment
-                    // This is more efficient than re-processing the entire target on every chunk,
-                    // but assumes KaTeX/Prism can work correctly on these fragments.
+                if (checkLibraryStates()) { // Ensure libs are ready
                     appendedNodes.forEach(function(appendedNode) {
-                        // If appendedNode is a text node, renderMathInElement will handle it.
-                        // If it's an element, renderMathInElement will scan its children.
-                        // Our manual ```math handler also uses querySelectorAll on the node.
                         processNodeWithLibraries(appendedNode);
                     });
                 } else {
@@ -279,10 +282,16 @@ fun generateKatexBaseHtmlTemplateString(
             };
 
             var initialCheckAttempts = 0;
-            var maxInitialCheckAttempts = 60;
+            var maxInitialCheckAttempts = 60; // Wait for 6 seconds
             function initialLibsLoadCheck() {
                 if (checkLibraryStates()) {
                     console.log("KaTeX and Prism are ready (initial check complete).");
+                    // If content was set before libs were ready, try to process it now.
+                    var target = document.getElementById('latex_content_target');
+                    if (target && target.innerHTML.trim() !== "" && !target.querySelector('.katex-html')) { // Check if already processed
+                         console.log("Libs became ready after content was set. Re-processing target.");
+                         processNodeWithLibraries(target);
+                    }
                 } else if (initialCheckAttempts < maxInitialCheckAttempts) {
                     initialCheckAttempts++;
                     setTimeout(initialLibsLoadCheck, 100);
@@ -298,10 +307,11 @@ fun generateKatexBaseHtmlTemplateString(
                 }
             }
 
-            if (document.readyState === "loading") {
+            // Ensure DOM is ready for library checks and initial processing
+             if (document.readyState === "loading") {
                  document.addEventListener("DOMContentLoaded", initialLibsLoadCheck);
             } else {
-                 initialLibsLoadCheck();
+                 initialLibsLoadCheck(); // Already loaded
             }
         </script>
     </body>

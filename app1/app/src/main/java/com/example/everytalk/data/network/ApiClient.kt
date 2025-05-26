@@ -37,10 +37,6 @@ object ApiClient {
         contextual(Long::class) { Long.serializer() }
         contextual(Float::class) { Float.serializer() }
         contextual(Double::class) { Double.serializer() }
-        // 如果 Any 可能包含 List<String> 或类似的简单集合，可以考虑添加：
-        // contextual<List<String>>(ListSerializer(String.serializer()))
-        // contextual<Map<String, String>>(MapSerializer(String.serializer(), String.serializer()))
-        // 但对于 mapOf("enable_thinking" to false)，主要是 Boolean 的上下文。
     }
 
     private val jsonParser: Json by lazy {
@@ -69,6 +65,7 @@ object ApiClient {
     }
 
     private val backendProxyUrls = listOf(
+        "https://uoseegiydwgx.us-west-1.clawcloudrun.com/chat",//claw could run
         "https://kunze999-backendai.hf.space/chat",//hugging face
         "https://backdaitalk-production.up.railway.app/chat",//railway
         "http://192.168.0.2:8000/chat" // 您的本地地址，请确保可访问

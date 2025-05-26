@@ -39,6 +39,13 @@ data class Message(
     val webSearchResults: List<WebSearchResult>? = null, // 存储从后端接收到的Web搜索结果
 
     var currentWebSearchStage: String? = null, // 当前Web搜索/分析阶段 (例如："web_indexing_started", "web_analysis_complete")
-    val htmlContent: String? = null
+    val htmlContent: String? = null,
+
+    /**
+     * 存储与此消息关联的图片URL列表。
+     * 这可以是上传到服务器后的HTTP/HTTPS URL，
+     * 或者是本地设备上的 content:// URI 字符串。
+     */
+    val imageUrls: List<String>? = null // 设置为可空，并且默认为 null
 )
 

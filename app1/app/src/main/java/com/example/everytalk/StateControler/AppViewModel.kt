@@ -14,6 +14,7 @@ import com.example.everytalk.data.DataClass.Sender
 import com.example.everytalk.data.DataClass.WebSearchResult
 import com.example.everytalk.data.local.SharedPreferencesDataSource
 import com.example.everytalk.data.network.ApiClient
+import com.example.everytalk.ui.screens.MainScreen.chat.SelectedMedia
 import com.example.everytalk.ui.screens.viewmodel.ConfigManager
 import com.example.everytalk.ui.screens.viewmodel.DataPersistenceManager
 import com.example.everytalk.ui.screens.viewmodel.HistoryManager
@@ -400,12 +401,48 @@ class AppViewModel(
         stateHolder._text.value = newText
     }
 
-    fun onSendMessage(messageText: String, isFromRegeneration: Boolean = false) {
+    fun onSendMessage(messageText: String, isFromRegeneration: Boolean = false, images: List<SelectedMedia> = emptyList()) {
         val textToActuallySend = messageText.trim()
-        if (textToActuallySend.isEmpty()) {
-            if (!isFromRegeneration) showSnackbar("请输入消息内容")
+        if (messageText.isBlank() && images.isEmpty()) {
+            showSnackbar("请输入消息内容或选择图片")
             return
         }
+
+        Log.d("AppViewModel", "onSendMessage called with text: '$messageText' and ${images.size} images.")
+        images.forEachIndexed { index, media ->
+            when(media) {
+                is SelectedMedia.FromBitmap -> Log.d("AppViewModel", "Image $index: Bitmap (size: ${media.bitmap.byteCount})")
+                is SelectedMedia.FromUri -> Log.d("AppViewModel", "Image $index: Uri (${media.uri})")
+            }
+        }
+
+        val processedImageUrls: List<String>? = if (images.isNotEmpty()) {
+            images.mapNotNull { media ->
+                when (media) {
+                    is SelectedMedia.FromUri -> media.uri.toString()
+                    is SelectedMedia.FromBitmap -> {
+                        // 如果直接使用 Bitmap，并且不需要上传，你可能需要另一种方式在 Message 中表示它
+                        // 或者，在发送前总是将 Bitmap 保存为临时文件并获取其 URI
+                        // 为了演示，我们假设 Bitmap 也能转换为某种可用的 "URL" 或标识符
+                        // 注意：直接在Message中持久化Bitmap对象通常不是好主意
+                        Log.w(TAG_APP_VIEW_MODEL, "Bitmap for message needs proper handling (e.g., upload or save to get URI)")
+                        null // 暂时不处理Bitmap的 "URL"
+                    }
+                }
+            }
+        } else {
+            null
+        }
+
+
+        val newUserMessage = Message(
+            text = textToActuallySend,
+            sender = Sender.User,
+            contentStarted = true,
+            imageUrls = processedImageUrls // <--- 使用处理后的图片URL列表
+        )
+
+        
         val currentConfig = stateHolder._selectedApiConfig.value ?: run {
             showSnackbar("请先选择 API 配置"); return
         }
@@ -954,7 +991,7 @@ class AppViewModel(
     }
 
     private fun onAiMessageFullTextChanged(messageId: String, currentFullText: String) {
-        viewModelScope.launch(Dispatchers.Main.immediate) {
+        viewModelScope.launch(Dispatchers.Main.immediate) { // 确保 messageIndex 的初始查找在主线程
             val messageIndex = stateHolder.messages.indexOfFirst { it.id == messageId }
             if (messageIndex != -1) {
                 if (currentFullText.isNotBlank()) {
@@ -962,11 +999,28 @@ class AppViewModel(
                         TAG_APP_VIEW_MODEL,
                         "onAiMessageFullTextChanged: For message $messageId, text has changed. New full text length: ${currentFullText.length}. Preparing to update HTML."
                     )
-                    launch(Dispatchers.Default) {
-                        val newHtml = convertMarkdownToHtml(currentFullText)
+                    // 使用后台线程进行耗时的 Markdown 到 HTML 转换
+                    launch(Dispatchers.Default) { // <--- 这个协程执行转换
+                        val newHtml = try {
+                            convertMarkdownToHtml(currentFullText) // <<< 这是之前发生崩溃的地方
+                        } catch (e: Exception) {
+                            Log.e(
+                                TAG_APP_VIEW_MODEL,
+                                "Error converting Markdown to HTML for message $messageId: ${e.message}",
+                                e
+                            )
+                            "<p>⚠️ 内容渲染出错，显示原始文本:</p><pre>${
+                                currentFullText.replace(
+                                    "<",
+                                    "&lt;"
+                                ).replace(">", "&gt;")
+                            }</pre>"
+                        }
+
+                        // 确保在更新UI前回主线程
                         withContext(Dispatchers.Main.immediate) {
                             val freshMessageIndex =
-                                stateHolder.messages.indexOfFirst { it.id == messageId }
+                                stateHolder.messages.indexOfFirst { it.id == messageId } // 再次获取索引，因为列表可能已改变
                             if (freshMessageIndex != -1) {
                                 val messageToUpdate = stateHolder.messages[freshMessageIndex]
                                 if (messageToUpdate.htmlContent != newHtml) {
@@ -979,15 +1033,15 @@ class AppViewModel(
                                 } else {
                                     Log.d(
                                         TAG_APP_VIEW_MODEL,
-                                        "onAiMessageFullTextChanged: Generated HTML for $messageId is identical to existing, no view update for htmlContent."
+                                        "onAiMessageFullTextChanged: Generated HTML for $messageId is identical to existing, no UI update for htmlContent."
                                     )
                                 }
                             }
                         }
                     }
-                } else {
+                } else { // currentFullText 为空
                     val messageToUpdate = stateHolder.messages[messageIndex]
-                    if (messageToUpdate.htmlContent != null) {
+                    if (messageToUpdate.htmlContent != null) { // 如果之前有HTML内容，现在清空
                         stateHolder.messages[messageIndex] =
                             messageToUpdate.copy(htmlContent = null)
                         Log.d(
