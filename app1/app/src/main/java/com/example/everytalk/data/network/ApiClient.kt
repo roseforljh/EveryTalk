@@ -65,10 +65,10 @@ object ApiClient {
     }
 
     private val backendProxyUrls = listOf(
-        "https://uoseegiydwgx.us-west-1.clawcloudrun.com/chat",//claw could run
+        //"https://uoseegiydwgx.us-west-1.clawcloudrun.com/chat",//claw could run
         "https://kunze999-backendai.hf.space/chat",//hugging face
-        "https://backdaitalk-production.up.railway.app/chat",//railway
-        "http://192.168.0.2:8000/chat" // 您的本地地址，请确保可访问
+        //"https://backdaitalk-production.up.railway.app/chat",//railway
+        //"http://192.168.0.102:7860/chat" // 您的本地地址，请确保可访问
     )
 
     fun preWarm() {

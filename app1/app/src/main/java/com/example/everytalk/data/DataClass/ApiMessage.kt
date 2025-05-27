@@ -3,14 +3,15 @@ package com.example.everytalk.data.DataClass
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
-@Serializable // Ensure it's serializable
+@Serializable
 data class ApiMessage(
-    @SerialName("role") // Match backend JSON key
-    val role: String, // Can be "user", "assistant", "system", or "tool"
+    @SerialName("role")
+    val role: String,
 
-    @SerialName("content") // Match backend JSON key
-    val content: String?, // Make content nullable for flexibility (e.g., assistant initiating tool call might not have text content)
+    @SerialName("content")
+    val content: String?, // 恢复为简单的 String? 类型
 
-    @SerialName("name") // Match the expected extra field name for tool role
-    val name: String? = null // Nullable: Only relevant and non-null when role is "tool"
+    @SerialName("name") // OpenAI的 tool role 可能需要 name
+    val name: String? = null,
+
 )

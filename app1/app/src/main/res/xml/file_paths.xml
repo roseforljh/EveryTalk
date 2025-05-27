@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
-    <cache-path
-        name="my_images"
-        path="images/" />
-    <!-- 你可以根据需要添加其他路径类型，例如：
-    <files-path name="my_documents" path="docs/" />
-    <external-path name="my_external_files" path="Pictures/" />
-    -->
+    <!-- Path for temporary camera images (saved to context.filesDir/chat_images_temp/) -->
+    <files-path name="chat_images_temp" path="chat_images_temp/" />
+
+    <!-- Path for persistent chat images (saved to context.filesDir/chat_images/) -->
+    <files-path name="chat_images" path="chat_images/" />
+
+    <!-- 如果你还在用外部存储，例如 getExternalFilesDir(null) -->
+    <!-- <external-files-path name="my_external_images" path="." /> -->
 </paths>

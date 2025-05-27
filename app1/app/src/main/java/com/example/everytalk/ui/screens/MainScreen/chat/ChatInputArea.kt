@@ -1,12 +1,9 @@
 package com.example.everytalk.ui.screens.MainScreen.chat
 
 import android.Manifest
-// import android.content.ContentValues // No longer needed for TakePicturePreview
-// import android.content.Context // No longer needed for createImageUri
-import android.graphics.Bitmap // For TakePicturePreview
+import android.content.Context // Needed for FileProvider and createImageFileUri
+import android.graphics.Bitmap
 import android.net.Uri
-// import android.os.Build // No longer needed for createImageUri
-// import android.provider.MediaStore // No longer needed for createImageUri
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -16,13 +13,13 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.Image // For displaying Bitmaps/URIs
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyRow // For horizontal list of image previews
-import androidx.compose.foundation.lazy.itemsIndexed // For LazyRow items
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -39,18 +36,48 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap // To convert Bitmap to ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
-// import androidx.compose.ui.platform.LocalContext // Not strictly needed here anymore
+import androidx.compose.ui.platform.LocalContext // Needed for Context
 import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
 import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
+import coil3.request.crossfade
 import com.example.everytalk.data.DataClass.ApiConfig
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
+import java.io.File // Needed for File
+import java.text.SimpleDateFormat // Needed for SimpleDateFormat
+import java.util.Date // Needed for Date
+import java.util.Locale // Needed for Locale
+import java.util.UUID // Needed for UUID
+
+// Helper function to create an image file and its FileProvider URI
+// This function can also be placed in AppViewModel or a utility class if it's reused.
+private fun createImageFileUri(context: Context): Uri {
+    val timeStamp: String = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+    val imageFileName = "JPEG_${timeStamp}_"
+    // Use app's internal files directory for images
+    val storageDir: File? = File(context.filesDir, "chat_images_temp") // Use a temp dir for new captures
+    if (storageDir != null && !storageDir.exists()) {
+        storageDir.mkdirs()
+    }
+    val imageFile = File.createTempFile(
+        imageFileName, /* prefix */
+        ".jpg",        /* suffix */
+        storageDir      /* directory */
+    )
+    return FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.provider", // Make sure this matches your AndroidManifest.xml
+        imageFile
+    )
+}
 
 // 定义图片来源选项的枚举
 enum class ImageSourceOption(val label: String, val icon: ImageVector) {
@@ -61,7 +88,7 @@ enum class ImageSourceOption(val label: String, val icon: ImageVector) {
 // 数据类，用于管理选中的图片，可以是Bitmap或Uri
 sealed class SelectedMedia {
     data class FromUri(val uri: Uri) : SelectedMedia()
-    data class FromBitmap(val bitmap: Bitmap) : SelectedMedia()
+    data class FromBitmap(val bitmap: Bitmap) : SelectedMedia() // This will now mainly be for old logic or other cases
 }
 
 
@@ -132,6 +159,10 @@ fun SelectedImagePreviewItem(
             .clip(RoundedCornerShape(8.dp))
             .border(1.dp, Color.LightGray, RoundedCornerShape(8.dp))
     ) {
+        // Coil can load both Uri and Bitmap (through its ImageRequest Builder).
+        // It's generally better to use AsyncImage for both for consistent loading.
+        // If media is FromBitmap, convert to Uri if possible, or use AsyncImage's Bitmap loading capability.
+        // For simplicity, we keep Image for Bitmap for now.
         when (media) {
             is SelectedMedia.FromUri -> {
                 AsyncImage(
@@ -142,8 +173,9 @@ fun SelectedImagePreviewItem(
                 )
             }
             is SelectedMedia.FromBitmap -> {
-                Image(
-                    bitmap = media.bitmap.asImageBitmap(),
+                // AsyncImage can also take a Bitmap directly for display
+                AsyncImage( // Changed from Image to AsyncImage for consistency
+                    model = media.bitmap, // AsyncImage can directly load a Bitmap
                     contentDescription = "Selected image from camera",
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop
@@ -178,7 +210,7 @@ fun ChatInputArea(
     isApiCalling: Boolean,
     isWebSearchEnabled: Boolean,
     onToggleWebSearch: () -> Unit,
-    onClearText: () -> Unit, // This will be used to clear text only
+    onClearText: () -> Unit,
     onStopApiCall: () -> Unit,
     focusRequester: FocusRequester,
     selectedApiConfig: ApiConfig?,
@@ -188,18 +220,20 @@ fun ChatInputArea(
     keyboardController: SoftwareKeyboardController?,
     onFocusChange: (isFocused: Boolean) -> Unit
 ) {
+    val context = LocalContext.current // Get Context here
     var pendingMessageTextForSend by remember { mutableStateOf<String?>(null) }
     var isTuneModeEnabled by remember { mutableStateOf(false) }
     var showImageSelectionPanel by remember { mutableStateOf(false) }
 
     val selectedImages = remember { mutableStateListOf<SelectedMedia>() }
+    var tempCameraImageUri by remember { mutableStateOf<Uri?>(null) } // To store the URI for camera capture
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
         onResult = { uri: Uri? ->
             if (uri != null) {
                 Log.d("PhotoPicker", "Selected URI: $uri")
-                selectedImages.add(SelectedMedia.FromUri(uri))
+                selectedImages.add(SelectedMedia.FromUri(uri)) // Still FromUri for gallery
             } else {
                 Log.d("PhotoPicker", "No media selected")
             }
@@ -207,15 +241,18 @@ fun ChatInputArea(
         }
     )
 
-    val cameraPreviewLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.TakePicturePreview(),
-        onResult = { bitmap: Bitmap? ->
-            if (bitmap != null) {
-                Log.d("Camera", "Image preview captured")
-                selectedImages.add(SelectedMedia.FromBitmap(bitmap))
+    // Modified camera launcher to use TakePicture (for full image URI)
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture(), // <<< Use TakePicture
+        onResult = { success: Boolean ->
+            if (success && tempCameraImageUri != null) {
+                Log.d("Camera", "Image captured and saved to URI: $tempCameraImageUri")
+                selectedImages.add(SelectedMedia.FromUri(tempCameraImageUri!!)) // Store as FromUri
+                tempCameraImageUri = null // Reset temp URI
             } else {
-                Log.d("Camera", "Image preview capture failed or no bitmap returned")
-                onShowSnackbar("无法获取相机预览图")
+                Log.d("Camera", "Image capture failed or URI was null.")
+                onShowSnackbar("无法获取相机照片")
+                tempCameraImageUri = null // Reset temp URI
             }
             showImageSelectionPanel = false
         }
@@ -226,7 +263,9 @@ fun ChatInputArea(
         onResult = { isGranted: Boolean ->
             if (isGranted) {
                 Log.d("Permission", "Camera permission granted")
-                cameraPreviewLauncher.launch(null)
+                val newCameraUri = createImageFileUri(context) // <<< Use helper to create URI
+                tempCameraImageUri = newCameraUri // Assign to the state variable
+                cameraLauncher.launch(newCameraUri) // <<< Launch camera, pass this local URI
             } else {
                 Log.d("Permission", "Camera permission denied")
                 onShowSnackbar("相机权限被拒绝")
@@ -234,20 +273,18 @@ fun ChatInputArea(
             }
         }
     )
-    // Optional: readMediaImagesPermissionLauncher if you want finer control for album
-    // val readMediaImagesPermissionLauncher = ...
 
     LaunchedEffect(Unit) {
         snapshotFlow { imeInsets.getBottom(density) > 0 }
             .distinctUntilChanged()
             .filter { isKeyboardVisible -> !isKeyboardVisible && (pendingMessageTextForSend != null || selectedImages.isNotEmpty()) }
             .collect {
-                val messageToSend = pendingMessageTextForSend ?: text // Use current text if pending is null but images exist
+                val messageToSend = pendingMessageTextForSend ?: text
                 Log.d("ChatInputArea", "Keyboard hidden, sending pending message: $messageToSend with ${selectedImages.size} images")
-                onSendMessageRequest(messageToSend, false, selectedImages.toList())
+                onSendMessageRequest(messageToSend, false, selectedImages.toList()) // Pass selectedImages here
                 pendingMessageTextForSend = null
-                if (text == messageToSend) onTextChange("") // Clear text if it was the one sent
-                selectedImages.clear()
+                if (text == messageToSend) onTextChange("")
+                selectedImages.clear() // Clear after sending
             }
     }
 
@@ -279,7 +316,7 @@ fun ChatInputArea(
                 ) {
                     itemsIndexed(selectedImages, key = { index, item ->
                         when(item) {
-                            is SelectedMedia.FromBitmap -> "bitmap_$index" // Simple key for bitmap
+                            is SelectedMedia.FromBitmap -> "bitmap_$index"
                             is SelectedMedia.FromUri -> item.uri.toString()
                         }
                     }) { index, media ->
@@ -358,8 +395,8 @@ fun ChatInputArea(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (text.isNotEmpty() || selectedImages.isNotEmpty()) {
                         IconButton(onClick = {
-                            onTextChange("") // Clear text using the provided callback
-                            selectedImages.clear() // Clear images
+                            onTextChange("")
+                            selectedImages.clear()
                         }) {
                             Icon(
                                 Icons.Filled.Clear, "清除内容和图片",
@@ -376,7 +413,6 @@ fun ChatInputArea(
                                 val isKeyboardCurrentlyVisible = imeInsets.getBottom(density) > 0
                                 if (isKeyboardCurrentlyVisible) {
                                     pendingMessageTextForSend = text
-                                    // selectedImages is already up-to-date
                                     onTextChange("")
                                     keyboardController?.hide()
                                 } else {
