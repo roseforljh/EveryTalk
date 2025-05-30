@@ -77,7 +77,7 @@ object ApiClient {
         "https://uoseegiydwgx.us-west-1.clawcloudrun.com/chat",//claw could run
         "https://kunze999-backendai.hf.space/chat",//hugging face
         "https://backdaitalk-production.up.railway.app/chat",//railway
-        "http://192.168.0.1:7860/chat" // 您的本地地址，请确保可访问
+        //"http://192.168.0.1:7860/chat" // 您的本地地址，请确保可访问
     )
 
     fun preWarm() {
@@ -136,10 +136,19 @@ object ApiClient {
         val logTag = "ApiClientStream"
 
         try {
-            Log.d(logTag, "准备向 $backendProxyUrl 发起请求. API Key: ${chatRequest.apiKey.takeLast(4)}, Attachments: ${attachmentsToUpload.size}")
+            Log.d(
+                logTag,
+                "准备向 $backendProxyUrl 发起请求. API Key: ${chatRequest.apiKey.takeLast(4)}, Attachments: ${attachmentsToUpload.size}"
+            )
 
-            val chatRequestJsonString = jsonParser.encodeToString(ChatRequest.serializer(), chatRequest)
-            Log.d(logTag, "Serialized chat_request_json (length ${chatRequestJsonString.length}): ${chatRequestJsonString.take(500)}...")
+            val chatRequestJsonString =
+                jsonParser.encodeToString(ChatRequest.serializer(), chatRequest)
+            Log.d(
+                logTag,
+                "Serialized chat_request_json (length ${chatRequestJsonString.length}): ${
+                    chatRequestJsonString.take(500)
+                }..."
+            )
 
             // --- 修改点：始终构建 multipart/form-data ---
             val multiPartData = MultiPartFormDataContent(
@@ -165,50 +174,69 @@ object ApiClient {
                             when (mediaItem) {
                                 is SelectedMediaItem.ImageFromUri -> {
                                     fileUri = mediaItem.uri
-                                    originalFileNameFromMediaItem = getFileNameFromUri(applicationContext, mediaItem.uri)
-                                    mimeTypeFromMediaItem = applicationContext.contentResolver.getType(mediaItem.uri)
+                                    originalFileNameFromMediaItem =
+                                        getFileNameFromUri(applicationContext, mediaItem.uri)
+                                    mimeTypeFromMediaItem =
+                                        applicationContext.contentResolver.getType(mediaItem.uri)
                                 }
+
                                 is SelectedMediaItem.GenericFile -> {
                                     fileUri = mediaItem.uri
-                                    originalFileNameFromMediaItem = mediaItem.displayName ?: getFileNameFromUri(applicationContext, mediaItem.uri)
-                                    mimeTypeFromMediaItem = mediaItem.mimeType ?: applicationContext.contentResolver.getType(mediaItem.uri)
+                                    originalFileNameFromMediaItem =
+                                        mediaItem.displayName ?: getFileNameFromUri(
+                                            applicationContext,
+                                            mediaItem.uri
+                                        )
+                                    mimeTypeFromMediaItem = mediaItem.mimeType
+                                        ?: applicationContext.contentResolver.getType(mediaItem.uri)
                                 }
+
                                 is SelectedMediaItem.ImageFromBitmap -> {
-                                    Log.w(logTag, "ImageFromBitmap 在索引 $index。理想情况是预处理为Uri。")
+                                    Log.w(
+                                        logTag,
+                                        "ImageFromBitmap 在索引 $index。理想情况是预处理为Uri。"
+                                    )
                                     fileUri = null
-                                    originalFileNameFromMediaItem = "bitmap_image_$index.${if(mediaItem.bitmap.hasAlpha()) "png" else "jpeg"}"
-                                    mimeTypeFromMediaItem = if(mediaItem.bitmap.hasAlpha()) ContentType.Image.PNG.toString() else ContentType.Image.JPEG.toString()
-                                    // 如果要直接上传Bitmap的bytes:
-                                    // val bos = java.io.ByteArrayOutputStream()
-                                    // val format = if(mediaItem.bitmap.hasAlpha()) android.graphics.Bitmap.CompressFormat.PNG else android.graphics.Bitmap.CompressFormat.JPEG
-                                    // mediaItem.bitmap.compress(format, 80, bos)
-                                    // val bitmapBytes = bos.toByteArray()
-                                    // append("uploaded_documents", bitmapBytes, Headers.build {
-                                    //    append(HttpHeaders.ContentDisposition, "filename=\"$originalFileNameFromMediaItem\"")
-                                    //    append(HttpHeaders.ContentType, mimeTypeFromMediaItem)
-                                    // })
-                                    // continue // 如果直接上传了 bitmapBytes，则跳过 fileUri 逻辑
+                                    originalFileNameFromMediaItem =
+                                        "bitmap_image_$index.${if (mediaItem.bitmap.hasAlpha()) "png" else "jpeg"}"
+                                    mimeTypeFromMediaItem =
+                                        if (mediaItem.bitmap.hasAlpha()) ContentType.Image.PNG.toString() else ContentType.Image.JPEG.toString()
                                 }
                             }
 
                             if (fileUri != null) {
-                                val finalMimeType = mimeTypeFromMediaItem ?: ContentType.Application.OctetStream.toString()
-                                Log.d(logTag, "准备文件部分 $index: '$originalFileNameFromMediaItem', MIME: '$finalMimeType', URI: $fileUri")
+                                val finalMimeType = mimeTypeFromMediaItem
+                                    ?: ContentType.Application.OctetStream.toString()
+                                Log.d(
+                                    logTag,
+                                    "准备文件部分 $index: '$originalFileNameFromMediaItem', MIME: '$finalMimeType', URI: $fileUri"
+                                )
                                 try {
-                                    applicationContext.contentResolver.openInputStream(fileUri)?.use { inputStream ->
-                                        val fileBytes = inputStream.readBytes()
-                                        append(
-                                            key = "uploaded_documents",
-                                            value = fileBytes,
-                                            headers = Headers.build {
-                                                append(HttpHeaders.ContentDisposition, "filename=\"$originalFileNameFromMediaItem\"")
-                                                append(HttpHeaders.ContentType, finalMimeType)
-                                            }
-                                        )
-                                        Log.i(logTag, "已添加文件 '$originalFileNameFromMediaItem' (size: ${fileBytes.size} B) 到表单数据。")
-                                    } ?: Log.e(logTag, "打开 URI 的 InputStream 失败: $fileUri")
+                                    applicationContext.contentResolver.openInputStream(fileUri)
+                                        ?.use { inputStream ->
+                                            val fileBytes = inputStream.readBytes()
+                                            append(
+                                                key = "uploaded_documents",
+                                                value = fileBytes,
+                                                headers = Headers.build {
+                                                    append(
+                                                        HttpHeaders.ContentDisposition,
+                                                        "filename=\"$originalFileNameFromMediaItem\""
+                                                    )
+                                                    append(HttpHeaders.ContentType, finalMimeType)
+                                                }
+                                            )
+                                            Log.i(
+                                                logTag,
+                                                "已添加文件 '$originalFileNameFromMediaItem' (size: ${fileBytes.size} B) 到表单数据。"
+                                            )
+                                        } ?: Log.e(logTag, "打开 URI 的 InputStream 失败: $fileUri")
                                 } catch (e: Exception) {
-                                    Log.e(logTag, "为 URI $fileUri 准备文件部分时出错: ${e.message}", e)
+                                    Log.e(
+                                        logTag,
+                                        "为 URI $fileUri 准备文件部分时出错: ${e.message}",
+                                        e
+                                    )
                                 }
                             }
                         }
@@ -236,8 +264,15 @@ object ApiClient {
                 Log.i(logTag, "收到来自 $backendProxyUrl 的响应状态: ${response?.status}")
 
                 if (response?.status?.isSuccess() != true) {
-                    val errorBody = try { response?.bodyAsText() ?: "(无错误响应体)" } catch (e: Exception) { "(读取错误响应体失败: ${e.message})" }
-                    Log.e(logTag, "代理错误 $backendProxyUrl ${response?.status}. 响应体: $errorBody")
+                    val errorBody = try {
+                        response?.bodyAsText() ?: "(无错误响应体)"
+                    } catch (e: Exception) {
+                        "(读取错误响应体失败: ${e.message})"
+                    }
+                    Log.e(
+                        logTag,
+                        "代理错误 $backendProxyUrl ${response?.status}. 响应体: $errorBody"
+                    )
                     throw IOException("代理错误 ($backendProxyUrl): ${response?.status?.value} - $errorBody")
                 }
 
@@ -267,26 +302,51 @@ object ApiClient {
 
                                 if (line.isEmpty()) continue
                                 if (line.startsWith("data:")) line = line.substring(5).trim()
-                                else if (line.startsWith(":")) { Log.v(logTag, "[SSE注释 $backendProxyUrl] $line"); continue }
+                                else if (line.startsWith(":")) {
+                                    Log.v(logTag, "[SSE注释 $backendProxyUrl] $line"); continue
+                                }
 
                                 Log.v(logTag, "[流块收到 $backendProxyUrl] ${line.take(100)}")
 
                                 if (line.isNotEmpty()) {
                                     try {
-                                        if (line.equals("[DONE]", ignoreCase = true)) { // 处理可能的 [DONE] 标记
+                                        if (line.equals(
+                                                "[DONE]",
+                                                ignoreCase = true
+                                            )
+                                        ) { // 处理可能的 [DONE] 标记
                                             Log.d(logTag, "收到显式的 [DONE] 标记，取消通道并中断。")
                                             channel.cancel(CoroutineCancellationException("[DONE] marker received"))
                                             break // 跳出内部 while
                                         }
-                                        val appEvent = jsonParser.decodeFromString(AppStreamEvent.serializer(), line)
+                                        val appEvent = jsonParser.decodeFromString(
+                                            AppStreamEvent.serializer(),
+                                            line
+                                        )
                                         val sendResult = trySend(appEvent)
                                         if (!sendResult.isSuccess) {
-                                            Log.w(logTag, "下游收集器 ($backendProxyUrl) 已关闭或失败。停止读取流。原因: $sendResult. isClosedForSend: $isClosedForSend")
-                                            if (!isClosedForSend && !channel.isClosedForRead) channel.cancel(CoroutineCancellationException("下游 ($backendProxyUrl) 已关闭: $sendResult"))
+                                            Log.w(
+                                                logTag,
+                                                "下游收集器 ($backendProxyUrl) 已关闭或失败。停止读取流。原因: $sendResult. isClosedForSend: $isClosedForSend"
+                                            )
+                                            if (!isClosedForSend && !channel.isClosedForRead) channel.cancel(
+                                                CoroutineCancellationException("下游 ($backendProxyUrl) 已关闭: $sendResult")
+                                            )
                                             return@execute
                                         }
-                                    } catch (e: SerializationException) { Log.e(logTag, "JSON 解析错误 ($backendProxyUrl): '$line'. ${e.message}", e) }
-                                    catch (e: Exception) { Log.e(logTag, "处理块错误 ($backendProxyUrl): '$line'. ${e.message}", e) }
+                                    } catch (e: SerializationException) {
+                                        Log.e(
+                                            logTag,
+                                            "JSON 解析错误 ($backendProxyUrl): '$line'. ${e.message}",
+                                            e
+                                        )
+                                    } catch (e: Exception) {
+                                        Log.e(
+                                            logTag,
+                                            "处理块错误 ($backendProxyUrl): '$line'. ${e.message}",
+                                            e
+                                        )
+                                    }
                                 }
                             }
                         } else { // bytesRead == 0, channel not closed, yield to prevent busy loop
@@ -300,24 +360,73 @@ object ApiClient {
                         if (line.isNotEmpty() && !line.equals("[DONE]", ignoreCase = true)) {
                             Log.v(logTag, "[流块收到 $backendProxyUrl EOF] ${line.take(100)}")
                             try {
-                                val appEvent = jsonParser.decodeFromString(AppStreamEvent.serializer(), line)
+                                val appEvent =
+                                    jsonParser.decodeFromString(AppStreamEvent.serializer(), line)
                                 trySend(appEvent)
-                            } catch (e: Exception) { Log.e(logTag, "EOF JSON 解析错误 ($backendProxyUrl): '$line'. ${e.message}", e)}
+                            } catch (e: Exception) {
+                                Log.e(
+                                    logTag,
+                                    "EOF JSON 解析错误 ($backendProxyUrl): '$line'. ${e.message}",
+                                    e
+                                )
+                            }
                         }
                     }
                     Log.d(logTag, "完成从 $backendProxyUrl 读取流通道。")
-                } catch (e: IOException) { Log.e(logTag, "读取流IO错误 ($backendProxyUrl): ${e.message}"); if (!isClosedForSend) throw e } // Rethrow if channel still open
-                catch (e: CoroutineCancellationException) { Log.i(logTag, "流读取取消 ($backendProxyUrl): ${e.message}"); throw e }
-                catch (e: Exception) { Log.e(logTag, "读取流意外错误 ($backendProxyUrl): ${e.message}", e); if (!isClosedForSend) throw IOException("意外流错误 ($backendProxyUrl): ${e.message}", e) }
-                finally { Log.d(logTag, "读取 $backendProxyUrl 流的内部 try-catch-finally 完成。") }
+                } catch (e: IOException) {
+                    Log.e(
+                        logTag,
+                        "读取流IO错误 ($backendProxyUrl): ${e.message}"
+                    ); if (!isClosedForSend) throw e
+                } // Rethrow if channel still open
+                catch (e: CoroutineCancellationException) {
+                    Log.i(logTag, "流读取取消 ($backendProxyUrl): ${e.message}"); throw e
+                } catch (e: Exception) {
+                    Log.e(
+                        logTag,
+                        "读取流意外错误 ($backendProxyUrl): ${e.message}",
+                        e
+                    ); if (!isClosedForSend) throw IOException(
+                        "意外流错误 ($backendProxyUrl): ${e.message}",
+                        e
+                    )
+                } finally {
+                    Log.d(logTag, "读取 $backendProxyUrl 流的内部 try-catch-finally 完成。")
+                }
             }
-        } catch (e: CoroutineCancellationException) { Log.i(logTag, "请求 $backendProxyUrl 已取消: ${e.message}"); throw e }
-        catch (e: HttpRequestTimeoutException) { Log.e(logTag, "请求超时 $backendProxyUrl: ${e.message}"); throw IOException("请求超时 ($backendProxyUrl): ${e.message}", e) }
+        } catch (e: CoroutineCancellationException) {
+            Log.i(logTag, "请求 $backendProxyUrl 已取消: ${e.message}"); throw e
+        } catch (e: HttpRequestTimeoutException) {
+            Log.e(
+                logTag,
+                "请求超时 $backendProxyUrl: ${e.message}"
+            ); throw IOException("请求超时 ($backendProxyUrl): ${e.message}", e)
+        }
         // Ktor的ConnectTimeoutException可能需要特定引擎的导入，或者被HttpRequestTimeoutException覆盖
         // catch (e: ConnectTimeoutException) { Log.e(logTag, "连接超时 $backendProxyUrl: ${e.message}"); throw IOException("连接超时 ($backendProxyUrl): ${e.message}", e) }
-        catch (e: ResponseException) { val errorBody = try { e.response.bodyAsText() } catch (ex: Exception) { "(无法读取错误体)"}; Log.e(logTag, "HTTP 错误 $backendProxyUrl: ${e.response.status}. Body: $errorBody", e); throw IOException("HTTP 错误 ($backendProxyUrl): ${e.response.status} - $errorBody", e) }
-        catch (e: IOException) { Log.e(logTag, "网络IO错误 $backendProxyUrl: ${e.message}", e); throw e }
-        catch (e: Exception) { Log.e(logTag, "未知客户端错误 $backendProxyUrl: ${e.message}", e); val statusInfo = response?.status?.let { " (状态: ${it.value})" } ?: ""; throw IOException("未知客户端错误 ($backendProxyUrl)$statusInfo: ${e.message}", e) }
+        catch (e: ResponseException) {
+            val errorBody = try {
+                e.response.bodyAsText()
+            } catch (ex: Exception) {
+                "(无法读取错误体)"
+            }; Log.e(
+                logTag,
+                "HTTP 错误 $backendProxyUrl: ${e.response.status}. Body: $errorBody",
+                e
+            ); throw IOException(
+                "HTTP 错误 ($backendProxyUrl): ${e.response.status} - $errorBody",
+                e
+            )
+        } catch (e: IOException) {
+            Log.e(logTag, "网络IO错误 $backendProxyUrl: ${e.message}", e); throw e
+        } catch (e: Exception) {
+            Log.e(logTag, "未知客户端错误 $backendProxyUrl: ${e.message}", e);
+            val statusInfo = response?.status?.let { " (状态: ${it.value})" }
+                ?: ""; throw IOException(
+                "未知客户端错误 ($backendProxyUrl)$statusInfo: ${e.message}",
+                e
+            )
+        }
         Log.d(logTag, "streamChatResponseInternal for $backendProxyUrl 完成。")
     }
 
