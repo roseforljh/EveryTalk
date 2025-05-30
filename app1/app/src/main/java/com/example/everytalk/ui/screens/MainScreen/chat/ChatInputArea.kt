@@ -1,9 +1,10 @@
 package com.example.everytalk.ui.screens.MainScreen.chat
 
 import android.Manifest
-import android.content.Context // Needed for FileProvider and createImageFileUri
+import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
+import android.provider.OpenableColumns
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -13,7 +14,6 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -36,75 +36,74 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext // Needed for Context
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.SoftwareKeyboardController
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import androidx.core.content.FileProvider
 import coil3.compose.AsyncImage
-import coil3.request.ImageRequest
-import coil3.request.crossfade
 import com.example.everytalk.data.DataClass.ApiConfig
+import com.example.everytalk.model.ImageSourceOption
+import com.example.everytalk.model.MoreOptionsType
+import com.example.everytalk.model.SelectedMediaItem
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
-import java.io.File // Needed for File
-import java.text.SimpleDateFormat // Needed for SimpleDateFormat
-import java.util.Date // Needed for Date
-import java.util.Locale // Needed for Locale
-import java.util.UUID // Needed for UUID
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
-// Helper function to create an image file and its FileProvider URI
-// This function can also be placed in AppViewModel or a utility class if it's reused.
 private fun createImageFileUri(context: Context): Uri {
     val timeStamp: String = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
     val imageFileName = "JPEG_${timeStamp}_"
-    // Use app's internal files directory for images
-    val storageDir: File? = File(context.filesDir, "chat_images_temp") // Use a temp dir for new captures
+    val storageDir: File? = File(context.filesDir, "chat_images_temp")
     if (storageDir != null && !storageDir.exists()) {
         storageDir.mkdirs()
     }
-    val imageFile = File.createTempFile(
-        imageFileName, /* prefix */
-        ".jpg",        /* suffix */
-        storageDir      /* directory */
-    )
-    return FileProvider.getUriForFile(
-        context,
-        "${context.packageName}.provider", // Make sure this matches your AndroidManifest.xml
-        imageFile
-    )
+    val imageFile = File.createTempFile(imageFileName, ".jpg", storageDir)
+    return FileProvider.getUriForFile(context, "${context.packageName}.provider", imageFile)
 }
 
-// 定义图片来源选项的枚举
-enum class ImageSourceOption(val label: String, val icon: ImageVector) {
-    ALBUM("相册", Icons.Outlined.PhotoLibrary),
-    CAMERA("相机", Icons.Outlined.PhotoCamera)
+private fun getFileDetailsFromUri(context: Context, uri: Uri): Triple<String, String?, String?> {
+    var displayName: String? = null
+    val mimeType: String? = context.contentResolver.getType(uri)
+    try {
+        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (nameIndex != -1) {
+                    displayName = cursor.getString(nameIndex)
+                }
+            }
+        }
+    } catch (e: Exception) {
+        Log.e("FileDetails", "Error querying URI metadata: $uri", e)
+    }
+    if (displayName == null) {
+        displayName = uri.lastPathSegment ?: "Unknown File"
+    }
+    return Triple(displayName ?: "Unknown File", mimeType, uri.toString())
 }
-
-// 数据类，用于管理选中的图片，可以是Bitmap或Uri
-sealed class SelectedMedia {
-    data class FromUri(val uri: Uri) : SelectedMedia()
-    data class FromBitmap(val bitmap: Bitmap) : SelectedMedia() // This will now mainly be for old logic or other cases
-}
-
 
 @Composable
 fun ImageSelectionPanel(
     modifier: Modifier = Modifier,
-    onOptionSelected: (ImageSourceOption) -> Unit,
-    onDismissRequest: () -> Unit
+    onOptionSelected: (ImageSourceOption) -> Unit
 ) {
     var activeOption by remember { mutableStateOf<ImageSourceOption?>(null) }
     val panelBackgroundColor = Color(0xFFf4f4f4)
     val darkerBackgroundColor = Color(0xFFCCCCCC)
-
     Surface(
-        modifier = modifier
-            .width(150.dp),
+        modifier = modifier.width(150.dp),
         shape = RoundedCornerShape(20.dp),
         color = panelBackgroundColor,
         tonalElevation = 4.dp
@@ -117,7 +116,6 @@ fun ImageSelectionPanel(
                     animationSpec = tween(durationMillis = 200),
                     label = "ImageOptionPanelItemBackground"
                 )
-
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -136,11 +134,7 @@ fun ImageSelectionPanel(
                         modifier = Modifier.size(24.dp)
                     )
                     Spacer(Modifier.width(12.dp))
-                    Text(
-                        text = option.label,
-                        color = Color.Black,
-                        fontSize = 16.sp
-                    )
+                    Text(text = option.label, color = Color.Black, fontSize = 16.sp)
                 }
             }
         }
@@ -148,38 +142,108 @@ fun ImageSelectionPanel(
 }
 
 @Composable
-fun SelectedImagePreviewItem(
-    media: SelectedMedia,
+fun MoreOptionsPanel(
+    modifier: Modifier = Modifier,
+    onOptionSelected: (MoreOptionsType) -> Unit
+) {
+    var activeOption by remember { mutableStateOf<MoreOptionsType?>(null) }
+    val panelBackgroundColor = Color(0xFFf4f4f4)
+    val darkerBackgroundColor = Color(0xFFCCCCCC)
+    Surface(
+        modifier = modifier.width(150.dp),
+        shape = RoundedCornerShape(20.dp),
+        color = panelBackgroundColor,
+        tonalElevation = 4.dp
+    ) {
+        Column {
+            MoreOptionsType.values().forEach { option ->
+                val isSelected = activeOption == option
+                val animatedBackgroundColor by animateColorAsState(
+                    targetValue = if (isSelected) darkerBackgroundColor else panelBackgroundColor,
+                    animationSpec = tween(durationMillis = 200),
+                    label = "MoreOptionPanelItemBackground"
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            activeOption = option
+                            onOptionSelected(option)
+                        }
+                        .background(animatedBackgroundColor)
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = option.icon,
+                        contentDescription = option.label,
+                        tint = Color(0xFF7b7b7b),
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Text(text = option.label, color = Color.Black, fontSize = 16.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SelectedItemPreview(
+    mediaItem: SelectedMediaItem,
     onRemoveClicked: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Box(
         modifier = modifier
-            .size(80.dp) // 预览图大小
+            .size(width = 100.dp, height = 80.dp)
             .clip(RoundedCornerShape(8.dp))
             .border(1.dp, Color.LightGray, RoundedCornerShape(8.dp))
+            .background(Color.White)
     ) {
-        // Coil can load both Uri and Bitmap (through its ImageRequest Builder).
-        // It's generally better to use AsyncImage for both for consistent loading.
-        // If media is FromBitmap, convert to Uri if possible, or use AsyncImage's Bitmap loading capability.
-        // For simplicity, we keep Image for Bitmap for now.
-        when (media) {
-            is SelectedMedia.FromUri -> {
-                AsyncImage(
-                    model = media.uri,
-                    contentDescription = "Selected image from gallery",
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
-                )
-            }
-            is SelectedMedia.FromBitmap -> {
-                // AsyncImage can also take a Bitmap directly for display
-                AsyncImage( // Changed from Image to AsyncImage for consistency
-                    model = media.bitmap, // AsyncImage can directly load a Bitmap
-                    contentDescription = "Selected image from camera",
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
-                )
+        when (mediaItem) {
+            is SelectedMediaItem.ImageFromUri -> AsyncImage(
+                model = mediaItem.uri,
+                contentDescription = "Selected image from gallery",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+
+            is SelectedMediaItem.ImageFromBitmap -> AsyncImage(
+                model = mediaItem.bitmap,
+                contentDescription = "Selected image from camera",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+
+            is SelectedMediaItem.GenericFile -> {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    val icon = when {
+                        mediaItem.mimeType?.startsWith("video/") == true -> Icons.Outlined.Videocam
+                        mediaItem.mimeType?.startsWith("audio/") == true -> Icons.Outlined.Audiotrack
+                        else -> Icons.Outlined.Description
+                    }
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = mediaItem.displayName,
+                        modifier = Modifier.size(32.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = mediaItem.displayName,
+                        fontSize = 12.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        color = Color.DarkGray
+                    )
+                }
             }
         }
         IconButton(
@@ -187,30 +251,28 @@ fun SelectedImagePreviewItem(
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .padding(2.dp)
-                .size(20.dp) // 叉叉按钮大小
+                .size(20.dp)
                 .background(Color.Black.copy(alpha = 0.5f), CircleShape)
         ) {
             Icon(
                 Icons.Filled.Close,
-                contentDescription = "Remove image",
+                contentDescription = "Remove item",
                 tint = Color.White,
-                modifier = Modifier.size(14.dp) // 叉叉图标大小
+                modifier = Modifier.size(14.dp)
             )
         }
     }
 }
-
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatInputArea(
     text: String,
     onTextChange: (String) -> Unit,
-    onSendMessageRequest: (messageText: String, isKeyboardVisible: Boolean, images: List<SelectedMedia>) -> Unit,
+    onSendMessageRequest: (messageText: String, isKeyboardVisible: Boolean, attachments: List<SelectedMediaItem>) -> Unit,
     isApiCalling: Boolean,
     isWebSearchEnabled: Boolean,
     onToggleWebSearch: () -> Unit,
-    onClearText: () -> Unit,
     onStopApiCall: () -> Unit,
     focusRequester: FocusRequester,
     selectedApiConfig: ApiConfig?,
@@ -220,77 +282,89 @@ fun ChatInputArea(
     keyboardController: SoftwareKeyboardController?,
     onFocusChange: (isFocused: Boolean) -> Unit
 ) {
-    val context = LocalContext.current // Get Context here
+    val context = LocalContext.current
     var pendingMessageTextForSend by remember { mutableStateOf<String?>(null) }
-    var isTuneModeEnabled by remember { mutableStateOf(false) }
-    var showImageSelectionPanel by remember { mutableStateOf(false) }
+    var showImageSelectionPanelIntent by remember { mutableStateOf(false) }
+    var isImageSelectionPopupComposed by remember { mutableStateOf(false) }
+    var imageSelectionPanelAnimatedVisible by remember { mutableStateOf(false) }
+    var showMoreOptionsPanelIntent by remember { mutableStateOf(false) }
+    var isMoreOptionsPopupComposed by remember { mutableStateOf(false) }
+    var moreOptionsPanelAnimatedVisible by remember { mutableStateOf(false) }
+    val selectedMediaItems = remember { mutableStateListOf<SelectedMediaItem>() }
+    var tempCameraImageUri by remember { mutableStateOf<Uri?>(null) }
 
-    val selectedImages = remember { mutableStateListOf<SelectedMedia>() }
-    var tempCameraImageUri by remember { mutableStateOf<Uri?>(null) } // To store the URI for camera capture
-
-    val photoPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickVisualMedia(),
-        onResult = { uri: Uri? ->
-            if (uri != null) {
-                Log.d("PhotoPicker", "Selected URI: $uri")
-                selectedImages.add(SelectedMedia.FromUri(uri)) // Still FromUri for gallery
-            } else {
-                Log.d("PhotoPicker", "No media selected")
-            }
-            showImageSelectionPanel = false
+    LaunchedEffect(showImageSelectionPanelIntent) {
+        if (showImageSelectionPanelIntent) {
+            isImageSelectionPopupComposed = true; imageSelectionPanelAnimatedVisible = true
+        } else {
+            imageSelectionPanelAnimatedVisible = false
         }
-    )
+    }
+    LaunchedEffect(showMoreOptionsPanelIntent) {
+        if (showMoreOptionsPanelIntent) {
+            isMoreOptionsPopupComposed = true; moreOptionsPanelAnimatedVisible = true
+        } else {
+            moreOptionsPanelAnimatedVisible = false
+        }
+    }
+    val imagePopupDismissRequestHandler = { showImageSelectionPanelIntent = false }
+    val moreOptionsPopupDismissRequestHandler = { showMoreOptionsPanelIntent = false }
 
-    // Modified camera launcher to use TakePicture (for full image URI)
-    val cameraLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.TakePicture(), // <<< Use TakePicture
-        onResult = { success: Boolean ->
+    val photoPickerLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+            uri?.let { selectedMediaItems.add(SelectedMediaItem.ImageFromUri(it)) }
+            showImageSelectionPanelIntent = false
+        }
+    val cameraLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
             if (success && tempCameraImageUri != null) {
-                Log.d("Camera", "Image captured and saved to URI: $tempCameraImageUri")
-                selectedImages.add(SelectedMedia.FromUri(tempCameraImageUri!!)) // Store as FromUri
-                tempCameraImageUri = null // Reset temp URI
+                selectedMediaItems.add(SelectedMediaItem.ImageFromUri(tempCameraImageUri!!))
+                tempCameraImageUri = null
             } else {
-                Log.d("Camera", "Image capture failed or URI was null.")
-                onShowSnackbar("无法获取相机照片")
-                tempCameraImageUri = null // Reset temp URI
+                onShowSnackbar("无法获取相机照片"); tempCameraImageUri = null
             }
-            showImageSelectionPanel = false
+            showImageSelectionPanelIntent = false
         }
-    )
-
-    val cameraPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission(),
-        onResult = { isGranted: Boolean ->
+    val cameraPermissionLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
             if (isGranted) {
-                Log.d("Permission", "Camera permission granted")
-                val newCameraUri = createImageFileUri(context) // <<< Use helper to create URI
-                tempCameraImageUri = newCameraUri // Assign to the state variable
-                cameraLauncher.launch(newCameraUri) // <<< Launch camera, pass this local URI
+                val newUri = createImageFileUri(context); tempCameraImageUri =
+                    newUri; cameraLauncher.launch(newUri)
             } else {
-                Log.d("Permission", "Camera permission denied")
-                onShowSnackbar("相机权限被拒绝")
-                showImageSelectionPanel = false
+                onShowSnackbar("相机权限被拒绝"); showImageSelectionPanelIntent = false
             }
         }
+
+    // --- MODIFIED: Use OpenDocument for filePickerLauncher ---
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(), // Changed to OpenDocument
+        onResult = { uri: Uri? ->
+            uri?.let {
+                val (displayName, mimeType, _) = getFileDetailsFromUri(context, it)
+                Log.d("OpenDocument", "Selected Document: $displayName, URI: $it, MIME: $mimeType")
+                selectedMediaItems.add(SelectedMediaItem.GenericFile(it, displayName, mimeType))
+            } ?: Log.d("OpenDocument", "No document selected")
+            showMoreOptionsPanelIntent = false
+        }
     )
+    // --- END OF MODIFICATION ---
 
     LaunchedEffect(Unit) {
         snapshotFlow { imeInsets.getBottom(density) > 0 }
             .distinctUntilChanged()
-            .filter { isKeyboardVisible -> !isKeyboardVisible && (pendingMessageTextForSend != null || selectedImages.isNotEmpty()) }
+            .filter { isKeyboardVisible -> !isKeyboardVisible && (pendingMessageTextForSend != null || selectedMediaItems.isNotEmpty()) }
             .collect {
                 val messageToSend = pendingMessageTextForSend ?: text
-                Log.d("ChatInputArea", "Keyboard hidden, sending pending message: $messageToSend with ${selectedImages.size} images")
-                onSendMessageRequest(messageToSend, false, selectedImages.toList()) // Pass selectedImages here
+                onSendMessageRequest(messageToSend, false, selectedMediaItems.toList())
                 pendingMessageTextForSend = null
                 if (text == messageToSend) onTextChange("")
-                selectedImages.clear() // Clear after sending
+                selectedMediaItems.clear()
             }
     }
+    var chatInputContentHeightPx by remember { mutableStateOf(0) }
+    val panelVerticalMarginFromTopInput = 16.dp
 
-    Box(
-        modifier = Modifier.fillMaxWidth()
-    ) {
+    Box(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -300,39 +374,27 @@ fun ChatInputArea(
                     shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
                     clip = false
                 )
-                .background(
-                    Color.White,
-                    RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
-                )
+                .background(Color.White, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
                 .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
                 .padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 8.dp)
+                .onSizeChanged { intSize -> chatInputContentHeightPx = intSize.height }
         ) {
-            if (selectedImages.isNotEmpty()) {
+            if (selectedMediaItems.isNotEmpty()) {
                 LazyRow(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(bottom = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    itemsIndexed(selectedImages, key = { index, item ->
-                        when(item) {
-                            is SelectedMedia.FromBitmap -> "bitmap_$index"
-                            is SelectedMedia.FromUri -> item.uri.toString()
-                        }
-                    }) { index, media ->
-                        SelectedImagePreviewItem(
-                            media = media,
-                            onRemoveClicked = {
-                                selectedImages.removeAt(index)
-                            }
-                        )
+                    itemsIndexed(selectedMediaItems, key = { _, item -> item.id }) { index, media ->
+                        SelectedItemPreview(
+                            mediaItem = media,
+                            onRemoveClicked = { selectedMediaItems.removeAt(index) })
                     }
                 }
             }
-
             OutlinedTextField(
-                value = text,
-                onValueChange = onTextChange,
+                value = text, onValueChange = onTextChange,
                 modifier = Modifier
                     .fillMaxWidth()
                     .focusRequester(focusRequester)
@@ -348,8 +410,7 @@ fun ChatInputArea(
                     focusedBorderColor = Color.Transparent,
                     unfocusedBorderColor = Color.Transparent,
                 ),
-                minLines = 1, maxLines = 5,
-                shape = RoundedCornerShape(16.dp)
+                minLines = 1, maxLines = 5, shape = RoundedCornerShape(16.dp)
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -359,47 +420,45 @@ fun ChatInputArea(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = onToggleWebSearch) {
                         Icon(
-                            imageVector = if (isWebSearchEnabled) Icons.Outlined.TravelExplore else Icons.Filled.Language,
-                            contentDescription = if (isWebSearchEnabled) "网页搜索已开启" else "网页搜索已关闭",
+                            if (isWebSearchEnabled) Icons.Outlined.TravelExplore else Icons.Filled.Language,
+                            if (isWebSearchEnabled) "网页搜索已开启" else "网页搜索已关闭",
                             tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(25.dp)
                         )
                     }
                     Spacer(Modifier.width(8.dp))
-                    IconButton(
-                        onClick = {
-                            showImageSelectionPanel = !showImageSelectionPanel
-                            if (showImageSelectionPanel) keyboardController?.hide()
-                        },
-                    ) {
+                    IconButton(onClick = {
+                        if (showMoreOptionsPanelIntent) showMoreOptionsPanelIntent =
+                            false; showImageSelectionPanelIntent =
+                        !showImageSelectionPanelIntent; if (showImageSelectionPanelIntent) keyboardController?.hide()
+                    }) {
                         Icon(
-                            imageVector = Icons.Outlined.Image,
-                            contentDescription = if (showImageSelectionPanel) "关闭图片选项" else "选择图片",
+                            Icons.Outlined.Image,
+                            if (showImageSelectionPanelIntent) "关闭图片选项" else "选择图片",
                             tint = Color(0xff2cb334),
                             modifier = Modifier.size(25.dp)
                         )
                     }
                     Spacer(Modifier.width(8.dp))
-                    IconButton(
-                        onClick = { isTuneModeEnabled = !isTuneModeEnabled }
-                    ) {
+                    IconButton(onClick = {
+                        if (showImageSelectionPanelIntent) showImageSelectionPanelIntent =
+                            false; showMoreOptionsPanelIntent =
+                        !showMoreOptionsPanelIntent; if (showMoreOptionsPanelIntent) keyboardController?.hide()
+                    }) {
                         Icon(
-                            imageVector = Icons.Filled.Tune,
-                            contentDescription = if (isTuneModeEnabled) "关闭更多选项" else "更多选项",
+                            Icons.Filled.Tune,
+                            if (showMoreOptionsPanelIntent) "关闭更多选项" else "更多选项",
                             tint = Color(0xfff76213),
                             modifier = Modifier.size(25.dp)
                         )
                     }
                 }
-
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (text.isNotEmpty() || selectedImages.isNotEmpty()) {
-                        IconButton(onClick = {
-                            onTextChange("")
-                            selectedImages.clear()
-                        }) {
+                    if (text.isNotEmpty() || selectedMediaItems.isNotEmpty()) {
+                        IconButton(onClick = { onTextChange(""); selectedMediaItems.clear() }) {
                             Icon(
-                                Icons.Filled.Clear, "清除内容和图片",
+                                Icons.Filled.Clear,
+                                "清除内容和所选项目",
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
@@ -407,24 +466,19 @@ fun ChatInputArea(
                     }
                     FilledIconButton(
                         onClick = {
-                            if (isApiCalling) {
-                                onStopApiCall()
-                            } else if ((text.isNotBlank() || selectedImages.isNotEmpty()) && selectedApiConfig != null) {
-                                val isKeyboardCurrentlyVisible = imeInsets.getBottom(density) > 0
-                                if (isKeyboardCurrentlyVisible) {
-                                    pendingMessageTextForSend = text
-                                    onTextChange("")
-                                    keyboardController?.hide()
+                            if (isApiCalling) onStopApiCall()
+                            else if ((text.isNotBlank() || selectedMediaItems.isNotEmpty()) && selectedApiConfig != null) {
+                                if (imeInsets.getBottom(density) > 0) {
+                                    pendingMessageTextForSend = text; keyboardController?.hide()
                                 } else {
-                                    onSendMessageRequest(text, false, selectedImages.toList())
-                                    onTextChange("")
-                                    selectedImages.clear()
+                                    onSendMessageRequest(
+                                        text,
+                                        false,
+                                        selectedMediaItems.toList()
+                                    ); onTextChange(""); selectedMediaItems.clear()
                                 }
-                            } else if (selectedApiConfig == null) {
-                                onShowSnackbar("请先选择 API 配置")
-                            } else {
-                                onShowSnackbar("请输入消息内容或选择图片")
-                            }
+                            } else if (selectedApiConfig == null) onShowSnackbar("请先选择 API 配置")
+                            else onShowSnackbar("请输入消息内容或选择项目")
                         },
                         shape = CircleShape,
                         colors = IconButtonDefaults.filledIconButtonColors(
@@ -440,37 +494,84 @@ fun ChatInputArea(
                 }
             }
         }
-
-        val estimatedInputAreaContentHeight = 120.dp
-        val panelVerticalMarginFromTopInput = 8.dp
-        val previewHeight = if (selectedImages.isNotEmpty()) 80.dp + 8.dp else 0.dp
-
-        AnimatedVisibility(
-            visible = showImageSelectionPanel,
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(start = 8.dp)
-                .offset(y = -(estimatedInputAreaContentHeight + panelVerticalMarginFromTopInput + previewHeight)),
-            enter = fadeIn(animationSpec = tween(durationMillis = 200)),
-            exit = fadeOut(animationSpec = tween(durationMillis = 150))
-        ) {
-            ImageSelectionPanel(
-                onOptionSelected = { selectedOption ->
-                    when (selectedOption) {
-                        ImageSourceOption.ALBUM -> {
-                            photoPickerLauncher.launch(
+        val yOffsetPx =
+            -(chatInputContentHeightPx + with(density) { panelVerticalMarginFromTopInput.toPx() })
+        if (isImageSelectionPopupComposed) {
+            val xOffsetPx = with(density) { 8.dp.toPx() }
+            Popup(
+                alignment = Alignment.BottomStart,
+                offset = IntOffset(xOffsetPx.toInt(), yOffsetPx.toInt()),
+                onDismissRequest = imagePopupDismissRequestHandler,
+                properties = PopupProperties(
+                    focusable = true,
+                    dismissOnClickOutside = true,
+                    dismissOnBackPress = true
+                )
+            ) {
+                AnimatedVisibility(
+                    visible = imageSelectionPanelAnimatedVisible,
+                    enter = fadeIn(tween(200)),
+                    exit = fadeOut(tween(150))
+                ) {
+                    ImageSelectionPanel { selectedOption ->
+                        when (selectedOption) {
+                            ImageSourceOption.ALBUM -> photoPickerLauncher.launch(
                                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                             )
-                        }
-                        ImageSourceOption.CAMERA -> {
-                            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+
+                            ImageSourceOption.CAMERA -> cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
                         }
                     }
-                },
-                onDismissRequest = {
-                    showImageSelectionPanel = false
                 }
-            )
+                LaunchedEffect(imageSelectionPanelAnimatedVisible) {
+                    if (!imageSelectionPanelAnimatedVisible) {
+                        delay(150L); if (!showImageSelectionPanelIntent) isImageSelectionPopupComposed =
+                            false
+                    }
+                }
+            }
+        }
+        if (isMoreOptionsPopupComposed) {
+            val iconButtonApproxWidth = 48.dp;
+            val spacerWidth = 8.dp;
+            val columnStartPadding = 8.dp
+            val tuneButtonCenterX =
+                columnStartPadding + iconButtonApproxWidth + spacerWidth + iconButtonApproxWidth + spacerWidth + (iconButtonApproxWidth / 2)
+            val panelWidthDp = 150.dp;
+            val xOffsetForPopup = tuneButtonCenterX - (panelWidthDp / 2)
+            val xOffsetForMoreOptionsPanelPx = with(density) { xOffsetForPopup.toPx() }
+            Popup(
+                alignment = Alignment.BottomStart,
+                offset = IntOffset(xOffsetForMoreOptionsPanelPx.toInt(), yOffsetPx.toInt()),
+                onDismissRequest = moreOptionsPopupDismissRequestHandler,
+                properties = PopupProperties(
+                    focusable = true,
+                    dismissOnClickOutside = true,
+                    dismissOnBackPress = true
+                )
+            ) {
+                AnimatedVisibility(
+                    visible = moreOptionsPanelAnimatedVisible,
+                    enter = fadeIn(tween(200)),
+                    exit = fadeOut(tween(150))
+                ) {
+                    MoreOptionsPanel { selectedOption ->
+                        Log.d(
+                            "MoreOptionsPanel",
+                            "Selected: ${selectedOption.label}, Launching with MIME types: ${selectedOption.mimeTypes.joinToString()}"
+                        )
+                        // --- MODIFIED: Launch filePickerLauncher (OpenDocument) with Array<String> ---
+                        filePickerLauncher.launch(selectedOption.mimeTypes)
+                        // --- END OF MODIFICATION ---
+                    }
+                }
+                LaunchedEffect(moreOptionsPanelAnimatedVisible) {
+                    if (!moreOptionsPanelAnimatedVisible) {
+                        delay(150L); if (!showMoreOptionsPanelIntent) isMoreOptionsPopupComposed =
+                            false
+                    }
+                }
+            }
         }
     }
 }

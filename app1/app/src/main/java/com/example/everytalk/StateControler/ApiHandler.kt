@@ -1,17 +1,18 @@
 package com.example.everytalk.StateControler // 确保包名正确
 
+import android.content.Context // <--- 新增导入
 import android.util.Log
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.DataClass.Sender
 import com.example.everytalk.data.DataClass.ChatRequest
 import com.example.everytalk.data.DataClass.AppStreamEvent
-import com.example.everytalk.data.DataClass.ApiContentPart // 确保导入
+import com.example.everytalk.data.DataClass.ApiContentPart
 import com.example.everytalk.data.network.ApiClient
+import com.example.everytalk.model.SelectedMediaItem // <--- 新增导入
 import com.example.everytalk.ui.screens.viewmodel.HistoryManager
-// import com.example.everytalk.util.convertMarkdownToHtml // ViewModel 会处理 HTML 生成
-import io.ktor.client.plugins.ResponseException
-import io.ktor.client.statement.HttpResponse
-import io.ktor.client.statement.bodyAsText
+import io.ktor.client.plugins.ResponseException // 这个可能不再直接需要，因为ApiClient会处理
+import io.ktor.client.statement.HttpResponse    // 这个可能不再直接需要
+import io.ktor.client.statement.bodyAsText      // 这个可能不再直接需要
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -23,7 +24,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.IOException
-import java.util.concurrent.CancellationException
+import java.util.concurrent.CancellationException // Ktor的取消异常是 kotlin.coroutines.CancellationException
 
 class ApiHandler(
     private val stateHolder: ViewModelStateHolder,
@@ -39,7 +40,6 @@ class ApiHandler(
     private var currentTextBuilder = StringBuilder()
     private var currentReasoningBuilder = StringBuilder()
 
-    // 为取消原因定义前缀，以便区分
     private val USER_CANCEL_PREFIX = "USER_CANCELLED:"
     private val NEW_STREAM_CANCEL_PREFIX = "NEW_STREAM_INITIATED:"
 
@@ -56,7 +56,7 @@ class ApiHandler(
         )
 
         if (jobToCancel?.isActive == true && messageIdBeingCancelled != null) {
-            val partialText = currentTextBuilder.toString().trim() // 获取并trim
+            val partialText = currentTextBuilder.toString().trim()
             val partialReasoning =
                 currentReasoningBuilder.toString().trim().let { if (it.isNotBlank()) it else null }
 
@@ -77,7 +77,6 @@ class ApiHandler(
                             reasoning = partialReasoning,
                             contentStarted = currentMessage.contentStarted || partialText.isNotBlank(),
                             isError = false
-                            // isInterrupted = true // 可选
                         )
                         stateHolder.messages[index] = updatedMessage
 
@@ -100,7 +99,7 @@ class ApiHandler(
 
         if (messageIdBeingCancelled != null) {
             stateHolder.reasoningCompleteMap.remove(messageIdBeingCancelled)
-            if (!isNewMessageSend) { // 只在非新消息发送取消时，才考虑移除占位符
+            if (!isNewMessageSend) {
                 viewModelScope.launch(Dispatchers.Main.immediate) {
                     val index =
                         stateHolder.messages.indexOfFirst { it.id == messageIdBeingCancelled }
@@ -121,34 +120,28 @@ class ApiHandler(
             }
         }
         jobToCancel?.takeIf { it.isActive }
-            ?.cancel(CancellationException(specificCancelReason)) // 使用特定原因取消
+            ?.cancel(CancellationException(specificCancelReason))
         stateHolder.apiJob = null
     }
 
+    // --- 修改 streamChatResponse 方法签名 ---
     fun streamChatResponse(
         requestBody: ChatRequest,
-        @Suppress("UNUSED_PARAMETER") userMessageTextForContext: String, // 这个参数现在可能不再需要，因为我们会从 requestBody 中获取
+        attachmentsToPassToApiClient: List<SelectedMediaItem>, // <--- 新增参数
+        applicationContextForApiClient: Context,             // <--- 新增参数
+        @Suppress("UNUSED_PARAMETER") userMessageTextForContext: String, // 这个参数现在主要用于日志
         afterUserMessageId: String?,
         onMessagesProcessed: () -> Unit
     ) {
-        // 从 requestBody 中获取用于日志的上下文文本
-        val lastUserMessageParts = requestBody.messages.lastOrNull {
-            // 根据 AbstractApiMessage 的实际子类来判断角色和提取文本
-            when (it) {
-                is com.example.everytalk.data.DataClass.SimpleTextApiMessage -> it.role == "user"
-                is com.example.everytalk.data.DataClass.PartsApiMessage -> it.role == "user"
-                else -> false
-            }
-        }
-        val contextTextFromParts = when (lastUserMessageParts) {
-            is com.example.everytalk.data.DataClass.SimpleTextApiMessage -> lastUserMessageParts.content
-            is com.example.everytalk.data.DataClass.PartsApiMessage -> lastUserMessageParts.parts.filterIsInstance<ApiContentPart.Text>()
-                .joinToString(separator = " ") { it.text }
+        val contextForLog = when (val lastUserMsg = requestBody.messages.lastOrNull {
+            it.role == "user"
+        }) {
+            is com.example.everytalk.data.DataClass.SimpleTextApiMessage -> lastUserMsg.content
+            is com.example.everytalk.data.DataClass.PartsApiMessage -> lastUserMsg.parts
+                .filterIsInstance<ApiContentPart.Text>().joinToString(" ") { it.text }
 
             else -> null
-        }
-        val contextForLog = contextTextFromParts?.take(30) ?: "N/A (无用户文本)"
-        // --- 修改结束 ---
+        }?.take(30) ?: "N/A"
 
         cancelCurrentApiJob("开始新的流式传输，上下文: '$contextForLog'", isNewMessageSend = true)
 
@@ -171,13 +164,18 @@ class ApiHandler(
             stateHolder._currentStreamingAiMessageId.value = aiMessageId
             stateHolder._isApiCalling.value = true
             stateHolder.reasoningCompleteMap[aiMessageId] = false
-            onMessagesProcessed()
+            onMessagesProcessed() // This might trigger ChatInputArea to clear selectedMediaItems
         }
 
         stateHolder.apiJob = viewModelScope.launch {
             val thisJob = coroutineContext[Job.Key]
             try {
-                ApiClient.streamChatResponse(requestBody)
+                // --- 调用修改后的 ApiClient.streamChatResponse ---
+                ApiClient.streamChatResponse(
+                    requestBody,
+                    attachmentsToPassToApiClient,    // <--- 传递
+                    applicationContextForApiClient // <--- 传递
+                )
                     .onStart { Log.d(TAG_API_HANDLER, "流式传输开始，消息ID: $aiMessageId") }
                     .catch { e ->
                         if (e !is CancellationException) {
@@ -322,24 +320,27 @@ class ApiHandler(
     }
 
     private fun processChunk(index: Int, appEvent: AppStreamEvent, messageIdForLog: String) {
-        // ***** 增加的日志 *****
         Log.i(
             TAG_API_HANDLER_CHUNK,
-            "processChunk called for Msg ID: $messageIdForLog. Event Type: ${appEvent.type}, Event Text: '${appEvent.text}', Event Stage: ${appEvent.stage}, Event Reason: ${appEvent.reason}"
+            "processChunk called for Msg ID: $messageIdForLog. Event Type: ${appEvent.type}, Event Text: '${
+                appEvent.text?.take(
+                    50
+                )
+            }', Event Stage: ${appEvent.stage}, Event Reason: ${appEvent.reason}"
         )
-        // ***** 增加结束 *****
 
         if (index < 0 || index >= stateHolder.messages.size || stateHolder.messages[index].id != messageIdForLog) {
             Log.e(
                 TAG_API_HANDLER_CHUNK,
                 "索引或ID无效或过时。Index: $index, ExpectedID: $messageIdForLog, ActualListID: ${
-                    stateHolder.messages.getOrNull(index)?.id
+                    stateHolder.messages.getOrNull(
+                        index
+                    )?.id
                 }"
             )
             return
         }
         val originalMessage = stateHolder.messages[index]
-        // 直接使用累积器，不在方法开始时用 originalMessage 的值初始化局部变量
         var newContentStarted = originalMessage.contentStarted
         var newWebResults = originalMessage.webSearchResults
         var newWebSearchStage = originalMessage.currentWebSearchStage
@@ -365,17 +366,15 @@ class ApiHandler(
             "reasoning" -> {
                 if (!appEvent.text.isNullOrEmpty()) {
                     currentReasoningBuilder.append(appEvent.text)
-                    if (stateHolder.reasoningCompleteMap[messageIdForLog] != false) {
-                        stateHolder.reasoningCompleteMap[messageIdForLog] = false
-                    }
+                    if (stateHolder.reasoningCompleteMap[messageIdForLog] != false) stateHolder.reasoningCompleteMap[messageIdForLog] =
+                        false
                 }
             }
 
             "reasoning_finish" -> {
                 Log.d(TAG_API_HANDLER_CHUNK, "Reasoning finish event for $messageIdForLog")
-                if (stateHolder.reasoningCompleteMap[messageIdForLog] != true) {
-                    stateHolder.reasoningCompleteMap[messageIdForLog] = true
-                }
+                if (stateHolder.reasoningCompleteMap[messageIdForLog] != true) stateHolder.reasoningCompleteMap[messageIdForLog] =
+                    true
             }
 
             "content" -> {
@@ -384,9 +383,8 @@ class ApiHandler(
                     mainTextChangedInThisChunk = true
                     if (!newContentStarted) {
                         newContentStarted = true
-                        if (stateHolder.reasoningCompleteMap[messageIdForLog] != true) {
-                            stateHolder.reasoningCompleteMap[messageIdForLog] = true
-                        }
+                        if (stateHolder.reasoningCompleteMap[messageIdForLog] != true) stateHolder.reasoningCompleteMap[messageIdForLog] =
+                            true
                     }
                 }
             }
@@ -396,9 +394,8 @@ class ApiHandler(
                     TAG_API_HANDLER_CHUNK,
                     "工具调用事件: ${appEvent.type} (消息ID: $messageIdForLog)"
                 )
-                if (stateHolder.reasoningCompleteMap[messageIdForLog] != true) {
-                    stateHolder.reasoningCompleteMap[messageIdForLog] = true
-                }
+                if (stateHolder.reasoningCompleteMap[messageIdForLog] != true) stateHolder.reasoningCompleteMap[messageIdForLog] =
+                    true
             }
 
             "finish" -> {
@@ -406,9 +403,8 @@ class ApiHandler(
                     TAG_API_HANDLER_CHUNK,
                     "完成事件，原因: ${appEvent.reason} (消息ID: $messageIdForLog)"
                 )
-                if (stateHolder.reasoningCompleteMap[messageIdForLog] != true) {
-                    stateHolder.reasoningCompleteMap[messageIdForLog] = true
-                }
+                if (stateHolder.reasoningCompleteMap[messageIdForLog] != true) stateHolder.reasoningCompleteMap[messageIdForLog] =
+                    true
             }
 
             "error" -> {
@@ -422,17 +418,14 @@ class ApiHandler(
                         IOException("SSE Error: ${appEvent.message} (Upstream: ${appEvent.upstreamStatus ?: "N/A"})")
                     )
                 }
-                if (stateHolder.reasoningCompleteMap[messageIdForLog] != true) {
-                    stateHolder.reasoningCompleteMap[messageIdForLog] = true
-                }
+                if (stateHolder.reasoningCompleteMap[messageIdForLog] != true) stateHolder.reasoningCompleteMap[messageIdForLog] =
+                    true
             }
 
-            else -> {
-                Log.w(
-                    TAG_API_HANDLER_CHUNK,
-                    "未处理的SSE事件类型: ${appEvent.type} (消息ID: $messageIdForLog)"
-                )
-            }
+            else -> Log.w(
+                TAG_API_HANDLER_CHUNK,
+                "未处理的SSE事件类型: ${appEvent.type} (消息ID: $messageIdForLog)"
+            )
         }
 
         val accumulatedFullText = currentTextBuilder.toString()
@@ -476,19 +469,12 @@ class ApiHandler(
                 val msg = stateHolder.messages[idx]
                 if (!msg.isError) {
                     val existingContent = (msg.text.takeIf { it.isNotBlank() }
-                        ?: msg.reasoning?.takeIf { it.isNotBlank() && msg.text.isBlank() }
-                        ?: "")
+                        ?: msg.reasoning?.takeIf { it.isNotBlank() && msg.text.isBlank() } ?: "")
                     val errorPrefix = if (existingContent.isNotBlank()) "\n\n" else ""
                     val errorTextContent = ERROR_VISUAL_PREFIX + when (error) {
                         is IOException -> "网络通讯故障: ${error.message ?: "IO 错误"}"
-                        is ResponseException -> parseBackendError(
-                            error.response, try {
-                                error.response.bodyAsText()
-                            } catch (_: Exception) {
-                                "(无法读取错误详情)"
-                            }
-                        )
-
+                        // ResponseException is Ktor specific, might not be directly thrown by ApiClient now
+                        // is io.ktor.client.plugins.ResponseException -> parseBackendError(error.response, try { error.response.bodyAsText() } catch (_: Exception) { "(无法读取错误详情)" })
                         else -> "处理时发生错误: ${error.message ?: "未知应用错误"}"
                     }
                     val errorMsg = msg.copy(
@@ -511,6 +497,7 @@ class ApiHandler(
         }
     }
 
+    // parseBackendError might need adjustment if the error structure from ApiClient changes
     private fun parseBackendError(response: HttpResponse, errorBody: String): String {
         return try {
             val errorJson = jsonParserForError.decodeFromString<BackendErrorContent>(errorBody)

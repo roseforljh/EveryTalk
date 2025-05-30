@@ -6,6 +6,9 @@
     <!-- Path for persistent chat images (saved to context.filesDir/chat_images/) -->
     <files-path name="chat_images" path="chat_images/" />
 
+    <!-- Path for general chat attachments (saved to context.filesDir/chat_attachments/) -->
+    <files-path name="my_chat_attachments" path="chat_attachments/" />
+
     <!-- 如果你还在用外部存储，例如 getExternalFilesDir(null) -->
     <!-- <external-files-path name="my_external_images" path="." /> -->
 </paths>

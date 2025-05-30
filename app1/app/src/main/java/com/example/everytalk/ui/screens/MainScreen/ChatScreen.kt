@@ -31,9 +31,9 @@ import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.example.everytalk.StateControler.AppViewModel
-import com.example.everytalk.data.DataClass.ApiConfig // <-- 确保 ApiConfig 被导入
+import com.example.everytalk.data.DataClass.ApiConfig
 import com.example.everytalk.data.DataClass.Message
-import com.example.everytalk.data.DataClass.Sender
+// import com.example.everytalk.data.DataClass.Sender // Sender is used implicitly via Message
 import com.example.everytalk.navigation.Screen
 import com.example.everytalk.ui.components.AppTopBar
 import com.example.everytalk.ui.components.WebSourcesDialog
@@ -42,13 +42,13 @@ import com.example.everytalk.ui.screens.MainScreen.chat.ChatMessagesList
 import com.example.everytalk.ui.screens.MainScreen.chat.EditMessageDialog
 import com.example.everytalk.ui.screens.MainScreen.chat.EmptyChatView
 import com.example.everytalk.ui.screens.MainScreen.chat.ModelSelectionBottomSheet
+// import com.example.everytalk.model.SelectedMediaItem // ViewModel handles this type now
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlin.coroutines.cancellation.CancellationException
 
 private const val USER_INACTIVITY_TIMEOUT_MS = 2000L
 private const val REALTIME_SCROLL_CHECK_DELAY_MS = 100L
-private const val FINAL_SCROLL_DELAY_MS = 150L
 private const val SESSION_SWITCH_SCROLL_DELAY_MS = 250L
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -60,7 +60,7 @@ fun ChatScreen(
 ) {
     val messages: List<Message> = viewModel.messages
     val text by viewModel.text.collectAsState()
-    val selectedApiConfig by viewModel.selectedApiConfig.collectAsState() // 当前选中的配置
+    val selectedApiConfig by viewModel.selectedApiConfig.collectAsState()
     val isApiCalling by viewModel.isApiCalling.collectAsState()
     val currentStreamingAiMessageId by viewModel.currentStreamingAiMessageId.collectAsState()
     val reasoningCompleteMap = viewModel.reasoningCompleteMap
@@ -82,12 +82,11 @@ fun ChatScreen(
     var userManuallyScrolledAwayFromBottom by remember { mutableStateOf(false) }
     var ongoingScrollJob by remember { mutableStateOf<Job?>(null) }
     var programmaticallyScrolling by remember { mutableStateOf(false) }
-    // --- BottomSheet State (remains in ChatScreen) ---
+
     val bottomSheetState = rememberModalBottomSheetState(
         skipPartiallyExpanded = true
     )
     var showModelSelectionBottomSheet by remember { mutableStateOf(false) }
-    // 'availableModels' 是从 ViewModel 获取的所有配置列表
     val availableModels by viewModel.apiConfigs.collectAsState()
 
     Log.d("ChatScreen_FilterDebug", "Recomposing ChatScreen or relevant state changed.")
@@ -111,7 +110,6 @@ fun ChatScreen(
         }
     }
 
-    // VVVVVV 根据当前选中配置的Key来过滤底部弹窗中显示的模型列表 VVVVVV
     val filteredModelsForBottomSheet by remember(availableModels, selectedApiConfig) {
         derivedStateOf {
             Log.d(
@@ -175,6 +173,11 @@ fun ChatScreen(
             if (messagesRef.isEmpty()) {
                 Log.d("ScrollJob", "Messages empty, cannot scroll to bottom ($reason)")
                 programmaticallyScrolling = false
+                userManuallyScrolledAwayFromBottom = false
+                try {
+                    listStateRef.scrollToItem(0)
+                } catch (_: Exception) {
+                }
                 return@launch
             }
             programmaticallyScrolling = true
@@ -190,9 +193,11 @@ fun ChatScreen(
                     "Attempting immediate scrollToItem to $targetIndex ($reason, attempt 0)"
                 )
                 listStateRef.scrollToItem(targetIndex)
-                delay(32)
+                delay(64)
                 val layoutInfo = listStateRef.layoutInfo
-                if (layoutInfo.visibleItemsInfo.isNotEmpty() && layoutInfo.visibleItemsInfo.any { it.index == targetIndex }) {
+                if (layoutInfo.visibleItemsInfo.any { it.index == targetIndex } ||
+                    (layoutInfo.visibleItemsInfo.lastOrNull()?.index == targetIndex - 1 &&
+                            layoutInfo.visibleItemsInfo.last().offset + layoutInfo.visibleItemsInfo.last().size <= layoutInfo.viewportEndOffset + 5)) {
                     reachedEnd = true
                     Log.d(
                         "ScrollJob",
@@ -220,9 +225,11 @@ fun ChatScreen(
                         "Attempting animateScrollToItem to $targetIndex ($reason, attempt $attempts)"
                     )
                     listStateRef.animateScrollToItem(targetIndex)
-                    delay(100)
+                    delay(150)
                     val layoutInfo = listStateRef.layoutInfo
-                    if (layoutInfo.visibleItemsInfo.isNotEmpty() && layoutInfo.visibleItemsInfo.any { it.index == targetIndex }) {
+                    if (layoutInfo.visibleItemsInfo.any { it.index == targetIndex } ||
+                        (layoutInfo.visibleItemsInfo.lastOrNull()?.index == targetIndex - 1 &&
+                                layoutInfo.visibleItemsInfo.last().offset + layoutInfo.visibleItemsInfo.last().size <= layoutInfo.viewportEndOffset + 5)) {
                         reachedEnd = true
                         Log.d(
                             "ScrollJob",
@@ -247,7 +254,7 @@ fun ChatScreen(
                         "Scroll attempt to $targetIndex FAILED ($reason, attempt $attempts): ${e.message}",
                         e
                     )
-                    delay(50)
+                    delay(100)
                 }
             }
 
@@ -285,7 +292,8 @@ fun ChatScreen(
         }
     }
 
-    LaunchedEffect(key1 = loadedHistoryIndex, key2 = messages.size) {
+    LaunchedEffect(key1 = loadedHistoryIndex, key2 = messages.hashCode()) {
+        val currentMessagesSnapshot = messages.toList()
         val currentLoadedIndex = loadedHistoryIndex
         val sessionJustChanged = previousLoadedHistoryIndexState != currentLoadedIndex
 
@@ -298,12 +306,15 @@ fun ChatScreen(
             previousLoadedHistoryIndexState = currentLoadedIndex
         }
 
-        if (messages.isNotEmpty()) {
+        if (currentMessagesSnapshot.isNotEmpty()) {
             Log.d(
                 "ChatScreenInitScroll",
-                "Messages not empty (size: ${messages.size}). Scrolling to bottom. loadedHistoryIndex: $currentLoadedIndex"
+                "Messages not empty (size: ${currentMessagesSnapshot.size}). Scrolling to bottom. loadedHistoryIndex: $currentLoadedIndex"
             )
-            scrollToBottomGuaranteed("InitialOrSessionChange")
+            scrollToBottomGuaranteed(
+                "InitialOrSessionChange",
+                messagesRef = currentMessagesSnapshot
+            )
         } else {
             Log.d(
                 "ChatScreenInitScroll",
@@ -335,12 +346,14 @@ fun ChatScreen(
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
                 if (source == NestedScrollSource.Drag && !programmaticallyScrolling) {
                     resetInactivityTimer()
-                    if (available.y < -0.5f && !userManuallyScrolledAwayFromBottom) {
-                        userManuallyScrolledAwayFromBottom = true
-                        Log.d(
-                            "ScrollState",
-                            "User dragging up (available.y: ${available.y}), userManuallyScrolledAwayFromBottom = true"
-                        )
+                    if (available.y > 0.5f && listState.canScrollBackward) {
+                        if (!userManuallyScrolledAwayFromBottom) {
+                            userManuallyScrolledAwayFromBottom = true
+                            Log.d(
+                                "ScrollState",
+                                "User dragging UP list content (available.y: ${available.y}), userManuallyScrolledAwayFromBottom = true"
+                            )
+                        }
                     }
                 }
                 return Offset.Zero
@@ -349,12 +362,14 @@ fun ChatScreen(
             override suspend fun onPreFling(available: Velocity): Velocity {
                 if (listState.isScrollInProgress && !programmaticallyScrolling) {
                     resetInactivityTimer()
-                    if (available.y < -50f && !userManuallyScrolledAwayFromBottom) {
-                        userManuallyScrolledAwayFromBottom = true
-                        Log.d(
-                            "ScrollState",
-                            "User flinging up (available.y: ${available.y}), userManuallyScrolledAwayFromBottom = true"
-                        )
+                    if (available.y > 50f && listState.canScrollBackward) {
+                        if (!userManuallyScrolledAwayFromBottom) {
+                            userManuallyScrolledAwayFromBottom = true
+                            Log.d(
+                                "ScrollState",
+                                "User flinging UP list content (available.y: ${available.y}), userManuallyScrolledAwayFromBottom = true"
+                            )
+                        }
                     }
                 }
                 return Velocity.Zero
@@ -368,18 +383,24 @@ fun ChatScreen(
             if (messages.isEmpty() || layoutInfo.visibleItemsInfo.isEmpty()) {
                 true
             } else {
-                layoutInfo.visibleItemsInfo.any { it.index == messages.size } // Check footer
+                val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
+                lastVisibleItem != null &&
+                        (lastVisibleItem.index == messages.size ||
+                                (lastVisibleItem.index == messages.size - 1 &&
+                                        lastVisibleItem.offset + lastVisibleItem.size <= layoutInfo.viewportEndOffset + 10))
             }
         }
     }
 
     LaunchedEffect(isAtBottom, listState.isScrollInProgress, programmaticallyScrolling) {
-        if (!listState.isScrollInProgress && !programmaticallyScrolling && isAtBottom && userManuallyScrolledAwayFromBottom) {
-            Log.d(
-                "ScrollState",
-                "Reached bottom by user or after programmatic scroll, resetting userManuallyScrolledAwayFromBottom = false"
-            )
-            userManuallyScrolledAwayFromBottom = false
+        if (!listState.isScrollInProgress && !programmaticallyScrolling && isAtBottom) {
+            if (userManuallyScrolledAwayFromBottom) {
+                Log.d(
+                    "ScrollState",
+                    "Reached bottom by user or after programmatic scroll, resetting userManuallyScrolledAwayFromBottom = false"
+                )
+                userManuallyScrolledAwayFromBottom = false
+            }
         }
     }
 
@@ -387,7 +408,7 @@ fun ChatScreen(
         viewModel.scrollToBottomEvent.collectLatest {
             Log.d("ChatScreen", "Received scrollToBottomEvent from ViewModel.")
             resetInactivityTimer()
-            scrollToBottomGuaranteed("ViewModelEvent")
+            scrollToBottomGuaranteed("ViewModelEvent", messagesRef = messages.toList())
         }
     }
 
@@ -395,22 +416,18 @@ fun ChatScreen(
         messages.find { it.id == currentStreamingAiMessageId }
     }
 
-    LaunchedEffect(
-        currentStreamingAiMessageId,
-        isApiCalling,
-        userManuallyScrolledAwayFromBottom,
-        isAtBottom
-    ) {
+    LaunchedEffect(currentStreamingAiMessageId, isApiCalling, userManuallyScrolledAwayFromBottom) {
         if (isApiCalling && currentStreamingAiMessageId != null && !userManuallyScrolledAwayFromBottom) {
-            snapshotFlow { streamingAiMessage?.text?.length }
+            snapshotFlow { messages.find { it.id == currentStreamingAiMessageId }?.text?.length }
                 .distinctUntilChanged()
-                .collect { _ ->
-                    if (isActive && isApiCalling && !userManuallyScrolledAwayFromBottom && !isAtBottom) {
-                        delay(REALTIME_SCROLL_CHECK_DELAY_MS)
-                        if (isActive && !isAtBottom && !userManuallyScrolledAwayFromBottom) {
-                            Log.d("RealtimeScroll", "AI streaming, text changed, auto-scrolling...")
-                            scrollToBottomGuaranteed("AI_Streaming_TextChanged")
-                        }
+                .debounce(50)
+                .collectLatest {
+                    if (isActive && isApiCalling && !userManuallyScrolledAwayFromBottom) {
+                        Log.d("RealtimeScroll", "AI streaming, text changed, auto-scrolling...")
+                        scrollToBottomGuaranteed(
+                            "AI_Streaming_TextChanged",
+                            messagesRef = messages.toList()
+                        )
                     }
                 }
         }
@@ -418,9 +435,7 @@ fun ChatScreen(
 
     val scrollToBottomButtonVisible by remember {
         derivedStateOf {
-            Log.d("FAB_VISIBILITY_DEBUG", "Checking FAB: messagesNotEmpty=${messages.isNotEmpty()}, isAtBottom=$isAtBottom, userActive=$isUserConsideredActive, scrolledUp=$userManuallyScrolledAwayFromBottom")
-            messages.isNotEmpty() &&
-                    userManuallyScrolledAwayFromBottom // 只保留这两个，先看滚动后是否出现
+            messages.isNotEmpty() && userManuallyScrolledAwayFromBottom
         }
     }
 
@@ -434,8 +449,8 @@ fun ChatScreen(
         modifier = modifier
             .fillMaxSize()
             .pointerInput(Unit) { detectTapGestures(onTap = { resetInactivityTimer() }) },
-        contentWindowInsets = WindowInsets(0, 0, 0, 0),
-        containerColor = MaterialTheme.colorScheme.surface,
+        contentWindowInsets = WindowInsets(0, 0, 0, 0), // YOUR ORIGINAL VALUE
+        containerColor = MaterialTheme.colorScheme.surface, // YOUR ORIGINAL VALUE
         topBar = {
             AppTopBar(
                 selectedConfigName = selectedApiConfig?.name?.takeIf { it.isNotBlank() }
@@ -445,10 +460,6 @@ fun ChatScreen(
                 onTitleClick = {
                     resetInactivityTimer()
                     coroutineScope.launch {
-                        Log.d(
-                            "ChatScreen_FilterDebug",
-                            "TopBar clicked. 'filteredModelsForBottomSheet' has ${filteredModelsForBottomSheet.size} items."
-                        )
                         if (filteredModelsForBottomSheet.isNotEmpty()) {
                             showModelSelectionBottomSheet = true
                         } else {
@@ -477,13 +488,13 @@ fun ChatScreen(
                 FloatingActionButton(
                     onClick = {
                         resetInactivityTimer()
-                        scrollToBottomGuaranteed("FAB_Click")
+                        scrollToBottomGuaranteed("FAB_Click", messagesRef = messages.toList())
                     },
-                    modifier = Modifier.padding(bottom = 100.dp + 16.dp + 15.dp),
-                    shape = CircleShape,
-                    containerColor = Color.White,
-                    contentColor = Color.Black,
-                    elevation = FloatingActionButtonDefaults.elevation(
+                    modifier = Modifier.padding(bottom = 100.dp + 16.dp + 15.dp), // YOUR ORIGINAL PADDING
+                    shape = CircleShape, // YOUR ORIGINAL SHAPE
+                    containerColor = Color.White, // YOUR ORIGINAL COLOR
+                    contentColor = Color.Black, // YOUR ORIGINAL COLOR
+                    elevation = FloatingActionButtonDefaults.elevation( // YOUR ORIGINAL ELEVATION
                         defaultElevation = 0.dp,
                         pressedElevation = 0.dp,
                         focusedElevation = 0.dp,
@@ -492,13 +503,13 @@ fun ChatScreen(
                 ) { Icon(Icons.Filled.ArrowDownward, "滚动到底部") }
             }
         },
-        floatingActionButtonPosition = FabPosition.End
+        floatingActionButtonPosition = FabPosition.End // YOUR ORIGINAL POSITION
     ) { scaffoldPaddingValues ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(scaffoldPaddingValues)
-                .background(Color.White)
+                .background(Color.White) // YOUR ORIGINAL BACKGROUND
                 .imePadding()
                 .navigationBarsPadding()
         ) {
@@ -532,12 +543,14 @@ fun ChatScreen(
                 }
             }
 
+            // --- MODIFICATION POINT FOR ChatInputArea کال ---
             ChatInputArea(
                 text = text,
                 onTextChange = { viewModel.onTextChange(it); resetInactivityTimer() },
-                onSendMessageRequest = { messageText,isKeyboardVisible, images ->
+                onSendMessageRequest = { messageText, _, attachments -> // isKeyboardVisible is ignored with _
                     resetInactivityTimer()
-                    viewModel.onSendMessage(messageText, images=images)
+                    // Pass `attachments` (List<SelectedMediaItem>) to AppViewModel
+                    viewModel.onSendMessage(messageText = messageText, attachments = attachments)
                 },
                 isApiCalling = isApiCalling,
                 isWebSearchEnabled = isWebSearchEnabled,
@@ -545,7 +558,7 @@ fun ChatScreen(
                     resetInactivityTimer()
                     viewModel.toggleWebSearchMode(!isWebSearchEnabled)
                 },
-                onClearText = { viewModel.onTextChange(""); resetInactivityTimer() },
+                // onClearText parameter is REMOVED as ChatInputArea handles its own clearing
                 onStopApiCall = { viewModel.onCancelAPICall(); resetInactivityTimer() },
                 focusRequester = focusRequester,
                 selectedApiConfig = selectedApiConfig,
@@ -555,6 +568,7 @@ fun ChatScreen(
                 keyboardController = keyboardController,
                 onFocusChange = { isFocused -> if (isFocused) resetInactivityTimer() }
             )
+            // --- END OF MODIFICATION POINT ---
         }
 
         if (showEditDialog) {
@@ -577,7 +591,7 @@ fun ChatScreen(
             ModelSelectionBottomSheet(
                 onDismissRequest = { showModelSelectionBottomSheet = false },
                 sheetState = bottomSheetState,
-                availableModels = filteredModelsForBottomSheet, // <-- 使用过滤后的列表
+                availableModels = filteredModelsForBottomSheet,
                 selectedApiConfig = selectedApiConfig,
                 onModelSelected = { modelConfig ->
                     resetInactivityTimer()
