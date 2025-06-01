@@ -4,37 +4,39 @@ import android.util.Log
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.safety.Safelist
-
-// --- CommonMark-java Imports ---
-import org.commonmark.node.* // Node, CustomNode, Text, AbstractVisitor, etc.
-import org.commonmark.parser.Parser
-import org.commonmark.renderer.html.HtmlNodeRendererContext
-import org.commonmark.renderer.html.HtmlRenderer
-import org.commonmark.renderer.html.HtmlNodeRendererFactory
-import org.commonmark.renderer.NodeRenderer // Interface for node renderers
-import java.util.regex.Pattern
-import org.commonmark.Extension // Base class for extensions
-
-import org.commonmark.ext.gfm.tables.TablesExtension
-import org.commonmark.ext.gfm.strikethrough.StrikethroughExtension
+import org.commonmark.Extension
 import org.commonmark.ext.autolink.AutolinkExtension
+import org.commonmark.ext.gfm.strikethrough.StrikethroughExtension
+import org.commonmark.ext.gfm.tables.TablesExtension
+import org.commonmark.node.*
+import org.commonmark.parser.Parser
+import org.commonmark.renderer.NodeRenderer
+import org.commonmark.renderer.html.HtmlNodeRendererContext
+import org.commonmark.renderer.html.HtmlNodeRendererFactory
+import org.commonmark.renderer.html.HtmlRenderer
+import java.util.regex.Pattern
 
-// Regexes for Pre-processing (可以保持不变)
-private val REGEX_LEADING_NEWLINES = Regex("(?<!\n\n)([ \t]*\n)?(```)")
+// Regexes for Pre-processing
+private val REGEX_LEADING_NEWLINES = Regex("(?<!\n\n)([ \\t]*\n)?(```)")
 private val REGEX_TRAILING_NEWLINES =
-    Regex("(```[^\n]*\n(?:[^\n]*\n)*?[^\n]*```)\n?([ \t]*)(?!\n\n)")
+    Regex("(```[^\\n]*\\n(?:[^\\n]*\\n)*?[^\\n]*```)\n?([ \\t]*)(?!\n\n)")
 private val REGEX_EXCESSIVE_NEWLINES = Regex("\n{3,}")
-private val REGEX_CUSTOM_REPLACE =
-    Regex("\\\$\\{([^}]+)\\}")
 
-// --- Custom Math Node for CommonMark-java ---
+// 用来将 ${xxx} 形式替换为 [...] 的占位
+private val REGEX_CUSTOM_REPLACE = Regex("\\\$\\{([^}]+)\\}")
+
+// **新增**：让标题前也加一个空行，避免 "# 标题" 因行首缺少空行而无法被识别
+private val REGEX_HEADING_PREFIX = Regex("(?m)^(?<!\n)(#{1,6} +)")
+
+// **新增**：让“•”这样的符号单独成段，以便 CommonMark 识别为列表项前缀
+private val REGEX_BULLET_PREFIX = Regex("(?m)^(?<!\\n)([ \\t]*)•[ \\t]+")
+
 class CMMathNode(var latexContent: String, var isBlock: Boolean) : CustomNode() {
     override fun accept(visitor: Visitor?) {
         visitor?.visit(this)
     }
 }
 
-// --- Custom HTML Renderer for CMMathNode ---
 class CMMathNodeHtmlRenderer(private val context: HtmlNodeRendererContext) : NodeRenderer {
     private val htmlWriter = context.writer
 
@@ -50,20 +52,19 @@ class CMMathNodeHtmlRenderer(private val context: HtmlNodeRendererContext) : Nod
         if (node is CMMathNode) {
             val tag = if (node.isBlock) "div" else "span"
             val cssClass = if (node.isBlock) "katex-math-display" else "katex-math-inline"
-
             Log.d(
                 LOG_TAG_RENDERER,
                 "Rendering CMMathNode. isBlock: ${node.isBlock}, Class: $cssClass, LaTeX: '${
-                    node.latexContent.takeForLog(60)
+                    node.latexContent.takeForLog(
+                        60
+                    )
                 }'"
             )
-
             val attributes: MutableMap<String, String> = HashMap()
             attributes["class"] = cssClass
-
             htmlWriter.tag(tag, attributes)
-            htmlWriter.text(node.latexContent) // .unescapeHtml() if you notice issues with HTML entities
-            htmlWriter.tag("/$tag") // Ensure closing tag is written
+            htmlWriter.text(node.latexContent)
+            htmlWriter.tag("/$tag")
         }
     }
 }
@@ -74,139 +75,127 @@ class CustomMathHtmlNodeRendererFactory : HtmlNodeRendererFactory {
     }
 }
 
-// --- Main Conversion Function using CommonMark-java ---
 internal fun convertMarkdownToHtml(originalMarkdown: String): String {
     val tag = "MarkdownToCM"
+    if (originalMarkdown.isBlank()) return ""
 
-    if (originalMarkdown.isBlank()) {
-        Log.d(tag, "Input MD is blank, returning empty string.")
-        return ""
-    }
     Log.d(tag, "==== ConvertMarkdownToHtml (CommonMark) START ====")
     Log.d(
         tag,
         "0. Raw LLM MD (len ${originalMarkdown.length}):\n${originalMarkdown.takeForLog(1000)}"
     )
 
-    // --- START: LaTeX Pre-processing and Normalization ---
-    var preProcessedLatexMd = originalMarkdown
-
-    // 1. Correct over-escaped LaTeX commands like \\Delta to \Delta, \\( to \(, etc.
-    // This specifically targets double backslashes followed by common LaTeX characters or commands.
-    preProcessedLatexMd = preProcessedLatexMd.replace(Regex("""\\\\([a-zA-Z]+|[\(\)\[\]\{\}\$\%\^\_\&\|\\])""")) { matchResult ->
-        "\\${matchResult.groupValues[1]}"
-    }
-    // Log if changes were made by this step
-    if (preProcessedLatexMd != originalMarkdown) {
-        Log.d(tag, "0.1. MD after correcting over-escaped LaTeX:\n${preProcessedLatexMd.takeForLog(1000)}")
-    }
-
-
-    val plainParenLatexRegex = Regex("""\(\s*(\\([a-zA-Z]+|[\[\]\{\}\$\%\^\_\&\|\\]).*?)\s*\)""")
-    preProcessedLatexMd = plainParenLatexRegex.replace(preProcessedLatexMd) { matchResult ->
-        val latexContent = matchResult.groupValues[1].trim()
-        // Check if it looks like it's not already inside \( ... \) or $...$
-        val startIndex = matchResult.range.first
-        val endIndex = matchResult.range.last
-        val prefix = if (startIndex > 1) preProcessedLatexMd.substring(startIndex - 2, startIndex) else ""
-        val suffix = if (endIndex < preProcessedLatexMd.length - 1) preProcessedLatexMd.substring(endIndex + 1, endIndex + 2) else ""
-
-        if (prefix != "\\(" && prefix != "\$(" && suffix != "\\)" && suffix != "\$)") {
-            Log.d(tag, "Attempting to fix plain parentheses for LaTeX: '${matchResult.value}' -> '\\(${latexContent}\\)'")
-            "\\(${latexContent}\\)"
-        } else {
-            matchResult.value // Already seems to be correctly delimited, leave it.
+    // 1. 先做最简单的空行前缀补齐，保证标题（#）、列表前缀（•）等能被正确识别
+    var processedMarkdown = originalMarkdown
+        // 如果一行以“# ”开头但前面没有空行，就在前面强制加一个换行
+        .replace(REGEX_HEADING_PREFIX) { match ->
+            "\n" + match.value
         }
-    }
-    // Log if changes were made by this step
-    val mdAfterPlainParenFix = preProcessedLatexMd
-    if (mdAfterPlainParenFix != originalMarkdown && mdAfterPlainParenFix != preProcessedLatexMd.substringBefore("Regex(")) { // Avoid re-logging if no change in this step
-        Log.d(tag, "0.2. MD after attempting plain parentheses fix:\n${mdAfterPlainParenFix.takeForLog(1000)}")
-    }
-
-
-    var processedMarkdown = mdAfterPlainParenFix // Use the LaTeX-preprocessed version
-    // --- END: LaTeX Pre-processing and Normalization ---
-
-
-    val mdBeforeStructuralPreProcessing = processedMarkdown
-    // Standard Markdown structural pre-processing (leading/trailing newlines for code blocks, excessive newlines)
-    processedMarkdown = REGEX_LEADING_NEWLINES.replace(processedMarkdown) { matchResult ->
-        val optionalNewline = matchResult.groups[1]?.value ?: ""
-        val codeFence = matchResult.groups[2]!!.value
-        if (optionalNewline.isBlank() || optionalNewline.trim().isEmpty()) {
-            "\n\n" + optionalNewline + codeFence
-        } else {
-            "\n" + optionalNewline + codeFence
+        // 如果一行以“• ”开头但前面没有空行，也先加一个 \n
+        .replace(REGEX_BULLET_PREFIX) { match ->
+            "\n" + match.groupValues[1] + "- "
+            // 将“•”替换成 Markdown “-”，CommonMark 会自动识别为无序列表
         }
+
+    // 2. 保证 Markdown 代码块用空行隔开，避免和其他内容黏在一起
+    processedMarkdown = REGEX_LEADING_NEWLINES.replace(processedMarkdown) {
+        val optionalNewline = it.groups[1]?.value ?: ""
+        val codeFence = it.groups[2]!!.value
+        if (optionalNewline.isBlank() || optionalNewline.trim()
+                .isEmpty()
+        ) "\n\n$optionalNewline$codeFence"
+        else "\n$optionalNewline$codeFence"
     }
-    processedMarkdown = REGEX_TRAILING_NEWLINES.replace(processedMarkdown) { matchResult ->
-        val codeBlock = matchResult.groups[1]!!.value
-        val trailingWhitespace = matchResult.groups[2]?.value ?: ""
-        codeBlock + trailingWhitespace + "\n\n"
+    processedMarkdown = REGEX_TRAILING_NEWLINES.replace(processedMarkdown) {
+        val codeBlock = it.groups[1]!!.value
+        val trailingWhitespace = it.groups[2]?.value ?: ""
+        "$codeBlock$trailingWhitespace\n\n"
     }
     processedMarkdown = REGEX_EXCESSIVE_NEWLINES.replace(processedMarkdown, "\n\n")
 
-    if (processedMarkdown != mdBeforeStructuralPreProcessing) {
-        Log.d(
-            tag,
-            "1. MD after Structural Pre-processing (len ${processedMarkdown.length}):\n${
-                processedMarkdown.takeForLog(1000)
-            }"
-        )
-    } else {
-        Log.d(tag, "1. MD after Structural Pre-processing: No changes by structural regexes.")
+    Log.d(
+        tag,
+        "1. MD after Structural Pre-processing (len ${processedMarkdown.length}):\n${
+            processedMarkdown.takeForLog(
+                1000
+            )
+        }"
+    )
+
+    // 3. 处理所有“转义了的 LaTeX 反斜杠”-> 变回单个反斜杠
+    processedMarkdown = processedMarkdown.replace(
+        Regex("""\\\\([a-zA-Z]+|[\(\)\[\]\{\}\$\%\^\_\&\|\\])""")
+    ) { "\\${it.groupValues[1]}" }
+
+    // 4. 将纯 “( \something )” 形式的 LaTeX，用 \( \) 包一层，方便后续处理
+    val plainParenLatexRegex = Regex("""\(\s*(\\[a-zA-Z]+[^\)]*?)\s*\)""")
+    processedMarkdown = plainParenLatexRegex.replace(processedMarkdown) { matchResult ->
+        val latexContent = matchResult.groupValues[1].trim()
+        val startIndex = matchResult.range.first
+        val endIndex = matchResult.range.last
+        val prefix =
+            if (startIndex > 1) processedMarkdown.substring(startIndex - 2, startIndex) else ""
+        val suffix = if (endIndex < processedMarkdown.length - 1) processedMarkdown.substring(
+            endIndex + 1,
+            endIndex + 2
+        ) else ""
+        // 避免已经被包在 \(…\) 或 $…$ 里，就不要重复包了
+        if (prefix != "\\(" && prefix != "\$(" && suffix != "\\)" && suffix != "\$)") {
+            "\\(${latexContent}\\)"
+        } else {
+            matchResult.value
+        }
     }
 
+    // 5. CommonMark 解析并提取数学
     val extensions = mutableListOf<Extension>(
         TablesExtension.create(),
         StrikethroughExtension.create()
     )
     try {
         extensions.add(AutolinkExtension.create())
-        Log.i(tag, "AutolinkExtension successfully added.")
     } catch (e: NoClassDefFoundError) {
         Log.w(
             tag,
-            "AutolinkExtension not found at runtime. Links will not be auto-converted. Add 'org.commonmark:commonmark-ext-autolink' to dependencies. Error: ${e.message}"
+            "AutolinkExtension not found. Links will not be auto-converted. Error: ${e.message}"
         )
     } catch (e: Exception) {
         Log.e(tag, "Error attempting to create AutolinkExtension: ${e.message}", e)
     }
 
-
-    val parser: Parser = Parser.builder()
-        .extensions(extensions)
-        .build()
-
+    val parser: Parser = Parser.builder().extensions(extensions).build()
     val renderer: HtmlRenderer = HtmlRenderer.builder()
         .extensions(extensions)
         .nodeRendererFactory(CustomMathHtmlNodeRendererFactory())
         .build()
 
-    var html: String
+    // **改动：在正则里加入对 “裸写 \\begin{aligned} … \\end{aligned}” 的捕获**
+    val mathPattern = Pattern.compile(
+        // 1) 裸写的 \begin{aligned} … \end{aligned}（DOTALL 模式下，能跨行匹配）
+        """(?<!\\)\\begin\{aligned\}(.*?)(?<!\\)\\end\{aligned\}|""" +
+                // 2) 原有的 \( … \)
+                """(?<!\\)\\\((.*?)(?<!\\)\\\)|""" +
+                // 3) 原有的 $…$ （非 $$）
+                """(?<!\\)\$((?:[^$\s\\](?:\\.)*?))(?<!\\)\$|""" +
+                // 4) 原有的 $$…$$
+                """(?<!\\)\$\$(.*?)(?<!\\)\$\$|""" +
+                // 5) 原有的 \[ … \]
+                """(?<!\\)\\\[(.*?)(?<!\\)\\]""",
+        Pattern.DOTALL
+    )
+
+    var htmlResult: String
     try {
-        Log.d(tag, "Parsing with CommonMark...")
         val documentNode: Node = parser.parse(processedMarkdown)
-        Log.d(tag, "CommonMark parsing complete. AST Root: $documentNode")
-
-        Log.d(tag, "Starting AST traversal to find and replace math delimiters...")
-        // This pattern should be fine as pre-processing aims to normalize input to these formats.
-        val mathPattern = Pattern.compile(
-            """(?<!\\)\\\((.*?)(?<!\\)\\\)|""" + // \( ... \) - Group 1
-                    """(?<!\\)\$((?:[^$\\](?:\\.)*)+?)(?<!\\)\$|""" + // $ ... $ (non-greedy, handles escaped $) - Group 2
-                    """(?<!\\)\$\$(.*?)(?<!\\)\$\$|""" + // $$ ... $$ - Group 3
-                    """(?<!\\)\\\[(.*?)(?<!\\)\\]""", // \[ ... \] - Group 4
-            Pattern.DOTALL
-        )
-
+        Log.d(tag, "CommonMark parsing complete.")
 
         val astVisitor = object : AbstractVisitor() {
-            override fun visit(textNode: Text) {
-                super.visit(textNode)
-                val literal = textNode.literal
-                // Optimization: only proceed if there's a potential math delimiter
-                if (literal.isNullOrEmpty() || (!literal.contains('$') && !literal.contains("\\(") && !literal.contains("\\["))) {
+            private fun processTextualContent(textHolderNode: Node, literal: String) {
+                if (literal.isEmpty() ||
+                    (!literal.contains('$') && !literal.contains("\\(") && !literal.contains("\\[")
+                            && !literal.contains("\\begin{aligned}")
+                            )
+                ) {
                     return
                 }
 
@@ -220,109 +209,193 @@ internal fun convertMarkdownToHtml(originalMarkdown: String): String {
                     val matchStart = matcher.start()
                     val matchEnd = matcher.end()
 
+                    // 1) 把前面那一段普通文本作为 Text node
                     if (matchStart > lastEnd) {
                         newNodes.add(Text(literal.substring(lastEnd, matchStart)))
                     }
 
+                    // 2) 判断是哪种数学匹配
                     val fullMatch = matcher.group(0)
                     val content: String
                     val isBlock: Boolean
 
                     when {
-                        // Group 1: \( ... \)
-                        matcher.group(1) != null && fullMatch.startsWith("\\(") -> {
-                            content = matcher.group(1)
-                            isBlock = false
-                            Log.d(tag, "AST Visitor: Found INLINE_PAREN: ${content.takeForLog(30)}")
-                        }
-                        // Group 2: $ ... $
-                        matcher.group(2) != null && fullMatch.startsWith("$") && !fullMatch.startsWith("$$") -> {
-                            content = matcher.group(2)
-                            isBlock = false
-                            Log.d(tag, "AST Visitor: Found INLINE_DOLLAR: ${content.takeForLog(30)}")
-                        }
-                        // Group 3: $$ ... $$
-                        matcher.group(3) != null && fullMatch.startsWith("$$") -> {
-                            content = matcher.group(3)
+                        // 裸写 aligned
+                        matcher.group(1) != null && fullMatch.startsWith("\\begin{aligned}") -> {
+                            content = matcher.group(1).trim()
                             isBlock = true
-                            Log.d(tag, "AST Visitor: Found BLOCK_DOLLAR: ${content.takeForLog(30)}")
                         }
-                        // Group 4: \[ ... \]
-                        matcher.group(4) != null && fullMatch.startsWith("\\[") -> {
-                            content = matcher.group(4)
+                        // \( … \)
+                        matcher.group(2) != null && fullMatch.startsWith("\\(") -> {
+                            content = matcher.group(2).trim()
+                            isBlock = false
+                        }
+                        // $…$
+                        matcher.group(3) != null && fullMatch.startsWith("$") && !fullMatch.startsWith(
+                            "$$"
+                        ) -> {
+                            content = matcher.group(3).trim()
+                            isBlock = false
+                        }
+                        // $$…$$
+                        matcher.group(4) != null && fullMatch.startsWith("$$") -> {
+                            content = matcher.group(4).trim()
                             isBlock = true
-                            Log.d(tag, "AST Visitor: Found BLOCK_BRACKET: ${content.takeForLog(30)}")
                         }
+                        // \[ … \]
+                        matcher.group(5) != null && fullMatch.startsWith("\\[") -> {
+                            content = matcher.group(5).trim()
+                            isBlock = true
+                        }
+
                         else -> {
-                            // This case should ideally not be hit if regex groups are exhaustive for matches
                             Log.w(
                                 tag,
-                                "AST Visitor: Regex matched but no known group captured. Full: '${fullMatch.takeForLog(30)}'. Matched groups: ${matcher.group(1)}, ${matcher.group(2)}, ${matcher.group(3)}, ${matcher.group(4)}"
+                                "AST Visitor: Regex matched but no known group captured for: '${
+                                    fullMatch.takeForLog(
+                                        30
+                                    )
+                                }'"
                             )
-                            newNodes.add(Text(fullMatch)) // Add the unmatched part as text
+                            newNodes.add(Text(fullMatch))
                             lastEnd = matchEnd
                             continue
                         }
                     }
-                    newNodes.add(CMMathNode(content.trim(), isBlock))
+
+                    newNodes.add(CMMathNode(content, isBlock))
                     lastEnd = matchEnd
                 }
 
-                if (modified && lastEnd < literal.length) {
+                // 3) 把剩余的文本也加入
+                if (lastEnd < literal.length) {
                     newNodes.add(Text(literal.substring(lastEnd)))
                 }
 
+                // 4) 如果发生过替换，就把原来的 Text node 替换成新的一系列 Node（Text + CMMathNode + Text…）
                 if (modified && newNodes.isNotEmpty()) {
-                    var currentNode: Node = textNode
+                    var currentNodeSuccessor: Node = textHolderNode
                     newNodes.forEach { newNode ->
-                        currentNode.insertAfter(newNode)
-                        currentNode = newNode
+                        currentNodeSuccessor.insertAfter(newNode)
+                        currentNodeSuccessor = newNode
                     }
-                    textNode.unlink()
-                    Log.d(tag, "AST Visitor: Replaced TextNode with ${newNodes.size} new nodes.")
+                    textHolderNode.unlink()
+                    Log.d(
+                        tag,
+                        "AST Visitor: Replaced node ${textHolderNode::class.java.simpleName} with ${newNodes.size} new nodes for math."
+                    )
+                }
+            }
+
+            override fun visit(textNode: Text) {
+                super.visit(textNode)
+                processTextualContent(textNode, textNode.literal)
+            }
+
+            override fun visit(fencedCodeBlock: FencedCodeBlock) {
+                super.visit(fencedCodeBlock)
+                val info = fencedCodeBlock.info?.trim()?.lowercase()
+                val looksLikeMathHeavyContent =
+                    fencedCodeBlock.literal.count { it == '$' || it == '\\' } > fencedCodeBlock.literal.length / 10
+                val shouldProcessAsMath = info.isNullOrEmpty() ||
+                        info in listOf("math", "latex", "katex", "tex") ||
+                        (info !in listOf(
+                            "python",
+                            "java",
+                            "javascript",
+                            "c++",
+                            "csharp",
+                            "kotlin",
+                            "swift",
+                            "rust",
+                            "go",
+                            "html",
+                            "css",
+                            "xml",
+                            "json",
+                            "yaml",
+                            "sql",
+                            "bash",
+                            "shell"
+                        ) && looksLikeMathHeavyContent)
+
+                if (shouldProcessAsMath) {
+                    Log.d(
+                        tag,
+                        "AST Visitor: Processing FencedCodeBlock (info: $info, len: ${fencedCodeBlock.literal.length}) for potential math content."
+                    )
+                    processTextualContent(fencedCodeBlock, fencedCodeBlock.literal)
+                } else {
+                    Log.d(
+                        tag,
+                        "AST Visitor: Skipping FencedCodeBlock (info: $info) - not identified as math."
+                    )
+                }
+            }
+
+            override fun visit(indentedCodeBlock: IndentedCodeBlock) {
+                super.visit(indentedCodeBlock)
+                val looksLikeMathHeavyContent =
+                    indentedCodeBlock.literal.count { it == '$' || it == '\\' } > indentedCodeBlock.literal.length / 10
+                if (looksLikeMathHeavyContent) {
+                    Log.d(
+                        tag,
+                        "AST Visitor: Processing IndentedCodeBlock (len: ${indentedCodeBlock.literal.length}) for potential math content."
+                    )
+                    processTextualContent(indentedCodeBlock, indentedCodeBlock.literal)
+                } else {
+                    Log.d(tag, "AST Visitor: Skipping IndentedCodeBlock - not identified as math.")
                 }
             }
         }
-        documentNode.accept(astVisitor)
-        Log.d(tag, "AST traversal complete.")
 
-        html = renderer.render(documentNode)
-        Log.d(tag, "2. HTML from CommonMark (len ${html.length}):\n${html.takeForLog(3000)}")
+        // 解析 AST
+        documentNode.accept(astVisitor)
+        Log.d(tag, "AST traversal for math complete.")
+
+        // 渲染为 HTML
+        htmlResult = renderer.render(documentNode)
+        Log.d(
+            tag,
+            "2. HTML from CommonMark (len ${htmlResult.length}):\n${htmlResult.takeForLog(3000)}"
+        )
 
     } catch (e: Exception) {
         Log.e(tag, "CRITICAL Error during CommonMark parsing or rendering: ${e.message}", e)
         return "<p style='color:red; font-weight:bold;'>[Markdown Rendering Error: ${e.javaClass.simpleName}]</p>" +
                 "<h4>Original Content (first 500 chars):</h4><pre style='background-color:#f0f0f0; padding:10px; border:1px solid #ccc; white-space: pre-wrap; word-wrap: break-word;'>${
-                    originalMarkdown.takeForLog(500).replace("<", "<").replace(">", ">")
+                    originalMarkdown.takeForLog(500).replace("<", "&lt;").replace(">", "&gt;")
                 }</pre>"
     }
 
-    val htmlBeforeCustomReplace = html
-    html = REGEX_CUSTOM_REPLACE.replace(html, "[$1]") // Your custom placeholder replacement
-    if (html != htmlBeforeCustomReplace) {
-        Log.d(tag, "3. HTML after Custom Replace (len ${html.length}):\n${html.takeForLog(1000)}")
-    } else {
-        Log.d(tag, "3. HTML after Custom Replace: No changes by custom replace.")
-    }
+    // 6. 做自定义的替换：把 ${xxx} -> [xxx]。不再主动替换“【…】”，保留原样
+    htmlResult = REGEX_CUSTOM_REPLACE.replace(htmlResult, "[$1]")
+    Log.d(
+        tag,
+        "3. HTML after Custom Replace (len ${htmlResult.length}):\n${htmlResult.takeForLog(1000)}"
+    )
 
+    // 7. 用 Jsoup 对 HTML 做 sanitize
     val safelist: Safelist = Safelist.relaxed()
         .addTags(
             "p", "br", "hr", "h1", "h2", "h3", "h4", "h5", "h6",
             "strong", "em", "del", "code", "pre", "blockquote",
             "ul", "ol", "li", "table", "thead", "tbody", "tr", "th", "td", "a",
-            "span", "div" // Ensure span and div are allowed for KaTeX output
+            "span", "div", "img"
         )
-        .addAttributes(":all", "class", "style") // Allow class for katex-math-inline/display
+        .addAttributes(":all", "class", "style")
         .addAttributes("a", "href", "title")
+        .addAttributes("img", "src", "alt", "title", "width", "height")
         .addProtocols("a", "href", "#", "http", "https", "mailto")
+        .addProtocols("img", "src", "http", "https", "data")
 
     val outputSettings = Document.OutputSettings().prettyPrint(false).indentAmount(0)
-    val cleanHtml: String = Jsoup.clean(html, "", safelist, outputSettings)
+    val cleanHtml: String = Jsoup.clean(htmlResult, "", safelist, outputSettings)
 
-    if (html != cleanHtml) {
+    if (htmlResult != cleanHtml) {
         Log.w(tag, "4. HTML was MODIFIED by Jsoup sanitization.")
-        Log.d(tag, "HTML before Jsoup: \n${html.takeForLog(1000)}")
-        Log.d(tag, "HTML after Jsoup: \n${cleanHtml.takeForLog(1000)}")
+        Log.d(tag, "HTML before Jsoup: \n${htmlResult.takeForLog(1000)}")
+        Log.d(tag, "HTML after Jsoup (Cleaned): \n${cleanHtml.takeForLog(1000)}")
     } else {
         Log.d(tag, "4. HTML was NOT modified by Jsoup sanitization.")
     }
@@ -330,9 +403,8 @@ internal fun convertMarkdownToHtml(originalMarkdown: String): String {
     return cleanHtml.trim()
 }
 
-// Helper to log only a portion of long strings
 private fun String.takeForLog(n: Int): String {
-    val eolReplacement = "↵" // Unicode for newline symbol
+    val eolReplacement = "↵"
     return if (this.length > n) {
         this.substring(0, n).replace("\n", eolReplacement) + "..."
     } else {

@@ -1,14 +1,16 @@
 package com.example.everytalk.StateControler // 你的包名
 
+import android.util.Log
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.DrawerValue
 import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateMapOf // <<< 新增导入
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.snapshots.SnapshotStateList
-import androidx.compose.runtime.snapshots.SnapshotStateMap // <<< 新增导入
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 import com.example.everytalk.data.DataClass.ApiConfig
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.DataClass.WebSearchResult
+import com.example.everytalk.model.SelectedMediaItem // <<< 新增导入 SelectedMediaItem
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -20,6 +22,10 @@ class ViewModelStateHolder {
     // --- 输入和消息列表 ---
     val _text = MutableStateFlow("")
     val messages: SnapshotStateList<Message> = mutableStateListOf()
+
+    // --- 附件选择 ---
+    val selectedMediaItems: SnapshotStateList<SelectedMediaItem> =
+        mutableStateListOf() // <<< 新增属性：用于存储已选媒体
 
     // --- 历史记录 ---
     val _historicalConversations = MutableStateFlow<List<List<Message>>>(emptyList())
@@ -33,18 +39,15 @@ class ViewModelStateHolder {
     val _isApiCalling = MutableStateFlow(false)
     var apiJob: Job? = null
     val _currentStreamingAiMessageId = MutableStateFlow<String?>(null)
-
-    // ▼▼▼ 修改这些为 SnapshotStateMap ▼▼▼
     val reasoningCompleteMap: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
     val expandedReasoningStates: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
     val messageAnimationStates: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
-    // ▲▲▲ 修改完成 ▲▲▲
 
     // --- UI 事件 ---
     val _snackbarMessage =
-        MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 1) // 增加 extraBufferCapacity
+        MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 1)
     val _scrollToBottomEvent =
-        MutableSharedFlow<Unit>(replay = 0, extraBufferCapacity = 1) // 增加 extraBufferCapacity
+        MutableSharedFlow<Unit>(replay = 0, extraBufferCapacity = 1)
 
     // --- 编辑/重命名对话框相关 ---
     val _editDialogInputText = MutableStateFlow("")
@@ -63,15 +66,22 @@ class ViewModelStateHolder {
     fun clearForNewChat() {
         _text.value = ""
         messages.clear()
+        selectedMediaItems.clear() // <<< 在清空新聊天时也清空已选媒体
         _isApiCalling.value = false
-        apiJob?.cancel() // 取消正在进行的API调用
+        apiJob?.cancel()
         apiJob = null
         _currentStreamingAiMessageId.value = null
         reasoningCompleteMap.clear()
         expandedReasoningStates.clear()
-        messageAnimationStates.clear() // 清除动画状态
+        messageAnimationStates.clear()
         _showSourcesDialog.value = false
         _sourcesForDialog.value = emptyList()
-        _loadedHistoryIndex.value = null // 确保新聊天时没有加载的历史索引
+        _loadedHistoryIndex.value = null
+    }
+
+    // >>> 新增方法：清除已选媒体 <<<
+    fun clearSelectedMedia() {
+        selectedMediaItems.clear()
+        Log.d("ViewModelStateHolder", "已选媒体已清除 (使用 mutableStateListOf)")
     }
 }

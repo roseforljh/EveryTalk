@@ -1,16 +1,20 @@
-package com.example.everytalk.StateControler // 请确认包名与您的项目一致
+package com.example.everytalk.StateControler // Package name kept as is, but should be lowercase
 
 import android.app.Application
 import android.content.ContentResolver
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
 import android.net.Uri
+import android.os.Build
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.util.Base64
 import android.util.Log
 import androidx.core.content.FileProvider
 import com.example.everytalk.data.DataClass.AbstractApiMessage
-import com.example.everytalk.data.DataClass.ApiContentPart
+import com.example.everytalk.data.DataClass.ApiContentPart // Will now use your defined Text, FileUri, InlineData
 import com.example.everytalk.data.DataClass.ChatRequest
 import com.example.everytalk.data.DataClass.PartsApiMessage
 import com.example.everytalk.data.DataClass.SimpleTextApiMessage
@@ -27,12 +31,13 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.io.ByteArrayOutputStream
-import java.io.IOException
+// import java.io.IOException // Potentially unused
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
-import kotlinx.serialization.Contextual
+
+// import kotlinx.serialization.Contextual // Potentially unused
 
 class MessageSender(
     private val application: Application,
@@ -47,13 +52,32 @@ class MessageSender(
     companion object {
         private const val TAG_MESSAGE_SENDER = "MessageSender"
         private const val MAX_IMAGE_SIZE_BYTES = 4 * 1024 * 1024
-
-        // MAX_OTHER_FILE_SIZE_BYTES 之前未被使用，如果需要文件大小限制，可以在ApiClient.kt中使用
-        // private const val MAX_OTHER_FILE_SIZE_BYTES = 10 * 1024 * 1024
         private const val TARGET_IMAGE_WIDTH = 1024
         private const val TARGET_IMAGE_HEIGHT = 1024
         private const val JPEG_COMPRESSION_QUALITY = 80
         private const val CHAT_ATTACHMENTS_SUBDIR = "chat_attachments"
+    }
+
+    private suspend fun loadBitmapFromUri(context: Context, uri: Uri): Bitmap? {
+        return withContext(Dispatchers.IO) {
+            try {
+                if (uri == Uri.EMPTY) return@withContext null
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    val source = ImageDecoder.createSource(context.contentResolver, uri)
+                    ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
+                        decoder.isMutableRequired = true
+                    }
+                } else {
+                    @Suppress("DEPRECATION")
+                    context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                        BitmapFactory.decodeStream(inputStream)
+                    } ?: MediaStore.Images.Media.getBitmap(context.contentResolver, uri)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG_MESSAGE_SENDER, "Error loading bitmap from URI: $uri", e)
+                null
+            }
+        }
     }
 
     private suspend fun copyUriToAppInternalStorage(
@@ -65,23 +89,15 @@ class MessageSender(
     ): String? {
         Log.d(
             TAG_MESSAGE_SENDER,
-            "copyUriToAppInternalStorage: Called for sourceUri: $sourceUri, originalFileName: $originalFileName"
+            "copyUriToAppInternalStorage: $sourceUri, Name: $originalFileName"
         )
         return withContext(Dispatchers.IO) {
             try {
                 val MimeTypeMap = android.webkit.MimeTypeMap.getSingleton()
                 val contentType = context.contentResolver.getType(sourceUri)
-                Log.d(
-                    TAG_MESSAGE_SENDER,
-                    "copyUriToAppInternalStorage: Content type for $sourceUri is $contentType"
-                )
                 val extension = MimeTypeMap.getExtensionFromMimeType(contentType)
                     ?: originalFileName?.substringAfterLast('.', "")
                     ?: "bin"
-                Log.d(
-                    TAG_MESSAGE_SENDER,
-                    "copyUriToAppInternalStorage: Determined extension: $extension"
-                )
 
                 val timeStamp: String =
                     SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
@@ -91,73 +107,36 @@ class MessageSender(
                     "${safeOriginalName}_${messageIdHint}_${attachmentIndex}_${timeStamp}_${
                         UUID.randomUUID().toString().take(4)
                     }.$extension"
-                Log.d(
-                    TAG_MESSAGE_SENDER,
-                    "copyUriToAppInternalStorage: Unique filename: $uniqueFileName"
-                )
 
                 val attachmentDir = File(context.filesDir, CHAT_ATTACHMENTS_SUBDIR)
-                if (!attachmentDir.exists()) {
-                    Log.d(
-                        TAG_MESSAGE_SENDER,
-                        "copyUriToAppInternalStorage: Attachment directory ${attachmentDir.absolutePath} does not exist, creating..."
-                    )
-                    if (attachmentDir.mkdirs()) {
-                        Log.d(
-                            TAG_MESSAGE_SENDER,
-                            "copyUriToAppInternalStorage: Attachment directory created successfully."
-                        )
-                    } else {
-                        Log.e(
-                            TAG_MESSAGE_SENDER,
-                            "copyUriToAppInternalStorage: Failed to create attachment directory."
-                        )
-                        return@withContext null
-                    }
-                } else {
-                    Log.d(
-                        TAG_MESSAGE_SENDER,
-                        "copyUriToAppInternalStorage: Attachment directory ${attachmentDir.absolutePath} already exists."
-                    )
+                if (!attachmentDir.exists() && !attachmentDir.mkdirs()) {
+                    Log.e(TAG_MESSAGE_SENDER, "Failed to create attachment directory.")
+                    return@withContext null
                 }
-                val destinationFile = File(attachmentDir, uniqueFileName)
-                Log.d(
-                    TAG_MESSAGE_SENDER,
-                    "copyUriToAppInternalStorage: Destination file path: ${destinationFile.absolutePath}"
-                )
 
-                context.contentResolver.openInputStream(sourceUri).use { inputStream ->
-                    if (inputStream == null) {
-                        Log.e(
-                            TAG_MESSAGE_SENDER,
-                            "copyUriToAppInternalStorage: Failed to open input stream for $sourceUri"
-                        )
-                        return@withContext null
-                    }
+                val destinationFile = File(attachmentDir, uniqueFileName)
+                context.contentResolver.openInputStream(sourceUri)?.use { inputStream ->
                     FileOutputStream(destinationFile).use { outputStream ->
                         inputStream.copyTo(outputStream)
                     }
+                } ?: run {
+                    Log.e(TAG_MESSAGE_SENDER, "Failed to open input stream for $sourceUri")
+                    return@withContext null
                 }
 
                 if (!destinationFile.exists() || destinationFile.length() == 0L) {
                     Log.e(
                         TAG_MESSAGE_SENDER,
-                        "copyUriToAppInternalStorage: Destination file does not exist or is empty after copy: ${destinationFile.absolutePath}"
+                        "Destination file missing or empty: ${destinationFile.absolutePath}"
                     )
                     if (destinationFile.exists()) destinationFile.delete()
                     return@withContext null
                 }
 
                 val authority = "${context.packageName}.provider"
-                val fileProviderUri =
-                    FileProvider.getUriForFile(context, authority, destinationFile)
-                fileProviderUri.toString()
+                FileProvider.getUriForFile(context, authority, destinationFile).toString()
             } catch (e: Exception) {
-                Log.e(
-                    TAG_MESSAGE_SENDER,
-                    "copyUriToAppInternalStorage: Error copying URI $sourceUri",
-                    e
-                )
+                Log.e(TAG_MESSAGE_SENDER, "Error copying URI $sourceUri", e)
                 null
             }
         }
@@ -167,20 +146,30 @@ class MessageSender(
         context: Context,
         bitmapToSave: Bitmap,
         messageIdHint: String,
-        attachmentIndex: Int
+        attachmentIndex: Int,
+        originalFileNameHint: String? = null
     ): String? {
+        Log.d(TAG_MESSAGE_SENDER, "saveBitmapToAppInternalStorage. Hint: $originalFileNameHint")
         return withContext(Dispatchers.IO) {
             var processedBitmap = bitmapToSave
             try {
-                if (processedBitmap.isRecycled) return@withContext null
+                if (processedBitmap.isRecycled) {
+                    Log.w(TAG_MESSAGE_SENDER, "Bitmap is recycled.")
+                    return@withContext null
+                }
 
                 if (processedBitmap.width > TARGET_IMAGE_WIDTH || processedBitmap.height > TARGET_IMAGE_HEIGHT) {
-                    val scale = Math.min(
-                        TARGET_IMAGE_WIDTH.toFloat() / processedBitmap.width,
-                        TARGET_IMAGE_HEIGHT.toFloat() / processedBitmap.height
-                    )
-                    val newWidth = (processedBitmap.width * scale).toInt()
-                    val newHeight = (processedBitmap.height * scale).toInt()
+                    val aspectRatio =
+                        processedBitmap.width.toFloat() / processedBitmap.height.toFloat()
+                    val newWidth: Int
+                    val newHeight: Int
+                    if (processedBitmap.width > processedBitmap.height) {
+                        newWidth = TARGET_IMAGE_WIDTH
+                        newHeight = (newWidth / aspectRatio).toInt()
+                    } else {
+                        newHeight = TARGET_IMAGE_HEIGHT
+                        newWidth = (newHeight * aspectRatio).toInt()
+                    }
                     if (newWidth > 0 && newHeight > 0) {
                         processedBitmap =
                             Bitmap.createScaledBitmap(processedBitmap, newWidth, newHeight, true)
@@ -197,30 +186,36 @@ class MessageSender(
                 processedBitmap.compress(compressFormat, JPEG_COMPRESSION_QUALITY, outputStream)
                 val bytes = outputStream.toByteArray()
 
-                if (bytes.size > MAX_IMAGE_SIZE_BYTES) return@withContext null
-
                 val timeStamp: String =
                     SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-                val uniqueFileName = "BMP_${messageIdHint}_${attachmentIndex}_${timeStamp}_${
-                    UUID.randomUUID().toString().take(4)
-                }.$fileExtension"
+                val baseName = originalFileNameHint?.substringBeforeLast('.')
+                    ?.replace("[^a-zA-Z0-9._-]".toRegex(), "_")?.take(20) ?: "IMG"
+                val uniqueFileName =
+                    "${baseName}_${messageIdHint}_${attachmentIndex}_${timeStamp}_${
+                        UUID.randomUUID().toString().take(4)
+                    }.$fileExtension"
 
                 val attachmentDir = File(context.filesDir, CHAT_ATTACHMENTS_SUBDIR)
-                if (!attachmentDir.exists()) {
-                    if (!attachmentDir.mkdirs()) return@withContext null
+                if (!attachmentDir.exists() && !attachmentDir.mkdirs()) {
+                    Log.e(TAG_MESSAGE_SENDER, "Failed to create attachment directory for bitmap.")
+                    return@withContext null
                 }
 
                 val destinationFile = File(attachmentDir, uniqueFileName)
                 FileOutputStream(destinationFile).use { it.write(bytes) }
 
                 if (!destinationFile.exists() || destinationFile.length() == 0L) {
+                    Log.e(
+                        TAG_MESSAGE_SENDER,
+                        "Bitmap destination file missing or empty: ${destinationFile.absolutePath}"
+                    )
                     if (destinationFile.exists()) destinationFile.delete()
                     return@withContext null
                 }
                 val authority = "${context.packageName}.provider"
                 FileProvider.getUriForFile(context, authority, destinationFile).toString()
             } catch (e: Exception) {
-                Log.e(TAG_MESSAGE_SENDER, "saveBitmapToAppInternalStorage: Error saving Bitmap", e)
+                Log.e(TAG_MESSAGE_SENDER, "Error saving Bitmap", e)
                 null
             }
         }
@@ -234,8 +229,9 @@ class MessageSender(
         val textToActuallySend = messageText.trim()
         Log.d(
             TAG_MESSAGE_SENDER,
-            "sendMessage: Called. Text: '${textToActuallySend.take(50)}...', Attachments: ${attachments.size}"
+            "sendMessage: Text: '${textToActuallySend.take(50)}...', Attachments: ${attachments.size}"
         )
+
         if (textToActuallySend.isBlank() && attachments.isEmpty()) {
             viewModelScope.launch { showSnackbar("请输入消息内容或选择项目") }
             return
@@ -263,34 +259,72 @@ class MessageSender(
             if (attachments.isNotEmpty()) {
                 val tempMessageIdForNaming = UUID.randomUUID().toString().take(8)
                 attachments.forEachIndexed { index, originalMediaItem ->
-                    val persistentUriStr: String? = when (originalMediaItem) {
-                        is SelectedMediaItem.ImageFromUri -> copyUriToAppInternalStorage(
-                            application, originalMediaItem.uri, tempMessageIdForNaming, index,
-                            getFileName(application.contentResolver, originalMediaItem.uri)
-                        )
+                    var persistentUriStr: String? = null
+                    val itemUri = when (originalMediaItem) {
+                        is SelectedMediaItem.ImageFromUri -> originalMediaItem.uri
+                        is SelectedMediaItem.GenericFile -> originalMediaItem.uri
+                        is SelectedMediaItem.ImageFromBitmap -> Uri.EMPTY
+                    }
+                    val originalFileNameForHint = getFileName(application.contentResolver, itemUri)
+                        ?: (originalMediaItem as? SelectedMediaItem.GenericFile)?.displayName
+                        ?: (if (originalMediaItem is SelectedMediaItem.ImageFromBitmap) "camera_shot" else "attachment")
 
-                        is SelectedMediaItem.ImageFromBitmap -> saveBitmapToAppInternalStorage(
-                            application, originalMediaItem.bitmap, tempMessageIdForNaming, index
-                        )
 
-                        is SelectedMediaItem.GenericFile -> copyUriToAppInternalStorage(
-                            application, originalMediaItem.uri, tempMessageIdForNaming, index,
-                            originalMediaItem.displayName
-                        )
+                    when (originalMediaItem) {
+                        is SelectedMediaItem.ImageFromUri -> {
+                            Log.d(
+                                TAG_MESSAGE_SENDER,
+                                "Processing ImageFromUri: ${originalMediaItem.uri}"
+                            )
+                            val bitmap = loadBitmapFromUri(application, originalMediaItem.uri)
+                            if (bitmap != null) {
+                                persistentUriStr = saveBitmapToAppInternalStorage(
+                                    application,
+                                    bitmap,
+                                    tempMessageIdForNaming,
+                                    index,
+                                    originalFileNameForHint
+                                )
+                                // if (!bitmap.isRecycled) bitmap.recycle() // Careful with recycling
+                            } else {
+                                Log.e(
+                                    TAG_MESSAGE_SENDER,
+                                    "Failed to load bitmap from URI: ${originalMediaItem.uri}"
+                                )
+                                showSnackbar("无法加载图片: ${originalFileNameForHint}")
+                            }
+                        }
+
+                        is SelectedMediaItem.ImageFromBitmap -> {
+                            Log.d(TAG_MESSAGE_SENDER, "Processing ImageFromBitmap")
+                            persistentUriStr = saveBitmapToAppInternalStorage(
+                                application,
+                                originalMediaItem.bitmap,
+                                tempMessageIdForNaming,
+                                index,
+                                originalFileNameForHint
+                            )
+                        }
+
+                        is SelectedMediaItem.GenericFile -> {
+                            Log.d(
+                                TAG_MESSAGE_SENDER,
+                                "Processing GenericFile: ${originalMediaItem.uri}, Name: ${originalMediaItem.displayName}"
+                            )
+                            persistentUriStr = copyUriToAppInternalStorage(
+                                application,
+                                originalMediaItem.uri,
+                                tempMessageIdForNaming,
+                                index,
+                                originalMediaItem.displayName
+                            )
+                        }
                     }
 
                     if (persistentUriStr != null) {
                         val persistentFileProviderUri = Uri.parse(persistentUriStr)
                         val processedItemForUi: SelectedMediaItem = when (originalMediaItem) {
-                            is SelectedMediaItem.ImageFromUri -> {
-                                imageUriStringsForUiMessage.add(persistentUriStr)
-                                SelectedMediaItem.ImageFromUri(
-                                    persistentFileProviderUri,
-                                    originalMediaItem.id
-                                )
-                            }
-
-                            is SelectedMediaItem.ImageFromBitmap -> {
+                            is SelectedMediaItem.ImageFromUri, is SelectedMediaItem.ImageFromBitmap -> {
                                 imageUriStringsForUiMessage.add(persistentUriStr)
                                 SelectedMediaItem.ImageFromUri(
                                     persistentFileProviderUri,
@@ -311,13 +345,13 @@ class MessageSender(
                             try {
                                 val mimeTypeForApi =
                                     application.contentResolver.getType(persistentFileProviderUri)
-                                        ?: when (processedItemForUi) {
-                                            is SelectedMediaItem.ImageFromUri -> "image/jpeg"
-                                            is SelectedMediaItem.GenericFile -> processedItemForUi.mimeType
-                                                ?: "application/octet-stream"
+                                        ?: (processedItemForUi as? SelectedMediaItem.GenericFile)?.mimeType
+                                        ?: "application/octet-stream"
+                                Log.d(
+                                    TAG_MESSAGE_SENDER,
+                                    "MIME type for API part: $mimeTypeForApi for $persistentUriStr"
+                                )
 
-                                            else -> "application/octet-stream"
-                                        }
                                 val supportedInlineMimesForGemini = listOf(
                                     "image/png",
                                     "image/jpeg",
@@ -325,6 +359,7 @@ class MessageSender(
                                     "image/heic",
                                     "image/heif"
                                 )
+
                                 if (mimeTypeForApi.lowercase() in supportedInlineMimesForGemini) {
                                     var fileSize = -1L
                                     try {
@@ -332,30 +367,86 @@ class MessageSender(
                                             persistentFileProviderUri,
                                             "r"
                                         )?.use { pfd -> fileSize = pfd.statSize }
-                                    } catch (e: Exception) { /* Log error */
+                                    } catch (e: Exception) {
+                                        Log.e(
+                                            TAG_MESSAGE_SENDER,
+                                            "Error getting file size for $persistentFileProviderUri",
+                                            e
+                                        )
                                     }
+
                                     if (fileSize != -1L && fileSize <= MAX_IMAGE_SIZE_BYTES) {
                                         application.contentResolver.openInputStream(
                                             persistentFileProviderUri
                                         )?.use { inputStream ->
                                             val bytes = inputStream.readBytes()
                                             apiContentPartsForCurrentUserMessage.add(
+                                                // Using your ApiContentPart.InlineData structure
                                                 ApiContentPart.InlineData(
-                                                    Base64.encodeToString(
+                                                    base64Data = Base64.encodeToString(
                                                         bytes,
                                                         Base64.NO_WRAP
-                                                    ), mimeTypeForApi
+                                                    ), mimeType = mimeTypeForApi
                                                 )
                                             )
+                                            Log.d(
+                                                TAG_MESSAGE_SENDER,
+                                                "Added InlineData part for IMAGE $persistentUriStr"
+                                            )
                                         }
-                                    } else { /* Log warning: file too large for inline */
+                                    } else {
+                                        Log.w(
+                                            TAG_MESSAGE_SENDER,
+                                            "Image $persistentUriStr ($fileSize bytes) too large for inline. Max: $MAX_IMAGE_SIZE_BYTES. Adding as FileUri."
+                                        )
+                                        // Using your ApiContentPart.FileUri structure
+                                        // IMPORTANT: The 'uri' for FileUri should be a publicly accessible HTTP/S or GCS URI.
+                                        // A local FileProvider URI might not work directly with the Gemini API unless your backend handles it.
+                                        // For now, we'll pass the FileProvider URI, assuming a backend might process it.
+                                        apiContentPartsForCurrentUserMessage.add(
+                                            ApiContentPart.FileUri(
+                                                uri = persistentUriStr,
+                                                mimeType = mimeTypeForApi
+                                            )
+                                        )
+                                        Log.d(
+                                            TAG_MESSAGE_SENDER,
+                                            "Added FileUri part for LARGE IMAGE $persistentUriStr"
+                                        )
                                     }
-                                } else { /* Log info: MIME not suitable for inline */
+                                } else if (processedItemForUi is SelectedMediaItem.GenericFile) {
+                                    // Using your ApiContentPart.FileUri structure
+                                    // IMPORTANT: Same as above, this local FileProvider URI might need backend processing.
+                                    apiContentPartsForCurrentUserMessage.add(
+                                        ApiContentPart.FileUri(
+                                            uri = persistentUriStr,
+                                            mimeType = mimeTypeForApi
+                                        )
+                                    )
+                                    Log.d(
+                                        TAG_MESSAGE_SENDER,
+                                        "Added FileUri part for GENERIC FILE $persistentUriStr, MIME: $mimeTypeForApi"
+                                    )
+                                } else {
+                                    Log.i(
+                                        TAG_MESSAGE_SENDER,
+                                        "MIME type $mimeTypeForApi not suitable for Gemini inline/file data for $persistentUriStr."
+                                    )
                                 }
-                            } catch (e: Exception) { /* Log error */
+                            } catch (e: Exception) {
+                                Log.e(
+                                    TAG_MESSAGE_SENDER,
+                                    "Error preparing attachment for API (parts): $persistentUriStr",
+                                    e
+                                )
                             }
                         }
-                    } else { /* Log error: UI persistence failed */
+                    } else {
+                        Log.e(
+                            TAG_MESSAGE_SENDER,
+                            "Failed to get persistent URI for attachment: ${originalMediaItem.id}"
+                        )
+                        showSnackbar("无法处理附件: ${originalFileNameForHint}")
                     }
                 }
             }
@@ -371,6 +462,7 @@ class MessageSender(
                 stateHolder.messageAnimationStates[newUserMessageForUi.id] = true
                 stateHolder.messages.add(newUserMessageForUi)
                 if (!isFromRegeneration) stateHolder._text.value = ""
+                stateHolder.clearSelectedMedia()
                 triggerScrollToBottom()
             }
 
@@ -389,39 +481,31 @@ class MessageSender(
                 for (uiMsg in historyUiMessages.asReversed()) {
                     if (historyMessageCount >= maxHistoryMessages) break
                     val roleForHistory = when (uiMsg.sender) {
-                        UiSender.User -> "user"; UiSender.AI -> "assistant"; else -> uiMsg.sender.toString()
-                            .lowercase()
+                        UiSender.User -> "user"
+                        UiSender.AI -> "assistant"
+                        UiSender.System -> "system"
+                        UiSender.Tool -> "tool"
                     }
-                    var messageAddedToHistory = false
-                    if (shouldUsePartsApiMessage) {
-                        val historyParts = mutableListOf<ApiContentPart>()
-                        if (uiMsg.text.isNotBlank()) historyParts.add(ApiContentPart.Text(text = uiMsg.text.trim()))
-                        if (historyParts.isNotEmpty()) {
+                    if (uiMsg.text.isNotBlank()) {
+                        if (shouldUsePartsApiMessage) {
                             apiMessagesForBackend.add(
                                 0,
                                 PartsApiMessage(
                                     role = roleForHistory,
-                                    parts = historyParts,
-                                    name = uiMsg.name
+                                    parts = listOf(ApiContentPart.Text(text = uiMsg.text.trim()))
                                 )
                             )
-                            messageAddedToHistory = true
-                        }
-                    } else {
-                        val historyContent = uiMsg.text.trim()
-                        if (historyContent.isNotBlank() || (uiMsg.sender == UiSender.System && uiMsg.text.isNotBlank()) || (uiMsg.sender == UiSender.Tool && uiMsg.name != null)) {
+                        } else {
                             apiMessagesForBackend.add(
                                 0,
                                 SimpleTextApiMessage(
                                     role = roleForHistory,
-                                    content = historyContent,
-                                    name = uiMsg.name
+                                    content = uiMsg.text.trim()
                                 )
                             )
-                            messageAddedToHistory = true
                         }
+                        historyMessageCount++
                     }
-                    if (messageAddedToHistory) historyMessageCount++
                 }
 
                 if (shouldUsePartsApiMessage) {
@@ -439,50 +523,56 @@ class MessageSender(
                                 parts = listOf(ApiContentPart.Text(text = textToActuallySend))
                             )
                         )
-                    } else if (attachments.isNotEmpty()) {
+                    } else if (attachments.isNotEmpty() && processedAttachmentsForUiMessage.isEmpty()) {
+                        Log.w(
+                            TAG_MESSAGE_SENDER,
+                            "No text, attachments provided but none processed for API. Sending empty text part."
+                        )
                         apiMessagesForBackend.add(
                             PartsApiMessage(
                                 role = "user",
                                 parts = listOf(ApiContentPart.Text(text = ""))
                             )
                         )
+                    } else if (textToActuallySend.isBlank() && attachments.isEmpty()) {
+                        Log.e(
+                            TAG_MESSAGE_SENDER,
+                            "Attempting to send an empty message. This should be caught earlier."
+                        )
+                        withContext(Dispatchers.Main.immediate) {
+                            stateHolder.messages.remove(newUserMessageForUi)
+                            stateHolder.messageAnimationStates.remove(newUserMessageForUi.id)
+                        }
+                        return@withContext
                     }
                 } else {
-                    if (textToActuallySend.isNotBlank()) {
+                    if (textToActuallySend.isNotBlank() || attachments.isNotEmpty()) {
                         apiMessagesForBackend.add(
                             SimpleTextApiMessage(
                                 role = "user",
                                 content = textToActuallySend
                             )
                         )
-                        if (attachments.isNotEmpty()) viewModelScope.launch { showSnackbar("注意：当前模型配置可能不支持发送文件。") }
-                    } else if (attachments.isNotEmpty()) {
-                        apiMessagesForBackend.add(SimpleTextApiMessage(role = "user", content = ""))
+                        if (attachments.isNotEmpty()) {
+                            Log.i(
+                                TAG_MESSAGE_SENDER,
+                                "Attachments present for SimpleTextApi. ApiHandler to handle."
+                            )
+                        }
                     }
                 }
 
                 if (apiMessagesForBackend.isEmpty() || apiMessagesForBackend.lastOrNull()?.role != "user") {
-                    if (attachments.isNotEmpty() && textToActuallySend.isBlank()) {
-                        if (shouldUsePartsApiMessage) apiMessagesForBackend.add(
-                            PartsApiMessage(
-                                role = "user",
-                                parts = listOf(ApiContentPart.Text(text = ""))
-                            )
-                        )
-                        else apiMessagesForBackend.add(
-                            SimpleTextApiMessage(
-                                role = "user",
-                                content = ""
-                            )
-                        )
-                    } else {
-                        Log.e(
-                            TAG_MESSAGE_SENDER,
-                            "API messages list is empty or does not end with a user message. Aborting."
-                        )
-                        viewModelScope.launch { showSnackbar("无法发送消息：内部准备错误。") }
-                        return@withContext
+                    Log.e(
+                        TAG_MESSAGE_SENDER,
+                        "API messages list is empty or does not end with a user message. Aborting. Last: ${apiMessagesForBackend.lastOrNull()?.role}"
+                    )
+                    viewModelScope.launch { showSnackbar("无法发送消息：内部准备错误。") }
+                    withContext(Dispatchers.Main.immediate) {
+                        stateHolder.messages.remove(newUserMessageForUi)
+                        stateHolder.messageAnimationStates.remove(newUserMessageForUi.id)
                     }
+                    return@withContext
                 }
 
                 val chatRequestForApi = ChatRequest(
@@ -516,9 +606,16 @@ class MessageSender(
                     applicationContextForApiClient = application,
                     userMessageTextForContext = textToActuallySend,
                     afterUserMessageId = newUserMessageForUi.id,
-                    onMessagesProcessed = {
-                        viewModelScope.launch {
-                            historyManager.saveCurrentChatToHistoryIfNeeded()
+                    onMessagesProcessed = { viewModelScope.launch { historyManager.saveCurrentChatToHistoryIfNeeded() } },
+                    onRequestFailed = {
+                        viewModelScope.launch(Dispatchers.Main) {
+                            Log.e(
+                                TAG_MESSAGE_SENDER,
+                                "API request failed by ApiHandler. Reverting UI for user message."
+                            )
+                            stateHolder.messages.remove(newUserMessageForUi)
+                            stateHolder.messageAnimationStates.remove(newUserMessageForUi.id)
+                            showSnackbar("发送失败，请检查网络或API配置。")
                         }
                     }
                 )
@@ -527,20 +624,26 @@ class MessageSender(
     }
 
     private fun getFileName(contentResolver: ContentResolver, uri: Uri): String? {
-        if (uri == Uri.EMPTY) return "bitmap_image"
+        if (uri == Uri.EMPTY) return null
         var fileName: String? = null
         try {
-            contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
-                ?.use { cursor ->
-                    if (cursor.moveToFirst()) {
-                        val displayNameIndex =
-                            cursor.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME)
-                        fileName = cursor.getString(displayNameIndex)
+            if (ContentResolver.SCHEME_CONTENT == uri.scheme) {
+                contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+                    ?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val displayNameIndex =
+                                cursor.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME)
+                            fileName = cursor.getString(displayNameIndex)
+                        }
                     }
-                }
+            }
+            if (fileName == null) {
+                fileName = uri.lastPathSegment
+            }
         } catch (e: Exception) {
             Log.w(TAG_MESSAGE_SENDER, "Error getting file name from URI: $uri", e)
+            fileName = uri.lastPathSegment
         }
-        return fileName ?: uri.lastPathSegment
+        return fileName ?: "file_${System.currentTimeMillis()}"
     }
 }

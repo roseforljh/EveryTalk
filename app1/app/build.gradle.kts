@@ -124,6 +124,8 @@ android {
         implementation("io.ktor:ktor-client-content-negotiation:2.3.11")
         implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.11")
         implementation("io.ktor:ktor-client-logging:2.3.11")
+        implementation("io.ktor:ktor-client-cio:2.3.11")
+        implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
 
         // Testing
         testImplementation(libs.junit)
@@ -148,5 +150,7 @@ android {
 
         implementation("io.coil-kt.coil3:coil-compose:3.2.0")
         implementation("io.coil-kt.coil3:coil-network-okhttp:3.2.0")
+
+        implementation ("com.google.accompanist:accompanist-flowlayout:0.30.1")
 
     }

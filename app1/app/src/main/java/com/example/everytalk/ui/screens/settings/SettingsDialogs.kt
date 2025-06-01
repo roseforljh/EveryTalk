@@ -4,6 +4,8 @@ import android.util.Log
 import androidx.compose.animation.*
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -21,6 +23,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Rect
@@ -28,6 +31,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -35,6 +39,11 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
+import com.example.everytalk.data.DataClass.ModalityType
+
+// 导入 Accompanist FlowRow
+import com.google.accompanist.flowlayout.FlowRow
+import com.google.accompanist.flowlayout.MainAxisAlignment
 
 
 val DialogTextFieldColors
@@ -54,6 +63,82 @@ val DialogTextFieldColors
         disabledContainerColor = Color.White.copy(alpha = 0.8f)
     )
 val DialogShape = RoundedCornerShape(16.dp)
+
+
+// --- 选择模态类型的对话框 (FlowRow 版本) ---
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun SelectModalityDialog(
+    onDismissRequest: () -> Unit,
+    onModalitySelected: (ModalityType) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismissRequest,
+        title = {
+            Text(
+                "选择模型类型",
+                color = Color.Black,
+                style = MaterialTheme.typography.headlineSmall
+            )
+        },
+        text = {
+            FlowRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 16.dp, horizontal = 8.dp),
+                mainAxisSpacing = 12.dp,
+                crossAxisSpacing = 12.dp,
+                mainAxisAlignment = MainAxisAlignment.Center
+            ) {
+                ModalityType.values().forEach { modality ->
+                    ModalityCapsuleButton(
+                        modalityType = modality,
+                        onClick = { onModalitySelected(modality) }
+                    )
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(
+                onClick = onDismissRequest,
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = Color.Red
+                )
+            ) { Text("取消") }
+        },
+        containerColor = Color.White,
+        shape = DialogShape,
+        titleContentColor = Color.Black,
+        textContentColor = Color.Black
+    )
+}
+
+@Composable
+private fun ModalityCapsuleButton(
+    modalityType: ModalityType,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier
+            .shadow(
+                elevation = 4.dp,
+                shape = RoundedCornerShape(50.dp),
+                clip = false
+            )
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(50.dp),
+        color = Color.White,
+    ) {
+        Text(
+            text = modalityType.displayName,
+            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Medium),
+            color = Color.Black,
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)
+        )
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -128,11 +213,11 @@ private fun CustomStyledDropdownMenu(
         val density = LocalDensity.current
         val menuWidth = with(density) { anchorBounds.width.toDp() }
 
-        val yAdjustmentDp: Dp = 74.dp
+        val yAdjustmentDp: Dp = 74.dp // Adjust this value if needed
         val yAdjustmentInPx = with(density) { yAdjustmentDp.toPx() }.toInt()
         val yOffset = anchorBounds.bottom.toInt() - yAdjustmentInPx
 
-        val xAdjustmentDp: Dp = 24.dp
+        val xAdjustmentDp: Dp = 24.dp // Adjust this value if needed
         val xAdjustmentInPx = with(density) { xAdjustmentDp.toPx() }.toInt()
         val xOffset = anchorBounds.left.toInt() - xAdjustmentInPx
 
@@ -149,18 +234,16 @@ private fun CustomStyledDropdownMenu(
         ) {
             AnimatedVisibility(
                 visibleState = transitionState,
-                // --- 新的过渡动画效果 ---
                 enter = fadeIn(animationSpec = tween(durationMillis = 200, delayMillis = 50)) +
                         slideInVertically(
                             animationSpec = tween(durationMillis = 250, delayMillis = 50),
-                            initialOffsetY = { -it / 3 } // 从上方一点滑入 (it 是完整高度)
+                            initialOffsetY = { -it / 3 }
                         ),
                 exit = fadeOut(animationSpec = tween(durationMillis = 150)) +
                         slideOutVertically(
                             animationSpec = tween(durationMillis = 200),
-                            targetOffsetY = { -it / 3 } // 向上方一点滑出
+                            targetOffsetY = { -it / 3 }
                         )
-                // --- 动画效果结束 ---
             ) {
                 Log.d(
                     "DropdownAnimation",
@@ -215,34 +298,26 @@ internal fun AddNewFullConfigDialog(
     val shouldShowCustomMenuLogical =
         providerMenuExpanded && allProviders.isNotEmpty() && textFieldAnchorBounds != null
 
+
     LaunchedEffect(shouldShowCustomMenuLogical) {
         providerMenuTransitionState.targetState = shouldShowCustomMenuLogical
-        Log.d(
-            "DropdownAnimation",
-            "shouldShowCustomMenuLogical: $shouldShowCustomMenuLogical, targetState set to: ${providerMenuTransitionState.targetState}"
-        )
     }
 
     LaunchedEffect(allProviders) {
-        Log.d(
-            "DropdownDebug",
-            "AddNewFullConfigDialog: allProviders size: ${allProviders.size}, isEmpty: ${allProviders.isEmpty()}"
-        )
+        Log.d("DropdownDebug", "AddNewFullConfigDialog: allProviders size: ${allProviders.size}")
     }
 
     AlertDialog(
         onDismissRequest = onDismissRequest,
-        title = { Text("添加配置 (1/2)", color = Color.Black) },
+        title = { Text("添加配置 (2/3)", color = Color.Black) },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 ExposedDropdownMenuBox(
-                    expanded = providerMenuExpanded,
+                    expanded = providerMenuExpanded && allProviders.isNotEmpty(),
                     onExpandedChange = {
-                        providerMenuExpanded = !providerMenuExpanded
-                        Log.d(
-                            "DropdownDebug",
-                            "ExposedDropdownMenuBox onExpandedChange. Toggled providerMenuExpanded to: $providerMenuExpanded"
-                        )
+                        if (allProviders.isNotEmpty()) {
+                            providerMenuExpanded = !providerMenuExpanded
+                        }
                     },
                     modifier = Modifier.padding(bottom = 12.dp)
                 ) {
@@ -256,71 +331,39 @@ internal fun AddNewFullConfigDialog(
                             .fillMaxWidth()
                             .onGloballyPositioned { coordinates ->
                                 textFieldAnchorBounds = coordinates.boundsInWindow()
-                                Log.d(
-                                    "DropdownDebug",
-                                    "Anchor bounds updated: ${textFieldAnchorBounds}"
-                                )
                             },
                         trailingIcon = {
                             IconButton(onClick = {
-                                if (providerMenuExpanded) {
+                                if (providerMenuExpanded && allProviders.isNotEmpty()) {
                                     providerMenuExpanded = false
-                                    Log.d(
-                                        "DropdownDebug",
-                                        "Add custom provider icon clicked while menu was open, closing menu."
-                                    )
                                 }
                                 onShowAddCustomProviderDialog()
-                            }) { Icon(Icons.Outlined.Add, "添加自定义平台") }
+                            }) {
+                                Icon(Icons.Outlined.Add, "添加自定义平台")
+                            }
                         },
                         shape = DialogShape,
                         colors = DialogTextFieldColors
                     )
 
-                    Log.d(
-                        "DropdownAnimation",
-                        "Before CustomMenu: providerMenuExpanded=$providerMenuExpanded, " +
-                                "allProvidersNotEmpty=${allProviders.isNotEmpty()}, " +
-                                "anchorBoundsNotNull=${textFieldAnchorBounds != null}, " +
-                                "shouldShowCustomMenuLogical=$shouldShowCustomMenuLogical, " +
-                                "transition.currentState=${providerMenuTransitionState.currentState}, " +
-                                "transition.targetState=${providerMenuTransitionState.targetState}"
-                    )
-
-                    CustomStyledDropdownMenu(
-                        transitionState = providerMenuTransitionState,
-                        onDismissRequest = {
-                            providerMenuExpanded = false
-                            Log.d(
-                                "DropdownDebug",
-                                "CustomStyledDropdownMenu dismissed via onDismissRequest."
-                            )
-                        },
-                        anchorBounds = textFieldAnchorBounds
-                    ) {
-                        if (allProviders.isEmpty()) {
-                            Log.d(
-                                "DropdownDebug",
-                                "CustomMenu content: allProviders is empty, showing no items."
-                            )
-                        }
-                        allProviders.forEach { providerItem ->
-                            Log.d(
-                                "DropdownDebug",
-                                "CustomMenu content: Rendering item: $providerItem"
-                            )
-                            DropdownMenuItem(
-                                text = { Text(providerItem, color = Color.Black) },
-                                onClick = {
-                                    onProviderChange(providerItem)
-                                    providerMenuExpanded = false
-                                    Log.d(
-                                        "DropdownDebug",
-                                        "Item '$providerItem' selected. Closing menu."
-                                    )
-                                },
-                                colors = MenuDefaults.itemColors(textColor = Color.Black)
-                            )
+                    if (allProviders.isNotEmpty()) {
+                        CustomStyledDropdownMenu(
+                            transitionState = providerMenuTransitionState,
+                            onDismissRequest = {
+                                providerMenuExpanded = false
+                            },
+                            anchorBounds = textFieldAnchorBounds
+                        ) {
+                            allProviders.forEach { providerItem ->
+                                DropdownMenuItem(
+                                    text = { Text(providerItem, color = Color.Black) },
+                                    onClick = {
+                                        onProviderChange(providerItem)
+                                        providerMenuExpanded = false
+                                    },
+                                    colors = MenuDefaults.itemColors(textColor = Color.Black)
+                                )
+                            }
                         }
                     }
                 }
@@ -388,7 +431,7 @@ internal fun AddModelToExistingKeyDialog(
     val focusRequesterModelName = remember { FocusRequester() }
     AlertDialog(
         onDismissRequest = onDismissRequest,
-        title = { Text("添加模型", color = Color.Black) },
+        title = { Text("添加模型 (3/3)", color = Color.Black) },
         text = {
             Column {
                 Text(

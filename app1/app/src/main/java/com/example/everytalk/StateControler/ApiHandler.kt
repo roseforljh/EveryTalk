@@ -1,6 +1,6 @@
-package com.example.everytalk.StateControler // 确保包名正确
+package com.example.everytalk.StateControler
 
-import android.content.Context // <--- 新增导入
+import android.content.Context
 import android.util.Log
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.DataClass.Sender
@@ -8,11 +8,9 @@ import com.example.everytalk.data.DataClass.ChatRequest
 import com.example.everytalk.data.DataClass.AppStreamEvent
 import com.example.everytalk.data.DataClass.ApiContentPart
 import com.example.everytalk.data.network.ApiClient
-import com.example.everytalk.model.SelectedMediaItem // <--- 新增导入
+import com.example.everytalk.model.SelectedMediaItem
 import com.example.everytalk.ui.screens.viewmodel.HistoryManager
-import io.ktor.client.plugins.ResponseException // 这个可能不再直接需要，因为ApiClient会处理
-import io.ktor.client.statement.HttpResponse    // 这个可能不再直接需要
-import io.ktor.client.statement.bodyAsText      // 这个可能不再直接需要
+import io.ktor.client.statement.HttpResponse
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -24,7 +22,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.IOException
-import java.util.concurrent.CancellationException // Ktor的取消异常是 kotlin.coroutines.CancellationException
+import java.util.concurrent.CancellationException
 
 class ApiHandler(
     private val stateHolder: ViewModelStateHolder,
@@ -124,14 +122,14 @@ class ApiHandler(
         stateHolder.apiJob = null
     }
 
-    // --- 修改 streamChatResponse 方法签名 ---
     fun streamChatResponse(
         requestBody: ChatRequest,
-        attachmentsToPassToApiClient: List<SelectedMediaItem>, // <--- 新增参数
-        applicationContextForApiClient: Context,             // <--- 新增参数
-        @Suppress("UNUSED_PARAMETER") userMessageTextForContext: String, // 这个参数现在主要用于日志
+        attachmentsToPassToApiClient: List<SelectedMediaItem>,
+        applicationContextForApiClient: Context,
+        @Suppress("UNUSED_PARAMETER") userMessageTextForContext: String,
         afterUserMessageId: String?,
-        onMessagesProcessed: () -> Unit
+        onMessagesProcessed: () -> Unit,
+        onRequestFailed: () -> Unit // <<< 关键改动：添加此参数
     ) {
         val contextForLog = when (val lastUserMsg = requestBody.messages.lastOrNull {
             it.role == "user"
@@ -164,22 +162,22 @@ class ApiHandler(
             stateHolder._currentStreamingAiMessageId.value = aiMessageId
             stateHolder._isApiCalling.value = true
             stateHolder.reasoningCompleteMap[aiMessageId] = false
-            onMessagesProcessed() // This might trigger ChatInputArea to clear selectedMediaItems
+            onMessagesProcessed()
         }
 
         stateHolder.apiJob = viewModelScope.launch {
             val thisJob = coroutineContext[Job.Key]
             try {
-                // --- 调用修改后的 ApiClient.streamChatResponse ---
                 ApiClient.streamChatResponse(
                     requestBody,
-                    attachmentsToPassToApiClient,    // <--- 传递
-                    applicationContextForApiClient // <--- 传递
+                    attachmentsToPassToApiClient,
+                    applicationContextForApiClient
                 )
                     .onStart { Log.d(TAG_API_HANDLER, "流式传输开始，消息ID: $aiMessageId") }
                     .catch { e ->
                         if (e !is CancellationException) {
                             updateMessageWithError(aiMessageId, e)
+                            onRequestFailed() // 在捕获到非取消异常时调用
                         } else {
                             Log.d(
                                 TAG_API_HANDLER,
@@ -224,6 +222,10 @@ class ApiHandler(
                             }
                             if (cause == null || (cause !is CancellationException)) {
                                 historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = cause != null)
+                            } else if (cause != null && cause !is CancellationException) {
+                                // 如果 onCompletion 是因为 catch 块中的错误（非取消）导致的，
+                                // 那么 onRequestFailed 已经在 catch 中调用了。
+                                // historyManager.saveCurrentChatToHistoryIfNeeded 也在 updateMessageWithError 中。
                             }
                         }
 
@@ -301,6 +303,7 @@ class ApiHandler(
                             e
                         )
                         updateMessageWithError(aiMessageId, e)
+                        onRequestFailed() // 在捕获到其他未处理异常时调用
                     }
                 }
             } finally {
@@ -416,6 +419,7 @@ class ApiHandler(
                     updateMessageWithError(
                         messageIdForLog,
                         IOException("SSE Error: ${appEvent.message} (Upstream: ${appEvent.upstreamStatus ?: "N/A"})")
+                        // onRequestFailed() 将在 updateMessageWithError -> catch 块中被间接调用
                     )
                 }
                 if (stateHolder.reasoningCompleteMap[messageIdForLog] != true) stateHolder.reasoningCompleteMap[messageIdForLog] =
@@ -473,8 +477,6 @@ class ApiHandler(
                     val errorPrefix = if (existingContent.isNotBlank()) "\n\n" else ""
                     val errorTextContent = ERROR_VISUAL_PREFIX + when (error) {
                         is IOException -> "网络通讯故障: ${error.message ?: "IO 错误"}"
-                        // ResponseException is Ktor specific, might not be directly thrown by ApiClient now
-                        // is io.ktor.client.plugins.ResponseException -> parseBackendError(error.response, try { error.response.bodyAsText() } catch (_: Exception) { "(无法读取错误详情)" })
                         else -> "处理时发生错误: ${error.message ?: "未知应用错误"}"
                     }
                     val errorMsg = msg.copy(
@@ -497,7 +499,6 @@ class ApiHandler(
         }
     }
 
-    // parseBackendError might need adjustment if the error structure from ApiClient changes
     private fun parseBackendError(response: HttpResponse, errorBody: String): String {
         return try {
             val errorJson = jsonParserForError.decodeFromString<BackendErrorContent>(errorBody)
