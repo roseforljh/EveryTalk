@@ -152,5 +152,4 @@ android {
         implementation("io.coil-kt.coil3:coil-network-okhttp:3.2.0")
 
         implementation ("com.google.accompanist:accompanist-flowlayout:0.30.1")
-
     }

@@ -20,7 +20,7 @@ data class ApiConfig(
     val modalityType: ModalityType = ModalityType.TEXT,
 
     // --- 通用文本生成参数 (也可部分用于其他模态) ---
-    val temperature: Float? = null,
+    val temperature: Float = 0.0f, // 默认设置为 0.0f
     val topP: Float? = null,        // Aliases: top_p
     val maxTokens: Int? = null,     // Aliases: max_tokens, maxOutputTokens
 
@@ -31,7 +31,4 @@ data class ApiConfig(
     val imageSize: String? = null,          // 例如 "1024x1024"
     val numInferenceSteps: Int? = null,   // 例如 20, 50
     val guidanceScale: Float? = null,     // 例如 7.5
-    // 你可以根据需要添加更多特定于模态的通用参数，
-    // 或者为非常特定的模型参数考虑一个 Map<String, String> 类型的 extraParams 字段。
-    // val extraParams: Map<String, String>? = null
 )
