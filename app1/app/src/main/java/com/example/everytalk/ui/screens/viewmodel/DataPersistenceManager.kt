@@ -1,4 +1,4 @@
-package com.example.everytalk.ui.screens.viewmodel // 请确保包名与你的项目一致
+package com.example.everytalk.ui.screens.viewmodel
 
 import android.util.Log
 import com.example.everytalk.data.local.SharedPreferencesDataSource
@@ -6,32 +6,26 @@ import com.example.everytalk.data.DataClass.ApiConfig
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.DataClass.Sender
 import com.example.everytalk.StateControler.ViewModelStateHolder
-import com.example.everytalk.util.convertMarkdownToHtml // ★ 确保这个导入路径正确 ★
+import com.example.everytalk.util.convertMarkdownToHtml
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch // launch 仅用于 loadInitialData 的顶层启动
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class DataPersistenceManager(
-    private val dataSource: SharedPreferencesDataSource, // 数据源 (SharedPreferencesDataSource)
-    private val stateHolder: ViewModelStateHolder,     // ViewModel 状态持有者
-    private val viewModelScope: CoroutineScope         // ViewModel 的协程作用域, 主要用于 loadInitialData 的启动
+    private val dataSource: SharedPreferencesDataSource,
+    private val stateHolder: ViewModelStateHolder,
+    private val viewModelScope: CoroutineScope
 ) {
-    private val TAG = "PersistenceManager" // 日志标签
+    private val TAG = "PersistenceManager"
 
-    /**
-     * 加载初始数据，包括 API 配置、聊天历史和最后打开的聊天。
-     * @param onLoadingComplete 加载完成后的回调，传递配置和历史是否存在。
-     */
     fun loadInitialData(onLoadingComplete: (initialConfigPresent: Boolean, initialHistoryPresent: Boolean) -> Unit) {
-        // loadInitialData 本身不是 suspend，它在内部启动一个协程来做 IO 操作
-        viewModelScope.launch(Dispatchers.IO) { // 在 IO 线程执行整个加载流程
+        viewModelScope.launch(Dispatchers.IO) {
             Log.d(TAG, "loadInitialData: 开始加载初始数据 (IO Thread)...")
             var initialConfigPresent = false
             var initialHistoryPresent = false
 
             try {
-                // --- 加载 API 配置 ---
                 Log.d(TAG, "loadInitialData: 调用 dataSource.loadApiConfigs()...")
                 val loadedConfigs: List<ApiConfig> = dataSource.loadApiConfigs()
                 initialConfigPresent = loadedConfigs.isNotEmpty()
@@ -48,8 +42,6 @@ class DataPersistenceManager(
                     }
                 }
 
-
-                // --- 加载并处理选中的 API 配置 ---
                 Log.d(TAG, "loadInitialData: 调用 dataSource.loadSelectedConfigId()...")
                 val selectedConfigId: String? = dataSource.loadSelectedConfigId()
                 Log.i(TAG, "loadInitialData: 加载到的选中配置ID: '$selectedConfigId'")
@@ -61,7 +53,7 @@ class DataPersistenceManager(
                             TAG,
                             "loadInitialData: 持久化的选中配置ID '$selectedConfigId' 在当前配置列表中未找到。将清除持久化的选中ID。"
                         )
-                        dataSource.saveSelectedConfigId(null) // 清除无效ID
+                        dataSource.saveSelectedConfigId(null)
                     }
                 }
 
@@ -72,12 +64,10 @@ class DataPersistenceManager(
                         TAG,
                         "loadInitialData: 无有效选中配置或之前未选中，默认选择第一个: ID='${finalSelectedConfig.id}', 模型='${finalSelectedConfig.model}'。将保存此选择。"
                     )
-                    dataSource.saveSelectedConfigId(finalSelectedConfig.id) // 保存这个默认选择
+                    dataSource.saveSelectedConfigId(finalSelectedConfig.id)
                 }
                 Log.i(TAG, "loadInitialData: 最终选中的配置: ${finalSelectedConfig?.model ?: "无"}")
 
-
-                // --- 加载聊天历史记录 ---
                 Log.d(TAG, "loadInitialData: 调用 dataSource.loadChatHistory()...")
                 val loadedHistory: List<List<Message>> = dataSource.loadChatHistory()
                 initialHistoryPresent = loadedHistory.isNotEmpty()
@@ -86,7 +76,6 @@ class DataPersistenceManager(
                     "loadInitialData: 聊天历史加载完成。数量: ${loadedHistory.size}, initialHistoryPresent: $initialHistoryPresent"
                 )
 
-                // --- 加载最后打开的聊天 ---
                 Log.d(TAG, "loadInitialData: 调用 dataSource.loadLastOpenChatInternal()...")
                 val lastOpenChatMessagesLoaded: List<Message> =
                     dataSource.loadLastOpenChatInternal()
@@ -95,7 +84,6 @@ class DataPersistenceManager(
                     "loadInitialData: 最后打开的聊天加载完成。消息数量: ${lastOpenChatMessagesLoaded.size}"
                 )
 
-                // ★★★ 为 lastOpenChatMessages 预处理 htmlContent 和 contentStarted (仍在 IO 线程) ★★★
                 val processedLastOpenChatMessages = if (lastOpenChatMessagesLoaded.isNotEmpty()) {
                     Log.d(
                         TAG,
@@ -126,9 +114,7 @@ class DataPersistenceManager(
                     TAG,
                     "loadInitialData: lastOpenChatMessages 的 htmlContent 和 contentStarted 预处理完成。"
                 )
-                // ★★★ 结束预处理 ★★★
 
-                // --- 更新 StateHolder (在主线程) ---
                 withContext(Dispatchers.Main.immediate) {
                     Log.d(TAG, "loadInitialData: 切换到主线程更新 StateHolder...")
                     stateHolder._apiConfigs.value = loadedConfigs
@@ -161,7 +147,6 @@ class DataPersistenceManager(
             } catch (e: Exception) {
                 Log.e(TAG, "loadInitialData: 加载初始数据时发生严重错误", e)
                 withContext(Dispatchers.Main.immediate) {
-                    // 发生错误时，确保状态是可预测的（例如，全空），并通知回调
                     stateHolder._apiConfigs.value = emptyList()
                     stateHolder._selectedApiConfig.value = null
                     stateHolder._historicalConversations.value = emptyList()

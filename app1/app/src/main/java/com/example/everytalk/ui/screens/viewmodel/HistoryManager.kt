@@ -1,9 +1,9 @@
-package com.example.everytalk.ui.screens.viewmodel // 请确保包名与你的项目一致
+package com.example.everytalk.ui.screens.viewmodel
 
 import android.util.Log
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.DataClass.Sender
-import com.example.everytalk.StateControler.ViewModelStateHolder // 已更正包名
+import com.example.everytalk.StateControler.ViewModelStateHolder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
@@ -13,18 +13,16 @@ class HistoryManager(
     private val persistenceManager: DataPersistenceManager,
     private val compareMessageLists: (List<Message>?, List<Message>?) -> Boolean
 ) {
-    private val TAG_HM = "HistoryManager" // 为 HistoryManager 单独定义日志标签
+    private val TAG_HM = "HistoryManager"
 
     private fun filterMessagesForSaving(messagesToFilter: List<Message>): List<Message> {
         return messagesToFilter.filter { msg ->
-            (msg.sender != Sender.System || msg.isPlaceholderName) &&
-                    !msg.isError && // 一般不保存错误消息
-                    (msg.sender == Sender.User ||
-                            (msg.sender == Sender.AI &&
-                                    (msg.contentStarted || msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank())
-                                    ) ||
-                            (msg.sender == Sender.System && msg.isPlaceholderName)
-                            )
+            (!msg.isError) &&
+            (
+                (msg.sender == Sender.User) ||
+                (msg.sender == Sender.AI && (msg.contentStarted || msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank())) ||
+                (msg.sender == Sender.System && msg.isPlaceholderName)
+            )
         }.toList()
     }
 
@@ -56,8 +54,6 @@ class HistoryManager(
                 TAG_HM,
                 "No valid messages to save to history, and not forcing save of empty list."
             )
-            // "Last open chat" will still be cleared at the end of this function.
-            // No direct modification to history list or loadedIndex here.
         }
 
         var finalNewLoadedIndex: Int? = stateHolder._loadedHistoryIndex.value
@@ -99,9 +95,9 @@ class HistoryManager(
                         TAG_HM,
                         "History index $currentLoadedIdx content unchanged and not force saving."
                     )
-                    return@update currentHistory // Return original list if no change
+                    return@update currentHistory
                 }
-            } else { // No history loaded, or index out of bounds (should ideally not happen if loadedIdx is managed well)
+            } else {
                 if (messagesToSave.isNotEmpty() || forceSave) {
                     val duplicateIndex =
                         if (forceSave && currentLoadedIdx == null) -1 else findChatInHistory(
@@ -122,14 +118,13 @@ class HistoryManager(
                             "Current conversation is a duplicate of history index $duplicateIndex. Setting loadedIndex to it."
                         )
                         finalNewLoadedIndex = duplicateIndex
-                        // History list itself not modified here, but loadedIndex might change.
                     }
                 } else {
                     Log.d(
                         TAG_HM,
                         "Current new conversation is empty and not force saving, not adding to history."
                     )
-                    return@update currentHistory // Return original list if no change
+                    return@update currentHistory
                 }
             }
             mutableHistory
@@ -142,13 +137,10 @@ class HistoryManager(
         }
 
         if (needsPersistenceSaveOfHistoryList) {
-            // ★★★ Pass the updated list from stateHolder ★★★
             persistenceManager.saveChatHistory(stateHolder._historicalConversations.value)
             Log.d(TAG_HM, "Chat history list persisted.")
         }
 
-        // Always clear the "last open chat" record in persistence to ensure a fresh start next time.
-        // This is a key design decision for your app's startup behavior.
         persistenceManager.saveLastOpenChat(emptyList())
         Log.d(TAG_HM, "\"Last open chat\" record has been cleared in persistence.")
 
@@ -200,7 +192,6 @@ class HistoryManager(
                     "Due to deletion, LoadedHistoryIndex updated to: $finalLoadedIndexAfterDelete"
                 )
             }
-            // ★★★ Pass the updated list from stateHolder ★★★
             persistenceManager.saveChatHistory(stateHolder._historicalConversations.value)
             persistenceManager.saveLastOpenChat(emptyList())
             Log.d(TAG_HM, "Chat history list persisted after deletion. \"Last open chat\" cleared.")
@@ -214,7 +205,6 @@ class HistoryManager(
             stateHolder._loadedHistoryIndex.value = null
             Log.d(TAG_HM, "In-memory history cleared, loadedHistoryIndex reset to null.")
 
-            // ★★★ Pass the updated (empty) list from stateHolder ★★★
             persistenceManager.saveChatHistory(stateHolder._historicalConversations.value)
             persistenceManager.saveLastOpenChat(emptyList())
             Log.d(TAG_HM, "Persisted history list cleared. \"Last open chat\" cleared.")

@@ -27,5 +27,6 @@ internal val defaultApiAddresses: Map<String, String> = mapOf(
     "硅基流动" to "https://api.siliconflow.cn",
     "阿里云百炼" to "https://dashscope.aliyuncs.com/compatible-mode",
     "火山引擎" to "https://ark.cn-beijing.volces.com/api/v3/bots/",
-    "深度求索" to "https://api.deepseek.com"
+    "深度求索" to "https://api.deepseek.com",
+    "openrouter" to "https://openrouter.ai/api" // 新增 OpenRouter
 )

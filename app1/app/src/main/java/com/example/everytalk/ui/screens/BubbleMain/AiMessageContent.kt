@@ -45,9 +45,9 @@ import com.example.everytalk.StateControler.AppViewModel
 import com.example.everytalk.data.DataClass.Sender
 import com.example.everytalk.ui.screens.BubbleMain.Main.toHexCss
 import com.example.everytalk.util.convertMarkdownToHtml
-import com.example.everytalk.util.convertMarkdownToPlainText // Import the new utility
+import com.example.everytalk.util.convertMarkdownToPlainText
 import com.example.everytalk.util.generateKatexBaseHtmlTemplateString
-import kotlinx.coroutines.delay // 确保这个导入存在
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filter
 
 
@@ -57,7 +57,7 @@ private val CONTEXT_MENU_ITEM_ICON_SIZE = 20.dp
 private val CONTEXT_MENU_FINE_TUNE_OFFSET_X = (-120).dp
 private val CONTEXT_MENU_FINE_TUNE_OFFSET_Y = (-8).dp
 private val CONTEXT_MENU_FIXED_WIDTH = 160.dp
-private const val TYPEWRITER_DELAY_MS = 10L // 调整为50L或更高以便观察
+private const val TYPEWRITER_DELAY_MS = 10L
 
 @Composable
 internal fun AnimatedDropdownMenuItem(
@@ -116,8 +116,8 @@ fun rememberKatexBaseHtmlTemplate(
 internal fun AiMessageContent(
     message: Message,
     appViewModel: AppViewModel,
-    fullMessageTextToCopy: String, // This is message.text (raw Markdown)
-    showLoadingDots: Boolean,      // True if AI is active for this message
+    fullMessageTextToCopy: String,
+    showLoadingDots: Boolean,
     contentColor: Color,
     onUserInteraction: () -> Unit,
     modifier: Modifier = Modifier
@@ -214,7 +214,6 @@ internal fun AiMessageContent(
                 )
                 newChars.forEach { char ->
                     displayedTextForTypewriter += char
-                    // Log.d("AiMessageContent_Typewriter", "MsgID ${message.id.take(4)}: Typed '$char'. Current: '${displayedTextForTypewriter.take(50).replace("\n", "\\n")}'") // Very verbose
                     delay(TYPEWRITER_DELAY_MS)
                 }
                 Log.d(
@@ -242,12 +241,6 @@ internal fun AiMessageContent(
                     displayedTextForTypewriter.take(50).replace("\n", "\\n")
                 }'. message.text blank: ${message.text.isBlank()}"
             )
-            // If not streaming, and the final message.text is available,
-            // we might want to ensure displayedTextForTypewriter is cleared or reflects final plain text if needed for some edge case.
-            // However, the main UI will switch to WebView, so this might not be strictly necessary.
-            // if (message.text.isBlank() || message.sender != Sender.AI || message.isError) {
-            //    displayedTextForTypewriter = "" // Example: clear if not a valid AI message for typewriter
-            // }
         }
     }
 
@@ -306,7 +299,6 @@ internal fun AiMessageContent(
 
         if (showLoadingDots) {
             if (displayedTextForTypewriter.isBlank() && targetPlainTextMessage.isBlank()) {
-                // Stream started, but no text received/processed yet
                 Log.d(
                     "AiMessageContent_Render",
                     "MsgID ${message.id.take(4)}: Showing loading dots (initial stream)."
@@ -323,7 +315,6 @@ internal fun AiMessageContent(
                     )
                 }
             } else {
-                // Streaming, show typewriter text
                 Log.d(
                     "AiMessageContent_Render",
                     "MsgID ${message.id.take(4)}: Showing typewriter text (len ${displayedTextForTypewriter.length}): '${
@@ -341,7 +332,7 @@ internal fun AiMessageContent(
                     )
                 }
             }
-        } else { // AI generation finished for this message (or message was not streaming)
+        } else {
             if (message.sender == Sender.AI && !message.isError) {
                 if (finalHtmlInput.isNotBlank()) {
                     Log.d(
@@ -392,7 +383,7 @@ internal fun AiMessageContent(
                         color = MaterialTheme.colorScheme.error,
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
                     )
-                } else if (message.sender != Sender.AI && message.text.isNotBlank()) { // Handle non-AI messages if this composable is ever used for them
+                } else if (message.sender != Sender.AI && message.text.isNotBlank()) {
                     Text(
                         text = message.text,
                         color = contentColor,
@@ -404,7 +395,6 @@ internal fun AiMessageContent(
             }
         }
 
-        // Context Menu
         if (isAiContextMenuVisible) {
             val localContextForToast = LocalContext.current
             val aiMenuVisibility = remember { MutableTransitionState(false) }.apply {
@@ -479,7 +469,6 @@ internal fun AiMessageContent(
             }
         }
 
-        // Selectable Text Dialog
         if (showSelectableTextDialog) {
             SelectableTextDialog(
                 textToDisplay = fullMessageTextToCopy,
@@ -488,7 +477,6 @@ internal fun AiMessageContent(
     }
 }
 
-// SelectableTextDialog Composable (remains unchanged)
 @Composable
 internal fun SelectableTextDialog(textToDisplay: String, onDismissRequest: () -> Unit) {
     Dialog(
@@ -519,7 +507,6 @@ internal fun SelectableTextDialog(textToDisplay: String, onDismissRequest: () ->
     }
 }
 
-// ThreeDotsLoadingAnimation Composable (remains unchanged)
 @Composable
 fun ThreeDotsLoadingAnimation(
     modifier: Modifier = Modifier,

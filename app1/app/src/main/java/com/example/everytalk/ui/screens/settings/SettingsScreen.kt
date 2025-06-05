@@ -40,9 +40,7 @@ fun SettingsScreen(
     var selectedModalityForNewConfig by remember { mutableStateOf<ModalityType?>(null) }
 
     var showAddFullConfigDialog by remember { mutableStateOf(false) }
-    var newFullConfigProvider by remember(allProviders) {
-        mutableStateOf(allProviders.firstOrNull() ?: "openai compatible")
-    }
+    var newFullConfigProvider by remember { mutableStateOf("") } // 初始化为空，将在适当时候设置
     var newFullConfigAddress by remember { mutableStateOf("") }
     var newFullConfigKey by remember { mutableStateOf("") }
 
@@ -120,11 +118,12 @@ fun SettingsScreen(
                 selectedModalityForNewConfig = modality
                 showSelectModalityDialog = false
 
-                val defaultProvider = allProviders.firstOrNull() ?: "openai compatible"
-                newFullConfigProvider = defaultProvider
-                newFullConfigKey = ""
+                // 关键: 在显示 AddNewFullConfigDialog 之前，设置 newFullConfigProvider 的初始值
+                val initialProvider = allProviders.firstOrNull() ?: "openai compatible"
+                newFullConfigProvider = initialProvider
+                newFullConfigKey = "" // 重置key
 
-                val providerKey = defaultProvider.lowercase().trim()
+                val providerKey = initialProvider.lowercase().trim()
                 newFullConfigAddress = if (modality == ModalityType.TEXT) {
                     defaultApiAddresses[providerKey] ?: ""
                 } else if (providerKey == "google" && modality == ModalityType.MULTIMODAL) { // Corrected enum constant
@@ -157,6 +156,27 @@ fun SettingsScreen(
             },
             allProviders = allProviders,
             onShowAddCustomProviderDialog = { showAddCustomProviderDialog = true },
+            onDeleteProvider = { providerNameToDelete -> // 新增删除 Provider 的处理
+                viewModel.deleteProvider(providerNameToDelete)
+                // 如果当前选中的 provider 被删除了，需要重置
+                if (newFullConfigProvider == providerNameToDelete) {
+                    val nextDefaultProvider = viewModel.allProviders.value.firstOrNull() ?: "openai compatible"
+                    newFullConfigProvider = nextDefaultProvider
+                    val currentModality = selectedModalityForNewConfig
+                    if (currentModality != null) {
+                        val providerKey = nextDefaultProvider.lowercase().trim()
+                        newFullConfigAddress = if (currentModality == ModalityType.TEXT) {
+                            defaultApiAddresses[providerKey] ?: ""
+                        } else if (providerKey == "google" && currentModality == ModalityType.MULTIMODAL) {
+                            defaultApiAddresses["google"] ?: ""
+                        } else {
+                            ""
+                        }
+                    } else {
+                        newFullConfigAddress = "" // 或者其他默认逻辑
+                    }
+                }
+            },
             apiAddress = newFullConfigAddress,
             onApiAddressChange = { newFullConfigAddress = it },
             apiKey = newFullConfigKey,
@@ -223,23 +243,34 @@ fun SettingsScreen(
                 if (trimmedName.isNotBlank() && !allProviders.any {
                         it.equals(trimmedName, ignoreCase = true)
                     }) {
-                    viewModel.addProvider(trimmedName)
+                    viewModel.addProvider(trimmedName) // ViewModel 会处理将其设为最新添加的
 
-                    if (showAddFullConfigDialog && newFullConfigProvider != trimmedName) {
-                        newFullConfigProvider = trimmedName
+                    // 当添加新的自定义平台后，自动在 AddNewFullConfigDialog 中选中它
+                    if (showAddFullConfigDialog) {
+                        newFullConfigProvider = trimmedName // 选中新添加的平台
                         val currentModality = selectedModalityForNewConfig
                         val providerKey = trimmedName.lowercase().trim()
 
                         if (currentModality != null) {
                             newFullConfigAddress = if (currentModality == ModalityType.TEXT) {
-                                defaultApiAddresses[providerKey] ?: ""
-                            } else if (providerKey == "google" && currentModality == ModalityType.MULTIMODAL) { // Corrected enum constant
+                                defaultApiAddresses[providerKey] ?: (defaultApiAddresses[providerKey.replace(" ", "")] ?: "") // 尝试移除空格再查找
+                            } else if (providerKey == "google" && currentModality == ModalityType.MULTIMODAL) {
                                 defaultApiAddresses["google"] ?: ""
                             } else {
-                                ""
+                                // 对于其他类型的模型或新的自定义平台，可能没有预设地址
+                                // 特别是新添加的 OpenRouter，如果 modality 不是 TEXT，这里会是空
+                                // 如果是 OpenRouter 且是 TEXT，则会使用 SettingsUtils 中定义的地址
+                                if (providerKey == "openrouter" && currentModality == ModalityType.TEXT) {
+                                    defaultApiAddresses["openrouter"] ?: ""
+                                } else {
+                                    "" // 用户需要手动输入
+                                }
                             }
+                        } else {
+                            newFullConfigAddress = "" // 如果没有选择模态，则清空地址
                         }
                     }
+
                     showAddCustomProviderDialog = false
                     newCustomProviderNameInput = ""
                 }

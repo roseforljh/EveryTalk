@@ -1,6 +1,6 @@
-package com.example.everytalk.ui.screens.BubbleMain.Main // 确保包名正确
+package com.example.everytalk.ui.screens.BubbleMain.Main
 
-import android.net.Uri // 确保导入 Uri
+import android.net.Uri
 import android.util.Log
 import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.foundation.background
@@ -8,8 +8,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons // 导入 Icons
-import androidx.compose.material.icons.outlined.Description // 导入文档图标
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -30,13 +30,9 @@ import coil3.request.crossfade
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.DataClass.Sender
 import com.example.everytalk.StateControler.AppViewModel
-import com.example.everytalk.model.SelectedMediaItem // 导入 SelectedMediaItem
+import com.example.everytalk.model.SelectedMediaItem
 import com.example.everytalk.ui.screens.BubbleMain.AiMessageContent
 
-// 确保这些组件也被正确导入或定义在同一个文件中
-// import com.example.everytalk.ui.screens.BubbleMain.ReasoningToggleAndContent
-// import com.example.everytalk.ui.screens.BubbleMain.UserOrErrorMessageContent
-// import com.example.everytalk.ui.screens.BubbleMain.ThreeDotsWaveAnimation
 
 fun Color.toHexCss(): String {
     return String.format("#%06X", 0xFFFFFF and this.toArgb())
@@ -100,7 +96,6 @@ fun MessageBubble(
         modifier = modifier.fillMaxWidth(),
         horizontalAlignment = if (isAI) Alignment.Start else Alignment.End
     ) {
-        // --- 用户发送的图片显示区域 (保持您之前的逻辑) ---
         if (!isAI && !message.imageUrls.isNullOrEmpty()) {
             Column(
                 modifier = Modifier
@@ -153,22 +148,18 @@ fun MessageBubble(
                 }
             }
         }
-        // --- 图片显示区域结束 ---
-
-        // --- 用户发送的文档附件显示区域 (新增) ---
         val documentAttachments = remember(message.attachments) {
             message.attachments?.filterIsInstance<SelectedMediaItem.GenericFile>()?.filter {
-                // 根据 MIME 类型判断是否为常见文档类型 (您可以扩展这个判断)
                 val mime = it.mimeType?.lowercase()
                 mime != null && (
                         mime.startsWith("application/pdf") ||
                                 mime.startsWith("application/msword") ||
-                                mime.startsWith("application/vnd.openxmlformats-officedocument.wordprocessingml.document") || // docx
-                                mime.startsWith("text/") || // txt, csv, html etc.
+                                mime.startsWith("application/vnd.openxmlformats-officedocument.wordprocessingml.document") ||
+                                mime.startsWith("text/") ||
                                 mime.startsWith("application/vnd.ms-excel") ||
-                                mime.startsWith("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") || // xlsx
+                                mime.startsWith("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") ||
                                 mime.startsWith("application/vnd.ms-powerpoint") ||
-                                mime.startsWith("application/vnd.openxmlformats-officedocument.presentationml.presentation") // pptx
+                                mime.startsWith("application/vnd.openxmlformats-officedocument.presentationml.presentation")
                         )
             } ?: emptyList()
         }
@@ -176,36 +167,33 @@ fun MessageBubble(
         if (!isAI && documentAttachments.isNotEmpty()) {
             Column(
                 modifier = Modifier
-                    .widthIn(max = userMessageBlockMaxWidth) // 与图片和文本块宽度一致
-                    .padding(bottom = if (message.text.isNotBlank() || message.imageUrls.isNullOrEmpty()) 6.dp else 0.dp), // 如果下方有文本，则加间距
-                horizontalAlignment = Alignment.End // 文档附件也右对齐
+                    .widthIn(max = userMessageBlockMaxWidth)
+                    .padding(bottom = if (message.text.isNotBlank() || message.imageUrls.isNullOrEmpty()) 6.dp else 0.dp),
+                horizontalAlignment = Alignment.End
             ) {
                 documentAttachments.forEachIndexed { index, doc ->
                     Log.d(
                         "MessageBubbleUserDoc",
                         "Displaying document: ${doc.displayName}, MIME: ${doc.mimeType}"
                     )
-                    // 简单的文档预览：图标 + 文件名
-                    // 您可以根据需要使这个预览更复杂，例如添加点击下载/查看的逻辑
                     Row(
                         modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
-                            .background(userBubbleBackgroundColor.copy(alpha = 0.7f)) // Slightly different background
+                            .background(userBubbleBackgroundColor.copy(alpha = 0.7f))
                             .border(1.dp, Color.LightGray, RoundedCornerShape(8.dp))
                             .padding(horizontal = 10.dp, vertical = 6.dp)
-                            .widthIn(max = userMessageBlockMaxWidth * 0.8f) // 限制单个文档预览宽度
+                            .widthIn(max = userMessageBlockMaxWidth * 0.8f)
                             .clickable {
                                 Log.d(
                                     "MessageBubbleUserDoc",
                                     "Clicked on document: ${doc.displayName}"
                                 )
-                                // TODO: 实现点击文档后的操作，例如打开或下载
                                 viewModel.showSnackbar("点击了文档: ${doc.displayName}")
                             },
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            imageVector = Icons.Outlined.Description, // 通用文档图标
+                            imageVector = Icons.Outlined.Description,
                             contentDescription = "文档图标",
                             modifier = Modifier.size(24.dp),
                             tint = userContentColor.copy(alpha = 0.7f)
@@ -220,19 +208,15 @@ fun MessageBubble(
                         )
                     }
                     if (index < documentAttachments.size - 1) {
-                        Spacer(Modifier.height(4.dp)) // 多个文档之间的间距
+                        Spacer(Modifier.height(4.dp))
                     }
                 }
             }
         }
-        // --- 文档附件显示区域结束 ---
 
-
-        // --- AI 消息或用户文本消息的气泡主体 (您的原始代码结构) ---
         Column(
             modifier = Modifier.widthIn(max = if (isAI) aiMessageBlockMaxWidth else userMessageBlockMaxWidth),
         ) {
-            // AI 加载占位符气泡 (你原来的逻辑)
             if (isAI && showLoadingBubble) {
                 Box(modifier = Modifier.padding(start = 16.dp)) {
                     Surface(
@@ -335,7 +319,7 @@ fun MessageBubble(
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 0.dp)
                         )
                     }
-                } else if (message.contentStarted && message.text.isBlank() && isMainContentStreaming) { /* Fallback or placeholder if needed */
+                } else if (message.contentStarted && message.text.isBlank() && isMainContentStreaming) {
                 }
 
                 val showSourcesButton =
@@ -364,7 +348,7 @@ fun MessageBubble(
                 }
             }
 
-            if (!isAI && message.text.isNotBlank() && !message.isError) { // 用户文本消息 (确保有文本才显示这个气泡)
+            if (!isAI && message.text.isNotBlank() && !message.isError) {
                 UserOrErrorMessageContent(
                     message = message,
                     displayedText = displayedMainTextForUserOrError,
@@ -376,7 +360,7 @@ fun MessageBubble(
                     onUserInteraction = onUserInteraction,
                     onEditRequest = onEditRequest,
                     onRegenerateRequest = onRegenerateRequest,
-                    modifier = Modifier // 您的原始 Modifier
+                    modifier = Modifier
                 )
             } else if (isAI && message.isError && !showLoadingBubble) {
                 Column(

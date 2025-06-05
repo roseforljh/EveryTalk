@@ -1,4 +1,4 @@
-package com.example.everytalk.StateControler // 请确认包名
+package com.example.everytalk.StateControler
 
 import android.app.Application
 import android.net.Uri
@@ -14,9 +14,7 @@ import com.example.everytalk.data.DataClass.Sender
 import com.example.everytalk.data.DataClass.WebSearchResult
 import com.example.everytalk.data.local.SharedPreferencesDataSource
 import com.example.everytalk.data.network.ApiClient
-// --- 修改导入以使用新的 SelectedMediaItem ---
-import com.example.everytalk.model.SelectedMediaItem // <<< 修改这里的导入路径
-// --- 导入结束 ---
+import com.example.everytalk.model.SelectedMediaItem
 import com.example.everytalk.ui.screens.viewmodel.ConfigManager
 import com.example.everytalk.ui.screens.viewmodel.DataPersistenceManager
 import com.example.everytalk.ui.screens.viewmodel.HistoryManager
@@ -37,7 +35,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.util.UUID
-
 
 class AppViewModel(
     application: Application,
@@ -123,32 +120,45 @@ class AppViewModel(
     val isSearchActiveInDrawer: StateFlow<Boolean> = _isSearchActiveInDrawer.asStateFlow()
     private val _searchQueryInDrawer = MutableStateFlow("")
     val searchQueryInDrawer: StateFlow<String> = _searchQueryInDrawer.asStateFlow()
+
     private val _customProviders = MutableStateFlow<Set<String>>(emptySet())
+
+    private val predefinedPlatformsList = listOf(
+        "openai compatible",
+        "google",
+        "硅基流动",
+        "阿里云百炼",
+        "火山引擎",
+        "深度求索",
+        "OpenRouter" // OpenRouter 移到列表末尾
+    )
+
     val allProviders: StateFlow<List<String>> = combine(
         _customProviders
-    ) { customsParamArray: Array<Set<String>> ->
-        val customs = customsParamArray[0]
-        val predefinedPlatforms =
-            listOf("openai compatible", "google", "硅基流动", "阿里云百炼", "火山引擎", "深度求索")
-        val combinedList = (predefinedPlatforms + customs.toList()).distinct()
-        val predefinedOrderMap = predefinedPlatforms.withIndex().associate { it.value to it.index }
+    ) { customsArray: Array<Set<String>> ->
+        val customs = customsArray[0]
+        val combinedList = (predefinedPlatformsList + customs.toList()).distinct()
+        val predefinedOrderMap = predefinedPlatformsList.withIndex().associate { it.value.lowercase().trim() to it.index }
         combinedList.sortedWith(compareBy<String> { platform ->
-            predefinedOrderMap[platform] ?: (predefinedPlatforms.size + customs.indexOf(platform)
+            predefinedOrderMap[platform.lowercase().trim()] ?: (predefinedPlatformsList.size + customs.indexOfFirst { it.equals(platform, ignoreCase = true) }
                 .let { if (it == -1) Int.MAX_VALUE else it })
         }.thenBy { it })
     }.stateIn(
         viewModelScope,
         SharingStarted.Eagerly,
-        listOf("openai compatible", "google", "硅基流动", "阿里云百炼", "火山引擎", "深度求索")
+        predefinedPlatformsList
     )
     val isWebSearchEnabled: StateFlow<Boolean> get() = stateHolder._isWebSearchEnabled.asStateFlow()
     val showSourcesDialog: StateFlow<Boolean> get() = stateHolder._showSourcesDialog.asStateFlow()
     val sourcesForDialog: StateFlow<List<WebSearchResult>> get() = stateHolder._sourcesForDialog.asStateFlow()
 
-
     init {
         Log.d(TAG_APP_VIEW_MODEL, "ViewModel 初始化开始")
-        // ... (大部分 init 块保持不变) ...
+
+        viewModelScope.launch(Dispatchers.IO) {
+            _customProviders.value = dataSource.loadCustomProviders()
+        }
+
         persistenceManager.loadInitialData { initialConfigPresent, initialHistoryPresent ->
             Log.d(
                 TAG_APP_VIEW_MODEL,
@@ -198,15 +208,14 @@ class AppViewModel(
 
         viewModelScope.launch(Dispatchers.IO) {
             ApiClient.preWarm()
-            apiHandler // Ensure lazy init
-            configManager // Ensure lazy init
-            messageSender // Ensure lazy init
+            apiHandler
+            configManager
+            messageSender
             Log.d(
                 TAG_APP_VIEW_MODEL,
                 "ViewModel IO pre-warming of ApiClient and Handlers completed."
             )
         }
-        // ... (init 块的剩余部分) ...
         viewModelScope.launch(Dispatchers.Default) {
             Log.d(TAG_APP_VIEW_MODEL, "开始后台批量预处理历史消息的 htmlContent...")
             val originalLoadedHistory = stateHolder._historicalConversations.value.toList()
@@ -280,7 +289,6 @@ class AppViewModel(
         list1: List<Message>?,
         list2: List<Message>?
     ): Boolean {
-        // ... (实现保持不变) ...
         if (list1 == null && list2 == null) return true
         if (list1 == null || list2 == null) return false
         val filteredList1 = filterMessagesForComparison(list1)
@@ -297,7 +305,6 @@ class AppViewModel(
     }
 
     private fun filterMessagesForComparison(messagesToFilter: List<Message>): List<Message> {
-        // ... (实现保持不变) ...
         return messagesToFilter.filter { msg ->
             (msg.sender != Sender.System || msg.isPlaceholderName) &&
                     (msg.sender == Sender.User ||
@@ -313,16 +320,13 @@ class AppViewModel(
     }
 
     fun addProvider(providerName: String) {
-        // ... (实现保持不变) ...
         val trimmedName = providerName.trim()
         if (trimmedName.isNotBlank()) {
             viewModelScope.launch(Dispatchers.IO) {
                 val currentCustomProviders = _customProviders.value.toMutableSet()
-                val predefinedForCheck = listOf(
-                    "openai compatible", "google", "硅基流动", "阿里云百炼", "火山引擎", "深度求索"
-                ).map { it.lowercase() }
-                if (predefinedForCheck.contains(trimmedName.lowercase())) {
-                    withContext(Dispatchers.Main) { showSnackbar("平台名称 '$trimmedName' 是预设名称，无法添加。") }
+
+                if (predefinedPlatformsList.any { it.equals(trimmedName, ignoreCase = true) }) {
+                    withContext(Dispatchers.Main) { showSnackbar("平台名称 '$trimmedName' 是预设名称或已存在，无法添加。") }
                     return@launch
                 }
                 if (currentCustomProviders.any { it.equals(trimmedName, ignoreCase = true) }) {
@@ -337,6 +341,42 @@ class AppViewModel(
             }
         } else {
             showSnackbar("平台名称不能为空")
+        }
+    }
+
+    fun deleteProvider(providerName: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val trimmedProviderName = providerName.trim()
+
+            if (predefinedPlatformsList.any { it.equals(trimmedProviderName, ignoreCase = true) }) {
+                withContext(Dispatchers.Main) {
+                    showSnackbar("预设平台 '$trimmedProviderName' 不可删除。")
+                }
+                return@launch
+            }
+
+            val currentCustomProviders = _customProviders.value.toMutableSet()
+            val removed = currentCustomProviders.removeIf { it.equals(trimmedProviderName, ignoreCase = true) }
+
+            if (removed) {
+                _customProviders.value = currentCustomProviders.toSet()
+                dataSource.saveCustomProviders(currentCustomProviders.toSet())
+
+                val configsToDelete = stateHolder._apiConfigs.value.filter {
+                    it.provider.equals(trimmedProviderName, ignoreCase = true)
+                }
+                configsToDelete.forEach { config ->
+                    configManager.deleteConfig(config)
+                }
+                withContext(Dispatchers.Main) {
+                    showSnackbar("模型平台 '$trimmedProviderName' 已删除")
+                }
+                Log.i(TAG_APP_VIEW_MODEL, "删除了自定义提供商: $trimmedProviderName 和相关配置")
+            } else {
+                withContext(Dispatchers.Main) {
+                    showSnackbar("未能删除模型平台 '$trimmedProviderName'，可能它不是一个自定义平台。")
+                }
+            }
         }
     }
 
@@ -360,17 +400,13 @@ class AppViewModel(
         stateHolder._text.value = newText
     }
 
-    // --- 修改 onSendMessage 方法以使用 List<SelectedMediaItem> ---
     fun onSendMessage(
         messageText: String,
         isFromRegeneration: Boolean = false,
-        attachments: List<SelectedMediaItem> = emptyList() // <<< 修改参数类型
+        attachments: List<SelectedMediaItem> = emptyList()
     ) {
-        // MessageSender 内部也需要相应地更新以处理 SelectedMediaItem
-        // 这里的 images 参数名可以改为 attachments 以更准确地反映其内容
         messageSender.sendMessage(messageText, isFromRegeneration, attachments)
     }
-    // --- 修改结束 ---
 
     fun onEditDialogTextChanged(newText: String) {
         stateHolder._editDialogInputText.value = newText
@@ -385,7 +421,6 @@ class AppViewModel(
     }
 
     fun confirmMessageEdit() {
-        // ... (实现保持不变) ...
         val messageIdToEdit = _editingMessageId.value ?: return
         val updatedText = stateHolder._editDialogInputText.value.trim()
         viewModelScope.launch {
@@ -414,7 +449,6 @@ class AppViewModel(
         stateHolder._editDialogInputText.value = ""
     }
 
-    // --- 修改 regenerateAiResponse 方法以处理 SelectedMediaItem ---
     fun regenerateAiResponse(originalUserMessage: Message) {
         if (originalUserMessage.sender != Sender.User) {
             showSnackbar("只能为您的消息重新生成回答"); return
@@ -426,20 +460,15 @@ class AppViewModel(
         val originalUserMessageText = originalUserMessage.text
         val originalUserMessageId = originalUserMessage.id
 
-        // 将 imageUrls (String) 转换为 SelectedMediaItem
         val originalAttachments = originalUserMessage.imageUrls?.mapNotNull { urlString ->
             try {
                 if (urlString.startsWith("content://") || urlString.startsWith("http://") || urlString.startsWith(
                         "https://"
                     )
                 ) {
-                    // 对于重新生成，我们只有URI，所以创建 ImageFromUri
-                    // 如果 Message 对象中存储了更多关于原始文件的信息（如文件名、MIME类型），
-                    // 那么可以创建更精确的 SelectedMediaItem.GenericFile
-                    // 这里简化为只处理图片URI
                     SelectedMediaItem.ImageFromUri(Uri.parse(urlString))
                 } else {
-                    null // 或者根据需要处理本地文件路径等
+                    null
                 }
             } catch (e: Exception) {
                 Log.w(TAG_APP_VIEW_MODEL, "无法解析重新生成消息中的图片URL: $urlString", e)
@@ -484,15 +513,13 @@ class AppViewModel(
                 stateHolder.messages.removeAt(userMessageIndex)
             }
             historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
-            // 调用更新后的 onSendMessage
-            onSendMessage( // 使用 this.onSendMessage 以明确
+            onSendMessage(
                 messageText = originalUserMessageText,
                 isFromRegeneration = true,
                 attachments = originalAttachments
             )
         }
     }
-    // --- 修改结束 ---
 
     fun triggerScrollToBottom() {
         viewModelScope.launch { stateHolder._scrollToBottomEvent.tryEmit(Unit) }
@@ -503,7 +530,6 @@ class AppViewModel(
     }
 
     fun startNewChat() {
-        // ... (实现保持不变) ...
         dismissEditDialog(); dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("开始新聊天")
         viewModelScope.launch {
@@ -517,7 +543,6 @@ class AppViewModel(
     }
 
     fun loadConversationFromHistory(index: Int) {
-        // ... (实现保持不变) ...
         val conversationList = stateHolder._historicalConversations.value
         if (index < 0 || index >= conversationList.size) {
             showSnackbar("无法加载对话：无效的索引"); return
@@ -566,7 +591,6 @@ class AppViewModel(
     }
 
     fun deleteConversation(indexToDelete: Int) {
-        // ... (实现保持不变) ...
         val currentLoadedIndex = stateHolder._loadedHistoryIndex.value
         if (indexToDelete < 0 || indexToDelete >= stateHolder._historicalConversations.value.size) {
             showSnackbar("无法删除：无效的索引"); return
@@ -597,7 +621,6 @@ class AppViewModel(
     }
 
     fun clearAllConversations() {
-        // ... (实现保持不变) ...
         dismissEditDialog(); dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("清除所有历史记录")
         viewModelScope.launch {
@@ -627,6 +650,7 @@ class AppViewModel(
     fun deleteConfig(config: ApiConfig) = configManager.deleteConfig(config)
     fun clearAllConfigs() = configManager.clearAllConfigs()
     fun selectConfig(config: ApiConfig) = configManager.selectConfig(config)
+
     fun onAnimationComplete(messageId: String) {
         viewModelScope.launch(Dispatchers.Main.immediate) {
             if (stateHolder.messageAnimationStates[messageId] != true) {
@@ -640,7 +664,6 @@ class AppViewModel(
     }
 
     fun getConversationPreviewText(index: Int): String {
-        // ... (实现保持不变) ...
         val conversation = stateHolder._historicalConversations.value.getOrNull(index)
             ?: return "对话 ${index + 1}"
         val placeholderTitleMsg =
@@ -660,7 +683,6 @@ class AppViewModel(
     }
 
     fun showRenameDialog(index: Int) {
-        // ... (实现保持不变) ...
         if (index >= 0 && index < stateHolder._historicalConversations.value.size) {
             _renamingIndexState.value = index
             val currentPreview = getConversationPreviewText(index)
@@ -681,7 +703,6 @@ class AppViewModel(
     }
 
     fun renameConversation(index: Int, newName: String) {
-        // ... (实现保持不变) ...
         val trimmedNewName = newName.trim()
         if (trimmedNewName.isBlank()) {
             showSnackbar("新名称不能为空"); return
@@ -747,7 +768,6 @@ class AppViewModel(
     }
 
     private fun onAiMessageFullTextChanged(messageId: String, currentFullText: String) {
-        // ... (实现保持不变) ...
         viewModelScope.launch(Dispatchers.Main.immediate) {
             val messageIndex = stateHolder.messages.indexOfFirst { it.id == messageId }
             if (messageIndex != -1) {
@@ -804,7 +824,6 @@ class AppViewModel(
     }
 
     override fun onCleared() {
-        // ... (实现保持不变) ...
         Log.d(TAG_APP_VIEW_MODEL, "onCleared 开始, 销毁 WebViewPool")
         try {
             webViewPool.destroyAll()
@@ -825,6 +844,7 @@ class AppViewModel(
                 persistenceManager.saveLastOpenChat(finalCurrentChatMessages)
                 persistenceManager.saveApiConfigs(finalApiConfigs)
                 persistenceManager.saveSelectedConfigIdentifier(finalSelectedConfigId)
+                dataSource.saveCustomProviders(_customProviders.value)
             }
         } catch (e: Exception) {
             Log.e(TAG_APP_VIEW_MODEL, "onCleared: Error during runBlocking save operations", e)

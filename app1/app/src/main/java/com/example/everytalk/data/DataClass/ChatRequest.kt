@@ -4,23 +4,6 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Contextual
 
-// 确保 GenerationConfig 和 ThinkingConfig 已定义（例如在 GenerationRelatedConfigs.kt 或此文件顶部）
-// 假设它们已按之前讨论的方式定义：
-// @Serializable
-// data class ThinkingConfig(
-//    @SerialName("include_thoughts") val includeThoughts: Boolean? = null,
-//    @SerialName("thinking_budget") val thinkingBudget: Int? = null
-// )
-//
-// @Serializable
-// data class GenerationConfig(
-//    @SerialName("temperature") val temperature: Float? = null,
-//    @SerialName("top_p") val topP: Float? = null,
-//    @SerialName("max_output_tokens") val maxOutputTokens: Int? = null,
-//    @SerialName("thinking_config") val thinkingConfig: ThinkingConfig? = null
-// )
-
-
 @Serializable
 data class ChatRequest(
     @SerialName("messages")

@@ -74,10 +74,10 @@ object ApiClient {
     }
 
     private val backendProxyUrls = listOf(
-        "https://backend-717323967862.europe-west1.run.app/chat",//google
+        "https://backdatalk-717323967862.europe-west1.run.app/chat",//google
         "https://uoseegiydwgx.us-west-1.clawcloudrun.com/chat",//claw could run
         "https://kunze999-backendai.hf.space/chat",//hugging face
-        "https://backdaitalk-production.up.railway.app/chat",//railway
+        //"https://backdaitalk-production.up.railway.app/chat",//railway
         //"http://192.168.0.1:7860/chat" // 您的本地地址，请确保可访问
     )
 

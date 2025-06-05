@@ -12,11 +12,6 @@ import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerializationException
 
-// MapSerializer 可能不再需要，如果其他地方也没用的话可以移除
-// import kotlinx.serialization.builtins.MapSerializer
-
-
-// --- 常量定义 ---
 private const val TAG = "SPDataSource"
 private const val PREFS_NAME = "app_settings"
 private const val KEY_API_CONFIG_LIST = "api_config_list_v2"
@@ -25,25 +20,22 @@ private const val KEY_CHAT_HISTORY = "chat_history_v1"
 private const val KEY_LAST_OPEN_CHAT = "last_open_chat_v1"
 private const val KEY_CUSTOM_PROVIDERS = "custom_providers_v1"
 
-// 所有与 KEY_SAVED_MODEL_NAMES_... 相关的常量已移除
 
 private val json = Json {
     ignoreUnknownKeys = true
     prettyPrint = false
-    encodeDefaults = true
+    encodeDefaults = false // 设置为 false 以减少存储默认值
     isLenient = true
 }
 
 class SharedPreferencesDataSource(context: Context) {
     private val sharedPrefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    // Serializers
     private val apiConfigListSerializer: KSerializer<List<ApiConfig>> =
         ListSerializer(ApiConfig.serializer())
     private val chatHistorySerializer: KSerializer<List<List<Message>>> =
         ListSerializer(ListSerializer(Message.serializer()))
 
-    // stringToStringSetMapSerializer 已移除，因为它仅用于模型名称历史建议
     private val singleChatSerializer: KSerializer<List<Message>> =
         ListSerializer(Message.serializer())
     private val customProvidersSerializer: KSerializer<Set<String>> =
@@ -148,7 +140,6 @@ class SharedPreferencesDataSource(context: Context) {
     fun clearApiConfigs() = remove(KEY_API_CONFIG_LIST)
     fun clearChatHistory() = remove(KEY_CHAT_HISTORY)
 
-    // --- 所有与模型名称历史建议相关的方法均已移除 ---
 
     fun saveLastOpenChatInternal(messages: List<Message>) {
         if (messages.isEmpty()) remove(KEY_LAST_OPEN_CHAT)

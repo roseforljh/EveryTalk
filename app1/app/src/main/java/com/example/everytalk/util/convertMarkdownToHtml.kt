@@ -21,7 +21,7 @@ private val REGEX_TRAILING_NEWLINES =
     Regex("(```[^\\n]*\\n(?:[^\\n]*\\n)*?[^\\n]*```)\n?([ \\t]*)(?!\n\n)")
 private val REGEX_EXCESSIVE_NEWLINES = Regex("\n{3,}")
 private val REGEX_CUSTOM_REPLACE = Regex("\\\$\\{([^}]+)\\}")
-private val REGEX_HEADING_PREFIX = Regex("(?m)^(?<!\n)(#{1,6} +)")
+private val REGEX_HEADING_PREFIX = Regex("(?m)^[ \t]{0,3}(#{1,6} +)")
 private val REGEX_BULLET_PREFIX = Regex("(?m)^(?<!\\n)([ \\t]*)•[ \\t]+")
 
 class CMMathNode(var latexContent: String, var isBlock: Boolean) : CustomNode() {
@@ -132,11 +132,8 @@ internal fun convertMarkdownToHtml(originalMarkdown: String): String {
         .nodeRendererFactory(CustomMathHtmlNodeRendererFactory()).build()
 
     val mathPattern = Pattern.compile(
-        """(?<!\\)\\begin\{aligned\}(.*?)(?<!\\)\\end\{aligned\}|""" +
-                """(?<!\\)\\\((.*?)(?<!\\)\\\)|""" +
-                """(?<!\\)\$((?:[^$\s\\](?:\\.)*?))(?<!\\)\$|""" + // This already captures single $...$ if not greedy and not matching $$
-                """(?<!\\)\$\$(.*?)(?<!\\)\$\$|""" +
-                """(?<!\\)\\\[(.*?)(?<!\\)\\]""", Pattern.DOTALL
+        """(?<!\\)\\begin\{aligned\}(.*?)(?<!\\)\\end\{aligned\}|""" + // group 1
+                """(?<!\\)\\\((.*?)(?<!\\)\\\)""", Pattern.DOTALL    // group 2
     )
 
     // Pattern for the specific $...$ case shown in the image, ensuring it's not part of $$...$$
@@ -287,32 +284,16 @@ internal fun convertMarkdownToHtml(originalMarkdown: String): String {
                     val content: String
                     val isBlock: Boolean
                     when {
-                        delimitedMatcher.group(1) != null && fullMatch.startsWith("\\begin{aligned}") -> {
+                        delimitedMatcher.group(1) != null -> { // Aligned environment
                             content = delimitedMatcher.group(1).trim(); isBlock = true
                         }
-
-                        delimitedMatcher.group(2) != null && fullMatch.startsWith("\\(") -> {
+                        delimitedMatcher.group(2) != null -> { // \(...\)
                             content = delimitedMatcher.group(2).trim(); isBlock = false
                         }
-
-                        delimitedMatcher.group(3) != null && fullMatch.startsWith("$") && !fullMatch.startsWith(
-                            "$$"
-                        ) -> {
-                            content = delimitedMatcher.group(3).trim(); isBlock = false
-                        }
-
-                        delimitedMatcher.group(4) != null && fullMatch.startsWith("$$") -> {
-                            content = delimitedMatcher.group(4).trim(); isBlock = true
-                        }
-
-                        delimitedMatcher.group(5) != null && fullMatch.startsWith("\\[") -> {
-                            content = delimitedMatcher.group(5).trim(); isBlock = true
-                        }
-
                         else -> {
                             Log.w(
                                 tag,
-                                "AST Visitor: Delimited regex '${fullMatch.takeForLog(30)}' no group. Fallback."
+                                "AST Visitor: Delimited regex '${fullMatch.takeForLog(30)}' no recognized group. Fallback."
                             )
                             addBareLatexNodes(fullMatch, newNodes)
                             lastEndDelimitedMatch = delimitedMatcher.end()
@@ -353,36 +334,19 @@ internal fun convertMarkdownToHtml(originalMarkdown: String): String {
             }
 
             override fun visit(fencedCodeBlock: FencedCodeBlock) {
-                super.visit(fencedCodeBlock)
                 val info = fencedCodeBlock.info?.trim()?.lowercase()
                 val literal = fencedCodeBlock.literal
-                val looksLikeMath = literal.count { it == '$' || it == '\\' } > literal.length / 10
-                val processAsMath =
-                    info.isNullOrEmpty() || info in listOf("math", "latex", "katex", "tex") ||
-                            (info !in listOf(
-                                "python",
-                                "java",
-                                "javascript",
-                                "c++",
-                                "csharp",
-                                "kotlin",
-                                "swift",
-                                "rust",
-                                "go",
-                                "html",
-                                "css",
-                                "xml",
-                                "json",
-                                "yaml",
-                                "sql",
-                                "bash",
-                                "shell"
-                            ) && looksLikeMath)
-                if (processAsMath) {
-                    Log.d(tag, "AST Visitor: Processing FencedCodeBlock (info: $info) for math.")
-                    processTextualContent(fencedCodeBlock, literal)
+
+                if (info != null && info in listOf("math", "latex", "katex", "tex")) {
+                    Log.d(tag, "AST Visitor: FencedCodeBlock (info: $info) is explicit KaTeX block. Replacing with CMMathNode.")
+                    val mathNode = CMMathNode(literal.trim(), true) // isBlock = true for fenced math
+                    fencedCodeBlock.insertAfter(mathNode)
+                    fencedCodeBlock.unlink()
+                    // No call to super.visit(fencedCodeBlock) as we've replaced it.
                 } else {
-                    Log.d(tag, "AST Visitor: Skipping FencedCodeBlock (info: $info).")
+                    Log.d(tag, "AST Visitor: FencedCodeBlock (info: $info) is not an explicit KaTeX block. Default handling.")
+                    // Default commonmark rendering for non-math code blocks
+                    super.visit(fencedCodeBlock)
                 }
             }
 

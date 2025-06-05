@@ -1,4 +1,4 @@
-package com.example.everytalk.ui.screens.BubbleMain.Main // 您的实际包名，确保一致
+package com.example.everytalk.ui.screens.BubbleMain.Main
 
 import android.util.Log
 import androidx.compose.animation.AnimatedVisibility
@@ -58,16 +58,9 @@ internal fun ReasoningToggleAndContent(
     val focusManager = LocalFocusManager.current
     var showReasoningDialog by remember(currentMessageId) { mutableStateOf(false) }
 
-    // --- 修改点1：恢复“流式思考框”的原始显隐逻辑 ---
-    // 条件：1. 思考过程正在流式传输
-    //       2. 消息没有错误
-    //       3. 并且主要回复内容还没有开始
-    val showInlineStreamingBox = isReasoningStreaming && !messageIsError && !mainContentHasStarted // <--- 恢复原始逻辑
+    val showInlineStreamingBox = isReasoningStreaming && !messageIsError && !mainContentHasStarted
 
-    // --- 修改点2：“小黑点”上三点动画的显隐逻辑 ---
-    // 为了在“深度思考输出屎”时不显示此动画，将其设置为false。
-    // toggle本身（静态点）仍会根据 displayedReasoningText.isNotBlank() 显示。
-    val showDotsAnimationOnToggle = false // <--- 确保toggle上的波浪动画不显示
+    val showDotsAnimationOnToggle = false
 
     val boxBackgroundColor = Color.White.copy(alpha = 0.95f)
     val scrimColor = boxBackgroundColor
@@ -81,8 +74,6 @@ internal fun ReasoningToggleAndContent(
         modifier = modifier,
         horizontalAlignment = Alignment.Start
     ) {
-        // 1. --- 流式“思考框” ---
-        // 现在会根据恢复的 showInlineStreamingBox 条件来显示或隐藏
         AnimatedVisibility(
             visible = showInlineStreamingBox,
             enter = fadeIn(tween(150)) + expandVertically(
@@ -136,7 +127,7 @@ internal fun ReasoningToggleAndContent(
                             style = MaterialTheme.typography.bodySmall.copy(lineHeight = 18.sp),
                         )
                     }
-                    Box( // Top Scrim
+                    Box(
                         modifier = Modifier
                             .align(Alignment.TopCenter)
                             .fillMaxWidth()
@@ -150,7 +141,7 @@ internal fun ReasoningToggleAndContent(
                                 )
                             )
                     )
-                    Box( // Bottom Scrim
+                    Box(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
                             .fillMaxWidth()
@@ -166,15 +157,13 @@ internal fun ReasoningToggleAndContent(
                     )
                 }
             }
-        } // 流式“思考框”的 AnimatedVisibility 结束
-
-        // --- 2. “小黑点” Toggle ---
+        }
         val shouldShowReviewDotToggle = isReasoningComplete && displayedReasoningText.isNotBlank() && !messageIsError
         if (shouldShowReviewDotToggle) {
             Box(
                 modifier = Modifier.padding(
                     start = 8.dp,
-                    top = if (showInlineStreamingBox) 2.dp else 0.dp, // 如果思考框可见，则微调toggle位置
+                    top = if (showInlineStreamingBox) 2.dp else 0.dp,
                     bottom = 0.dp
                 )
             ) {
@@ -192,12 +181,11 @@ internal fun ReasoningToggleAndContent(
                             showReasoningDialog = true
                         }
                 ) {
-                    // 由于 showDotsAnimationOnToggle 设置为 false，这里总会进入 else 分支显示静态点
                     if (showDotsAnimationOnToggle && !showReasoningDialog) {
                         ThreeDotsWaveAnimation(
                             dotColor = reasoningToggleDotColor, dotSize = 7.dp, spacing = 5.dp
                         )
-                    } else { // 显示静态点
+                    } else {
                         val circleIconSize by animateDpAsState(
                             targetValue = if (showReasoningDialog) 10.dp else 7.dp,
                             animationSpec = tween(
@@ -214,10 +202,8 @@ internal fun ReasoningToggleAndContent(
                     }
                 }
             }
-        } // “小黑点” Toggle 结束
-    } // 根Column结束
-
-    // --- 3. 推理内容的 Dialog ---
+        }
+    }
     if (showReasoningDialog) {
         Dialog(
             onDismissRequest = { showReasoningDialog = false },
@@ -259,7 +245,6 @@ internal fun ReasoningToggleAndContent(
                             style = MaterialTheme.typography.bodyLarge
                         )
                     }
-                    // 对话框底部的三点动画逻辑保持不变
                     val showDialogLoadingAnimation =
                         isReasoningStreaming && !isReasoningComplete && !messageIsError && !mainContentHasStarted
                     if (showDialogLoadingAnimation) {
@@ -282,10 +267,9 @@ internal fun ReasoningToggleAndContent(
                 }
             }
         }
-    } // Dialog 结束
+    }
 }
 
-// ThreeDotsWaveAnimation Composable (保持不变)
 @Composable
 fun ThreeDotsWaveAnimation(
     modifier: Modifier = Modifier,

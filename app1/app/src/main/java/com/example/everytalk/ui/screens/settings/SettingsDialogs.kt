@@ -13,6 +13,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -283,6 +284,7 @@ internal fun AddNewFullConfigDialog(
     onProviderChange: (String) -> Unit,
     allProviders: List<String>,
     onShowAddCustomProviderDialog: () -> Unit,
+    onDeleteProvider: (String) -> Unit, // 新增回调用于删除 Provider
     apiAddress: String,
     onApiAddressChange: (String) -> Unit,
     apiKey: String,
@@ -356,7 +358,43 @@ internal fun AddNewFullConfigDialog(
                         ) {
                             allProviders.forEach { providerItem ->
                                 DropdownMenuItem(
-                                    text = { Text(providerItem, color = Color.Black) },
+                                    text = {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Text(
+                                                text = providerItem,
+                                                color = Color.Black,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            // 添加删除图标，仅为非默认的 provider 显示
+                                            // 预定义的不可删除平台列表（与 AppViewModel 中的保持一致）
+                                            val nonDeletableProviders = listOf(
+                                                "openai compatible",
+                                                "google",
+                                                "硅基流动",
+                                                "阿里云百炼",
+                                                "火山引擎",
+                                                "深度求索",
+                                                "openrouter" // OpenRouter 移到列表末尾，确保使用小写进行比较
+                                            )
+                                            if (!nonDeletableProviders.contains(providerItem.lowercase().trim())) {
+                                                IconButton(
+                                                    onClick = {
+                                                        onDeleteProvider(providerItem)
+                                                    },
+                                                    modifier = Modifier.size(24.dp)
+                                                ) {
+                                                    Icon(
+                                                        Icons.Filled.Close,
+                                                        contentDescription = "删除 $providerItem",
+                                                        tint = Color.Gray
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    },
                                     onClick = {
                                         onProviderChange(providerItem)
                                         providerMenuExpanded = false
