@@ -130,7 +130,7 @@ class AppViewModel(
         "阿里云百炼",
         "火山引擎",
         "深度求索",
-        "OpenRouter" // OpenRouter 移到列表末尾
+        "OpenRouter"
     )
 
     val allProviders: StateFlow<List<String>> = combine(
@@ -138,10 +138,17 @@ class AppViewModel(
     ) { customsArray: Array<Set<String>> ->
         val customs = customsArray[0]
         val combinedList = (predefinedPlatformsList + customs.toList()).distinct()
-        val predefinedOrderMap = predefinedPlatformsList.withIndex().associate { it.value.lowercase().trim() to it.index }
+        val predefinedOrderMap = predefinedPlatformsList.withIndex()
+            .associate { it.value.lowercase().trim() to it.index }
         combinedList.sortedWith(compareBy<String> { platform ->
-            predefinedOrderMap[platform.lowercase().trim()] ?: (predefinedPlatformsList.size + customs.indexOfFirst { it.equals(platform, ignoreCase = true) }
-                .let { if (it == -1) Int.MAX_VALUE else it })
+            predefinedOrderMap[platform.lowercase().trim()]
+                ?: (predefinedPlatformsList.size + customs.indexOfFirst {
+                    it.equals(
+                        platform,
+                        ignoreCase = true
+                    )
+                }
+                    .let { if (it == -1) Int.MAX_VALUE else it })
         }.thenBy { it })
     }.stateIn(
         viewModelScope,
@@ -356,7 +363,12 @@ class AppViewModel(
             }
 
             val currentCustomProviders = _customProviders.value.toMutableSet()
-            val removed = currentCustomProviders.removeIf { it.equals(trimmedProviderName, ignoreCase = true) }
+            val removed = currentCustomProviders.removeIf {
+                it.equals(
+                    trimmedProviderName,
+                    ignoreCase = true
+                )
+            }
 
             if (removed) {
                 _customProviders.value = currentCustomProviders.toSet()

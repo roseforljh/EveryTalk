@@ -45,6 +45,7 @@ fun MessageBubble(
     isMainContentStreaming: Boolean, isReasoningStreaming: Boolean, isReasoningComplete: Boolean,
     onUserInteraction: () -> Unit, maxWidth: Dp,
     onEditRequest: (Message) -> Unit, onRegenerateRequest: (Message) -> Unit,
+    // onReasoningBoxBecameVisible: () -> Unit, // (1) 移除此参数
     modifier: Modifier = Modifier, showLoadingBubble: Boolean = false
 ) {
     val aiBubbleColor = Color.White
@@ -289,6 +290,8 @@ fun MessageBubble(
                     mainContentHasStarted = message.contentStarted,
                     reasoningTextColor = reasoningTextColor,
                     reasoningToggleDotColor = aiContentColor
+                    // (2) 移除此处的参数传递
+                    // onReasoningBoxBecameVisible = onReasoningBoxBecameVisible
                 )
             }
 

@@ -31,6 +31,8 @@ fun ChatMessagesList(
     onUserInteraction: () -> Unit,
     onRequestEditMessage: (Message) -> Unit,
     onRequestRegenerateAiResponse: (Message) -> Unit
+    // 1. 从函数参数中移除 onReasoningBoxBecameVisible
+    // onReasoningBoxBecameVisible: () -> Unit
 ) {
     LazyColumn(
         modifier = Modifier

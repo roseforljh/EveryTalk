@@ -36,12 +36,8 @@ data class ChatRequest(
     @SerialName("tool_choice")
     val toolChoice: @Contextual Any? = null, // 如果 tool_choice 也是复杂对象，可能也需要具体类型或多态
 
-    // --- 新增 Qwen 特定参数 ---
-    @SerialName("qwen_enable_search") // 为 Qwen 添加一个明确的布尔字段
+    @SerialName("qwen_enable_search")
     val qwenEnableSearch: Boolean? = null,
-    // 如果 Qwen 还有其他已知类型的特定参数，也可以在这里添加
-    // 例如: @SerialName("qwen_enable_thinking") val qwenEnableThinking: Boolean? = null,
-    // --- Qwen 特定参数结束 ---
 
     @SerialName("customModelParameters") // 用于其他模型的、未显式定义的自定义参数
     val customModelParameters: Map<String, @Contextual Any>? = null,

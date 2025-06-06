@@ -52,6 +52,9 @@ class ViewModelStateHolder {
     val _showSourcesDialog = MutableStateFlow(false)
     val _sourcesForDialog = MutableStateFlow<List<WebSearchResult>>(emptyList())
 
+    // 新增：用于从思考框请求滚动的事件
+    internal val _requestScrollForReasoningBoxEvent = MutableSharedFlow<Unit>(replay = 0, extraBufferCapacity = 1)
+
     fun clearForNewChat() {
         _text.value = ""
         messages.clear()

@@ -67,7 +67,12 @@ internal fun ReasoningToggleAndContent(
     val scrimHeight = 28.dp
 
     LaunchedEffect(currentMessageId, displayedReasoningText, isReasoningStreaming) {
-        Log.d("REASON_DBG", "ShowBox=$showInlineStreamingBox, streaming=$isReasoningStreaming, contentStarted=$mainContentHasStarted, text='${displayedReasoningText.take(40)}'")
+        Log.d(
+            "REASON_DBG",
+            "ShowBox=$showInlineStreamingBox, streaming=$isReasoningStreaming, contentStarted=$mainContentHasStarted, text='${
+                displayedReasoningText.take(40)
+            }'"
+        )
     }
 
     Column(
@@ -100,17 +105,26 @@ internal fun ReasoningToggleAndContent(
                                 try {
                                     scrollState.animateScrollTo(scrollState.maxValue)
                                 } catch (e: Exception) {
-                                    Log.w(TAG_REASONING, "[$currentMessageId] 自动滚动失败: ${e.message}")
+                                    Log.w(
+                                        TAG_REASONING,
+                                        "[$currentMessageId] 自动滚动失败: ${e.message}"
+                                    )
                                     break
                                 }
                                 if (!isReasoningStreaming) break
                                 delay(100L)
                             }
-                            if (isActive && !isReasoningStreaming && displayedReasoningText.length > (scrollState.value / 15).coerceAtLeast(10)) {
+                            if (isActive && !isReasoningStreaming && displayedReasoningText.length > (scrollState.value / 15).coerceAtLeast(
+                                    10
+                                )
+                            ) {
                                 try {
                                     scrollState.animateScrollTo(scrollState.maxValue)
                                 } catch (e: Exception) {
-                                    Log.w(TAG_REASONING, "[$currentMessageId] 流结束后最终滚动失败: ${e.message}")
+                                    Log.w(
+                                        TAG_REASONING,
+                                        "[$currentMessageId] 流结束后最终滚动失败: ${e.message}"
+                                    )
                                 }
                             }
                         }
@@ -158,7 +172,8 @@ internal fun ReasoningToggleAndContent(
                 }
             }
         }
-        val shouldShowReviewDotToggle = isReasoningComplete && displayedReasoningText.isNotBlank() && !messageIsError
+        val shouldShowReviewDotToggle =
+            isReasoningComplete && displayedReasoningText.isNotBlank() && !messageIsError
         if (shouldShowReviewDotToggle) {
             Box(
                 modifier = Modifier.padding(

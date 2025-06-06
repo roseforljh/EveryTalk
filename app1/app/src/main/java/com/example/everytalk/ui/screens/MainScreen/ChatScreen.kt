@@ -33,7 +33,7 @@ import androidx.navigation.NavController
 import com.example.everytalk.StateControler.AppViewModel
 import com.example.everytalk.data.DataClass.ApiConfig
 import com.example.everytalk.data.DataClass.Message
-// import com.example.everytalk.data.DataClass.Sender // Sender is used implicitly via Message
+import com.example.everytalk.data.DataClass.Sender
 import com.example.everytalk.navigation.Screen
 import com.example.everytalk.ui.components.AppTopBar
 import com.example.everytalk.ui.components.WebSourcesDialog
@@ -42,7 +42,6 @@ import com.example.everytalk.ui.screens.MainScreen.chat.ChatMessagesList
 import com.example.everytalk.ui.screens.MainScreen.chat.EditMessageDialog
 import com.example.everytalk.ui.screens.MainScreen.chat.EmptyChatView
 import com.example.everytalk.ui.screens.MainScreen.chat.ModelSelectionBottomSheet
-// import com.example.everytalk.model.SelectedMediaItem // ViewModel handles this type now
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlin.coroutines.cancellation.CancellationException
@@ -433,6 +432,31 @@ fun ChatScreen(
         }
     }
 
+    val isReasoningBoxVisible by remember(messages, currentStreamingAiMessageId, isApiCalling) {
+        derivedStateOf {
+            if (!isApiCalling || currentStreamingAiMessageId == null) {
+                false
+            } else {
+                val streamingMsg = messages.find { it.id == currentStreamingAiMessageId }
+                streamingMsg != null &&
+                        streamingMsg.sender == Sender.AI &&
+                        !streamingMsg.reasoning.isNullOrBlank() &&
+                        !streamingMsg.contentStarted
+            }
+        }
+    }
+
+    LaunchedEffect(isReasoningBoxVisible) {
+        if (isReasoningBoxVisible && !userManuallyScrolledAwayFromBottom) {
+            Log.d("ChatScreen_StateDriven", "Reasoning box became visible, triggering scroll.")
+            delay(300L)
+            scrollToBottomGuaranteed(
+                "ReasoningBox_StateDriven",
+                messagesRef = messages.toList()
+            )
+        }
+    }
+
     val scrollToBottomButtonVisible by remember {
         derivedStateOf {
             messages.isNotEmpty() && userManuallyScrolledAwayFromBottom
@@ -449,8 +473,8 @@ fun ChatScreen(
         modifier = modifier
             .fillMaxSize()
             .pointerInput(Unit) { detectTapGestures(onTap = { resetInactivityTimer() }) },
-        contentWindowInsets = WindowInsets(0, 0, 0, 0), // YOUR ORIGINAL VALUE
-        containerColor = MaterialTheme.colorScheme.surface, // YOUR ORIGINAL VALUE
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        containerColor = MaterialTheme.colorScheme.surface,
         topBar = {
             AppTopBar(
                 selectedConfigName = selectedApiConfig?.name?.takeIf { it.isNotBlank() }
@@ -490,11 +514,11 @@ fun ChatScreen(
                         resetInactivityTimer()
                         scrollToBottomGuaranteed("FAB_Click", messagesRef = messages.toList())
                     },
-                    modifier = Modifier.padding(bottom = 100.dp + 16.dp + 15.dp), // YOUR ORIGINAL PADDING
-                    shape = CircleShape, // YOUR ORIGINAL SHAPE
-                    containerColor = Color.White, // YOUR ORIGINAL COLOR
-                    contentColor = Color.Black, // YOUR ORIGINAL COLOR
-                    elevation = FloatingActionButtonDefaults.elevation( // YOUR ORIGINAL ELEVATION
+                    modifier = Modifier.padding(bottom = 100.dp + 16.dp + 15.dp),
+                    shape = CircleShape,
+                    containerColor = Color.White,
+                    contentColor = Color.Black,
+                    elevation = FloatingActionButtonDefaults.elevation(
                         defaultElevation = 0.dp,
                         pressedElevation = 0.dp,
                         focusedElevation = 0.dp,
@@ -503,13 +527,13 @@ fun ChatScreen(
                 ) { Icon(Icons.Filled.ArrowDownward, "滚动到底部") }
             }
         },
-        floatingActionButtonPosition = FabPosition.End // YOUR ORIGINAL POSITION
+        floatingActionButtonPosition = FabPosition.End
     ) { scaffoldPaddingValues ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(scaffoldPaddingValues)
-                .background(Color.White) // YOUR ORIGINAL BACKGROUND
+                .background(Color.White)
                 .imePadding()
                 .navigationBarsPadding()
         ) {
@@ -542,14 +566,11 @@ fun ChatScreen(
                     )
                 }
             }
-
-            // --- MODIFICATION POINT FOR ChatInputArea کال ---
             ChatInputArea(
                 text = text,
                 onTextChange = { viewModel.onTextChange(it); resetInactivityTimer() },
-                onSendMessageRequest = { messageText, _, attachments -> // isKeyboardVisible is ignored with _
+                onSendMessageRequest = { messageText, _, attachments ->
                     resetInactivityTimer()
-                    // Pass `attachments` (List<SelectedMediaItem>) to AppViewModel
                     viewModel.onSendMessage(messageText = messageText, attachments = attachments)
                 },
                 isApiCalling = isApiCalling,
@@ -558,7 +579,6 @@ fun ChatScreen(
                     resetInactivityTimer()
                     viewModel.toggleWebSearchMode(!isWebSearchEnabled)
                 },
-                // onClearText parameter is REMOVED as ChatInputArea handles its own clearing
                 onStopApiCall = { viewModel.onCancelAPICall(); resetInactivityTimer() },
                 focusRequester = focusRequester,
                 selectedApiConfig = selectedApiConfig,
@@ -568,7 +588,6 @@ fun ChatScreen(
                 keyboardController = keyboardController,
                 onFocusChange = { isFocused -> if (isFocused) resetInactivityTimer() }
             )
-            // --- END OF MODIFICATION POINT ---
         }
 
         if (showEditDialog) {
