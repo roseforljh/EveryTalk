@@ -8,6 +8,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListState
@@ -15,8 +16,13 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.IosShare
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.geometry.Offset
@@ -30,6 +36,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
+import androidx.navigation.NavGraph.Companion.findStartDestination
 import com.example.everytalk.StateControler.AppViewModel
 import com.example.everytalk.data.DataClass.ApiConfig
 import com.example.everytalk.data.DataClass.Message
@@ -37,11 +44,13 @@ import com.example.everytalk.data.DataClass.Sender
 import com.example.everytalk.navigation.Screen
 import com.example.everytalk.ui.components.AppTopBar
 import com.example.everytalk.ui.components.WebSourcesDialog
+import com.example.everytalk.ui.screens.BubbleMain.Main.MessageBubble
 import com.example.everytalk.ui.screens.MainScreen.chat.ChatInputArea
 import com.example.everytalk.ui.screens.MainScreen.chat.ChatMessagesList
 import com.example.everytalk.ui.screens.MainScreen.chat.EditMessageDialog
 import com.example.everytalk.ui.screens.MainScreen.chat.EmptyChatView
 import com.example.everytalk.ui.screens.MainScreen.chat.ModelSelectionBottomSheet
+import com.example.everytalk.ui.screens.BubbleMain.SelectableTextDialog
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlin.coroutines.cancellation.CancellationException
@@ -87,6 +96,11 @@ fun ChatScreen(
     )
     var showModelSelectionBottomSheet by remember { mutableStateOf(false) }
     val availableModels by viewModel.apiConfigs.collectAsState()
+
+    var showAiMessageOptionsBottomSheet by remember { mutableStateOf(false) }
+    var selectedMessageForOptions by remember { mutableStateOf<Message?>(null) }
+    val aiMessageOptionsBottomSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
 
     Log.d("ChatScreen_FilterDebug", "Recomposing ChatScreen or relevant state changed.")
     Log.d(
@@ -467,7 +481,16 @@ fun ChatScreen(
     val editDialogInputText by viewModel.editDialogInputText.collectAsState()
     val showSourcesDialog by viewModel.showSourcesDialog.collectAsState()
     val sourcesForDialog by viewModel.sourcesForDialog.collectAsState()
+    val showSelectableTextDialog by viewModel.showSelectableTextDialog.collectAsState()
+    val textForSelectionDialog by viewModel.textForSelectionDialog.collectAsState()
     val imeInsets = WindowInsets.ime
+
+    if (showSelectableTextDialog) {
+        SelectableTextDialog(
+            textToDisplay = textForSelectionDialog,
+            onDismissRequest = { viewModel.dismissSelectableTextDialog() }
+        )
+    }
 
     Scaffold(
         modifier = modifier
@@ -480,7 +503,19 @@ fun ChatScreen(
                 selectedConfigName = selectedApiConfig?.name?.takeIf { it.isNotBlank() }
                     ?: selectedApiConfig?.model ?: "选择配置",
                 onMenuClick = { coroutineScope.launch { viewModel.drawerState.open() } },
-                onSettingsClick = { navController.navigate(Screen.SETTINGS_SCREEN) },
+                onSettingsClick = {
+                    navController.navigate(Screen.SETTINGS_SCREEN) {
+                        // 弹出到导航图的起始目标，避免在返回栈上建立大量的目标。
+                        // 这是标准的底部导航栏模式，但我们移除了 saveState 来避免 ANR。
+                        popUpTo(navController.graph.findStartDestination().id) {
+                            saveState = true
+                        }
+                        // 避免在栈顶重复创建同一个目标的多个实例
+                        launchSingleTop = true
+                        // 切换页面时，恢复之前保存的状态
+                        restoreState = true
+                    }
+                },
                 onTitleClick = {
                     resetInactivityTimer()
                     coroutineScope.launch {
@@ -545,24 +580,52 @@ fun ChatScreen(
                 if (messages.isEmpty()) {
                     EmptyChatView(density = density)
                 } else {
-                    ChatMessagesList(
-                        messages = messages,
-                        listState = listState,
-                        viewModel = viewModel,
-                        currentStreamingAiMessageId = currentStreamingAiMessageId,
-                        isApiCalling = isApiCalling,
-                        reasoningCompleteMap = reasoningCompleteMap,
-                        bubbleMaxWidth = bubbleMaxWidth,
-                        nestedScrollConnection = nestedScrollConnection,
-                        onUserInteraction = { resetInactivityTimer() },
-                        onRequestEditMessage = { msg ->
-                            resetInactivityTimer()
-                            viewModel.requestEditMessage(msg)
-                        },
-                        onRequestRegenerateAiResponse = { userMsg ->
-                            resetInactivityTimer()
-                            viewModel.regenerateAiResponse(userMsg)
+                    val isListScrolling by remember { derivedStateOf { listState.isScrollInProgress } }
+
+                    val messageItems = remember(messages.toList(), currentStreamingAiMessageId, isApiCalling) {
+                        messages.map { message ->
+                            val messageContent = @Composable {
+                                val isLoadingMessage = message.id == currentStreamingAiMessageId && isApiCalling
+                                val currentReasoning = message.reasoning
+                                val showLoadingDots = isLoadingMessage &&
+                                        message.text.isBlank() &&
+                                        (currentReasoning == null || currentReasoning.isBlank()) &&
+                                        !message.contentStarted &&
+                                        !message.isError
+
+                               MessageBubble(
+                                   message = message,
+                                   viewModel = viewModel,
+                                   onUserInteraction = { resetInactivityTimer() },
+                                   isStreaming = isLoadingMessage,
+                                   isMainContentStreaming = isLoadingMessage && message.contentStarted,
+                                   isReasoningStreaming = isLoadingMessage && currentReasoning != null && !currentReasoning.isBlank() && !(reasoningCompleteMap[message.id] ?: false),
+                                   isReasoningComplete = (reasoningCompleteMap[message.id] ?: false),
+                                   isListScrolling = isListScrolling,
+                                   maxWidth = bubbleMaxWidth,
+                                   showLoadingBubble = showLoadingDots,
+                                   onEditRequest = { msg ->
+                                       resetInactivityTimer()
+                                       viewModel.requestEditMessage(msg)
+                                   },
+                                   onRegenerateRequest = { userMsg ->
+                                       resetInactivityTimer()
+                                       viewModel.regenerateAiResponse(userMsg)
+                                   },
+                                   onAiMessageLongPress = { msg ->
+                                       selectedMessageForOptions = msg
+                                       showAiMessageOptionsBottomSheet = true
+                                   }
+                               )
+                            }
+                            message.id to messageContent
                         }
+                    }
+
+                    ChatMessagesList(
+                        messageItems = messageItems,
+                        listState = listState,
+                        nestedScrollConnection = nestedScrollConnection
                     )
                 }
             }
@@ -623,7 +686,78 @@ fun ChatScreen(
                         }
                     }
                 }
-            )
-        }
-    }
+           )
+       }
+
+       if (showAiMessageOptionsBottomSheet && selectedMessageForOptions != null) {
+           ModalBottomSheet(
+               onDismissRequest = { showAiMessageOptionsBottomSheet = false },
+               sheetState = aiMessageOptionsBottomSheetState,
+               containerColor = Color.White,
+           ) {
+               Column(modifier = Modifier.padding(bottom = 32.dp)) {
+                   ListItem(
+                       headlineContent = { Text("选择文本") },
+                       leadingContent = { Icon(Icons.Outlined.SelectAll, contentDescription = "选择文本") },
+                       modifier = Modifier.clickable {
+                           viewModel.showSelectableTextDialog(selectedMessageForOptions!!.text)
+                           coroutineScope.launch {
+                               aiMessageOptionsBottomSheetState.hide()
+                           }.invokeOnCompletion {
+                               if (!aiMessageOptionsBottomSheetState.isVisible) {
+                                   showAiMessageOptionsBottomSheet = false
+                               }
+                           }
+                       },
+                       colors = ListItemDefaults.colors(containerColor = Color.White)
+                   )
+                   ListItem(
+                       headlineContent = { Text("复制全文") },
+                       leadingContent = { Icon(Icons.Filled.ContentCopy, contentDescription = "复制全文") },
+                       modifier = Modifier.clickable {
+                           viewModel.copyToClipboard(selectedMessageForOptions!!.text)
+                           coroutineScope.launch {
+                               aiMessageOptionsBottomSheetState.hide()
+                           }.invokeOnCompletion {
+                               if (!aiMessageOptionsBottomSheetState.isVisible) {
+                                   showAiMessageOptionsBottomSheet = false
+                               }
+                           }
+                       },
+                       colors = ListItemDefaults.colors(containerColor = Color.White)
+                   )
+                   ListItem(
+                       headlineContent = { Text("重新回答") },
+                       leadingContent = { Icon(Icons.Filled.Refresh, contentDescription = "重新回答") },
+                       modifier = Modifier.clickable {
+                           viewModel.regenerateAiResponse(selectedMessageForOptions!!)
+                           coroutineScope.launch {
+                               aiMessageOptionsBottomSheetState.hide()
+                           }.invokeOnCompletion {
+                               if (!aiMessageOptionsBottomSheetState.isVisible) {
+                                   showAiMessageOptionsBottomSheet = false
+                               }
+                           }
+                       },
+                       colors = ListItemDefaults.colors(containerColor = Color.White)
+                   )
+                   ListItem(
+                       headlineContent = { Text("导出文本") },
+                       leadingContent = { Icon(Icons.Filled.IosShare, contentDescription = "导出文本") },
+                       modifier = Modifier.clickable {
+                           viewModel.exportMessageText(selectedMessageForOptions!!.text)
+                           coroutineScope.launch {
+                               aiMessageOptionsBottomSheetState.hide()
+                           }.invokeOnCompletion {
+                               if (!aiMessageOptionsBottomSheetState.isVisible) {
+                                   showAiMessageOptionsBottomSheet = false
+                               }
+                           }
+                       },
+                       colors = ListItemDefaults.colors(containerColor = Color.White)
+                   )
+               }
+           }
+       }
+   }
 }

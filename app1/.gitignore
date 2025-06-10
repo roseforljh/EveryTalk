@@ -13,4 +13,5 @@
 .externalNativeBuild
 .cxx
 local.properties
+# Github properties should be local
 github.properties

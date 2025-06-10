@@ -129,7 +129,7 @@ class ApiHandler(
         @Suppress("UNUSED_PARAMETER") userMessageTextForContext: String,
         afterUserMessageId: String?,
         onMessagesProcessed: () -> Unit,
-        onRequestFailed: () -> Unit // <<< 关键改动：添加此参数
+        onRequestFailed: () -> Unit
     ) {
         val contextForLog = when (val lastUserMsg = requestBody.messages.lastOrNull {
             it.role == "user"
@@ -177,7 +177,7 @@ class ApiHandler(
                     .catch { e ->
                         if (e !is CancellationException) {
                             updateMessageWithError(aiMessageId, e)
-                            onRequestFailed() // 在捕获到非取消异常时调用
+                            onRequestFailed()
                         } else {
                             Log.d(
                                 TAG_API_HANDLER,
@@ -222,55 +222,56 @@ class ApiHandler(
                             }
                             if (cause == null || (cause !is CancellationException)) {
                                 historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = cause != null)
-                            } else if (cause != null && cause !is CancellationException) {
-                                // 如果 onCompletion 是因为 catch 块中的错误（非取消）导致的，
-                                // 那么 onRequestFailed 已经在 catch 中调用了。
-                                // historyManager.saveCurrentChatToHistoryIfNeeded 也在 updateMessageWithError 中。
                             }
                         }
 
                         currentTextBuilder.clear()
                         currentReasoningBuilder.clear()
 
-                        val finalIdx = stateHolder.messages.indexOfFirst { it.id == targetMsgId }
-                        if (finalIdx != -1) {
-                            val msg = stateHolder.messages[finalIdx]
-                            if (cause == null && !msg.isError) {
-                                val updatedMsg = msg.copy(
-                                    text = msg.text.trim(),
-                                    reasoning = msg.reasoning?.trim()
-                                        .let { if (it.isNullOrBlank()) null else it },
-                                    contentStarted = msg.contentStarted || msg.text.isNotBlank()
-                                )
-                                if (updatedMsg != msg) stateHolder.messages[finalIdx] = updatedMsg
-                                if (stateHolder.messageAnimationStates[targetMsgId] != true) stateHolder.messageAnimationStates[targetMsgId] =
-                                    true
-                            } else if (cause != null && cause !is CancellationException && !msg.isError) {
-                                // updateMessageWithError 内部会处理保存
-                            } else if (cause is CancellationException) {
-                                Log.d(
-                                    TAG_API_HANDLER,
-                                    "流被取消 (onCompletion)，消息 $targetMsgId。原因: ${cause.message}"
-                                )
-                                if (!wasCancelledByApiHandler) {
-                                    val hasMeaningfulContent =
-                                        msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank()
-                                    if (hasMeaningfulContent) {
-                                        historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
-                                    } else if (msg.sender == Sender.AI && !msg.isError) {
-                                        Log.d(
-                                            TAG_API_HANDLER,
-                                            "AI消息 $targetMsgId 在 (非ApiHandler) 取消时无内容，移除。"
+                        viewModelScope.launch {
+                            val finalIdx = stateHolder.messages.indexOfFirst { it.id == targetMsgId }
+                            if (finalIdx != -1) {
+                                val msg = stateHolder.messages[finalIdx]
+                                if (cause == null && !msg.isError) {
+                                    withContext(Dispatchers.Main.immediate) {
+                                        val updatedMsg = msg.copy(
+                                            text = msg.text.trim(),
+                                            reasoning = msg.reasoning?.trim()
+                                                .let { if (it.isNullOrBlank()) null else it },
+                                            contentStarted = msg.contentStarted || msg.text.isNotBlank()
                                         )
-                                        stateHolder.messages.removeAt(finalIdx)
+                                        if (updatedMsg != msg) {
+                                            stateHolder.messages[finalIdx] = updatedMsg
+                                            Log.d(TAG_API_HANDLER, "onCompletion: 消息 ${targetMsgId} 的HTML内容已缓存。")
+                                        }
+                                        if (stateHolder.messageAnimationStates[targetMsgId] != true) {
+                                            stateHolder.messageAnimationStates[targetMsgId] = true
+                                        }
+                                    }
+                                } else if (cause is CancellationException) {
+                                    Log.d(
+                                        TAG_API_HANDLER,
+                                        "流被取消 (onCompletion)，消息 $targetMsgId。原因: ${cause.message}"
+                                    )
+                                    if (!wasCancelledByApiHandler) {
+                                        val hasMeaningfulContent = msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank()
+                                        if (hasMeaningfulContent) {
+                                            historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
+                                        } else if (msg.sender == Sender.AI && !msg.isError) {
+                                            Log.d(
+                                                TAG_API_HANDLER,
+                                                "AI消息 $targetMsgId 在 (非ApiHandler) 取消时无内容，移除。"
+                                            )
+                                            stateHolder.messages.removeAt(finalIdx)
+                                        }
                                     }
                                 }
+                            } else {
+                                Log.w(
+                                    TAG_API_HANDLER,
+                                    "onCompletion: 未找到消息ID $targetMsgId 进行最终更新。"
+                                )
                             }
-                        } else {
-                            Log.w(
-                                TAG_API_HANDLER,
-                                "onCompletion: 未找到消息ID $targetMsgId 进行最终更新。"
-                            )
                         }
                     }
                     .collect { appEvent ->
@@ -281,7 +282,9 @@ class ApiHandler(
                         val currentChunkIndex =
                             stateHolder.messages.indexOfFirst { it.id == aiMessageId }
                         if (currentChunkIndex != -1) {
-                            processChunk(currentChunkIndex, appEvent, aiMessageId)
+                            withContext(Dispatchers.Default) {
+                                processChunk(currentChunkIndex, appEvent, aiMessageId)
+                            }
                         } else {
                             thisJob?.cancel(CancellationException("目标消息 $aiMessageId 在收集中途消失"))
                             return@collect
@@ -303,7 +306,7 @@ class ApiHandler(
                             e
                         )
                         updateMessageWithError(aiMessageId, e)
-                        onRequestFailed() // 在捕获到其他未处理异常时调用
+                        onRequestFailed()
                     }
                 }
             } finally {
@@ -323,139 +326,80 @@ class ApiHandler(
     }
 
     private fun processChunk(index: Int, appEvent: AppStreamEvent, messageIdForLog: String) {
-        Log.i(
-            TAG_API_HANDLER_CHUNK,
-            "processChunk called for Msg ID: $messageIdForLog. Event Type: ${appEvent.type}, Event Text: '${
-                appEvent.text?.take(
-                    50
-                )
-            }', Event Stage: ${appEvent.stage}, Event Reason: ${appEvent.reason}"
-        )
-
         if (index < 0 || index >= stateHolder.messages.size || stateHolder.messages[index].id != messageIdForLog) {
-            Log.e(
-                TAG_API_HANDLER_CHUNK,
-                "索引或ID无效或过时。Index: $index, ExpectedID: $messageIdForLog, ActualListID: ${
-                    stateHolder.messages.getOrNull(
-                        index
-                    )?.id
-                }"
-            )
             return
         }
+
         val originalMessage = stateHolder.messages[index]
-        var newContentStarted = originalMessage.contentStarted
-        var newWebResults = originalMessage.webSearchResults
-        var newWebSearchStage = originalMessage.currentWebSearchStage
-        var mainTextChangedInThisChunk = false
+        var updatedMessage = originalMessage
 
         when (appEvent.type) {
             "status_update" -> {
-                Log.d(
-                    TAG_API_HANDLER_CHUNK,
-                    "状态更新: ${appEvent.stage} (消息ID: $messageIdForLog)"
-                )
-                newWebSearchStage = appEvent.stage
+                updatedMessage = originalMessage.copy(currentWebSearchStage = appEvent.stage)
             }
-
             "web_search_results" -> {
-                Log.d(
-                    TAG_API_HANDLER_CHUNK,
-                    "收到Web搜索结果 (${appEvent.results?.size ?: 0} 条) (消息ID: $messageIdForLog)"
-                )
-                appEvent.results?.let { newWebResults = it }
+                appEvent.results?.let {
+                    updatedMessage = originalMessage.copy(webSearchResults = it)
+                }
             }
-
             "reasoning" -> {
                 if (!appEvent.text.isNullOrEmpty()) {
                     currentReasoningBuilder.append(appEvent.text)
-                    if (stateHolder.reasoningCompleteMap[messageIdForLog] != false) stateHolder.reasoningCompleteMap[messageIdForLog] =
-                        false
-                }
-            }
-
-            "reasoning_finish" -> {
-                Log.d(TAG_API_HANDLER_CHUNK, "Reasoning finish event for $messageIdForLog")
-                if (stateHolder.reasoningCompleteMap[messageIdForLog] != true) stateHolder.reasoningCompleteMap[messageIdForLog] =
-                    true
-            }
-
-            "content" -> {
-                if (!appEvent.text.isNullOrEmpty()) {
-                    currentTextBuilder.append(appEvent.text)
-                    mainTextChangedInThisChunk = true
-                    if (!newContentStarted) {
-                        newContentStarted = true
-                        if (stateHolder.reasoningCompleteMap[messageIdForLog] != true) stateHolder.reasoningCompleteMap[messageIdForLog] =
-                            true
+                    if (stateHolder.reasoningCompleteMap[messageIdForLog] != false) {
+                        stateHolder.reasoningCompleteMap[messageIdForLog] = false
                     }
                 }
             }
-
-            "tool_calls_chunk", "google_function_call_request" -> {
-                Log.d(
-                    TAG_API_HANDLER_CHUNK,
-                    "工具调用事件: ${appEvent.type} (消息ID: $messageIdForLog)"
-                )
-                if (stateHolder.reasoningCompleteMap[messageIdForLog] != true) stateHolder.reasoningCompleteMap[messageIdForLog] =
-                    true
+            "reasoning_finish" -> {
+                if (stateHolder.reasoningCompleteMap[messageIdForLog] != true) {
+                    stateHolder.reasoningCompleteMap[messageIdForLog] = true
+                }
             }
-
-            "finish" -> {
-                Log.d(
-                    TAG_API_HANDLER_CHUNK,
-                    "完成事件，原因: ${appEvent.reason} (消息ID: $messageIdForLog)"
-                )
-                if (stateHolder.reasoningCompleteMap[messageIdForLog] != true) stateHolder.reasoningCompleteMap[messageIdForLog] =
-                    true
+            "content" -> {
+                if (!appEvent.text.isNullOrEmpty()) {
+                    currentTextBuilder.append(appEvent.text)
+                    if (!originalMessage.contentStarted) {
+                        updatedMessage = originalMessage.copy(contentStarted = true)
+                        if (stateHolder.reasoningCompleteMap[messageIdForLog] != true) {
+                            stateHolder.reasoningCompleteMap[messageIdForLog] = true
+                        }
+                    }
+                }
             }
-
+            "tool_calls_chunk", "google_function_call_request", "finish" -> {
+                if (stateHolder.reasoningCompleteMap[messageIdForLog] != true) {
+                    stateHolder.reasoningCompleteMap[messageIdForLog] = true
+                }
+            }
             "error" -> {
-                Log.e(
-                    TAG_API_HANDLER_CHUNK,
-                    "错误事件: ${appEvent.message} (消息ID: $messageIdForLog)"
-                )
                 viewModelScope.launch {
                     updateMessageWithError(
                         messageIdForLog,
                         IOException("SSE Error: ${appEvent.message} (Upstream: ${appEvent.upstreamStatus ?: "N/A"})")
-                        // onRequestFailed() 将在 updateMessageWithError -> catch 块中被间接调用
                     )
                 }
-                if (stateHolder.reasoningCompleteMap[messageIdForLog] != true) stateHolder.reasoningCompleteMap[messageIdForLog] =
-                    true
+                if (stateHolder.reasoningCompleteMap[messageIdForLog] != true) {
+                    stateHolder.reasoningCompleteMap[messageIdForLog] = true
+                }
             }
-
-            else -> Log.w(
-                TAG_API_HANDLER_CHUNK,
-                "未处理的SSE事件类型: ${appEvent.type} (消息ID: $messageIdForLog)"
-            )
         }
 
         val accumulatedFullText = currentTextBuilder.toString()
-        val accumulatedFullReasoning =
-            currentReasoningBuilder.toString().let { if (it.isNotBlank()) it else null }
+        val accumulatedFullReasoning = currentReasoningBuilder.toString().let { if (it.isNotBlank()) it else null }
 
-        if (!newContentStarted && accumulatedFullText.isNotBlank() && (stateHolder.reasoningCompleteMap[messageIdForLog] == true || appEvent.type == "content")) {
-            newContentStarted = true
+        if (accumulatedFullText != updatedMessage.text || accumulatedFullReasoning != updatedMessage.reasoning) {
+            updatedMessage = updatedMessage.copy(
+                text = accumulatedFullText,
+                reasoning = accumulatedFullReasoning
+            )
         }
 
-        if (accumulatedFullText != originalMessage.text ||
-            accumulatedFullReasoning != originalMessage.reasoning ||
-            newContentStarted != originalMessage.contentStarted ||
-            newWebResults != originalMessage.webSearchResults ||
-            newWebSearchStage != originalMessage.currentWebSearchStage
-        ) {
-            stateHolder.messages[index] = originalMessage.copy(
-                text = accumulatedFullText,
-                reasoning = accumulatedFullReasoning,
-                contentStarted = newContentStarted,
-                webSearchResults = newWebResults,
-                currentWebSearchStage = newWebSearchStage
-            )
-            if (mainTextChangedInThisChunk && accumulatedFullText.isNotBlank()) {
-                onAiMessageFullTextChanged(messageIdForLog, accumulatedFullText)
-            }
+        if (updatedMessage != originalMessage) {
+            stateHolder.messages[index] = updatedMessage
+        }
+
+        if (appEvent.type == "content" && !appEvent.text.isNullOrEmpty()) {
+            onAiMessageFullTextChanged(messageIdForLog, accumulatedFullText)
         }
     }
 

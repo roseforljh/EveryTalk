@@ -37,7 +37,7 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false // 生产环境通常建议开启
+            isMinifyEnabled = true // 生产环境通常建议开启
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -110,6 +110,7 @@ android {
         // Core Android & Lifecycle (从你的 libs.versions.toml 获取，通常这些不由Compose BOM管理)
         implementation(libs.androidx.core.ktx)
         implementation(libs.androidx.lifecycle.runtime.ktx)
+        implementation("androidx.lifecycle:lifecycle-process:2.9.0") // 版本对齐 & 添加此行以使用 ProcessLifecycleOwner
 
         // Kotlinx Serialization
         implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
@@ -135,8 +136,6 @@ android {
         debugImplementation(libs.androidx.ui.test.manifest)    // BOM 会管理版本
 
         implementation("androidx.navigation:navigation-compose:2.7.7")
-        implementation("com.halilibo.compose-richtext:richtext-ui-material3:0.20.0")
-        implementation("com.halilibo.compose-richtext:richtext-commonmark:0.20.0")
 
         implementation(libs.androidx.profileinstaller)
         implementation ("org.slf4j:slf4j-nop:2.0.12")
@@ -152,4 +151,6 @@ android {
         implementation("io.coil-kt.coil3:coil-network-okhttp:3.2.0")
 
         implementation ("com.google.accompanist:accompanist-flowlayout:0.30.1")
+
     }
+

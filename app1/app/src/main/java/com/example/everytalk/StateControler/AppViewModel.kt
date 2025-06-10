@@ -1,6 +1,9 @@
 package com.example.everytalk.StateControler
 
 import android.app.Application
+import android.app.ActivityManager
+import android.content.ClipboardManager
+import android.content.Context
 import android.net.Uri
 import android.util.Log
 import androidx.compose.material3.DrawerState
@@ -18,9 +21,6 @@ import com.example.everytalk.model.SelectedMediaItem
 import com.example.everytalk.ui.screens.viewmodel.ConfigManager
 import com.example.everytalk.ui.screens.viewmodel.DataPersistenceManager
 import com.example.everytalk.ui.screens.viewmodel.HistoryManager
-import com.example.everytalk.util.convertMarkdownToHtml
-import com.example.everytalk.util.generateKatexBaseHtmlTemplateString
-import com.example.everytalk.webviewpool.WebViewPool
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -84,10 +84,6 @@ class AppViewModel(
         )
     }
 
-    val webViewPool: WebViewPool by lazy {
-        Log.d(TAG_APP_VIEW_MODEL, "Initializing WebViewPool")
-        WebViewPool(getApplication<Application>().applicationContext, maxSize = 8)
-    }
 
     private val _markdownChunkToAppendFlow =
         MutableSharedFlow<Pair<String, Pair<String, String>>>(replay = 0, extraBufferCapacity = 128)
@@ -107,6 +103,10 @@ class AppViewModel(
     val expandedReasoningStates: SnapshotStateMap<String, Boolean> get() = stateHolder.expandedReasoningStates
     val snackbarMessage: SharedFlow<String> get() = stateHolder._snackbarMessage.asSharedFlow()
     val scrollToBottomEvent: SharedFlow<Unit> get() = stateHolder._scrollToBottomEvent.asSharedFlow()
+
+    private val _exportRequest = MutableSharedFlow<Pair<String, String>>()
+    val exportRequest: SharedFlow<Pair<String, String>> = _exportRequest.asSharedFlow()
+
     private val _showEditDialog = MutableStateFlow(false)
     val showEditDialog: StateFlow<Boolean> = _showEditDialog.asStateFlow()
     private val _editingMessageId = MutableStateFlow<String?>(null)
@@ -159,59 +159,28 @@ class AppViewModel(
     val showSourcesDialog: StateFlow<Boolean> get() = stateHolder._showSourcesDialog.asStateFlow()
     val sourcesForDialog: StateFlow<List<WebSearchResult>> get() = stateHolder._sourcesForDialog.asStateFlow()
 
-    init {
-        Log.d(TAG_APP_VIEW_MODEL, "ViewModel 初始化开始")
+   private val _showSelectableTextDialog = MutableStateFlow(false)
+   val showSelectableTextDialog: StateFlow<Boolean> = _showSelectableTextDialog.asStateFlow()
+   private val _textForSelectionDialog = MutableStateFlow("")
+   val textForSelectionDialog: StateFlow<String> = _textForSelectionDialog.asStateFlow()
+
+   init {
+       Log.d(TAG_APP_VIEW_MODEL, "ViewModel 初始化开始")
 
         viewModelScope.launch(Dispatchers.IO) {
             _customProviders.value = dataSource.loadCustomProviders()
         }
 
-        persistenceManager.loadInitialData { initialConfigPresent, initialHistoryPresent ->
+        persistenceManager.loadInitialData(loadLastChat = false) { initialConfigPresent, initialHistoryPresent ->
             Log.d(
                 TAG_APP_VIEW_MODEL,
-                "初始数据加载完成。配置存在: $initialConfigPresent, 历史存在: $initialHistoryPresent"
+                "初始数据加载完成。配置存在: $initialConfigPresent, 历史存在: $initialHistoryPresent, 上次会话已跳过加载。"
             )
             if (!initialConfigPresent) {
                 viewModelScope.launch { Log.i(TAG_APP_VIEW_MODEL, "没有检测到已保存的API配置。") }
             }
-            viewModelScope.launch(Dispatchers.Main.immediate) {
-                Log.d(
-                    TAG_APP_VIEW_MODEL,
-                    "Restoring reasoningCompleteMap and animation states for loaded messages..."
-                )
-                stateHolder.messages.forEach { msg ->
-                    val hasContentOrError = msg.contentStarted || msg.isError
-                    val hasReasoning = !msg.reasoning.isNullOrBlank()
-                    if (msg.sender == Sender.AI && hasReasoning && !this@AppViewModel.isApiCalling.value) {
-                        stateHolder.reasoningCompleteMap[msg.id] = true
-                    } else if (msg.sender == Sender.AI && this@AppViewModel.isApiCalling.value && this@AppViewModel.currentStreamingAiMessageId.value == msg.id) {
-                        stateHolder.reasoningCompleteMap.remove(msg.id)
-                    }
-                    val animationPlayedCondition =
-                        hasContentOrError || (msg.sender == Sender.AI && hasReasoning)
-                    if (animationPlayedCondition) {
-                        stateHolder.messageAnimationStates[msg.id] = true
-                    }
-                }
-                Log.d(
-                    TAG_APP_VIEW_MODEL,
-                    "Finished restoring reasoningCompleteMap and animation states after initial load."
-                )
-            }
         }
 
-        viewModelScope.launch {
-            val baseTemplate = getDefaultKatexHtmlTemplate()
-            try {
-                withContext(Dispatchers.Main) {
-                    Log.d(TAG_APP_VIEW_MODEL, "Warming up WebViewPool on Main thread...")
-                    this@AppViewModel.webViewPool.warmUp(4, baseTemplate)
-                }
-                Log.d(TAG_APP_VIEW_MODEL, "WebViewPool warmed up.")
-            } catch (e: Exception) {
-                Log.e(TAG_APP_VIEW_MODEL, "Error warming up WebViewPool", e)
-            }
-        }
 
         viewModelScope.launch(Dispatchers.IO) {
             ApiClient.preWarm()
@@ -223,74 +192,9 @@ class AppViewModel(
                 "ViewModel IO pre-warming of ApiClient and Handlers completed."
             )
         }
-        viewModelScope.launch(Dispatchers.Default) {
-            Log.d(TAG_APP_VIEW_MODEL, "开始后台批量预处理历史消息的 htmlContent...")
-            val originalLoadedHistory = stateHolder._historicalConversations.value.toList()
-            if (originalLoadedHistory.isNotEmpty()) {
-                val processedHistory = originalLoadedHistory.map { conversation ->
-                    conversation.map { message ->
-                        if (message.sender == Sender.AI && message.text.isNotBlank() && message.htmlContent == null) {
-                            message.copy(htmlContent = convertMarkdownToHtml(message.text))
-                        } else {
-                            message
-                        }
-                    }
-                }
-                var wasModified = false
-                if (originalLoadedHistory.size == processedHistory.size) {
-                    for (i in originalLoadedHistory.indices) {
-                        if (originalLoadedHistory[i].size == processedHistory[i].size) {
-                            for (j in originalLoadedHistory[i].indices) {
-                                if (originalLoadedHistory[i][j].htmlContent == null && processedHistory[i][j].htmlContent != null) {
-                                    wasModified = true
-                                    break
-                                }
-                            }
-                        }
-                        if (wasModified) break
-                    }
-                }
-                if (wasModified) {
-                    Log.d(TAG_APP_VIEW_MODEL, "后台预处理完成，检测到 htmlContent 更新。")
-                    withContext(Dispatchers.Main.immediate) {
-                        stateHolder._historicalConversations.value = processedHistory
-                    }
-                    withContext(Dispatchers.IO) {
-                        try {
-                            persistenceManager.saveChatHistory(processedHistory)
-                            Log.i(
-                                TAG_APP_VIEW_MODEL,
-                                "成功将预处理后的历史记录保存到 SharedPreferences。"
-                            )
-                        } catch (e: Exception) {
-                            Log.e(
-                                TAG_APP_VIEW_MODEL,
-                                "保存预处理后的历史记录到 SharedPreferences 失败。",
-                                e
-                            )
-                        }
-                    }
-                } else {
-                    Log.d(TAG_APP_VIEW_MODEL, "后台预处理完成，未检测到需要更新的 htmlContent。")
-                }
-            } else {
-                Log.d(TAG_APP_VIEW_MODEL, "后台预处理：没有历史记录可供处理。")
-            }
-        }
         Log.d(TAG_APP_VIEW_MODEL, "ViewModel 初始化逻辑结束.")
     }
 
-    private fun getDefaultKatexHtmlTemplate(): String {
-        val defaultBackgroundColor = "transparent"
-        val defaultTextColor = "#000000"
-        val defaultErrorColor = "#CD5C5C"
-        return generateKatexBaseHtmlTemplateString(
-            backgroundColor = defaultBackgroundColor,
-            textColor = defaultTextColor,
-            errorColor = defaultErrorColor,
-            throwOnError = false
-        )
-    }
 
     private fun areMessageListsEffectivelyEqual(
         list1: List<Message>?,
@@ -461,32 +365,30 @@ class AppViewModel(
         stateHolder._editDialogInputText.value = ""
     }
 
-    fun regenerateAiResponse(originalUserMessage: Message) {
-        if (originalUserMessage.sender != Sender.User) {
-            showSnackbar("只能为您的消息重新生成回答"); return
+    fun regenerateAiResponse(message: Message) {
+        val messageToRegenerateFrom = if (message.sender == Sender.AI) {
+            val aiMessageIndex = messages.indexOf(message)
+            if (aiMessageIndex > 0) {
+                messages.subList(0, aiMessageIndex).findLast { it.sender == Sender.User }
+            } else {
+                null
+            }
+        } else {
+            message
         }
+
+        if (messageToRegenerateFrom == null || messageToRegenerateFrom.sender != Sender.User) {
+            showSnackbar("无法找到对应的用户消息来重新生成回答"); return
+        }
+
         if (stateHolder._selectedApiConfig.value == null) {
             showSnackbar("请先选择 API 配置"); return
         }
 
-        val originalUserMessageText = originalUserMessage.text
-        val originalUserMessageId = originalUserMessage.id
+        val originalUserMessageText = messageToRegenerateFrom.text
+        val originalUserMessageId = messageToRegenerateFrom.id
 
-        val originalAttachments = originalUserMessage.imageUrls?.mapNotNull { urlString ->
-            try {
-                if (urlString.startsWith("content://") || urlString.startsWith("http://") || urlString.startsWith(
-                        "https://"
-                    )
-                ) {
-                    SelectedMediaItem.ImageFromUri(Uri.parse(urlString))
-                } else {
-                    null
-                }
-            } catch (e: Exception) {
-                Log.w(TAG_APP_VIEW_MODEL, "无法解析重新生成消息中的图片URL: $urlString", e)
-                null
-            }
-        } ?: emptyList()
+        val originalAttachments = messageToRegenerateFrom.attachments ?: emptyList()
 
         Log.d(
             TAG_APP_VIEW_MODEL,
@@ -555,47 +457,51 @@ class AppViewModel(
     }
 
     fun loadConversationFromHistory(index: Int) {
-        val conversationList = stateHolder._historicalConversations.value
-        if (index < 0 || index >= conversationList.size) {
-            showSnackbar("无法加载对话：无效的索引"); return
-        }
-        val conversationToLoad = conversationList[index]
         dismissEditDialog(); dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("加载历史索引 $index")
         viewModelScope.launch {
             historyManager.saveCurrentChatToHistoryIfNeeded()
-            val processedConversation = withContext(Dispatchers.Default) {
-                conversationToLoad.map { msg ->
-                    val updatedContentStarted =
-                        msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || msg.isError
-                    if (msg.sender == Sender.AI && msg.text.isNotBlank() && msg.htmlContent == null) {
-                        msg.copy(
-                            htmlContent = convertMarkdownToHtml(msg.text),
-                            contentStarted = updatedContentStarted
-                        )
-                    } else {
-                        msg.copy(contentStarted = updatedContentStarted)
-                    }
-                }
+
+            val conversationList = stateHolder._historicalConversations.value
+            if (index < 0 || index >= conversationList.size) {
+                showSnackbar("无法加载对话：无效的索引"); return@launch
             }
-            withContext(Dispatchers.Main.immediate) {
-                stateHolder.clearForNewChat()
-                stateHolder.messages.addAll(processedConversation)
-                stateHolder.messages.forEach { msg ->
+            val conversationToLoad = conversationList[index]
+
+            val (processedConversation, newReasoningMap, newAnimationStates) = withContext(Dispatchers.IO) {
+                val newReasoning = mutableMapOf<String, Boolean>()
+                val newAnimation = mutableMapOf<String, Boolean>()
+
+                val processed = conversationToLoad.map { msg ->
+                    val updatedContentStarted = msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || msg.isError
+                    msg.copy(contentStarted = updatedContentStarted)
+                }
+
+                processed.forEach { msg ->
                     val hasContentOrError = msg.contentStarted || msg.isError
                     val hasReasoning = !msg.reasoning.isNullOrBlank()
                     if (msg.sender == Sender.AI && hasReasoning) {
-                        stateHolder.reasoningCompleteMap[msg.id] = true
+                        newReasoning[msg.id] = true
                     }
-                    val animationPlayedCondition =
-                        hasContentOrError || (msg.sender == Sender.AI && hasReasoning)
+                    val animationPlayedCondition = hasContentOrError || (msg.sender == Sender.AI && hasReasoning)
                     if (animationPlayedCondition) {
-                        stateHolder.messageAnimationStates[msg.id] = true
+                        newAnimation[msg.id] = true
                     }
                 }
-                stateHolder._loadedHistoryIndex.value = index
-                triggerScrollToBottom()
+                Triple(processed, newReasoning, newAnimation)
             }
+
+            withContext(Dispatchers.Main.immediate) {
+                stateHolder.messages.clear()
+                stateHolder.messages.addAll(processedConversation)
+                stateHolder.reasoningCompleteMap.clear()
+                stateHolder.reasoningCompleteMap.putAll(newReasoningMap)
+                stateHolder.messageAnimationStates.clear()
+                stateHolder.messageAnimationStates.putAll(newAnimationStates)
+
+                stateHolder._loadedHistoryIndex.value = index
+            }
+
             if (_isSearchActiveInDrawer.value) withContext(Dispatchers.Main.immediate) {
                 setSearchActiveInDrawer(false)
             }
@@ -657,8 +563,32 @@ class AppViewModel(
         }
     }
 
-    fun addConfig(config: ApiConfig) = configManager.addConfig(config)
-    fun updateConfig(config: ApiConfig) = configManager.updateConfig(config)
+   fun showSelectableTextDialog(text: String) {
+       _textForSelectionDialog.value = text
+       _showSelectableTextDialog.value = true
+   }
+
+   fun dismissSelectableTextDialog() {
+       _showSelectableTextDialog.value = false
+       _textForSelectionDialog.value = ""
+   }
+
+   fun copyToClipboard(text: String) {
+       val clipboard = getApplication<Application>().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+       val clip = android.content.ClipData.newPlainText("Copied Text", text)
+       clipboard.setPrimaryClip(clip)
+       showSnackbar("已复制到剪贴板")
+   }
+
+    fun exportMessageText(text: String) {
+        viewModelScope.launch {
+            val fileName = "conversation_export.md"
+            _exportRequest.emit(fileName to text)
+        }
+    }
+
+   fun addConfig(config: ApiConfig) = configManager.addConfig(config)
+   fun updateConfig(config: ApiConfig) = configManager.updateConfig(config)
     fun deleteConfig(config: ApiConfig) = configManager.deleteConfig(config)
     fun clearAllConfigs() = configManager.clearAllConfigs()
     fun selectConfig(config: ApiConfig) = configManager.selectConfig(config)
@@ -783,53 +713,11 @@ class AppViewModel(
         viewModelScope.launch(Dispatchers.Main.immediate) {
             val messageIndex = stateHolder.messages.indexOfFirst { it.id == messageId }
             if (messageIndex != -1) {
-                if (currentFullText.isNotBlank()) {
-                    Log.d(
-                        TAG_APP_VIEW_MODEL,
-                        "onAiMessageFullTextChanged: For message $messageId, text has changed. New full text length: ${currentFullText.length}. Preparing to update HTML."
+                val messageToUpdate = stateHolder.messages[messageIndex]
+                if (messageToUpdate.text != currentFullText) {
+                    stateHolder.messages[messageIndex] = messageToUpdate.copy(
+                        text = currentFullText
                     )
-                    launch(Dispatchers.Default) {
-                        val newHtml = try {
-                            convertMarkdownToHtml(currentFullText)
-                        } catch (e: Exception) {
-                            Log.e(
-                                TAG_APP_VIEW_MODEL,
-                                "Error converting Markdown to HTML for message $messageId: ${e.message}",
-                                e
-                            )
-                            "<p>⚠️ 内容渲染出错，显示原始文本:</p><pre>${
-                                currentFullText.replace(
-                                    "<",
-                                    "<"
-                                ).replace(">", ">")
-                            }</pre>"
-                        }
-                        withContext(Dispatchers.Main.immediate) {
-                            val freshMessageIndex =
-                                stateHolder.messages.indexOfFirst { it.id == messageId }
-                            if (freshMessageIndex != -1) {
-                                val messageToUpdate = stateHolder.messages[freshMessageIndex]
-                                if (messageToUpdate.htmlContent != newHtml) {
-                                    stateHolder.messages[freshMessageIndex] =
-                                        messageToUpdate.copy(htmlContent = newHtml)
-                                    Log.d(
-                                        TAG_APP_VIEW_MODEL,
-                                        "onAiMessageFullTextChanged: Updated htmlContent for message $messageId."
-                                    )
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    val messageToUpdate = stateHolder.messages[messageIndex]
-                    if (messageToUpdate.htmlContent != null) {
-                        stateHolder.messages[messageIndex] =
-                            messageToUpdate.copy(htmlContent = null)
-                        Log.d(
-                            TAG_APP_VIEW_MODEL,
-                            "onAiMessageFullTextChanged: Cleared htmlContent for message $messageId as currentFullText is blank."
-                        )
-                    }
                 }
             }
         }
@@ -838,9 +726,8 @@ class AppViewModel(
     override fun onCleared() {
         Log.d(TAG_APP_VIEW_MODEL, "onCleared 开始, 销毁 WebViewPool")
         try {
-            webViewPool.destroyAll()
         } catch (e: Exception) {
-            Log.e(TAG_APP_VIEW_MODEL, "Error destroying WebViewPool in onCleared", e)
+            Log.e(TAG_APP_VIEW_MODEL, "Error in onCleared", e)
         }
         dismissEditDialog(); dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("ViewModel cleared", isNewMessageSend = false)
@@ -864,4 +751,5 @@ class AppViewModel(
         super.onCleared()
         Log.d(TAG_APP_VIEW_MODEL, "ViewModel onCleared 结束.")
     }
+
 }

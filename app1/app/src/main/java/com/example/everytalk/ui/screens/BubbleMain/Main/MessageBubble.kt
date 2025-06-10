@@ -42,10 +42,12 @@ fun Color.toHexCss(): String {
 @Composable
 fun MessageBubble(
     message: Message, viewModel: AppViewModel,
+    isStreaming: Boolean,
     isMainContentStreaming: Boolean, isReasoningStreaming: Boolean, isReasoningComplete: Boolean,
+    isListScrolling: Boolean,
     onUserInteraction: () -> Unit, maxWidth: Dp,
     onEditRequest: (Message) -> Unit, onRegenerateRequest: (Message) -> Unit,
-    // onReasoningBoxBecameVisible: () -> Unit, // (1) 移除此参数
+    onAiMessageLongPress: (Message) -> Unit,
     modifier: Modifier = Modifier, showLoadingBubble: Boolean = false
 ) {
     val aiBubbleColor = Color.White
@@ -316,9 +318,12 @@ fun MessageBubble(
                             message = message,
                             appViewModel = viewModel,
                             fullMessageTextToCopy = message.text,
+                            isStreaming = isStreaming,
                             showLoadingDots = showDotsInsideAiContent,
+                            isListScrolling = isListScrolling,
                             contentColor = aiContentColor,
                             onUserInteraction = onUserInteraction,
+                            onAiMessageLongPress = { onAiMessageLongPress(message) },
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 0.dp)
                         )
                     }

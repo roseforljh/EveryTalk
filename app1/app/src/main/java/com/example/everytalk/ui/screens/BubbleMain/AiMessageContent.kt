@@ -2,12 +2,13 @@ package com.example.everytalk.ui.screens.BubbleMain
 
 import android.util.Log
 import android.widget.Toast
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.*
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.StartOffset
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
@@ -18,108 +19,49 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupProperties
-import com.example.everytalk.ui.components.PooledKatexWebView
-import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.StateControler.AppViewModel
+import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.DataClass.Sender
-import com.example.everytalk.ui.screens.BubbleMain.Main.toHexCss
-import com.example.everytalk.util.convertMarkdownToHtml
-import com.example.everytalk.util.convertMarkdownToPlainText
-import com.example.everytalk.util.generateKatexBaseHtmlTemplateString
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.filter
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Text
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+import com.example.everytalk.util.MarkdownBlock
+import com.example.everytalk.util.CodeHighlighter
+import com.example.everytalk.util.LatexToUnicode
+import com.example.everytalk.util.parseMarkdownToBlocks
 
-
-private const val CONTEXT_MENU_ANIMATION_DURATION_MS = 150
-private val CONTEXT_MENU_CORNER_RADIUS = 16.dp
-private val CONTEXT_MENU_ITEM_ICON_SIZE = 20.dp
-private val CONTEXT_MENU_FINE_TUNE_OFFSET_X = (-120).dp
-private val CONTEXT_MENU_FINE_TUNE_OFFSET_Y = (-8).dp
-private val CONTEXT_MENU_FIXED_WIDTH = 160.dp
-private const val TYPEWRITER_DELAY_MS = 10L
-
-@Composable
-internal fun AnimatedDropdownMenuItem(
-    visibleState: MutableTransitionState<Boolean>, delay: Int = 0,
-    text: @Composable () -> Unit, onClick: () -> Unit, leadingIcon: @Composable (() -> Unit)? = null
-) {
-    AnimatedVisibility(
-        visibleState = visibleState,
-        enter = fadeIn(
-            animationSpec = tween(
-                CONTEXT_MENU_ANIMATION_DURATION_MS,
-                delayMillis = delay,
-                easing = LinearOutSlowInEasing
-            )
-        ) +
-                scaleIn(
-                    animationSpec = tween(
-                        CONTEXT_MENU_ANIMATION_DURATION_MS,
-                        delayMillis = delay,
-                        easing = LinearOutSlowInEasing
-                    ), transformOrigin = TransformOrigin(0f, 0f)
-                ),
-        exit = fadeOut(
-            animationSpec = tween(
-                CONTEXT_MENU_ANIMATION_DURATION_MS,
-                easing = FastOutLinearInEasing
-            )
-        ) +
-                scaleOut(
-                    animationSpec = tween(
-                        CONTEXT_MENU_ANIMATION_DURATION_MS,
-                        easing = FastOutLinearInEasing
-                    ), transformOrigin = TransformOrigin(0f, 0f)
-                )
-    ) {
-        DropdownMenuItem(
-            text = text, onClick = onClick, leadingIcon = leadingIcon,
-            colors = MenuDefaults.itemColors(
-                textColor = MaterialTheme.colorScheme.onSurface,
-                leadingIconColor = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        )
-    }
-}
-
-@Composable
-fun rememberKatexBaseHtmlTemplate(
-    backgroundColor: String, textColor: String, errorColor: String, throwOnError: Boolean
-): String {
-    return remember(backgroundColor, textColor, errorColor, throwOnError) {
-        generateKatexBaseHtmlTemplateString(backgroundColor, textColor, errorColor, throwOnError)
-    }
-}
 
 @Composable
 internal fun AiMessageContent(
     message: Message,
     appViewModel: AppViewModel,
     fullMessageTextToCopy: String,
+    isStreaming: Boolean,
     showLoadingDots: Boolean,
+    isListScrolling: Boolean,
     contentColor: Color,
     onUserInteraction: () -> Unit,
+    onAiMessageLongPress: (Message) -> Unit,
     modifier: Modifier = Modifier
 ) {
     Log.d(
@@ -129,352 +71,119 @@ internal fun AiMessageContent(
         }'"
     )
 
-    val clipboardManager = LocalClipboardManager.current
-    val density = LocalDensity.current
-
-    var isAiContextMenuVisible by remember(fullMessageTextToCopy) { mutableStateOf(false) }
-    var pressOffset by remember(fullMessageTextToCopy) { mutableStateOf(Offset.Zero) }
-    var showSelectableTextDialog by remember(fullMessageTextToCopy) { mutableStateOf(false) }
-
-    var displayedTextForTypewriter by remember(message.id) { mutableStateOf("") }
-    var targetPlainTextMessage by remember(message.id) { mutableStateOf("") }
-
-    val webViewContentId = remember(message.id) { "${message.id}_ai_content_wv_final" }
-
-    LaunchedEffect(message.id, appViewModel.markdownChunkToAppendFlow) {
-        var accumulatedPlainText = ""
-        Log.d(
-            "AiMessageContent_Stream",
-            "MsgID ${message.id.take(4)}: Subscribing to markdown chunks."
-        )
-        appViewModel.markdownChunkToAppendFlow
-            .filter { (msgId, _) -> msgId == message.id }
-            .collect { (msgIdFromFlow, markdownChunkPair) ->
-                val triggerKey = markdownChunkPair.first
-                val markdownChunk = markdownChunkPair.second
-                Log.d(
-                    "AiMessageContent_Stream",
-                    "MsgID ${message.id.take(4)} (Flow MsgID ${msgIdFromFlow.take(4)}): Received mdChunk (key ${
-                        triggerKey.take(4)
-                    }, len ${markdownChunk.length}): \"${
-                        markdownChunk.take(50).replace("\n", "\\n")
-                    }\""
-                )
-                if (markdownChunk.isNotBlank()) {
-                    val plainTextChunk = convertMarkdownToPlainText(markdownChunk)
-                    Log.d(
-                        "AiMessageContent_Stream",
-                        "MsgID ${message.id.take(4)}: Converted to plainTextChunk (len ${plainTextChunk.length}): \"${
-                            plainTextChunk.take(50).replace("\n", "\\n")
-                        }\""
-                    )
-                    if (plainTextChunk.isNotBlank()) {
-                        accumulatedPlainText += plainTextChunk
-                        targetPlainTextMessage = accumulatedPlainText
-                        Log.d(
-                            "AiMessageContent_Stream",
-                            "MsgID ${message.id.take(4)}: Updated targetPlainTextMessage (len ${targetPlainTextMessage.length}): \"${
-                                targetPlainTextMessage.take(50).replace("\n", "\\n")
-                            }\""
-                        )
-                    } else {
-                        Log.d(
-                            "AiMessageContent_Stream",
-                            "MsgID ${message.id.take(4)}: plainTextChunk was blank after conversion."
-                        )
-                    }
-                } else {
-                    Log.d(
-                        "AiMessageContent_Stream",
-                        "MsgID ${message.id.take(4)}: Received blank mdChunk."
-                    )
-                }
-            }
-        Log.d(
-            "AiMessageContent_Stream",
-            "MsgID ${message.id.take(4)}: Finished collecting markdown chunks (flow might have completed or coroutine cancelled)."
-        )
-    }
-
-    LaunchedEffect(targetPlainTextMessage) {
-        Log.d(
-            "AiMessageContent_Typewriter",
-            "Effect run for MsgID ${message.id.take(4)}. showLoadingDots: $showLoadingDots. Target='${
-                targetPlainTextMessage.take(50).replace("\n", "\\n")
-            }'. CurrentDisplay='${displayedTextForTypewriter.take(50).replace("\n", "\\n")}'"
-        )
-        if (showLoadingDots) {
-            if (displayedTextForTypewriter.length < targetPlainTextMessage.length) {
-                val newChars = targetPlainTextMessage.substring(displayedTextForTypewriter.length)
-                Log.d(
-                    "AiMessageContent_Typewriter",
-                    "MsgID ${message.id.take(4)}: New chars to type: '${
-                        newChars.take(50).replace("\n", "\\n")
-                    }'"
-                )
-                newChars.forEach { char ->
-                    displayedTextForTypewriter += char
-                    delay(TYPEWRITER_DELAY_MS)
-                }
-                Log.d(
-                    "AiMessageContent_Typewriter",
-                    "MsgID ${message.id.take(4)}: Finished typing loop. Displayed: '${
-                        displayedTextForTypewriter.take(50).replace("\n", "\\n")
-                    }'"
-                )
-            } else if (displayedTextForTypewriter.length > targetPlainTextMessage.length) {
-                Log.d(
-                    "AiMessageContent_Typewriter",
-                    "MsgID ${message.id.take(4)}: Target is shorter. Resetting displayed text to target."
-                )
-                displayedTextForTypewriter = targetPlainTextMessage
-            } else {
-                Log.d(
-                    "AiMessageContent_Typewriter",
-                    "MsgID ${message.id.take(4)}: No new chars to type or target is not shorter."
-                )
-            }
-        } else {
-            Log.d(
-                "AiMessageContent_Typewriter",
-                "MsgID ${message.id.take(4)}: Not in showLoadingDots mode. CurrentDisplay='${
-                    displayedTextForTypewriter.take(50).replace("\n", "\\n")
-                }'. message.text blank: ${message.text.isBlank()}"
-            )
-        }
-    }
-
-
-    val finalHtmlInput = remember(
-        message.text,
-        message.htmlContent,
-        message.sender,
-        message.isError,
-        showLoadingDots
-    ) {
-        if (message.sender == Sender.AI && !message.isError && !showLoadingDots) {
-            if (!message.htmlContent.isNullOrBlank()) {
-                Log.d(
-                    "AiMessageContent_FinalHTML",
-                    "Using pre-rendered HTML for MsgID ${message.id.take(4)}"
-                )
-                message.htmlContent!!
-            } else if (message.text.isNotBlank()) {
-                Log.d(
-                    "AiMessageContent_FinalHTML",
-                    "MsgID ${message.id.take(4)}: Generating finalHtmlInput from message.text (len ${message.text.length})"
-                )
-                convertMarkdownToHtml(message.text.trim())
-            } else {
-                Log.d(
-                    "AiMessageContent_FinalHTML",
-                    "MsgID ${message.id.take(4)}: Final HTML is empty because message.text is blank."
-                )
-                ""
-            }
-        } else {
-            Log.d(
-                "AiMessageContent_FinalHTML",
-                "MsgID ${message.id.take(4)}: Not generating final HTML. sender=${message.sender}, isError=${message.isError}, showLoadingDots=$showLoadingDots"
-            )
-            ""
-        }
-    }
-
+    val haptic = LocalHapticFeedback.current
     Column(
-        modifier = modifier.pointerInput(fullMessageTextToCopy) {
-            detectTapGestures(onLongPress = { offsetValue ->
-                onUserInteraction(); pressOffset = offsetValue; isAiContextMenuVisible = true
-            })
-        }
+        modifier = modifier
+            .pointerInput(fullMessageTextToCopy) {
+                detectTapGestures(onLongPress = {
+                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                    onUserInteraction()
+                    onAiMessageLongPress(message)
+                })
+            }
     ) {
-        Log.d(
-            "AiMessageContent_Render",
-            "Rendering Column for MsgID ${message.id.take(4)}. showLoadingDots: $showLoadingDots. displayedText='${
-                displayedTextForTypewriter.take(30).replace("\n", "\\n")
-            }', targetText='${
-                targetPlainTextMessage.take(30).replace("\n", "\\n")
-            }', finalHtmlInput blank: ${finalHtmlInput.isBlank()}"
-        )
-
-        if (showLoadingDots) {
-            if (displayedTextForTypewriter.isBlank() && targetPlainTextMessage.isBlank()) {
-                Log.d(
-                    "AiMessageContent_Render",
-                    "MsgID ${message.id.take(4)}: Showing loading dots (initial stream)."
-                )
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .defaultMinSize(minHeight = 28.dp)
-                ) {
-                    ThreeDotsLoadingAnimation(
-                        dotColor = contentColor,
-                        modifier = Modifier.offset(y = (-6).dp)
-                    )
-                }
-            } else {
-                Log.d(
-                    "AiMessageContent_Render",
-                    "MsgID ${message.id.take(4)}: Showing typewriter text (len ${displayedTextForTypewriter.length}): '${
-                        displayedTextForTypewriter.take(50).replace("\n", "\\n")
-                    }'"
-                )
-                SelectionContainer(modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        text = displayedTextForTypewriter.trimStart().ifEmpty { " " },
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = contentColor,
-                        modifier = Modifier
-                            .padding(horizontal = 12.dp, vertical = 8.dp)
-                            .defaultMinSize(minHeight = 20.dp)
-                    )
-                }
-            }
-        } else {
-            if (message.sender == Sender.AI && !message.isError) {
-                if (finalHtmlInput.isNotBlank()) {
-                    Log.d(
-                        "AiMessageContent_Render",
-                        "MsgID ${message.id.take(4)}: Rendering PooledKatexWebView with final HTML (len ${finalHtmlInput.length})."
-                    )
-                    val textColorHex = remember(contentColor) { contentColor.toHexCss() }
-                    val baseHtmlTemplate = rememberKatexBaseHtmlTemplate(
-                        backgroundColor = "transparent",
-                        textColor = textColorHex,
-                        errorColor = "#CD5C5C",
-                        throwOnError = false
-                    )
-                    PooledKatexWebView(
-                        appViewModel = appViewModel,
-                        contentId = webViewContentId,
-                        initialLatexInput = finalHtmlInput,
-                        htmlChunkToAppend = null,
-                        htmlTemplate = baseHtmlTemplate,
-                        modifier = Modifier.heightIn(min = 1.dp)
-                    )
-                } else if (message.text.isBlank()) {
-                    Log.d(
-                        "AiMessageContent_Render",
-                        "MsgID ${message.id.take(4)}: AI finished, message is blank. Showing spacer."
-                    )
-                    Spacer(Modifier.height(1.dp))
-                } else {
-                    Log.d(
-                        "AiMessageContent_Render",
-                        "MsgID ${message.id.take(4)}: AI finished, finalHtmlInput is blank but message.text is not. Fallback to plain text."
-                    )
-                    Text(
-                        text = convertMarkdownToPlainText(message.text.trimStart()),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = contentColor,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
-                    )
-                }
-            } else {
-                Log.d(
-                    "AiMessageContent_Render",
-                    "MsgID ${message.id.take(4)}: Not AI or isError. sender=${message.sender}, isError=${message.isError}"
-                )
-                if (message.isError && message.text.isNotBlank()) {
-                    Text(
-                        text = message.text,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
-                    )
-                } else if (message.sender != Sender.AI && message.text.isNotBlank()) {
-                    Text(
-                        text = message.text,
-                        color = contentColor,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
-                    )
-                } else {
-                    Spacer(Modifier.height(1.dp))
-                }
-            }
-        }
-
-        if (isAiContextMenuVisible) {
-            val localContextForToast = LocalContext.current
-            val aiMenuVisibility = remember { MutableTransitionState(false) }.apply {
-                targetState = isAiContextMenuVisible
-            }
-            val dropdownMenuOffsetX =
-                with(density) { pressOffset.x.toDp() } + CONTEXT_MENU_FINE_TUNE_OFFSET_X
-            val dropdownMenuOffsetY =
-                with(density) { pressOffset.y.toDp() } + CONTEXT_MENU_FINE_TUNE_OFFSET_Y
-            Popup(
-                alignment = Alignment.TopStart,
-                offset = IntOffset(
-                    x = with(density) { dropdownMenuOffsetX.roundToPx() },
-                    y = with(density) { dropdownMenuOffsetY.roundToPx() }),
-                onDismissRequest = { isAiContextMenuVisible = false },
-                properties = PopupProperties(
-                    focusable = true,
-                    dismissOnBackPress = true,
-                    dismissOnClickOutside = true,
-                    clippingEnabled = false
-                )
+        if (showLoadingDots && message.text.isBlank()) {
+            Log.d(
+                "AiMessageContent_Render",
+                "MsgID ${message.id.take(4)}: Showing loading dots (initial stream)."
+            )
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .defaultMinSize(minHeight = 28.dp)
             ) {
-                Surface(
-                    shape = RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS),
-                    color = MaterialTheme.colorScheme.surface,
-                    tonalElevation = 3.dp,
-                    modifier = Modifier
-                        .width(CONTEXT_MENU_FIXED_WIDTH)
-                        .shadow(
-                            elevation = 8.dp,
-                            shape = RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS)
-                        )
-                        .padding(1.dp)
-                ) {
-                    Column {
-                        AnimatedDropdownMenuItem(
-                            visibleState = aiMenuVisibility,
-                            delay = 0,
-                            text = { Text("复制") },
-                            onClick = {
-                                clipboardManager.setText(AnnotatedString(fullMessageTextToCopy))
-                                Toast.makeText(
-                                    localContextForToast,
-                                    "AI回复已复制",
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                                isAiContextMenuVisible = false
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Filled.ContentCopy,
-                                    "复制AI回复",
-                                    Modifier.size(CONTEXT_MENU_ITEM_ICON_SIZE)
+                ThreeDotsLoadingAnimation(
+                    dotColor = contentColor,
+                    modifier = Modifier.offset(y = (-6).dp)
+                )
+            }
+        } else if (message.isError && message.text.isNotBlank()) {
+            Log.d(
+                "AiMessageContent_Render",
+                "MsgID ${message.id.take(4)}: Is an error message."
+            )
+            Text(
+                text = message.text,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+            )
+        } else if (message.sender == Sender.AI) {
+            // Use RichText to render markdown content natively in Compose, both for streaming and final text.
+            val blocks = parseMarkdownToBlocks(message.text)
+            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
+                blocks.forEach { block ->
+                    when (block) {
+                        is MarkdownBlock.Header -> {
+                            Text(
+                                text = block.text,
+                                style = TextStyle(
+                                    fontSize = when (block.level) {
+                                        1 -> 28.sp
+                                        2 -> 24.sp
+                                        else -> 20.sp
+                                    },
+                                    fontWeight = FontWeight.Bold
+                                ),
+                                color = contentColor
+                            )
+                        }
+                        is MarkdownBlock.Text -> {
+                            Text(
+                                text = block.text,
+                                color = contentColor
+                            )
+                        }
+                        is MarkdownBlock.CodeBlock -> {
+                            Box(modifier = Modifier.padding(vertical = 8.dp)) {
+                                CodeBlock(
+                                    rawText = block.rawText,
+                                    language = block.language,
+                                    contentColor = contentColor
                                 )
-                            })
-                        AnimatedDropdownMenuItem(
-                            visibleState = aiMenuVisibility,
-                            delay = 30,
-                            text = { Text("选择文本") },
-                            onClick = {
-                                showSelectableTextDialog = true; isAiContextMenuVisible = false
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Outlined.SelectAll,
-                                    "选择文本",
-                                    Modifier.size(CONTEXT_MENU_ITEM_ICON_SIZE)
+                            }
+                        }
+                        is MarkdownBlock.ListItem -> {
+                            Row {
+                                Text(
+                                    text = "• ",
+                                    color = contentColor
                                 )
-                            })
+                                Text(
+                                    text = block.text,
+                                    color = contentColor
+                                )
+                            }
+                        }
+                        is MarkdownBlock.MathBlock -> {
+                            Text(
+                                text = LatexToUnicode.convert(block.text),
+                                color = contentColor,
+                                modifier = Modifier.padding(vertical = 4.dp)
+                            )
+                        }
                     }
                 }
             }
+        } else if (message.sender != Sender.AI && message.text.isNotBlank()) {
+            Log.d(
+                "AiMessageContent_Render",
+                "MsgID ${message.id.take(4)}: Is a user message."
+            )
+            Text(
+                text = message.text,
+                color = contentColor,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+            )
+        } else {
+            Log.d(
+                "AiMessageContent_Render",
+                "MsgID ${message.id.take(4)}: Fallback to spacer for other cases."
+            )
+            Spacer(Modifier.height(0.dp))
         }
 
-        if (showSelectableTextDialog) {
-            SelectableTextDialog(
-                textToDisplay = fullMessageTextToCopy,
-                onDismissRequest = { showSelectableTextDialog = false })
-        }
-    }
+   }
 }
 
 @Composable
@@ -493,7 +202,7 @@ internal fun SelectableTextDialog(textToDisplay: String, onDismissRequest: () ->
                 .fillMaxWidth(0.92f)
                 .padding(vertical = 24.dp)
                 .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.75f),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            colors = CardDefaults.cardColors(containerColor = Color.White)
         ) {
             SelectionContainer(modifier = Modifier.padding(20.dp)) {
                 Text(
@@ -506,6 +215,46 @@ internal fun SelectableTextDialog(textToDisplay: String, onDismissRequest: () ->
         }
     }
 }
+
+@Composable
+fun CodeBlock(rawText: String, language: String?, contentColor: Color) {
+    val clipboardManager = LocalClipboardManager.current
+    val context = LocalContext.current
+    val annotatedString = CodeHighlighter.highlightToAnnotatedString(rawText, language)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFFF3F3F3), RoundedCornerShape(16.dp))
+            .padding(top = 12.dp, start = 16.dp, end = 16.dp, bottom = 4.dp)
+    ) {
+        Text(
+            text = annotatedString,
+            style = TextStyle(
+                fontFamily = FontFamily.Monospace,
+                fontSize = 13.sp,
+                lineHeight = 19.sp
+            ),
+            color = contentColor
+        )
+        Box(modifier = Modifier.fillMaxWidth()) {
+            IconButton(
+                onClick = {
+                    clipboardManager.setText(AnnotatedString(rawText))
+                    Toast.makeText(context, "代码已复制", Toast.LENGTH_SHORT).show()
+                },
+                modifier = Modifier.align(Alignment.CenterEnd)
+            ) {
+                Icon(
+                    Icons.Filled.ContentCopy,
+                    contentDescription = "复制",
+                    modifier = Modifier.size(20.dp),
+                    tint = contentColor.copy(alpha = 0.7f)
+                )
+            }
+        }
+    }
+}
+
 
 @Composable
 fun ThreeDotsLoadingAnimation(

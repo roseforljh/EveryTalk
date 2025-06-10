@@ -6,7 +6,6 @@ import com.example.everytalk.data.DataClass.ApiConfig
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.DataClass.Sender
 import com.example.everytalk.StateControler.ViewModelStateHolder
-import com.example.everytalk.util.convertMarkdownToHtml
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -19,9 +18,12 @@ class DataPersistenceManager(
 ) {
     private val TAG = "PersistenceManager"
 
-    fun loadInitialData(onLoadingComplete: (initialConfigPresent: Boolean, initialHistoryPresent: Boolean) -> Unit) {
+    fun loadInitialData(
+        loadLastChat: Boolean = true,
+        onLoadingComplete: (initialConfigPresent: Boolean, initialHistoryPresent: Boolean) -> Unit
+    ) {
         viewModelScope.launch(Dispatchers.IO) {
-            Log.d(TAG, "loadInitialData: 开始加载初始数据 (IO Thread)...")
+            Log.d(TAG, "loadInitialData: 开始加载初始数据 (IO Thread)... loadLastChat: $loadLastChat")
             var initialConfigPresent = false
             var initialHistoryPresent = false
 
@@ -69,51 +71,37 @@ class DataPersistenceManager(
                 Log.i(TAG, "loadInitialData: 最终选中的配置: ${finalSelectedConfig?.model ?: "无"}")
 
                 Log.d(TAG, "loadInitialData: 调用 dataSource.loadChatHistory()...")
-                val loadedHistory: List<List<Message>> = dataSource.loadChatHistory()
+                val loadedHistoryRaw: List<List<Message>> = dataSource.loadChatHistory()
+                val loadedHistory = loadedHistoryRaw.map { conversation ->
+                    conversation.map { message ->
+                        message
+                    }
+                }
                 initialHistoryPresent = loadedHistory.isNotEmpty()
                 Log.i(
                     TAG,
-                    "loadInitialData: 聊天历史加载完成。数量: ${loadedHistory.size}, initialHistoryPresent: $initialHistoryPresent"
+                    "loadInitialData: 聊天历史加载并预处理完成。数量: ${loadedHistory.size}, initialHistoryPresent: $initialHistoryPresent"
                 )
 
-                Log.d(TAG, "loadInitialData: 调用 dataSource.loadLastOpenChatInternal()...")
-                val lastOpenChatMessagesLoaded: List<Message> =
-                    dataSource.loadLastOpenChatInternal()
-                Log.i(
-                    TAG,
-                    "loadInitialData: 最后打开的聊天加载完成。消息数量: ${lastOpenChatMessagesLoaded.size}"
-                )
+                val processedLastOpenChatMessages = if (loadLastChat) {
+                    Log.d(TAG, "loadInitialData: 调用 dataSource.loadLastOpenChatInternal()...")
+                    val lastOpenChatMessagesLoaded: List<Message> = dataSource.loadLastOpenChatInternal()
+                    Log.i(TAG, "loadInitialData: 最后打开的聊天加载完成。消息数量: ${lastOpenChatMessagesLoaded.size}")
 
-                val processedLastOpenChatMessages = if (lastOpenChatMessagesLoaded.isNotEmpty()) {
-                    Log.d(
-                        TAG,
-                        "loadInitialData: 开始为 lastOpenChatMessages 预处理 htmlContent 和 contentStarted..."
-                    )
-                    lastOpenChatMessagesLoaded.map { message ->
-                        val updatedContentStarted =
-                            message.text.isNotBlank() || !message.reasoning.isNullOrBlank() || message.isError
-                        if (message.sender == Sender.AI && message.text.isNotBlank() && message.htmlContent == null) {
-                            Log.d(
-                                TAG,
-                                "loadInitialData: 预处理 lastOpen: 为消息 ${message.id.take(4)} 生成 htmlContent"
-                            )
-                            message.copy(
-                                htmlContent = convertMarkdownToHtml(message.text),
-                                contentStarted = updatedContentStarted
-                            )
-                        } else {
-                            message.copy(
-                                contentStarted = updatedContentStarted
-                            )
+                    if (lastOpenChatMessagesLoaded.isNotEmpty()) {
+                        Log.d(TAG, "loadInitialData: 开始为 lastOpenChatMessages 预处理 htmlContent 和 contentStarted...")
+                        lastOpenChatMessagesLoaded.map { message ->
+                            val updatedContentStarted = message.text.isNotBlank() || !message.reasoning.isNullOrBlank() || message.isError
+                            message.copy(contentStarted = updatedContentStarted)
                         }
+                    } else {
+                        emptyList()
                     }
                 } else {
+                    Log.i(TAG, "loadInitialData: 跳过加载最后打开的聊天。")
                     emptyList()
                 }
-                Log.d(
-                    TAG,
-                    "loadInitialData: lastOpenChatMessages 的 htmlContent 和 contentStarted 预处理完成。"
-                )
+                Log.d(TAG, "loadInitialData: lastOpenChatMessages 的 htmlContent 和 contentStarted 预处理完成。")
 
                 withContext(Dispatchers.Main.immediate) {
                     Log.d(TAG, "loadInitialData: 切换到主线程更新 StateHolder...")
@@ -121,18 +109,19 @@ class DataPersistenceManager(
                     stateHolder._selectedApiConfig.value = finalSelectedConfig
                     stateHolder._historicalConversations.value = loadedHistory
 
-                    stateHolder.messages.clear()
-                    stateHolder.messages.addAll(processedLastOpenChatMessages)
-
-                    stateHolder.messages.forEach { msg ->
-                        if (msg.contentStarted || msg.isError) {
-                            stateHolder.messageAnimationStates[msg.id] = true
+                    if (loadLastChat) {
+                        stateHolder.messages.clear()
+                        stateHolder.messages.addAll(processedLastOpenChatMessages)
+                        stateHolder.messages.forEach { msg ->
+                            if (msg.contentStarted || msg.isError) {
+                                stateHolder.messageAnimationStates[msg.id] = true
+                            }
                         }
+                        Log.d(TAG, "loadInitialData: StateHolder.messages 已更新为最后打开的聊天。数量: ${stateHolder.messages.size}")
+                    } else {
+                        stateHolder.messages.clear()
+                        Log.d(TAG, "loadInitialData: StateHolder.messages 已清空，因为 loadLastChat=false。")
                     }
-                    Log.d(
-                        TAG,
-                        "loadInitialData: StateHolder.messages 已更新为最后打开的聊天。数量: ${stateHolder.messages.size}"
-                    )
 
                     stateHolder._loadedHistoryIndex.value = null
                     Log.d(

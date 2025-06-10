@@ -17,15 +17,15 @@ enum class Sender {
 @Serializable
 data class Message(
     val id: String = UUID.randomUUID().toString(), // 消息的唯一标识符
-    var text: String, // 主要文本内容 (对于AI，这是最终答案；对于用户，这是输入)
+    val text: String, // 主要文本内容 (对于AI，这是最终答案；对于用户，这是输入)
     val sender: Sender, // 消息发送者 (User, AI, System, Tool)
 
     // --- 思考过程相关字段 ---
-    var reasoning: String? = null, // AI的思考过程文本，由后端 "reasoning" 事件填充
+    val reasoning: String? = null, // AI的思考过程文本，由后端 "reasoning" 事件填充
 
     // --- 状态标记字段 ---
-    var contentStarted: Boolean = false, // 标记主要文本内容(Message.text)是否已开始输出 (对于AI消息)
-    var isError: Boolean = false, // 标记此消息是否表示一个错误
+    val contentStarted: Boolean = false, // 标记主要文本内容(Message.text)是否已开始输出 (对于AI消息)
+    val isError: Boolean = false, // 标记此消息是否表示一个错误
 
     // --- 工具调用相关 (如果适用) ---
     val name: String? = null, // 对于 role="tool" 的消息，这是工具的名称
@@ -37,8 +37,7 @@ data class Message(
     // --- Web搜索相关字段 ---
     val webSearchResults: List<WebSearchResult>? = null, // 存储从后端接收到的Web搜索结果
 
-    var currentWebSearchStage: String? = null, // 当前Web搜索/分析阶段 (例如："web_indexing_started", "web_analysis_complete")
-    val htmlContent: String? = null, // HTML内容，假设它已经是String
+    val currentWebSearchStage: String? = null, // 当前Web搜索/分析阶段 (例如："web_indexing_started", "web_analysis_complete")
 
     /**
      * 存储与此消息关联的图片URL列表。

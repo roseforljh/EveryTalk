@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.foundation.layout.*
@@ -58,6 +59,24 @@ private val defaultDrawerWidth = 280.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
 class MainActivity : ComponentActivity() {
+
+    private var fileContentToSave: String? = null
+
+    private val createDocument = registerForActivityResult(ActivityResultContracts.CreateDocument("text/markdown")) { uri ->
+        uri?.let {
+            fileContentToSave?.let { content ->
+                try {
+                    contentResolver.openOutputStream(it)?.use { outputStream ->
+                        outputStream.write(content.toByteArray())
+                    }
+                    fileContentToSave = null
+                } catch (e: Exception) {
+                    Log.e("MainActivity", "Failed to save file", e)
+                }
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -83,6 +102,13 @@ class MainActivity : ComponentActivity() {
                         if (message.isNotBlank() && snackbarHostState.currentSnackbarData?.visuals?.message != message) {
                             snackbarHostState.showSnackbar(message)
                         }
+                    }
+                }
+
+                LaunchedEffect(Unit) {
+                    appViewModel.exportRequest.collectLatest { (fileName, content) ->
+                        fileContentToSave = content
+                        createDocument.launch(fileName)
                     }
                 }
 
