@@ -1,5 +1,4 @@
-package com.example.everytalk.data.DataClass // 请确认包名是否正确
-
+package com.example.everytalk.data.DataClass
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Contextual
@@ -25,7 +24,7 @@ data class ChatRequest(
     val forceGoogleReasoningPrompt: Boolean? = null,
 
     @SerialName("useWebSearch")
-    val useWebSearch: Boolean? = null, // 用于通用的联网搜索标志
+    val useWebSearch: Boolean? = null,
 
     @SerialName("generation_config")
     val generationConfig: GenerationConfig? = null,
@@ -34,12 +33,12 @@ data class ChatRequest(
     val tools: List<Map<String, @Contextual Any>>? = null,
 
     @SerialName("tool_choice")
-    val toolChoice: @Contextual Any? = null, // 如果 tool_choice 也是复杂对象，可能也需要具体类型或多态
+    val toolChoice: @Contextual Any? = null,
 
     @SerialName("qwen_enable_search")
     val qwenEnableSearch: Boolean? = null,
 
-    @SerialName("customModelParameters") // 用于其他模型的、未显式定义的自定义参数
+    @SerialName("customModelParameters")
     val customModelParameters: Map<String, @Contextual Any>? = null,
 
     @SerialName("customExtraBody")

@@ -1,6 +1,5 @@
 package com.example.everytalk.ui.screens.MainScreen.drawer
 
-import android.util.Log
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -19,7 +18,9 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Fill
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -34,7 +35,7 @@ import kotlinx.coroutines.launch
 import kotlin.math.max
 import kotlin.math.roundToInt
 
-private val LIST_ITEM_MIN_HEIGHT = 64.dp // 更高的行高，按需调整
+private val LIST_ITEM_MIN_HEIGHT = 64.dp
 
 @Composable
 internal fun DrawerConversationListItem(
@@ -65,7 +66,6 @@ internal fun DrawerConversationListItem(
 
     val isActuallyActive = loadedHistoryIndex == originalIndex
 
-    // 自定义涟漪效果相关状态
     var rippleState by remember { mutableStateOf<CustomRippleState>(CustomRippleState.Idle) }
     var currentPressPosition by remember { mutableStateOf(Offset.Zero) }
     val animationProgress by animateFloatAsState(
@@ -83,11 +83,12 @@ internal fun DrawerConversationListItem(
     )
     val scope = rememberCoroutineScope()
     var pressAndHoldJob by remember { mutableStateOf<Job?>(null) }
+    val haptic = LocalHapticFeedback.current
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(LIST_ITEM_MIN_HEIGHT) // ★ 保证点击区域更高，涟漪也会变高
+            .height(LIST_ITEM_MIN_HEIGHT)
             .clipToBounds()
             .pointerInput(originalIndex) {
                 detectTapGestures(
@@ -113,13 +114,10 @@ internal fun DrawerConversationListItem(
                         }
                     },
                     onLongPress = { offset ->
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         pressAndHoldJob?.cancel()
                         rippleState = CustomRippleState.Idle
                         onExpandItem(originalIndex, offset)
-                        Log.d(
-                            "DrawerListItem",
-                            "长按索引 $originalIndex, 触发 onExpandItem"
-                        )
                     }
                 )
             }
@@ -147,7 +145,7 @@ internal fun DrawerConversationListItem(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(LIST_ITEM_MIN_HEIGHT),
-                verticalAlignment = Alignment.CenterVertically // 文字竖直居中
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 if (isActuallyActive) {
                     Spacer(Modifier.width(16.dp))
@@ -183,7 +181,6 @@ internal fun DrawerConversationListItem(
                 )
             }
 
-            // 菜单
             val currentLongPressPosition = longPressPositionForMenu
             if (expandedItemIndex == originalIndex && currentLongPressPosition != null) {
                 ConversationItemMenu(

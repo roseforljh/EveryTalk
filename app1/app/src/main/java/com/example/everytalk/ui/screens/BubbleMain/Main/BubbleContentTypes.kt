@@ -1,6 +1,5 @@
 package com.example.everytalk.ui.screens.BubbleMain.Main
 
-import android.util.Log
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
@@ -30,6 +29,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -70,6 +70,7 @@ internal fun UserOrErrorMessageContent(
     val density = LocalDensity.current
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
+    val haptic = LocalHapticFeedback.current
 
     Box(
         modifier = modifier
@@ -85,6 +86,7 @@ internal fun UserOrErrorMessageContent(
                 .pointerInput(message.id) {
                     detectTapGestures(
                         onLongPress = { offset ->
+                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                             onUserInteraction()
                             if (!isError) {
                                 pressOffset = offset
@@ -275,34 +277,16 @@ fun parseMarkdownSegments(markdownInput: String): List<TextSegment> {
     val segments = mutableListOf<TextSegment>()
     var currentIndex = 0
 
-    Log.d(
-        "ParseMarkdownOpt",
-        "输入 (长度 ${markdownInput.length}):\nSTART_MD\n${
-            markdownInput.take(200).replace("\n", "\\n")
-        }...\nEND_MD"
-    )
-
     var matchResult = GFM_CLOSED_CODE_BLOCK_REGEX.find(markdownInput, currentIndex)
 
     while (matchResult != null) {
         val matchStart = matchResult.range.first
         val matchEnd = matchResult.range.last
 
-        Log.d(
-            "ParseMarkdownOpt",
-            "找到闭合代码块. 范围: ${matchResult.range}. 当前索引(之前): $currentIndex"
-        )
-
         if (matchStart > currentIndex) {
             val normalText = markdownInput.substring(currentIndex, matchStart)
             if (normalText.isNotBlank()) {
                 segments.add(TextSegment.Normal(normalText.trim()))
-                Log.d(
-                    "ParseMarkdownOpt",
-                    "添加普通文本 (闭合块之前): '${
-                        normalText.trim().take(50).replace("\n", "\\n")
-                    }'"
-                )
             }
         }
 
@@ -310,30 +294,13 @@ fun parseMarkdownSegments(markdownInput: String): List<TextSegment> {
             ?.takeIf { it.isNotEmpty() }
         val code = matchResult.groups[2]?.value ?: ""
         segments.add(TextSegment.CodeBlock(language, code))
-        Log.d(
-            "ParseMarkdownOpt",
-            "添加闭合代码块: 语言='$language', 代码='${
-                code.take(50).replace("\n", "\\n")
-            }'"
-        )
 
         currentIndex = matchEnd + 1
         matchResult = GFM_CLOSED_CODE_BLOCK_REGEX.find(markdownInput, currentIndex)
     }
 
-    Log.d(
-        "ParseMarkdownOpt",
-        "闭合代码块循环结束. 当前索引: $currentIndex, Markdown长度: ${markdownInput.length}"
-    )
-
     if (currentIndex < markdownInput.length) {
         val remainingText = markdownInput.substring(currentIndex)
-        Log.d(
-            "ParseMarkdownOpt",
-            "剩余文本 (长度 ${remainingText.length}): '${
-                remainingText.take(100).replace("\n", "\\n")
-            }'"
-        )
 
         val openBlockMatch = CODE_BLOCK_START_REGEX.find(remainingText)
         if (openBlockMatch != null) {
@@ -343,12 +310,6 @@ fun parseMarkdownSegments(markdownInput: String): List<TextSegment> {
                 val normalPrefix = remainingText.substring(0, openBlockStartInRemaining)
                 if (normalPrefix.isNotBlank()) {
                     segments.add(TextSegment.Normal(normalPrefix.trim()))
-                    Log.d(
-                        "ParseMarkdownOpt",
-                        "添加普通文本 (开放代码块前缀): '${
-                            normalPrefix.trim().take(50).replace("\n", "\\n")
-                        }'"
-                    )
                 }
             }
 
@@ -372,33 +333,15 @@ fun parseMarkdownSegments(markdownInput: String): List<TextSegment> {
                 codeContent = ""
             }
             segments.add(TextSegment.CodeBlock(lang, codeContent))
-            Log.d(
-                "ParseMarkdownOpt",
-                "从剩余文本添加开放代码块: 语言='$lang', 代码预览='${
-                    codeContent.take(50).replace("\n", "\\n")
-                }'"
-            )
 
         } else {
             if (remainingText.isNotBlank()) {
                 segments.add(TextSegment.Normal(remainingText.trim()))
-                Log.d(
-                    "ParseMarkdownOpt",
-                    "剩余文本是普通文本: '${
-                        remainingText.trim().take(50).replace("\n", "\\n")
-                    }'"
-                )
             }
         }
     }
 
     if (segments.isEmpty() && markdownInput.isNotBlank()) {
-        Log.w(
-            "ParseMarkdownOpt",
-            "片段列表为空，但Markdown非空白. Markdown是否以 '```' 开头: ${
-                markdownInput.startsWith("```")
-            }"
-        )
         if (markdownInput.startsWith("```")) {
             val codeBlockCandidate = markdownInput.substring(3)
             val firstNewlineIndex = codeBlockCandidate.indexOf('\n')
@@ -418,35 +361,15 @@ fun parseMarkdownSegments(markdownInput: String): List<TextSegment> {
                 codeContent = ""
             }
             segments.add(TextSegment.CodeBlock(lang, codeContent))
-            Log.d(
-                "ParseMarkdownOpt",
-                "将整个输入添加为开放代码块: 语言='$lang', 代码预览='${
-                    codeContent.take(50).replace("\n", "\\n")
-                }'"
-            )
         } else {
             segments.add(TextSegment.Normal(markdownInput.trim()))
-            Log.d(
-                "ParseMarkdownOpt",
-                "整个输入是普通文本 (片段为空且不以 ``` 开头)."
-            )
         }
     }
 
-    Log.i(
-        "ParseMarkdownOpt",
-        "最终片段数量: ${segments.size}, 类型: ${segments.map { it::class.simpleName }}"
-    )
     return segments
 }
 
 fun extractStreamingCodeContent(textAlreadyTrimmedAndStartsWithTripleQuote: String): Pair<String?, String> {
-    Log.d(
-        "ExtractStreamCode",
-        "用于提取的输入: \"${
-            textAlreadyTrimmedAndStartsWithTripleQuote.take(30).replace("\n", "\\n")
-        }\""
-    )
     val contentAfterTripleTicks =
         textAlreadyTrimmedAndStartsWithTripleQuote.substring(3)
     val firstNewlineIndex = contentAfterTripleTicks.indexOf('\n')

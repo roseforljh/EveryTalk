@@ -1,6 +1,5 @@
 package com.example.everytalk.StateControler
 
-import android.util.Log
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.DrawerValue
 import androidx.compose.runtime.mutableStateListOf
@@ -52,7 +51,6 @@ class ViewModelStateHolder {
     val _showSourcesDialog = MutableStateFlow(false)
     val _sourcesForDialog = MutableStateFlow<List<WebSearchResult>>(emptyList())
 
-    // 新增：用于从思考框请求滚动的事件
     internal val _requestScrollForReasoningBoxEvent = MutableSharedFlow<Unit>(replay = 0, extraBufferCapacity = 1)
 
     fun clearForNewChat() {
@@ -73,6 +71,5 @@ class ViewModelStateHolder {
 
     fun clearSelectedMedia() {
         selectedMediaItems.clear()
-        Log.d("ViewModelStateHolder", "已选媒体已清除 (使用 mutableStateListOf)")
     }
 }

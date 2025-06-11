@@ -1,7 +1,6 @@
 package com.example.everytalk.data.local
 
 import android.content.Context
-import android.util.Log
 import androidx.core.content.edit
 import com.example.everytalk.data.DataClass.ApiConfig
 import com.example.everytalk.data.DataClass.Message
@@ -12,7 +11,6 @@ import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerializationException
 
-private const val TAG = "SPDataSource"
 private const val PREFS_NAME = "app_settings"
 private const val KEY_API_CONFIG_LIST = "api_config_list_v2"
 private const val KEY_SELECTED_API_CONFIG_ID = "selected_api_config_id_v1"
@@ -24,7 +22,7 @@ private const val KEY_CUSTOM_PROVIDERS = "custom_providers_v1"
 private val json = Json {
     ignoreUnknownKeys = true
     prettyPrint = false
-    encodeDefaults = false // 设置为 false 以减少存储默认值
+    encodeDefaults = false
     isLenient = true
 }
 
@@ -45,73 +43,36 @@ class SharedPreferencesDataSource(context: Context) {
         try {
             val jsonString = json.encodeToString(serializer, value)
             sharedPrefs.edit { putString(key, jsonString) }
-            Log.d(TAG, "saveData: Key '$key' saved. Data preview: ${jsonString.take(150)}...")
         } catch (e: SerializationException) {
-            Log.e(
-                TAG,
-                "saveData: Serialization error for key '$key'. Value (type: ${value?.let { it::class.simpleName } ?: "null"}). Error: ${e.message}",
-                e)
         } catch (e: Exception) {
-            Log.e(
-                TAG,
-                "saveData: Unexpected error saving data for key '$key'. Value (type: ${value?.let { it::class.simpleName } ?: "null"}). Error: ${e.message}",
-                e)
         }
     }
 
     private fun <T> loadData(key: String, serializer: KSerializer<T>, defaultValue: T): T {
         val jsonString = sharedPrefs.getString(key, null)
-        Log.d(
-            TAG,
-            "loadData: Attempting to load key '$key'. Raw JSON string: ${jsonString?.take(200)}"
-        )
         return if (!jsonString.isNullOrEmpty()) {
             try {
-                json.decodeFromString(serializer, jsonString).also {
-                    Log.i(TAG, "loadData: Successfully decoded data for key '$key'.")
-                }
+                json.decodeFromString(serializer, jsonString)
             } catch (e: SerializationException) {
-                Log.e(
-                    TAG,
-                    "loadData: SERIALIZATION ERROR decoding key '$key'. JSON: '$jsonString'. Returning default. Error: ${e.message}",
-                    e
-                )
                 defaultValue
             } catch (e: Exception) {
-                Log.e(
-                    TAG,
-                    "loadData: UNEXPECTED ERROR decoding key '$key'. JSON: '$jsonString'. Returning default. Error: ${e.message}",
-                    e
-                )
                 defaultValue
             }
         } else {
-            Log.w(
-                TAG,
-                "loadData: No data found for key '$key' or string is empty. Returning default."
-            )
             defaultValue
         }
     }
 
     fun saveString(key: String, value: String?) {
         sharedPrefs.edit { putString(key, value) }
-        Log.d(TAG, "saveString: Key '$key' saved. Value: '$value'")
     }
 
     fun getString(key: String, defaultValue: String?): String? {
-        val value = sharedPrefs.getString(key, defaultValue)
-        if (sharedPrefs.contains(key)) {
-            Log.d(TAG, "getString: Key '$key' found. Value loaded: '$value'")
-        } else {
-            Log.w(TAG, "getString: Key '$key' not found. Returning default value: '$defaultValue'")
-        }
-        return value
+        return sharedPrefs.getString(key, defaultValue)
     }
 
     fun remove(key: String) {
         sharedPrefs.edit { remove(key) }
-        Log.i(TAG, "remove: Key '$key' removed from SharedPreferences.")
     }
 
     fun loadApiConfigs(): List<ApiConfig> =

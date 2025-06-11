@@ -1,11 +1,8 @@
 package com.example.everytalk.StateControler
 
 import android.app.Application
-import android.app.ActivityManager
 import android.content.ClipboardManager
 import android.content.Context
-import android.net.Uri
-import android.util.Log
 import androidx.compose.material3.DrawerState
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.snapshots.SnapshotStateMap
@@ -40,9 +37,6 @@ class AppViewModel(
     application: Application,
     private val dataSource: SharedPreferencesDataSource
 ) : AndroidViewModel(application) {
-
-    private val instanceId = UUID.randomUUID().toString().take(8)
-    private val TAG_APP_VIEW_MODEL = "AppViewModel[ID:$instanceId]"
 
     internal val stateHolder = ViewModelStateHolder()
     private val persistenceManager =
@@ -165,19 +159,13 @@ class AppViewModel(
    val textForSelectionDialog: StateFlow<String> = _textForSelectionDialog.asStateFlow()
 
    init {
-       Log.d(TAG_APP_VIEW_MODEL, "ViewModel 初始化开始")
-
         viewModelScope.launch(Dispatchers.IO) {
             _customProviders.value = dataSource.loadCustomProviders()
         }
 
         persistenceManager.loadInitialData(loadLastChat = false) { initialConfigPresent, initialHistoryPresent ->
-            Log.d(
-                TAG_APP_VIEW_MODEL,
-                "初始数据加载完成。配置存在: $initialConfigPresent, 历史存在: $initialHistoryPresent, 上次会话已跳过加载。"
-            )
             if (!initialConfigPresent) {
-                viewModelScope.launch { Log.i(TAG_APP_VIEW_MODEL, "没有检测到已保存的API配置。") }
+                viewModelScope.launch { }
             }
         }
 
@@ -187,12 +175,7 @@ class AppViewModel(
             apiHandler
             configManager
             messageSender
-            Log.d(
-                TAG_APP_VIEW_MODEL,
-                "ViewModel IO pre-warming of ApiClient and Handlers completed."
-            )
         }
-        Log.d(TAG_APP_VIEW_MODEL, "ViewModel 初始化逻辑结束.")
     }
 
 
@@ -227,7 +210,6 @@ class AppViewModel(
 
     fun toggleWebSearchMode(enabled: Boolean) {
         stateHolder._isWebSearchEnabled.value = enabled
-        Log.d(TAG_APP_VIEW_MODEL, "联网搜索模式切换为: $enabled")
     }
 
     fun addProvider(providerName: String) {
@@ -248,7 +230,6 @@ class AppViewModel(
                 _customProviders.value = currentCustomProviders.toSet()
                 dataSource.saveCustomProviders(currentCustomProviders.toSet())
                 withContext(Dispatchers.Main) { showSnackbar("模型平台 '$trimmedName' 已添加") }
-                Log.i(TAG_APP_VIEW_MODEL, "添加了新的自定义提供商: $trimmedName")
             }
         } else {
             showSnackbar("平台名称不能为空")
@@ -287,7 +268,6 @@ class AppViewModel(
                 withContext(Dispatchers.Main) {
                     showSnackbar("模型平台 '$trimmedProviderName' 已删除")
                 }
-                Log.i(TAG_APP_VIEW_MODEL, "删除了自定义提供商: $trimmedProviderName 和相关配置")
             } else {
                 withContext(Dispatchers.Main) {
                     showSnackbar("未能删除模型平台 '$trimmedProviderName'，可能它不是一个自定义平台。")
@@ -305,7 +285,6 @@ class AppViewModel(
     fun setSearchActiveInDrawer(isActive: Boolean) {
         _isSearchActiveInDrawer.value = isActive
         if (!isActive) _searchQueryInDrawer.value = ""
-        Log.d(TAG_APP_VIEW_MODEL, "抽屉内搜索状态设置为: $isActive")
     }
 
     fun onDrawerSearchQueryChange(query: String) {
@@ -389,13 +368,6 @@ class AppViewModel(
         val originalUserMessageId = messageToRegenerateFrom.id
 
         val originalAttachments = messageToRegenerateFrom.attachments ?: emptyList()
-
-        Log.d(
-            TAG_APP_VIEW_MODEL,
-            "regenerateAiResponse: 用户消息 ID $originalUserMessageId, 文本: '${
-                originalUserMessageText.take(50)
-            }', 附件数: ${originalAttachments.size}"
-        )
 
         viewModelScope.launch(Dispatchers.Main.immediate) {
             val userMessageIndex =
@@ -724,10 +696,8 @@ class AppViewModel(
     }
 
     override fun onCleared() {
-        Log.d(TAG_APP_VIEW_MODEL, "onCleared 开始, 销毁 WebViewPool")
         try {
         } catch (e: Exception) {
-            Log.e(TAG_APP_VIEW_MODEL, "Error in onCleared", e)
         }
         dismissEditDialog(); dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("ViewModel cleared", isNewMessageSend = false)
@@ -736,7 +706,6 @@ class AppViewModel(
         val finalSelectedConfigId = stateHolder._selectedApiConfig.value?.id
         val finalCurrentChatMessages = stateHolder.messages.toList()
 
-        Log.i(TAG_APP_VIEW_MODEL, "onCleared: Preparing to save final states synchronously.")
         try {
             runBlocking(Dispatchers.IO) {
                 historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
@@ -746,10 +715,8 @@ class AppViewModel(
                 dataSource.saveCustomProviders(_customProviders.value)
             }
         } catch (e: Exception) {
-            Log.e(TAG_APP_VIEW_MODEL, "onCleared: Error during runBlocking save operations", e)
         }
         super.onCleared()
-        Log.d(TAG_APP_VIEW_MODEL, "ViewModel onCleared 结束.")
     }
 
 }

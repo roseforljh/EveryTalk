@@ -2,6 +2,10 @@ package com.example.everytalk.util
 
 object LatexToUnicode {
     private val replacements = mapOf(
+        "\\triangle" to "△",
+        "\\angle" to "∠",
+        "\\circ" to "°",
+        "\\sim" to "∼",
         "\\sum" to "∑",
         "\\in" to "∈",
         "\\infty" to "∞",
@@ -74,6 +78,7 @@ object LatexToUnicode {
         "\\ " to " ",
         "\\left" to "",
         "\\right" to "",
+        "\\backslash" to "＼",
     )
 
     private val superscriptMap = mapOf(
@@ -107,25 +112,6 @@ object LatexToUnicode {
         val textRegex = Regex("\\\\text\\{([^}]+)\\}")
         result = result.replace(textRegex) { matchResult ->
             matchResult.groupValues[1]
-        }
-
-        // Handle fractions \frac{a}{b} -> (a)/(b)
-        // Case 1: \frac{...}{...} (well-formed)
-        val fracRegexWellFormed = Regex("\\\\frac\\{([^}]+)\\}\\{([^}]+)\\}")
-        result = result.replace(fracRegexWellFormed) { matchResult ->
-            // Recursively convert numerator and denominator
-            val numerator = _convert(matchResult.groupValues[1])
-            val denominator = _convert(matchResult.groupValues[2])
-            "(${numerator})/(${denominator})"
-        }
-
-        // Case 2: \frac ... { ... } (malformed, numerator not in braces)
-        val fracRegexMalformed = Regex("\\\\frac([^\\{]+)\\{([^}]+)\\}")
-        result = result.replace(fracRegexMalformed) { matchResult ->
-            // Recursively convert numerator and denominator
-            val numerator = _convert(matchResult.groupValues[1].trim())
-            val denominator = _convert(matchResult.groupValues[2])
-            "(${numerator})/(${denominator})"
         }
 
         // Handle superscripts ^{...}

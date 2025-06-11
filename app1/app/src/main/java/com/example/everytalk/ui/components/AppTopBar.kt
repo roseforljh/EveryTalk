@@ -1,11 +1,9 @@
 package com.example.everytalk.ui.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
@@ -28,12 +26,12 @@ fun AppTopBar(
     selectedConfigName: String,
     onMenuClick: () -> Unit,
     onSettingsClick: () -> Unit,
-    onTitleClick: () -> Unit, // 新增：点击标题/模型名称的回调
+    onTitleClick: () -> Unit,
     modifier: Modifier = Modifier,
     barHeight: Dp = 85.dp,
     contentPaddingHorizontal: Dp = 8.dp,
     bottomAlignPadding: Dp = 12.dp,
-    titleFontSize: TextUnit = 12.sp, // 稍微调小一点以便适应胶囊
+    titleFontSize: TextUnit = 12.sp,
     iconButtonSize: Dp = 36.dp,
     iconSize: Dp = 22.dp
 ) {
@@ -51,7 +49,6 @@ fun AppTopBar(
                 .padding(horizontal = contentPaddingHorizontal),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            // Navigation Icon
             Box(
                 modifier = Modifier
                     .size(iconButtonSize)
@@ -69,24 +66,23 @@ fun AppTopBar(
                 }
             }
 
-            // Title as a Capsule Button
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .height(barHeight) // 让Box和Bar一样高，方便垂直居中胶囊
-                    .padding(horizontal = 4.dp) // 给胶囊一些呼吸空间
-                    .align(Alignment.Bottom) // 确保胶囊在底部对齐线上
-                    .padding(bottom = bottomAlignPadding - 4.dp), // 调整胶囊的底部对齐，使其视觉上更协调
-                contentAlignment = Alignment.BottomCenter // 胶囊按钮在Box中底部居中
+                    .height(barHeight)
+                    .padding(horizontal = 4.dp)
+                    .align(Alignment.Bottom)
+                    .padding(bottom = bottomAlignPadding - 4.dp),
+                contentAlignment = Alignment.BottomCenter
             ) {
-                Surface( // 使用Surface制作胶囊背景和形状
-                    shape = CircleShape, // 胶囊形状 (等同于 RoundedCornerShape(percent = 50))
-                    color = Color(0xffececec), // 胶囊背景色
+                Surface(
+                    shape = CircleShape,
+                    color = Color(0xffececec),
                     modifier = Modifier
-                        .height(28.dp) // 胶囊的高度
-                        .wrapContentWidth(unbounded = false) //修饰符以显式声明包裹内容宽度,确保它不超过父容器允许的宽度
-                        .clip(CircleShape) // 确保点击效果也在胶囊内
-                        .clickable(onClick = onTitleClick) // 点击事件
+                        .height(28.dp)
+                        .wrapContentWidth(unbounded = false)
+                        .clip(CircleShape)
+                        .clickable(onClick = onTitleClick)
                 ) {
                     Text(
                         text = selectedConfigName,
@@ -97,15 +93,14 @@ fun AppTopBar(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier
-                            .padding(horizontal = 12.dp, vertical = 4.dp) // 胶囊内部文字的 padding
-                            .align(Alignment.Center) // 文字在Surface内居中
+                            .padding(horizontal = 12.dp, vertical = 4.dp)
+                            .align(Alignment.Center)
                             .offset(y = (-1.8).dp)
                     )
                 }
             }
 
 
-            // Action Icon
             Box(
                 modifier = Modifier
                     .size(iconButtonSize)

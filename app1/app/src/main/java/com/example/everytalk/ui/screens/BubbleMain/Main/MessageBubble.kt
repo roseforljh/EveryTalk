@@ -1,11 +1,11 @@
 package com.example.everytalk.ui.screens.BubbleMain.Main
 
 import android.net.Uri
-import android.util.Log
 import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -15,11 +15,19 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -32,6 +40,7 @@ import com.example.everytalk.data.DataClass.Sender
 import com.example.everytalk.StateControler.AppViewModel
 import com.example.everytalk.model.SelectedMediaItem
 import com.example.everytalk.ui.screens.BubbleMain.AiMessageContent
+import com.example.everytalk.util.TextBlockInfo
 
 
 fun Color.toHexCss(): String {
@@ -60,12 +69,8 @@ fun MessageBubble(
     val aiMessageBlockMaxWidth = maxWidth
     val userMessageBlockMaxWidth = maxWidth * 0.85f
 
-    Log.d(
-        "MessageBubbleRecomp",
-        "ID: ${message.id.take(8)}, Sender: ${message.sender}, ImageUrls: ${message.imageUrls?.size ?: 0}, Attachments: ${message.attachments?.size ?: 0}"
-    )
-
     val isAI = message.sender == Sender.AI
+    val haptic = LocalHapticFeedback.current
     val currentMessageId = message.id
     val displayedMainTextForUserOrError = remember(message.text) { message.text.trim() }
     val displayedReasoningText = remember(message.reasoning) { message.reasoning?.trim() ?: "" }
@@ -116,21 +121,7 @@ fun MessageBubble(
                         AsyncImage(
                             model = ImageRequest.Builder(LocalContext.current).data(imageUri)
                                 .crossfade(true)
-                                .listener(
-                                    onSuccess = { _, result ->
-                                        Log.i(
-                                            "MessageBubbleUserImage",
-                                            "Successfully loaded image: ${result.request.data}"
-                                        )
-                                    },
-                                    onError = { _, result ->
-                                        Log.e(
-                                            "MessageBubbleUserImage",
-                                            "Error loading image: ${result.request.data}",
-                                            result.throwable
-                                        )
-                                    }
-                                ).build(),
+                                .build(),
                             contentDescription = "用户发送的图片 ${index + 1}",
                             modifier = Modifier
                                 .widthIn(max = userMessageBlockMaxWidth * 0.7f)
@@ -175,10 +166,6 @@ fun MessageBubble(
                 horizontalAlignment = Alignment.End
             ) {
                 documentAttachments.forEachIndexed { index, doc ->
-                    Log.d(
-                        "MessageBubbleUserDoc",
-                        "Displaying document: ${doc.displayName}, MIME: ${doc.mimeType}"
-                    )
                     Row(
                         modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
@@ -187,10 +174,6 @@ fun MessageBubble(
                             .padding(horizontal = 10.dp, vertical = 6.dp)
                             .widthIn(max = userMessageBlockMaxWidth * 0.8f)
                             .clickable {
-                                Log.d(
-                                    "MessageBubbleUserDoc",
-                                    "Clicked on document: ${doc.displayName}"
-                                )
                                 viewModel.showSnackbar("点击了文档: ${doc.displayName}")
                             },
                         verticalAlignment = Alignment.CenterVertically
@@ -292,20 +275,89 @@ fun MessageBubble(
                     mainContentHasStarted = message.contentStarted,
                     reasoningTextColor = reasoningTextColor,
                     reasoningToggleDotColor = aiContentColor
-                    // (2) 移除此处的参数传递
-                    // onReasoningBoxBecameVisible = onReasoningBoxBecameVisible
                 )
             }
 
-            val shouldShowAiMessageComponent = isAI && !message.isError && !showLoadingBubble
+            if (isAI && !message.imageUrls.isNullOrEmpty()) {
+                Column(
+                    modifier = Modifier
+                        .widthIn(max = aiMessageBlockMaxWidth)
+                        .padding(bottom = 6.dp),
+                    horizontalAlignment = Alignment.Start
+                ) {
+                    message.imageUrls.forEachIndexed { index, imageUrlString ->
+                        val imageUri = try {
+                            Uri.parse(imageUrlString)
+                        } catch (e: Exception) {
+                            null
+                        }
+                        if (imageUri != null) {
+                            AsyncImage(
+                                model = ImageRequest.Builder(LocalContext.current).data(imageUri)
+                                    .crossfade(true)
+                                    .build(),
+                                contentDescription = "AI发送的图片 ${index + 1}",
+                                modifier = Modifier
+                                    .widthIn(max = aiMessageBlockMaxWidth * 0.7f)
+                                    .heightIn(min = 50.dp, max = 300.dp)
+                                    .aspectRatio(1f, matchHeightConstraintsFirst = false)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Color.LightGray.copy(alpha = 0.3f)),
+                                contentScale = ContentScale.Crop
+                            )
+                            if (index < message.imageUrls.size - 1) Spacer(Modifier.height(6.dp))
+                        } else {
+                            Text(
+                                "图片加载失败: $imageUrlString",
+                                color = Color.Red,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                }
+            }
+
+            val shouldShowAiMessageComponent = isAI && !message.isError && !showLoadingBubble && message.imageUrls.isNullOrEmpty()
             if (shouldShowAiMessageComponent) {
                 val showDotsInsideAiContent =
                     isMainContentStreaming && message.text.isBlank() && !message.contentStarted && !showLoadingBubble
                 if (message.text.isNotBlank() || (message.contentStarted && message.text.isBlank()) || showDotsInsideAiContent) {
+                    val textBlockInfos = remember { mutableStateMapOf<Int, TextBlockInfo>() }
+                    var surfaceCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
+                    val context = LocalContext.current
+
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 4.dp),
+                            .padding(vertical = 4.dp)
+                            .onGloballyPositioned { surfaceCoordinates = it }
+                            .pointerInput(textBlockInfos, surfaceCoordinates) {
+                                detectTapGestures(
+                                    onLongPress = {
+                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                        onUserInteraction()
+                                        onAiMessageLongPress(message)
+                                    },
+                                    onTap = { tapOffsetInSurface ->
+                                        val surfaceCoords = surfaceCoordinates ?: return@detectTapGestures
+                                        val tapOffsetInWindow = surfaceCoords.localToWindow(tapOffsetInSurface)
+
+                                        textBlockInfos.values.forEach { info ->
+                                            if (info.rectInWindow.contains(tapOffsetInWindow)) {
+                                                val tapOffsetInText = tapOffsetInWindow - info.rectInWindow.topLeft
+                                                val charOffset = info.layoutResult.getOffsetForPosition(tapOffsetInText)
+
+                                                info.annotatedString.getStringAnnotations("URL", charOffset, charOffset)
+                                                    .firstOrNull()?.let { annotation ->
+                                                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse(annotation.item))
+                                                        context.startActivity(intent)
+                                                        return@detectTapGestures
+                                                    }
+                                            }
+                                        }
+                                    }
+                                )
+                            },
                         shape = RoundedCornerShape(
                             topStart = if (shouldDisplayReasoningComponentBox) 8.dp else 18.dp,
                             topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 18.dp
@@ -323,7 +375,9 @@ fun MessageBubble(
                             isListScrolling = isListScrolling,
                             contentColor = aiContentColor,
                             onUserInteraction = onUserInteraction,
-                            onAiMessageLongPress = { onAiMessageLongPress(message) },
+                            onTextBlockInfoUpdate = { index, info ->
+                                textBlockInfos[index] = info
+                            },
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 0.dp)
                         )
                     }

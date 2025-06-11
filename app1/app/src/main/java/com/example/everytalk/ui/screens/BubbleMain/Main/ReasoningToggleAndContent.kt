@@ -1,6 +1,5 @@
 package com.example.everytalk.ui.screens.BubbleMain.Main
 
-import android.util.Log
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
 import androidx.compose.animation.expandVertically
@@ -41,8 +40,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-private const val TAG_REASONING = "推理界面"
-
 @Composable
 internal fun ReasoningToggleAndContent(
     currentMessageId: String,
@@ -65,15 +62,6 @@ internal fun ReasoningToggleAndContent(
     val boxBackgroundColor = Color.White.copy(alpha = 0.95f)
     val scrimColor = boxBackgroundColor
     val scrimHeight = 28.dp
-
-    LaunchedEffect(currentMessageId, displayedReasoningText, isReasoningStreaming) {
-        Log.d(
-            "REASON_DBG",
-            "ShowBox=$showInlineStreamingBox, streaming=$isReasoningStreaming, contentStarted=$mainContentHasStarted, text='${
-                displayedReasoningText.take(40)
-            }'"
-        )
-    }
 
     Column(
         modifier = modifier,
@@ -105,10 +93,6 @@ internal fun ReasoningToggleAndContent(
                                 try {
                                     scrollState.animateScrollTo(scrollState.maxValue)
                                 } catch (e: Exception) {
-                                    Log.w(
-                                        TAG_REASONING,
-                                        "[$currentMessageId] 自动滚动失败: ${e.message}"
-                                    )
                                     break
                                 }
                                 if (!isReasoningStreaming) break
@@ -121,10 +105,6 @@ internal fun ReasoningToggleAndContent(
                                 try {
                                     scrollState.animateScrollTo(scrollState.maxValue)
                                 } catch (e: Exception) {
-                                    Log.w(
-                                        TAG_REASONING,
-                                        "[$currentMessageId] 流结束后最终滚动失败: ${e.message}"
-                                    )
                                 }
                             }
                         }

@@ -1,8 +1,7 @@
-package com.example.everytalk.StateControler // 确保这是你 MainActivity 的正确包名
+package com.example.everytalk.StateControler
 
-import android.app.Application // 【新增】导入 Application
+import android.app.Application
 import android.os.Bundle
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -10,13 +9,10 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -41,15 +37,14 @@ import com.example.everytalk.ui.theme.App1Theme
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
-// ViewModel 工厂 (修改后)
 class AppViewModelFactory(
-    private val application: Application, // 【修改】接收 Application
+    private val application: Application,
     private val dataSource: SharedPreferencesDataSource
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(AppViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
-            return AppViewModel(application, dataSource) as T // 【修改】调用新的构造函数
+            return AppViewModel(application, dataSource) as T
         }
         throw IllegalArgumentException("未知的 ViewModel 类: ${modelClass.name}")
     }
@@ -71,7 +66,6 @@ class MainActivity : ComponentActivity() {
                     }
                     fileContentToSave = null
                 } catch (e: Exception) {
-                    Log.e("MainActivity", "Failed to save file", e)
                 }
             }
         }
@@ -86,10 +80,9 @@ class MainActivity : ComponentActivity() {
                 val navController = rememberNavController()
                 val coroutineScope = rememberCoroutineScope()
 
-                // 获取ViewModel实例
                 val appViewModel: AppViewModel = viewModel(
                     factory = AppViewModelFactory(
-                        application, // 【修改】传递 application 实例
+                        application,
                         SharedPreferencesDataSource(applicationContext)
                     )
                 )
@@ -129,7 +122,6 @@ class MainActivity : ComponentActivity() {
 
                     LaunchedEffect(appViewModel.drawerState.isClosed, isSearchActiveInDrawer) {
                         if (appViewModel.drawerState.isClosed && isSearchActiveInDrawer) {
-                            Log.d("MainActivity", "抽屉已关闭，搜索模式之前已激活。正在停用搜索模式。")
                             appViewModel.setSearchActiveInDrawer(false)
                         }
                     }

@@ -1,6 +1,5 @@
 package com.example.everytalk.ui.screens.MainScreen
 
-import android.util.Log
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
@@ -101,77 +100,19 @@ fun ChatScreen(
     var selectedMessageForOptions by remember { mutableStateOf<Message?>(null) }
     val aiMessageOptionsBottomSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-
-    Log.d("ChatScreen_FilterDebug", "Recomposing ChatScreen or relevant state changed.")
-    Log.d(
-        "ChatScreen_FilterDebug",
-        "Current selectedApiConfig: name='${selectedApiConfig?.name}', key='${selectedApiConfig?.key}', model='${selectedApiConfig?.model}'"
-    )
-    Log.d(
-        "ChatScreen_FilterDebug",
-        "Total 'availableModels' (all configs) count: ${availableModels.size}"
-    )
-    if (availableModels.isEmpty()) {
-        Log.d("ChatScreen_FilterDebug", "'availableModels' is empty.")
-    } else {
-        Log.d("ChatScreen_FilterDebug", "Listing all 'availableModels':")
-        availableModels.forEachIndexed { index, config ->
-            Log.d(
-                "ChatScreen_FilterDebug",
-                "  [$index] Name='${config.name}', Key='${config.key}', Model='${config.model}', ID='${config.id}'"
-            )
-        }
-    }
-
     val filteredModelsForBottomSheet by remember(availableModels, selectedApiConfig) {
         derivedStateOf {
-            Log.d(
-                "ChatScreen_FilterDebug",
-                "--- derivedStateOf for filteredModelsForBottomSheet ---"
-            )
             val currentKey = selectedApiConfig?.key
-            Log.d("ChatScreen_FilterDebug", "Using key for filtering: '$currentKey'")
-
-            val resultList =
-                if (selectedApiConfig != null && currentKey != null && currentKey.isNotBlank()) {
-                    Log.d(
-                        "ChatScreen_FilterDebug",
-                        "Attempting to filter ${availableModels.size} models by key: '$currentKey'"
-                    )
-                    val filteredList = availableModels.filter { it.key == currentKey }
-                    Log.d(
-                        "ChatScreen_FilterDebug",
-                        "Filter result count for key '$currentKey': ${filteredList.size}"
-                    )
-                    if (filteredList.isEmpty()) {
-                        Log.d(
-                            "ChatScreen_FilterDebug",
-                            "Filtered list is empty, using listOfNotNull(selectedApiConfig)."
-                        )
-                        listOfNotNull(selectedApiConfig)
-                    } else {
-                        Log.d("ChatScreen_FilterDebug", "Filtered list is NOT empty, using it.")
-                        filteredList
-                    }
+            if (selectedApiConfig != null && currentKey != null && currentKey.isNotBlank()) {
+                val filteredList = availableModels.filter { it.key == currentKey }
+                if (filteredList.isEmpty()) {
+                    listOfNotNull(selectedApiConfig)
                 } else {
-                    Log.d(
-                        "ChatScreen_FilterDebug",
-                        "No valid selected config or key, using all 'availableModels' (${availableModels.size} items)."
-                    )
-                    availableModels
+                    filteredList
                 }
-            Log.d(
-                "ChatScreen_FilterDebug",
-                "Final 'filteredModelsForBottomSheet' count: ${resultList.size}"
-            )
-            resultList.forEachIndexed { index, config ->
-                Log.d(
-                    "ChatScreen_FilterDebug",
-                    "  Result Item [$index]: Name='${config.name}', Key='${config.key}', Model='${config.model}'"
-                )
+            } else {
+                availableModels
             }
-            Log.d("ChatScreen_FilterDebug", "--- end of derivedStateOf ---")
-            resultList
         }
     }
 
@@ -184,7 +125,6 @@ fun ChatScreen(
         ongoingScrollJob?.cancel(CancellationException("New scroll request: $reason"))
         ongoingScrollJob = coroutineScope.launch {
             if (messagesRef.isEmpty()) {
-                Log.d("ScrollJob", "Messages empty, cannot scroll to bottom ($reason)")
                 programmaticallyScrolling = false
                 userManuallyScrolledAwayFromBottom = false
                 try {
@@ -201,10 +141,6 @@ fun ChatScreen(
             val maxAttempts = 12
 
             try {
-                Log.d(
-                    "ScrollJob",
-                    "Attempting immediate scrollToItem to $targetIndex ($reason, attempt 0)"
-                )
                 listStateRef.scrollToItem(targetIndex)
                 delay(64)
                 val layoutInfo = listStateRef.layoutInfo
@@ -212,31 +148,13 @@ fun ChatScreen(
                     (layoutInfo.visibleItemsInfo.lastOrNull()?.index == targetIndex - 1 &&
                             layoutInfo.visibleItemsInfo.last().offset + layoutInfo.visibleItemsInfo.last().size <= layoutInfo.viewportEndOffset + 5)) {
                     reachedEnd = true
-                    Log.d(
-                        "ScrollJob",
-                        "Immediate scrollToItem SUCCESS to $targetIndex ($reason, attempt 0)"
-                    )
-                } else {
-                    Log.d(
-                        "ScrollJob",
-                        "Immediate scrollToItem to $targetIndex might not have reached ($reason, attempt 0)"
-                    )
                 }
             } catch (e: Exception) {
-                Log.e(
-                    "ScrollJob",
-                    "Immediate scrollToItem to $targetIndex FAILED ($reason, attempt 0): ${e.message}",
-                    e
-                )
             }
 
             while (!reachedEnd && attempts < maxAttempts && isActive) {
                 attempts++
                 try {
-                    Log.d(
-                        "ScrollJob",
-                        "Attempting animateScrollToItem to $targetIndex ($reason, attempt $attempts)"
-                    )
                     listStateRef.animateScrollToItem(targetIndex)
                     delay(150)
                     val layoutInfo = listStateRef.layoutInfo
@@ -244,40 +162,17 @@ fun ChatScreen(
                         (layoutInfo.visibleItemsInfo.lastOrNull()?.index == targetIndex - 1 &&
                                 layoutInfo.visibleItemsInfo.last().offset + layoutInfo.visibleItemsInfo.last().size <= layoutInfo.viewportEndOffset + 5)) {
                         reachedEnd = true
-                        Log.d(
-                            "ScrollJob",
-                            "AnimateScrollToItem SUCCESS to $targetIndex ($reason, attempt $attempts)"
-                        )
                         break
-                    } else {
-                        Log.d(
-                            "ScrollJob",
-                            "AnimateScrollToItem to $targetIndex might not have reached ($reason, attempt $attempts)"
-                        )
                     }
                 } catch (e: CancellationException) {
-                    Log.d(
-                        "ScrollJob",
-                        "Scroll attempt to $targetIndex CANCELLED ($reason, attempt $attempts)"
-                    )
                     throw e
                 } catch (e: Exception) {
-                    Log.e(
-                        "ScrollJob",
-                        "Scroll attempt to $targetIndex FAILED ($reason, attempt $attempts): ${e.message}",
-                        e
-                    )
                     delay(100)
                 }
             }
 
             if (reachedEnd) {
                 userManuallyScrolledAwayFromBottom = false
-            } else if (isActive) {
-                Log.w(
-                    "ScrollJob",
-                    "Failed to scroll to $targetIndex after $maxAttempts attempts ($reason)."
-                )
             }
             programmaticallyScrolling = false
             ongoingScrollJob = null
@@ -311,39 +206,22 @@ fun ChatScreen(
         val sessionJustChanged = previousLoadedHistoryIndexState != currentLoadedIndex
 
         if (sessionJustChanged) {
-            Log.d(
-                "ChatScreenInitScroll",
-                "Session changed ($previousLoadedHistoryIndexState -> $currentLoadedIndex). Delaying scroll by ${SESSION_SWITCH_SCROLL_DELAY_MS}ms."
-            )
             delay(SESSION_SWITCH_SCROLL_DELAY_MS)
             previousLoadedHistoryIndexState = currentLoadedIndex
         }
 
         if (currentMessagesSnapshot.isNotEmpty()) {
-            Log.d(
-                "ChatScreenInitScroll",
-                "Messages not empty (size: ${currentMessagesSnapshot.size}). Scrolling to bottom. loadedHistoryIndex: $currentLoadedIndex"
-            )
             scrollToBottomGuaranteed(
                 "InitialOrSessionChange",
                 messagesRef = currentMessagesSnapshot
             )
         } else {
-            Log.d(
-                "ChatScreenInitScroll",
-                "Messages empty. Scrolling to top. loadedHistoryIndex: $currentLoadedIndex"
-            )
             coroutineScope.launch {
                 programmaticallyScrolling = true
                 userManuallyScrolledAwayFromBottom = false
                 try {
                     listState.scrollToItem(0)
                 } catch (e: Exception) {
-                    Log.e(
-                        "ChatScreenInitScroll",
-                        "Scroll to top (empty list) failed: ${e.message}",
-                        e
-                    )
                 } finally {
                     programmaticallyScrolling = false
                 }
@@ -362,10 +240,6 @@ fun ChatScreen(
                     if (available.y > 0.5f && listState.canScrollBackward) {
                         if (!userManuallyScrolledAwayFromBottom) {
                             userManuallyScrolledAwayFromBottom = true
-                            Log.d(
-                                "ScrollState",
-                                "User dragging UP list content (available.y: ${available.y}), userManuallyScrolledAwayFromBottom = true"
-                            )
                         }
                     }
                 }
@@ -378,10 +252,6 @@ fun ChatScreen(
                     if (available.y > 50f && listState.canScrollBackward) {
                         if (!userManuallyScrolledAwayFromBottom) {
                             userManuallyScrolledAwayFromBottom = true
-                            Log.d(
-                                "ScrollState",
-                                "User flinging UP list content (available.y: ${available.y}), userManuallyScrolledAwayFromBottom = true"
-                            )
                         }
                     }
                 }
@@ -408,10 +278,6 @@ fun ChatScreen(
     LaunchedEffect(isAtBottom, listState.isScrollInProgress, programmaticallyScrolling) {
         if (!listState.isScrollInProgress && !programmaticallyScrolling && isAtBottom) {
             if (userManuallyScrolledAwayFromBottom) {
-                Log.d(
-                    "ScrollState",
-                    "Reached bottom by user or after programmatic scroll, resetting userManuallyScrolledAwayFromBottom = false"
-                )
                 userManuallyScrolledAwayFromBottom = false
             }
         }
@@ -419,7 +285,6 @@ fun ChatScreen(
 
     LaunchedEffect(Unit) {
         viewModel.scrollToBottomEvent.collectLatest {
-            Log.d("ChatScreen", "Received scrollToBottomEvent from ViewModel.")
             resetInactivityTimer()
             scrollToBottomGuaranteed("ViewModelEvent", messagesRef = messages.toList())
         }
@@ -436,7 +301,6 @@ fun ChatScreen(
                 .debounce(50)
                 .collectLatest {
                     if (isActive && isApiCalling && !userManuallyScrolledAwayFromBottom) {
-                        Log.d("RealtimeScroll", "AI streaming, text changed, auto-scrolling...")
                         scrollToBottomGuaranteed(
                             "AI_Streaming_TextChanged",
                             messagesRef = messages.toList()
@@ -462,7 +326,6 @@ fun ChatScreen(
 
     LaunchedEffect(isReasoningBoxVisible) {
         if (isReasoningBoxVisible && !userManuallyScrolledAwayFromBottom) {
-            Log.d("ChatScreen_StateDriven", "Reasoning box became visible, triggering scroll.")
             delay(300L)
             scrollToBottomGuaranteed(
                 "ReasoningBox_StateDriven",
@@ -505,14 +368,10 @@ fun ChatScreen(
                 onMenuClick = { coroutineScope.launch { viewModel.drawerState.open() } },
                 onSettingsClick = {
                     navController.navigate(Screen.SETTINGS_SCREEN) {
-                        // 弹出到导航图的起始目标，避免在返回栈上建立大量的目标。
-                        // 这是标准的底部导航栏模式，但我们移除了 saveState 来避免 ANR。
                         popUpTo(navController.graph.findStartDestination().id) {
                             saveState = true
                         }
-                        // 避免在栈顶重复创建同一个目标的多个实例
                         launchSingleTop = true
-                        // 切换页面时，恢复之前保存的状态
                         restoreState = true
                     }
                 },
@@ -759,5 +618,5 @@ fun ChatScreen(
                }
            }
        }
-   }
+    }
 }

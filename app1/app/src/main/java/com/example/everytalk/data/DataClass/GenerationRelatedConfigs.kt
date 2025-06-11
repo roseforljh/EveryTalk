@@ -1,6 +1,4 @@
-// 文件：GenerationRelatedConfigs.kt (或者放在 ChatRequest.kt 文件的顶部，但在 ChatRequest 类定义之外)
-package com.example.everytalk.data.DataClass // 确保包名与你的项目结构一致
-
+package com.example.everytalk.data.DataClass
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
