@@ -695,6 +695,9 @@ class AppViewModel(
         }
     }
 
+fun getMessageById(id: String): Message? {
+        return messages.find { it.id == id }
+    }
     override fun onCleared() {
         try {
         } catch (e: Exception) {

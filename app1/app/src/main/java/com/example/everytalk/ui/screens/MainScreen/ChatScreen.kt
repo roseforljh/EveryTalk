@@ -2,17 +2,23 @@ package com.example.everytalk.ui.screens.MainScreen
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ContentCopy
@@ -34,6 +40,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.navigation.NavController
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import com.example.everytalk.StateControler.AppViewModel
@@ -43,19 +51,18 @@ import com.example.everytalk.data.DataClass.Sender
 import com.example.everytalk.navigation.Screen
 import com.example.everytalk.ui.components.AppTopBar
 import com.example.everytalk.ui.components.WebSourcesDialog
-import com.example.everytalk.ui.screens.BubbleMain.Main.MessageBubble
 import com.example.everytalk.ui.screens.MainScreen.chat.ChatInputArea
+import com.example.everytalk.ui.screens.MainScreen.chat.ChatListItem
 import com.example.everytalk.ui.screens.MainScreen.chat.ChatMessagesList
 import com.example.everytalk.ui.screens.MainScreen.chat.EditMessageDialog
 import com.example.everytalk.ui.screens.MainScreen.chat.EmptyChatView
 import com.example.everytalk.ui.screens.MainScreen.chat.ModelSelectionBottomSheet
-import com.example.everytalk.ui.screens.BubbleMain.SelectableTextDialog
+import com.example.everytalk.util.parseMarkdownToBlocks
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlin.coroutines.cancellation.CancellationException
 
 private const val USER_INACTIVITY_TIMEOUT_MS = 2000L
-private const val REALTIME_SCROLL_CHECK_DELAY_MS = 100L
 private const val SESSION_SWITCH_SCROLL_DELAY_MS = 250L
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -70,7 +77,6 @@ fun ChatScreen(
     val selectedApiConfig by viewModel.selectedApiConfig.collectAsState()
     val isApiCalling by viewModel.isApiCalling.collectAsState()
     val currentStreamingAiMessageId by viewModel.currentStreamingAiMessageId.collectAsState()
-    val reasoningCompleteMap = viewModel.reasoningCompleteMap
     val isWebSearchEnabled by viewModel.isWebSearchEnabled.collectAsState()
 
     val listState = rememberLazyListState()
@@ -134,7 +140,12 @@ fun ChatScreen(
                 return@launch
             }
             programmaticallyScrolling = true
-            val targetIndex = messagesRef.size
+            val targetIndex = listStateRef.layoutInfo.totalItemsCount - 1
+            if (targetIndex < 0) {
+                programmaticallyScrolling = false
+                return@launch
+            }
+
 
             var reachedEnd = false
             var attempts = 0
@@ -155,7 +166,10 @@ fun ChatScreen(
             while (!reachedEnd && attempts < maxAttempts && isActive) {
                 attempts++
                 try {
-                    listStateRef.animateScrollToItem(targetIndex)
+                    listStateRef.animateScrollBy(
+                        value = 1500f,
+                        animationSpec = tween(durationMillis = 500, easing = FastOutSlowInEasing)
+                    )
                     delay(150)
                     val layoutInfo = listStateRef.layoutInfo
                     if (layoutInfo.visibleItemsInfo.any { it.index == targetIndex } ||
@@ -180,24 +194,9 @@ fun ChatScreen(
     }
 
     var lastInteractionTime by remember { mutableStateOf(System.currentTimeMillis()) }
-    var isUserConsideredActive by remember { mutableStateOf(true) }
 
     val resetInactivityTimer: () -> Unit = {
         lastInteractionTime = System.currentTimeMillis()
-    }
-
-    LaunchedEffect(lastInteractionTime) {
-        isUserConsideredActive = true
-        delay(USER_INACTIVITY_TIMEOUT_MS)
-        if (isActive) {
-            isUserConsideredActive = false
-        }
-    }
-
-    LaunchedEffect(text) {
-        if (text.isNotEmpty()) {
-            resetInactivityTimer()
-        }
     }
 
     LaunchedEffect(key1 = loadedHistoryIndex, key2 = messages.hashCode()) {
@@ -235,26 +234,14 @@ fun ChatScreen(
     val nestedScrollConnection = remember {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                if (source == NestedScrollSource.Drag && !programmaticallyScrolling) {
+                if (source == NestedScrollSource.Drag) {
                     resetInactivityTimer()
-                    if (available.y > 0.5f && listState.canScrollBackward) {
-                        if (!userManuallyScrolledAwayFromBottom) {
-                            userManuallyScrolledAwayFromBottom = true
-                        }
-                    }
                 }
                 return Offset.Zero
             }
 
             override suspend fun onPreFling(available: Velocity): Velocity {
-                if (listState.isScrollInProgress && !programmaticallyScrolling) {
-                    resetInactivityTimer()
-                    if (available.y > 50f && listState.canScrollBackward) {
-                        if (!userManuallyScrolledAwayFromBottom) {
-                            userManuallyScrolledAwayFromBottom = true
-                        }
-                    }
-                }
+                resetInactivityTimer()
                 return Velocity.Zero
             }
         }
@@ -263,22 +250,26 @@ fun ChatScreen(
     val isAtBottom by remember {
         derivedStateOf {
             val layoutInfo = listState.layoutInfo
-            if (messages.isEmpty() || layoutInfo.visibleItemsInfo.isEmpty()) {
+            if (layoutInfo.visibleItemsInfo.isEmpty()) {
                 true
             } else {
                 val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
-                lastVisibleItem != null &&
-                        (lastVisibleItem.index == messages.size ||
-                                (lastVisibleItem.index == messages.size - 1 &&
-                                        lastVisibleItem.offset + lastVisibleItem.size <= layoutInfo.viewportEndOffset + 10))
+                lastVisibleItem != null && lastVisibleItem.index >= layoutInfo.totalItemsCount - 1 &&
+                        lastVisibleItem.offset + lastVisibleItem.size <= layoutInfo.viewportEndOffset + 10
             }
         }
     }
 
-    LaunchedEffect(isAtBottom, listState.isScrollInProgress, programmaticallyScrolling) {
-        if (!listState.isScrollInProgress && !programmaticallyScrolling && isAtBottom) {
-            if (userManuallyScrolledAwayFromBottom) {
-                userManuallyScrolledAwayFromBottom = false
+    LaunchedEffect(listState.isScrollInProgress) {
+        if (!listState.isScrollInProgress && !programmaticallyScrolling) {
+            if (isAtBottom) {
+                if (userManuallyScrolledAwayFromBottom) {
+                    userManuallyScrolledAwayFromBottom = false
+                }
+            } else {
+                if (!userManuallyScrolledAwayFromBottom) {
+                    userManuallyScrolledAwayFromBottom = true
+                }
             }
         }
     }
@@ -290,47 +281,36 @@ fun ChatScreen(
         }
     }
 
-    val streamingAiMessage = remember(messages, currentStreamingAiMessageId) {
-        messages.find { it.id == currentStreamingAiMessageId }
-    }
-
     LaunchedEffect(currentStreamingAiMessageId, isApiCalling, userManuallyScrolledAwayFromBottom) {
         if (isApiCalling && currentStreamingAiMessageId != null && !userManuallyScrolledAwayFromBottom) {
-            snapshotFlow { messages.find { it.id == currentStreamingAiMessageId }?.text?.length }
-                .distinctUntilChanged()
-                .debounce(50)
-                .collectLatest {
-                    if (isActive && isApiCalling && !userManuallyScrolledAwayFromBottom) {
-                        scrollToBottomGuaranteed(
-                            "AI_Streaming_TextChanged",
-                            messagesRef = messages.toList()
-                        )
+            // Coroutine for reasoning text
+            launch {
+                snapshotFlow { messages.find { it.id == currentStreamingAiMessageId }?.reasoning }
+                    .distinctUntilChanged()
+                    .collect { reasoning ->
+                        if (reasoning?.isNotBlank() == true) {
+                            scrollToBottomGuaranteed(
+                                "AI_Reasoning_Updated",
+                                messagesRef = messages.toList()
+                            )
+                        }
                     }
-                }
-        }
-    }
-
-    val isReasoningBoxVisible by remember(messages, currentStreamingAiMessageId, isApiCalling) {
-        derivedStateOf {
-            if (!isApiCalling || currentStreamingAiMessageId == null) {
-                false
-            } else {
-                val streamingMsg = messages.find { it.id == currentStreamingAiMessageId }
-                streamingMsg != null &&
-                        streamingMsg.sender == Sender.AI &&
-                        !streamingMsg.reasoning.isNullOrBlank() &&
-                        !streamingMsg.contentStarted
             }
-        }
-    }
 
-    LaunchedEffect(isReasoningBoxVisible) {
-        if (isReasoningBoxVisible && !userManuallyScrolledAwayFromBottom) {
-            delay(300L)
-            scrollToBottomGuaranteed(
-                "ReasoningBox_StateDriven",
-                messagesRef = messages.toList()
-            )
+            // Coroutine for main message text
+            launch {
+                snapshotFlow { messages.find { it.id == currentStreamingAiMessageId }?.text?.length }
+                    .distinctUntilChanged()
+                    .debounce(50)
+                    .collect {
+                        if (isActive) {
+                            scrollToBottomGuaranteed(
+                                "AI_Streaming_TextChanged",
+                                messagesRef = messages.toList()
+                            )
+                        }
+                    }
+            }
         }
     }
 
@@ -439,52 +419,69 @@ fun ChatScreen(
                 if (messages.isEmpty()) {
                     EmptyChatView(density = density)
                 } else {
-                    val isListScrolling by remember { derivedStateOf { listState.isScrollInProgress } }
+                    val chatListItems = remember(messages.toList(), currentStreamingAiMessageId, isApiCalling) {
+                        messages.flatMap { message ->
+                            when {
+                                message.sender == Sender.User -> {
+                                    listOf(ChatListItem.UserMessage(message))
+                                }
+                                message.isError -> {
+                                    listOf(ChatListItem.ErrorMessage(message))
+                                }
+                                message.sender == Sender.AI -> {
+                                    val showLoading = isApiCalling &&
+                                            message.id == currentStreamingAiMessageId &&
+                                            message.text.isBlank() &&
+                                            message.reasoning.isNullOrBlank() &&
+                                            !message.contentStarted
 
-                    val messageItems = remember(messages.toList(), currentStreamingAiMessageId, isApiCalling) {
-                        messages.map { message ->
-                            val messageContent = @Composable {
-                                val isLoadingMessage = message.id == currentStreamingAiMessageId && isApiCalling
-                                val currentReasoning = message.reasoning
-                                val showLoadingDots = isLoadingMessage &&
-                                        message.text.isBlank() &&
-                                        (currentReasoning == null || currentReasoning.isBlank()) &&
-                                        !message.contentStarted &&
-                                        !message.isError
+                                    if (showLoading) {
+                                        listOf(ChatListItem.LoadingIndicator(message.id))
+                                    } else {
+                                        val reasoningItem = if (!message.reasoning.isNullOrBlank()) {
+                                            listOf(ChatListItem.AiMessageReasoning(message))
+                                        } else {
+                                            emptyList()
+                                        }
 
-                               MessageBubble(
-                                   message = message,
-                                   viewModel = viewModel,
-                                   onUserInteraction = { resetInactivityTimer() },
-                                   isStreaming = isLoadingMessage,
-                                   isMainContentStreaming = isLoadingMessage && message.contentStarted,
-                                   isReasoningStreaming = isLoadingMessage && currentReasoning != null && !currentReasoning.isBlank() && !(reasoningCompleteMap[message.id] ?: false),
-                                   isReasoningComplete = (reasoningCompleteMap[message.id] ?: false),
-                                   isListScrolling = isListScrolling,
-                                   maxWidth = bubbleMaxWidth,
-                                   showLoadingBubble = showLoadingDots,
-                                   onEditRequest = { msg ->
-                                       resetInactivityTimer()
-                                       viewModel.requestEditMessage(msg)
-                                   },
-                                   onRegenerateRequest = { userMsg ->
-                                       resetInactivityTimer()
-                                       viewModel.regenerateAiResponse(userMsg)
-                                   },
-                                   onAiMessageLongPress = { msg ->
-                                       selectedMessageForOptions = msg
-                                       showAiMessageOptionsBottomSheet = true
-                                   }
-                               )
+                                        val blocks = parseMarkdownToBlocks(message.text)
+                                        val hasReasoning = reasoningItem.isNotEmpty()
+                                        val blockItems = blocks.mapIndexed { index, block ->
+                                            ChatListItem.AiMessageBlock(
+                                                messageId = message.id,
+                                                block = block,
+                                                blockIndex = index,
+                                                isFirstBlock = index == 0,
+                                                isLastBlock = index == blocks.size - 1,
+                                                hasReasoning = hasReasoning
+                                            )
+                                        }
+
+                                        val footerItem = if (!message.webSearchResults.isNullOrEmpty() && !isApiCalling) {
+                                            listOf(ChatListItem.AiMessageFooter(message))
+                                        } else {
+                                            emptyList()
+                                        }
+
+                                        reasoningItem + blockItems + footerItem
+                                    }
+                                }
+                                else -> emptyList()
                             }
-                            message.id to messageContent
                         }
                     }
 
                     ChatMessagesList(
-                        messageItems = messageItems,
+                        chatItems = chatListItems,
+                        viewModel = viewModel,
                         listState = listState,
-                        nestedScrollConnection = nestedScrollConnection
+                        nestedScrollConnection = nestedScrollConnection,
+                        bubbleMaxWidth = bubbleMaxWidth,
+                        onResetInactivityTimer = { resetInactivityTimer() },
+                        onShowAiMessageOptions = { msg ->
+                            selectedMessageForOptions = msg
+                            showAiMessageOptionsBottomSheet = true
+                        }
                     )
                 }
             }
@@ -618,5 +615,35 @@ fun ChatScreen(
                }
            }
        }
+    }
+}
+
+@Composable
+internal fun SelectableTextDialog(textToDisplay: String, onDismissRequest: () -> Unit) {
+    Dialog(
+        onDismissRequest = onDismissRequest,
+        properties = DialogProperties(
+            dismissOnClickOutside = true,
+            dismissOnBackPress = true,
+            usePlatformDefaultWidth = false
+        )
+    ) {
+        Card(
+            shape = RoundedCornerShape(28.dp),
+            modifier = Modifier
+                .fillMaxWidth(0.92f)
+                .padding(vertical = 24.dp)
+                .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.75f),
+            colors = CardDefaults.cardColors(containerColor = Color.White)
+        ) {
+            SelectionContainer(modifier = Modifier.padding(20.dp)) {
+                Text(
+                    text = textToDisplay,
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+        }
     }
 }

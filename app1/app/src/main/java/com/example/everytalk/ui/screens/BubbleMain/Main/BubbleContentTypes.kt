@@ -1,5 +1,6 @@
 package com.example.everytalk.ui.screens.BubbleMain.Main
 
+import android.content.Intent
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
@@ -8,6 +9,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -31,17 +33,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
+import coil3.compose.AsyncImage
 import com.example.everytalk.data.DataClass.Message
-import com.example.everytalk.ui.screens.BubbleMain.ThreeDotsLoadingAnimation
+import com.example.everytalk.model.SelectedMediaItem
 
 private const val CONTEXT_MENU_ANIMATION_DURATION_MS = 150
 private val CONTEXT_MENU_CORNER_RADIUS = 16.dp
@@ -96,26 +96,28 @@ internal fun UserOrErrorMessageContent(
                     )
                 }
         ) {
-            Box(
-                contentAlignment = Alignment.CenterStart,
-                modifier = Modifier
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
-                    .wrapContentWidth()
-                    .defaultMinSize(minHeight = 28.dp)
-            ) {
-                if (showLoadingDots && !isError) {
-                    ThreeDotsLoadingAnimation(
-                        dotColor = contentColor,
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .offset(y = (-6).dp)
-                    )
-                } else if (displayedText.isNotBlank() || isError) {
-                    Text(
-                        text = displayedText.trim(),
-                        textAlign = TextAlign.Start,
-                        color = contentColor
-                    )
+            Column {
+                Box(
+                    contentAlignment = Alignment.CenterStart,
+                    modifier = Modifier
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .wrapContentWidth()
+                        .defaultMinSize(minHeight = 28.dp)
+                ) {
+                    if (showLoadingDots && !isError) {
+                        ThreeDotsLoadingAnimation(
+                            dotColor = contentColor,
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .offset(y = (-6).dp)
+                        )
+                    } else if (displayedText.isNotBlank() || isError) {
+                        Text(
+                            text = displayedText.trim(),
+                            textAlign = TextAlign.Start,
+                            color = contentColor
+                        )
+                    }
                 }
             }
         }
@@ -259,6 +261,76 @@ internal fun UserOrErrorMessageContent(
     }
 }
 
+@Composable
+fun AttachmentsContent(
+    attachments: List<SelectedMediaItem>,
+    onAttachmentClick: (SelectedMediaItem) -> Unit
+) {
+    val context = LocalContext.current
+    Column(
+        modifier = Modifier.padding(top = 8.dp),
+        horizontalAlignment = Alignment.End
+    ) {
+        attachments.forEach { attachment ->
+            when (attachment) {
+                is SelectedMediaItem.ImageFromUri -> {
+                    AsyncImage(
+                        model = attachment.uri,
+                        contentDescription = "Image attachment",
+                        modifier = Modifier
+                            .fillMaxWidth(0.6f)
+                            .padding(vertical = 4.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .clickable {
+                                val intent = Intent(Intent.ACTION_VIEW).apply {
+                                    setDataAndType(attachment.uri, "image/*")
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                context.startActivity(intent)
+                            }
+                    )
+                }
+                is SelectedMediaItem.ImageFromBitmap -> {
+                    AsyncImage(
+                        model = attachment.bitmap,
+                        contentDescription = "Image attachment",
+                        modifier = Modifier
+                            .fillMaxWidth(0.6f)
+                            .padding(vertical = 4.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .clickable { onAttachmentClick(attachment) }
+                    )
+                }
+                is SelectedMediaItem.GenericFile -> {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth(0.8f)
+                            .padding(vertical = 4.dp)
+                            .background(Color(0xFFF0F0F0), RoundedCornerShape(12.dp))
+                            .clickable {
+                                val intent = Intent(Intent.ACTION_VIEW).apply {
+                                    setDataAndType(attachment.uri, attachment.mimeType)
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                context.startActivity(intent)
+                            }
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ContentCopy, // Replace with appropriate icon
+                            contentDescription = "Attachment",
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(text = attachment.displayName, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+        }
+    }
+}
+
 sealed class TextSegment {
     data class Normal(val text: String) : TextSegment()
     data class CodeBlock(val language: String?, val code: String) : TextSegment()
@@ -379,7 +451,7 @@ fun extractStreamingCodeContent(textAlreadyTrimmedAndStartsWithTripleQuote: Stri
         val code = contentAfterTripleTicks.substring(firstNewlineIndex + 1)
         val validatedLangHint =
             if (langHint.all { it.isLetterOrDigit() || it == '_' || it == '.' || it == '-' || it == '+' }) {
-                langHint.takeIf { it.isNotBlank() }
+                langHint.takeIf { it.isNotEmpty() }
             } else {
                 null
             }
@@ -388,10 +460,44 @@ fun extractStreamingCodeContent(textAlreadyTrimmedAndStartsWithTripleQuote: Stri
         val langLine = contentAfterTripleTicks.trim()
         val validatedLangHint =
             if (langLine.all { it.isLetterOrDigit() || it == '_' || it == '.' || it == '-' || it == '+' }) {
-                langLine.takeIf { it.isNotBlank() }
+                langLine.takeIf { it.isNotEmpty() }
             } else {
                 null
             }
         return Pair(validatedLangHint, "")
+    }
+}
+
+
+@Composable
+private fun ThreeDotsLoadingAnimation(
+    modifier: Modifier = Modifier,
+    dotColor: Color = MaterialTheme.colorScheme.primary
+) {
+    Row(
+        modifier = modifier.padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        (0..2).forEach { index ->
+            val infiniteTransition =
+                rememberInfiniteTransition(label = "dot_loading_transition_$index")
+            val animatedAlpha by infiniteTransition.animateFloat(
+                initialValue = 0.3f, targetValue = 1f,
+                animationSpec = infiniteRepeatable(
+                    animation = keyframes {
+                        durationMillis =
+                            1200; 0.3f at 0 with LinearEasing; 1.0f at 200 with LinearEasing
+                        0.3f at 400 with LinearEasing; 0.3f at 1200 with LinearEasing
+                    },
+                    repeatMode = RepeatMode.Restart, initialStartOffset = StartOffset(index * 150)
+                ), label = "dot_alpha_$index"
+            )
+            Box(
+                modifier = Modifier
+                    .size(10.dp)
+                    .background(dotColor.copy(alpha = animatedAlpha), RoundedCornerShape(50))
+            )
+        }
     }
 }

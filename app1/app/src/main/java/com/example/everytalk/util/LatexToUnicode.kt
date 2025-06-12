@@ -57,7 +57,12 @@ object LatexToUnicode {
         "\\exists" to "∃",
         "\\nabla" to "∇",
         "\\partial" to "∂",
-        "\\sqrt" to "√",
+        "\\sqrt" to "√ ",
+        "\\vec" to "→",
+        "\\|" to "||",
+        "\\mathbfi" to "𝐢",
+        "\\mathbfj" to "𝐣",
+        "\\mathbfk" to "𝐤",
         "\\{ " to "{",
         "\\} " to "}",
         "\\cdots" to "⋯",
@@ -79,31 +84,58 @@ object LatexToUnicode {
         "\\left" to "",
         "\\right" to "",
         "\\backslash" to "＼",
+        "\\mathrm" to "",
+        "\\boxed" to " ",
     )
 
     private val superscriptMap = mapOf(
-        '0' to '⁰', '1' to '¹', '2' to '²', '3' to '³', '4' to '⁴',
-        '5' to '⁵', '6' to '⁶', '7' to '⁷', '8' to '⁸', '9' to '⁹',
-        '+' to '⁺', '-' to '⁻', '=' to '⁼', '(' to '⁽', ')' to '⁾',
-        'n' to 'ⁿ'
+        '0' to '⁰', '1' to '¹', '2' to '²', '3' to '³', '4' to '⁴', '5' to '⁵', '6' to '⁶', '7' to '⁷', '8' to '⁸', '9' to '⁹',
+        'a' to 'ᵃ', 'b' to 'ᵇ', 'c' to 'ᶜ', 'd' to 'ᵈ', 'e' to 'ᵉ', 'f' to 'ᶠ', 'g' to 'ᵍ', 'h' to 'ʰ', 'i' to 'ⁱ', 'j' to 'ʲ',
+        'k' to 'ᵏ', 'l' to 'ˡ', 'm' to 'ᵐ', 'n' to 'ⁿ', 'o' to 'ᵒ', 'p' to 'ᵖ', 'r' to 'ʳ', 's' to 'ˢ', 't' to 'ᵗ', 'u' to 'ᵘ',
+        'v' to 'ᵛ', 'w' to 'ʷ', 'x' to 'ˣ', 'y' to 'ʸ', 'z' to 'ᶻ',
+        'A' to 'ᴬ', 'B' to 'ᴮ', 'D' to 'ᴰ', 'E' to 'ᴱ', 'G' to 'ᴳ', 'H' to 'ᴴ', 'I' to 'ᴵ', 'J' to 'ᴶ', 'K' to 'ᴷ', 'L' to 'ᴸ',
+        'M' to 'ᴹ', 'N' to 'ᴺ', 'O' to 'ᴼ', 'P' to 'ᴾ', 'R' to 'ᴿ', 'T' to 'ᵀ', 'U' to 'ᵁ', 'V' to 'ⱽ', 'W' to 'ᵂ',
+        '+' to '⁺', '-' to '⁻', '=' to '⁼', '(' to '⁽', ')' to '⁾'
     )
 
     private val subscriptMap = mapOf(
-        '0' to '₀', '1' to '₁', '2' to '₂', '3' to '₃', '4' to '₄',
-        '5' to '₅', '6' to '₆', '7' to '₇', '8' to '₈', '9' to '₉',
-        '+' to '₊', '-' to '₋', '=' to '₌', '(' to '₍', ')' to '₎',
-        'n' to 'ₙ'
+        '0' to '₀', '1' to '₁', '2' to '₂', '3' to '₃', '4' to '₄', '5' to '₅', '6' to '₆', '7' to '₇', '8' to '₈', '9' to '₉',
+        'a' to 'ₐ', 'e' to 'ₑ', 'h' to 'ₕ', 'i' to 'ᵢ', 'j' to 'ⱼ', 'k' to 'ₖ', 'l' to 'ₗ', 'm' to 'ₘ', 'n' to 'ₙ', 'o' to 'ₒ',
+        'p' to 'ₚ', 'r' to 'ᵣ', 's' to 'ₛ', 't' to 'ₜ', 'u' to 'ᵤ', 'v' to 'ᵥ', 'x' to 'ₓ',
+        '+' to '₊', '-' to '₋', '=' to '₌', '(' to '₍', ')' to '₎'
     )
 
     fun convert(latex: String): String {
-        // Final cleanup happens here, once, at the end.
         return _convert(latex)
-            .replace("{", "")
-            .replace("}", "")
     }
 
     private fun _convert(latex: String): String {
         var result = latex
+
+        // Handle vmatrix environment specifically to avoid replacing '&' globally
+        val matrixRegex = Regex("\\\\beginvmatrix([\\s\\S]*?)\\\\endvmatrix")
+        result = matrixRegex.replace(result) { matchResult ->
+            val matrixContent = matchResult.groupValues[1]
+                .replace("&", "  ")
+                .replace("\\\\", "\n") // Standard LaTeX newline in matrix
+            "|${matrixContent}|"
+        }
+
+
+        // Handle \frac{...}{...}
+        val fracRegex = Regex("\\\\frac\\{([^}]*)\\}\\{([^}]*)\\}")
+        result = fracRegex.replace(result) { matchResult ->
+            val numerator = _convert(matchResult.groupValues[1])
+            val denominator = _convert(matchResult.groupValues[2])
+            "($numerator) ÷ ($denominator)"
+        }
+
+        // Handle \frac with single argument
+        val fracSingleArgRegex = Regex("\\\\frac\\s*(\\S+)")
+        result = fracSingleArgRegex.replace(result) { matchResult ->
+            _convert(matchResult.groupValues[1])
+        }
+
         replacements.forEach { (key, value) ->
             result = result.replace(key, value)
         }
@@ -141,6 +173,10 @@ object LatexToUnicode {
             val char = matchResult.groupValues[1].first()
             (subscriptMap[char] ?: char).toString()
         }
+
+        // Final cleanup of braces and delimiters
+        result = result.replace("{", "").replace("}", "")
+        result = result.replace("$", "")
 
         return result
     }

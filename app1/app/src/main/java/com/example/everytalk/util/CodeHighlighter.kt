@@ -8,22 +8,22 @@ import java.util.regex.Pattern
 
 object CodeHighlighter {
 
-    // region Final Color Palette (Based on User Image)
-    private val colorComment = Color(0xFF7F848E)      // Comment
-    private val colorPunctuation = Color(0xFFABB2BF)  // Punctuation: <> {} () , ;
-    private val colorHtmlTag = Color(0xFFE06C75)      // HTML Tag: <div> <h1>
-    private val colorHtmlAttrName = Color(0xFFD19A66) // HTML Attribute Name: class=, id=
-    private val colorHtmlAttrValue = Color(0xFF98C379) // HTML Attribute Value: "container"
-    private val colorCssSelector = Color(0xFFC678DD)  // CSS Selector: .class, #id
-    private val colorCssProperty = Color(0xFF61AFEF)  // CSS Property: font-size
-    private val colorCssValue = Color(0xFFD19A66)      // CSS Value: 16px, #fff, center
-    private val colorCssUnit = Color(0xFFABB2BF)      // CSS Unit: px, %, rem
-    private val colorJsKeyword = Color(0xFFC678DD)    // JS Keyword: const, function
-    private val colorJsFunction = Color(0xFF61AFEF)    // JS Function Name: goToSlide
-    private val colorJsVariable = Color(0xFFE06C75)    // JS Variable: carousel
-    private val colorJsString = Color(0xFF98C379)      // JS String
-    private val colorJsNumber = Color(0xFFD19A66)      // JS Number
-    private val colorJsOperator = Color(0xFF56B6C2)    // JS Operator: =, +, %
+    // region Catppuccin Latte Theme Color Palette
+    private val colorComment = Color(0xFF9CA0B0)       // Comment
+    private val colorPunctuation = Color(0xFF888B9D)   // Punctuation: <> {} () , ;
+    private val colorHtmlTag = Color(0xFF1E66F5)       // HTML Tag: <div> <h1>
+    private val colorHtmlAttrName = Color(0xFFDD7878)  // HTML Attribute Name: class=, id=
+    private val colorHtmlAttrValue = Color(0xFF179299) // HTML Attribute Value: "container"
+    private val colorCssSelector = Color(0xFF7287FD)   // CSS Selector: .class, #id
+    private val colorCssProperty = Color(0xFF1E66F5)   // CSS Property: font-size
+    private val colorCssValue = Color(0xFFFE640B)      // CSS Value: 16px, #fff, center
+    private val colorCssUnit = Color(0xFFDD7878)       // CSS Unit: px, %, rem
+    private val colorJsKeyword = Color(0xFF8839EF)     // JS Keyword: const, function
+    private val colorJsFunction = Color(0xFF7287FD)    // JS Function Name: goToSlide
+    private val colorJsVariable = Color(0xFF4C4F69)    // JS Variable & Default Text
+    private val colorJsString = Color(0xFF179299)      // JS String
+    private val colorJsNumber = Color(0xFFFE640B)      // JS Number
+    private val colorJsOperator = Color(0xFF179299)    // JS Operator: =, +, %
     // endregion
 
     private data class Rule(val pattern: Pattern, val color: Color, val groupIndex: Int = 1)
@@ -37,7 +37,9 @@ object CodeHighlighter {
                 Rule(Pattern.compile("(<\\/?)([a-zA-Z0-9\\-]+)"), colorHtmlTag, 2),
                 Rule(Pattern.compile("\\s([a-zA-Z\\-]+)(?=\\s*=)"), colorHtmlAttrName, 1),
                 Rule(Pattern.compile("(\"[^\"]*\"|'[^']*')"), colorHtmlAttrValue, 1),
-                Rule(Pattern.compile("([<>/=])"), colorPunctuation, 1)
+                Rule(Pattern.compile("(&[a-zA-Z0-9#]+;)"), colorPunctuation, 1),
+                Rule(Pattern.compile("([<>/=])"), colorPunctuation, 1),
+                Rule(Pattern.compile("\\b([a-zA-Z0-9_]+)\\b"), colorJsVariable, 1)
             )
             "css" -> listOf(
                 Rule(Pattern.compile("\\/\\*[\\s\\S]*?\\*\\/"), colorComment, 0),
@@ -62,7 +64,8 @@ object CodeHighlighter {
                 Rule(Pattern.compile("(?<=[\\s.(])([a-zA-Z0-9_]+)(?=\\s*\\()"), colorJsFunction, 1),
                 Rule(Pattern.compile("\\b([0-9]+(?:\\.[0-9]+)?)\\b"), colorJsNumber, 1),
                 Rule(Pattern.compile("([=+\\-*/%<>!&|?^])"), colorJsOperator, 1),
-                Rule(Pattern.compile("([;,.()\\[\\]{}])"), colorPunctuation, 1)
+                Rule(Pattern.compile("([;,.()\\[\\]{}])"), colorPunctuation, 1),
+                Rule(Pattern.compile("\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b"), colorJsVariable, 1)
             )
             else -> emptyList()
         }

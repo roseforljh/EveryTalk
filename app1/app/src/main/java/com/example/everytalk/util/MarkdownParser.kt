@@ -18,6 +18,7 @@ sealed class MarkdownBlock {
     data class ListItem(val text: AnnotatedString) : MarkdownBlock()
     data class MathBlock(val text: String) : MarkdownBlock()
     data class Image(val altText: String, val url: String) : MarkdownBlock()
+    data class Table(val header: List<AnnotatedString>, val rows: List<List<AnnotatedString>>) : MarkdownBlock()
 }
 
 fun parseMarkdownToBlocks(markdown: String): List<MarkdownBlock> {
@@ -108,15 +109,39 @@ fun parseMarkdownToBlocks(markdown: String): List<MarkdownBlock> {
                 }
                 blocks.add(MarkdownBlock.ListItem(parseInlineMarkdown(listContent.joinToString("\n"))))
             }
+            line.trim().startsWith("|") && i + 1 < lines.size && isSeparatorLine(lines[i + 1]) -> {
+                val headerLine = line.trim()
+                val headerContent = headerLine.substring(1).let { if (it.endsWith("|")) it.substring(0, it.length - 1) else it }
+                val headerCells = headerContent.split("|").map {
+                    parseInlineMarkdown(it.trim())
+                }
+                i++ // Consume header line
+                i++ // Consume separator line
+
+                val tableRows = mutableListOf<List<AnnotatedString>>()
+                while (i < lines.size && lines[i].trim().startsWith("|")) {
+                    val rowLine = lines[i].trim()
+                    val rowContent = rowLine.substring(1).let { if (it.endsWith("|")) it.substring(0, it.length - 1) else it }
+                    val rowCells = rowContent.split("|").map {
+                        parseInlineMarkdown(it.trim())
+                    }
+                    tableRows.add(rowCells)
+                    i++
+                }
+                blocks.add(MarkdownBlock.Table(headerCells, tableRows))
+            }
             else -> {
                 val textLines = mutableListOf<String>()
                 while (i < lines.size) {
                     val currentLine = lines[i]
+                    val isTableStart = currentLine.trim().startsWith("|") && i + 1 < lines.size && isSeparatorLine(lines[i + 1])
+
                     if (currentLine.startsWith("```") ||
                         currentLine.startsWith("#") ||
                         currentLine.trim().startsWith("* ") ||
                         currentLine.trim().startsWith("- ") ||
-                        currentLine.trim().startsWith("$$") || currentLine.trim().startsWith("\\[")
+                        currentLine.trim().startsWith("$$") || currentLine.trim().startsWith("\\[") ||
+                        isTableStart
                     ) {
                         break
                     }
@@ -126,13 +151,48 @@ fun parseMarkdownToBlocks(markdown: String): List<MarkdownBlock> {
                 if (textLines.isNotEmpty()) {
                     val text = textLines.joinToString("\n")
                     if (text.isNotBlank()) {
-                        blocks.add(MarkdownBlock.Text(parseInlineMarkdown(text)))
+                        val latexCommands = listOf(
+                            "\\text", "\\frac", "\\sum", "\\beta", "\\alpha", "\\gamma", "\\delta",
+                            "\\epsilon", "\\sigma", "\\rho", "\\theta", "\\omega", "\\mu", "\\nu",
+                            "\\sin", "\\cos", "\\tan", "\\log", "\\ln", "\\sqrt", "\\in", "\\infty",
+                            "\\left", "\\right", "\\times", "\\geq", "\\leq", "\\neq", "\\approx",
+                            "\\cdot", "\\pm", "\\mp", "\\forall", "\\exists", "\\nabla", "\\partial",
+                            "\\begin", "\\end"
+                        )
+                        if (latexCommands.any { text.contains(it) }) {
+                            blocks.add(MarkdownBlock.MathBlock(text))
+                        } else {
+                            blocks.add(MarkdownBlock.Text(parseInlineMarkdown(text)))
+                        }
                     }
                 }
             }
         }
     }
     return blocks
+}
+
+private fun isSeparatorLine(line: String): Boolean {
+    val trimmed = line.trim()
+    if (!trimmed.startsWith('|')) return false
+
+    // A GFM separator line must contain a pipe and dashes.
+    if (trimmed.length < 3 || !trimmed.contains('-')) return false
+
+    // Strip optional leading and trailing pipes for splitting
+    var content = trimmed
+    if (content.startsWith('|')) content = content.substring(1)
+    if (content.endsWith('|')) content = content.substring(0, content.length - 1)
+
+    val separatorParts = content.split('|')
+    if (separatorParts.isEmpty()) return false
+
+    // Each part must be like ---, :---, ---:, or :---:
+    // Let's be lenient and require at least two dashes.
+    // The regex checks for optional leading/trailing whitespace, optional colons, and at least 2 dash-like characters.
+    val dashRegex = Regex("^\\s*:?[\\-–—]{2,}:?\\s*$")
+
+    return separatorParts.all { it.matches(dashRegex) }
 }
 
 private fun parseInlineMarkdown(line: String): AnnotatedString {
