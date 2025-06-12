@@ -169,12 +169,16 @@ fun ChatMessagesList(
                         horizontalArrangement = Arrangement.Start
                     ) {
                         Text(
-                            "正在连接API",
+                            "正在连接大模型",
                             style = MaterialTheme.typography.bodySmall,
                             color = Color.Black
                         )
-                        Spacer(Modifier.width(4.dp))
-                        ThreeDotsWaveAnimation(dotSize = 3.dp, spacing = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(12.dp),
+                            color = Color.Black,
+                            strokeWidth = 1.5.dp
+                        )
                     }
                 }
             }
@@ -266,7 +270,6 @@ private fun RenderMarkdownBlock(
                 Text("• ", color = contentColor)
                 Text(text = block.text, style = MaterialTheme.typography.bodyLarge.copy(color = contentColor))
             }
-            is MarkdownBlock.MathBlock -> Text(text = "KaTeX unsupported in this view: ${block.text}", style = MaterialTheme.typography.bodyMedium.copy(color = contentColor.copy(alpha = 0.7f)))
             is MarkdownBlock.Image -> coil3.compose.AsyncImage(model = coil3.request.ImageRequest.Builder(LocalContext.current).data(block.url).crossfade(true).build(), contentDescription = block.altText, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(12.dp)))
             is MarkdownBlock.Table -> MarkdownTable(header = block.header, rows = block.rows, contentColor = contentColor)
         }
@@ -333,29 +336,6 @@ private fun RowScope.TableCell(text: AnnotatedString, isHeader: Boolean, weight:
     Text(text = text, modifier = Modifier.weight(weight).padding(12.dp), fontWeight = if (isHeader) FontWeight.Bold else FontWeight.Normal, color = contentColor)
 }
 
-@Composable
-private fun ThreeDotsWaveAnimation(modifier: Modifier = Modifier, dotColor: Color = Color.Black, dotSize: Dp = 6.dp, spacing: Dp = 4.dp) {
-    val infiniteTransition = rememberInfiniteTransition(label = "wave_transition")
-    Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(spacing)) {
-        (0..2).forEach { index ->
-            val yOffset by infiniteTransition.animateFloat(
-                initialValue = 0f,
-                targetValue = 0f,
-                animationSpec = infiniteRepeatable(
-                    animation = keyframes {
-                        durationMillis = 800
-                        0f at 0
-                        -dotSize.value at 200
-                        0f at 400
-                    },
-                    repeatMode = RepeatMode.Restart,
-                    initialStartOffset = androidx.compose.animation.core.StartOffset(index * 100)
-                ), label = "dot_wave_$index"
-            )
-            Box(modifier = Modifier.size(dotSize).offset(y = yOffset.dp).background(color = dotColor, shape = CircleShape))
-        }
-    }
-}
 
 @Composable
 private fun ReasoningToggleAndContent(

@@ -16,7 +16,6 @@ sealed class MarkdownBlock {
     data class Text(val text: AnnotatedString) : MarkdownBlock()
     data class CodeBlock(val rawText: String, val language: String?) : MarkdownBlock()
     data class ListItem(val text: AnnotatedString) : MarkdownBlock()
-    data class MathBlock(val text: String) : MarkdownBlock()
     data class Image(val altText: String, val url: String) : MarkdownBlock()
     data class Table(val header: List<AnnotatedString>, val rows: List<List<AnnotatedString>>) : MarkdownBlock()
 }
@@ -38,31 +37,6 @@ fun parseMarkdownToBlocks(markdown: String): List<MarkdownBlock> {
                 }
                 i++
             }
-            line.trim().startsWith("$$") || line.trim().startsWith("\\[") -> {
-                val isDollars = line.trim().startsWith("$$")
-                val openDelim = if (isDollars) "$$" else "\\["
-                val closeDelim = if (isDollars) "$$" else "\\]"
-
-                val mathBlockLines = mutableListOf<String>()
-                val startingLine = line.trim().substring(openDelim.length)
-
-                if (startingLine.endsWith(closeDelim)) {
-                    mathBlockLines.add(startingLine.removeSuffix(closeDelim).trim())
-                    i++
-                } else {
-                    mathBlockLines.add(startingLine)
-                    i++
-                    while (i < lines.size && !lines[i].trim().endsWith(closeDelim)) {
-                        mathBlockLines.add(lines[i])
-                        i++
-                    }
-                    if (i < lines.size) {
-                        mathBlockLines.add(lines[i].trim().removeSuffix(closeDelim))
-                        i++
-                    }
-                }
-                blocks.add(MarkdownBlock.MathBlock(mathBlockLines.joinToString("\n").trim()))
-            }
             line.startsWith("```") -> {
                 val lang = line.substring(3).trim()
                 val codeBlockLines = mutableListOf<String>()
@@ -73,20 +47,7 @@ fun parseMarkdownToBlocks(markdown: String): List<MarkdownBlock> {
                 }
                 val rawText = codeBlockLines.joinToString("\n")
 
-                val latexCommands = listOf(
-                    "\\text", "\\frac", "\\sum", "\\beta", "\\alpha", "\\gamma", "\\delta",
-                    "\\epsilon", "\\sigma", "\\rho", "\\theta", "\\omega", "\\mu", "\\nu",
-                    "\\sin", "\\cos", "\\tan", "\\log", "\\ln", "\\sqrt", "\\in", "\\infty",
-                    "\\left", "\\right", "\\times", "\\geq", "\\leq", "\\neq", "\\approx",
-                    "\\cdot", "\\pm", "\\mp", "\\forall", "\\exists", "\\nabla", "\\partial"
-                )
-                val isLikelyMath = lang.isEmpty() && latexCommands.any { rawText.contains(it) }
-
-                if (isLikelyMath) {
-                    blocks.add(MarkdownBlock.MathBlock(rawText))
-                } else {
-                    blocks.add(MarkdownBlock.CodeBlock(rawText, lang.ifEmpty { null }))
-                }
+                blocks.add(MarkdownBlock.CodeBlock(rawText, lang.ifEmpty { null }))
 
                 if (i < lines.size) {
                     i++
@@ -148,22 +109,11 @@ fun parseMarkdownToBlocks(markdown: String): List<MarkdownBlock> {
                     textLines.add(currentLine)
                     i++
                 }
+
                 if (textLines.isNotEmpty()) {
                     val text = textLines.joinToString("\n")
                     if (text.isNotBlank()) {
-                        val latexCommands = listOf(
-                            "\\text", "\\frac", "\\sum", "\\beta", "\\alpha", "\\gamma", "\\delta",
-                            "\\epsilon", "\\sigma", "\\rho", "\\theta", "\\omega", "\\mu", "\\nu",
-                            "\\sin", "\\cos", "\\tan", "\\log", "\\ln", "\\sqrt", "\\in", "\\infty",
-                            "\\left", "\\right", "\\times", "\\geq", "\\leq", "\\neq", "\\approx",
-                            "\\cdot", "\\pm", "\\mp", "\\forall", "\\exists", "\\nabla", "\\partial",
-                            "\\begin", "\\end"
-                        )
-                        if (latexCommands.any { text.contains(it) }) {
-                            blocks.add(MarkdownBlock.MathBlock(text))
-                        } else {
-                            blocks.add(MarkdownBlock.Text(parseInlineMarkdown(text)))
-                        }
+                        blocks.add(MarkdownBlock.Text(parseInlineMarkdown(text)))
                     }
                 }
             }
@@ -207,7 +157,8 @@ private fun parseInlineMarkdown(line: String): AnnotatedString {
             "bold" to Regex("\\*\\*([\\s\\S]+?)\\*\\*"),
             "italic" to Regex("\\*([\\s\\S]+?)\\*"),
             "code" to Regex("`([^`]+?)`"),
-            "math" to Regex("\\\\\\((.*?)\\\\\\)|\\$(.*?)\\$"),
+            // This regex now handles both $$...$$ (block) and $...$ (inline)
+            "math" to Regex("\\$\\$([\\s\\S]*?)\\$\\$|\\$([^\\$]*?)\\$"),
             "url" to Regex("\\b(https?://\\S+)")
         )
 
@@ -243,7 +194,11 @@ private fun parseInlineMarkdown(line: String): AnnotatedString {
             "bold" -> Triple(match.groupValues[1], SpanStyle(fontWeight = FontWeight.Bold), null)
             "italic" -> Triple(match.groupValues[1], SpanStyle(fontStyle = FontStyle.Italic), null)
             "code" -> Triple(match.groupValues[1], SpanStyle(fontFamily = FontFamily.Monospace, background = Color.White, fontSize = 13.sp, color = Color.Gray), null)
-            "math" -> Triple(if (match.groupValues[1].isNotEmpty()) match.groupValues[1] else match.groupValues[2], SpanStyle(fontFamily = FontFamily.Default), null)
+            "math" -> {
+                // Group 1 is for $$...$$, Group 2 is for $...$
+                val content = if (match.groupValues[1].isNotEmpty()) match.groupValues[1] else match.groupValues[2]
+                Triple(content, SpanStyle(fontFamily = FontFamily.Default), null)
+            }
             else -> Triple("", SpanStyle(), null)
         }
 

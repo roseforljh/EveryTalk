@@ -62,7 +62,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlin.coroutines.cancellation.CancellationException
 
-private const val USER_INACTIVITY_TIMEOUT_MS = 2000L
+private const val USER_INACTIVITY_TIMEOUT_MS = 3000L
 private const val SESSION_SWITCH_SCROLL_DELAY_MS = 250L
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -95,6 +95,7 @@ fun ChatScreen(
     var userManuallyScrolledAwayFromBottom by remember { mutableStateOf(false) }
     var ongoingScrollJob by remember { mutableStateOf<Job?>(null) }
     var programmaticallyScrolling by remember { mutableStateOf(false) }
+    var isUserActive by remember { mutableStateOf(true) }
 
     val bottomSheetState = rememberModalBottomSheetState(
         skipPartiallyExpanded = true
@@ -130,91 +131,41 @@ fun ChatScreen(
     ) {
         ongoingScrollJob?.cancel(CancellationException("New scroll request: $reason"))
         ongoingScrollJob = coroutineScope.launch {
-            if (messagesRef.isEmpty()) {
-                programmaticallyScrolling = false
-                userManuallyScrolledAwayFromBottom = false
-                try {
-                    listStateRef.scrollToItem(0)
-                } catch (_: Exception) {
-                }
-                return@launch
-            }
             programmaticallyScrolling = true
-            val targetIndex = listStateRef.layoutInfo.totalItemsCount - 1
-            if (targetIndex < 0) {
-                programmaticallyScrolling = false
-                return@launch
-            }
-
-
-            var reachedEnd = false
-            var attempts = 0
-            val maxAttempts = 12
-
             try {
-                listStateRef.scrollToItem(targetIndex)
-                delay(64)
-                val layoutInfo = listStateRef.layoutInfo
-                if (layoutInfo.visibleItemsInfo.any { it.index == targetIndex } ||
-                    (layoutInfo.visibleItemsInfo.lastOrNull()?.index == targetIndex - 1 &&
-                            layoutInfo.visibleItemsInfo.last().offset + layoutInfo.visibleItemsInfo.last().size <= layoutInfo.viewportEndOffset + 5)) {
-                    reachedEnd = true
+                // The target index should be the last item in the UI list, not the data list
+                val targetIndex = listStateRef.layoutInfo.totalItemsCount - 1
+                if (targetIndex >= 0) {
+                    listStateRef.animateScrollToItem(index = targetIndex)
                 }
-            } catch (e: Exception) {
+            } finally {
+                programmaticallyScrolling = false
             }
-
-            while (!reachedEnd && attempts < maxAttempts && isActive) {
-                attempts++
-                try {
-                    listStateRef.animateScrollBy(
-                        value = 1500f,
-                        animationSpec = tween(durationMillis = 500, easing = FastOutSlowInEasing)
-                    )
-                    delay(150)
-                    val layoutInfo = listStateRef.layoutInfo
-                    if (layoutInfo.visibleItemsInfo.any { it.index == targetIndex } ||
-                        (layoutInfo.visibleItemsInfo.lastOrNull()?.index == targetIndex - 1 &&
-                                layoutInfo.visibleItemsInfo.last().offset + layoutInfo.visibleItemsInfo.last().size <= layoutInfo.viewportEndOffset + 5)) {
-                        reachedEnd = true
-                        break
-                    }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    delay(100)
-                }
-            }
-
-            if (reachedEnd) {
-                userManuallyScrolledAwayFromBottom = false
-            }
-            programmaticallyScrolling = false
-            ongoingScrollJob = null
         }
     }
 
     var lastInteractionTime by remember { mutableStateOf(System.currentTimeMillis()) }
 
+    LaunchedEffect(lastInteractionTime) {
+        isUserActive = true
+        delay(USER_INACTIVITY_TIMEOUT_MS)
+        isUserActive = false
+    }
+
     val resetInactivityTimer: () -> Unit = {
         lastInteractionTime = System.currentTimeMillis()
     }
 
-    LaunchedEffect(key1 = loadedHistoryIndex, key2 = messages.hashCode()) {
+    LaunchedEffect(messages.size, loadedHistoryIndex) {
         val currentMessagesSnapshot = messages.toList()
-        val currentLoadedIndex = loadedHistoryIndex
-        val sessionJustChanged = previousLoadedHistoryIndexState != currentLoadedIndex
+        val sessionJustChanged = previousLoadedHistoryIndexState != loadedHistoryIndex
 
         if (sessionJustChanged) {
             delay(SESSION_SWITCH_SCROLL_DELAY_MS)
-            previousLoadedHistoryIndexState = currentLoadedIndex
+            previousLoadedHistoryIndexState = loadedHistoryIndex
         }
 
-        if (currentMessagesSnapshot.isNotEmpty()) {
-            scrollToBottomGuaranteed(
-                "InitialOrSessionChange",
-                messagesRef = currentMessagesSnapshot
-            )
-        } else {
+        if (currentMessagesSnapshot.isEmpty()) {
             coroutineScope.launch {
                 programmaticallyScrolling = true
                 userManuallyScrolledAwayFromBottom = false
@@ -225,6 +176,19 @@ fun ChatScreen(
                     programmaticallyScrolling = false
                 }
             }
+            return@LaunchedEffect
+        }
+
+        val lastMessage = currentMessagesSnapshot.last()
+        val shouldScroll = lastMessage.sender == Sender.User ||
+                !userManuallyScrolledAwayFromBottom ||
+                sessionJustChanged
+
+        if (shouldScroll) {
+            scrollToBottomGuaranteed(
+                "New message or session change",
+                messagesRef = currentMessagesSnapshot
+            )
         }
     }
 
@@ -236,18 +200,27 @@ fun ChatScreen(
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
                 if (source == NestedScrollSource.Drag) {
                     resetInactivityTimer()
+                    if (available.y < 0) { // User scrolling up
+                        ongoingScrollJob?.cancel(CancellationException("User interrupted scroll"))
+                        userManuallyScrolledAwayFromBottom = true
+                    }
                 }
                 return Offset.Zero
             }
 
             override suspend fun onPreFling(available: Velocity): Velocity {
                 resetInactivityTimer()
+                if (available.y < 0) { // User flinging up
+                    ongoingScrollJob?.cancel(CancellationException("User interrupted fling"))
+                    userManuallyScrolledAwayFromBottom = true
+                }
                 return Velocity.Zero
             }
         }
     }
 
-    val isAtBottom by remember {
+    val bottomScrollThreshold = with(density) { 60.dp.toPx() }
+    val isAtBottom by remember(bottomScrollThreshold) {
         derivedStateOf {
             val layoutInfo = listState.layoutInfo
             if (layoutInfo.visibleItemsInfo.isEmpty()) {
@@ -255,22 +228,14 @@ fun ChatScreen(
             } else {
                 val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
                 lastVisibleItem != null && lastVisibleItem.index >= layoutInfo.totalItemsCount - 1 &&
-                        lastVisibleItem.offset + lastVisibleItem.size <= layoutInfo.viewportEndOffset + 10
+                        lastVisibleItem.offset + lastVisibleItem.size <= layoutInfo.viewportEndOffset + bottomScrollThreshold
             }
         }
     }
 
     LaunchedEffect(listState.isScrollInProgress) {
         if (!listState.isScrollInProgress && !programmaticallyScrolling) {
-            if (isAtBottom) {
-                if (userManuallyScrolledAwayFromBottom) {
-                    userManuallyScrolledAwayFromBottom = false
-                }
-            } else {
-                if (!userManuallyScrolledAwayFromBottom) {
-                    userManuallyScrolledAwayFromBottom = true
-                }
-            }
+            userManuallyScrolledAwayFromBottom = !isAtBottom
         }
     }
 
@@ -283,14 +248,16 @@ fun ChatScreen(
 
     LaunchedEffect(currentStreamingAiMessageId, isApiCalling, userManuallyScrolledAwayFromBottom) {
         if (isApiCalling && currentStreamingAiMessageId != null && !userManuallyScrolledAwayFromBottom) {
-            // Coroutine for reasoning text
+            // Coroutine for reasoning text appearance
             launch {
                 snapshotFlow { messages.find { it.id == currentStreamingAiMessageId }?.reasoning }
+                    .map { !it.isNullOrBlank() }
                     .distinctUntilChanged()
-                    .collect { reasoning ->
-                        if (reasoning?.isNotBlank() == true) {
+                    .filter { it } // Trigger only when reasoning appears
+                    .collect {
+                        if (isActive) {
                             scrollToBottomGuaranteed(
-                                "AI_Reasoning_Updated",
+                                "AI_Reasoning_Appeared",
                                 messagesRef = messages.toList()
                             )
                         }
@@ -314,9 +281,9 @@ fun ChatScreen(
         }
     }
 
-    val scrollToBottomButtonVisible by remember {
+    val scrollToBottomButtonVisible by remember(isUserActive) {
         derivedStateOf {
-            messages.isNotEmpty() && userManuallyScrolledAwayFromBottom
+            messages.isNotEmpty() && userManuallyScrolledAwayFromBottom && isUserActive
         }
     }
 
@@ -385,6 +352,7 @@ fun ChatScreen(
             ) {
                 FloatingActionButton(
                     onClick = {
+                        userManuallyScrolledAwayFromBottom = false
                         resetInactivityTimer()
                         scrollToBottomGuaranteed("FAB_Click", messagesRef = messages.toList())
                     },
@@ -457,7 +425,7 @@ fun ChatScreen(
                                             )
                                         }
 
-                                        val footerItem = if (!message.webSearchResults.isNullOrEmpty() && !isApiCalling) {
+                                        val footerItem = if (!message.webSearchResults.isNullOrEmpty()) {
                                             listOf(ChatListItem.AiMessageFooter(message))
                                         } else {
                                             emptyList()
