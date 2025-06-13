@@ -12,12 +12,12 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.sp
 
 sealed class MarkdownBlock {
-    data class Header(val level: Int, val text: AnnotatedString) : MarkdownBlock()
-    data class Text(val text: AnnotatedString) : MarkdownBlock()
+    data class Header(val level: Int, val text: String) : MarkdownBlock()
+    data class Text(val text: String) : MarkdownBlock()
     data class CodeBlock(val rawText: String, val language: String?) : MarkdownBlock()
-    data class ListItem(val text: AnnotatedString) : MarkdownBlock()
+    data class ListItem(val text: String) : MarkdownBlock()
     data class Image(val altText: String, val url: String) : MarkdownBlock()
-    data class Table(val header: List<AnnotatedString>, val rows: List<List<AnnotatedString>>) : MarkdownBlock()
+    data class Table(val header: List<String>, val rows: List<List<String>>) : MarkdownBlock()
 }
 
 fun parseMarkdownToBlocks(markdown: String): List<MarkdownBlock> {
@@ -57,7 +57,7 @@ fun parseMarkdownToBlocks(markdown: String): List<MarkdownBlock> {
                 val trimmedLine = line.trim()
                 val level = trimmedLine.takeWhile { it == '#' }.length
                 val text = trimmedLine.removePrefix("#".repeat(level)).trim()
-                blocks.add(MarkdownBlock.Header(level, parseInlineMarkdown(text)))
+                blocks.add(MarkdownBlock.Header(level, text))
                 i++
             }
             line.trim().startsWith("* ") || line.trim().startsWith("- ") -> {
@@ -68,24 +68,20 @@ fun parseMarkdownToBlocks(markdown: String): List<MarkdownBlock> {
                     listContent.add(lines[i])
                     i++
                 }
-                blocks.add(MarkdownBlock.ListItem(parseInlineMarkdown(listContent.joinToString("\n"))))
+                blocks.add(MarkdownBlock.ListItem(listContent.joinToString("\n")))
             }
             line.trim().startsWith("|") && i + 1 < lines.size && isSeparatorLine(lines[i + 1]) -> {
                 val headerLine = line.trim()
                 val headerContent = headerLine.removePrefix("|").removeSuffix("|")
-                val headerCells = headerContent.split("|").map {
-                    parseInlineMarkdown(it.trim())
-                }
+                val headerCells = headerContent.split("|").map { it.trim() }
                 i++ // Consume header line
                 i++ // Consume separator line
 
-                val tableRows = mutableListOf<List<AnnotatedString>>()
+                val tableRows = mutableListOf<List<String>>()
                 while (i < lines.size && lines[i].trim().startsWith("|")) {
                     val rowLine = lines[i].trim()
                     val rowContent = rowLine.removePrefix("|").removeSuffix("|")
-                    val rowCells = rowContent.split("|").map {
-                        parseInlineMarkdown(it.trim())
-                    }
+                    val rowCells = rowContent.split("|").map { it.trim() }
                     tableRows.add(rowCells)
                     i++
                 }
@@ -113,7 +109,7 @@ fun parseMarkdownToBlocks(markdown: String): List<MarkdownBlock> {
                 if (textLines.isNotEmpty()) {
                     val text = textLines.joinToString("\n")
                     if (text.isNotBlank()) {
-                        blocks.add(MarkdownBlock.Text(parseInlineMarkdown(text)))
+                        blocks.add(MarkdownBlock.Text(text))
                     }
                 }
             }
@@ -138,86 +134,4 @@ private fun isSeparatorLine(line: String): Boolean {
     val dashRegex = Regex("^\\s*:?[\\-–—]{2,}:?\\s*$")
 
     return separatorParts.all { it.matches(dashRegex) }
-}
-
-private fun parseInlineMarkdown(line: String): AnnotatedString {
-    // Pre-process to handle <br> tags and remove table formatting characters
-    val processedLine = line
-        .replace(Regex("<br\\s*/?>"), "\n")
-        .replace(Regex("\\s*\\|\\s*"), " ") // Remove pipe characters used for table formatting
-
-    return buildAnnotatedString {
-        // Base case for recursion
-        if (processedLine.isEmpty()) return@buildAnnotatedString
-
-        val regexes = mapOf(
-            "link" to Regex("\\[([^\\]]+?)\\]\\((https?://\\S+?)\\)"),
-            "fraction" to Regex("\\\\frac\\{([^}]+?)\\}\\{([^}]+)\\}"),
-            "bold_italic" to Regex("\\*\\*\\*([\\s\\S]+?)\\*\\*\\*"),
-            "bold" to Regex("\\*\\*([\\s\\S]+?)\\*\\*"),
-            "italic" to Regex("\\*([\\s\\S]+?)\\*"),
-            "code" to Regex("`([^`]+?)`"),
-            // This regex now handles both $$...$$ (block) and $...$ (inline)
-            "math" to Regex("\\$\\$([\\s\\S]*?)\\$\\$|\\$([^\\$]*?)\\$"),
-            "url" to Regex("\\b(https?://\\S+)")
-        )
-
-        val firstMatch = regexes.flatMap { (type, regex) ->
-            regex.findAll(processedLine).map { match -> type to match }
-        }.sortedWith(
-            compareBy<Pair<String, MatchResult>> { (_, match) -> match.range.first }
-                .thenByDescending { (_, match) -> match.range.last - match.range.first }
-        ).firstOrNull()
-
-        if (firstMatch == null) {
-            append(processedLine)
-            return@buildAnnotatedString
-        }
-
-        val (type, match) = firstMatch
-
-        // Append text before the match
-        if (match.range.first > 0) {
-            append(processedLine.substring(0, match.range.first))
-        }
-
-        // Get content and apply style
-        val (content, style, annotation) = when (type) {
-            "link" -> Triple(match.groupValues[1], SpanStyle(color = Color(0xFF3498DB)), "URL" to match.groupValues[2])
-            "url" -> Triple(match.value, SpanStyle(color = Color(0xFF3498DB)), "URL" to match.value)
-            "fraction" -> {
-                val numerator = match.groupValues[1]
-                val denominator = match.groupValues[2]
-                Triple(" ", SpanStyle(), "FRACTION" to "$numerator/$denominator")
-            }
-            "bold_italic" -> Triple(match.groupValues[1], SpanStyle(fontWeight = FontWeight.Bold, fontStyle = FontStyle.Italic), null)
-            "bold" -> Triple(match.groupValues[1], SpanStyle(fontWeight = FontWeight.Bold), null)
-            "italic" -> Triple(match.groupValues[1], SpanStyle(fontStyle = FontStyle.Italic), null)
-            "code" -> Triple(match.groupValues[1], SpanStyle(fontFamily = FontFamily.Monospace, background = Color.White, fontSize = 13.sp, color = Color.Gray), null)
-            "math" -> {
-                // Group 1 is for $$...$$, Group 2 is for $...$
-                val content = if (match.groupValues[1].isNotEmpty()) match.groupValues[1] else match.groupValues[2]
-                Triple(content, SpanStyle(fontFamily = FontFamily.Default), null)
-            }
-            else -> Triple("", SpanStyle(), null)
-        }
-
-        if (annotation != null) {
-            pushStringAnnotation(annotation.first, annotation.second)
-        }
-        withStyle(style) {
-            if (type == "url" || type == "code" || type == "math" || type == "fraction") {
-                append(if (type == "math") LatexToUnicode.convert(content) else content)
-            } else {
-                append(parseInlineMarkdown(content)) // Recursive call
-            }
-        }
-        if (annotation != null) {
-            pop()
-        }
-
-        // Recursively parse the rest of the line
-        val restOfLine = processedLine.substring(match.range.last + 1)
-        append(parseInlineMarkdown(restOfLine))
-    }
 }

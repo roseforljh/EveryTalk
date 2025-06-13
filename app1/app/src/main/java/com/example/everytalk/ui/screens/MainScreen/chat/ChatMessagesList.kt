@@ -29,6 +29,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
@@ -57,6 +58,7 @@ import com.example.everytalk.ui.screens.BubbleMain.Main.ReasoningToggleAndConten
 import com.example.everytalk.ui.screens.BubbleMain.Main.UserOrErrorMessageContent
 import com.example.everytalk.util.CodeHighlighter
 import com.example.everytalk.util.MarkdownBlock
+import com.example.everytalk.util.parseInlineMarkdownToAnnotatedString
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -267,7 +269,7 @@ private fun RenderMarkdownBlock(
     Box(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
         when (block) {
             is MarkdownBlock.Header -> MarkdownText(
-                text = block.text,
+                text = block.text.toString(),
                 style = MaterialTheme.typography.headlineSmall.copy(
                     fontSize = when (block.level) {
                         1 -> 28.sp
@@ -280,7 +282,7 @@ private fun RenderMarkdownBlock(
                 onLongPress = onLongPress
             )
             is MarkdownBlock.Text -> MarkdownText(
-                text = block.text,
+                text = block.text.toString(),
                 style = MaterialTheme.typography.bodyLarge.copy(color = contentColor),
                 onLongPress = onLongPress
             )
@@ -293,7 +295,7 @@ private fun RenderMarkdownBlock(
             is MarkdownBlock.ListItem -> Row {
                 Text("• ", color = contentColor)
                 MarkdownText(
-                    text = block.text,
+                    text = block.text.toString(),
                     style = MaterialTheme.typography.bodyLarge.copy(color = contentColor),
                     modifier = Modifier.weight(1f),
                     onLongPress = onLongPress
@@ -324,7 +326,11 @@ private fun RenderMarkdownBlock(
 private fun CodeBlock(rawText: String, language: String?, contentColor: Color, onLongPress: () -> Unit) {
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
-    val annotatedString = CodeHighlighter.highlightToAnnotatedString(rawText, language)
+    val annotatedString by produceState(initialValue = AnnotatedString(rawText)) {
+        value = withContext(NonCancellable) {
+            CodeHighlighter.highlightToAnnotatedString(rawText, language)
+        }
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -350,7 +356,7 @@ private fun CodeBlock(rawText: String, language: String?, contentColor: Color, o
 }
 
 @Composable
-private fun MarkdownTable(header: List<AnnotatedString>, rows: List<List<AnnotatedString>>, contentColor: Color, onLongPress: () -> Unit) {
+private fun MarkdownTable(header: List<String>, rows: List<List<String>>, contentColor: Color, onLongPress: () -> Unit) {
     val columnCount = header.size
     if (columnCount == 0) return
 
@@ -369,7 +375,7 @@ private fun MarkdownTable(header: List<AnnotatedString>, rows: List<List<Annotat
         rows.forEach { row ->
             Row(Modifier.fillMaxWidth()) {
                 for(i in 0 until columnCount) {
-                    val text = row.getOrNull(i) ?: AnnotatedString("")
+                    val text = row.getOrNull(i) ?: ""
                     TableCell(text = text, isHeader = false, weight = 1f / columnCount, contentColor = contentColor, onLongPress = onLongPress)
                 }
             }
@@ -379,7 +385,7 @@ private fun MarkdownTable(header: List<AnnotatedString>, rows: List<List<Annotat
 }
 
 @Composable
-private fun RowScope.TableCell(text: AnnotatedString, isHeader: Boolean, weight: Float, contentColor: Color, onLongPress: () -> Unit) {
+private fun RowScope.TableCell(text: String, isHeader: Boolean, weight: Float, contentColor: Color, onLongPress: () -> Unit) {
     MarkdownText(
         text = text,
         modifier = Modifier
@@ -395,7 +401,7 @@ private fun RowScope.TableCell(text: AnnotatedString, isHeader: Boolean, weight:
 
 @Composable
 private fun MarkdownText(
-    text: AnnotatedString,
+    text: String,
     modifier: Modifier = Modifier,
     style: TextStyle = LocalTextStyle.current,
     onLongPress: () -> Unit
@@ -404,26 +410,34 @@ private fun MarkdownText(
     val context = LocalContext.current
     var textLayoutResult by remember { mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null) }
 
+    val annotatedString by produceState(initialValue = AnnotatedString(text), key1 = text) {
+        value = withContext(NonCancellable) {
+            parseInlineMarkdownToAnnotatedString(text)
+        }
+    }
+
     Text(
-        text = text,
-        modifier = modifier.pointerInput(onLongPress) {
-            detectTapGestures(
-                onLongPress = { onLongPress() },
-                onTap = { offset ->
-                    textLayoutResult?.let { layoutResult ->
-                        val characterIndex = layoutResult.getOffsetForPosition(offset)
-                        text.getStringAnnotations(tag = "URL", start = characterIndex, end = characterIndex)
-                            .firstOrNull()?.let { annotation ->
-                                try {
-                                    uriHandler.openUri(annotation.item)
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "无法打开链接: ${annotation.item}", Toast.LENGTH_SHORT).show()
+        text = annotatedString,
+        modifier = modifier
+            .graphicsLayer()
+            .pointerInput(onLongPress) {
+                detectTapGestures(
+                    onLongPress = { onLongPress() },
+                    onTap = { offset ->
+                        textLayoutResult?.let { layoutResult ->
+                            val characterIndex = layoutResult.getOffsetForPosition(offset)
+                            annotatedString.getStringAnnotations(tag = "URL", start = characterIndex, end = characterIndex)
+                                .firstOrNull()?.let { annotation ->
+                                    try {
+                                        uriHandler.openUri(annotation.item)
+                                    } catch (e: Exception) {
+                                        Toast.makeText(context, "无法打开链接: ${annotation.item}", Toast.LENGTH_SHORT).show()
+                                    }
                                 }
-                            }
+                        }
                     }
-                }
-            )
-        },
+                )
+            },
         style = style,
         onTextLayout = { layoutResult ->
             textLayoutResult = layoutResult
