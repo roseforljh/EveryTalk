@@ -38,8 +38,10 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.foundation.text.ClickableText
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
@@ -51,6 +53,7 @@ import coil3.request.crossfade
 import com.example.everytalk.StateControler.AppViewModel
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.ui.screens.BubbleMain.Main.AttachmentsContent
+import com.example.everytalk.ui.screens.BubbleMain.Main.ReasoningToggleAndContent
 import com.example.everytalk.ui.screens.BubbleMain.Main.UserOrErrorMessageContent
 import com.example.everytalk.util.CodeHighlighter
 import com.example.everytalk.util.MarkdownBlock
@@ -93,7 +96,8 @@ fun ChatMessagesList(
                         if (!item.message.attachments.isNullOrEmpty()) {
                             AttachmentsContent(
                                 attachments = item.message.attachments!!,
-                                onAttachmentClick = { /* Handle attachment click */ }
+                                onAttachmentClick = { /* Handle attachment click */ },
+                                maxWidth = bubbleMaxWidth * 0.85f
                             )
                         }
                         if (item.message.text.isNotBlank()) {
@@ -116,12 +120,16 @@ fun ChatMessagesList(
                     val isApiCalling by viewModel.isApiCalling.collectAsState()
                     val reasoningCompleteMap = viewModel.reasoningCompleteMap
                     val isReasoningStreaming = isApiCalling && item.message.reasoning != null && !(reasoningCompleteMap[item.message.id] ?: false)
+                    val isReasoningComplete = reasoningCompleteMap[item.message.id] ?: false
 
                     ReasoningToggleAndContent(
                         modifier = Modifier.fillMaxWidth(),
                         currentMessageId = item.message.id,
                         displayedReasoningText = item.message.reasoning ?: "",
                         isReasoningStreaming = isReasoningStreaming,
+                        isReasoningComplete = isReasoningComplete,
+                        messageIsError = item.message.isError,
+                        mainContentHasStarted = item.message.contentStarted,
                         reasoningTextColor = Color(0xFF444444),
                         reasoningToggleDotColor = Color.Black
                     )
@@ -209,10 +217,7 @@ private fun AiMessageBlockItem(
     ) {
         Surface(
             modifier = Modifier
-                .widthIn(max = maxWidth)
-                .pointerInput(Unit) {
-                     detectTapGestures(onLongPress = { onLongPress() })
-                },
+                .widthIn(max = maxWidth),
             shape = shape,
             color = Color.White,
             contentColor = Color.Black,
@@ -221,7 +226,8 @@ private fun AiMessageBlockItem(
             RenderMarkdownBlock(
                 block = item.block,
                 viewModel = viewModel,
-                contentColor = Color.Black
+                contentColor = Color.Black,
+                onLongPress = onLongPress
             )
         }
     }
@@ -255,29 +261,67 @@ private fun AiMessageFooterItem(
 private fun RenderMarkdownBlock(
     block: MarkdownBlock,
     viewModel: AppViewModel,
-    contentColor: Color
+    contentColor: Color,
+    onLongPress: () -> Unit
 ) {
     Box(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
         when (block) {
-            is MarkdownBlock.Header -> Text(text = block.text, style = MaterialTheme.typography.headlineSmall.copy(fontSize = when (block.level) {
-                1 -> 28.sp
-                2 -> 24.sp
-                else -> 20.sp
-            }, fontWeight = FontWeight.Bold, color = contentColor))
-            is MarkdownBlock.Text -> Text(text = block.text, style = MaterialTheme.typography.bodyLarge.copy(color = contentColor))
-            is MarkdownBlock.CodeBlock -> CodeBlock(rawText = block.rawText, language = block.language, contentColor = contentColor)
+            is MarkdownBlock.Header -> MarkdownText(
+                text = block.text,
+                style = MaterialTheme.typography.headlineSmall.copy(
+                    fontSize = when (block.level) {
+                        1 -> 28.sp
+                        2 -> 24.sp
+                        else -> 20.sp
+                    },
+                    fontWeight = FontWeight.Bold,
+                    color = contentColor
+                ),
+                onLongPress = onLongPress
+            )
+            is MarkdownBlock.Text -> MarkdownText(
+                text = block.text,
+                style = MaterialTheme.typography.bodyLarge.copy(color = contentColor),
+                onLongPress = onLongPress
+            )
+            is MarkdownBlock.CodeBlock -> CodeBlock(
+                rawText = block.rawText,
+                language = block.language,
+                contentColor = contentColor,
+                onLongPress = onLongPress
+            )
             is MarkdownBlock.ListItem -> Row {
                 Text("• ", color = contentColor)
-                Text(text = block.text, style = MaterialTheme.typography.bodyLarge.copy(color = contentColor))
+                MarkdownText(
+                    text = block.text,
+                    style = MaterialTheme.typography.bodyLarge.copy(color = contentColor),
+                    modifier = Modifier.weight(1f),
+                    onLongPress = onLongPress
+                )
             }
-            is MarkdownBlock.Image -> coil3.compose.AsyncImage(model = coil3.request.ImageRequest.Builder(LocalContext.current).data(block.url).crossfade(true).build(), contentDescription = block.altText, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(12.dp)))
-            is MarkdownBlock.Table -> MarkdownTable(header = block.header, rows = block.rows, contentColor = contentColor)
+            is MarkdownBlock.Image -> Box(
+                modifier = Modifier.pointerInput(Unit) {
+                    detectTapGestures(onLongPress = { onLongPress() })
+                }
+            ) {
+                coil3.compose.AsyncImage(
+                    model = coil3.request.ImageRequest.Builder(LocalContext.current).data(block.url).crossfade(true).build(),
+                    contentDescription = block.altText,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(12.dp))
+                )
+            }
+            is MarkdownBlock.Table -> MarkdownTable(
+                header = block.header,
+                rows = block.rows,
+                contentColor = contentColor,
+                onLongPress = onLongPress
+            )
         }
     }
 }
 
 @Composable
-private fun CodeBlock(rawText: String, language: String?, contentColor: Color) {
+private fun CodeBlock(rawText: String, language: String?, contentColor: Color, onLongPress: () -> Unit) {
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
     val annotatedString = CodeHighlighter.highlightToAnnotatedString(rawText, language)
@@ -285,6 +329,9 @@ private fun CodeBlock(rawText: String, language: String?, contentColor: Color) {
         modifier = Modifier
             .fillMaxWidth()
             .background(Color(0xFFF3F3F3), RoundedCornerShape(16.dp))
+            .pointerInput(Unit) {
+                detectTapGestures(onLongPress = { onLongPress() })
+            }
             .padding(top = 12.dp, start = 16.dp, end = 16.dp, bottom = 4.dp)
     ) {
         Text(text = annotatedString, style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 19.sp), color = contentColor)
@@ -303,7 +350,7 @@ private fun CodeBlock(rawText: String, language: String?, contentColor: Color) {
 }
 
 @Composable
-private fun MarkdownTable(header: List<AnnotatedString>, rows: List<List<AnnotatedString>>, contentColor: Color) {
+private fun MarkdownTable(header: List<AnnotatedString>, rows: List<List<AnnotatedString>>, contentColor: Color, onLongPress: () -> Unit) {
     val columnCount = header.size
     if (columnCount == 0) return
 
@@ -315,7 +362,7 @@ private fun MarkdownTable(header: List<AnnotatedString>, rows: List<List<Annotat
     ) {
         Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))) {
             header.forEach { text ->
-                TableCell(text = text, isHeader = true, weight = 1f / columnCount, contentColor = contentColor)
+                TableCell(text = text, isHeader = true, weight = 1f / columnCount, contentColor = contentColor, onLongPress = onLongPress)
             }
         }
         Divider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f))
@@ -323,7 +370,7 @@ private fun MarkdownTable(header: List<AnnotatedString>, rows: List<List<Annotat
             Row(Modifier.fillMaxWidth()) {
                 for(i in 0 until columnCount) {
                     val text = row.getOrNull(i) ?: AnnotatedString("")
-                    TableCell(text = text, isHeader = false, weight = 1f / columnCount, contentColor = contentColor)
+                    TableCell(text = text, isHeader = false, weight = 1f / columnCount, contentColor = contentColor, onLongPress = onLongPress)
                 }
             }
             Divider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f))
@@ -332,145 +379,55 @@ private fun MarkdownTable(header: List<AnnotatedString>, rows: List<List<Annotat
 }
 
 @Composable
-private fun RowScope.TableCell(text: AnnotatedString, isHeader: Boolean, weight: Float, contentColor: Color) {
-    Text(text = text, modifier = Modifier.weight(weight).padding(12.dp), fontWeight = if (isHeader) FontWeight.Bold else FontWeight.Normal, color = contentColor)
+private fun RowScope.TableCell(text: AnnotatedString, isHeader: Boolean, weight: Float, contentColor: Color, onLongPress: () -> Unit) {
+    MarkdownText(
+        text = text,
+        modifier = Modifier
+            .weight(weight)
+            .padding(12.dp),
+        style = LocalTextStyle.current.copy(
+            fontWeight = if (isHeader) FontWeight.Bold else FontWeight.Normal,
+            color = contentColor
+        ),
+        onLongPress = onLongPress
+    )
 }
-
 
 @Composable
-private fun ReasoningToggleAndContent(
+private fun MarkdownText(
+    text: AnnotatedString,
     modifier: Modifier = Modifier,
-    currentMessageId: String,
-    displayedReasoningText: String,
-    isReasoningStreaming: Boolean,
-    reasoningTextColor: Color,
-    reasoningToggleDotColor: Color
+    style: TextStyle = LocalTextStyle.current,
+    onLongPress: () -> Unit
 ) {
-    var showDialog by remember(currentMessageId) { mutableStateOf(false) }
+    val uriHandler = LocalUriHandler.current
+    val context = LocalContext.current
+    var textLayoutResult by remember { mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null) }
 
-    val dotSize by animateDpAsState(
-        targetValue = if (showDialog) 6.dp else 8.dp,
-        animationSpec = tween(durationMillis = 200),
-        label = "dotSizeAnimation"
+    Text(
+        text = text,
+        modifier = modifier.pointerInput(onLongPress) {
+            detectTapGestures(
+                onLongPress = { onLongPress() },
+                onTap = { offset ->
+                    textLayoutResult?.let { layoutResult ->
+                        val characterIndex = layoutResult.getOffsetForPosition(offset)
+                        text.getStringAnnotations(tag = "URL", start = characterIndex, end = characterIndex)
+                            .firstOrNull()?.let { annotation ->
+                                try {
+                                    uriHandler.openUri(annotation.item)
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "无法打开链接: ${annotation.item}", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                    }
+                }
+            )
+        },
+        style = style,
+        onTextLayout = { layoutResult ->
+            textLayoutResult = layoutResult
+        }
     )
-
-    if (isReasoningStreaming) {
-        val boxBackgroundColor = Color.White.copy(alpha = 0.95f)
-        val scrimColor = boxBackgroundColor
-        val scrimHeight = 28.dp
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = boxBackgroundColor,
-            shadowElevation = 2.dp,
-            modifier = modifier
-                .fillMaxWidth()
-                .padding(start = 8.dp, end = 8.dp, bottom = 6.dp, top = 4.dp)
-                .heightIn(min = 50.dp, max = 180.dp)
-        ) {
-            Box(modifier = Modifier.fillMaxSize()) {
-                val scrollState = rememberScrollState()
-                LaunchedEffect(Unit) {
-                    try {
-                        while (isActive) {
-                            delay(1000L)
-                            scrollState.animateScrollTo(scrollState.maxValue)
-                        }
-                    } finally {
-                        withContext(NonCancellable) {
-                            scrollState.animateScrollTo(scrollState.maxValue)
-                        }
-                    }
-                }
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .verticalScroll(scrollState)
-                        .padding(horizontal = 12.dp, vertical = scrimHeight)
-                ) {
-                    Text(
-                        text = displayedReasoningText.ifBlank { " " },
-                        color = reasoningTextColor,
-                        style = MaterialTheme.typography.bodySmall.copy(lineHeight = 18.sp),
-                    )
-                }
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .fillMaxWidth()
-                        .height(scrimHeight)
-                        .background(
-                            brush = Brush.verticalGradient(
-                                colors = listOf(scrimColor, Color.Transparent)
-                            )
-                        )
-                )
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .height(scrimHeight)
-                        .background(
-                            brush = Brush.verticalGradient(
-                                colors = listOf(Color.Transparent, scrimColor)
-                            )
-                        )
-                )
-            }
-        }
-    } else {
-        Column(modifier = modifier.padding(start = 8.dp, end = 8.dp, bottom = 4.dp)) {
-            Box(
-                modifier = Modifier
-                    .size(24.dp)
-                    .clip(CircleShape)
-                    .clickable { showDialog = true },
-                contentAlignment = Alignment.Center
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(dotSize)
-                        .background(Color.Black, CircleShape)
-                )
-            }
-        }
-    }
-
-    if (showDialog) {
-        Dialog(
-            onDismissRequest = { showDialog = false },
-            properties = DialogProperties(usePlatformDefaultWidth = false)
-        ) {
-            Card(
-                shape = RoundedCornerShape(24.dp),
-                modifier = Modifier
-                    .fillMaxWidth(0.9f)
-                    .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.7f),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
-            ) {
-                Column(modifier = Modifier.padding(20.dp)) {
-                    Text(
-                        text = "Thinking Process",
-                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
-                        modifier = Modifier
-                            .padding(bottom = 16.dp)
-                            .align(Alignment.CenterHorizontally)
-                    )
-                    HorizontalDivider(thickness = 1.dp, color = Color.Gray.copy(alpha = 0.2f))
-                    Spacer(Modifier.height(16.dp))
-                    Box(
-                        modifier = Modifier
-                            .weight(1f, fill = false)
-                            .verticalScroll(rememberScrollState())
-                    ) {
-                        Text(
-                            text = displayedReasoningText,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = reasoningTextColor
-                        )
-                    }
-                }
-            }
-        }
-    }
 }
+

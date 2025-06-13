@@ -75,7 +75,7 @@ internal fun UserOrErrorMessageContent(
     Box(
         modifier = modifier
             .widthIn(max = maxWidth)
-            .padding(horizontal = 8.dp, vertical = 2.dp)
+            .padding(vertical = 2.dp)
     ) {
         Surface(
             color = bubbleColor,
@@ -264,7 +264,8 @@ internal fun UserOrErrorMessageContent(
 @Composable
 fun AttachmentsContent(
     attachments: List<SelectedMediaItem>,
-    onAttachmentClick: (SelectedMediaItem) -> Unit
+    onAttachmentClick: (SelectedMediaItem) -> Unit,
+    maxWidth: Dp
 ) {
     val context = LocalContext.current
     Column(
@@ -278,7 +279,7 @@ fun AttachmentsContent(
                         model = attachment.uri,
                         contentDescription = "Image attachment",
                         modifier = Modifier
-                            .fillMaxWidth(0.6f)
+                            .widthIn(max = maxWidth * 0.8f)
                             .padding(vertical = 4.dp)
                             .clip(RoundedCornerShape(16.dp))
                             .clickable {
@@ -295,7 +296,7 @@ fun AttachmentsContent(
                         model = attachment.bitmap,
                         contentDescription = "Image attachment",
                         modifier = Modifier
-                            .fillMaxWidth(0.6f)
+                            .widthIn(max = maxWidth * 0.8f)
                             .padding(vertical = 4.dp)
                             .clip(RoundedCornerShape(16.dp))
                             .clickable { onAttachmentClick(attachment) }
@@ -304,7 +305,7 @@ fun AttachmentsContent(
                 is SelectedMediaItem.GenericFile -> {
                     Row(
                         modifier = Modifier
-                            .fillMaxWidth(0.8f)
+                            .widthIn(max = maxWidth)
                             .padding(vertical = 4.dp)
                             .background(Color(0xFFF0F0F0), RoundedCornerShape(12.dp))
                             .clickable {

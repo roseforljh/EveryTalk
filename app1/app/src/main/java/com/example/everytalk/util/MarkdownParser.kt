@@ -72,7 +72,7 @@ fun parseMarkdownToBlocks(markdown: String): List<MarkdownBlock> {
             }
             line.trim().startsWith("|") && i + 1 < lines.size && isSeparatorLine(lines[i + 1]) -> {
                 val headerLine = line.trim()
-                val headerContent = headerLine.substring(1).let { if (it.endsWith("|")) it.substring(0, it.length - 1) else it }
+                val headerContent = headerLine.removePrefix("|").removeSuffix("|")
                 val headerCells = headerContent.split("|").map {
                     parseInlineMarkdown(it.trim())
                 }
@@ -82,7 +82,7 @@ fun parseMarkdownToBlocks(markdown: String): List<MarkdownBlock> {
                 val tableRows = mutableListOf<List<AnnotatedString>>()
                 while (i < lines.size && lines[i].trim().startsWith("|")) {
                     val rowLine = lines[i].trim()
-                    val rowContent = rowLine.substring(1).let { if (it.endsWith("|")) it.substring(0, it.length - 1) else it }
+                    val rowContent = rowLine.removePrefix("|").removeSuffix("|")
                     val rowCells = rowContent.split("|").map {
                         parseInlineMarkdown(it.trim())
                     }
@@ -124,31 +124,31 @@ fun parseMarkdownToBlocks(markdown: String): List<MarkdownBlock> {
 
 private fun isSeparatorLine(line: String): Boolean {
     val trimmed = line.trim()
-    if (!trimmed.startsWith('|')) return false
+    // A separator line must contain a pipe and a dash.
+    if (!trimmed.contains('|') || !trimmed.contains('-')) return false
 
-    // A GFM separator line must contain a pipe and dashes.
-    if (trimmed.length < 3 || !trimmed.contains('-')) return false
-
-    // Strip optional leading and trailing pipes for splitting
-    var content = trimmed
-    if (content.startsWith('|')) content = content.substring(1)
-    if (content.endsWith('|')) content = content.substring(0, content.length - 1)
+    // Strip optional leading and trailing pipes for splitting.
+    val content = trimmed.removePrefix("|").removeSuffix("|")
 
     val separatorParts = content.split('|')
     if (separatorParts.isEmpty()) return false
 
-    // Each part must be like ---, :---, ---:, or :---:
-    // Let's be lenient and require at least two dashes.
-    // The regex checks for optional leading/trailing whitespace, optional colons, and at least 2 dash-like characters.
+    // Each part must be like ---, :---, ---:, or :---:.
+    // Be lenient: require at least 2 dashes. Allow different dash characters.
     val dashRegex = Regex("^\\s*:?[\\-–—]{2,}:?\\s*$")
 
     return separatorParts.all { it.matches(dashRegex) }
 }
 
 private fun parseInlineMarkdown(line: String): AnnotatedString {
+    // Pre-process to handle <br> tags and remove table formatting characters
+    val processedLine = line
+        .replace(Regex("<br\\s*/?>"), "\n")
+        .replace(Regex("\\s*\\|\\s*"), " ") // Remove pipe characters used for table formatting
+
     return buildAnnotatedString {
         // Base case for recursion
-        if (line.isEmpty()) return@buildAnnotatedString
+        if (processedLine.isEmpty()) return@buildAnnotatedString
 
         val regexes = mapOf(
             "link" to Regex("\\[([^\\]]+?)\\]\\((https?://\\S+?)\\)"),
@@ -163,14 +163,14 @@ private fun parseInlineMarkdown(line: String): AnnotatedString {
         )
 
         val firstMatch = regexes.flatMap { (type, regex) ->
-            regex.findAll(line).map { match -> type to match }
+            regex.findAll(processedLine).map { match -> type to match }
         }.sortedWith(
             compareBy<Pair<String, MatchResult>> { (_, match) -> match.range.first }
                 .thenByDescending { (_, match) -> match.range.last - match.range.first }
         ).firstOrNull()
 
         if (firstMatch == null) {
-            append(line)
+            append(processedLine)
             return@buildAnnotatedString
         }
 
@@ -178,7 +178,7 @@ private fun parseInlineMarkdown(line: String): AnnotatedString {
 
         // Append text before the match
         if (match.range.first > 0) {
-            append(line.substring(0, match.range.first))
+            append(processedLine.substring(0, match.range.first))
         }
 
         // Get content and apply style
@@ -217,7 +217,7 @@ private fun parseInlineMarkdown(line: String): AnnotatedString {
         }
 
         // Recursively parse the rest of the line
-        val restOfLine = line.substring(match.range.last + 1)
+        val restOfLine = processedLine.substring(match.range.last + 1)
         append(parseInlineMarkdown(restOfLine))
     }
 }

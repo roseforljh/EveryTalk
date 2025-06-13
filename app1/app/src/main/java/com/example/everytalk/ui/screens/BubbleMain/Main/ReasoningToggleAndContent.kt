@@ -87,26 +87,14 @@ internal fun ReasoningToggleAndContent(
             ) {
                 Box(modifier = Modifier.fillMaxSize()) {
                     val scrollState = rememberScrollState()
-                    LaunchedEffect(displayedReasoningText, isReasoningStreaming) {
-                        if (isReasoningStreaming && isActive) {
-                            while (isActive && isReasoningStreaming) {
-                                try {
-                                    scrollState.animateScrollTo(scrollState.maxValue)
-                                } catch (e: Exception) {
-                                    break
-                                }
-                                if (!isReasoningStreaming) break
-                                delay(100L)
-                            }
-                            if (isActive && !isReasoningStreaming && displayedReasoningText.length > (scrollState.value / 15).coerceAtLeast(
-                                    10
-                                )
-                            ) {
-                                try {
-                                    scrollState.animateScrollTo(scrollState.maxValue)
-                                } catch (e: Exception) {
-                                }
-                            }
+                    // This effect ensures that as new reasoning text streams in,
+                    // the view automatically scrolls to the bottom to show the latest content.
+                    // It's keyed on scrollState.maxValue, which changes whenever the size of the
+                    // content inside the scrollable container changes. This is a more reliable
+                    // trigger for scrolling than the text itself.
+                    LaunchedEffect(scrollState.maxValue) {
+                        if (isReasoningStreaming) {
+                            scrollState.animateScrollTo(scrollState.maxValue)
                         }
                     }
                     Column(

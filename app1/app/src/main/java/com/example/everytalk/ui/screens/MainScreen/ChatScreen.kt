@@ -133,12 +133,17 @@ fun ChatScreen(
         ongoingScrollJob = coroutineScope.launch {
             programmaticallyScrolling = true
             try {
-                // The target index should be the last item in the UI list, not the data list
+                // Give the UI a moment to compose the new items before we scroll.
+                // This is crucial when new items are added and we want to scroll immediately.
+                delay(50)
                 val targetIndex = listStateRef.layoutInfo.totalItemsCount - 1
                 if (targetIndex >= 0) {
                     listStateRef.animateScrollToItem(index = targetIndex)
                 }
             } finally {
+                // After any programmatic scroll, we should be at the bottom.
+                // Reset the manual scroll flag to hide the "scroll to bottom" button.
+                userManuallyScrolledAwayFromBottom = false
                 programmaticallyScrolling = false
             }
         }
@@ -195,30 +200,6 @@ fun ChatScreen(
     val screenWidth = configuration.screenWidthDp.dp
     val bubbleMaxWidth = remember(screenWidth) { screenWidth.coerceAtMost(600.dp) }
 
-    val nestedScrollConnection = remember {
-        object : NestedScrollConnection {
-            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                if (source == NestedScrollSource.Drag) {
-                    resetInactivityTimer()
-                    if (available.y < 0) { // User scrolling up
-                        ongoingScrollJob?.cancel(CancellationException("User interrupted scroll"))
-                        userManuallyScrolledAwayFromBottom = true
-                    }
-                }
-                return Offset.Zero
-            }
-
-            override suspend fun onPreFling(available: Velocity): Velocity {
-                resetInactivityTimer()
-                if (available.y < 0) { // User flinging up
-                    ongoingScrollJob?.cancel(CancellationException("User interrupted fling"))
-                    userManuallyScrolledAwayFromBottom = true
-                }
-                return Velocity.Zero
-            }
-        }
-    }
-
     val bottomScrollThreshold = with(density) { 60.dp.toPx() }
     val isAtBottom by remember(bottomScrollThreshold) {
         derivedStateOf {
@@ -233,9 +214,47 @@ fun ChatScreen(
         }
     }
 
-    LaunchedEffect(listState.isScrollInProgress) {
-        if (!listState.isScrollInProgress && !programmaticallyScrolling) {
-            userManuallyScrolledAwayFromBottom = !isAtBottom
+    val nestedScrollConnection = remember {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                // If the user scrolls up (to view history, y < 0), we must immediately disable auto-scrolling.
+                if (source == NestedScrollSource.Drag && available.y < 0) {
+                    resetInactivityTimer()
+                    if (ongoingScrollJob?.isActive == true) {
+                        ongoingScrollJob?.cancel(CancellationException("User interrupted scroll by dragging up"))
+                    }
+                    userManuallyScrolledAwayFromBottom = true
+                }
+                return Offset.Zero
+            }
+
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                // After a user's scroll, sync the flag with the actual scroll position.
+                // If they are no longer at the bottom, auto-scrolling should be disabled.
+                // If they scroll back to the bottom, it should be re-enabled.
+                if (source == NestedScrollSource.Drag) {
+                    userManuallyScrolledAwayFromBottom = !isAtBottom
+                }
+                return super.onPostScroll(consumed, available, source)
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                // Same logic for flinging up (y < 0).
+                if (available.y < 0) {
+                    resetInactivityTimer()
+                    if (ongoingScrollJob?.isActive == true) {
+                        ongoingScrollJob?.cancel(CancellationException("User interrupted scroll by flinging up"))
+                    }
+                    userManuallyScrolledAwayFromBottom = true
+                }
+                return Velocity.Zero
+            }
+
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                // After a fling settles, sync the flag with the final position.
+                userManuallyScrolledAwayFromBottom = !isAtBottom
+                return super.onPostFling(consumed, available)
+            }
         }
     }
 
@@ -246,38 +265,31 @@ fun ChatScreen(
         }
     }
 
+    // This is the main effect for auto-scrolling when new content is streaming in.
     LaunchedEffect(currentStreamingAiMessageId, isApiCalling, userManuallyScrolledAwayFromBottom) {
         if (isApiCalling && currentStreamingAiMessageId != null && !userManuallyScrolledAwayFromBottom) {
-            // Coroutine for reasoning text appearance
-            launch {
-                snapshotFlow { messages.find { it.id == currentStreamingAiMessageId }?.reasoning }
-                    .map { !it.isNullOrBlank() }
-                    .distinctUntilChanged()
-                    .filter { it } // Trigger only when reasoning appears
-                    .collect {
-                        if (isActive) {
-                            scrollToBottomGuaranteed(
-                                "AI_Reasoning_Appeared",
-                                messagesRef = messages.toList()
-                            )
-                        }
-                    }
+            // It watches for any change in the content of the currently streaming message.
+            snapshotFlow {
+                messages.find { it.id == currentStreamingAiMessageId }?.let { msg ->
+                    // We track multiple properties to catch all content changes,
+                    // including reasoning text, main text, and structural changes (e.g., new code blocks).
+                    Triple(
+                        msg.reasoning,
+                        msg.text,
+                        parseMarkdownToBlocks(msg.text).size
+                    )
+                }
             }
-
-            // Coroutine for main message text
-            launch {
-                snapshotFlow { messages.find { it.id == currentStreamingAiMessageId }?.text?.length }
-                    .distinctUntilChanged()
-                    .debounce(50)
-                    .collect {
-                        if (isActive) {
-                            scrollToBottomGuaranteed(
-                                "AI_Streaming_TextChanged",
-                                messagesRef = messages.toList()
-                            )
-                        }
+                .distinctUntilChanged()
+                .collect {
+                    // Only scroll if the user hasn't manually scrolled away.
+                    if (isActive) {
+                        scrollToBottomGuaranteed(
+                            "AI_Streaming_ContentChanged",
+                            messagesRef = messages.toList()
+                        )
                     }
-            }
+                }
         }
     }
 
@@ -425,7 +437,7 @@ fun ChatScreen(
                                             )
                                         }
 
-                                        val footerItem = if (!message.webSearchResults.isNullOrEmpty()) {
+                                        val footerItem = if (!message.webSearchResults.isNullOrEmpty() && !(isApiCalling && message.id == currentStreamingAiMessageId)) {
                                             listOf(ChatListItem.AiMessageFooter(message))
                                         } else {
                                             emptyList()
