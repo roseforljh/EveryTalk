@@ -326,7 +326,7 @@ private fun RenderMarkdownBlock(
 private fun CodeBlock(rawText: String, language: String?, contentColor: Color, onLongPress: () -> Unit) {
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
-    val annotatedString by produceState(initialValue = AnnotatedString(rawText)) {
+    val annotatedString by produceState(initialValue = AnnotatedString(rawText), key1 = rawText, key2 = language) {
         value = withContext(NonCancellable) {
             CodeHighlighter.highlightToAnnotatedString(rawText, language)
         }

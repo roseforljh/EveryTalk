@@ -44,7 +44,8 @@ internal fun SettingsScreenContent(
     onSelectConfig: (config: ApiConfig) -> Unit,
     selectedConfigIdInApp: String?,
     onAddModelForApiKeyClick: (apiKey: String, existingProvider: String, existingAddress: String, existingModality: ModalityType) -> Unit,
-    onDeleteModelForApiKey: (configToDelete: ApiConfig) -> Unit
+    onDeleteModelForApiKey: (configToDelete: ApiConfig) -> Unit,
+    onEditConfigClick: (config: ApiConfig) -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -100,7 +101,8 @@ internal fun SettingsScreenContent(
                                     representativeConfig.modalityType
                                 )
                             },
-                            onDeleteModelForApiKey = onDeleteModelForApiKey
+                            onDeleteModelForApiKey = onDeleteModelForApiKey,
+                            onEditConfigClick = { onEditConfigClick(configsForKeyAndModality.first()) }
                         )
                         Spacer(Modifier.height(18.dp))
                     }
@@ -119,14 +121,17 @@ private fun ApiKeyItemGroup(
     onSelectConfig: (ApiConfig) -> Unit,
     selectedConfigIdInApp: String?,
     onAddModelForApiKeyClick: () -> Unit,
-    onDeleteModelForApiKey: (ApiConfig) -> Unit
+    onDeleteModelForApiKey: (ApiConfig) -> Unit,
+    onEditConfigClick: () -> Unit
 ) {
     var expandedModels by remember { mutableStateOf(false) }
     val providerName =
         configsInGroup.firstOrNull()?.provider?.ifBlank { null } ?: "综合平台" // Provide a default
 
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onEditConfigClick),
         shape = RoundedCornerShape(20.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
         colors = CardDefaults.cardColors(containerColor = Color.White)
@@ -255,6 +260,8 @@ private fun ModelItem(
     onSelect: () -> Unit,
     onDelete: () -> Unit
 ) {
+    var showConfirmDeleteDialog by remember { mutableStateOf(false) }
+
     val itemBackgroundColor by animateColorAsState(
         targetValue = if (isSelected) Color(0xFFF4F4F4) else Color.Transparent, // Light gray for selected
         animationSpec = if (isSelected) tween(durationMillis = 200) else snap(),
@@ -287,7 +294,7 @@ private fun ModelItem(
             )
         }
         IconButton(
-            onClick = onDelete,
+            onClick = { showConfirmDeleteDialog = true },
             modifier = Modifier.size(36.dp) // Make delete icon consistently clickable
         ) {
             Icon(
@@ -297,5 +304,17 @@ private fun ModelItem(
                 modifier = Modifier.size(18.dp) // Adjust icon size if needed
             )
         }
+    }
+
+    if (showConfirmDeleteDialog) {
+        ConfirmDeleteDialog(
+            onDismissRequest = { showConfirmDeleteDialog = false },
+            onConfirm = {
+                onDelete()
+                showConfirmDeleteDialog = false
+            },
+            title = "删除模型",
+            text = "您确定要删除模型 “${config.name}” 吗？此操作不可撤销。"
+        )
     }
 }

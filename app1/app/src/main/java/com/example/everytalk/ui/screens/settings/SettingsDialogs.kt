@@ -522,3 +522,125 @@ internal fun AddModelToExistingKeyDialog(
     )
     LaunchedEffect(Unit) { focusRequesterModelName.requestFocus() }
 }
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun EditConfigDialog(
+    representativeConfig: com.example.everytalk.data.DataClass.ApiConfig,
+    onDismissRequest: () -> Unit,
+    onConfirm: (newAddress: String, newKey: String) -> Unit
+) {
+    var apiAddress by remember { mutableStateOf(representativeConfig.address) }
+    var apiKey by remember { mutableStateOf(representativeConfig.key) }
+    val focusRequester = remember { FocusRequester() }
+
+    AlertDialog(
+        onDismissRequest = onDismissRequest,
+        title = { Text("编辑配置", color = Color.Black) },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    "平台: ${representativeConfig.provider}",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    "类型: ${representativeConfig.modalityType.displayName}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color.Gray
+                )
+                Spacer(Modifier.height(16.dp))
+
+                OutlinedTextField(
+                    value = apiAddress,
+                    onValueChange = { apiAddress = it },
+                    label = { Text("API接口地址") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Next),
+                    shape = DialogShape,
+                    colors = DialogTextFieldColors
+                )
+                OutlinedTextField(
+                    value = apiKey,
+                    onValueChange = { apiKey = it },
+                    label = { Text("API密钥") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp)
+                        .focusRequester(focusRequester),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { if (apiKey.isNotBlank() && apiAddress.isNotBlank()) onConfirm(apiAddress, apiKey) }),
+                    shape = DialogShape,
+                    colors = DialogTextFieldColors
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirm(apiAddress, apiKey) },
+                enabled = apiKey.isNotBlank() && apiAddress.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color.Black,
+                    contentColor = Color.White
+                )
+            ) { Text("更新") }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismissRequest,
+                colors = ButtonDefaults.textButtonColors(contentColor = Color.Red)
+            ) { Text("取消") }
+        },
+        containerColor = Color.White,
+        shape = DialogShape,
+        titleContentColor = Color.Black,
+        textContentColor = Color.Black
+    )
+
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+    }
+}
+
+@Composable
+internal fun ConfirmDeleteDialog(
+    onDismissRequest: () -> Unit,
+    onConfirm: () -> Unit,
+    title: String,
+    text: String
+) {
+    AlertDialog(
+        onDismissRequest = onDismissRequest,
+        title = { Text(title, color = Color.Black) },
+        text = { Text(text, color = Color.Black, style = MaterialTheme.typography.bodyMedium) },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onConfirm()
+                    onDismissRequest()
+                },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFFC62828),
+                    contentColor = Color.White
+                )
+            ) {
+                Text("确认删除")
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismissRequest,
+                colors = ButtonDefaults.textButtonColors(contentColor = Color.Black)
+            ) {
+                Text("取消")
+            }
+        },
+        containerColor = Color.White,
+        shape = DialogShape,
+        titleContentColor = Color.Black,
+        textContentColor = Color.Black
+    )
+}

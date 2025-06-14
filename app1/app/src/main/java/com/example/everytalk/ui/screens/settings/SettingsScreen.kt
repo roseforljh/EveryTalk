@@ -56,6 +56,13 @@ fun SettingsScreen(
 
     var backButtonEnabled by remember { mutableStateOf(true) }
 
+    // --- 编辑和删除对话框状态 ---
+    var showEditConfigDialog by remember { mutableStateOf(false) }
+    var configToEdit by remember { mutableStateOf<ApiConfig?>(null) }
+    var showConfirmDeleteProviderDialog by remember { mutableStateOf(false) }
+    var providerToDelete by remember { mutableStateOf<String?>(null) }
+
+
     Scaffold(
         modifier = modifier.fillMaxSize(),
         containerColor = Color.White,
@@ -104,6 +111,10 @@ fun SettingsScreen(
             },
             onDeleteModelForApiKey = { configToDelete ->
                 viewModel.deleteConfig(configToDelete)
+            },
+            onEditConfigClick = { config ->
+                configToEdit = config
+                showEditConfigDialog = true
             }
         )
     }
@@ -156,26 +167,9 @@ fun SettingsScreen(
             },
             allProviders = allProviders,
             onShowAddCustomProviderDialog = { showAddCustomProviderDialog = true },
-            onDeleteProvider = { providerNameToDelete -> // 新增删除 Provider 的处理
-                viewModel.deleteProvider(providerNameToDelete)
-                // 如果当前选中的 provider 被删除了，需要重置
-                if (newFullConfigProvider == providerNameToDelete) {
-                    val nextDefaultProvider = viewModel.allProviders.value.firstOrNull() ?: "openai compatible"
-                    newFullConfigProvider = nextDefaultProvider
-                    val currentModality = selectedModalityForNewConfig
-                    if (currentModality != null) {
-                        val providerKey = nextDefaultProvider.lowercase().trim()
-                        newFullConfigAddress = if (currentModality == ModalityType.TEXT) {
-                            defaultApiAddresses[providerKey] ?: ""
-                        } else if (providerKey == "google" && currentModality == ModalityType.MULTIMODAL) {
-                            defaultApiAddresses["google"] ?: ""
-                        } else {
-                            ""
-                        }
-                    } else {
-                        newFullConfigAddress = "" // 或者其他默认逻辑
-                    }
-                }
+            onDeleteProvider = { providerNameToDelete ->
+                providerToDelete = providerNameToDelete
+                showConfirmDeleteProviderDialog = true
             },
             apiAddress = newFullConfigAddress,
             onApiAddressChange = { newFullConfigAddress = it },
@@ -275,6 +269,58 @@ fun SettingsScreen(
                     newCustomProviderNameInput = ""
                 }
             }
+        )
+    }
+
+    // --- 编辑和删除对话框 ---
+
+    if (showEditConfigDialog && configToEdit != null) {
+        EditConfigDialog(
+            representativeConfig = configToEdit!!,
+            onDismissRequest = {
+                showEditConfigDialog = false
+                configToEdit = null
+            },
+            onConfirm = { newAddress, newKey ->
+                viewModel.updateConfigGroup(configToEdit!!, newAddress, newKey)
+                showEditConfigDialog = false
+                configToEdit = null
+            }
+        )
+    }
+
+    if (showConfirmDeleteProviderDialog && providerToDelete != null) {
+        ConfirmDeleteDialog(
+            onDismissRequest = {
+                showConfirmDeleteProviderDialog = false
+                providerToDelete = null
+            },
+            onConfirm = {
+                val providerNameToDelete = providerToDelete!!
+                viewModel.deleteProvider(providerNameToDelete)
+                // 如果当前选中的 provider 被删除了，需要重置
+                if (newFullConfigProvider == providerNameToDelete) {
+                    val nextDefaultProvider = viewModel.allProviders.value.firstOrNull() ?: "openai compatible"
+                    newFullConfigProvider = nextDefaultProvider
+                    val currentModality = selectedModalityForNewConfig
+                    if (currentModality != null) {
+                        val providerKey = nextDefaultProvider.lowercase().trim()
+                        newFullConfigAddress = if (currentModality == ModalityType.TEXT) {
+                            defaultApiAddresses[providerKey] ?: ""
+                        } else if (providerKey == "google" && currentModality == ModalityType.MULTIMODAL) {
+                            defaultApiAddresses["google"] ?: ""
+                        } else {
+                            ""
+                        }
+                    } else {
+                        newFullConfigAddress = "" // 或者其他默认逻辑
+                    }
+                }
+                showConfirmDeleteProviderDialog = false
+                providerToDelete = null
+            },
+            title = "删除平台",
+            text = "您确定要删除模型平台 “$providerToDelete” 吗？\n\n这将同时删除所有使用此平台的配置。此操作不可撤销。"
         )
     }
 }

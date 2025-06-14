@@ -564,6 +564,37 @@ class AppViewModel(
     fun deleteConfig(config: ApiConfig) = configManager.deleteConfig(config)
     fun clearAllConfigs() = configManager.clearAllConfigs()
     fun selectConfig(config: ApiConfig) = configManager.selectConfig(config)
+fun updateConfigGroup(representativeConfig: ApiConfig, newAddress: String, newKey: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val trimmedAddress = newAddress.trim()
+            val trimmedKey = newKey.trim()
+
+            val originalKey = representativeConfig.key
+            val modality = representativeConfig.modalityType
+
+            val currentConfigs = stateHolder._apiConfigs.value
+            val newConfigs = currentConfigs.map { config ->
+                if (config.key == originalKey && config.modalityType == modality) {
+                    config.copy(address = trimmedAddress, key = trimmedKey)
+                } else {
+                    config
+                }
+            }
+
+            stateHolder._apiConfigs.value = newConfigs
+            persistenceManager.saveApiConfigs(newConfigs)
+
+            val currentSelectedConfig = stateHolder._selectedApiConfig.value
+            if (currentSelectedConfig != null && currentSelectedConfig.key == originalKey && currentSelectedConfig.modalityType == modality) {
+                val newSelectedConfig = currentSelectedConfig.copy(address = trimmedAddress, key = trimmedKey)
+                stateHolder._selectedApiConfig.value = newSelectedConfig
+            }
+
+            withContext(Dispatchers.Main) {
+                showSnackbar("配置已更新")
+            }
+        }
+    }
 
     fun onAnimationComplete(messageId: String) {
         viewModelScope.launch(Dispatchers.Main.immediate) {
