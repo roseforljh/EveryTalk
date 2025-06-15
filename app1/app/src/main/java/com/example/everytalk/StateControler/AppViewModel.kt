@@ -562,6 +562,20 @@ class AppViewModel(
    fun addConfig(config: ApiConfig) = configManager.addConfig(config)
    fun updateConfig(config: ApiConfig) = configManager.updateConfig(config)
     fun deleteConfig(config: ApiConfig) = configManager.deleteConfig(config)
+    fun deleteConfigGroup(apiKey: String, modalityType: com.example.everytalk.data.DataClass.ModalityType) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val configsToDelete = stateHolder._apiConfigs.value.filter { it.key == apiKey && it.modalityType == modalityType }
+
+            if (configsToDelete.isNotEmpty()) {
+                configsToDelete.forEach { config ->
+                    configManager.deleteConfig(config)
+                }
+                withContext(Dispatchers.Main) {
+                    showSnackbar("配置组已删除")
+                }
+            }
+        }
+    }
     fun clearAllConfigs() = configManager.clearAllConfigs()
     fun selectConfig(config: ApiConfig) = configManager.selectConfig(config)
 fun updateConfigGroup(representativeConfig: ApiConfig, newAddress: String, newKey: String) {

@@ -2,22 +2,22 @@ package com.example.everytalk.ui.screens.settings
 
 import android.annotation.SuppressLint
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.CheckCircleOutline
-import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.outlined.Cancel
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -32,8 +32,6 @@ import androidx.compose.ui.unit.sp
 import com.example.everytalk.data.DataClass.ApiConfig
 import com.example.everytalk.data.DataClass.ModalityType
 
-// maskApiKeyShort 函数保持不变
-
 @SuppressLint("ConfigurationScreenWidthHeight")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -45,7 +43,8 @@ internal fun SettingsScreenContent(
     selectedConfigIdInApp: String?,
     onAddModelForApiKeyClick: (apiKey: String, existingProvider: String, existingAddress: String, existingModality: ModalityType) -> Unit,
     onDeleteModelForApiKey: (configToDelete: ApiConfig) -> Unit,
-    onEditConfigClick: (config: ApiConfig) -> Unit
+    onEditConfigClick: (config: ApiConfig) -> Unit,
+    onDeleteConfigGroup: (apiKey: String, modalityType: ModalityType) -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -59,7 +58,7 @@ internal fun SettingsScreenContent(
             onClick = onAddFullConfigClick,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 0.dp), // Usually no bottom padding for the first main button
+                .padding(bottom = 0.dp),
             colors = ButtonDefaults.buttonColors(
                 containerColor = Color.Black,
                 contentColor = Color.White
@@ -102,7 +101,8 @@ internal fun SettingsScreenContent(
                                 )
                             },
                             onDeleteModelForApiKey = onDeleteModelForApiKey,
-                            onEditConfigClick = { onEditConfigClick(configsForKeyAndModality.first()) }
+                            onEditConfigClick = { onEditConfigClick(configsForKeyAndModality.first()) },
+                            onDeleteGroup = { onDeleteConfigGroup(apiKey, modalityType) }
                         )
                         Spacer(Modifier.height(18.dp))
                     }
@@ -112,9 +112,9 @@ internal fun SettingsScreenContent(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ApiKeyItemGroup(
+    modifier: Modifier = Modifier,
     apiKey: String,
     modalityType: ModalityType,
     configsInGroup: List<ApiConfig>,
@@ -122,14 +122,16 @@ private fun ApiKeyItemGroup(
     selectedConfigIdInApp: String?,
     onAddModelForApiKeyClick: () -> Unit,
     onDeleteModelForApiKey: (ApiConfig) -> Unit,
-    onEditConfigClick: () -> Unit
+    onEditConfigClick: () -> Unit,
+    onDeleteGroup: () -> Unit
 ) {
     var expandedModels by remember { mutableStateOf(false) }
+    var showConfirmDeleteGroupDialog by remember { mutableStateOf(false) }
     val providerName =
-        configsInGroup.firstOrNull()?.provider?.ifBlank { null } ?: "综合平台" // Provide a default
+        configsInGroup.firstOrNull()?.provider?.ifBlank { null } ?: "综合平台"
 
     Card(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .clickable(onClick = onEditConfigClick),
         shape = RoundedCornerShape(20.dp),
@@ -146,7 +148,7 @@ private fun ApiKeyItemGroup(
                         text = providerName,
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface // Use theme color
+                            color = MaterialTheme.colorScheme.onSurface
                         ),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -154,20 +156,19 @@ private fun ApiKeyItemGroup(
                     Text(
                         text = "Key: ${maskApiKey(apiKey)}",
                         style = MaterialTheme.typography.bodyMedium.copy(
-                            color = MaterialTheme.colorScheme.onSurface // Use theme color
+                            color = MaterialTheme.colorScheme.onSurface
                         ),
                         modifier = Modifier.padding(top = 4.dp)
                     )
                 }
-                Badge(
-                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                    modifier = Modifier.padding(start = 8.dp) // Add some space
+                IconButton(
+                    onClick = { showConfirmDeleteGroupDialog = true },
+                    modifier = Modifier.size(20.dp)
                 ) {
-                    Text(
-                        text = modalityType.displayName,
-                        fontSize = 10.sp,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    Icon(
+                        Icons.Outlined.Cancel,
+                        contentDescription = "删除配置组",
+                        tint = Color.Gray
                     )
                 }
             }
@@ -177,9 +178,9 @@ private fun ApiKeyItemGroup(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(MaterialTheme.shapes.small) // Clip for ripple effect
+                    .clip(MaterialTheme.shapes.small)
                     .clickable { expandedModels = !expandedModels }
-                    .padding(vertical = 8.dp), // Padding for clickable area
+                    .padding(vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
@@ -187,19 +188,17 @@ private fun ApiKeyItemGroup(
                     style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Medium),
                     modifier = Modifier.weight(1f)
                 )
-                Row(verticalAlignment = Alignment.CenterVertically) { // To align icon and potentially text
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(
                         onClick = onAddModelForApiKeyClick,
-                        modifier = Modifier.size(36.dp) // Consistent clickable area
+                        modifier = Modifier.size(36.dp)
                     ) {
                         Icon(
                             Icons.Filled.Add,
                             contentDescription = "为此Key和类型添加模型",
-                            tint = Color.Gray // Or MaterialTheme.colorScheme.primary
+                            tint = Color.Gray
                         )
                     }
-                    // If you want text next to the icon:
-                    // Text("Add", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
                 }
             }
 
@@ -238,8 +237,8 @@ private fun ApiKeyItemGroup(
                                         alpha = 0.1f
                                     ),
                                     modifier = Modifier.padding(
-                                        start = 40.dp, // Indent divider
-                                        end = 8.dp,
+                                        start = 24.dp,
+                                        end = 0.dp,
                                         top = 4.dp,
                                         bottom = 4.dp
                                     )
@@ -250,6 +249,18 @@ private fun ApiKeyItemGroup(
                 }
             }
         }
+    }
+
+    if (showConfirmDeleteGroupDialog) {
+        ConfirmDeleteDialog(
+            onDismissRequest = { showConfirmDeleteGroupDialog = false },
+            onConfirm = {
+                onDeleteGroup()
+                showConfirmDeleteGroupDialog = false
+            },
+            title = "删除整个配置组?",
+            text = "您确定要删除 “$providerName” 的所有 ${modalityType.displayName} 模型配置吗？\n\n此操作会删除 ${configsInGroup.size} 个模型，且不可撤销。"
+        )
     }
 }
 
@@ -262,27 +273,28 @@ private fun ModelItem(
 ) {
     var showConfirmDeleteDialog by remember { mutableStateOf(false) }
 
-    val itemBackgroundColor by animateColorAsState(
-        targetValue = if (isSelected) Color(0xFFF4F4F4) else Color.Transparent, // Light gray for selected
-        animationSpec = if (isSelected) tween(durationMillis = 200) else snap(),
-        label = "ModelItemBg"
-    )
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(MaterialTheme.shapes.medium)
-            .background(itemBackgroundColor)
-            .clickable(onClick = onSelect)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onSelect
+            )
             .padding(vertical = 10.dp, horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(
-            imageVector = if (isSelected) Icons.Filled.CheckCircleOutline else Icons.Outlined.RadioButtonUnchecked,
-            contentDescription = "选择模型",
-            tint = if (isSelected) Color.Black else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(20.dp)
-        )
-        Spacer(Modifier.width(16.dp))
+        Box(
+            modifier = Modifier.size(18.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = if (isSelected) Icons.Filled.CheckCircle else Icons.Outlined.RadioButtonUnchecked,
+                contentDescription = "选择模型",
+                tint = if (isSelected) Color.Black else Color.Gray
+            )
+        }
+        Spacer(Modifier.width(8.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = config.name.ifEmpty { config.model },
@@ -290,18 +302,17 @@ private fun ModelItem(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
-                color = Color.Black // Ensure text is visible on selected background
+                color = Color.Black
             )
         }
         IconButton(
             onClick = { showConfirmDeleteDialog = true },
-            modifier = Modifier.size(36.dp) // Make delete icon consistently clickable
+            modifier = Modifier.size(20.dp)
         ) {
             Icon(
-                Icons.Filled.Delete,
-                contentDescription = "删除模型 ${config.name}",
-                tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f), // Use theme error color
-                modifier = Modifier.size(18.dp) // Adjust icon size if needed
+                Icons.Filled.Close,
+                contentDescription = "删除模型",
+                tint = Color(0xFFD32F2F)
             )
         }
     }

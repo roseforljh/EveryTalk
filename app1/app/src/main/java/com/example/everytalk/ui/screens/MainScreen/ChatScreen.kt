@@ -521,6 +521,11 @@ fun ChatScreen(
                             showModelSelectionBottomSheet = false
                         }
                     }
+                },
+                allApiConfigs = availableModels,
+                onPlatformSelected = { platformConfig ->
+                    resetInactivityTimer()
+                    viewModel.selectConfig(platformConfig)
                 }
            )
        }

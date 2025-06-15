@@ -88,15 +88,14 @@ android {
         implementation(platform("androidx.compose:compose-bom:2025.05.00")) // 使用你指定的版本
         androidTestImplementation(platform("androidx.compose:compose-bom:2025.05.00"))
 
-        implementation(platform("androidx.compose:compose-bom:2025.05.00"))
-        androidTestImplementation(platform("androidx.compose:compose-bom:2025.05.00"))
-
         // Compose UI - 让BOM管理版本
         implementation(libs.androidx.ui) // 或者 "androidx.compose.ui:ui"
         implementation(libs.androidx.ui.graphics) // 或者 "androidx.compose.ui:ui-graphics"
         implementation(libs.androidx.ui.tooling.preview) // 或者 "androidx.compose.ui:ui-tooling-preview"
-        implementation(libs.androidx.material3) // 或者 "androidx.compose.material3:material3" <--- 移除版本号
+        implementation(libs.androidx.material3) // 恢复 BOM 管理
 
+        implementation("androidx.compose.material:material") // 保留基础 Material 依赖
+        implementation("androidx.compose.material3:material3-window-size-class") // 添加 window size class
         implementation("androidx.compose.material:material-icons-core") // 这些通常也由BOM管理或有自己的稳定版本线
         implementation("androidx.compose.material:material-icons-extended")
         implementation("androidx.compose.foundation:foundation") // BOM 会管理

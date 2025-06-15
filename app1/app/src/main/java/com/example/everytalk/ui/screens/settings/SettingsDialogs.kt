@@ -1,11 +1,9 @@
-package com.example.everytalk.ui.screens.settings // 请确保包名与您的项目一致
+package com.example.everytalk.ui.screens.settings
 
 import android.util.Log
 import androidx.compose.animation.*
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -24,7 +22,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Rect
@@ -32,20 +29,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
-import com.example.everytalk.data.DataClass.ModalityType
-
-// 导入 Accompanist FlowRow
-import com.google.accompanist.flowlayout.FlowRow
-import com.google.accompanist.flowlayout.MainAxisAlignment
-
 
 val DialogTextFieldColors
     @Composable get() = OutlinedTextFieldDefaults.colors(
@@ -64,82 +53,6 @@ val DialogTextFieldColors
         disabledContainerColor = Color.White.copy(alpha = 0.8f)
     )
 val DialogShape = RoundedCornerShape(16.dp)
-
-
-// --- 选择模态类型的对话框 (FlowRow 版本) ---
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-internal fun SelectModalityDialog(
-    onDismissRequest: () -> Unit,
-    onModalitySelected: (ModalityType) -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismissRequest,
-        title = {
-            Text(
-                "选择模型类型",
-                color = Color.Black,
-                style = MaterialTheme.typography.headlineSmall
-            )
-        },
-        text = {
-            FlowRow(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 16.dp, horizontal = 8.dp),
-                mainAxisSpacing = 12.dp,
-                crossAxisSpacing = 12.dp,
-                mainAxisAlignment = MainAxisAlignment.Center
-            ) {
-                ModalityType.values().forEach { modality ->
-                    ModalityCapsuleButton(
-                        modalityType = modality,
-                        onClick = { onModalitySelected(modality) }
-                    )
-                }
-            }
-        },
-        confirmButton = {},
-        dismissButton = {
-            TextButton(
-                onClick = onDismissRequest,
-                colors = ButtonDefaults.textButtonColors(
-                    contentColor = Color.Red
-                )
-            ) { Text("取消") }
-        },
-        containerColor = Color.White,
-        shape = DialogShape,
-        titleContentColor = Color.Black,
-        textContentColor = Color.Black
-    )
-}
-
-@Composable
-private fun ModalityCapsuleButton(
-    modalityType: ModalityType,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Surface(
-        modifier = modifier
-            .shadow(
-                elevation = 4.dp,
-                shape = RoundedCornerShape(50.dp),
-                clip = false
-            )
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(50.dp),
-        color = Color.White,
-    ) {
-        Text(
-            text = modalityType.displayName,
-            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Medium),
-            color = Color.Black,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)
-        )
-    }
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -214,11 +127,11 @@ private fun CustomStyledDropdownMenu(
         val density = LocalDensity.current
         val menuWidth = with(density) { anchorBounds.width.toDp() }
 
-        val yAdjustmentDp: Dp = 74.dp // Adjust this value if needed
+        val yAdjustmentDp: Dp = 74.dp
         val yAdjustmentInPx = with(density) { yAdjustmentDp.toPx() }.toInt()
         val yOffset = anchorBounds.bottom.toInt() - yAdjustmentInPx
 
-        val xAdjustmentDp: Dp = 24.dp // Adjust this value if needed
+        val xAdjustmentDp: Dp = 24.dp
         val xAdjustmentInPx = with(density) { xAdjustmentDp.toPx() }.toInt()
         val xOffset = anchorBounds.left.toInt() - xAdjustmentInPx
 
@@ -276,7 +189,6 @@ private fun CustomStyledDropdownMenu(
     }
 }
 
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun AddNewFullConfigDialog(
@@ -284,7 +196,7 @@ internal fun AddNewFullConfigDialog(
     onProviderChange: (String) -> Unit,
     allProviders: List<String>,
     onShowAddCustomProviderDialog: () -> Unit,
-    onDeleteProvider: (String) -> Unit, // 新增回调用于删除 Provider
+    onDeleteProvider: (String) -> Unit,
     apiAddress: String,
     onApiAddressChange: (String) -> Unit,
     apiKey: String,
@@ -300,7 +212,6 @@ internal fun AddNewFullConfigDialog(
     val shouldShowCustomMenuLogical =
         providerMenuExpanded && allProviders.isNotEmpty() && textFieldAnchorBounds != null
 
-
     LaunchedEffect(shouldShowCustomMenuLogical) {
         providerMenuTransitionState.targetState = shouldShowCustomMenuLogical
     }
@@ -311,7 +222,7 @@ internal fun AddNewFullConfigDialog(
 
     AlertDialog(
         onDismissRequest = onDismissRequest,
-        title = { Text("添加配置 (2/3)", color = Color.Black) },
+        title = { Text("添加配置 (1/2)", color = Color.Black) },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 ExposedDropdownMenuBox(
@@ -368,8 +279,6 @@ internal fun AddNewFullConfigDialog(
                                                 color = Color.Black,
                                                 modifier = Modifier.weight(1f)
                                             )
-                                            // 添加删除图标，仅为非默认的 provider 显示
-                                            // 预定义的不可删除平台列表（与 AppViewModel 中的保持一致）
                                             val nonDeletableProviders = listOf(
                                                 "openai compatible",
                                                 "google",
@@ -377,7 +286,7 @@ internal fun AddNewFullConfigDialog(
                                                 "阿里云百炼",
                                                 "火山引擎",
                                                 "深度求索",
-                                                "openrouter" // OpenRouter 移到列表末尾，确保使用小写进行比较
+                                                "openrouter"
                                             )
                                             if (!nonDeletableProviders.contains(providerItem.lowercase().trim())) {
                                                 IconButton(
@@ -469,22 +378,9 @@ internal fun AddModelToExistingKeyDialog(
     val focusRequesterModelName = remember { FocusRequester() }
     AlertDialog(
         onDismissRequest = onDismissRequest,
-        title = { Text("添加模型 (3/3)", color = Color.Black) },
+        title = { Text("添加模型 (2/2)", color = Color.Black) },
         text = {
             Column {
-                Text(
-                    "平台: $targetProvider",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color.DarkGray
-                )
-                Text(
-                    "地址: $targetAddress",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color.DarkGray,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(Modifier.height(16.dp))
                 OutlinedTextField(
                     value = newModelName,
                     onValueChange = onNewModelNameChange,
@@ -522,6 +418,7 @@ internal fun AddModelToExistingKeyDialog(
     )
     LaunchedEffect(Unit) { focusRequesterModelName.requestFocus() }
 }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun EditConfigDialog(
@@ -538,18 +435,6 @@ internal fun EditConfigDialog(
         title = { Text("编辑配置", color = Color.Black) },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                Text(
-                    "平台: ${representativeConfig.provider}",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    "类型: ${representativeConfig.modalityType.displayName}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color.Gray
-                )
-                Spacer(Modifier.height(16.dp))
-
                 OutlinedTextField(
                     value = apiAddress,
                     onValueChange = { apiAddress = it },
@@ -615,7 +500,7 @@ internal fun ConfirmDeleteDialog(
     AlertDialog(
         onDismissRequest = onDismissRequest,
         title = { Text(title, color = Color.Black) },
-        text = { Text(text, color = Color.Black, style = MaterialTheme.typography.bodyMedium) },
+        text = { Text(text, color = Color.Black) },
         confirmButton = {
             Button(
                 onClick = {
