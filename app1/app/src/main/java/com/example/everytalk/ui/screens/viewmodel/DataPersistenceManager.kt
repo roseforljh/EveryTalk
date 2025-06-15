@@ -1,10 +1,12 @@
 package com.example.everytalk.ui.screens.viewmodel
 
+import android.content.Context
+import android.net.Uri
 import android.util.Log
-import com.example.everytalk.data.local.SharedPreferencesDataSource
 import com.example.everytalk.data.DataClass.ApiConfig
 import com.example.everytalk.data.DataClass.Message
-import com.example.everytalk.data.DataClass.Sender
+import com.example.everytalk.data.local.SharedPreferencesDataSource
+import com.example.everytalk.model.SelectedMediaItem
 import com.example.everytalk.StateControler.ViewModelStateHolder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -12,6 +14,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class DataPersistenceManager(
+    private val context: Context,
     private val dataSource: SharedPreferencesDataSource,
     private val stateHolder: ViewModelStateHolder,
     private val viewModelScope: CoroutineScope
@@ -198,6 +201,51 @@ class DataPersistenceManager(
             dataSource.clearApiConfigs()
             dataSource.saveSelectedConfigId(null) // 确保选中的也被清掉
             Log.i(TAG, "clearAllApiConfigData: API配置数据已通过 dataSource 清除。")
+        }
+    }
+    suspend fun deleteMediaFilesForMessages(conversations: List<List<Message>>) {
+        withContext(Dispatchers.IO) {
+            Log.d(TAG, "Starting deletion of media files for ${conversations.size} conversations.")
+            var deletedFilesCount = 0
+            conversations.forEach { conversation ->
+                conversation.forEach { message ->
+                    val urisToDelete = mutableSetOf<Uri>()
+
+                    // Collect URIs from attachments
+                    message.attachments?.forEach { attachment ->
+                        when (attachment) {
+                            is SelectedMediaItem.ImageFromUri -> urisToDelete.add(attachment.uri)
+                            is SelectedMediaItem.GenericFile -> urisToDelete.add(attachment.uri)
+                            is SelectedMediaItem.ImageFromBitmap -> { /* In-memory, no file to delete */ }
+                        }
+                    }
+
+                    // Collect URIs from imageUrls
+                    message.imageUrls?.forEach { urlString ->
+                        try {
+                            urisToDelete.add(Uri.parse(urlString))
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error parsing URI from imageUrls: $urlString", e)
+                        }
+                    }
+
+                    // Delete all collected unique URIs
+                    urisToDelete.forEach { uri ->
+                        try {
+                            val rowsDeleted = context.contentResolver.delete(uri, null, null)
+                            if (rowsDeleted > 0) {
+                                Log.d(TAG, "Successfully deleted media file: $uri")
+                                deletedFilesCount++
+                            } else {
+                                Log.w(TAG, "Failed to delete media file, or file did not exist: $uri")
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error deleting media file: $uri", e)
+                        }
+                    }
+                }
+            }
+            Log.d(TAG, "Finished media file deletion. Total files deleted: $deletedFilesCount")
         }
     }
 }

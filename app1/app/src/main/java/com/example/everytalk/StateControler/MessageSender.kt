@@ -53,25 +53,47 @@ class MessageSender(
         private const val CHAT_ATTACHMENTS_SUBDIR = "chat_attachments"
     }
 
-    private suspend fun loadBitmapFromUri(context: Context, uri: Uri): Bitmap? {
+    private suspend fun loadAndCompressBitmapFromUri(context: Context, uri: Uri): Bitmap? {
         return withContext(Dispatchers.IO) {
             try {
                 if (uri == Uri.EMPTY) return@withContext null
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    val source = ImageDecoder.createSource(context.contentResolver, uri)
-                    ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
-                        decoder.isMutableRequired = true
-                    }
-                } else {
-                    @Suppress("DEPRECATION")
-                    context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                        BitmapFactory.decodeStream(inputStream)
-                    } ?: MediaStore.Images.Media.getBitmap(context.contentResolver, uri)
+
+                // First, decode with inJustDecodeBounds=true to check dimensions
+                val options = BitmapFactory.Options().apply {
+                    inJustDecodeBounds = true
+                }
+                context.contentResolver.openInputStream(uri)?.use {
+                    BitmapFactory.decodeStream(it, null, options)
+                }
+
+                // Calculate inSampleSize
+                options.inSampleSize = calculateInSampleSize(options, TARGET_IMAGE_WIDTH, TARGET_IMAGE_HEIGHT)
+
+                // Decode bitmap with inSampleSize set
+                options.inJustDecodeBounds = false
+                options.inMutable = true // Make it mutable for further scaling if needed
+
+                context.contentResolver.openInputStream(uri)?.use {
+                    BitmapFactory.decodeStream(it, null, options)
                 }
             } catch (e: Exception) {
                 null
             }
         }
+    }
+
+    private fun calculateInSampleSize(options: BitmapFactory.Options, reqWidth: Int, reqHeight: Int): Int {
+        val (height: Int, width: Int) = options.run { outHeight to outWidth }
+        var inSampleSize = 1
+
+        if (height > reqHeight || width > reqWidth) {
+            val halfHeight: Int = height / 2
+            val halfWidth: Int = width / 2
+            while (halfHeight / inSampleSize >= reqHeight && halfWidth / inSampleSize >= reqWidth) {
+                inSampleSize *= 2
+            }
+        }
+        return inSampleSize
     }
 
     private suspend fun copyUriToAppInternalStorage(
@@ -243,7 +265,7 @@ class MessageSender(
 
                     when (originalMediaItem) {
                         is SelectedMediaItem.ImageFromUri -> {
-                            val bitmap = loadBitmapFromUri(application, originalMediaItem.uri)
+                            val bitmap = loadAndCompressBitmapFromUri(application, originalMediaItem.uri)
                             if (bitmap != null) {
                                 persistentUriStr = saveBitmapToAppInternalStorage(
                                     application,
@@ -253,7 +275,7 @@ class MessageSender(
                                     originalFileNameForHint
                                 )
                             } else {
-                                showSnackbar("无法加载图片: ${originalFileNameForHint}")
+                                showSnackbar("无法加载或压缩图片: ${originalFileNameForHint}")
                             }
                         }
 

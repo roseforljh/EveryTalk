@@ -65,9 +65,9 @@ object ApiClient {
 
     private val backendProxyUrls = listOf(
         "https://backdatalk-717323967862.europe-west1.run.app/chat",
-        "https://uoseegiydwgx.us-west-1.clawcloudrun.com/chat",
-        "https://kunze999-backendai.hf.space/chat",
-        "https://backdaitalk-production.up.railway.app/chat",
+        //"https://uoseegiydwgx.us-west-1.clawcloudrun.com/chat",
+        //"https://kunze999-backendai.hf.space/chat",
+        //"https://backdaitalk-production.up.railway.app/chat",
     )
 
     fun preWarm() {

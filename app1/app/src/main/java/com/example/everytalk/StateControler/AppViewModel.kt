@@ -40,7 +40,7 @@ class AppViewModel(
 
     internal val stateHolder = ViewModelStateHolder()
     private val persistenceManager =
-        DataPersistenceManager(dataSource, stateHolder, viewModelScope)
+        DataPersistenceManager(application.applicationContext, dataSource, stateHolder, viewModelScope)
 
     private val historyManager: HistoryManager =
         HistoryManager(

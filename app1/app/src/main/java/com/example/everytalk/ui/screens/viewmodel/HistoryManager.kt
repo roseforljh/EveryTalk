@@ -155,10 +155,12 @@ class HistoryManager(
         Log.d(TAG_HM, "Requesting to delete history index $indexToDelete.")
         var successfullyDeleted = false
         var finalLoadedIndexAfterDelete: Int? = stateHolder._loadedHistoryIndex.value
+        var conversationToDelete: List<Message>? = null
 
         stateHolder._historicalConversations.update { currentHistory ->
             if (indexToDelete >= 0 && indexToDelete < currentHistory.size) {
                 val mutableHistory = currentHistory.toMutableList()
+                conversationToDelete = mutableHistory[indexToDelete]
                 mutableHistory.removeAt(indexToDelete)
                 successfullyDeleted = true
                 Log.d(TAG_HM, "Removed conversation at index $indexToDelete from memory.")
@@ -185,6 +187,9 @@ class HistoryManager(
         }
 
         if (successfullyDeleted) {
+            conversationToDelete?.let {
+                persistenceManager.deleteMediaFilesForMessages(listOf(it))
+            }
             if (stateHolder._loadedHistoryIndex.value != finalLoadedIndexAfterDelete) {
                 stateHolder._loadedHistoryIndex.value = finalLoadedIndexAfterDelete
                 Log.d(
@@ -200,7 +205,10 @@ class HistoryManager(
 
     suspend fun clearAllHistory() {
         Log.d(TAG_HM, "Requesting to clear all history.")
-        if (stateHolder._historicalConversations.value.isNotEmpty() || stateHolder._loadedHistoryIndex.value != null) {
+        val historyToClear = stateHolder._historicalConversations.value
+        if (historyToClear.isNotEmpty() || stateHolder._loadedHistoryIndex.value != null) {
+            persistenceManager.deleteMediaFilesForMessages(historyToClear)
+
             stateHolder._historicalConversations.value = emptyList()
             stateHolder._loadedHistoryIndex.value = null
             Log.d(TAG_HM, "In-memory history cleared, loadedHistoryIndex reset to null.")
