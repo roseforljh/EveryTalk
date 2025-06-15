@@ -33,7 +33,7 @@
             tools:targetApi="q" />
 
         <activity
-            android:name="com.example.everytalk.StateControler.MainActivity"
+            android:name="io.github.roseforljh.kuntalk.StateControler.MainActivity"
             android:exported="true"
             android:theme="@style/Theme.App1"
             android:windowSoftInputMode="adjustResize"
