@@ -305,15 +305,16 @@ class MessageSender(
                                         ?: (processedItemForUi as? SelectedMediaItem.GenericFile)?.mimeType
                                         ?: "application/octet-stream"
 
-                                val supportedInlineMimesForGemini = listOf(
-                                    "image/png",
-                                    "image/jpeg",
-                                    "image/webp",
-                                    "image/heic",
-                                    "image/heif"
+                                val supportedImageMimesForGemini = listOf(
+                                    "image/png", "image/jpeg", "image/webp", "image/heic", "image/heif"
                                 )
+                                val supportedAudioMimesForGemini = listOf(
+                                    "audio/mp3", "audio/mpeg", "audio/wav", "audio/x-wav", "audio/aac",
+                                    "audio/ogg", "audio/opus", "audio/flac", "audio/amr", "audio/aiff", "audio/x-m4a"
+                                )
+                                val allSupportedInlineMimes = supportedImageMimesForGemini + supportedAudioMimesForGemini
 
-                                if (mimeTypeForApi.lowercase() in supportedInlineMimesForGemini) {
+                                if (mimeTypeForApi.lowercase() in allSupportedInlineMimes) {
                                     var fileSize = -1L
                                     try {
                                         application.contentResolver.openFileDescriptor(

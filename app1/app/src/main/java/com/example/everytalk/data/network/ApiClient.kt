@@ -131,61 +131,78 @@ object ApiClient {
                         }
                     )
 
-                    if (attachmentsToUpload.isNotEmpty()) {
-                        attachmentsToUpload.forEachIndexed { index, mediaItem ->
-                            val fileUri: Uri?
-                            val originalFileNameFromMediaItem: String
-                            val mimeTypeFromMediaItem: String?
+                    val hasInlineData = chatRequest.messages.any { msg ->
+                        (msg as? com.example.everytalk.data.DataClass.PartsApiMessage)?.parts?.any { part ->
+                            part is com.example.everytalk.data.DataClass.ApiContentPart.InlineData
+                        } == true
+                    }
 
-                            when (mediaItem) {
-                                is SelectedMediaItem.ImageFromUri -> {
-                                    fileUri = mediaItem.uri
-                                    originalFileNameFromMediaItem =
-                                        getFileNameFromUri(applicationContext, mediaItem.uri)
-                                    mimeTypeFromMediaItem =
-                                        applicationContext.contentResolver.getType(mediaItem.uri)
+                    if (attachmentsToUpload.isNotEmpty() || hasInlineData) {
+                        if (attachmentsToUpload.isEmpty()) {
+                            append(
+                                key = "uploaded_documents",
+                                value = ByteArray(0),
+                                headers = Headers.build {
+                                    append(HttpHeaders.ContentDisposition, "filename=\"placeholder.bin\"")
+                                    append(HttpHeaders.ContentType, ContentType.Application.OctetStream)
                                 }
+                            )
+                        } else {
+                            attachmentsToUpload.forEachIndexed { index, mediaItem ->
+                                val fileUri: Uri?
+                                val originalFileNameFromMediaItem: String
+                                val mimeTypeFromMediaItem: String?
 
-                                is SelectedMediaItem.GenericFile -> {
-                                    fileUri = mediaItem.uri
-                                    originalFileNameFromMediaItem =
-                                        mediaItem.displayName ?: getFileNameFromUri(
-                                            applicationContext,
-                                            mediaItem.uri
-                                        )
-                                    mimeTypeFromMediaItem = mediaItem.mimeType
-                                        ?: applicationContext.contentResolver.getType(mediaItem.uri)
-                                }
+                                when (mediaItem) {
+                                    is SelectedMediaItem.ImageFromUri -> {
+                                        fileUri = mediaItem.uri
+                                        originalFileNameFromMediaItem =
+                                            getFileNameFromUri(applicationContext, mediaItem.uri)
+                                        mimeTypeFromMediaItem =
+                                            applicationContext.contentResolver.getType(mediaItem.uri)
+                                    }
 
-                                is SelectedMediaItem.ImageFromBitmap -> {
-                                    fileUri = null
-                                    originalFileNameFromMediaItem =
-                                        "bitmap_image_$index.${if (mediaItem.bitmap.hasAlpha()) "png" else "jpeg"}"
-                                    mimeTypeFromMediaItem =
-                                        if (mediaItem.bitmap.hasAlpha()) ContentType.Image.PNG.toString() else ContentType.Image.JPEG.toString()
-                                }
-                            }
-
-                            if (fileUri != null) {
-                                val finalMimeType = mimeTypeFromMediaItem
-                                    ?: ContentType.Application.OctetStream.toString()
-                                try {
-                                    applicationContext.contentResolver.openInputStream(fileUri)
-                                        ?.use { inputStream ->
-                                            val fileBytes = inputStream.readBytes()
-                                            append(
-                                                key = "uploaded_documents",
-                                                value = fileBytes,
-                                                headers = Headers.build {
-                                                    append(
-                                                        HttpHeaders.ContentDisposition,
-                                                        "filename=\"$originalFileNameFromMediaItem\""
-                                                    )
-                                                    append(HttpHeaders.ContentType, finalMimeType)
-                                                }
+                                    is SelectedMediaItem.GenericFile -> {
+                                        fileUri = mediaItem.uri
+                                        originalFileNameFromMediaItem =
+                                            mediaItem.displayName ?: getFileNameFromUri(
+                                                applicationContext,
+                                                mediaItem.uri
                                             )
-                                        }
-                                } catch (e: Exception) {
+                                        mimeTypeFromMediaItem = mediaItem.mimeType
+                                            ?: applicationContext.contentResolver.getType(mediaItem.uri)
+                                    }
+
+                                    is SelectedMediaItem.ImageFromBitmap -> {
+                                        fileUri = null
+                                        originalFileNameFromMediaItem =
+                                            "bitmap_image_$index.${if (mediaItem.bitmap.hasAlpha()) "png" else "jpeg"}"
+                                        mimeTypeFromMediaItem =
+                                            if (mediaItem.bitmap.hasAlpha()) ContentType.Image.PNG.toString() else ContentType.Image.JPEG.toString()
+                                    }
+                                }
+
+                                if (fileUri != null) {
+                                    val finalMimeType = mimeTypeFromMediaItem
+                                        ?: ContentType.Application.OctetStream.toString()
+                                    try {
+                                        applicationContext.contentResolver.openInputStream(fileUri)
+                                            ?.use { inputStream ->
+                                                val fileBytes = inputStream.readBytes()
+                                                append(
+                                                    key = "uploaded_documents",
+                                                    value = fileBytes,
+                                                    headers = Headers.build {
+                                                        append(
+                                                            HttpHeaders.ContentDisposition,
+                                                            "filename=\"$originalFileNameFromMediaItem\""
+                                                        )
+                                                        append(HttpHeaders.ContentType, finalMimeType)
+                                                    }
+                                                )
+                                            }
+                                    } catch (e: Exception) {
+                                    }
                                 }
                             }
                         }

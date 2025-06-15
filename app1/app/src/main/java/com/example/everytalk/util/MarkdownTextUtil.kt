@@ -20,7 +20,7 @@ fun parseInlineMarkdownToAnnotatedString(line: String): AnnotatedString {
             "link" to Regex("\\[([^\\]]+?)\\]\\((https?://\\S+?)\\)"),
             "bold_italic" to Regex("\\*\\*\\*([\\s\\S]+?)\\*\\*\\*"),
             "bold" to Regex("\\*\\*([\\s\\S]+?)\\*\\*"),
-            "italic" to Regex("\\*([\\s\\S]+?)\\*"),
+            "italic" to Regex("\\*([^*][\\s\\S]*?)\\*"),
             "code" to Regex("`([^`]+?)`"),
             "math" to Regex("\\$\\$([\\s\\S]*?)\\$\\$|\\$([^\\$]*?)\\$"),
             "url" to Regex("\\b(https?://\\S+)")
