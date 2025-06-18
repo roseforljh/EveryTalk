@@ -277,6 +277,7 @@ fun AttachmentsContent(
                 is SelectedMediaItem.ImageFromUri -> {
                     AsyncImage(
                         model = attachment.uri,
+                        imageLoader = com.example.everytalk.util.AppImageLoader.get(context),
                         contentDescription = "Image attachment",
                         modifier = Modifier
                             .widthIn(max = maxWidth * 0.8f)
@@ -301,6 +302,7 @@ fun AttachmentsContent(
                 is SelectedMediaItem.ImageFromBitmap -> {
                     AsyncImage(
                         model = attachment.bitmap,
+                        imageLoader = com.example.everytalk.util.AppImageLoader.get(context),
                         contentDescription = "Image attachment",
                         modifier = Modifier
                             .widthIn(max = maxWidth * 0.8f)

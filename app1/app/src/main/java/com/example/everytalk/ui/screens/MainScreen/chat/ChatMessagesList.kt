@@ -36,6 +36,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil3.compose.setSingletonImageLoaderFactory
 import coil3.request.crossfade
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.statecontroler.AppViewModel
@@ -283,14 +284,18 @@ private fun RenderMarkdownBlock(
                     modifier = Modifier.weight(1f)
                 )
             }
-            is MarkdownBlock.Image -> coil3.compose.AsyncImage(
-                model = coil3.request.ImageRequest.Builder(LocalContext.current).data(block.url).crossfade(true).build(),
-                contentDescription = block.altText,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp)
-                    .clip(RoundedCornerShape(12.dp))
-            )
+            is MarkdownBlock.Image -> {
+                val context = LocalContext.current
+                coil3.compose.AsyncImage(
+                    model = coil3.request.ImageRequest.Builder(context).data(block.url).crossfade(true).build(),
+                    imageLoader = com.example.everytalk.util.AppImageLoader.get(context),
+                    contentDescription = block.altText,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                )
+            }
             is MarkdownBlock.Table -> MarkdownTable(
                 header = block.header,
                 rows = block.rows,

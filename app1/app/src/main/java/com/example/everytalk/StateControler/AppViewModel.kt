@@ -180,7 +180,6 @@ class AppViewModel(
 
 
         viewModelScope.launch(Dispatchers.IO) {
-            ApiClient.preWarm()
             apiHandler
             configManager
             messageSender

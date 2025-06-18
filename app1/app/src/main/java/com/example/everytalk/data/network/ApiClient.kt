@@ -10,6 +10,9 @@ import com.example.everytalk.model.SelectedMediaItem
 import io.ktor.client.*
 import io.ktor.client.engine.android.*
 import io.ktor.client.plugins.*
+import io.ktor.client.plugins.cache.HttpCache
+import io.ktor.client.plugins.cache.storage.CacheStorage
+import io.ktor.client.plugins.cache.storage.FileStorage
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
 import io.ktor.client.request.forms.*
@@ -23,43 +26,43 @@ import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.SerializationException
 import java.io.IOException
+import java.io.File
 import java.io.InputStream
 import io.ktor.client.plugins.HttpRequestTimeoutException
 import kotlinx.coroutines.CancellationException as CoroutineCancellationException
-import kotlinx.serialization.modules.SerializersModule
-import kotlinx.serialization.modules.contextual
-import kotlinx.serialization.builtins.serializer
 
 object ApiClient {
-
-    private val appSerializersModule = SerializersModule {
-        contextual(String::class) { String.serializer() }
-        contextual(Boolean::class) { Boolean.serializer() }
-        contextual(Int::class) { Int.serializer() }
-        contextual(Long::class) { Long.serializer() }
-        contextual(Float::class) { Float.serializer() }
-        contextual(Double::class) { Double.serializer() }
-    }
 
     private val jsonParser: Json by lazy {
         Json {
             ignoreUnknownKeys = true
             isLenient = true
             encodeDefaults = true
-            serializersModule = appSerializersModule
         }
     }
 
-    private val client: HttpClient by lazy {
-        HttpClient(Android) {
-            install(ContentNegotiation) {
-                json(jsonParser)
+    private lateinit var client: HttpClient
+    private var isInitialized = false
+
+    fun initialize(context: Context) {
+        if (isInitialized) return
+        synchronized(this) {
+            if (isInitialized) return
+            val cacheFile = File(context.cacheDir, "ktor_http_cache")
+            client = HttpClient(Android) {
+                install(ContentNegotiation) {
+                    json(jsonParser)
+                }
+                install(HttpTimeout) {
+                    requestTimeoutMillis = 300_000
+                    connectTimeoutMillis = 20_000
+                    socketTimeoutMillis = 300_000
+                }
+                install(HttpCache) {
+                    publicStorage(FileStorage(cacheFile))
+                }
             }
-            install(HttpTimeout) {
-                requestTimeoutMillis = 300_000
-                connectTimeoutMillis = 20_000
-                socketTimeoutMillis = 300_000
-            }
+            isInitialized = true
         }
     }
 
@@ -69,20 +72,6 @@ object ApiClient {
         "https://kunze999-backendai.hf.space/chat",
         "https://backdaitalk-production.up.railway.app/chat",
     )
-
-    fun preWarm() {
-        val clientInstance = client
-        val jsonInstance = jsonParser
-        try {
-            @kotlinx.serialization.Serializable
-            data class PreWarmTestData(val status: String)
-
-            val testJsonString = """{"status":"ok"}"""
-            val decoded =
-                jsonInstance.decodeFromString(PreWarmTestData.serializer(), testJsonString)
-        } catch (e: Exception) {
-        }
-    }
 
     private fun getFileNameFromUri(context: Context, uri: Uri): String {
         var fileName: String? = null

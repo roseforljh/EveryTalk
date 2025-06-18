@@ -33,6 +33,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.everytalk.data.local.SharedPreferencesDataSource
+import com.example.everytalk.data.network.ApiClient
 import com.example.everytalk.navigation.Screen
 import com.example.everytalk.ui.screens.MainScreen.AppDrawerContent
 import com.example.everytalk.ui.screens.MainScreen.ChatScreen
@@ -77,6 +78,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        ApiClient.initialize(this)
         enableEdgeToEdge()
         setContent {
             App1Theme {
