@@ -282,12 +282,19 @@ fun AttachmentsContent(
                             .widthIn(max = maxWidth * 0.8f)
                             .padding(vertical = 4.dp)
                             .clip(RoundedCornerShape(16.dp))
-                            .clickable {
-                                val intent = Intent(Intent.ACTION_VIEW).apply {
-                                    setDataAndType(attachment.uri, "image/*")
-                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                }
-                                context.startActivity(intent)
+                            .pointerInput(Unit) {
+                                detectTapGestures(
+                                    onTap = {
+                                        val intent = Intent(Intent.ACTION_VIEW).apply {
+                                            setDataAndType(attachment.uri, "image/*")
+                                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                        }
+                                        context.startActivity(intent)
+                                    },
+                                    onLongPress = {
+                                        // Handle long press, e.g., show a context menu to save the image
+                                    }
+                                )
                             }
                     )
                 }
@@ -299,7 +306,14 @@ fun AttachmentsContent(
                             .widthIn(max = maxWidth * 0.8f)
                             .padding(vertical = 4.dp)
                             .clip(RoundedCornerShape(16.dp))
-                            .clickable { onAttachmentClick(attachment) }
+                            .pointerInput(Unit) {
+                                detectTapGestures(
+                                    onTap = { onAttachmentClick(attachment) },
+                                    onLongPress = {
+                                        // Handle long press, e.g., show a context menu to save the image
+                                    }
+                                )
+                            }
                     )
                 }
                 is SelectedMediaItem.GenericFile -> {

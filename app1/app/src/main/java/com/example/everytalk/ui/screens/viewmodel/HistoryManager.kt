@@ -26,14 +26,14 @@ class HistoryManager(
         }.toList()
     }
 
-    fun findChatInHistory(messagesToFind: List<Message>): Int {
+    suspend fun findChatInHistory(messagesToFind: List<Message>): Int = withContext(Dispatchers.Default) {
         val filteredMessagesToFind = filterMessagesForSaving(messagesToFind)
         if (filteredMessagesToFind.isEmpty() && messagesToFind.isNotEmpty()) {
-            return -1
+            return@withContext -1
         }
-        if (filteredMessagesToFind.isEmpty()) return -1
+        if (filteredMessagesToFind.isEmpty()) return@withContext -1
 
-        return stateHolder._historicalConversations.value.indexOfFirst { historyChat ->
+        stateHolder._historicalConversations.value.indexOfFirst { historyChat ->
             compareMessageLists(filterMessagesForSaving(historyChat), filteredMessagesToFind)
         }
     }
@@ -66,19 +66,16 @@ class HistoryManager(
             if (currentLoadedIdx != null && currentLoadedIdx >= 0 && currentLoadedIdx < mutableHistory.size) {
                 val existingChatInHistoryFiltered =
                     filterMessagesForSaving(mutableHistory[currentLoadedIdx])
-                if (forceSave || !compareMessageLists(
+                val contentChanged = withContext(Dispatchers.Default) {
+                    !compareMessageLists(
                         messagesToSave,
                         existingChatInHistoryFiltered
                     )
-                ) {
+                }
+                if (forceSave || contentChanged) {
                     Log.d(
                         TAG_HM,
-                        "Updating history index $currentLoadedIdx. Force: $forceSave. Content changed: ${
-                            !compareMessageLists(
-                                messagesToSave,
-                                existingChatInHistoryFiltered
-                            )
-                        }"
+                        "Updating history index $currentLoadedIdx. Force: $forceSave. Content changed: $contentChanged"
                     )
                     if (messagesToSave.isNotEmpty() || forceSave) {
                         mutableHistory[currentLoadedIdx] = messagesToSave

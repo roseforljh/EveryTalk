@@ -2,6 +2,6 @@
 <resources>
 
     <style name="Theme.App1" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:windowBackground">@android:color/white</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
     </style>
 </resources>

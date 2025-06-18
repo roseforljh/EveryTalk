@@ -4,7 +4,9 @@ import android.widget.Toast
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -43,7 +45,7 @@ import com.example.everytalk.ui.screens.BubbleMain.Main.UserOrErrorMessageConten
 import com.example.everytalk.util.CodeHighlighter
 import com.example.everytalk.util.MarkdownBlock
 import com.example.everytalk.util.parseInlineMarkdownToAnnotatedString
-import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 @Composable
@@ -79,7 +81,7 @@ fun ChatMessagesList(
                     ) {
                         if (!item.message.attachments.isNullOrEmpty()) {
                             AttachmentsContent(
-                                attachments = item.message.attachments!!,
+                                attachments = item.message.attachments,
                                 onAttachmentClick = { /* Handle attachment click */ },
                                 maxWidth = bubbleMaxWidth * 0.85f
                             )
@@ -121,7 +123,6 @@ fun ChatMessagesList(
                 is ChatListItem.AiMessageBlock -> {
                     AiMessageBlockItem(
                         item = item,
-                        viewModel = viewModel,
                         maxWidth = bubbleMaxWidth,
                         onLongPress = {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -186,7 +187,6 @@ fun ChatMessagesList(
 @Composable
 private fun AiMessageBlockItem(
     item: ChatListItem.AiMessageBlock,
-    viewModel: AppViewModel,
     maxWidth: Dp,
     onLongPress: () -> Unit
 ) {
@@ -203,7 +203,10 @@ private fun AiMessageBlockItem(
     ) {
         Surface(
             modifier = Modifier
-                .widthIn(max = maxWidth),
+                .widthIn(max = maxWidth)
+                .pointerInput(Unit) {
+                    detectTapGestures(onLongPress = { onLongPress() })
+                },
             shape = shape,
             color = Color.White,
             contentColor = Color.Black,
@@ -211,9 +214,7 @@ private fun AiMessageBlockItem(
         ) {
             RenderMarkdownBlock(
                 block = item.block,
-                viewModel = viewModel,
-                contentColor = Color.Black,
-                onLongPress = onLongPress
+                contentColor = Color.Black
             )
         }
     }
@@ -233,10 +234,10 @@ private fun AiMessageFooterItem(
             TextButton(
                 onClick = {
                     onUserInteraction()
-                    viewModel.showSourcesDialog(message.webSearchResults!!)
+                    viewModel.showSourcesDialog(message.webSearchResults)
                 },
             ) {
-                Text("查看参考来源 (${message.webSearchResults?.size ?: 0})")
+                Text("查看参考来源 (${message.webSearchResults.size})")
             }
         }
     }
@@ -246,11 +247,12 @@ private fun AiMessageFooterItem(
 @Composable
 private fun RenderMarkdownBlock(
     block: MarkdownBlock,
-    viewModel: AppViewModel,
-    contentColor: Color,
-    onLongPress: () -> Unit
+    contentColor: Color
 ) {
-    Box(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+    Box(
+        modifier = Modifier
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+    ) {
         when (block) {
             is MarkdownBlock.Header -> MarkdownText(
                 text = block.text.toString(),
@@ -262,66 +264,58 @@ private fun RenderMarkdownBlock(
                     },
                     fontWeight = FontWeight.Bold,
                     color = contentColor
-                ),
-                onLongPress = onLongPress
+                )
             )
             is MarkdownBlock.Text -> MarkdownText(
                 text = block.text.toString(),
-                style = MaterialTheme.typography.bodyLarge.copy(color = contentColor),
-                onLongPress = onLongPress
+                style = MaterialTheme.typography.bodyLarge.copy(color = contentColor)
             )
             is MarkdownBlock.CodeBlock -> CodeBlock(
                 rawText = block.rawText,
                 language = block.language,
-                contentColor = contentColor,
-                onLongPress = onLongPress
+                contentColor = contentColor
             )
             is MarkdownBlock.ListItem -> Row {
                 Text("• ", color = contentColor)
                 MarkdownText(
                     text = block.text.toString(),
                     style = MaterialTheme.typography.bodyLarge.copy(color = contentColor),
-                    modifier = Modifier.weight(1f),
-                    onLongPress = onLongPress
+                    modifier = Modifier.weight(1f)
                 )
             }
-            is MarkdownBlock.Image -> Box(
-                modifier = Modifier.pointerInput(Unit) {
-                    detectTapGestures(onLongPress = { onLongPress() })
-                }
-            ) {
-                coil3.compose.AsyncImage(
-                    model = coil3.request.ImageRequest.Builder(LocalContext.current).data(block.url).crossfade(true).build(),
-                    contentDescription = block.altText,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(12.dp))
-                )
-            }
+            is MarkdownBlock.Image -> coil3.compose.AsyncImage(
+                model = coil3.request.ImageRequest.Builder(LocalContext.current).data(block.url).crossfade(true).build(),
+                contentDescription = block.altText,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp)
+                    .clip(RoundedCornerShape(12.dp))
+            )
             is MarkdownBlock.Table -> MarkdownTable(
                 header = block.header,
                 rows = block.rows,
-                contentColor = contentColor,
-                onLongPress = onLongPress
+                contentColor = contentColor
             )
         }
     }
 }
 
 @Composable
-private fun CodeBlock(rawText: String, language: String?, contentColor: Color, onLongPress: () -> Unit) {
+private fun CodeBlock(rawText: String, language: String?, contentColor: Color) {
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
-    val annotatedString by produceState(initialValue = AnnotatedString(rawText), key1 = rawText, key2 = language) {
-        value = withContext(NonCancellable) {
+    var annotatedString by remember { mutableStateOf(AnnotatedString(rawText)) }
+
+    LaunchedEffect(rawText, language) {
+        annotatedString = withContext(Dispatchers.Default) {
             CodeHighlighter.highlightToAnnotatedString(rawText, language)
         }
     }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .background(Color(0xFFF3F3F3), RoundedCornerShape(16.dp))
-            .pointerInput(Unit) {
-                detectTapGestures(onLongPress = { onLongPress() })
-            }
             .padding(top = 12.dp, start = 16.dp, end = 16.dp, bottom = 4.dp)
     ) {
         Text(text = annotatedString, style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 19.sp), color = contentColor)
@@ -340,7 +334,7 @@ private fun CodeBlock(rawText: String, language: String?, contentColor: Color, o
 }
 
 @Composable
-private fun MarkdownTable(header: List<String>, rows: List<List<String>>, contentColor: Color, onLongPress: () -> Unit) {
+private fun MarkdownTable(header: List<String>, rows: List<List<String>>, contentColor: Color) {
     val columnCount = header.size
     if (columnCount == 0) return
 
@@ -352,7 +346,7 @@ private fun MarkdownTable(header: List<String>, rows: List<List<String>>, conten
     ) {
         Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))) {
             header.forEach { text ->
-                TableCell(text = text, isHeader = true, weight = 1f / columnCount, contentColor = contentColor, onLongPress = onLongPress)
+                TableCell(text = text, isHeader = true, weight = 1f / columnCount, contentColor = contentColor)
             }
         }
         Divider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f))
@@ -360,7 +354,7 @@ private fun MarkdownTable(header: List<String>, rows: List<List<String>>, conten
             Row(Modifier.fillMaxWidth()) {
                 for(i in 0 until columnCount) {
                     val text = row.getOrNull(i) ?: ""
-                    TableCell(text = text, isHeader = false, weight = 1f / columnCount, contentColor = contentColor, onLongPress = onLongPress)
+                    TableCell(text = text, isHeader = false, weight = 1f / columnCount, contentColor = contentColor)
                 }
             }
             Divider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f))
@@ -369,7 +363,7 @@ private fun MarkdownTable(header: List<String>, rows: List<List<String>>, conten
 }
 
 @Composable
-private fun RowScope.TableCell(text: String, isHeader: Boolean, weight: Float, contentColor: Color, onLongPress: () -> Unit) {
+private fun RowScope.TableCell(text: String, isHeader: Boolean, weight: Float, contentColor: Color) {
     MarkdownText(
         text = text,
         modifier = Modifier
@@ -378,8 +372,7 @@ private fun RowScope.TableCell(text: String, isHeader: Boolean, weight: Float, c
         style = LocalTextStyle.current.copy(
             fontWeight = if (isHeader) FontWeight.Bold else FontWeight.Normal,
             color = contentColor
-        ),
-        onLongPress = onLongPress
+        )
     )
 }
 
@@ -387,15 +380,15 @@ private fun RowScope.TableCell(text: String, isHeader: Boolean, weight: Float, c
 private fun MarkdownText(
     text: String,
     modifier: Modifier = Modifier,
-    style: TextStyle = LocalTextStyle.current,
-    onLongPress: () -> Unit
+    style: TextStyle = LocalTextStyle.current
 ) {
     val uriHandler = LocalUriHandler.current
     val context = LocalContext.current
     var textLayoutResult by remember { mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null) }
+    var annotatedString by remember { mutableStateOf(AnnotatedString(text)) }
 
-    val annotatedString by produceState(initialValue = AnnotatedString(text), key1 = text) {
-        value = withContext(NonCancellable) {
+    LaunchedEffect(text) {
+        annotatedString = withContext(Dispatchers.Default) {
             parseInlineMarkdownToAnnotatedString(text)
         }
     }
@@ -404,12 +397,14 @@ private fun MarkdownText(
         text = annotatedString,
         modifier = modifier
             .graphicsLayer()
-            .pointerInput(onLongPress) {
-                detectTapGestures(
-                    onLongPress = { onLongPress() },
-                    onTap = { offset ->
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitPointerEvent()
+                    val up = waitForUpOrCancellation()
+                    if (up != null) {
+                        up.consume()
                         textLayoutResult?.let { layoutResult ->
-                            val characterIndex = layoutResult.getOffsetForPosition(offset)
+                            val characterIndex = layoutResult.getOffsetForPosition(down.changes.first().position)
                             annotatedString.getStringAnnotations(tag = "URL", start = characterIndex, end = characterIndex)
                                 .firstOrNull()?.let { annotation ->
                                     try {
@@ -420,7 +415,7 @@ private fun MarkdownText(
                                 }
                         }
                     }
-                )
+                }
             },
         style = style,
         onTextLayout = { layoutResult ->
@@ -428,4 +423,3 @@ private fun MarkdownText(
         }
     )
 }
-

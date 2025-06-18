@@ -167,12 +167,12 @@ class AppViewModel(
    private val _textForSelectionDialog = MutableStateFlow("")
    val textForSelectionDialog: StateFlow<String> = _textForSelectionDialog.asStateFlow()
 
-   init {
-        viewModelScope.launch(Dispatchers.IO) {
-            _customProviders.value = dataSource.loadCustomProviders()
-        }
+  init {
+       viewModelScope.launch(Dispatchers.IO) {
+           _customProviders.value = dataSource.loadCustomProviders()
+       }
 
-        persistenceManager.loadInitialData(loadLastChat = false) { initialConfigPresent, initialHistoryPresent ->
+       persistenceManager.loadInitialData(loadLastChat = false) { initialConfigPresent, initialHistoryPresent ->
             if (!initialConfigPresent) {
                 viewModelScope.launch { }
             }
@@ -340,7 +340,7 @@ class AppViewModel(
                     if (stateHolder.messageAnimationStates[updatedMessage.id] != true) {
                         stateHolder.messageAnimationStates[updatedMessage.id] = true
                     }
-                    historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
+                    viewModelScope.launch { historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true) }
                 }
             }
             withContext(Dispatchers.Main.immediate) { dismissEditDialog() }
@@ -378,41 +378,60 @@ class AppViewModel(
 
         val originalAttachments = messageToRegenerateFrom.attachments ?: emptyList()
 
-        viewModelScope.launch(Dispatchers.Main.immediate) {
-            val userMessageIndex =
-                stateHolder.messages.indexOfFirst { it.id == originalUserMessageId }
-            if (userMessageIndex == -1) {
-                showSnackbar("无法重新生成：原始用户消息在当前列表中未找到。"); return@launch
-            }
-            var currentIndexToInspect = userMessageIndex + 1
-            while (currentIndexToInspect < stateHolder.messages.size) {
-                if (stateHolder.messages[currentIndexToInspect].sender == Sender.AI) {
-                    val aiMessageToRemove = stateHolder.messages[currentIndexToInspect]
-                    if (stateHolder._currentStreamingAiMessageId.value == aiMessageToRemove.id) {
-                        apiHandler.cancelCurrentApiJob(
-                            "为消息 '${originalUserMessageId.take(4)}' 重新生成回答，取消旧AI流",
-                            isNewMessageSend = true
-                        )
+        viewModelScope.launch {
+            val success = withContext(Dispatchers.Default) {
+                val userMessageIndex =
+                    stateHolder.messages.indexOfFirst { it.id == originalUserMessageId }
+                if (userMessageIndex == -1) {
+                    withContext(Dispatchers.Main) {
+                        showSnackbar("无法重新生成：原始用户消息在当前列表中未找到。")
                     }
-                    stateHolder.reasoningCompleteMap.remove(aiMessageToRemove.id)
-                    stateHolder.expandedReasoningStates.remove(aiMessageToRemove.id)
-                    stateHolder.messageAnimationStates.remove(aiMessageToRemove.id)
-                    stateHolder.messages.removeAt(currentIndexToInspect)
-                } else {
-                    break
+                    return@withContext false
                 }
+
+                val messagesToRemove = mutableListOf<Message>()
+                var currentIndexToInspect = userMessageIndex + 1
+                while (currentIndexToInspect < stateHolder.messages.size) {
+                    val message = stateHolder.messages[currentIndexToInspect]
+                    if (message.sender == Sender.AI) {
+                        messagesToRemove.add(message)
+                        currentIndexToInspect++
+                    } else {
+                        break
+                    }
+                }
+
+                withContext(Dispatchers.Main.immediate) {
+                    messagesToRemove.forEach { aiMessageToRemove ->
+                        if (stateHolder._currentStreamingAiMessageId.value == aiMessageToRemove.id) {
+                            apiHandler.cancelCurrentApiJob(
+                                "为消息 '${originalUserMessageId.take(4)}' 重新生成回答，取消旧AI流",
+                                isNewMessageSend = true
+                            )
+                        }
+                        stateHolder.reasoningCompleteMap.remove(aiMessageToRemove.id)
+                        stateHolder.expandedReasoningStates.remove(aiMessageToRemove.id)
+                        stateHolder.messageAnimationStates.remove(aiMessageToRemove.id)
+                        stateHolder.messages.remove(aiMessageToRemove)
+                    }
+
+                    val messageToDelete = stateHolder.messages.getOrNull(userMessageIndex)
+                    if (messageToDelete?.id == originalUserMessageId) {
+                        stateHolder.messageAnimationStates.remove(originalUserMessageId)
+                        stateHolder.messages.removeAt(userMessageIndex)
+                    }
+                }
+                true
             }
-            val messageToDelete = stateHolder.messages.getOrNull(userMessageIndex)
-            if (messageToDelete?.id == originalUserMessageId) {
-                stateHolder.messageAnimationStates.remove(originalUserMessageId)
-                stateHolder.messages.removeAt(userMessageIndex)
+
+            if (success) {
+                viewModelScope.launch { historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true) }
+                onSendMessage(
+                    messageText = originalUserMessageText,
+                    isFromRegeneration = true,
+                    attachments = originalAttachments
+                )
             }
-            historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
-            onSendMessage(
-                messageText = originalUserMessageText,
-                isFromRegeneration = true,
-                attachments = originalAttachments
-            )
         }
     }
 
@@ -567,9 +586,9 @@ class AppViewModel(
             _exportRequest.emit(fileName to text)
         }
     }
-
-   fun addConfig(config: ApiConfig) = configManager.addConfig(config)
-   fun updateConfig(config: ApiConfig) = configManager.updateConfig(config)
+ 
+    fun addConfig(config: ApiConfig) = configManager.addConfig(config)
+    fun updateConfig(config: ApiConfig) = configManager.updateConfig(config)
     fun deleteConfig(config: ApiConfig) = configManager.deleteConfig(config)
     fun deleteConfigGroup(apiKey: String, modalityType: com.example.everytalk.data.DataClass.ModalityType) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -676,62 +695,76 @@ fun updateConfigGroup(representativeConfig: ApiConfig, newAddress: String, newKe
             showSnackbar("新名称不能为空"); return
         }
         viewModelScope.launch {
-            val currentHistoricalConvos = stateHolder._historicalConversations.value
-            if (index < 0 || index >= currentHistoricalConvos.size) {
-                withContext(Dispatchers.Main) { showSnackbar("无法重命名：对话索引错误") }; return@launch
-            }
-            val originalConversationAtIndex = currentHistoricalConvos[index].toMutableList()
-            var titleMessageUpdatedOrAdded = false
-            val existingTitleIndex =
-                originalConversationAtIndex.indexOfFirst { it.sender == Sender.System && it.isPlaceholderName }
-            if (existingTitleIndex != -1) {
-                originalConversationAtIndex[existingTitleIndex] =
-                    originalConversationAtIndex[existingTitleIndex].copy(
-                        text = trimmedNewName,
-                        timestamp = System.currentTimeMillis()
-                    )
-                titleMessageUpdatedOrAdded = true
-            }
-            if (!titleMessageUpdatedOrAdded) {
-                val titleMessage = Message(
-                    id = "title_${UUID.randomUUID()}",
-                    text = trimmedNewName,
-                    sender = Sender.System,
-                    timestamp = System.currentTimeMillis() - 1,
-                    contentStarted = true,
-                    isPlaceholderName = true
-                )
-                originalConversationAtIndex.add(0, titleMessage)
-            }
-            val updatedHistoricalConversationsList = currentHistoricalConvos.toMutableList()
-                .apply { this[index] = originalConversationAtIndex.toList() }
-            stateHolder._historicalConversations.value = updatedHistoricalConversationsList.toList()
-            withContext(Dispatchers.IO) { persistenceManager.saveChatHistory(stateHolder._historicalConversations.value) }
+            val success = withContext(Dispatchers.Default) {
+                val currentHistoricalConvos = stateHolder._historicalConversations.value
+                if (index < 0 || index >= currentHistoricalConvos.size) {
+                    withContext(Dispatchers.Main) { showSnackbar("无法重命名：对话索引错误") }
+                    return@withContext false
+                }
 
-            if (stateHolder._loadedHistoryIndex.value == index) {
+                val originalConversationAtIndex = currentHistoricalConvos[index].toMutableList()
+                var titleMessageUpdatedOrAdded = false
+                val existingTitleIndex =
+                    originalConversationAtIndex.indexOfFirst { it.sender == Sender.System && it.isPlaceholderName }
+
+                if (existingTitleIndex != -1) {
+                    originalConversationAtIndex[existingTitleIndex] =
+                        originalConversationAtIndex[existingTitleIndex].copy(
+                            text = trimmedNewName,
+                            timestamp = System.currentTimeMillis()
+                        )
+                    titleMessageUpdatedOrAdded = true
+                }
+
+                if (!titleMessageUpdatedOrAdded) {
+                    val titleMessage = Message(
+                        id = "title_${UUID.randomUUID()}",
+                        text = trimmedNewName,
+                        sender = Sender.System,
+                        timestamp = System.currentTimeMillis() - 1,
+                        contentStarted = true,
+                        isPlaceholderName = true
+                    )
+                    originalConversationAtIndex.add(0, titleMessage)
+                }
+
+                val updatedHistoricalConversationsList = currentHistoricalConvos.toMutableList()
+                    .apply { this[index] = originalConversationAtIndex.toList() }
+
                 withContext(Dispatchers.Main.immediate) {
-                    stateHolder.messages.clear()
+                    stateHolder._historicalConversations.value = updatedHistoricalConversationsList.toList()
+                }
+
+                persistenceManager.saveChatHistory(stateHolder._historicalConversations.value)
+
+                if (stateHolder._loadedHistoryIndex.value == index) {
                     val reloadedConversation = originalConversationAtIndex.toList().map { msg ->
                         val updatedContentStarted =
                             msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || msg.isError
                         msg.copy(contentStarted = updatedContentStarted)
                     }
-                    stateHolder.messages.addAll(reloadedConversation)
-                    reloadedConversation.forEach { msg ->
-                        val hasContentOrError = msg.contentStarted || msg.isError
-                        val hasReasoning = !msg.reasoning.isNullOrBlank()
-                        if (msg.sender == Sender.AI && hasReasoning) {
-                            stateHolder.reasoningCompleteMap[msg.id] = true
-                        }
-                        val animationPlayedCondition =
-                            hasContentOrError || (msg.sender == Sender.AI && hasReasoning)
-                        if (animationPlayedCondition) {
-                            stateHolder.messageAnimationStates[msg.id] = true
+                    withContext(Dispatchers.Main.immediate) {
+                        stateHolder.messages.clear()
+                        stateHolder.messages.addAll(reloadedConversation)
+                        reloadedConversation.forEach { msg ->
+                            val hasContentOrError = msg.contentStarted || msg.isError
+                            val hasReasoning = !msg.reasoning.isNullOrBlank()
+                            if (msg.sender == Sender.AI && hasReasoning) {
+                                stateHolder.reasoningCompleteMap[msg.id] = true
+                            }
+                            val animationPlayedCondition =
+                                hasContentOrError || (msg.sender == Sender.AI && hasReasoning)
+                            if (animationPlayedCondition) {
+                                stateHolder.messageAnimationStates[msg.id] = true
+                            }
                         }
                     }
                 }
+                true
             }
-            withContext(Dispatchers.Main) { dismissRenameDialog(); showSnackbar("对话已重命名") }
+            if (success) {
+                withContext(Dispatchers.Main) { dismissRenameDialog(); showSnackbar("对话已重命名") }
+            }
         }
     }
 
@@ -813,7 +846,7 @@ fun getMessageById(id: String): Message? {
 
         try {
             runBlocking(Dispatchers.IO) {
-                historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
+                launch { historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true) }
                 persistenceManager.saveLastOpenChat(finalCurrentChatMessages)
                 persistenceManager.saveApiConfigs(finalApiConfigs)
                 persistenceManager.saveSelectedConfigIdentifier(finalSelectedConfigId)
