@@ -144,7 +144,9 @@ fun ChatMessagesList(
                         onLongPress = {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             onResetInactivityTimer()
-                            viewModel.getMessageById(item.messageId)?.let {
+                            val message = viewModel.getMessageById(item.messageId)
+                            android.util.Log.d("ChatMessagesList", "Long press on messageId: ${item.messageId}, message found: ${message != null}")
+                            message?.let {
                                 onShowAiMessageOptions(it)
                             }
                         }

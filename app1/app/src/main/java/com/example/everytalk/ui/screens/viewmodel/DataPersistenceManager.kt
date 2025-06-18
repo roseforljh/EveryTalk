@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import com.example.everytalk.data.DataClass.ApiConfig
+import java.io.File
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.local.SharedPreferencesDataSource
 import com.example.everytalk.model.SelectedMediaItem
@@ -31,8 +32,14 @@ class DataPersistenceManager(
             var initialHistoryPresent = false
 
             try {
-                Log.d(TAG, "loadInitialData: 调用 dataSource.loadApiConfigs()...")
-                val loadedConfigs: List<ApiConfig> = dataSource.loadApiConfigs()
+                Log.d(TAG, "loadInitialData: 检查API配置缓存...")
+                val loadedConfigs: List<ApiConfig> = if (stateHolder._apiConfigs.value.isEmpty()) {
+                    Log.d(TAG, "loadInitialData: API配置缓存未命中。从dataSource加载...")
+                    dataSource.loadApiConfigs()
+                } else {
+                    Log.d(TAG, "loadInitialData: API配置缓存命中。使用现有数据。")
+                    stateHolder._apiConfigs.value
+                }
                 initialConfigPresent = loadedConfigs.isNotEmpty()
                 Log.i(
                     TAG,
@@ -73,8 +80,14 @@ class DataPersistenceManager(
                 }
                 Log.i(TAG, "loadInitialData: 最终选中的配置: ${finalSelectedConfig?.model ?: "无"}")
 
-                Log.d(TAG, "loadInitialData: 调用 dataSource.loadChatHistory()...")
-                val loadedHistoryRaw: List<List<Message>> = dataSource.loadChatHistory()
+                Log.d(TAG, "loadInitialData: 检查聊天历史缓存...")
+                val loadedHistoryRaw: List<List<Message>> = if (stateHolder._historicalConversations.value.isEmpty()) {
+                    Log.d(TAG, "loadInitialData: 聊天历史缓存未命中。从dataSource加载...")
+                    dataSource.loadChatHistory()
+                } else {
+                    Log.d(TAG, "loadInitialData: 聊天历史缓存命中。使用现有数据。")
+                    stateHolder._historicalConversations.value
+                }
                 val loadedHistory = loadedHistoryRaw.map { conversation ->
                     conversation.map { message ->
                         message
@@ -232,13 +245,29 @@ class DataPersistenceManager(
                     // Delete all collected unique URIs
                     urisToDelete.forEach { uri ->
                         try {
-                            val rowsDeleted = context.contentResolver.delete(uri, null, null)
-                            if (rowsDeleted > 0) {
-                                Log.d(TAG, "Successfully deleted media file: $uri")
-                                deletedFilesCount++
+                            if ("file" == uri.scheme) {
+                                val file = uri.path?.let { File(it) }
+                                if (file?.exists() == true) {
+                                    if (file.delete()) {
+                                        Log.d(TAG, "Successfully deleted local file: $uri")
+                                        deletedFilesCount++
+                                    } else {
+                                        Log.w(TAG, "Failed to delete local file: $uri")
+                                    }
+                                } else {
+                                    Log.w(TAG, "Local file to delete does not exist: $uri")
+                                }
                             } else {
-                                Log.w(TAG, "Failed to delete media file, or file did not exist: $uri")
+                                val rowsDeleted = context.contentResolver.delete(uri, null, null)
+                                if (rowsDeleted > 0) {
+                                    Log.d(TAG, "Successfully deleted media via ContentResolver: $uri")
+                                    deletedFilesCount++
+                                } else {
+                                    Log.w(TAG, "ContentResolver did not delete media, or it did not exist: $uri")
+                                }
                             }
+                        } catch (e: SecurityException) {
+                            Log.e(TAG, "Security exception deleting media file: $uri", e)
                         } catch (e: Exception) {
                             Log.e(TAG, "Error deleting media file: $uri", e)
                         }

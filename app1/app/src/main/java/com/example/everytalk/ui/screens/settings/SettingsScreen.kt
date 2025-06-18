@@ -1,13 +1,17 @@
 package com.example.everytalk.ui.screens.settings
 
 import android.util.Log
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ImportExport
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavController
 import com.example.everytalk.StateControler.AppViewModel
 import com.example.everytalk.data.DataClass.ApiConfig
@@ -55,6 +59,47 @@ fun SettingsScreen(
     var configToEdit by remember { mutableStateOf<ApiConfig?>(null) }
     var showConfirmDeleteProviderDialog by remember { mutableStateOf(false) }
     var providerToDelete by remember { mutableStateOf<String?>(null) }
+    var showImportExportDialog by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    var exportData by remember { mutableStateOf<Pair<String, String>?>(null) }
+
+    val exportSettingsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json"),
+        onResult = { uri ->
+            uri?.let {
+                exportData?.second?.let { jsonContent ->
+                    context.contentResolver.openOutputStream(it)?.use { outputStream ->
+                        outputStream.write(jsonContent.toByteArray())
+                    }
+                    viewModel.showSnackbar("配置已导出")
+                    exportData = null
+                }
+            }
+        }
+    )
+
+    val importSettingsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent(),
+        onResult = { uri ->
+            uri?.let {
+                try {
+                    context.contentResolver.openInputStream(it)?.use { inputStream ->
+                        val jsonContent = inputStream.bufferedReader().use { reader -> reader.readText() }
+                        viewModel.importSettings(jsonContent)
+                    }
+                } catch (e: Exception) {
+                    viewModel.showSnackbar("导入失败: ${e.message}")
+                }
+            }
+        }
+    )
+
+    LaunchedEffect(Unit) {
+        viewModel.exportRequest.collect { data ->
+            exportData = data
+            exportSettingsLauncher.launch(data.first)
+        }
+    }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -72,6 +117,15 @@ fun SettingsScreen(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             "返回",
                             tint = if (backButtonEnabled) Color.Black else Color.Gray
+                        )
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { showImportExportDialog = true }) {
+                        Icon(
+                            imageVector = Icons.Default.ImportExport,
+                            contentDescription = "导入/导出配置",
+                            tint = Color.Black
                         )
                     }
                 },
@@ -242,6 +296,20 @@ fun SettingsScreen(
             },
             title = "删除平台",
             text = "您确定要删除模型平台 “$providerToDelete” 吗？\n\n这将同时删除所有使用此平台的配置。此操作不可撤销。"
+        )
+    }
+    if (showImportExportDialog) {
+        ImportExportDialog(
+            onDismissRequest = { showImportExportDialog = false },
+            onExport = {
+                viewModel.exportSettings()
+                showImportExportDialog = false
+            },
+            onImport = {
+                importSettingsLauncher.launch("application/json")
+                showImportExportDialog = false
+            },
+            isExportEnabled = savedConfigs.isNotEmpty()
         )
     }
 }

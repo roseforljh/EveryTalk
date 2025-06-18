@@ -529,3 +529,60 @@ internal fun ConfirmDeleteDialog(
         textContentColor = Color.Black
     )
 }
+
+@Composable
+internal fun ImportExportDialog(
+    onDismissRequest: () -> Unit,
+    onExport: () -> Unit,
+    onImport: () -> Unit,
+    isExportEnabled: Boolean
+) {
+    AlertDialog(
+        onDismissRequest = onDismissRequest,
+        shape = DialogShape,
+        containerColor = Color.White,
+        titleContentColor = Color.Black,
+        textContentColor = Color.Black,
+        title = { Text("导入 / 导出配置", color = Color.Black) },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Button(
+                    onClick = onExport,
+                    enabled = isExportEnabled,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(50.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color.Black,
+                        contentColor = Color.White
+                    )
+                ) {
+                    Text("导出配置")
+                }
+                Spacer(Modifier.height(16.dp))
+                Button(
+                    onClick = onImport,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(50.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color.Black,
+                        contentColor = Color.White
+                    )
+                ) {
+                    Text("导入配置")
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(
+                onClick = onDismissRequest,
+                colors = ButtonDefaults.textButtonColors(contentColor = Color.Gray)
+            ) {
+                Text("取消")
+            }
+        }
+    )
+}

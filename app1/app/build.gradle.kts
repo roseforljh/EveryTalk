@@ -152,5 +152,6 @@ android {
 
         implementation ("com.google.accompanist:accompanist-flowlayout:0.30.1")
 
+        implementation("com.google.code.gson:gson:2.10.1") // 添加 Gson 依赖
     }
 

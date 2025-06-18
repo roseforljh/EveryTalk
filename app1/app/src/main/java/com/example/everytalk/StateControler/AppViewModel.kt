@@ -15,6 +15,7 @@ import com.example.everytalk.data.DataClass.Sender
 import com.example.everytalk.data.DataClass.WebSearchResult
 import com.example.everytalk.data.local.SharedPreferencesDataSource
 import com.example.everytalk.data.network.ApiClient
+import android.net.Uri
 import com.example.everytalk.model.SelectedMediaItem
 import com.example.everytalk.ui.screens.viewmodel.ConfigManager
 import com.example.everytalk.ui.screens.viewmodel.DataPersistenceManager
@@ -32,12 +33,19 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import java.util.UUID
 
 class AppViewModel(
     application: Application,
     private val dataSource: SharedPreferencesDataSource
 ) : AndroidViewModel(application) {
+
+    private data class ExportedSettings(
+        val apiConfigs: List<ApiConfig>,
+        val customProviders: Set<String>
+    )
 
     internal val stateHolder = ViewModelStateHolder()
     private val persistenceManager =
@@ -736,6 +744,54 @@ fun updateConfigGroup(representativeConfig: ApiConfig, newAddress: String, newKe
                     stateHolder.messages[messageIndex] = messageToUpdate.copy(
                         text = currentFullText
                     )
+                }
+            }
+        }
+    }
+
+    fun exportSettings() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val settingsToExport = ExportedSettings(
+                apiConfigs = stateHolder._apiConfigs.value,
+                customProviders = _customProviders.value
+            )
+            val json = Gson().toJson(settingsToExport)
+            _exportRequest.emit("eztalk_settings.json" to json)
+        }
+    }
+
+    fun importSettings(jsonContent: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val type = object : TypeToken<ExportedSettings>() {}.type
+                val importedSettings: ExportedSettings = Gson().fromJson(jsonContent, type)
+
+                // Basic validation
+                if (importedSettings.apiConfigs.any { it.id.isBlank() || it.provider.isBlank() }) {
+                    withContext(Dispatchers.Main) { showSnackbar("导入失败：配置文件格式无效。") }
+                    return@launch
+                }
+
+                stateHolder._apiConfigs.value = importedSettings.apiConfigs
+                _customProviders.value = importedSettings.customProviders
+
+                persistenceManager.saveApiConfigs(importedSettings.apiConfigs)
+                dataSource.saveCustomProviders(importedSettings.customProviders)
+
+                // Reselect config if the old one is gone
+                val currentSelectedId = stateHolder._selectedApiConfig.value?.id
+                if (currentSelectedId == null || importedSettings.apiConfigs.none { it.id == currentSelectedId }) {
+                    val firstConfig = importedSettings.apiConfigs.firstOrNull()
+                    stateHolder._selectedApiConfig.value = firstConfig
+                    persistenceManager.saveSelectedConfigIdentifier(firstConfig?.id)
+                }
+
+                withContext(Dispatchers.Main) {
+                    showSnackbar("配置已成功导入")
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    showSnackbar("导入失败: ${e.message}")
                 }
             }
         }
