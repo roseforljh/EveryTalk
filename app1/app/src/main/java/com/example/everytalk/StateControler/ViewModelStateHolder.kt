@@ -1,4 +1,4 @@
-package com.example.everytalk.StateControler
+package com.example.everytalk.statecontroler
 
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.DrawerValue

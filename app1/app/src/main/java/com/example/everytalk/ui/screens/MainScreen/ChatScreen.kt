@@ -44,11 +44,10 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.navigation.NavController
 import androidx.navigation.NavGraph.Companion.findStartDestination
-import com.example.everytalk.StateControler.AppViewModel
-import com.example.everytalk.data.DataClass.ApiConfig
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.DataClass.Sender
 import com.example.everytalk.navigation.Screen
+import com.example.everytalk.statecontroler.AppViewModel
 import com.example.everytalk.ui.components.AppTopBar
 import com.example.everytalk.ui.components.WebSourcesDialog
 import com.example.everytalk.ui.screens.MainScreen.chat.ChatInputArea

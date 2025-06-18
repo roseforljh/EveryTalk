@@ -33,11 +33,11 @@
             tools:targetApi="q" />
 
         <activity
-            android:name="com.example.everytalk.StateControler.MainActivity"
+            android:name="com.example.everytalk.statecontroler.MainActivity"
             android:exported="true"
             android:theme="@style/Theme.App1"
             android:windowSoftInputMode="adjustResize"
-            tools:ignore="WrongManifestParent"> <!-- 忽略关于错误 Manifest 父节点的警告 -->
+            tools:ignore="WrongManifestParent">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 

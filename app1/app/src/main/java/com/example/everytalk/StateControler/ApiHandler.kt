@@ -1,4 +1,4 @@
-package com.example.everytalk.StateControler
+package com.example.everytalk.statecontroler
 
 import android.content.Context
 import com.example.everytalk.data.DataClass.Message

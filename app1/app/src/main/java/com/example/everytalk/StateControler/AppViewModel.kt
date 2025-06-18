@@ -1,4 +1,4 @@
-package com.example.everytalk.StateControler
+package com.example.everytalk.statecontroler
 
 import android.app.Application
 import android.content.ClipboardManager

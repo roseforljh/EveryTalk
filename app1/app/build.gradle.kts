@@ -18,11 +18,11 @@ plugins {
 }
 
 android {
-    namespace = "com.anyaitalked.everytalk" // 确认这是你的包名
+    namespace = "com.example.everytalk"
     compileSdk = 35 // 建议与 targetSdk 和 Compose BOM 推荐的 SDK 版本对齐
 
     defaultConfig {
-        applicationId = "com.anyaitalked.everytalk" // 确认这是你的 applicationId
+        applicationId = "com.example.everytalk"
         minSdk = 27
         //noinspection OldTargetApi
         targetSdk = 35 // 通常与 compileSdk 一致

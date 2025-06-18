@@ -8,7 +8,7 @@ import java.io.File
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.local.SharedPreferencesDataSource
 import com.example.everytalk.model.SelectedMediaItem
-import com.example.everytalk.StateControler.ViewModelStateHolder
+import com.example.everytalk.statecontroler.ViewModelStateHolder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch

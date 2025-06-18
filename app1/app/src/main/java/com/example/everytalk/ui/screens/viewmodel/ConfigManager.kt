@@ -2,8 +2,8 @@ package com.example.everytalk.ui.screens.viewmodel
 
 import android.util.Log
 import com.example.everytalk.data.DataClass.ApiConfig
-import com.example.everytalk.StateControler.ApiHandler
-import com.example.everytalk.StateControler.ViewModelStateHolder
+import com.example.everytalk.statecontroler.ApiHandler
+import com.example.everytalk.statecontroler.ViewModelStateHolder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.update

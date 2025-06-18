@@ -13,9 +13,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavController
-import com.example.everytalk.StateControler.AppViewModel
 import com.example.everytalk.data.DataClass.ApiConfig
 import com.example.everytalk.data.DataClass.ModalityType
+import com.example.everytalk.statecontroler.AppViewModel
 import java.util.UUID
 
 @OptIn(ExperimentalMaterial3Api::class)
