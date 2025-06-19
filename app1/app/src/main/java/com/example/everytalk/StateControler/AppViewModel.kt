@@ -106,6 +106,7 @@ class AppViewModel(
     val expandedReasoningStates: SnapshotStateMap<String, Boolean> get() = stateHolder.expandedReasoningStates
     val snackbarMessage: SharedFlow<String> get() = stateHolder._snackbarMessage.asSharedFlow()
     val scrollToBottomEvent: SharedFlow<Unit> get() = stateHolder._scrollToBottomEvent.asSharedFlow()
+    val selectedMediaItems: SnapshotStateList<SelectedMediaItem> get() = stateHolder.selectedMediaItems
 
     private val _exportRequest = MutableSharedFlow<Pair<String, String>>()
     val exportRequest: SharedFlow<Pair<String, String>> = _exportRequest.asSharedFlow()
@@ -309,10 +310,27 @@ class AppViewModel(
         attachments: List<SelectedMediaItem> = emptyList()
     ) {
         messageSender.sendMessage(messageText, isFromRegeneration, attachments)
+        if (attachments.isNotEmpty()) {
+            clearMediaItems()
+        }
     }
 
-    fun onEditDialogTextChanged(newText: String) {
-        stateHolder._editDialogInputText.value = newText
+    fun addMediaItem(item: SelectedMediaItem) {
+        stateHolder.selectedMediaItems.add(item)
+    }
+
+    fun removeMediaItemAtIndex(index: Int) {
+        if (index >= 0 && index < stateHolder.selectedMediaItems.size) {
+            stateHolder.selectedMediaItems.removeAt(index)
+        }
+    }
+
+    fun clearMediaItems() {
+        stateHolder.clearSelectedMedia()
+    }
+ 
+     fun onEditDialogTextChanged(newText: String) {
+         stateHolder._editDialogInputText.value = newText
     }
 
     fun requestEditMessage(message: Message) {

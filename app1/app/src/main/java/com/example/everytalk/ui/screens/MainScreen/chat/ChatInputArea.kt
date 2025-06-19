@@ -268,6 +268,10 @@ fun ChatInputArea(
     text: String,
     onTextChange: (String) -> Unit,
     onSendMessageRequest: (messageText: String, isKeyboardVisible: Boolean, attachments: List<SelectedMediaItem>) -> Unit,
+    selectedMediaItems: List<SelectedMediaItem>,
+    onAddMediaItem: (SelectedMediaItem) -> Unit,
+    onRemoveMediaItemAtIndex: (Int) -> Unit,
+    onClearMediaItems: () -> Unit,
     isApiCalling: Boolean,
     isWebSearchEnabled: Boolean,
     onToggleWebSearch: () -> Unit,
@@ -285,19 +289,17 @@ fun ChatInputArea(
     var pendingMessageTextForSend by remember { mutableStateOf<String?>(null) }
     var showImageSelectionPanel by remember { mutableStateOf(false) }
     var showMoreOptionsPanel by remember { mutableStateOf(false) }
-
-    val selectedMediaItems = remember { mutableStateListOf<SelectedMediaItem>() }
     var tempCameraImageUri by remember { mutableStateOf<Uri?>(null) }
-
-    val photoPickerLauncher =
+ 
+     val photoPickerLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-            uri?.let { selectedMediaItems.add(SelectedMediaItem.ImageFromUri(it)) }
+            uri?.let { onAddMediaItem(SelectedMediaItem.ImageFromUri(it)) }
             showImageSelectionPanel = false // Close panel after selection
         }
     val cameraLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
             if (success && tempCameraImageUri != null) {
-                selectedMediaItems.add(SelectedMediaItem.ImageFromUri(tempCameraImageUri!!))
+                onAddMediaItem(SelectedMediaItem.ImageFromUri(tempCameraImageUri!!))
                 tempCameraImageUri = null
             } else {
                 Log.w("CameraLauncher", "无法获取相机照片或 URI 为空")
@@ -322,7 +324,7 @@ fun ChatInputArea(
             uri?.let {
                 val (displayName, mimeType, _) = getFileDetailsFromUri(context, it)
                 Log.d("OpenDocument", "Selected Document: $displayName, URI: $it, MIME: $mimeType")
-                selectedMediaItems.add(SelectedMediaItem.GenericFile(it, displayName, mimeType))
+                onAddMediaItem(SelectedMediaItem.GenericFile(it, displayName, mimeType))
             } ?: Log.d("OpenDocument", "No document selected")
             showMoreOptionsPanel = false // Close panel after selection
         }
@@ -337,7 +339,7 @@ fun ChatInputArea(
                 onSendMessageRequest(messageToSend, false, selectedMediaItems.toList())
                 pendingMessageTextForSend = null
                 if (text == messageToSend) onTextChange("")
-                selectedMediaItems.clear()
+                onClearMediaItems()
             }
     }
     var chatInputContentHeightPx by remember { mutableIntStateOf(0) }
@@ -368,7 +370,7 @@ fun ChatInputArea(
                     itemsIndexed(selectedMediaItems, key = { _, item -> item.id }) { index, media ->
                         SelectedItemPreview(
                             mediaItem = media,
-                            onRemoveClicked = { selectedMediaItems.removeAt(index) })
+                            onRemoveClicked = { onRemoveMediaItemAtIndex(index) })
                     }
                 }
             }
@@ -434,7 +436,7 @@ fun ChatInputArea(
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (text.isNotEmpty() || selectedMediaItems.isNotEmpty()) {
-                        IconButton(onClick = { onTextChange(""); selectedMediaItems.clear() }) {
+                        IconButton(onClick = { onTextChange(""); onClearMediaItems() }) {
                             Icon(
                                 Icons.Filled.Clear,
                                 "清除内容和所选项目",
@@ -457,7 +459,7 @@ fun ChatInputArea(
                                         selectedMediaItems.toList()
                                     )
                                     onTextChange("")
-                                    selectedMediaItems.clear()
+                                    onClearMediaItems()
                                 }
                             } else if (selectedApiConfig == null) {
                                 Log.w("SendMessage", "请先选择 API 配置")

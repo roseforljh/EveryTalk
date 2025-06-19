@@ -77,9 +77,10 @@ fun ChatScreen(
     val isApiCalling by viewModel.isApiCalling.collectAsState()
     val currentStreamingAiMessageId by viewModel.currentStreamingAiMessageId.collectAsState()
     val isWebSearchEnabled by viewModel.isWebSearchEnabled.collectAsState()
-
-    val listState = rememberLazyListState()
-    val coroutineScope = rememberCoroutineScope()
+    val selectedMediaItems = viewModel.selectedMediaItems
+ 
+     val listState = rememberLazyListState()
+     val coroutineScope = rememberCoroutineScope()
 
     val loadedHistoryIndex by viewModel.loadedHistoryIndex.collectAsState()
     var previousLoadedHistoryIndexState by remember(loadedHistoryIndex) {
@@ -473,6 +474,10 @@ fun ChatScreen(
                     resetInactivityTimer()
                     viewModel.onSendMessage(messageText = messageText, attachments = attachments)
                 },
+                selectedMediaItems = selectedMediaItems,
+                onAddMediaItem = { viewModel.addMediaItem(it) },
+                onRemoveMediaItemAtIndex = { viewModel.removeMediaItemAtIndex(it) },
+                onClearMediaItems = { viewModel.clearMediaItems() },
                 isApiCalling = isApiCalling,
                 isWebSearchEnabled = isWebSearchEnabled,
                 onToggleWebSearch = {
