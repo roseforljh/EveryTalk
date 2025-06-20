@@ -11,7 +11,6 @@ import io.ktor.client.*
 import io.ktor.client.engine.android.*
 import io.ktor.client.plugins.*
 import io.ktor.client.plugins.cache.HttpCache
-import io.ktor.client.plugins.cache.storage.CacheStorage
 import io.ktor.client.plugins.cache.storage.FileStorage
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
@@ -29,6 +28,7 @@ import java.io.IOException
 import java.io.File
 import io.ktor.client.plugins.HttpRequestTimeoutException
 import kotlinx.coroutines.CancellationException as CoroutineCancellationException
+import java.util.concurrent.atomic.AtomicBoolean
 
 object ApiClient {
 
@@ -68,7 +68,7 @@ object ApiClient {
     private val backendProxyUrls = listOf(
         "http://backendcentrol.everytalk.dpdns.org:8880/chat",
         "http://backendwest.everytalk.dpdns.org:2052/chat",
-        "http://backend.everytalk.dpdns.org:8880/chat",
+        "http://backend.everytalk.dpdns.org:8080/chat",
         "https://backdatalk-717323967862.europe-west1.run.app/chat",
         "https://kunze999-backendai.hf.space/chat",
     )
@@ -332,40 +332,53 @@ object ApiClient {
         request: ChatRequest,
         attachments: List<SelectedMediaItem>,
         applicationContext: Context
-    ): Flow<AppStreamEvent> =
-        flow {
-            var lastError: Exception? = null
-            val successfulUrls = mutableListOf<String>()
+    ): Flow<AppStreamEvent> = channelFlow {
+        if (backendProxyUrls.isEmpty()) {
+            throw IOException("没有后端服务器URL可供尝试。")
+        }
 
-            if (backendProxyUrls.isEmpty()) {
-                throw IOException("没有后端服务器URL可供尝试。")
-            }
+        val errors = mutableListOf<Throwable>()
+        val jobs = mutableListOf<Job>()
+        val winnerFound = AtomicBoolean(false)
 
+        supervisorScope {
             for (url in backendProxyUrls) {
-                try {
-                    streamChatResponseInternal(url, request, attachments, applicationContext)
-                        .collect { appEvent ->
-                            if (successfulUrls.isEmpty()) {
-                                successfulUrls.add(url)
+                val job = launch {
+                    try {
+                        streamChatResponseInternal(url, request, attachments, applicationContext)
+                            .collect { event ->
+                                if (winnerFound.compareAndSet(false, true)) {
+                                    // We are the winner, cancel other jobs
+                                    jobs.forEach {
+                                        if (it != coroutineContext[Job]) {
+                                            it.cancel(CoroutineCancellationException("Another stream responded faster."))
+                                        }
+                                    }
+                                }
+                                // Only the winner will proceed to send events
+                                send(event)
                             }
-                            emit(appEvent)
+                    } catch (e: Exception) {
+                        if (e !is CoroutineCancellationException) {
+                            synchronized(errors) {
+                                errors.add(e)
+                            }
                         }
-                    return@flow
-                } catch (e: CoroutineCancellationException) {
-                    throw e
-                } catch (e: IOException) {
-                    lastError = e
-                } catch (e: Exception) {
-                    lastError = e
+                    }
                 }
-            }
-
-            if (lastError != null) {
-                throw lastError
-            } else {
-                throw IOException("无法连接到任何可用的后端服务器。")
+                jobs.add(job)
             }
         }
-            .buffer(Channel.BUFFERED)
-            .flowOn(Dispatchers.IO)
+
+        // After supervisorScope, all jobs are complete (successfully, failed, or cancelled)
+        if (!winnerFound.get()) {
+            if (errors.isNotEmpty()) {
+                throw errors.last()
+            } else {
+                // This can happen if all requests are cancelled before producing anything,
+                // or if there are no URLs. The empty check is at the top.
+                throw IOException("无法连接到任何可用的后端服务器，且没有报告具体错误。")
+            }
+        }
+    }.buffer(Channel.BUFFERED).flowOn(Dispatchers.IO)
 }
