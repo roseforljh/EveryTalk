@@ -300,12 +300,14 @@ fun ChatInputArea(
         rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
             if (success && tempCameraImageUri != null) {
                 onAddMediaItem(SelectedMediaItem.ImageFromUri(tempCameraImageUri!!))
-                tempCameraImageUri = null
             } else {
                 Log.w("CameraLauncher", "无法获取相机照片或 URI 为空")
-                tempCameraImageUri = null
             }
-            showImageSelectionPanel = false // Close panel
+            tempCameraImageUri?.let { uri ->
+                context.contentResolver.delete(uri, null, null)
+            }
+            tempCameraImageUri = null
+            showImageSelectionPanel = false
         }
     val cameraPermissionLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
@@ -339,7 +341,6 @@ fun ChatInputArea(
                 onSendMessageRequest(messageToSend, false, selectedMediaItems.toList())
                 pendingMessageTextForSend = null
                 if (text == messageToSend) onTextChange("")
-                onClearMediaItems()
             }
     }
     var chatInputContentHeightPx by remember { mutableIntStateOf(0) }
@@ -459,7 +460,6 @@ fun ChatInputArea(
                                         selectedMediaItems.toList()
                                     )
                                     onTextChange("")
-                                    onClearMediaItems()
                                 }
                             } else if (selectedApiConfig == null) {
                                 Log.w("SendMessage", "请先选择 API 配置")

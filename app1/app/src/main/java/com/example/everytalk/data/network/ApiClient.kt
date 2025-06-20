@@ -120,79 +120,60 @@ object ApiClient {
                         }
                     )
 
-                    val hasInlineData = chatRequest.messages.any { msg ->
-                        (msg as? com.example.everytalk.data.DataClass.PartsApiMessage)?.parts?.any { part ->
-                            part is com.example.everytalk.data.DataClass.ApiContentPart.InlineData
-                        } == true
-                    }
+                    attachmentsToUpload.forEachIndexed { index, mediaItem ->
+                        val fileUri: Uri?
+                        val originalFileNameFromMediaItem: String
+                        val mimeTypeFromMediaItem: String?
 
-                    if (attachmentsToUpload.isNotEmpty() || hasInlineData) {
-                        if (attachmentsToUpload.isEmpty()) {
-                            append(
-                                key = "uploaded_documents",
-                                value = ByteArray(0),
-                                headers = Headers.build {
-                                    append(HttpHeaders.ContentDisposition, "filename=\"placeholder.bin\"")
-                                    append(HttpHeaders.ContentType, ContentType.Application.OctetStream)
-                                }
-                            )
-                        } else {
-                            attachmentsToUpload.forEachIndexed { index, mediaItem ->
-                                val fileUri: Uri?
-                                val originalFileNameFromMediaItem: String
-                                val mimeTypeFromMediaItem: String?
+                        when (mediaItem) {
+                            is SelectedMediaItem.ImageFromUri -> {
+                                fileUri = mediaItem.uri
+                                originalFileNameFromMediaItem =
+                                    getFileNameFromUri(applicationContext, mediaItem.uri)
+                                mimeTypeFromMediaItem =
+                                    applicationContext.contentResolver.getType(mediaItem.uri)
+                            }
 
-                                when (mediaItem) {
-                                    is SelectedMediaItem.ImageFromUri -> {
-                                        fileUri = mediaItem.uri
-                                        originalFileNameFromMediaItem =
-                                            getFileNameFromUri(applicationContext, mediaItem.uri)
-                                        mimeTypeFromMediaItem =
-                                            applicationContext.contentResolver.getType(mediaItem.uri)
-                                    }
+                            is SelectedMediaItem.GenericFile -> {
+                                fileUri = mediaItem.uri
+                                originalFileNameFromMediaItem =
+                                    mediaItem.displayName ?: getFileNameFromUri(
+                                        applicationContext,
+                                        mediaItem.uri
+                                    )
+                                mimeTypeFromMediaItem = mediaItem.mimeType
+                                    ?: applicationContext.contentResolver.getType(mediaItem.uri)
+                            }
 
-                                    is SelectedMediaItem.GenericFile -> {
-                                        fileUri = mediaItem.uri
-                                        originalFileNameFromMediaItem =
-                                            mediaItem.displayName ?: getFileNameFromUri(
-                                                applicationContext,
-                                                mediaItem.uri
-                                            )
-                                        mimeTypeFromMediaItem = mediaItem.mimeType
-                                            ?: applicationContext.contentResolver.getType(mediaItem.uri)
-                                    }
+                            is SelectedMediaItem.ImageFromBitmap -> {
+                                fileUri = null
+                                originalFileNameFromMediaItem =
+                                    "bitmap_image_$index.${if (mediaItem.bitmap.hasAlpha()) "png" else "jpeg"}"
+                                mimeTypeFromMediaItem =
+                                    if (mediaItem.bitmap.hasAlpha()) ContentType.Image.PNG.toString() else ContentType.Image.JPEG.toString()
+                            }
+                        }
 
-                                    is SelectedMediaItem.ImageFromBitmap -> {
-                                        fileUri = null
-                                        originalFileNameFromMediaItem =
-                                            "bitmap_image_$index.${if (mediaItem.bitmap.hasAlpha()) "png" else "jpeg"}"
-                                        mimeTypeFromMediaItem =
-                                            if (mediaItem.bitmap.hasAlpha()) ContentType.Image.PNG.toString() else ContentType.Image.JPEG.toString()
-                                    }
-                                }
-
-                                if (fileUri != null) {
-                                    val finalMimeType = mimeTypeFromMediaItem
-                                        ?: ContentType.Application.OctetStream.toString()
-                                    try {
-                                        applicationContext.contentResolver.openInputStream(fileUri)
-                                            ?.use { inputStream ->
-                                                val fileBytes = inputStream.readBytes()
+                        if (fileUri != null) {
+                            val finalMimeType = mimeTypeFromMediaItem
+                                ?: ContentType.Application.OctetStream.toString()
+                            try {
+                                applicationContext.contentResolver.openInputStream(fileUri)
+                                    ?.use { inputStream ->
+                                        val fileBytes = inputStream.readBytes()
+                                        append(
+                                            key = "uploaded_documents",
+                                            value = fileBytes,
+                                            headers = Headers.build {
                                                 append(
-                                                    key = "uploaded_documents",
-                                                    value = fileBytes,
-                                                    headers = Headers.build {
-                                                        append(
-                                                            HttpHeaders.ContentDisposition,
-                                                            "filename=\"$originalFileNameFromMediaItem\""
-                                                        )
-                                                        append(HttpHeaders.ContentType, finalMimeType)
-                                                    }
+                                                    HttpHeaders.ContentDisposition,
+                                                    "filename=\"$originalFileNameFromMediaItem\""
                                                 )
+                                                append(HttpHeaders.ContentType, finalMimeType)
                                             }
-                                    } catch (e: Exception) {
+                                        )
                                     }
-                                }
+                            } catch (e: Exception) {
                             }
                         }
                     }
@@ -348,14 +329,12 @@ object ApiClient {
                         streamChatResponseInternal(url, request, attachments, applicationContext)
                             .collect { event ->
                                 if (winnerFound.compareAndSet(false, true)) {
-                                    // We are the winner, cancel other jobs
                                     jobs.forEach {
                                         if (it != coroutineContext[Job]) {
                                             it.cancel(CoroutineCancellationException("Another stream responded faster."))
                                         }
                                     }
                                 }
-                                // Only the winner will proceed to send events
                                 send(event)
                             }
                     } catch (e: Exception) {
@@ -370,13 +349,10 @@ object ApiClient {
             }
         }
 
-        // After supervisorScope, all jobs are complete (successfully, failed, or cancelled)
         if (!winnerFound.get()) {
             if (errors.isNotEmpty()) {
                 throw errors.last()
             } else {
-                // This can happen if all requests are cancelled before producing anything,
-                // or if there are no URLs. The empty check is at the top.
                 throw IOException("无法连接到任何可用的后端服务器，且没有报告具体错误。")
             }
         }

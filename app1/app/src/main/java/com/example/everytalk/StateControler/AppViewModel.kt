@@ -378,9 +378,6 @@ class AppViewModel(
         attachments: List<SelectedMediaItem> = emptyList()
     ) {
         messageSender.sendMessage(messageText, isFromRegeneration, attachments)
-        if (attachments.isNotEmpty()) {
-            clearMediaItems()
-        }
     }
 
     fun addMediaItem(item: SelectedMediaItem) {
@@ -461,7 +458,15 @@ class AppViewModel(
         val originalUserMessageText = messageToRegenerateFrom.text
         val originalUserMessageId = messageToRegenerateFrom.id
 
-        val originalAttachments = messageToRegenerateFrom.attachments ?: emptyList()
+        val originalAttachments = messageToRegenerateFrom.attachments?.mapNotNull {
+            // We need to create new instances with new UUIDs because the underlying LazyColumn uses the ID as a key.
+            // If we reuse the same ID, Compose might not recompose the item correctly.
+            when (it) {
+                is SelectedMediaItem.ImageFromUri -> it.copy(id = UUID.randomUUID().toString())
+                is SelectedMediaItem.GenericFile -> it.copy(id = UUID.randomUUID().toString())
+                is SelectedMediaItem.ImageFromBitmap -> it.copy(id = UUID.randomUUID().toString())
+            }
+        } ?: emptyList()
 
         viewModelScope.launch {
             val success = withContext(Dispatchers.Default) {
@@ -881,8 +886,9 @@ fun updateConfigGroup(representativeConfig: ApiConfig, newAddress: String, newKe
     fun importSettings(jsonContent: String) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                val gson = Gson()
                 val type = object : TypeToken<ExportedSettings>() {}.type
-                val importedSettings: ExportedSettings = Gson().fromJson(jsonContent, type)
+                val importedSettings = gson.fromJson<ExportedSettings>(jsonContent, type)
 
                 // Basic validation
                 if (importedSettings.apiConfigs.any { it.id.isBlank() || it.provider.isBlank() }) {

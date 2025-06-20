@@ -39,26 +39,28 @@ enum class MoreOptionsType(val label: String, val icon: ImageVector, val mimeTyp
 @Serializable
 sealed class SelectedMediaItem {
     abstract val id: String
-
+ 
     @Serializable
     data class ImageFromUri(
         @Serializable(with = com.example.everytalk.util.UriSerializer::class)
         val uri: Uri,
-        override val id: String = uri.toString()
+        val filePath: String? = null,
+        override val id: String = UUID.randomUUID().toString()
     ) : SelectedMediaItem()
-
+ 
     @Serializable
     data class ImageFromBitmap(
         @Contextual val bitmap: Bitmap,
         override val id: String = "bitmap_${UUID.randomUUID()}"
     ) : SelectedMediaItem()
-
+ 
     @Serializable
     data class GenericFile(
         @Serializable(with = com.example.everytalk.util.UriSerializer::class)
         val uri: Uri,
         val displayName: String,
         val mimeType: String?,
-        override val id: String = uri.toString()
+        val filePath: String? = null,
+        override val id: String = UUID.randomUUID().toString()
     ) : SelectedMediaItem()
 }

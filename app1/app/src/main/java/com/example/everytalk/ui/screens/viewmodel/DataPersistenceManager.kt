@@ -222,89 +222,64 @@ class DataPersistenceManager(
         withContext(Dispatchers.IO) {
             Log.d(TAG, "Starting deletion of media files for ${conversations.size} conversations.")
             var deletedFilesCount = 0
+            val allFilePathsToDelete = mutableSetOf<String>()
+            val allHttpUrisToClearFromCache = mutableSetOf<String>()
+ 
             conversations.forEach { conversation ->
                 conversation.forEach { message ->
-                    val urisToDelete = mutableSetOf<Uri>()
-
-                    // Collect URIs from attachments
+                    // Collect file paths from attachments
                     message.attachments?.forEach { attachment ->
-                        when (attachment) {
-                            is SelectedMediaItem.ImageFromUri -> urisToDelete.add(attachment.uri)
-                            is SelectedMediaItem.GenericFile -> urisToDelete.add(attachment.uri)
-                            is SelectedMediaItem.ImageFromBitmap -> { /* In-memory, no file to delete */ }
+                        val path = when (attachment) {
+                            is SelectedMediaItem.ImageFromUri -> attachment.filePath
+                            is SelectedMediaItem.GenericFile -> attachment.filePath
+                            else -> null
+                        }
+                        if (!path.isNullOrBlank()) {
+                            allFilePathsToDelete.add(path)
                         }
                     }
-
-                    // Collect URIs from imageUrls
+ 
+                    // Collect http(s) urls from imageUrls to clear from cache
                     message.imageUrls?.forEach { urlString ->
                         try {
-                            urisToDelete.add(Uri.parse(urlString))
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Error parsing URI from imageUrls: $urlString", e)
-                        }
-                    }
-
-                    // Delete all collected unique URIs
-                    urisToDelete.forEach { uri ->
-                        try {
-                            val authority = "${context.packageName}.provider"
-                            if (uri.scheme == "content" && uri.authority == authority) {
-                                // Handle FileProvider URI specifically
-                                val file = File(context.filesDir, uri.path?.substring(1) ?: "")
-                                if (file.exists()) {
-                                    if (file.delete()) {
-                                        Log.d(TAG, "Successfully deleted app-private file: $uri")
-                                        deletedFilesCount++
-                                    } else {
-                                        Log.w(TAG, "Failed to delete app-private file: $uri")
-                                    }
-                                } else {
-                                    Log.w(TAG, "App-private file to delete does not exist: $uri")
-                                }
-                            } else {
-                                // Original logic for other URIs
-                                when (uri.scheme) {
-                                    "file" -> {
-                                        val file = uri.path?.let { File(it) }
-                                        if (file?.exists() == true) {
-                                            if (file.delete()) {
-                                                Log.d(TAG, "Successfully deleted local file: $uri")
-                                                deletedFilesCount++
-                                            } else {
-                                                Log.w(TAG, "Failed to delete local file: $uri")
-                                            }
-                                        } else {
-                                            Log.w(TAG, "Local file to delete does not exist: $uri")
-                                        }
-                                    }
-                                    "content" -> {
-                                        // This will now mostly handle non-FileProvider content URIs
-                                        val rowsDeleted = context.contentResolver.delete(uri, null, null)
-                                        if (rowsDeleted > 0) {
-                                            Log.d(TAG, "Successfully deleted media via ContentResolver: $uri")
-                                            deletedFilesCount++
-                                        } else {
-                                            Log.w(TAG, "ContentResolver did not delete media, or it did not exist: $uri")
-                                        }
-                                    }
-                                    "http", "https" -> {
-                                        imageLoader.diskCache?.remove(uri.toString())
-                                        Log.d(TAG, "Successfully removed image from cache: $uri")
-                                        deletedFilesCount++
-                                    }
-                                    else -> {
-                                        Log.w(TAG, "Unsupported URI scheme for deletion: ${uri.scheme}")
-                                    }
-                                }
+                            val uri = Uri.parse(urlString)
+                            if (uri.scheme == "http" || uri.scheme == "https") {
+                                allHttpUrisToClearFromCache.add(urlString)
                             }
-                        } catch (e: SecurityException) {
-                            Log.e(TAG, "Security exception deleting media file: $uri", e)
                         } catch (e: Exception) {
-                            Log.e(TAG, "Error deleting media file: $uri", e)
+                            // Ignore parsing errors
                         }
                     }
                 }
             }
+ 
+            // Delete all collected unique file paths
+            allFilePathsToDelete.forEach { path ->
+                try {
+                    val file = File(path)
+                    if (file.exists()) {
+                        if (file.delete()) {
+                            Log.d(TAG, "Successfully deleted media file: $path")
+                            deletedFilesCount++
+                        } else {
+                            Log.w(TAG, "Failed to delete media file: $path")
+                        }
+                    } else {
+                        Log.w(TAG, "Media file to delete does not exist: $path")
+                    }
+                } catch (e: SecurityException) {
+                    Log.e(TAG, "Security exception deleting media file: $path", e)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error deleting media file: $path", e)
+                }
+            }
+ 
+            // Clear http(s) images from cache
+            allHttpUrisToClearFromCache.forEach { url ->
+                imageLoader.diskCache?.remove(url)
+                Log.d(TAG, "Removed image from cache: $url")
+            }
+ 
             Log.d(TAG, "Finished media file deletion. Total files deleted: $deletedFilesCount")
         }
     }

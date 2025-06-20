@@ -265,82 +265,249 @@ internal fun UserOrErrorMessageContent(
 fun AttachmentsContent(
     attachments: List<SelectedMediaItem>,
     onAttachmentClick: (SelectedMediaItem) -> Unit,
-    maxWidth: Dp
+    maxWidth: Dp,
+    message: Message,
+    onUserInteraction: () -> Unit,
+    onEditRequest: (Message) -> Unit,
+    onRegenerateRequest: (Message) -> Unit
 ) {
     val context = LocalContext.current
-    Column(
-        modifier = Modifier.padding(top = 8.dp),
-        horizontalAlignment = Alignment.End
-    ) {
-        attachments.forEach { attachment ->
-            when (attachment) {
-                is SelectedMediaItem.ImageFromUri -> {
-                    AsyncImage(
-                        model = attachment.uri,
-                        imageLoader = com.example.everytalk.util.AppImageLoader.get(context),
-                        contentDescription = "Image attachment",
-                        modifier = Modifier
-                            .widthIn(max = maxWidth * 0.8f)
-                            .padding(vertical = 4.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .pointerInput(Unit) {
-                                detectTapGestures(
-                                    onTap = {
-                                        val intent = Intent(Intent.ACTION_VIEW).apply {
-                                            setDataAndType(attachment.uri, "image/*")
-                                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                        }
-                                        context.startActivity(intent)
-                                    },
-                                    onLongPress = {
-                                        // Handle long press, e.g., show a context menu to save the image
-                                    }
-                                )
-                            }
-                    )
-                }
-                is SelectedMediaItem.ImageFromBitmap -> {
-                    AsyncImage(
-                        model = attachment.bitmap,
-                        imageLoader = com.example.everytalk.util.AppImageLoader.get(context),
-                        contentDescription = "Image attachment",
-                        modifier = Modifier
-                            .widthIn(max = maxWidth * 0.8f)
-                            .padding(vertical = 4.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .pointerInput(Unit) {
-                                detectTapGestures(
-                                    onTap = { onAttachmentClick(attachment) },
-                                    onLongPress = {
-                                        // Handle long press, e.g., show a context menu to save the image
-                                    }
-                                )
-                            }
-                    )
-                }
-                is SelectedMediaItem.GenericFile -> {
-                    Row(
-                        modifier = Modifier
-                            .widthIn(max = maxWidth)
-                            .padding(vertical = 4.dp)
-                            .background(Color(0xFFF0F0F0), RoundedCornerShape(12.dp))
-                            .clickable {
-                                val intent = Intent(Intent.ACTION_VIEW).apply {
-                                    setDataAndType(attachment.uri, attachment.mimeType)
-                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    var isContextMenuVisible by remember(message.id) { mutableStateOf(false) }
+    var pressOffset by remember(message.id) { mutableStateOf(Offset.Zero) }
+    val density = LocalDensity.current
+    val clipboardManager = LocalClipboardManager.current
+    val haptic = LocalHapticFeedback.current
+
+    val onLongPressHandler = { offset: Offset ->
+        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+        onUserInteraction()
+        pressOffset = offset
+        isContextMenuVisible = true
+    }
+
+    Box {
+        Column(
+            modifier = Modifier.padding(top = 8.dp),
+            horizontalAlignment = Alignment.End
+        ) {
+            attachments.forEach { attachment ->
+                when (attachment) {
+                    is SelectedMediaItem.ImageFromUri -> {
+                        AsyncImage(
+                            model = attachment.uri,
+                            imageLoader = com.example.everytalk.util.AppImageLoader.get(context),
+                            contentDescription = "Image attachment",
+                            modifier = Modifier
+                                .widthIn(max = maxWidth * 0.8f)
+                                .padding(vertical = 4.dp)
+                                .clip(RoundedCornerShape(16.dp))
+                                .pointerInput(message.id) {
+                                    detectTapGestures(
+                                        onTap = {
+                                            val intent = Intent(Intent.ACTION_VIEW).apply {
+                                                setDataAndType(attachment.uri, "image/*")
+                                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                            }
+                                            context.startActivity(intent)
+                                        },
+                                        onLongPress = onLongPressHandler
+                                    )
                                 }
-                                context.startActivity(intent)
-                            }
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.ContentCopy, // Replace with appropriate icon
-                            contentDescription = "Attachment",
-                            modifier = Modifier.size(24.dp)
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(text = attachment.displayName, style = MaterialTheme.typography.bodyMedium)
+                    }
+                    is SelectedMediaItem.ImageFromBitmap -> {
+                        AsyncImage(
+                            model = attachment.bitmap,
+                            imageLoader = com.example.everytalk.util.AppImageLoader.get(context),
+                            contentDescription = "Image attachment",
+                            modifier = Modifier
+                                .widthIn(max = maxWidth * 0.8f)
+                                .padding(vertical = 4.dp)
+                                .clip(RoundedCornerShape(16.dp))
+                                .pointerInput(message.id) {
+                                    detectTapGestures(
+                                        onTap = { onAttachmentClick(attachment) },
+                                        onLongPress = onLongPressHandler
+                                    )
+                                }
+                        )
+                    }
+                    is SelectedMediaItem.GenericFile -> {
+                        Row(
+                            modifier = Modifier
+                                .widthIn(max = maxWidth)
+                                .padding(vertical = 4.dp)
+                                .background(Color(0xFFF0F0F0), RoundedCornerShape(12.dp))
+                                .clip(RoundedCornerShape(12.dp))
+                                .pointerInput(message.id) {
+                                    detectTapGestures(
+                                        onTap = {
+                                            val intent = Intent(Intent.ACTION_VIEW).apply {
+                                                setDataAndType(
+                                                    attachment.uri,
+                                                    attachment.mimeType
+                                                )
+                                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                            }
+                                            context.startActivity(intent)
+                                        },
+                                        onLongPress = onLongPressHandler
+                                    )
+                                }
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ContentCopy, // Replace with appropriate icon
+                                contentDescription = "Attachment",
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = attachment.displayName,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        if (isContextMenuVisible) {
+            val dropdownMenuOffsetX =
+                with(density) { pressOffset.x.toDp() } + CONTEXT_MENU_FINE_TUNE_OFFSET_X
+            val dropdownMenuOffsetY =
+                with(density) { pressOffset.y.toDp() } + CONTEXT_MENU_FINE_TUNE_OFFSET_Y
+
+            Popup(
+                alignment = Alignment.TopStart,
+                offset = IntOffset(
+                    x = with(density) { dropdownMenuOffsetX.roundToPx() },
+                    y = with(density) { dropdownMenuOffsetY.roundToPx() }),
+                onDismissRequest = { isContextMenuVisible = false },
+                properties = PopupProperties(
+                    focusable = true,
+                    dismissOnBackPress = true,
+                    dismissOnClickOutside = true,
+                    clippingEnabled = false
+                )
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS),
+                    color = Color.White,
+                    tonalElevation = 0.dp,
+                    modifier = Modifier
+                        .width(CONTEXT_MENU_FIXED_WIDTH)
+                        .shadow(
+                            elevation = 8.dp,
+                            shape = RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS)
+                        )
+                        .padding(1.dp)
+                ) {
+                    Column {
+                        val menuVisibility =
+                            remember { MutableTransitionState(false) }
+                        LaunchedEffect(isContextMenuVisible) {
+                            menuVisibility.targetState = isContextMenuVisible
+                        }
+
+                        @Composable
+                        fun AnimatedDropdownMenuItem(
+                            visibleState: MutableTransitionState<Boolean>,
+                            delay: Int = 0,
+                            text: @Composable () -> Unit,
+                            onClick: () -> Unit,
+                            leadingIcon: @Composable (() -> Unit)? = null
+                        ) {
+                            AnimatedVisibility(
+                                visibleState = visibleState,
+                                enter = fadeIn(
+                                    animationSpec = tween(
+                                        CONTEXT_MENU_ANIMATION_DURATION_MS,
+                                        delayMillis = delay,
+                                        easing = LinearOutSlowInEasing
+                                    )
+                                ) +
+                                        scaleIn(
+                                            animationSpec = tween(
+                                                CONTEXT_MENU_ANIMATION_DURATION_MS,
+                                                delayMillis = delay,
+                                                easing = LinearOutSlowInEasing
+                                            ), transformOrigin = TransformOrigin(0f, 0f)
+                                        ),
+                                exit = fadeOut(
+                                    animationSpec = tween(
+                                        CONTEXT_MENU_ANIMATION_DURATION_MS,
+                                        easing = FastOutLinearInEasing
+                                    )
+                                ) +
+                                        scaleOut(
+                                            animationSpec = tween(
+                                                CONTEXT_MENU_ANIMATION_DURATION_MS,
+                                                easing = FastOutLinearInEasing
+                                            ), transformOrigin = TransformOrigin(0f, 0f)
+                                        )
+                            ) {
+                                DropdownMenuItem(
+                                    text = text, onClick = onClick, leadingIcon = leadingIcon,
+                                    colors = MenuDefaults.itemColors(
+                                        textColor = MaterialTheme.colorScheme.onSurface,
+                                        leadingIconColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                )
+                            }
+                        }
+
+                        if (message.text.isNotBlank()) {
+                            AnimatedDropdownMenuItem(
+                                menuVisibility,
+                                text = { Text("复制") },
+                                onClick = {
+                                    clipboardManager.setText(AnnotatedString(message.text))
+                                    Toast.makeText(context, "内容已复制", Toast.LENGTH_SHORT).show()
+                                    isContextMenuVisible = false
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Filled.ContentCopy,
+                                        "复制",
+                                        Modifier.size(CONTEXT_MENU_ITEM_ICON_SIZE)
+                                    )
+                                })
+                        }
+
+
+                        AnimatedDropdownMenuItem(
+                            menuVisibility,
+                            delay = 30,
+                            text = { Text("编辑") },
+                            onClick = {
+                                onEditRequest(message)
+                                isContextMenuVisible = false
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Filled.Edit,
+                                    "编辑",
+                                    Modifier.size(CONTEXT_MENU_ITEM_ICON_SIZE)
+                                )
+                            })
+
+                        AnimatedDropdownMenuItem(
+                            menuVisibility,
+                            delay = 60,
+                            text = { Text("重新回答") },
+                            onClick = {
+                                onRegenerateRequest(message)
+                                isContextMenuVisible = false
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Filled.Refresh,
+                                    "重新回答",
+                                    Modifier.size(CONTEXT_MENU_ITEM_ICON_SIZE)
+                                )
+                            })
                     }
                 }
             }

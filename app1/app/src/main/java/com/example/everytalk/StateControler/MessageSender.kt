@@ -31,7 +31,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
- 
+
 private data class AttachmentProcessingResult(
     val success: Boolean,
     val processedAttachmentsForUi: List<SelectedMediaItem> = emptyList(),
@@ -58,10 +58,10 @@ private data class AttachmentProcessingResult(
 
     private suspend fun loadAndCompressBitmapFromUri(context: Context, uri: Uri): Bitmap? {
         return withContext(Dispatchers.IO) {
+            var bitmap: Bitmap? = null
             try {
                 if (uri == Uri.EMPTY) return@withContext null
 
-                // First, decode with inJustDecodeBounds=true to check dimensions
                 val options = BitmapFactory.Options().apply {
                     inJustDecodeBounds = true
                 }
@@ -69,23 +69,20 @@ private data class AttachmentProcessingResult(
                     BitmapFactory.decodeStream(it, null, options)
                 }
 
-                // Calculate inSampleSize
                 options.inSampleSize = calculateInSampleSize(options, TARGET_IMAGE_WIDTH, TARGET_IMAGE_HEIGHT)
 
-                // Decode bitmap with inSampleSize set
                 options.inJustDecodeBounds = false
-                options.inMutable = true // Make it mutable for further scaling if needed
+                options.inMutable = true
 
-                var bitmap = context.contentResolver.openInputStream(uri)?.use {
+                bitmap = context.contentResolver.openInputStream(uri)?.use {
                     BitmapFactory.decodeStream(it, null, options)
                 }
 
-                // Ensure the bitmap is scaled down if it's still too large
-                if (bitmap != null && (bitmap.width > TARGET_IMAGE_WIDTH || bitmap.height > TARGET_IMAGE_HEIGHT)) {
-                    val aspectRatio = bitmap.width.toFloat() / bitmap.height.toFloat()
+                if (bitmap != null && (bitmap!!.width > TARGET_IMAGE_WIDTH || bitmap!!.height > TARGET_IMAGE_HEIGHT)) {
+                    val aspectRatio = bitmap!!.width.toFloat() / bitmap!!.height.toFloat()
                     val newWidth: Int
                     val newHeight: Int
-                    if (bitmap.width > bitmap.height) {
+                    if (bitmap!!.width > bitmap!!.height) {
                         newWidth = TARGET_IMAGE_WIDTH
                         newHeight = (newWidth / aspectRatio).toInt()
                     } else {
@@ -93,15 +90,16 @@ private data class AttachmentProcessingResult(
                         newWidth = (newHeight * aspectRatio).toInt()
                     }
                     if (newWidth > 0 && newHeight > 0) {
-                        val scaledBitmap = Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)
+                        val scaledBitmap = Bitmap.createScaledBitmap(bitmap!!, newWidth, newHeight, true)
                         if (scaledBitmap != bitmap) {
-                            bitmap.recycle()
+                            bitmap?.recycle()
                         }
                         bitmap = scaledBitmap
                     }
                 }
                 bitmap
             } catch (e: Exception) {
+                bitmap?.recycle()
                 null
             }
         }
@@ -164,8 +162,7 @@ private data class AttachmentProcessingResult(
                     return@withContext null
                 }
 
-                val authority = "${context.packageName}.provider"
-                FileProvider.getUriForFile(context, authority, destinationFile).toString()
+                destinationFile.absolutePath
             } catch (e: Exception) {
                 null
             }
@@ -180,22 +177,23 @@ private data class AttachmentProcessingResult(
         originalFileNameHint: String? = null
     ): String? {
         return withContext(Dispatchers.IO) {
-            var processedBitmap = bitmapToSave
             try {
-                if (processedBitmap.isRecycled) {
+                if (bitmapToSave.isRecycled) {
                     return@withContext null
                 }
 
-
                 val outputStream = ByteArrayOutputStream()
                 val fileExtension: String
-                val compressFormat = if (processedBitmap.hasAlpha()) {
+                val compressFormat = if (bitmapToSave.hasAlpha()) {
                     fileExtension = "png"; Bitmap.CompressFormat.PNG
                 } else {
                     fileExtension = "jpg"; Bitmap.CompressFormat.JPEG
                 }
-                processedBitmap.compress(compressFormat, JPEG_COMPRESSION_QUALITY, outputStream)
+                bitmapToSave.compress(compressFormat, JPEG_COMPRESSION_QUALITY, outputStream)
                 val bytes = outputStream.toByteArray()
+                if (!bitmapToSave.isRecycled) {
+                    bitmapToSave.recycle()
+                }
 
                 val timeStamp: String =
                     SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
@@ -218,9 +216,11 @@ private data class AttachmentProcessingResult(
                     if (destinationFile.exists()) destinationFile.delete()
                     return@withContext null
                 }
-                val authority = "${context.packageName}.provider"
-                FileProvider.getUriForFile(context, authority, destinationFile).toString()
+                destinationFile.absolutePath
             } catch (e: Exception) {
+                if (!bitmapToSave.isRecycled) {
+                    bitmapToSave.recycle()
+                }
                 null
             }
         }
@@ -244,8 +244,10 @@ private data class AttachmentProcessingResult(
         val imageUriStringsForUi = mutableListOf<String>()
         val apiContentParts = mutableListOf<ApiContentPart>()
 
-        if (shouldUsePartsApiMessage && textToActuallySend.isNotBlank()) {
-            apiContentParts.add(ApiContentPart.Text(text = textToActuallySend))
+        if (shouldUsePartsApiMessage) {
+            if (textToActuallySend.isNotBlank() || attachments.isNotEmpty()) {
+                apiContentParts.add(ApiContentPart.Text(text = textToActuallySend))
+            }
         }
 
         val tempMessageIdForNaming = UUID.randomUUID().toString().take(8)
@@ -260,7 +262,7 @@ private data class AttachmentProcessingResult(
                 ?: (originalMediaItem as? SelectedMediaItem.GenericFile)?.displayName
                 ?: (if (originalMediaItem is SelectedMediaItem.ImageFromBitmap) "camera_shot" else "attachment")
 
-            val persistentUriStr: String? = when (originalMediaItem) {
+            val persistentFilePath: String? = when (originalMediaItem) {
                 is SelectedMediaItem.ImageFromUri -> {
                     val bitmap = loadAndCompressBitmapFromUri(application, originalMediaItem.uri)
                     if (bitmap != null) {
@@ -278,22 +280,25 @@ private data class AttachmentProcessingResult(
                 }
             }
 
-            if (persistentUriStr == null) {
+            if (persistentFilePath == null) {
                 showSnackbar("无法处理附件: $originalFileNameForHint")
                 return@withContext AttachmentProcessingResult(success = false)
             }
 
-            val persistentFileProviderUri = Uri.parse(persistentUriStr)
+            val persistentFile = File(persistentFilePath)
+            val authority = "${application.packageName}.provider"
+            val persistentFileProviderUri = FileProvider.getUriForFile(application, authority, persistentFile)
+
             val processedItemForUi: SelectedMediaItem = when (originalMediaItem) {
                 is SelectedMediaItem.ImageFromUri, is SelectedMediaItem.ImageFromBitmap -> {
-                    imageUriStringsForUi.add(persistentUriStr)
-                    SelectedMediaItem.ImageFromUri(persistentFileProviderUri, originalMediaItem.id)
+                    imageUriStringsForUi.add(persistentFileProviderUri.toString())
+                    SelectedMediaItem.ImageFromUri(persistentFileProviderUri, persistentFilePath)
                 }
                 is SelectedMediaItem.GenericFile -> SelectedMediaItem.GenericFile(
                     uri = persistentFileProviderUri,
                     displayName = originalMediaItem.displayName,
                     mimeType = originalMediaItem.mimeType,
-                    id = originalMediaItem.id
+                    filePath = persistentFilePath
                 )
             }
             processedAttachmentsForUi.add(processedItemForUi)
@@ -316,13 +321,12 @@ private data class AttachmentProcessingResult(
                                 apiContentParts.add(ApiContentPart.InlineData(Base64.encodeToString(bytes, Base64.NO_WRAP), mimeTypeForApi))
                             }
                         } else {
-                            apiContentParts.add(ApiContentPart.FileUri(uri = persistentUriStr, mimeType = mimeTypeForApi))
+                            apiContentParts.add(ApiContentPart.FileUri(uri = persistentFileProviderUri.toString(), mimeType = mimeTypeForApi))
                         }
                     } else if (processedItemForUi is SelectedMediaItem.GenericFile) {
-                        apiContentParts.add(ApiContentPart.FileUri(uri = persistentUriStr, mimeType = mimeTypeForApi))
+                        apiContentParts.add(ApiContentPart.FileUri(uri = persistentFileProviderUri.toString(), mimeType = mimeTypeForApi))
                     }
                 } catch (e: Exception) {
-                    // Ignore and proceed, the attachment might not be critical for the API call
                 }
             }
         }
@@ -352,11 +356,14 @@ private data class AttachmentProcessingResult(
 
             val attachmentResult = processAttachments(attachments, shouldUsePartsApiMessage, textToActuallySend)
             if (!attachmentResult.success) {
-                return@launch // Abort sending if attachment processing failed
+                return@launch
             }
 
-            val attachmentsForApiClient = attachments.toList()
-            val apiContentPartsForCurrentUserMessage = attachmentResult.apiContentParts
+            val attachmentsForApiClient = if (shouldUsePartsApiMessage) {
+                emptyList()
+            } else {
+                attachments.toList()
+            }
 
             val newUserMessageForUi = UiMessage(
                 id = "user_${UUID.randomUUID()}", text = textToActuallySend, sender = UiSender.User,
@@ -368,8 +375,10 @@ private data class AttachmentProcessingResult(
             withContext(Dispatchers.Main.immediate) {
                 stateHolder.messageAnimationStates[newUserMessageForUi.id] = true
                 stateHolder.messages.add(newUserMessageForUi)
-                if (!isFromRegeneration) stateHolder._text.value = ""
-                stateHolder.clearSelectedMedia()
+                if (!isFromRegeneration) {
+                   stateHolder._text.value = ""
+                   stateHolder.clearSelectedMedia()
+                }
                 triggerScrollToBottom()
             }
 
@@ -393,16 +402,39 @@ private data class AttachmentProcessingResult(
                         UiSender.System -> "system"
                         UiSender.Tool -> "tool"
                     }
-                    if (uiMsg.text.isNotBlank()) {
-                        if (shouldUsePartsApiMessage) {
-                            apiMessagesForBackend.add(
-                                0,
-                                PartsApiMessage(
-                                    role = roleForHistory,
-                                    parts = listOf(ApiContentPart.Text(text = uiMsg.text.trim()))
-                                )
-                            )
-                        } else {
+
+                    val hasContent = uiMsg.text.isNotBlank() || !uiMsg.attachments.isNullOrEmpty()
+                    if (!hasContent) continue
+
+                    if (shouldUsePartsApiMessage) {
+                        val parts = mutableListOf<ApiContentPart>()
+                        if (uiMsg.text.isNotBlank()) {
+                            parts.add(ApiContentPart.Text(text = uiMsg.text.trim()))
+                        }
+                        uiMsg.attachments?.forEach { attachment ->
+                            if (attachment is SelectedMediaItem.ImageFromUri) {
+                                try {
+                                    application.contentResolver.openInputStream(attachment.uri)?.use { inputStream ->
+                                        val bytes = inputStream.readBytes()
+                                        if (bytes.isNotEmpty() && bytes.size <= MAX_IMAGE_SIZE_BYTES) {
+                                            val mimeType = application.contentResolver.getType(attachment.uri) ?: "image/jpeg"
+                                            val supportedImageMimesForGemini = listOf("image/png", "image/jpeg", "image/webp", "image/heic", "image/heif")
+                                            if (mimeType.lowercase() in supportedImageMimesForGemini) {
+                                                parts.add(ApiContentPart.InlineData(Base64.encodeToString(bytes, Base64.NO_WRAP), mimeType))
+                                            }
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                }
+                            }
+                        }
+
+                        if (parts.isNotEmpty()) {
+                            apiMessagesForBackend.add(0, PartsApiMessage(role = roleForHistory, parts = parts))
+                            historyMessageCount++
+                        }
+                    } else {
+                        if (uiMsg.text.isNotBlank()) {
                             apiMessagesForBackend.add(
                                 0,
                                 SimpleTextApiMessage(
@@ -410,53 +442,23 @@ private data class AttachmentProcessingResult(
                                     content = uiMsg.text.trim()
                                 )
                             )
+                            historyMessageCount++
                         }
-                        historyMessageCount++
                     }
                 }
 
                 if (shouldUsePartsApiMessage) {
-                    if (apiContentPartsForCurrentUserMessage.isNotEmpty()) {
-                        apiMessagesForBackend.add(
-                            PartsApiMessage(
-                                role = "user",
-                                parts = apiContentPartsForCurrentUserMessage
-                            )
-                        )
-                    } else if (textToActuallySend.isNotBlank()) {
-                        apiMessagesForBackend.add(
-                            PartsApiMessage(
-                                role = "user",
-                                parts = listOf(ApiContentPart.Text(text = textToActuallySend))
-                            )
-                        )
-                    } else if (attachments.isNotEmpty() && attachmentResult.processedAttachmentsForUi.isEmpty()) {
-                        apiMessagesForBackend.add(
-                            PartsApiMessage(
-                                role = "user",
-                                parts = listOf(ApiContentPart.Text(text = ""))
-                            )
-                        )
-                    } else if (textToActuallySend.isBlank() && attachments.isEmpty()) {
-                        withContext(Dispatchers.Main.immediate) {
-                            stateHolder.messages.remove(newUserMessageForUi)
-                            stateHolder.messageAnimationStates.remove(newUserMessageForUi.id)
-                        }
-                        return@withContext
+                    val currentUserParts = attachmentResult.apiContentParts
+                    if (currentUserParts.isNotEmpty()) {
+                        apiMessagesForBackend.add(PartsApiMessage("user", currentUserParts))
                     }
                 } else {
                     if (textToActuallySend.isNotBlank() || attachments.isNotEmpty()) {
-                        apiMessagesForBackend.add(
-                            SimpleTextApiMessage(
-                                role = "user",
-                                content = textToActuallySend
-                            )
-                        )
+                        apiMessagesForBackend.add(SimpleTextApiMessage("user", textToActuallySend))
                     }
                 }
 
                 if (apiMessagesForBackend.isEmpty() || apiMessagesForBackend.lastOrNull()?.role != "user") {
-                    viewModelScope.launch { showSnackbar("无法发送消息：内部准备错误。") }
                     withContext(Dispatchers.Main.immediate) {
                         stateHolder.messages.remove(newUserMessageForUi)
                         stateHolder.messageAnimationStates.remove(newUserMessageForUi.id)
@@ -496,11 +498,10 @@ private data class AttachmentProcessingResult(
                     userMessageTextForContext = textToActuallySend,
                     afterUserMessageId = newUserMessageForUi.id,
                     onMessagesProcessed = { viewModelScope.launch { historyManager.saveCurrentChatToHistoryIfNeeded() } },
-                    onRequestFailed = {
+                    onRequestFailed = { error ->
                         viewModelScope.launch(Dispatchers.Main) {
-                            stateHolder.messages.remove(newUserMessageForUi)
-                            stateHolder.messageAnimationStates.remove(newUserMessageForUi.id)
-                            showSnackbar("发送失败，请检查网络或API配置。")
+                            val errorMessage = "发送失败: ${error.message ?: "未知错误"}"
+                            showSnackbar(errorMessage)
                         }
                     }
                 )

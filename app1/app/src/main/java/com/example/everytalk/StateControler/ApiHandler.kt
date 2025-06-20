@@ -112,7 +112,7 @@ class ApiHandler(
         @Suppress("UNUSED_PARAMETER") userMessageTextForContext: String,
         afterUserMessageId: String?,
         onMessagesProcessed: () -> Unit,
-        onRequestFailed: () -> Unit
+        onRequestFailed: (Throwable) -> Unit
     ) {
         val contextForLog = when (val lastUserMsg = requestBody.messages.lastOrNull {
             it.role == "user"
@@ -159,7 +159,7 @@ class ApiHandler(
                     .catch { e ->
                         if (e !is CancellationException) {
                             updateMessageWithError(aiMessageId, e)
-                            onRequestFailed()
+                            onRequestFailed(e)
                         }
                     }
                     .onCompletion { cause ->
@@ -252,7 +252,7 @@ class ApiHandler(
                     is CancellationException -> {}
                     else -> {
                         updateMessageWithError(aiMessageId, e)
-                        onRequestFailed()
+                        onRequestFailed(e)
                     }
                 }
             } finally {

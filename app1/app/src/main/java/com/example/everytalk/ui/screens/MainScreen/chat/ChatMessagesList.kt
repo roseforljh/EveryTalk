@@ -82,7 +82,11 @@ fun ChatMessagesList(
                             AttachmentsContent(
                                 attachments = item.message.attachments,
                                 onAttachmentClick = { /* Handle attachment click */ },
-                                maxWidth = bubbleMaxWidth * 0.85f
+                                maxWidth = bubbleMaxWidth * 0.85f,
+                                message = item.message,
+                                onUserInteraction = onResetInactivityTimer,
+                                onEditRequest = { viewModel.requestEditMessage(it) },
+                                onRegenerateRequest = { viewModel.regenerateAiResponse(it) }
                             )
                         }
                         if (item.message.text.isNotBlank()) {
