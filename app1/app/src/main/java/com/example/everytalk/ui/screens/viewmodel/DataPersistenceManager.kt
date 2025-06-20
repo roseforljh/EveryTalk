@@ -13,12 +13,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import coil3.ImageLoader
 
 class DataPersistenceManager(
     private val context: Context,
     private val dataSource: SharedPreferencesDataSource,
     private val stateHolder: ViewModelStateHolder,
-    private val viewModelScope: CoroutineScope
+    private val viewModelScope: CoroutineScope,
+    private val imageLoader: ImageLoader
 ) {
     private val TAG = "PersistenceManager"
 
@@ -245,25 +247,54 @@ class DataPersistenceManager(
                     // Delete all collected unique URIs
                     urisToDelete.forEach { uri ->
                         try {
-                            if ("file" == uri.scheme) {
-                                val file = uri.path?.let { File(it) }
-                                if (file?.exists() == true) {
+                            val authority = "${context.packageName}.provider"
+                            if (uri.scheme == "content" && uri.authority == authority) {
+                                // Handle FileProvider URI specifically
+                                val file = File(context.filesDir, uri.path?.substring(1) ?: "")
+                                if (file.exists()) {
                                     if (file.delete()) {
-                                        Log.d(TAG, "Successfully deleted local file: $uri")
+                                        Log.d(TAG, "Successfully deleted app-private file: $uri")
                                         deletedFilesCount++
                                     } else {
-                                        Log.w(TAG, "Failed to delete local file: $uri")
+                                        Log.w(TAG, "Failed to delete app-private file: $uri")
                                     }
                                 } else {
-                                    Log.w(TAG, "Local file to delete does not exist: $uri")
+                                    Log.w(TAG, "App-private file to delete does not exist: $uri")
                                 }
                             } else {
-                                val rowsDeleted = context.contentResolver.delete(uri, null, null)
-                                if (rowsDeleted > 0) {
-                                    Log.d(TAG, "Successfully deleted media via ContentResolver: $uri")
-                                    deletedFilesCount++
-                                } else {
-                                    Log.w(TAG, "ContentResolver did not delete media, or it did not exist: $uri")
+                                // Original logic for other URIs
+                                when (uri.scheme) {
+                                    "file" -> {
+                                        val file = uri.path?.let { File(it) }
+                                        if (file?.exists() == true) {
+                                            if (file.delete()) {
+                                                Log.d(TAG, "Successfully deleted local file: $uri")
+                                                deletedFilesCount++
+                                            } else {
+                                                Log.w(TAG, "Failed to delete local file: $uri")
+                                            }
+                                        } else {
+                                            Log.w(TAG, "Local file to delete does not exist: $uri")
+                                        }
+                                    }
+                                    "content" -> {
+                                        // This will now mostly handle non-FileProvider content URIs
+                                        val rowsDeleted = context.contentResolver.delete(uri, null, null)
+                                        if (rowsDeleted > 0) {
+                                            Log.d(TAG, "Successfully deleted media via ContentResolver: $uri")
+                                            deletedFilesCount++
+                                        } else {
+                                            Log.w(TAG, "ContentResolver did not delete media, or it did not exist: $uri")
+                                        }
+                                    }
+                                    "http", "https" -> {
+                                        imageLoader.diskCache?.remove(uri.toString())
+                                        Log.d(TAG, "Successfully removed image from cache: $uri")
+                                        deletedFilesCount++
+                                    }
+                                    else -> {
+                                        Log.w(TAG, "Unsupported URI scheme for deletion: ${uri.scheme}")
+                                    }
                                 }
                             }
                         } catch (e: SecurityException) {

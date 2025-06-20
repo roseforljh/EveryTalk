@@ -27,7 +27,6 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.SerializationException
 import java.io.IOException
 import java.io.File
-import java.io.InputStream
 import io.ktor.client.plugins.HttpRequestTimeoutException
 import kotlinx.coroutines.CancellationException as CoroutineCancellationException
 
@@ -67,10 +66,11 @@ object ApiClient {
     }
 
     private val backendProxyUrls = listOf(
+        "http://backendcentrol.everytalk.dpdns.org:8880/chat",
+        "http://backendwest.everytalk.dpdns.org:2052/chat",
+        "http://backend.everytalk.dpdns.org:8880/chat",
         "https://backdatalk-717323967862.europe-west1.run.app/chat",
-        "https://uoseegiydwgx.us-west-1.clawcloudrun.com/chat",
         "https://kunze999-backendai.hf.space/chat",
-        "https://backdaitalk-production.up.railway.app/chat",
     )
 
     private fun getFileNameFromUri(context: Context, uri: Uri): String {

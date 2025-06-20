@@ -46,8 +46,6 @@ import com.example.everytalk.ui.screens.BubbleMain.Main.UserOrErrorMessageConten
 import com.example.everytalk.util.CodeHighlighter
 import com.example.everytalk.util.MarkdownBlock
 import com.example.everytalk.util.parseInlineMarkdownToAnnotatedString
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 @Composable
 fun ChatMessagesList(
@@ -309,12 +307,8 @@ private fun RenderMarkdownBlock(
 private fun CodeBlock(rawText: String, language: String?, contentColor: Color) {
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
-    var annotatedString by remember { mutableStateOf(AnnotatedString(rawText)) }
-
-    LaunchedEffect(rawText, language) {
-        annotatedString = withContext(Dispatchers.Default) {
-            CodeHighlighter.highlightToAnnotatedString(rawText, language)
-        }
+    val annotatedString by remember(rawText, language) {
+        mutableStateOf(CodeHighlighter.highlightToAnnotatedString(rawText, language))
     }
 
     Column(
@@ -390,13 +384,7 @@ private fun MarkdownText(
     val uriHandler = LocalUriHandler.current
     val context = LocalContext.current
     var textLayoutResult by remember { mutableStateOf<androidx.compose.ui.text.TextLayoutResult?>(null) }
-    var annotatedString by remember { mutableStateOf(AnnotatedString(text)) }
-
-    LaunchedEffect(text) {
-        annotatedString = withContext(Dispatchers.Default) {
-            parseInlineMarkdownToAnnotatedString(text)
-        }
-    }
+    val annotatedString = remember(text) { parseInlineMarkdownToAnnotatedString(text) }
 
     Text(
         text = annotatedString,

@@ -53,19 +53,19 @@ fun parseMarkdownToBlocks(markdown: String): List<MarkdownBlock> {
                     i++
                 }
             }
-            line.trim().startsWith("#") -> {
+            line.trim().startsWith("#") && !line.trim().startsWith("\\#") -> {
                 val trimmedLine = line.trim()
                 val level = trimmedLine.takeWhile { it == '#' }.length
                 val text = trimmedLine.removePrefix("#".repeat(level)).trim()
                 blocks.add(MarkdownBlock.Header(level, text))
                 i++
             }
-            line.trim().matches(Regex("^[*\\-]\\s+.*")) -> {
+            line.trim().matches(Regex("^(?<!\\\\)[*\\-]\\s+.*")) -> {
                 val trimmedLine = line.trim()
                 val contentStartIndex = trimmedLine.indexOfFirst { it.isWhitespace() } + 1
                 val listContent = mutableListOf(trimmedLine.substring(contentStartIndex))
                 i++
-                while (i < lines.size && lines[i].isNotBlank() && !lines[i].trim().matches(Regex("^[*\\-]\\s+.*")) && !lines[i].trim().startsWith("#") && !lines[i].startsWith("```")) {
+                while (i < lines.size && lines[i].isNotBlank() && !lines[i].trim().matches(Regex("^(?<!\\\\)[*\\-]\\s+.*")) && !lines[i].trim().startsWith("#") && !lines[i].startsWith("```")) {
                     listContent.add(lines[i])
                     i++
                 }
@@ -96,7 +96,7 @@ fun parseMarkdownToBlocks(markdown: String): List<MarkdownBlock> {
 
                     if (currentLine.startsWith("```") ||
                         currentLine.startsWith("#") ||
-                        currentLine.trim().matches(Regex("^[*\\-]\\s+.*")) ||
+                        currentLine.trim().matches(Regex("^(?<!\\\\)[*\\-]\\s+.*")) ||
                         currentLine.trim().startsWith("$$") || currentLine.trim().startsWith("\\[") ||
                         isTableStart
                     ) {

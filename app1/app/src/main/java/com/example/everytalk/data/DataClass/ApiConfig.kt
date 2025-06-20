@@ -1,7 +1,9 @@
 package com.example.everytalk.data.DataClass
+import androidx.annotation.Keep
 import kotlinx.serialization.Serializable
 import java.util.UUID
 
+@Keep
 @Serializable
 data class ApiConfig(
     val address: String,

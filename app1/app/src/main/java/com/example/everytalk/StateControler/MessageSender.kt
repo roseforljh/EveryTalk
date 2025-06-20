@@ -5,10 +5,7 @@ import android.content.ContentResolver
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.ImageDecoder
 import android.net.Uri
-import android.os.Build
-import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.util.Base64
 import androidx.core.content.FileProvider
@@ -34,9 +31,15 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
-
-class MessageSender(
-    private val application: Application,
+ 
+private data class AttachmentProcessingResult(
+    val success: Boolean,
+    val processedAttachmentsForUi: List<SelectedMediaItem> = emptyList(),
+    val imageUriStringsForUi: List<String> = emptyList(),
+    val apiContentParts: List<ApiContentPart> = emptyList()
+)
+ class MessageSender(
+     private val application: Application,
     private val viewModelScope: CoroutineScope,
     private val stateHolder: ViewModelStateHolder,
     private val apiHandler: ApiHandler,
@@ -73,9 +76,31 @@ class MessageSender(
                 options.inJustDecodeBounds = false
                 options.inMutable = true // Make it mutable for further scaling if needed
 
-                context.contentResolver.openInputStream(uri)?.use {
+                var bitmap = context.contentResolver.openInputStream(uri)?.use {
                     BitmapFactory.decodeStream(it, null, options)
                 }
+
+                // Ensure the bitmap is scaled down if it's still too large
+                if (bitmap != null && (bitmap.width > TARGET_IMAGE_WIDTH || bitmap.height > TARGET_IMAGE_HEIGHT)) {
+                    val aspectRatio = bitmap.width.toFloat() / bitmap.height.toFloat()
+                    val newWidth: Int
+                    val newHeight: Int
+                    if (bitmap.width > bitmap.height) {
+                        newWidth = TARGET_IMAGE_WIDTH
+                        newHeight = (newWidth / aspectRatio).toInt()
+                    } else {
+                        newHeight = TARGET_IMAGE_HEIGHT
+                        newWidth = (newHeight * aspectRatio).toInt()
+                    }
+                    if (newWidth > 0 && newHeight > 0) {
+                        val scaledBitmap = Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)
+                        if (scaledBitmap != bitmap) {
+                            bitmap.recycle()
+                        }
+                        bitmap = scaledBitmap
+                    }
+                }
+                bitmap
             } catch (e: Exception) {
                 null
             }
@@ -161,23 +186,6 @@ class MessageSender(
                     return@withContext null
                 }
 
-                if (processedBitmap.width > TARGET_IMAGE_WIDTH || processedBitmap.height > TARGET_IMAGE_HEIGHT) {
-                    val aspectRatio =
-                        processedBitmap.width.toFloat() / processedBitmap.height.toFloat()
-                    val newWidth: Int
-                    val newHeight: Int
-                    if (processedBitmap.width > processedBitmap.height) {
-                        newWidth = TARGET_IMAGE_WIDTH
-                        newHeight = (newWidth / aspectRatio).toInt()
-                    } else {
-                        newHeight = TARGET_IMAGE_HEIGHT
-                        newWidth = (newHeight * aspectRatio).toInt()
-                    }
-                    if (newWidth > 0 && newHeight > 0) {
-                        processedBitmap =
-                            Bitmap.createScaledBitmap(processedBitmap, newWidth, newHeight, true)
-                    }
-                }
 
                 val outputStream = ByteArrayOutputStream()
                 val fileExtension: String
@@ -218,6 +226,109 @@ class MessageSender(
         }
     }
 
+    private suspend fun processAttachments(
+        attachments: List<SelectedMediaItem>,
+        shouldUsePartsApiMessage: Boolean,
+        textToActuallySend: String
+    ): AttachmentProcessingResult = withContext(Dispatchers.IO) {
+        if (attachments.isEmpty()) {
+            val apiParts = if (shouldUsePartsApiMessage && textToActuallySend.isNotBlank()) {
+                listOf(ApiContentPart.Text(text = textToActuallySend))
+            } else {
+                emptyList()
+            }
+            return@withContext AttachmentProcessingResult(success = true, apiContentParts = apiParts)
+        }
+
+        val processedAttachmentsForUi = mutableListOf<SelectedMediaItem>()
+        val imageUriStringsForUi = mutableListOf<String>()
+        val apiContentParts = mutableListOf<ApiContentPart>()
+
+        if (shouldUsePartsApiMessage && textToActuallySend.isNotBlank()) {
+            apiContentParts.add(ApiContentPart.Text(text = textToActuallySend))
+        }
+
+        val tempMessageIdForNaming = UUID.randomUUID().toString().take(8)
+
+        for ((index, originalMediaItem) in attachments.withIndex()) {
+            val itemUri = when (originalMediaItem) {
+                is SelectedMediaItem.ImageFromUri -> originalMediaItem.uri
+                is SelectedMediaItem.GenericFile -> originalMediaItem.uri
+                is SelectedMediaItem.ImageFromBitmap -> Uri.EMPTY
+            }
+            val originalFileNameForHint = getFileName(application.contentResolver, itemUri)
+                ?: (originalMediaItem as? SelectedMediaItem.GenericFile)?.displayName
+                ?: (if (originalMediaItem is SelectedMediaItem.ImageFromBitmap) "camera_shot" else "attachment")
+
+            val persistentUriStr: String? = when (originalMediaItem) {
+                is SelectedMediaItem.ImageFromUri -> {
+                    val bitmap = loadAndCompressBitmapFromUri(application, originalMediaItem.uri)
+                    if (bitmap != null) {
+                        saveBitmapToAppInternalStorage(application, bitmap, tempMessageIdForNaming, index, originalFileNameForHint)
+                    } else {
+                        showSnackbar("无法加载或压缩图片: $originalFileNameForHint")
+                        return@withContext AttachmentProcessingResult(success = false)
+                    }
+                }
+                is SelectedMediaItem.ImageFromBitmap -> {
+                    saveBitmapToAppInternalStorage(application, originalMediaItem.bitmap, tempMessageIdForNaming, index, originalFileNameForHint)
+                }
+                is SelectedMediaItem.GenericFile -> {
+                    copyUriToAppInternalStorage(application, originalMediaItem.uri, tempMessageIdForNaming, index, originalMediaItem.displayName)
+                }
+            }
+
+            if (persistentUriStr == null) {
+                showSnackbar("无法处理附件: $originalFileNameForHint")
+                return@withContext AttachmentProcessingResult(success = false)
+            }
+
+            val persistentFileProviderUri = Uri.parse(persistentUriStr)
+            val processedItemForUi: SelectedMediaItem = when (originalMediaItem) {
+                is SelectedMediaItem.ImageFromUri, is SelectedMediaItem.ImageFromBitmap -> {
+                    imageUriStringsForUi.add(persistentUriStr)
+                    SelectedMediaItem.ImageFromUri(persistentFileProviderUri, originalMediaItem.id)
+                }
+                is SelectedMediaItem.GenericFile -> SelectedMediaItem.GenericFile(
+                    uri = persistentFileProviderUri,
+                    displayName = originalMediaItem.displayName,
+                    mimeType = originalMediaItem.mimeType,
+                    id = originalMediaItem.id
+                )
+            }
+            processedAttachmentsForUi.add(processedItemForUi)
+
+            if (shouldUsePartsApiMessage) {
+                try {
+                    val mimeTypeForApi = application.contentResolver.getType(persistentFileProviderUri)
+                        ?: (processedItemForUi as? SelectedMediaItem.GenericFile)?.mimeType
+                        ?: "application/octet-stream"
+
+                    val supportedImageMimesForGemini = listOf("image/png", "image/jpeg", "image/webp", "image/heic", "image/heif")
+                    val supportedAudioMimesForGemini = listOf("audio/mp3", "audio/mpeg", "audio/wav", "audio/x-wav", "audio/aac", "audio/ogg", "audio/opus", "audio/flac", "audio/amr", "audio/aiff", "audio/x-m4a")
+                    val allSupportedInlineMimes = supportedImageMimesForGemini + supportedAudioMimesForGemini
+
+                    if (mimeTypeForApi.lowercase() in allSupportedInlineMimes) {
+                        val fileSize = application.contentResolver.openFileDescriptor(persistentFileProviderUri, "r")?.use { it.statSize } ?: -1L
+                        if (fileSize != -1L && fileSize <= MAX_IMAGE_SIZE_BYTES) {
+                            application.contentResolver.openInputStream(persistentFileProviderUri)?.use { inputStream ->
+                                val bytes = inputStream.readBytes()
+                                apiContentParts.add(ApiContentPart.InlineData(Base64.encodeToString(bytes, Base64.NO_WRAP), mimeTypeForApi))
+                            }
+                        } else {
+                            apiContentParts.add(ApiContentPart.FileUri(uri = persistentUriStr, mimeType = mimeTypeForApi))
+                        }
+                    } else if (processedItemForUi is SelectedMediaItem.GenericFile) {
+                        apiContentParts.add(ApiContentPart.FileUri(uri = persistentUriStr, mimeType = mimeTypeForApi))
+                    }
+                } catch (e: Exception) {
+                    // Ignore and proceed, the attachment might not be critical for the API call
+                }
+            }
+        }
+        AttachmentProcessingResult(true, processedAttachmentsForUi, imageUriStringsForUi, apiContentParts)
+    }
+
     fun sendMessage(
         messageText: String,
         isFromRegeneration: Boolean = false,
@@ -236,162 +347,24 @@ class MessageSender(
 
         viewModelScope.launch {
             val modelIsGeminiType = currentConfig.model.lowercase().startsWith("gemini")
-            val shouldUsePartsApiMessage =
-                currentConfig.provider.equals("google", ignoreCase = true) && modelIsGeminiType
+            val shouldUsePartsApiMessage = currentConfig.provider.equals("google", ignoreCase = true) && modelIsGeminiType
             val providerForRequestBackend = currentConfig.provider
 
-            val processedAttachmentsForUiMessage = mutableListOf<SelectedMediaItem>()
-            val imageUriStringsForUiMessage = mutableListOf<String>()
-            val apiContentPartsForCurrentUserMessage = mutableListOf<ApiContentPart>()
+            val attachmentResult = processAttachments(attachments, shouldUsePartsApiMessage, textToActuallySend)
+            if (!attachmentResult.success) {
+                return@launch // Abort sending if attachment processing failed
+            }
+
             val attachmentsForApiClient = attachments.toList()
-
-            if (shouldUsePartsApiMessage && textToActuallySend.isNotBlank()) {
-                apiContentPartsForCurrentUserMessage.add(ApiContentPart.Text(text = textToActuallySend))
-            }
-
-            if (attachments.isNotEmpty()) {
-                val tempMessageIdForNaming = UUID.randomUUID().toString().take(8)
-                attachments.forEachIndexed { index, originalMediaItem ->
-                    var persistentUriStr: String? = null
-                    val itemUri = when (originalMediaItem) {
-                        is SelectedMediaItem.ImageFromUri -> originalMediaItem.uri
-                        is SelectedMediaItem.GenericFile -> originalMediaItem.uri
-                        is SelectedMediaItem.ImageFromBitmap -> Uri.EMPTY
-                    }
-                    val originalFileNameForHint = getFileName(application.contentResolver, itemUri)
-                        ?: (originalMediaItem as? SelectedMediaItem.GenericFile)?.displayName
-                        ?: (if (originalMediaItem is SelectedMediaItem.ImageFromBitmap) "camera_shot" else "attachment")
-
-
-                    when (originalMediaItem) {
-                        is SelectedMediaItem.ImageFromUri -> {
-                            val bitmap = loadAndCompressBitmapFromUri(application, originalMediaItem.uri)
-                            if (bitmap != null) {
-                                persistentUriStr = saveBitmapToAppInternalStorage(
-                                    application,
-                                    bitmap,
-                                    tempMessageIdForNaming,
-                                    index,
-                                    originalFileNameForHint
-                                )
-                            } else {
-                                showSnackbar("无法加载或压缩图片: ${originalFileNameForHint}")
-                            }
-                        }
-
-                        is SelectedMediaItem.ImageFromBitmap -> {
-                            persistentUriStr = saveBitmapToAppInternalStorage(
-                                application,
-                                originalMediaItem.bitmap,
-                                tempMessageIdForNaming,
-                                index,
-                                originalFileNameForHint
-                            )
-                        }
-
-                        is SelectedMediaItem.GenericFile -> {
-                            persistentUriStr = copyUriToAppInternalStorage(
-                                application,
-                                originalMediaItem.uri,
-                                tempMessageIdForNaming,
-                                index,
-                                originalMediaItem.displayName
-                            )
-                        }
-                    }
-
-                    if (persistentUriStr != null) {
-                        val persistentFileProviderUri = Uri.parse(persistentUriStr)
-                        val processedItemForUi: SelectedMediaItem = when (originalMediaItem) {
-                            is SelectedMediaItem.ImageFromUri, is SelectedMediaItem.ImageFromBitmap -> {
-                                imageUriStringsForUiMessage.add(persistentUriStr)
-                                SelectedMediaItem.ImageFromUri(
-                                    persistentFileProviderUri,
-                                    originalMediaItem.id
-                                )
-                            }
-
-                            is SelectedMediaItem.GenericFile -> SelectedMediaItem.GenericFile(
-                                uri = persistentFileProviderUri,
-                                displayName = originalMediaItem.displayName,
-                                mimeType = originalMediaItem.mimeType,
-                                id = originalMediaItem.id
-                            )
-                        }
-                        processedAttachmentsForUiMessage.add(processedItemForUi)
-
-                        if (shouldUsePartsApiMessage) {
-                            try {
-                                val mimeTypeForApi =
-                                    application.contentResolver.getType(persistentFileProviderUri)
-                                        ?: (processedItemForUi as? SelectedMediaItem.GenericFile)?.mimeType
-                                        ?: "application/octet-stream"
-
-                                val supportedImageMimesForGemini = listOf(
-                                    "image/png", "image/jpeg", "image/webp", "image/heic", "image/heif"
-                                )
-                                val supportedAudioMimesForGemini = listOf(
-                                    "audio/mp3", "audio/mpeg", "audio/wav", "audio/x-wav", "audio/aac",
-                                    "audio/ogg", "audio/opus", "audio/flac", "audio/amr", "audio/aiff", "audio/x-m4a"
-                                )
-                                val allSupportedInlineMimes = supportedImageMimesForGemini + supportedAudioMimesForGemini
-
-                                if (mimeTypeForApi.lowercase() in allSupportedInlineMimes) {
-                                    var fileSize = -1L
-                                    try {
-                                        application.contentResolver.openFileDescriptor(
-                                            persistentFileProviderUri,
-                                            "r"
-                                        )?.use { pfd -> fileSize = pfd.statSize }
-                                    } catch (e: Exception) {
-                                    }
-
-                                    if (fileSize != -1L && fileSize <= MAX_IMAGE_SIZE_BYTES) {
-                                        application.contentResolver.openInputStream(
-                                            persistentFileProviderUri
-                                        )?.use { inputStream ->
-                                            val bytes = inputStream.readBytes()
-                                            apiContentPartsForCurrentUserMessage.add(
-                                                ApiContentPart.InlineData(
-                                                    base64Data = Base64.encodeToString(
-                                                        bytes,
-                                                        Base64.NO_WRAP
-                                                    ), mimeType = mimeTypeForApi
-                                                )
-                                            )
-                                        }
-                                    } else {
-                                        apiContentPartsForCurrentUserMessage.add(
-                                            ApiContentPart.FileUri(
-                                                uri = persistentUriStr,
-                                                mimeType = mimeTypeForApi
-                                            )
-                                        )
-                                    }
-                                } else if (processedItemForUi is SelectedMediaItem.GenericFile) {
-                                    apiContentPartsForCurrentUserMessage.add(
-                                        ApiContentPart.FileUri(
-                                            uri = persistentUriStr,
-                                            mimeType = mimeTypeForApi
-                                        )
-                                    )
-                                }
-                            } catch (e: Exception) {
-                            }
-                        }
-                    } else {
-                        showSnackbar("无法处理附件: ${originalFileNameForHint}")
-                    }
-                }
-            }
+            val apiContentPartsForCurrentUserMessage = attachmentResult.apiContentParts
 
             val newUserMessageForUi = UiMessage(
                 id = "user_${UUID.randomUUID()}", text = textToActuallySend, sender = UiSender.User,
                 timestamp = System.currentTimeMillis(), contentStarted = true,
-                imageUrls = imageUriStringsForUiMessage.ifEmpty { null },
-                attachments = processedAttachmentsForUiMessage.ifEmpty { null }
+                imageUrls = attachmentResult.imageUriStringsForUi.ifEmpty { null },
+                attachments = attachmentResult.processedAttachmentsForUi.ifEmpty { null }
             )
-
+ 
             withContext(Dispatchers.Main.immediate) {
                 stateHolder.messageAnimationStates[newUserMessageForUi.id] = true
                 stateHolder.messages.add(newUserMessageForUi)
@@ -457,7 +430,7 @@ class MessageSender(
                                 parts = listOf(ApiContentPart.Text(text = textToActuallySend))
                             )
                         )
-                    } else if (attachments.isNotEmpty() && processedAttachmentsForUiMessage.isEmpty()) {
+                    } else if (attachments.isNotEmpty() && attachmentResult.processedAttachmentsForUi.isEmpty()) {
                         apiMessagesForBackend.add(
                             PartsApiMessage(
                                 role = "user",

@@ -16,10 +16,13 @@ import com.example.everytalk.data.DataClass.WebSearchResult
 import com.example.everytalk.data.local.SharedPreferencesDataSource
 import com.example.everytalk.data.network.ApiClient
 import android.net.Uri
+import coil3.ImageLoader
 import com.example.everytalk.model.SelectedMediaItem
+import com.example.everytalk.ui.screens.MainScreen.chat.ChatListItem
 import com.example.everytalk.ui.screens.viewmodel.ConfigManager
 import com.example.everytalk.ui.screens.viewmodel.DataPersistenceManager
 import com.example.everytalk.ui.screens.viewmodel.HistoryManager
+import com.example.everytalk.util.parseMarkdownToBlocks
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -29,6 +32,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -36,20 +40,23 @@ import kotlinx.coroutines.withContext
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import java.util.UUID
+import androidx.annotation.Keep
 
 class AppViewModel(
     application: Application,
     private val dataSource: SharedPreferencesDataSource
 ) : AndroidViewModel(application) {
 
+    @Keep
     private data class ExportedSettings(
         val apiConfigs: List<ApiConfig>,
         val customProviders: Set<String>
     )
 
     internal val stateHolder = ViewModelStateHolder()
+    private val imageLoader = ImageLoader.Builder(application.applicationContext).build()
     private val persistenceManager =
-        DataPersistenceManager(application.applicationContext, dataSource, stateHolder, viewModelScope)
+        DataPersistenceManager(application.applicationContext, dataSource, stateHolder, viewModelScope, imageLoader)
 
     private val historyManager: HistoryManager =
         HistoryManager(
@@ -167,6 +174,67 @@ class AppViewModel(
    val showSelectableTextDialog: StateFlow<Boolean> = _showSelectableTextDialog.asStateFlow()
    private val _textForSelectionDialog = MutableStateFlow("")
    val textForSelectionDialog: StateFlow<String> = _textForSelectionDialog.asStateFlow()
+
+   val chatListItems: StateFlow<List<ChatListItem>> = combine(
+       snapshotFlow { messages.toList() },
+       isApiCalling,
+       currentStreamingAiMessageId
+   ) { messages, isApiCalling, currentStreamingAiMessageId ->
+       messages.flatMap { message ->
+           when {
+               message.sender == Sender.User -> {
+                   listOf(ChatListItem.UserMessage(message))
+               }
+               message.isError -> {
+                   listOf(ChatListItem.ErrorMessage(message))
+               }
+               message.sender == Sender.AI -> {
+                   val showLoading = isApiCalling &&
+                           message.id == currentStreamingAiMessageId &&
+                           message.text.isBlank() &&
+                           message.reasoning.isNullOrBlank() &&
+                           !message.contentStarted
+
+                   if (showLoading) {
+                       listOf(ChatListItem.LoadingIndicator(message.id))
+                   } else {
+                       val reasoningItem = if (!message.reasoning.isNullOrBlank()) {
+                           listOf(ChatListItem.AiMessageReasoning(message))
+                       } else {
+                           emptyList()
+                       }
+
+                       val blocks = parseMarkdownToBlocks(message.text)
+                       val hasReasoning = reasoningItem.isNotEmpty()
+                       val blockItems = blocks.mapIndexed { index, block ->
+                           ChatListItem.AiMessageBlock(
+                               messageId = message.id,
+                               block = block,
+                               blockIndex = index,
+                               isFirstBlock = index == 0,
+                               isLastBlock = index == blocks.size - 1,
+                               hasReasoning = hasReasoning
+                           )
+                       }
+
+                       val footerItem = if (!message.webSearchResults.isNullOrEmpty() && !(isApiCalling && message.id == currentStreamingAiMessageId)) {
+                           listOf(ChatListItem.AiMessageFooter(message))
+                       } else {
+                           emptyList()
+                       }
+
+                       reasoningItem + blockItems + footerItem
+                   }
+               }
+               else -> emptyList()
+           }
+       }
+   }.flowOn(Dispatchers.Default)
+       .stateIn(
+           scope = viewModelScope,
+           started = SharingStarted.WhileSubscribed(5000),
+           initialValue = emptyList()
+       )
 
   init {
        viewModelScope.launch(Dispatchers.IO) {

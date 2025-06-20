@@ -399,59 +399,7 @@ fun ChatScreen(
                 if (messages.isEmpty()) {
                     EmptyChatView(density = density)
                 } else {
-                    val chatListItems by remember {
-                        derivedStateOf {
-                            messages.flatMap { message ->
-                                when {
-                                    message.sender == Sender.User -> {
-                                        listOf(ChatListItem.UserMessage(message))
-                                    }
-                                    message.isError -> {
-                                        listOf(ChatListItem.ErrorMessage(message))
-                                    }
-                                    message.sender == Sender.AI -> {
-                                        val showLoading = isApiCalling &&
-                                                message.id == currentStreamingAiMessageId &&
-                                                message.text.isBlank() &&
-                                                message.reasoning.isNullOrBlank() &&
-                                                !message.contentStarted
-
-                                        if (showLoading) {
-                                            listOf(ChatListItem.LoadingIndicator(message.id))
-                                        } else {
-                                            val reasoningItem = if (!message.reasoning.isNullOrBlank()) {
-                                                listOf(ChatListItem.AiMessageReasoning(message))
-                                            } else {
-                                                emptyList()
-                                            }
-
-                                            val blocks = parseMarkdownToBlocks(message.text)
-                                            val hasReasoning = reasoningItem.isNotEmpty()
-                                            val blockItems = blocks.mapIndexed { index, block ->
-                                                ChatListItem.AiMessageBlock(
-                                                    messageId = message.id,
-                                                    block = block,
-                                                    blockIndex = index,
-                                                    isFirstBlock = index == 0,
-                                                    isLastBlock = index == blocks.size - 1,
-                                                    hasReasoning = hasReasoning
-                                                )
-                                            }
-
-                                            val footerItem = if (!message.webSearchResults.isNullOrEmpty() && !(isApiCalling && message.id == currentStreamingAiMessageId)) {
-                                                listOf(ChatListItem.AiMessageFooter(message))
-                                            } else {
-                                                emptyList()
-                                            }
-
-                                            reasoningItem + blockItems + footerItem
-                                        }
-                                    }
-                                    else -> emptyList()
-                                }
-                            }
-                        }
-                    }
+                    val chatListItems by viewModel.chatListItems.collectAsState()
 
                     ChatMessagesList(
                         chatItems = chatListItems,

@@ -1,5 +1,8 @@
 package com.example.everytalk.data.DataClass
 
+import androidx.annotation.Keep
+
+@Keep
 enum class ModalityType(val displayName: String) {
     TEXT("文本大模型"),
     IMAGE("图像生成"),
