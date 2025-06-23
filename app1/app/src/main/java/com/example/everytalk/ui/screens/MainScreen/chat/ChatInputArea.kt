@@ -49,12 +49,15 @@ import androidx.compose.ui.window.PopupProperties
 import androidx.core.content.FileProvider
 import coil3.compose.AsyncImage
 import com.example.everytalk.data.DataClass.ApiConfig
-import com.example.everytalk.model.ImageSourceOption // 确保你的 model 类在这里或正确导入
-import com.example.everytalk.model.MoreOptionsType   // 确保你的 model 类在这里或正确导入
-import com.example.everytalk.model.SelectedMediaItem // 确保你的 model 类在这里或正确导入
-import kotlinx.coroutines.delay
+import com.example.everytalk.model.ImageSourceOption
+import com.example.everytalk.model.MoreOptionsType
+import com.example.everytalk.model.SelectedMediaItem
+import com.example.everytalk.util.AppImageLoader
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -71,25 +74,61 @@ private fun createImageFileUri(context: Context): Uri {
     return FileProvider.getUriForFile(context, "${context.packageName}.provider", imageFile)
 }
 
-private fun getFileDetailsFromUri(context: Context, uri: Uri): Triple<String, String?, String?> {
-    var displayName: String? = null
-    val mimeType: String? = context.contentResolver.getType(uri)
-    try {
-        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                if (nameIndex != -1) {
-                    displayName = cursor.getString(nameIndex)
+// 修复：将文件查询移到后台线程，添加异常处理
+private suspend fun getFileDetailsFromUri(
+    context: Context,
+    uri: Uri
+): Triple<String, String?, String?> {
+    return withContext(Dispatchers.IO) {
+        var displayName: String? = null
+        // First, try to get the display name to find the extension
+        try {
+            context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (nameIndex != -1) {
+                        displayName = cursor.getString(nameIndex)
+                    }
                 }
             }
+        } catch (e: Exception) {
+            Log.e("FileDetails", "Error querying URI for display name: $uri", e)
         }
-    } catch (e: Exception) {
-        Log.e("FileDetails", "Error querying URI metadata: $uri", e)
+        if (displayName == null) {
+            displayName = uri.lastPathSegment
+        }
+
+        // Now, try to get the MIME type from the content resolver
+        var mimeType: String? = try {
+            context.contentResolver.getType(uri)
+        } catch (e: Exception) {
+            Log.e("FileDetails", "Error getting MIME type for URI: $uri", e)
+            null
+        }
+
+        // If the content resolver fails, fall back to using the file extension
+        if (mimeType == null && displayName != null) {
+            val fileExtension = displayName!!.substringAfterLast('.', "").lowercase(Locale.getDefault())
+            if (fileExtension.isNotEmpty()) {
+                mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(fileExtension)
+            }
+        }
+
+        Triple(displayName ?: "Unknown File", mimeType, uri.toString())
     }
-    if (displayName == null) {
-        displayName = uri.lastPathSegment ?: "Unknown File"
+}
+
+// 修复：添加安全的文件删除函数
+private fun safeDeleteTempFile(context: Context, uri: Uri?) {
+    uri?.let {
+        try {
+            context.contentResolver.delete(it, null, null)
+        } catch (e: SecurityException) {
+            Log.w("FileCleanup", "无法删除临时文件: $uri", e)
+        } catch (e: Exception) {
+            Log.e("FileCleanup", "删除临时文件时发生错误: $uri", e)
+        }
     }
-    return Triple(displayName ?: "Unknown File", mimeType, uri.toString())
 }
 
 @Composable
@@ -100,6 +139,7 @@ fun ImageSelectionPanel(
     var activeOption by remember { mutableStateOf<ImageSourceOption?>(null) }
     val panelBackgroundColor = Color(0xFFf4f4f4)
     val darkerBackgroundColor = Color(0xFFCCCCCC)
+
     Surface(
         modifier = modifier.width(150.dp),
         shape = RoundedCornerShape(20.dp),
@@ -107,20 +147,28 @@ fun ImageSelectionPanel(
         tonalElevation = 4.dp
     ) {
         Column {
-            ImageSourceOption.entries.forEach { option ->
+            // 修复：使用 .values() 替代 .entries
+            ImageSourceOption.values().forEach { option ->
                 val isSelected = activeOption == option
                 val animatedBackgroundColor by animateColorAsState(
                     targetValue = if (isSelected) darkerBackgroundColor else panelBackgroundColor,
                     animationSpec = tween(durationMillis = 200),
                     label = "ImageOptionPanelItemBackground"
                 )
+
+                // 修复：确保返回类型为 Unit
+                val onClickCallback = remember(option) {
+                    {
+                        activeOption = option
+                        onOptionSelected(option)
+                        Unit // 明确返回 Unit
+                    }
+                }
+
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable {
-                            activeOption = option
-                            onOptionSelected(option)
-                        }
+                        .clickable(onClick = onClickCallback)
                         .background(animatedBackgroundColor)
                         .padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -147,6 +195,7 @@ fun MoreOptionsPanel(
     var activeOption by remember { mutableStateOf<MoreOptionsType?>(null) }
     val panelBackgroundColor = Color(0xFFf4f4f4)
     val darkerBackgroundColor = Color(0xFFCCCCCC)
+
     Surface(
         modifier = modifier.width(150.dp),
         shape = RoundedCornerShape(20.dp),
@@ -154,20 +203,28 @@ fun MoreOptionsPanel(
         tonalElevation = 4.dp
     ) {
         Column {
-            MoreOptionsType.entries.forEach { option ->
+            // 修复：使用 .values() 替代 .entries
+            MoreOptionsType.values().forEach { option ->
                 val isSelected = activeOption == option
                 val animatedBackgroundColor by animateColorAsState(
                     targetValue = if (isSelected) darkerBackgroundColor else panelBackgroundColor,
                     animationSpec = tween(durationMillis = 200),
                     label = "MoreOptionPanelItemBackground"
                 )
+
+                // 修复：确保返回类型为 Unit
+                val onClickCallback = remember(option) {
+                    {
+                        activeOption = option
+                        onOptionSelected(option)
+                        Unit // 明确返回 Unit
+                    }
+                }
+
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable {
-                            activeOption = option
-                            onOptionSelected(option)
-                        }
+                        .clickable(onClick = onClickCallback)
                         .background(animatedBackgroundColor)
                         .padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -192,6 +249,8 @@ fun SelectedItemPreview(
     onRemoveClicked: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+
     Box(
         modifier = modifier
             .size(width = 100.dp, height = 80.dp)
@@ -204,14 +263,16 @@ fun SelectedItemPreview(
                 model = mediaItem.uri,
                 contentDescription = "Selected image from gallery",
                 modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
+                contentScale = ContentScale.Crop,
+                imageLoader = AppImageLoader.get(context)
             )
 
             is SelectedMediaItem.ImageFromBitmap -> AsyncImage(
                 model = mediaItem.bitmap,
                 contentDescription = "Selected image from camera",
                 modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
+                contentScale = ContentScale.Crop,
+                imageLoader = AppImageLoader.get(context)
             )
 
             is SelectedMediaItem.GenericFile -> {
@@ -285,66 +346,193 @@ fun ChatInputArea(
     onFocusChange: (isFocused: Boolean) -> Unit
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
 
     var pendingMessageTextForSend by remember { mutableStateOf<String?>(null) }
     var showImageSelectionPanel by remember { mutableStateOf(false) }
     var showMoreOptionsPanel by remember { mutableStateOf(false) }
     var tempCameraImageUri by remember { mutableStateOf<Uri?>(null) }
- 
-     val photoPickerLauncher =
-        rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-            uri?.let { onAddMediaItem(SelectedMediaItem.ImageFromUri(it)) }
-            showImageSelectionPanel = false // Close panel after selection
-        }
-    val cameraLauncher =
-        rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
-            if (success && tempCameraImageUri != null) {
-                onAddMediaItem(SelectedMediaItem.ImageFromUri(tempCameraImageUri!!))
-            } else {
-                Log.w("CameraLauncher", "无法获取相机照片或 URI 为空")
-            }
-            tempCameraImageUri?.let { uri ->
-                context.contentResolver.delete(uri, null, null)
-            }
-            tempCameraImageUri = null
-            showImageSelectionPanel = false
-        }
-    val cameraPermissionLauncher =
-        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
-            if (isGranted) {
-                val newUri = createImageFileUri(context); tempCameraImageUri =
-                    newUri; cameraLauncher.launch(newUri)
-            } else {
-                Log.w("CameraPermission", "相机权限被拒绝")
-                showImageSelectionPanel = false // Close panel
-            }
-        }
 
+    // 修复：改善相册选择的错误处理
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        try {
+            if (uri != null) {
+                onAddMediaItem(SelectedMediaItem.ImageFromUri(uri))
+            } else {
+                Log.d("PhotoPicker", "用户取消了图片选择")
+                // 不关闭面板，让用户可以重新选择
+            }
+        } catch (e: Exception) {
+            Log.e("PhotoPicker", "处理选择的图片时发生错误", e)
+            onShowSnackbar("选择图片时发生错误")
+        }
+    }
+
+    // 修复：改善相机启动器的错误处理和资源清理
+    val cameraLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.TakePicture()
+    ) { success ->
+        val currentUri = tempCameraImageUri
+        try {
+            if (success && currentUri != null) {
+                onAddMediaItem(SelectedMediaItem.ImageFromUri(currentUri))
+            } else {
+                Log.w("CameraLauncher", "相机拍照失败或被取消")
+                // 修复：失败时也要清理临时文件
+                if (currentUri != null) {
+                    safeDeleteTempFile(context, currentUri)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("CameraLauncher", "处理相机照片时发生错误", e)
+            onShowSnackbar("拍照时发生错误")
+            if (currentUri != null) {
+                safeDeleteTempFile(context, currentUri)
+            }
+        } finally {
+            // 修复：确保总是清理 tempCameraImageUri 引用
+            tempCameraImageUri = null
+        }
+    }
+
+    // 修复：改善权限处理，权限被拒绝时不关闭面板
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            try {
+                val newUri = createImageFileUri(context)
+                tempCameraImageUri = newUri
+                cameraLauncher.launch(newUri)
+            } catch (e: Exception) {
+                Log.e("CameraPermission", "创建相机文件 URI 时发生错误", e)
+                onShowSnackbar("启动相机时发生错误")
+            }
+        } else {
+            Log.w("CameraPermission", "相机权限被拒绝")
+            onShowSnackbar("需要相机权限才能拍照")
+            // 修复：不关闭面板，让用户可以重新尝试或选择其他选项
+        }
+    }
+
+    // 修复：改善文件选择器的错误处理和后台处理
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
         onResult = { uri: Uri? ->
-            uri?.let {
-                val (displayName, mimeType, _) = getFileDetailsFromUri(context, it)
-                Log.d("OpenDocument", "Selected Document: $displayName, URI: $it, MIME: $mimeType")
-                onAddMediaItem(SelectedMediaItem.GenericFile(it, displayName, mimeType))
-            } ?: Log.d("OpenDocument", "No document selected")
-            showMoreOptionsPanel = false // Close panel after selection
+            if (uri != null) {
+                // 修复：使用 coroutineScope 处理文件操作
+                coroutineScope.launch {
+                    try {
+                        val (displayName, mimeType, _) = getFileDetailsFromUri(context, uri)
+                        Log.d(
+                            "OpenDocument",
+                            "Selected Document: $displayName, URI: $uri, MIME: $mimeType"
+                        )
+                        withContext(Dispatchers.Main) {
+                            onAddMediaItem(
+                                SelectedMediaItem.GenericFile(
+                                    uri,
+                                    displayName,
+                                    mimeType
+                                )
+                            )
+                        }
+                    } catch (e: Exception) {
+                        Log.e("OpenDocument", "处理选择的文件时发生错误", e)
+                        withContext(Dispatchers.Main) {
+                            onShowSnackbar("处理文件时发生错误")
+                        }
+                    }
+                }
+            } else {
+                Log.d("OpenDocument", "用户取消了文件选择")
+                // 不关闭面板，让用户可以重新选择
+            }
         }
     )
 
+    // 修复：防止竞态条件的键盘处理
     LaunchedEffect(Unit) {
         snapshotFlow { imeInsets.getBottom(density) > 0 }
             .distinctUntilChanged()
-            .filter { isKeyboardVisible -> !isKeyboardVisible && pendingMessageTextForSend != null }
-            .collect {
-                val messageToSend = pendingMessageTextForSend!!
-                onSendMessageRequest(messageToSend, false, selectedMediaItems.toList())
-                pendingMessageTextForSend = null
-                if (text == messageToSend) onTextChange("")
+            .filter { isKeyboardVisible -> !isKeyboardVisible }
+            .collect { _ ->
+                // 修复：安全地处理 pendingMessageTextForSend
+                val messageToSend = pendingMessageTextForSend
+                if (messageToSend != null) {
+                    try {
+                        onSendMessageRequest(messageToSend, false, selectedMediaItems.toList())
+                        pendingMessageTextForSend = null
+                        if (text == messageToSend) onTextChange("")
+                        onClearMediaItems()
+                    } catch (e: Exception) {
+                        Log.e("MessageSend", "发送消息时发生错误", e)
+                        pendingMessageTextForSend = null
+                        onShowSnackbar("发送消息失败")
+                    }
+                }
             }
     }
+
     var chatInputContentHeightPx by remember { mutableIntStateOf(0) }
     val panelVerticalMarginFromTopInput = 16.dp
+
+    // 修复：确保返回类型为 Unit
+    val onToggleImagePanel = remember {
+        {
+            if (showMoreOptionsPanel) showMoreOptionsPanel = false
+            showImageSelectionPanel = !showImageSelectionPanel
+            Unit
+        }
+    }
+
+    val onToggleMoreOptionsPanel = remember {
+        {
+            if (showImageSelectionPanel) showImageSelectionPanel = false
+            showMoreOptionsPanel = !showMoreOptionsPanel
+            Unit
+        }
+    }
+
+    val onClearContent = remember {
+        {
+            onTextChange("")
+            onClearMediaItems()
+            Unit
+        }
+    }
+
+    val onSendClick =
+        remember(isApiCalling, text, selectedMediaItems, selectedApiConfig, imeInsets, density) {
+            {
+                try {
+                    if (isApiCalling) {
+                        onStopApiCall()
+                    } else if ((text.isNotBlank() || selectedMediaItems.isNotEmpty()) && selectedApiConfig != null) {
+                        if (imeInsets.getBottom(density) > 0) {
+                            pendingMessageTextForSend = text
+                            keyboardController?.hide()
+                        } else {
+                            onSendMessageRequest(text, false, selectedMediaItems.toList())
+                            onTextChange("")
+                            onClearMediaItems()
+                        }
+                    } else if (selectedApiConfig == null) {
+                        Log.w("SendMessage", "请先选择 API 配置")
+                        onShowSnackbar("请先选择 API 配置")
+                    } else {
+                        Log.w("SendMessage", "请输入消息内容或选择项目")
+                        onShowSnackbar("请输入消息内容或选择项目")
+                    }
+                } catch (e: Exception) {
+                    Log.e("SendMessage", "发送消息时发生错误", e)
+                    onShowSnackbar("发送消息失败")
+                }
+                Unit
+            }
+        }
 
     Box(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -371,12 +559,15 @@ fun ChatInputArea(
                     itemsIndexed(selectedMediaItems, key = { _, item -> item.id }) { index, media ->
                         SelectedItemPreview(
                             mediaItem = media,
-                            onRemoveClicked = { onRemoveMediaItemAtIndex(index) })
+                            onRemoveClicked = { onRemoveMediaItemAtIndex(index) }
+                        )
                     }
                 }
             }
+
             OutlinedTextField(
-                value = text, onValueChange = onTextChange,
+                value = text,
+                onValueChange = onTextChange,
                 modifier = Modifier
                     .fillMaxWidth()
                     .focusRequester(focusRequester)
@@ -392,8 +583,11 @@ fun ChatInputArea(
                     focusedBorderColor = Color.Transparent,
                     unfocusedBorderColor = Color.Transparent,
                 ),
-                minLines = 1, maxLines = 5, shape = RoundedCornerShape(16.dp)
+                minLines = 1,
+                maxLines = 5,
+                shape = RoundedCornerShape(16.dp)
             )
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -409,11 +603,7 @@ fun ChatInputArea(
                         )
                     }
                     Spacer(Modifier.width(8.dp))
-                    IconButton(onClick = {
-                        // 切换面板前关闭另一个面板
-                        if (showMoreOptionsPanel) showMoreOptionsPanel = false
-                        showImageSelectionPanel = !showImageSelectionPanel
-                    }) {
+                    IconButton(onClick = onToggleImagePanel) {
                         Icon(
                             Icons.Outlined.Image,
                             if (showImageSelectionPanel) "关闭图片选项" else "选择图片",
@@ -422,11 +612,7 @@ fun ChatInputArea(
                         )
                     }
                     Spacer(Modifier.width(8.dp))
-                    IconButton(onClick = {
-                        // 切换面板前关闭另一个面板
-                        if (showImageSelectionPanel) showImageSelectionPanel = false
-                        showMoreOptionsPanel = !showMoreOptionsPanel
-                    }) {
+                    IconButton(onClick = onToggleMoreOptionsPanel) {
                         Icon(
                             Icons.Filled.Tune,
                             if (showMoreOptionsPanel) "关闭更多选项" else "更多选项",
@@ -435,9 +621,10 @@ fun ChatInputArea(
                         )
                     }
                 }
+
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (text.isNotEmpty() || selectedMediaItems.isNotEmpty()) {
-                        IconButton(onClick = { onTextChange(""); onClearMediaItems() }) {
+                        IconButton(onClick = onClearContent) {
                             Icon(
                                 Icons.Filled.Clear,
                                 "清除内容和所选项目",
@@ -447,28 +634,7 @@ fun ChatInputArea(
                         Spacer(Modifier.width(4.dp))
                     }
                     FilledIconButton(
-                        onClick = {
-                            if (isApiCalling) onStopApiCall()
-                            else if ((text.isNotBlank() || selectedMediaItems.isNotEmpty()) && selectedApiConfig != null) {
-                                if (imeInsets.getBottom(density) > 0) {
-                                    pendingMessageTextForSend = text
-                                    keyboardController?.hide()
-                                } else {
-                                    onSendMessageRequest(
-                                        text,
-                                        false,
-                                        selectedMediaItems.toList()
-                                    )
-                                    onTextChange("")
-                                }
-                            } else if (selectedApiConfig == null) {
-                                Log.w("SendMessage", "请先选择 API 配置")
-                                onShowSnackbar("请先选择 API 配置") // Added feedback
-                            } else {
-                                Log.w("SendMessage", "请输入消息内容或选择项目")
-                                onShowSnackbar("请输入消息内容或选择项目") // Added feedback
-                            }
-                        },
+                        onClick = onSendClick,
                         shape = CircleShape,
                         colors = IconButtonDefaults.filledIconButtonColors(
                             containerColor = Color.Black,
@@ -483,6 +649,7 @@ fun ChatInputArea(
                 }
             }
         }
+
         val yOffsetPx =
             -(chatInputContentHeightPx.toFloat() + with(density) { panelVerticalMarginFromTopInput.toPx() })
 
@@ -494,7 +661,7 @@ fun ChatInputArea(
                 offset = IntOffset(xOffsetPx.toInt(), yOffsetPx.toInt()),
                 onDismissRequest = { showImageSelectionPanel = false },
                 properties = PopupProperties(
-                    focusable = false, // MODIFIED: Prevent popup from taking focus
+                    focusable = false,
                     dismissOnClickOutside = true,
                     dismissOnBackPress = true
                 )
@@ -506,6 +673,7 @@ fun ChatInputArea(
                     label = "ImageSelectionPanelVisibility"
                 ) {
                     ImageSelectionPanel { selectedOption ->
+                        showImageSelectionPanel = false
                         when (selectedOption) {
                             ImageSourceOption.ALBUM -> photoPickerLauncher.launch(
                                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
@@ -528,12 +696,13 @@ fun ChatInputArea(
             val panelWidthDp = 150.dp
             val xOffsetForPopup = tuneButtonCenterX - (panelWidthDp / 2)
             val xOffsetForMoreOptionsPanelPx = with(density) { xOffsetForPopup.toPx() }
+
             Popup(
                 alignment = Alignment.BottomStart,
                 offset = IntOffset(xOffsetForMoreOptionsPanelPx.toInt(), yOffsetPx.toInt()),
                 onDismissRequest = { showMoreOptionsPanel = false },
                 properties = PopupProperties(
-                    focusable = false, // MODIFIED: Prevent popup from taking focus
+                    focusable = false,
                     dismissOnClickOutside = true,
                     dismissOnBackPress = true
                 )
@@ -545,6 +714,7 @@ fun ChatInputArea(
                     label = "MoreOptionsPanelVisibility"
                 ) {
                     MoreOptionsPanel { selectedOption ->
+                        showMoreOptionsPanel = false
                         Log.d(
                             "MoreOptionsPanel",
                             "Selected: ${selectedOption.label}, Launching with MIME types: ${selectedOption.mimeTypes.joinToString()}"
@@ -555,6 +725,15 @@ fun ChatInputArea(
                         filePickerLauncher.launch(mimeTypesArray)
                     }
                 }
+            }
+        }
+    }
+
+    // 修复：组件销毁时清理临时文件
+    DisposableEffect(Unit) {
+        onDispose {
+            tempCameraImageUri?.let { uri ->
+                safeDeleteTempFile(context, uri)
             }
         }
     }

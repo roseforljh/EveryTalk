@@ -1,137 +1,300 @@
 package com.example.everytalk.util
 
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextDecoration
-import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.unit.sp
-
+// --- 1. Enhanced Data Model (AST) ---
 sealed class MarkdownBlock {
     data class Header(val level: Int, val text: String) : MarkdownBlock()
-    data class Text(val text: String) : MarkdownBlock()
-    data class CodeBlock(val rawText: String, val language: String?) : MarkdownBlock()
-    data class ListItem(val text: String) : MarkdownBlock()
+    data class CodeBlock(val language: String?, val rawText: String) : MarkdownBlock()
     data class Image(val altText: String, val url: String) : MarkdownBlock()
     data class Table(val header: List<String>, val rows: List<List<String>>) : MarkdownBlock()
+    data class Paragraph(val text: String) : MarkdownBlock()
+    data class Blockquote(val blocks: List<MarkdownBlock>) : MarkdownBlock()
+    data class UnorderedList(val items: List<String>) : MarkdownBlock()
+    data class OrderedList(val items: List<String>) : MarkdownBlock()
+    object HorizontalRule : MarkdownBlock()
+}
+
+// --- 2. Parser Infrastructure ---
+internal class ParseContext(val lines: List<String>, var currentIndex: Int) {
+    fun currentLine(): String? = lines.getOrNull(currentIndex)
+    fun hasMoreLines(): Boolean = currentIndex < lines.size
+}
+
+internal interface BlockParser {
+    fun canParse(context: ParseContext): Boolean
+    fun parse(context: ParseContext): MarkdownBlock
+}
+
+// --- 3. Concrete Parser Implementations ---
+
+private object RegexConstants {
+    val HEADER_REGEX = Regex("^#{1,6}\\s+.*")
+    val UNORDERED_LIST_REGEX = Regex("^[\\-*•]\\s+.*")
+    val ORDERED_LIST_REGEX = Regex("^\\d+\\.\\s+.*")
+    val IMAGE_REGEX = Regex("^!\\[(.*?)\\]\\((.*?)\\)")
+    val CODE_BLOCK_START_REGEX = Regex("^```.*")
+    val TABLE_ROW_REGEX = Regex("^\\|.*\\|$")
+    val HORIZONTAL_RULE_REGEX = Regex("^(?:---|\\*\\*\\*|___)$")
+}
+
+internal class HeaderParser : BlockParser {
+    override fun canParse(context: ParseContext): Boolean {
+        val line = context.currentLine()?.trim()
+        return line != null && RegexConstants.HEADER_REGEX.matches(line)
+    }
+
+    override fun parse(context: ParseContext): MarkdownBlock {
+        val line = context.currentLine()!!
+        val level = line.takeWhile { it == '#' }.length
+        val text = line.removePrefix("#".repeat(level)).trim()
+        context.currentIndex++
+        return MarkdownBlock.Header(level, text)
+    }
+}
+
+internal class CodeBlockParser : BlockParser {
+    override fun canParse(context: ParseContext): Boolean {
+        return context.currentLine()?.trim()?.let { RegexConstants.CODE_BLOCK_START_REGEX.matches(it) } == true
+    }
+
+    override fun parse(context: ParseContext): MarkdownBlock {
+        val firstLine = context.currentLine()!!
+        val language = firstLine.substring(3).trim().ifEmpty { null }
+        context.currentIndex++
+
+        val codeLines = mutableListOf<String>()
+        while (context.hasMoreLines()) {
+
+            val currentLine = context.currentLine()!!
+            if (RegexConstants.CODE_BLOCK_START_REGEX.matches(currentLine.trim())) {
+                context.currentIndex++ // Consume the closing ```
+                break
+            }
+            codeLines.add(currentLine)
+            context.currentIndex++
+        }
+        return MarkdownBlock.CodeBlock(language, codeLines.joinToString("\n"))
+    }
+}
+
+internal class UnorderedListParser : BlockParser {
+    override fun canParse(context: ParseContext): Boolean {
+        return context.currentLine()?.trim()?.let { RegexConstants.UNORDERED_LIST_REGEX.matches(it) } == true
+    }
+
+    override fun parse(context: ParseContext): MarkdownBlock {
+        val items = mutableListOf<String>()
+        // This loop consumes all consecutive items of an unordered list
+        while (context.hasMoreLines() && canParse(context)) {
+            val itemContent = mutableListOf<String>()
+
+            // First line of the item
+            val firstLine = context.currentLine()!!.trim()
+            val cleanedLine = firstLine.replaceFirst(Regex("^([\\-*•]\\s+)+"), "")
+            itemContent.add(cleanedLine.trim())
+            context.currentIndex++
+
+            // Subsequent lines of the same item (continuation)
+            while (context.hasMoreLines() && context.currentLine()?.isNotBlank() == true) {
+                val trimmedLine = context.currentLine()!!.trim()
+                val isNewListItem = RegexConstants.UNORDERED_LIST_REGEX.matches(trimmedLine) ||
+                                  RegexConstants.ORDERED_LIST_REGEX.matches(trimmedLine)
+                if (isNewListItem) break
+
+                val isOtherBlock = MarkdownParser.blockParsers.any {
+                    it !is ParagraphParser && it !is UnorderedListParser && it !is OrderedListParser && it.canParse(context)
+                }
+                if (isOtherBlock) break
+
+                itemContent.add(trimmedLine)
+                context.currentIndex++
+            }
+            items.add(itemContent.joinToString("\n").trim())
+        }
+        return MarkdownBlock.UnorderedList(items)
+    }
+}
+
+internal class OrderedListParser : BlockParser {
+    override fun canParse(context: ParseContext): Boolean {
+        return context.currentLine()?.trim()?.let { RegexConstants.ORDERED_LIST_REGEX.matches(it) } == true
+    }
+
+    override fun parse(context: ParseContext): MarkdownBlock {
+        val items = mutableListOf<String>()
+        while (context.hasMoreLines() && canParse(context)) {
+            val itemContent = mutableListOf<String>()
+
+            // First line of the item
+            val firstLine = context.currentLine()!!.trim()
+            itemContent.add(firstLine.replaceFirst(RegexConstants.ORDERED_LIST_REGEX.pattern.replace(".*", ""), "").trim())
+            context.currentIndex++
+
+            // Subsequent lines of the same item (continuation)
+            while (context.hasMoreLines() && context.currentLine()?.isNotBlank() == true) {
+                val trimmedLine = context.currentLine()!!.trim()
+                val isNewListItem = RegexConstants.UNORDERED_LIST_REGEX.matches(trimmedLine) ||
+                                  RegexConstants.ORDERED_LIST_REGEX.matches(trimmedLine)
+                if (isNewListItem) break
+
+                val isOtherBlock = MarkdownParser.blockParsers.any {
+                    it !is ParagraphParser && it !is UnorderedListParser && it !is OrderedListParser && it.canParse(context)
+                }
+                if (isOtherBlock) break
+
+                itemContent.add(trimmedLine)
+                context.currentIndex++
+            }
+            items.add(itemContent.joinToString("\n").trim())
+        }
+        return MarkdownBlock.OrderedList(items)
+    }
+}
+
+internal class ImageParser : BlockParser {
+    override fun canParse(context: ParseContext): Boolean {
+        return context.currentLine()?.trim()?.let { RegexConstants.IMAGE_REGEX.matches(it) } == true
+    }
+
+    override fun parse(context: ParseContext): MarkdownBlock {
+        val line = context.currentLine()!!.trim()
+        val match = RegexConstants.IMAGE_REGEX.find(line)!!
+        val altText = match.groupValues[1]
+        val url = match.groupValues[2]
+        context.currentIndex++
+        return MarkdownBlock.Image(altText, url)
+    }
+}
+
+internal class HorizontalRuleParser : BlockParser {
+    override fun canParse(context: ParseContext): Boolean {
+        return context.currentLine()?.trim()?.let { RegexConstants.HORIZONTAL_RULE_REGEX.matches(it) } == true
+    }
+
+    override fun parse(context: ParseContext): MarkdownBlock {
+        context.currentIndex++
+        return MarkdownBlock.HorizontalRule
+    }
+}
+
+internal class BlockquoteParser : BlockParser {
+    override fun canParse(context: ParseContext): Boolean {
+        return context.currentLine()?.trim()?.startsWith(">") == true
+    }
+
+    override fun parse(context: ParseContext): MarkdownBlock {
+        val quoteLines = mutableListOf<String>()
+        while (context.hasMoreLines() && (context.currentLine()?.trim()?.startsWith(">") == true)) {
+            val line = context.currentLine()!!.trim()
+            quoteLines.add(line.removePrefix(">").trim())
+            context.currentIndex++
+        }
+        val nestedBlocks = MarkdownParser.parse(quoteLines.joinToString("\n"))
+        return MarkdownBlock.Blockquote(nestedBlocks)
+    }
+}
+
+internal class TableParser : BlockParser {
+    private val separatorRegex = Regex("^\\s*:?[\\-–—]{2,}:?\\s*$")
+
+    private fun isSeparatorLine(line: String): Boolean {
+        val trimmed = line.trim()
+        if (!trimmed.contains('|') || !trimmed.contains('-')) return false
+        val content = trimmed.removePrefix("|").removeSuffix("|")
+        return content.split('|').all { it.matches(separatorRegex) }
+    }
+
+    override fun canParse(context: ParseContext): Boolean {
+        val currentLine = context.currentLine()?.trim() ?: return false
+        val nextLine = context.lines.getOrNull(context.currentIndex + 1)?.trim() ?: return false
+        return RegexConstants.TABLE_ROW_REGEX.matches(currentLine) && isSeparatorLine(nextLine)
+    }
+
+    override fun parse(context: ParseContext): MarkdownBlock {
+        val headerLine = context.currentLine()!!.trim().removePrefix("|").removeSuffix("|")
+        val header = headerLine.split("|").map { it.trim() }
+        context.currentIndex += 2 // Skip header and separator
+
+        val rows = mutableListOf<List<String>>()
+        while (context.hasMoreLines()) {
+            val line = context.currentLine()?.trim()
+            if (line == null || !RegexConstants.TABLE_ROW_REGEX.matches(line)) {
+                break
+            }
+            val rowContent = line.removePrefix("|").removeSuffix("|")
+            val row = rowContent.split("|").map { it.trim() }
+            if (row.size == header.size) {
+                rows.add(row)
+            }
+            context.currentIndex++
+        }
+        return MarkdownBlock.Table(header, rows)
+    }
+}
+
+internal class ParagraphParser : BlockParser {
+    override fun canParse(context: ParseContext): Boolean {
+        return context.currentLine()?.isNotBlank() == true
+    }
+
+    override fun parse(context: ParseContext): MarkdownBlock {
+        val textLines = mutableListOf<String>()
+        while (context.hasMoreLines()) {
+            val line = context.currentLine()
+            if (line.isNullOrBlank() || (line.isNotBlank() && isAnotherBlock(context))) {
+                break
+            }
+            textLines.add(line)
+            context.currentIndex++
+        }
+        return MarkdownBlock.Paragraph(textLines.joinToString("\n").trim())
+    }
+
+    private fun isAnotherBlock(context: ParseContext): Boolean {
+        return MarkdownParser.blockParsers.any { it !is ParagraphParser && it.canParse(context) }
+    }
+}
+
+// --- 4. Main Parser Object ---
+object MarkdownParser {
+    internal val blockParsers: List<BlockParser> = listOf(
+        HorizontalRuleParser(),
+        CodeBlockParser(),
+        HeaderParser(),
+        BlockquoteParser(),
+        ImageParser(),
+        TableParser(),
+        UnorderedListParser(),
+        OrderedListParser(),
+        ParagraphParser() // Fallback
+    )
+
+    fun parse(markdown: String): List<MarkdownBlock> {
+        val blocks = mutableListOf<MarkdownBlock>()
+        val context = ParseContext(markdown.lines(), 0)
+
+        while (context.hasMoreLines()) {
+            val line = context.currentLine()
+            if (line.isNullOrBlank()) {
+                context.currentIndex++
+                continue
+            }
+
+            val parser = blockParsers.firstOrNull { it.canParse(context) }
+            if (parser != null) {
+                val initialIndex = context.currentIndex
+                val block = parser.parse(context)
+                blocks.add(block)
+                if (context.currentIndex == initialIndex) {
+                    context.currentIndex++
+                }
+            } else {
+                context.currentIndex++
+            }
+        }
+        return blocks
+    }
 }
 
 fun parseMarkdownToBlocks(markdown: String): List<MarkdownBlock> {
-    val blocks = mutableListOf<MarkdownBlock>()
-    val lines = markdown.lines()
-    var i = 0
-    while (i < lines.size) {
-        val line = lines[i]
-        when {
-            line.trim().startsWith("![") && line.trim().endsWith(")") -> {
-                val altTextRegex = Regex("!\\[(.*?)\\]")
-                val urlRegex = Regex("\\((.*?)\\)")
-                val altText = altTextRegex.find(line)?.groupValues?.get(1) ?: ""
-                val url = urlRegex.find(line)?.groupValues?.get(1) ?: ""
-                if (url.isNotEmpty()) {
-                    blocks.add(MarkdownBlock.Image(altText, url))
-                }
-                i++
-            }
-            line.startsWith("```") -> {
-                val lang = line.substring(3).trim()
-                val codeBlockLines = mutableListOf<String>()
-                i++
-                while (i < lines.size && !lines[i].startsWith("```")) {
-                    codeBlockLines.add(lines[i])
-                    i++
-                }
-                val rawText = codeBlockLines.joinToString("\n")
-
-                blocks.add(MarkdownBlock.CodeBlock(rawText, lang.ifEmpty { null }))
-
-                if (i < lines.size) {
-                    i++
-                }
-            }
-            line.trim().startsWith("#") && !line.trim().startsWith("\\#") -> {
-                val trimmedLine = line.trim()
-                val level = trimmedLine.takeWhile { it == '#' }.length
-                val text = trimmedLine.removePrefix("#".repeat(level)).trim()
-                blocks.add(MarkdownBlock.Header(level, text))
-                i++
-            }
-            line.trim().matches(Regex("^(?<!\\\\)[*\\-]\\s+.*")) -> {
-                val trimmedLine = line.trim()
-                val contentStartIndex = trimmedLine.indexOfFirst { it.isWhitespace() } + 1
-                val listContent = mutableListOf(trimmedLine.substring(contentStartIndex))
-                i++
-                while (i < lines.size && lines[i].isNotBlank() && !lines[i].trim().matches(Regex("^(?<!\\\\)[*\\-]\\s+.*")) && !lines[i].trim().startsWith("#") && !lines[i].startsWith("```")) {
-                    listContent.add(lines[i])
-                    i++
-                }
-                blocks.add(MarkdownBlock.ListItem(listContent.joinToString("\n")))
-            }
-            line.trim().startsWith("|") && i + 1 < lines.size && isSeparatorLine(lines[i + 1]) -> {
-                val headerLine = line.trim()
-                val headerContent = headerLine.removePrefix("|").removeSuffix("|")
-                val headerCells = headerContent.split("|").map { it.trim() }
-                i++ // Consume header line
-                i++ // Consume separator line
-
-                val tableRows = mutableListOf<List<String>>()
-                while (i < lines.size && lines[i].trim().startsWith("|")) {
-                    val rowLine = lines[i].trim()
-                    val rowContent = rowLine.removePrefix("|").removeSuffix("|")
-                    val rowCells = rowContent.split("|").map { it.trim() }
-                    tableRows.add(rowCells)
-                    i++
-                }
-                blocks.add(MarkdownBlock.Table(headerCells, tableRows))
-            }
-            else -> {
-                val textLines = mutableListOf<String>()
-                while (i < lines.size) {
-                    val currentLine = lines[i]
-                    val isTableStart = currentLine.trim().startsWith("|") && i + 1 < lines.size && isSeparatorLine(lines[i + 1])
-
-                    if (currentLine.startsWith("```") ||
-                        currentLine.startsWith("#") ||
-                        currentLine.trim().matches(Regex("^(?<!\\\\)[*\\-]\\s+.*")) ||
-                        currentLine.trim().startsWith("$$") || currentLine.trim().startsWith("\\[") ||
-                        isTableStart
-                    ) {
-                        break
-                    }
-                    textLines.add(currentLine)
-                    i++
-                }
-
-                if (textLines.isNotEmpty()) {
-                    val text = textLines.joinToString("\n")
-                    if (text.isNotBlank()) {
-                        blocks.add(MarkdownBlock.Text(text))
-                    }
-                }
-            }
-        }
-    }
-    return blocks
-}
-
-private fun isSeparatorLine(line: String): Boolean {
-    val trimmed = line.trim()
-    // A separator line must contain a pipe and a dash.
-    if (!trimmed.contains('|') || !trimmed.contains('-')) return false
-
-    // Strip optional leading and trailing pipes for splitting.
-    val content = trimmed.removePrefix("|").removeSuffix("|")
-
-    val separatorParts = content.split('|')
-    if (separatorParts.isEmpty()) return false
-
-    // Each part must be like ---, :---, ---:, or :---:.
-    // Be lenient: require at least 2 dashes. Allow different dash characters.
-    val dashRegex = Regex("^\\s*:?[\\-–—]{2,}:?\\s*$")
-
-    return separatorParts.all { it.matches(dashRegex) }
+    return MarkdownParser.parse(markdown)
 }

@@ -11,7 +11,8 @@ import kotlinx.coroutines.withContext
 class HistoryManager(
     private val stateHolder: ViewModelStateHolder,
     private val persistenceManager: DataPersistenceManager,
-    private val compareMessageLists: (List<Message>?, List<Message>?) -> Boolean
+    private val compareMessageLists: (List<Message>?, List<Message>?) -> Boolean,
+    private val onHistoryModified: () -> Unit
 ) {
     private val TAG_HM = "HistoryManager"
 
@@ -140,6 +141,10 @@ class HistoryManager(
 
         persistenceManager.saveLastOpenChat(emptyList())
         Log.d(TAG_HM, "\"Last open chat\" record has been cleared in persistence.")
+
+        if (historyListModified) {
+            onHistoryModified()
+        }
 
         Log.d(
             TAG_HM,

@@ -303,32 +303,10 @@ private data class AttachmentProcessingResult(
             }
             processedAttachmentsForUi.add(processedItemForUi)
 
-            if (shouldUsePartsApiMessage) {
-                try {
-                    val mimeTypeForApi = application.contentResolver.getType(persistentFileProviderUri)
-                        ?: (processedItemForUi as? SelectedMediaItem.GenericFile)?.mimeType
-                        ?: "application/octet-stream"
-
-                    val supportedImageMimesForGemini = listOf("image/png", "image/jpeg", "image/webp", "image/heic", "image/heif")
-                    val supportedAudioMimesForGemini = listOf("audio/mp3", "audio/mpeg", "audio/wav", "audio/x-wav", "audio/aac", "audio/ogg", "audio/opus", "audio/flac", "audio/amr", "audio/aiff", "audio/x-m4a")
-                    val allSupportedInlineMimes = supportedImageMimesForGemini + supportedAudioMimesForGemini
-
-                    if (mimeTypeForApi.lowercase() in allSupportedInlineMimes) {
-                        val fileSize = application.contentResolver.openFileDescriptor(persistentFileProviderUri, "r")?.use { it.statSize } ?: -1L
-                        if (fileSize != -1L && fileSize <= MAX_IMAGE_SIZE_BYTES) {
-                            application.contentResolver.openInputStream(persistentFileProviderUri)?.use { inputStream ->
-                                val bytes = inputStream.readBytes()
-                                apiContentParts.add(ApiContentPart.InlineData(Base64.encodeToString(bytes, Base64.NO_WRAP), mimeTypeForApi))
-                            }
-                        } else {
-                            apiContentParts.add(ApiContentPart.FileUri(uri = persistentFileProviderUri.toString(), mimeType = mimeTypeForApi))
-                        }
-                    } else if (processedItemForUi is SelectedMediaItem.GenericFile) {
-                        apiContentParts.add(ApiContentPart.FileUri(uri = persistentFileProviderUri.toString(), mimeType = mimeTypeForApi))
-                    }
-                } catch (e: Exception) {
-                }
-            }
+            // The logic for Base64 encoding and adding to apiContentParts has been removed.
+            // For Gemini, we now rely on the ApiClient to send the file as a multipart/form-data part,
+            // which is the correct approach for the backend implementation.
+            // This block is intentionally left empty.
         }
         AttachmentProcessingResult(true, processedAttachmentsForUi, imageUriStringsForUi, apiContentParts)
     }
@@ -351,7 +329,7 @@ private data class AttachmentProcessingResult(
 
         viewModelScope.launch {
             val modelIsGeminiType = currentConfig.model.lowercase().startsWith("gemini")
-            val shouldUsePartsApiMessage = currentConfig.provider.equals("google", ignoreCase = true) && modelIsGeminiType
+            val shouldUsePartsApiMessage = modelIsGeminiType
             val providerForRequestBackend = currentConfig.provider
 
             val attachmentResult = processAttachments(attachments, shouldUsePartsApiMessage, textToActuallySend)
@@ -359,11 +337,10 @@ private data class AttachmentProcessingResult(
                 return@launch
             }
 
-            val attachmentsForApiClient = if (shouldUsePartsApiMessage) {
-                emptyList()
-            } else {
-                attachments.toList()
-            }
+            // Always pass the attachments to the ApiClient.
+            // The ApiClient will handle creating the multipart request.
+            // The previous logic incorrectly sent an empty list for Gemini.
+            val attachmentsForApiClient = attachments.toList()
 
             val newUserMessageForUi = UiMessage(
                 id = "user_${UUID.randomUUID()}", text = textToActuallySend, sender = UiSender.User,
@@ -406,44 +383,23 @@ private data class AttachmentProcessingResult(
                     val hasContent = uiMsg.text.isNotBlank() || !uiMsg.attachments.isNullOrEmpty()
                     if (!hasContent) continue
 
-                    if (shouldUsePartsApiMessage) {
-                        val parts = mutableListOf<ApiContentPart>()
-                        if (uiMsg.text.isNotBlank()) {
-                            parts.add(ApiContentPart.Text(text = uiMsg.text.trim()))
-                        }
-                        uiMsg.attachments?.forEach { attachment ->
-                            if (attachment is SelectedMediaItem.ImageFromUri) {
-                                try {
-                                    application.contentResolver.openInputStream(attachment.uri)?.use { inputStream ->
-                                        val bytes = inputStream.readBytes()
-                                        if (bytes.isNotEmpty() && bytes.size <= MAX_IMAGE_SIZE_BYTES) {
-                                            val mimeType = application.contentResolver.getType(attachment.uri) ?: "image/jpeg"
-                                            val supportedImageMimesForGemini = listOf("image/png", "image/jpeg", "image/webp", "image/heic", "image/heif")
-                                            if (mimeType.lowercase() in supportedImageMimesForGemini) {
-                                                parts.add(ApiContentPart.InlineData(Base64.encodeToString(bytes, Base64.NO_WRAP), mimeType))
-                                            }
-                                        }
-                                    }
-                                } catch (e: Exception) {
-                                }
-                            }
-                        }
-
-                        if (parts.isNotEmpty()) {
-                            apiMessagesForBackend.add(0, PartsApiMessage(role = roleForHistory, parts = parts))
-                            historyMessageCount++
-                        }
-                    } else {
-                        if (uiMsg.text.isNotBlank()) {
-                            apiMessagesForBackend.add(
-                                0,
-                                SimpleTextApiMessage(
-                                    role = roleForHistory,
-                                    content = uiMsg.text.trim()
-                                )
+                    // Simplified history processing. History messages should only contain text.
+                    // The backend expects multimodal content only in the last user message,
+                    // which is handled by the multipart upload.
+                    if (uiMsg.text.isNotBlank()) {
+                        val historyMessage: AbstractApiMessage = if (shouldUsePartsApiMessage) {
+                            PartsApiMessage(
+                                role = roleForHistory,
+                                parts = listOf(ApiContentPart.Text(text = uiMsg.text.trim()))
                             )
-                            historyMessageCount++
+                        } else {
+                            SimpleTextApiMessage(
+                                role = roleForHistory,
+                                content = uiMsg.text.trim()
+                            )
                         }
+                        apiMessagesForBackend.add(0, historyMessage)
+                        historyMessageCount++
                     }
                 }
 
@@ -486,9 +442,7 @@ private data class AttachmentProcessingResult(
                             ) 1024 else null
                         ) else null
                     ).let { if (it.temperature != null || it.topP != null || it.maxOutputTokens != null || it.thinkingConfig != null) it else null },
-                    qwenEnableSearch = if (currentConfig.model.lowercase()
-                            .contains("qwen")
-                    ) stateHolder._isWebSearchEnabled.value else null,
+                    qwenEnableSearch = if (currentConfig.model.lowercase().contains("qwen")) stateHolder._isWebSearchEnabled.value else null
                 )
 
                 apiHandler.streamChatResponse(
@@ -509,6 +463,17 @@ private data class AttachmentProcessingResult(
         }
     }
 
+private suspend fun readTextFromUri(context: Context, uri: Uri): String? {
+        return withContext(Dispatchers.IO) {
+            try {
+                context.contentResolver.openInputStream(uri)?.bufferedReader().use { reader ->
+                    reader?.readText()
+                }
+            } catch (e: Exception) {
+                null
+            }
+        }
+    }
     private fun getFileName(contentResolver: ContentResolver, uri: Uri): String? {
         if (uri == Uri.EMPTY) return null
         var fileName: String? = null

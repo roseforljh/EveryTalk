@@ -1,3 +1,12 @@
 <resources>
     <string name="app_name">EveryTalk</string>
+    <!-- Chat related strings -->
+    <string name="connecting_to_model">正在连接大模型</string>
+    <string name="code_copied">代码已复制</string>
+    <string name="copy">复制</string>
+    <string name="view_sources">查看参考来源 (%d)</string>
+    <string name="no_permission_open_link">没有权限打开此链接</string>
+    <string name="no_app_found_for_link">没有找到可以打开此链接的应用</string>
+    <string name="cannot_open_link">无法打开链接: %s</string>
+    <string name="ai_reply_message">AI回复消息</string>
 </resources>

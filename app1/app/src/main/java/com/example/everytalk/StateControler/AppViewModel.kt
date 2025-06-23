@@ -14,8 +14,6 @@ import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.DataClass.Sender
 import com.example.everytalk.data.DataClass.WebSearchResult
 import com.example.everytalk.data.local.SharedPreferencesDataSource
-import com.example.everytalk.data.network.ApiClient
-import android.net.Uri
 import coil3.ImageLoader
 import com.example.everytalk.model.SelectedMediaItem
 import com.example.everytalk.ui.screens.MainScreen.chat.ChatListItem
@@ -23,8 +21,17 @@ import com.example.everytalk.ui.screens.viewmodel.ConfigManager
 import com.example.everytalk.ui.screens.viewmodel.DataPersistenceManager
 import com.example.everytalk.ui.screens.viewmodel.HistoryManager
 import com.example.everytalk.util.parseMarkdownToBlocks
+import android.util.Log
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -36,11 +43,25 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import java.util.UUID
 import androidx.annotation.Keep
+import com.example.everytalk.util.MarkdownBlock
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.yield
+import java.util.Collections
+import java.util.LinkedHashMap
+
+@Keep
+class LRUCache<K, V>(private val maxSize: Int) : LinkedHashMap<K, V>(maxSize + 1, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<K, V>): Boolean {
+        return size > maxSize
+    }
+}
 
 class AppViewModel(
     application: Application,
@@ -53,22 +74,33 @@ class AppViewModel(
         val customProviders: Set<String>
     )
 
+    private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val defaultScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    private val messagesMutex = Mutex()
+    private val markdownCache = Collections.synchronizedMap(LRUCache<String, List<MarkdownBlock>>(500))
+    private val conversationPreviewCache = Collections.synchronizedMap(LRUCache<Int, String>(100))
+    private val textUpdateDebouncer = mutableMapOf<String, Job>()
+
+
     internal val stateHolder = ViewModelStateHolder()
     private val imageLoader = ImageLoader.Builder(application.applicationContext).build()
     private val persistenceManager =
-        DataPersistenceManager(application.applicationContext, dataSource, stateHolder, viewModelScope, imageLoader)
+        DataPersistenceManager(application.applicationContext, dataSource, stateHolder, ioScope, imageLoader)
 
     private val historyManager: HistoryManager =
         HistoryManager(
             stateHolder,
             persistenceManager,
-            ::areMessageListsEffectivelyEqual
+            ::areMessageListsEffectivelyEqual,
+            onHistoryModified = { conversationPreviewCache.clear() }
         )
 
     private val apiHandler: ApiHandler by lazy {
         ApiHandler(
             stateHolder,
-            viewModelScope,
+            mainScope,
             historyManager,
             ::onAiMessageFullTextChanged
         )
@@ -78,14 +110,14 @@ class AppViewModel(
             stateHolder,
             persistenceManager,
             apiHandler,
-            viewModelScope
+            ioScope
         )
     }
 
     private val messageSender: MessageSender by lazy {
         MessageSender(
             application = getApplication(),
-            viewModelScope = viewModelScope,
+            viewModelScope = mainScope,
             stateHolder = stateHolder,
             apiHandler = apiHandler,
             historyManager = historyManager,
@@ -105,6 +137,8 @@ class AppViewModel(
     val messages: SnapshotStateList<Message> get() = stateHolder.messages
     val historicalConversations: StateFlow<List<List<Message>>> get() = stateHolder._historicalConversations.asStateFlow()
     val loadedHistoryIndex: StateFlow<Int?> get() = stateHolder._loadedHistoryIndex.asStateFlow()
+    val isLoadingHistory: StateFlow<Boolean> get() = stateHolder._isLoadingHistory.asStateFlow()
+    val currentConversationId: StateFlow<String> get() = stateHolder._currentConversationId.asStateFlow()
     val apiConfigs: StateFlow<List<ApiConfig>> get() = stateHolder._apiConfigs.asStateFlow()
     val selectedApiConfig: StateFlow<ApiConfig?> get() = stateHolder._selectedApiConfig.asStateFlow()
     val isApiCalling: StateFlow<Boolean> get() = stateHolder._isApiCalling.asStateFlow()
@@ -115,18 +149,16 @@ class AppViewModel(
     val scrollToBottomEvent: SharedFlow<Unit> get() = stateHolder._scrollToBottomEvent.asSharedFlow()
     val selectedMediaItems: SnapshotStateList<SelectedMediaItem> get() = stateHolder.selectedMediaItems
 
-    private val _exportRequest = MutableSharedFlow<Pair<String, String>>()
-    val exportRequest: SharedFlow<Pair<String, String>> = _exportRequest.asSharedFlow()
+    private val _exportRequest = Channel<Pair<String, String>>(Channel.BUFFERED)
+    val exportRequest: Flow<Pair<String, String>> = _exportRequest.receiveAsFlow()
+
+    private val _settingsExportRequest = Channel<Pair<String, String>>(Channel.BUFFERED)
+    val settingsExportRequest: Flow<Pair<String, String>> = _settingsExportRequest.receiveAsFlow()
 
     private val _showEditDialog = MutableStateFlow(false)
     val showEditDialog: StateFlow<Boolean> = _showEditDialog.asStateFlow()
     private val _editingMessageId = MutableStateFlow<String?>(null)
     val editDialogInputText: StateFlow<String> get() = stateHolder._editDialogInputText.asStateFlow()
-    private val _showRenameDialogState = MutableStateFlow(false)
-    val showRenameDialogState: StateFlow<Boolean> = _showRenameDialogState.asStateFlow()
-    private val _renamingIndexState = MutableStateFlow<Int?>(null)
-    val renamingIndexState: StateFlow<Int?> = _renamingIndexState.asStateFlow()
-    val renameInputText: StateFlow<String> get() = stateHolder._renameInputText.asStateFlow()
     private val _isSearchActiveInDrawer = MutableStateFlow(false)
     val isSearchActiveInDrawer: StateFlow<Boolean> = _isSearchActiveInDrawer.asStateFlow()
     private val _searchQueryInDrawer = MutableStateFlow("")
@@ -162,7 +194,7 @@ class AppViewModel(
                     .let { if (it == -1) Int.MAX_VALUE else it })
         }.thenBy { it })
     }.stateIn(
-        viewModelScope,
+        ioScope,
         SharingStarted.Eagerly,
         predefinedPlatformsList
     )
@@ -180,80 +212,101 @@ class AppViewModel(
        isApiCalling,
        currentStreamingAiMessageId
    ) { messages, isApiCalling, currentStreamingAiMessageId ->
-       messages.flatMap { message ->
-           when {
-               message.sender == Sender.User -> {
-                   listOf(ChatListItem.UserMessage(message))
-               }
-               message.isError -> {
-                   listOf(ChatListItem.ErrorMessage(message))
-               }
-               message.sender == Sender.AI -> {
-                   val showLoading = isApiCalling &&
-                           message.id == currentStreamingAiMessageId &&
-                           message.text.isBlank() &&
-                           message.reasoning.isNullOrBlank() &&
-                           !message.contentStarted
-
-                   if (showLoading) {
-                       listOf(ChatListItem.LoadingIndicator(message.id))
-                   } else {
-                       val reasoningItem = if (!message.reasoning.isNullOrBlank()) {
-                           listOf(ChatListItem.AiMessageReasoning(message))
-                       } else {
-                           emptyList()
-                       }
-
-                       val blocks = parseMarkdownToBlocks(message.text)
-                       val hasReasoning = reasoningItem.isNotEmpty()
-                       val blockItems = blocks.mapIndexed { index, block ->
-                           ChatListItem.AiMessageBlock(
-                               messageId = message.id,
-                               block = block,
-                               blockIndex = index,
-                               isFirstBlock = index == 0,
-                               isLastBlock = index == blocks.size - 1,
-                               hasReasoning = hasReasoning
-                           )
-                       }
-
-                       val footerItem = if (!message.webSearchResults.isNullOrEmpty() && !(isApiCalling && message.id == currentStreamingAiMessageId)) {
-                           listOf(ChatListItem.AiMessageFooter(message))
-                       } else {
-                           emptyList()
-                       }
-
-                       reasoningItem + blockItems + footerItem
+       messages.map { message ->
+           when (message.sender) {
+               Sender.AI -> {
+                   val cacheKey = "${message.id}_${message.text.hashCode()}"
+                   val blocks = synchronized(markdownCache) {
+                       markdownCache[cacheKey] ?: parseMarkdownToBlocks(message.text).also { markdownCache[cacheKey] = it }
                    }
+                   createAiMessageItems(message, blocks, isApiCalling, currentStreamingAiMessageId)
                }
-               else -> emptyList()
+               else -> createOtherMessageItems(message)
            }
-       }
+       }.flatten()
    }.flowOn(Dispatchers.Default)
        .stateIn(
-           scope = viewModelScope,
+           scope = defaultScope,
            started = SharingStarted.WhileSubscribed(5000),
            initialValue = emptyList()
        )
 
   init {
-       viewModelScope.launch(Dispatchers.IO) {
+       ioScope.launch {
            _customProviders.value = dataSource.loadCustomProviders()
        }
 
        persistenceManager.loadInitialData(loadLastChat = false) { initialConfigPresent, initialHistoryPresent ->
             if (!initialConfigPresent) {
-                viewModelScope.launch { }
+                mainScope.launch { }
             }
         }
 
 
-        viewModelScope.launch(Dispatchers.IO) {
-            apiHandler
-            configManager
-            messageSender
-        }
-    }
+       ioScope.launch {
+           apiHandler
+           configManager
+           messageSender
+       }
+
+      mainScope.launch {
+          while (isActive) {
+              delay(30_000) // 每 30 秒
+              textUpdateDebouncer.entries.removeIf { !it.value.isActive }
+          }
+      }
+  }
+
+   private fun createAiMessageItems(
+       message: Message,
+       blocks: List<MarkdownBlock>,
+       isApiCalling: Boolean,
+       currentStreamingAiMessageId: String?
+   ): List<ChatListItem> {
+       val showLoading = isApiCalling &&
+               message.id == currentStreamingAiMessageId &&
+               message.text.isBlank() &&
+               message.reasoning.isNullOrBlank() &&
+               !message.contentStarted
+
+       if (showLoading) {
+           return listOf(ChatListItem.LoadingIndicator(message.id))
+       }
+
+       val reasoningItem = if (!message.reasoning.isNullOrBlank()) {
+           listOf(ChatListItem.AiMessageReasoning(message))
+       } else {
+           emptyList()
+       }
+
+       val hasReasoning = reasoningItem.isNotEmpty()
+       val blockItems = blocks.mapIndexed { index, block ->
+           ChatListItem.AiMessageBlock(
+               messageId = message.id,
+               block = block,
+               blockIndex = index,
+               isFirstBlock = index == 0,
+               isLastBlock = index == blocks.size - 1,
+               hasReasoning = hasReasoning
+           )
+       }
+
+       val footerItem = if (!message.webSearchResults.isNullOrEmpty() && !(isApiCalling && message.id == currentStreamingAiMessageId)) {
+           listOf(ChatListItem.AiMessageFooter(message))
+       } else {
+           emptyList()
+       }
+
+       return reasoningItem + blockItems + footerItem
+   }
+
+   private fun createOtherMessageItems(message: Message): List<ChatListItem> {
+       return when {
+           message.sender == Sender.User -> listOf(ChatListItem.UserMessage(message))
+           message.isError -> listOf(ChatListItem.ErrorMessage(message))
+           else -> emptyList()
+       }
+   }
 
 
     private fun areMessageListsEffectivelyEqual(
@@ -292,7 +345,7 @@ class AppViewModel(
     fun addProvider(providerName: String) {
         val trimmedName = providerName.trim()
         if (trimmedName.isNotBlank()) {
-            viewModelScope.launch(Dispatchers.IO) {
+            ioScope.launch {
                 val currentCustomProviders = _customProviders.value.toMutableSet()
 
                 if (predefinedPlatformsList.any { it.equals(trimmedName, ignoreCase = true) }) {
@@ -314,7 +367,7 @@ class AppViewModel(
     }
 
     fun deleteProvider(providerName: String) {
-        viewModelScope.launch(Dispatchers.IO) {
+        ioScope.launch {
             val trimmedProviderName = providerName.trim()
 
             if (predefinedPlatformsList.any { it.equals(trimmedProviderName, ignoreCase = true) }) {
@@ -354,7 +407,7 @@ class AppViewModel(
     }
 
     fun showSnackbar(message: String) {
-        viewModelScope.launch {
+        mainScope.launch {
             stateHolder._snackbarMessage.emit(message)
         }
     }
@@ -409,21 +462,27 @@ class AppViewModel(
     fun confirmMessageEdit() {
         val messageIdToEdit = _editingMessageId.value ?: return
         val updatedText = stateHolder._editDialogInputText.value.trim()
-        viewModelScope.launch {
-            val messageIndex = stateHolder.messages.indexOfFirst { it.id == messageIdToEdit }
-            if (messageIndex != -1) {
-                val originalMessage = stateHolder.messages[messageIndex]
-                if (originalMessage.text != updatedText) {
-                    val updatedMessage = originalMessage.copy(
-                        text = updatedText,
-                        timestamp = System.currentTimeMillis()
-                    )
-                    stateHolder.messages[messageIndex] = updatedMessage
-                    if (stateHolder.messageAnimationStates[updatedMessage.id] != true) {
-                        stateHolder.messageAnimationStates[updatedMessage.id] = true
+        mainScope.launch {
+            var needsHistorySave = false
+            messagesMutex.withLock {
+                val messageIndex = stateHolder.messages.indexOfFirst { it.id == messageIdToEdit }
+                if (messageIndex != -1) {
+                    val originalMessage = stateHolder.messages[messageIndex]
+                    if (originalMessage.text != updatedText) {
+                        val updatedMessage = originalMessage.copy(
+                            text = updatedText,
+                            timestamp = System.currentTimeMillis()
+                        )
+                        stateHolder.messages[messageIndex] = updatedMessage
+                        if (stateHolder.messageAnimationStates[updatedMessage.id] != true) {
+                            stateHolder.messageAnimationStates[updatedMessage.id] = true
+                        }
+                        needsHistorySave = true
                     }
-                    viewModelScope.launch { historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true) }
                 }
+            }
+            if (needsHistorySave) {
+                ioScope.launch { historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true) }
             }
             withContext(Dispatchers.Main.immediate) { dismissEditDialog() }
         }
@@ -468,7 +527,7 @@ class AppViewModel(
             }
         } ?: emptyList()
 
-        viewModelScope.launch {
+        defaultScope.launch {
             val success = withContext(Dispatchers.Default) {
                 val userMessageIndex =
                     stateHolder.messages.indexOfFirst { it.id == originalUserMessageId }
@@ -491,31 +550,36 @@ class AppViewModel(
                     }
                 }
 
-                withContext(Dispatchers.Main.immediate) {
-                    messagesToRemove.forEach { aiMessageToRemove ->
-                        if (stateHolder._currentStreamingAiMessageId.value == aiMessageToRemove.id) {
-                            apiHandler.cancelCurrentApiJob(
-                                "为消息 '${originalUserMessageId.take(4)}' 重新生成回答，取消旧AI流",
-                                isNewMessageSend = true
-                            )
+                messagesMutex.withLock {
+                    withContext(Dispatchers.Main.immediate) {
+                        val idsToRemove = messagesToRemove.map { it.id }.toSet()
+                        idsToRemove.forEach { id ->
+                            if (stateHolder._currentStreamingAiMessageId.value == id) {
+                                apiHandler.cancelCurrentApiJob(
+                                    "为消息 '${originalUserMessageId.take(4)}' 重新生成回答，取消旧AI流",
+                                    isNewMessageSend = true
+                                )
+                            }
                         }
-                        stateHolder.reasoningCompleteMap.remove(aiMessageToRemove.id)
-                        stateHolder.expandedReasoningStates.remove(aiMessageToRemove.id)
-                        stateHolder.messageAnimationStates.remove(aiMessageToRemove.id)
-                        stateHolder.messages.remove(aiMessageToRemove)
-                    }
+                        stateHolder.reasoningCompleteMap.keys.removeAll(idsToRemove)
+                        stateHolder.expandedReasoningStates.keys.removeAll(idsToRemove)
+                        stateHolder.messageAnimationStates.keys.removeAll(idsToRemove)
 
-                    val messageToDelete = stateHolder.messages.getOrNull(userMessageIndex)
-                    if (messageToDelete?.id == originalUserMessageId) {
-                        stateHolder.messageAnimationStates.remove(originalUserMessageId)
-                        stateHolder.messages.removeAt(userMessageIndex)
+                        stateHolder.messages.removeAll(messagesToRemove.toSet())
+
+                        val finalUserMessageIndex =
+                            stateHolder.messages.indexOfFirst { it.id == originalUserMessageId }
+                        if (finalUserMessageIndex != -1) {
+                            stateHolder.messageAnimationStates.remove(originalUserMessageId)
+                            stateHolder.messages.removeAt(finalUserMessageIndex)
+                        }
                     }
                 }
                 true
             }
 
             if (success) {
-                viewModelScope.launch { historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true) }
+                ioScope.launch { historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true) }
                 onSendMessage(
                     messageText = originalUserMessageText,
                     isFromRegeneration = true,
@@ -526,7 +590,7 @@ class AppViewModel(
     }
 
     fun triggerScrollToBottom() {
-        viewModelScope.launch { stateHolder._scrollToBottomEvent.tryEmit(Unit) }
+        mainScope.launch { stateHolder._scrollToBottomEvent.tryEmit(Unit) }
     }
 
     fun onCancelAPICall() {
@@ -536,10 +600,12 @@ class AppViewModel(
     fun startNewChat() {
         dismissEditDialog(); dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("开始新聊天")
-        viewModelScope.launch {
-            historyManager.saveCurrentChatToHistoryIfNeeded()
-            withContext(Dispatchers.Main.immediate) {
+        mainScope.launch {
+            ioScope.launch { historyManager.saveCurrentChatToHistoryIfNeeded() }.join()
+            messagesMutex.withLock {
                 stateHolder.clearForNewChat()
+                // Ensure new chats get a unique ID from the start.
+                stateHolder._currentConversationId.value = "chat_${UUID.randomUUID()}"
                 triggerScrollToBottom()
                 if (_isSearchActiveInDrawer.value) setSearchActiveInDrawer(false)
             }
@@ -549,20 +615,27 @@ class AppViewModel(
     fun loadConversationFromHistory(index: Int) {
         dismissEditDialog(); dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("加载历史索引 $index")
-        viewModelScope.launch {
-            historyManager.saveCurrentChatToHistoryIfNeeded()
+        mainScope.launch {
+            stateHolder._isLoadingHistory.value = true
+            ioScope.launch { historyManager.saveCurrentChatToHistoryIfNeeded() }.join()
 
             val conversationList = stateHolder._historicalConversations.value
             if (index < 0 || index >= conversationList.size) {
-                showSnackbar("无法加载对话：无效的索引"); return@launch
+                showSnackbar("无法加载对话：无效的索引")
+                stateHolder._isLoadingHistory.value = false
+                return@launch
             }
             val conversationToLoad = conversationList[index]
+            val stableId = conversationToLoad.firstOrNull()?.id ?: "history_${UUID.randomUUID()}"
+            stateHolder._currentConversationId.value = stableId
+            yield() // Allow UI to recompose with new ID and loading state before proceeding
 
-            val (processedConversation, newReasoningMap, newAnimationStates) = withContext(Dispatchers.IO) {
+
+            val (processedConversation, newReasoningMap, newAnimationStates) = withContext(defaultScope.coroutineContext) {
                 val newReasoning = mutableMapOf<String, Boolean>()
                 val newAnimation = mutableMapOf<String, Boolean>()
 
-                val processed = conversationToLoad.map { msg ->
+                val processed = conversationToLoad.map { msg: Message ->
                     val updatedContentStarted = msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || msg.isError
                     msg.copy(contentStarted = updatedContentStarted)
                 }
@@ -581,74 +654,78 @@ class AppViewModel(
                 Triple(processed, newReasoning, newAnimation)
             }
 
-            withContext(Dispatchers.Main.immediate) {
-                stateHolder.messages.clear()
-                stateHolder.messages.addAll(processedConversation)
-                stateHolder.reasoningCompleteMap.clear()
-                stateHolder.reasoningCompleteMap.putAll(newReasoningMap)
-                stateHolder.messageAnimationStates.clear()
-                stateHolder.messageAnimationStates.putAll(newAnimationStates)
+            messagesMutex.withLock {
+                withContext(Dispatchers.Main.immediate) {
+                    stateHolder.messages.clear()
+                    stateHolder.messages.addAll(processedConversation)
+                    stateHolder.reasoningCompleteMap.clear()
+                    stateHolder.reasoningCompleteMap.putAll(newReasoningMap)
+                    stateHolder.messageAnimationStates.clear()
+                    stateHolder.messageAnimationStates.putAll(newAnimationStates)
 
-                stateHolder._loadedHistoryIndex.value = index
+                    stateHolder._loadedHistoryIndex.value = index
+                }
             }
 
             if (_isSearchActiveInDrawer.value) withContext(Dispatchers.Main.immediate) {
                 setSearchActiveInDrawer(false)
             }
+            // Crucially, set loading to false AFTER all state has been updated.
+            stateHolder._isLoadingHistory.value = false
         }
     }
 
     fun deleteConversation(indexToDelete: Int) {
         val currentLoadedIndex = stateHolder._loadedHistoryIndex.value
-        if (indexToDelete < 0 || indexToDelete >= stateHolder._historicalConversations.value.size) {
+        val historicalConversations = stateHolder._historicalConversations.value
+        if (indexToDelete < 0 || indexToDelete >= historicalConversations.size) {
             showSnackbar("无法删除：无效的索引"); return
         }
-        viewModelScope.launch {
+        mainScope.launch {
             val wasCurrentChatDeleted = (currentLoadedIndex == indexToDelete)
             val idsInDeletedConversation =
-                stateHolder._historicalConversations.value.getOrNull(indexToDelete)?.map { it.id }
+                historicalConversations.getOrNull(indexToDelete)?.map { it.id }
                     ?: emptyList()
-            historyManager.deleteConversation(indexToDelete)
+            ioScope.launch { historyManager.deleteConversation(indexToDelete) }.join()
             if (wasCurrentChatDeleted) {
-                withContext(Dispatchers.Main.immediate) {
+                messagesMutex.withLock {
                     dismissEditDialog(); dismissSourcesDialog()
                     stateHolder.clearForNewChat(); triggerScrollToBottom()
                 }
                 apiHandler.cancelCurrentApiJob("当前聊天(#$indexToDelete)被删除，开始新聊天")
             } else {
-                withContext(Dispatchers.Main.immediate) {
-                    idsInDeletedConversation.forEach { id ->
-                        stateHolder.reasoningCompleteMap.remove(id)
-                        stateHolder.expandedReasoningStates.remove(id)
-                        stateHolder.messageAnimationStates.remove(id)
-                    }
-                }
+                val idsToRemove = idsInDeletedConversation.toSet()
+                stateHolder.reasoningCompleteMap.keys.removeAll(idsToRemove)
+                stateHolder.expandedReasoningStates.keys.removeAll(idsToRemove)
+                stateHolder.messageAnimationStates.keys.removeAll(idsToRemove)
             }
             showSnackbar("对话已删除")
+            conversationPreviewCache.clear()
         }
     }
 
     fun clearAllConversations() {
         dismissEditDialog(); dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("清除所有历史记录")
-        viewModelScope.launch {
-            historyManager.clearAllHistory()
-            withContext(Dispatchers.Main.immediate) {
+        mainScope.launch {
+            ioScope.launch { historyManager.clearAllHistory() }.join()
+            messagesMutex.withLock {
                 stateHolder.clearForNewChat(); triggerScrollToBottom()
             }
             showSnackbar("所有对话已清除")
+            conversationPreviewCache.clear()
         }
     }
 
     fun showSourcesDialog(sources: List<WebSearchResult>) {
-        viewModelScope.launch {
+        mainScope.launch {
             stateHolder._sourcesForDialog.value = sources; stateHolder._showSourcesDialog.value =
             true
         }
     }
 
     fun dismissSourcesDialog() {
-        viewModelScope.launch {
+        mainScope.launch {
             if (stateHolder._showSourcesDialog.value) stateHolder._showSourcesDialog.value = false
         }
     }
@@ -671,9 +748,9 @@ class AppViewModel(
    }
 
     fun exportMessageText(text: String) {
-        viewModelScope.launch {
+        mainScope.launch {
             val fileName = "conversation_export.md"
-            _exportRequest.emit(fileName to text)
+            _exportRequest.send(fileName to text)
         }
     }
  
@@ -681,7 +758,7 @@ class AppViewModel(
     fun updateConfig(config: ApiConfig) = configManager.updateConfig(config)
     fun deleteConfig(config: ApiConfig) = configManager.deleteConfig(config)
     fun deleteConfigGroup(apiKey: String, modalityType: com.example.everytalk.data.DataClass.ModalityType) {
-        viewModelScope.launch(Dispatchers.IO) {
+        ioScope.launch {
             val configsToDelete = stateHolder._apiConfigs.value.filter { it.key == apiKey && it.modalityType == modalityType }
 
             if (configsToDelete.isNotEmpty()) {
@@ -697,39 +774,40 @@ class AppViewModel(
     fun clearAllConfigs() = configManager.clearAllConfigs()
     fun selectConfig(config: ApiConfig) = configManager.selectConfig(config)
 fun updateConfigGroup(representativeConfig: ApiConfig, newAddress: String, newKey: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val trimmedAddress = newAddress.trim()
-            val trimmedKey = newKey.trim()
+       ioScope.launch {
+           val trimmedAddress = newAddress.trim()
+           val trimmedKey = newKey.trim()
 
-            val originalKey = representativeConfig.key
-            val modality = representativeConfig.modalityType
+           val originalKey = representativeConfig.key
+           val modality = representativeConfig.modalityType
 
-            val currentConfigs = stateHolder._apiConfigs.value
-            val newConfigs = currentConfigs.map { config ->
-                if (config.key == originalKey && config.modalityType == modality) {
-                    config.copy(address = trimmedAddress, key = trimmedKey)
-                } else {
-                    config
-                }
-            }
+           val currentConfigs = stateHolder._apiConfigs.value
+           val newConfigs = currentConfigs.map { config ->
+               if (config.key == originalKey && config.modalityType == modality) {
+                   config.copy(address = trimmedAddress, key = trimmedKey)
+               } else {
+                   config
+               }
+           }
+           if (currentConfigs != newConfigs) {
+               stateHolder._apiConfigs.value = newConfigs
+               persistenceManager.saveApiConfigs(newConfigs)
 
-            stateHolder._apiConfigs.value = newConfigs
-            persistenceManager.saveApiConfigs(newConfigs)
+               val currentSelectedConfig = stateHolder._selectedApiConfig.value
+               if (currentSelectedConfig != null && currentSelectedConfig.key == originalKey && currentSelectedConfig.modalityType == modality) {
+                   val newSelectedConfig = currentSelectedConfig.copy(address = trimmedAddress, key = trimmedKey)
+                   stateHolder._selectedApiConfig.value = newSelectedConfig
+               }
 
-            val currentSelectedConfig = stateHolder._selectedApiConfig.value
-            if (currentSelectedConfig != null && currentSelectedConfig.key == originalKey && currentSelectedConfig.modalityType == modality) {
-                val newSelectedConfig = currentSelectedConfig.copy(address = trimmedAddress, key = trimmedKey)
-                stateHolder._selectedApiConfig.value = newSelectedConfig
-            }
-
-            withContext(Dispatchers.Main) {
-                showSnackbar("配置已更新")
-            }
-        }
-    }
+               withContext(Dispatchers.Main) {
+                   showSnackbar("配置已更新")
+               }
+           }
+       }
+   }
 
     fun onAnimationComplete(messageId: String) {
-        viewModelScope.launch(Dispatchers.Main.immediate) {
+        mainScope.launch(Dispatchers.Main.immediate) {
             if (stateHolder.messageAnimationStates[messageId] != true) {
                 stateHolder.messageAnimationStates[messageId] = true
             }
@@ -741,50 +819,30 @@ fun updateConfigGroup(representativeConfig: ApiConfig, newAddress: String, newKe
     }
 
     fun getConversationPreviewText(index: Int): String {
-        val conversation = stateHolder._historicalConversations.value.getOrNull(index)
-            ?: return "对话 ${index + 1}"
-        val placeholderTitleMsg =
-            conversation.firstOrNull { it.sender == Sender.System && it.isPlaceholderName && it.text.isNotBlank() }?.text?.trim()
-        if (!placeholderTitleMsg.isNullOrBlank()) return placeholderTitleMsg
-        val firstUserMsg =
-            conversation.firstOrNull { it.sender == Sender.User && it.text.isNotBlank() }?.text?.trim()
-        if (!firstUserMsg.isNullOrBlank()) return firstUserMsg
-        val firstAiMsg =
-            conversation.firstOrNull { it.sender == Sender.AI && it.text.isNotBlank() }?.text?.trim()
-        if (!firstAiMsg.isNullOrBlank()) return firstAiMsg
-        return "对话 ${index + 1}"
-    }
+        synchronized(conversationPreviewCache) {
+            val cachedPreview = conversationPreviewCache[index]
+            if (cachedPreview != null) return cachedPreview
 
-    fun onRenameInputTextChange(newName: String) {
-        stateHolder._renameInputText.value = newName
-    }
+            val conversation = stateHolder._historicalConversations.value.getOrNull(index)
+                ?: return "对话 ${index + 1}".also { conversationPreviewCache[index] = it }
 
-    fun showRenameDialog(index: Int) {
-        if (index >= 0 && index < stateHolder._historicalConversations.value.size) {
-            _renamingIndexState.value = index
-            val currentPreview = getConversationPreviewText(index)
-            val isDefaultPreview = currentPreview.startsWith("对话 ") && runCatching {
-                currentPreview.substringAfter("对话 ").toIntOrNull() == index + 1
-            }.getOrElse { false }
-            stateHolder._renameInputText.value = if (isDefaultPreview) "" else currentPreview
-            _showRenameDialogState.value = true
-        } else {
-            showSnackbar("无法重命名：无效的对话索引")
+            val newPreview = (conversation.firstOrNull { it.sender == Sender.System && it.isPlaceholderName && it.text.isNotBlank() }?.text?.trim()
+                ?: conversation.firstOrNull { it.sender == Sender.User && it.text.isNotBlank() }?.text?.trim()
+                ?: conversation.firstOrNull { it.sender == Sender.AI && it.text.isNotBlank() }?.text?.trim()
+                ?: "对话 ${index + 1}")
+
+            conversationPreviewCache[index] = newPreview
+            return newPreview
         }
     }
 
-    fun dismissRenameDialog() {
-        _showRenameDialogState.value = false
-        _renamingIndexState.value = null
-        stateHolder._renameInputText.value = ""
-    }
 
     fun renameConversation(index: Int, newName: String) {
         val trimmedNewName = newName.trim()
         if (trimmedNewName.isBlank()) {
             showSnackbar("新名称不能为空"); return
         }
-        viewModelScope.launch {
+        defaultScope.launch {
             val success = withContext(Dispatchers.Default) {
                 val currentHistoricalConvos = stateHolder._historicalConversations.value
                 if (index < 0 || index >= currentHistoricalConvos.size) {
@@ -825,7 +883,7 @@ fun updateConfigGroup(representativeConfig: ApiConfig, newAddress: String, newKe
                     stateHolder._historicalConversations.value = updatedHistoricalConversationsList.toList()
                 }
 
-                persistenceManager.saveChatHistory(stateHolder._historicalConversations.value)
+                ioScope.launch{ persistenceManager.saveChatHistory(stateHolder._historicalConversations.value) }.join()
 
                 if (stateHolder._loadedHistoryIndex.value == index) {
                     val reloadedConversation = originalConversationAtIndex.toList().map { msg ->
@@ -833,19 +891,21 @@ fun updateConfigGroup(representativeConfig: ApiConfig, newAddress: String, newKe
                             msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || msg.isError
                         msg.copy(contentStarted = updatedContentStarted)
                     }
-                    withContext(Dispatchers.Main.immediate) {
-                        stateHolder.messages.clear()
-                        stateHolder.messages.addAll(reloadedConversation)
-                        reloadedConversation.forEach { msg ->
-                            val hasContentOrError = msg.contentStarted || msg.isError
-                            val hasReasoning = !msg.reasoning.isNullOrBlank()
-                            if (msg.sender == Sender.AI && hasReasoning) {
-                                stateHolder.reasoningCompleteMap[msg.id] = true
-                            }
-                            val animationPlayedCondition =
-                                hasContentOrError || (msg.sender == Sender.AI && hasReasoning)
-                            if (animationPlayedCondition) {
-                                stateHolder.messageAnimationStates[msg.id] = true
+                    messagesMutex.withLock {
+                        withContext(Dispatchers.Main.immediate) {
+                            stateHolder.messages.clear()
+                            stateHolder.messages.addAll(reloadedConversation)
+                            reloadedConversation.forEach { msg ->
+                                val hasContentOrError = msg.contentStarted || msg.isError
+                                val hasReasoning = !msg.reasoning.isNullOrBlank()
+                                if (msg.sender == Sender.AI && hasReasoning) {
+                                    stateHolder.reasoningCompleteMap[msg.id] = true
+                                }
+                                val animationPlayedCondition =
+                                    hasContentOrError || (msg.sender == Sender.AI && hasReasoning)
+                                if (animationPlayedCondition) {
+                                    stateHolder.messageAnimationStates[msg.id] = true
+                                }
                             }
                         }
                     }
@@ -853,38 +913,44 @@ fun updateConfigGroup(representativeConfig: ApiConfig, newAddress: String, newKe
                 true
             }
             if (success) {
-                withContext(Dispatchers.Main) { dismissRenameDialog(); showSnackbar("对话已重命名") }
+                withContext(Dispatchers.Main) { showSnackbar("对话已重命名") }
+                conversationPreviewCache.put(index, trimmedNewName)
             }
         }
     }
 
     private fun onAiMessageFullTextChanged(messageId: String, currentFullText: String) {
-        viewModelScope.launch(Dispatchers.Main.immediate) {
-            val messageIndex = stateHolder.messages.indexOfFirst { it.id == messageId }
-            if (messageIndex != -1) {
-                val messageToUpdate = stateHolder.messages[messageIndex]
-                if (messageToUpdate.text != currentFullText) {
-                    stateHolder.messages[messageIndex] = messageToUpdate.copy(
-                        text = currentFullText
-                    )
+        textUpdateDebouncer[messageId]?.cancel()
+        textUpdateDebouncer[messageId] = mainScope.launch {
+            delay(120)
+            messagesMutex.withLock {
+                val messageIndex = stateHolder.messages.indexOfFirst { it.id == messageId }
+                if (messageIndex != -1) {
+                    val messageToUpdate = stateHolder.messages[messageIndex]
+                    if (messageToUpdate.text != currentFullText) {
+                        stateHolder.messages[messageIndex] = messageToUpdate.copy(
+                            text = currentFullText
+                        )
+                    }
                 }
             }
+            textUpdateDebouncer.remove(messageId)
         }
     }
 
     fun exportSettings() {
-        viewModelScope.launch(Dispatchers.IO) {
+        ioScope.launch {
             val settingsToExport = ExportedSettings(
                 apiConfigs = stateHolder._apiConfigs.value,
                 customProviders = _customProviders.value
             )
             val json = Gson().toJson(settingsToExport)
-            _exportRequest.emit("eztalk_settings.json" to json)
+            _settingsExportRequest.send("eztalk_settings" to json)
         }
     }
 
     fun importSettings(jsonContent: String) {
-        viewModelScope.launch(Dispatchers.IO) {
+        ioScope.launch {
             try {
                 val gson = Gson()
                 val type = object : TypeToken<ExportedSettings>() {}.type
@@ -914,8 +980,9 @@ fun updateConfigGroup(representativeConfig: ApiConfig, newAddress: String, newKe
                     showSnackbar("配置已成功导入")
                 }
             } catch (e: Exception) {
+                Log.e("AppViewModel", "Settings import failed", e)
                 withContext(Dispatchers.Main) {
-                    showSnackbar("导入失败: ${e.message}")
+                    showSnackbar("导入失败: 文件内容或格式无效")
                 }
             }
         }
@@ -924,9 +991,23 @@ fun updateConfigGroup(representativeConfig: ApiConfig, newAddress: String, newKe
 fun getMessageById(id: String): Message? {
         return messages.find { it.id == id }
     }
+
+    fun saveScrollState(conversationId: String, scrollState: ConversationScrollState) {
+        if (scrollState.firstVisibleItemIndex >= 0) {
+            stateHolder.conversationScrollStates[conversationId] = scrollState
+        }
+    }
+
+    fun getScrollState(conversationId: String): ConversationScrollState? {
+        return stateHolder.conversationScrollStates[conversationId]
+    }
     override fun onCleared() {
         try {
+            mainScope.cancel()
+            ioScope.cancel()
+            defaultScope.cancel()
         } catch (e: Exception) {
+            Log.e("AppViewModel", "Error during cleanup", e)
         }
         dismissEditDialog(); dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("ViewModel cleared", isNewMessageSend = false)
@@ -944,6 +1025,7 @@ fun getMessageById(id: String): Message? {
                 dataSource.saveCustomProviders(_customProviders.value)
             }
         } catch (e: Exception) {
+            Log.e("AppViewModel", "Error saving state onCleared", e)
         }
         super.onCleared()
     }

@@ -58,7 +58,7 @@ fun AppDrawerContent(
     onSearchQueryChange: (String) -> Unit,
     onConversationClick: (Int) -> Unit,
     onNewChatClick: () -> Unit,
-    onRenameRequest: (index: Int) -> Unit,
+    onRenameRequest: (index: Int, newName: String) -> Unit,
     onDeleteRequest: (index: Int) -> Unit,
     onClearAllConversationsRequest: () -> Unit,
     getPreviewForIndex: (Int) -> String,
@@ -69,6 +69,7 @@ fun AppDrawerContent(
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showClearAllConfirm by remember { mutableStateOf(false) }
     var longPressPosition by remember { mutableStateOf<Offset?>(null) } // 长按位置，用于定位弹出菜单
+    var renamingIndex by remember { mutableStateOf<Int?>(null) }
 
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -367,7 +368,7 @@ fun AppDrawerContent(
                                             onConversationClick(index)
                                         },
                                         onRenameRequest = { index ->
-                                            onRenameRequest(index)
+                                            renamingIndex = index
                                         },
                                         onDeleteTriggered = { index ->
                                             if (!selectedSet.contains(index)) selectedSet.add(index)
@@ -424,6 +425,34 @@ fun AppDrawerContent(
                     expandedItemIndex = null
                 }
             )
+
+            renamingIndex?.let { index ->
+                var newName by remember(index) { mutableStateOf(getPreviewForIndex(index)) }
+                AlertDialog(
+                    onDismissRequest = { renamingIndex = null },
+                    title = { Text("重命名会话") },
+                    text = {
+                        OutlinedTextField(
+                            value = newName,
+                            onValueChange = { newName = it },
+                            singleLine = true
+                        )
+                    },
+                    confirmButton = {
+                        Button(onClick = {
+                            onRenameRequest(index, newName)
+                            renamingIndex = null
+                        }) {
+                            Text("确定")
+                        }
+                    },
+                    dismissButton = {
+                        Button(onClick = { renamingIndex = null }) {
+                            Text("取消")
+                        }
+                    }
+                )
+            }
         }
     }
 }

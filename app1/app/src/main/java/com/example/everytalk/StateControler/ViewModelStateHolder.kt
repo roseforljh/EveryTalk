@@ -1,11 +1,13 @@
 package com.example.everytalk.statecontroler
 
+import android.os.Looper
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.DrawerValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.snapshots.SnapshotStateMap
+import androidx.compose.foundation.lazy.LazyListState
 import com.example.everytalk.data.DataClass.ApiConfig
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.DataClass.WebSearchResult
@@ -14,8 +16,14 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 
-class ViewModelStateHolder {
-    val drawerState: DrawerState = DrawerState(initialValue = DrawerValue.Closed)
+data class ConversationScrollState(
+    val firstVisibleItemIndex: Int = 0,
+    val firstVisibleItemScrollOffset: Int = 0,
+    val userScrolledAway: Boolean = false
+)
+ 
+ class ViewModelStateHolder {
+     val drawerState: DrawerState = DrawerState(initialValue = DrawerValue.Closed)
 
     val _text = MutableStateFlow("")
     val messages: SnapshotStateList<Message> = mutableStateListOf()
@@ -25,9 +33,11 @@ class ViewModelStateHolder {
 
     val _historicalConversations = MutableStateFlow<List<List<Message>>>(emptyList())
     val _loadedHistoryIndex = MutableStateFlow<Int?>(null)
+    val _isLoadingHistory = MutableStateFlow(false)
+    val _currentConversationId = MutableStateFlow<String>("new_chat_${System.currentTimeMillis()}")
 
-    val _apiConfigs = MutableStateFlow<List<ApiConfig>>(emptyList())
-    val _selectedApiConfig = MutableStateFlow<ApiConfig?>(null)
+     val _apiConfigs = MutableStateFlow<List<ApiConfig>>(emptyList())
+     val _selectedApiConfig = MutableStateFlow<ApiConfig?>(null)
 
     val _isApiCalling = MutableStateFlow(false)
     var apiJob: Job? = null
@@ -35,14 +45,14 @@ class ViewModelStateHolder {
     val reasoningCompleteMap: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
     val expandedReasoningStates: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
     val messageAnimationStates: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
-
-    val _snackbarMessage =
-        MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 1)
+    val conversationScrollStates = mutableStateMapOf<String, ConversationScrollState>()
+ 
+     val _snackbarMessage =
+         MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 1)
     val _scrollToBottomEvent =
         MutableSharedFlow<Unit>(replay = 0, extraBufferCapacity = 1)
 
     val _editDialogInputText = MutableStateFlow("")
-    val _renameInputText = MutableStateFlow("")
 
     val _showSettingsDialog = MutableStateFlow(false)
 
@@ -67,9 +77,16 @@ class ViewModelStateHolder {
         _showSourcesDialog.value = false
         _sourcesForDialog.value = emptyList()
         _loadedHistoryIndex.value = null
+        _currentConversationId.value = "new_chat_${System.currentTimeMillis()}"
     }
-
-    fun clearSelectedMedia() {
+ 
+     fun clearSelectedMedia() {
         selectedMediaItems.clear()
     }
+fun addMessage(message: Message) {
+    check(Looper.myLooper() == Looper.getMainLooper()) {
+        "addMessage must be called from the main thread"
+    }
+    messages.add(message)
+}
 }

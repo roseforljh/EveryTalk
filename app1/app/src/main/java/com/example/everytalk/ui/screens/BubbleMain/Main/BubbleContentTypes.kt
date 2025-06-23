@@ -60,7 +60,6 @@ internal fun UserOrErrorMessageContent(
     contentColor: Color,
     isError: Boolean,
     maxWidth: Dp,
-    onUserInteraction: () -> Unit,
     onEditRequest: (Message) -> Unit,
     onRegenerateRequest: (Message) -> Unit,
     modifier: Modifier = Modifier
@@ -87,7 +86,6 @@ internal fun UserOrErrorMessageContent(
                     detectTapGestures(
                         onLongPress = { offset ->
                             haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                            onUserInteraction()
                             if (!isError) {
                                 pressOffset = offset
                                 isContextMenuVisible = true
@@ -267,7 +265,6 @@ fun AttachmentsContent(
     onAttachmentClick: (SelectedMediaItem) -> Unit,
     maxWidth: Dp,
     message: Message,
-    onUserInteraction: () -> Unit,
     onEditRequest: (Message) -> Unit,
     onRegenerateRequest: (Message) -> Unit
 ) {
@@ -280,7 +277,6 @@ fun AttachmentsContent(
 
     val onLongPressHandler = { offset: Offset ->
         haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-        onUserInteraction()
         pressOffset = offset
         isContextMenuVisible = true
     }

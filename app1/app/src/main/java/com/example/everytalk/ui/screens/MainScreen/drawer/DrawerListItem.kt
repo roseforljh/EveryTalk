@@ -53,16 +53,7 @@ internal fun DrawerConversationListItem(
     longPressPositionForMenu: Offset?,
 ) {
     val originalIndex = itemData.originalIndex
-    val definitivePreviewText = getPreviewForIndex(originalIndex)
-
-    val previewTextToShowInSnippet: AnnotatedString? =
-        if (isSearchActive && currentSearchQuery.isNotBlank()) {
-            itemData.conversation.firstNotNullOfOrNull { msg ->
-                if (msg.text.contains(currentSearchQuery, ignoreCase = true))
-                    rememberGeneratedPreviewSnippet(msg.text, currentSearchQuery)
-                else null
-            }
-        } else null
+    val definitivePreviewText = remember(itemData) { getPreviewForIndex(originalIndex) }
 
     val isActuallyActive = loadedHistoryIndex == originalIndex
 
@@ -155,29 +146,19 @@ internal fun DrawerConversationListItem(
                             .background(Color.Black, CircleShape)
                     )
                     Spacer(Modifier.width(8.dp))
-                } else {
-                    Spacer(Modifier.width(32.dp))
                 }
                 Text(
-                    text = definitivePreviewText,
+                    text = if (isSearchActive && currentSearchQuery.isNotBlank())
+                        rememberHighlightedText(definitivePreviewText, currentSearchQuery)
+                    else
+                        AnnotatedString(definitivePreviewText),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     fontWeight = FontWeight.Medium,
                     style = MaterialTheme.typography.bodyLarge,
                     modifier = Modifier
                         .weight(1f)
-                        .padding(start = 32.dp, end = 16.dp)
-                )
-            }
-            if (previewTextToShowInSnippet != null) {
-                Text(
-                    text = previewTextToShowInSnippet,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.9f),
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier
-                        .padding(start = 40.dp, end = 16.dp, bottom = 8.dp),
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
+                        .padding(start = if (isActuallyActive) 0.dp else 32.dp, end = 16.dp)
                 )
             }
 

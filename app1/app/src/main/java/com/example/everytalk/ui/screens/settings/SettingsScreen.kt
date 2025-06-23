@@ -95,7 +95,7 @@ fun SettingsScreen(
     )
 
     LaunchedEffect(Unit) {
-        viewModel.exportRequest.collect { data ->
+        viewModel.settingsExportRequest.collect { data ->
             exportData = data
             exportSettingsLauncher.launch(data.first)
         }

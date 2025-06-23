@@ -66,11 +66,13 @@ object ApiClient {
     }
 
     private val backendProxyUrls = listOf(
-        "http://backendcentrol.everytalk.dpdns.org:8880/chat",
-        "http://backendwest.everytalk.dpdns.org:2052/chat",
-        "http://backend.everytalk.dpdns.org:8080/chat",
-        "https://backdatalk-717323967862.europe-west1.run.app/chat",
-        "https://kunze999-backendai.hf.space/chat",
+        //"http://192.168.0.2:7860/chat", // Attempting with a common LAN IP
+        "http://anyaitotalked.zabc.net:7860/chat",
+        "http://backendwest.everytalk.dpdns.org:7860/chat",
+        "http://backend.everytalk.dpdns.org:7860/chat",
+        //"https://backdatalk-717323967862.europe-west1.run.app/chat",
+        //"https://kunze999-backendai.hf.space/chat",
+
     )
 
     private fun getFileNameFromUri(context: Context, uri: Uri): String {
@@ -250,7 +252,11 @@ object ApiClient {
                                             return@execute
                                         }
                                     } catch (e: SerializationException) {
+                                        // Log the error and the problematic line to understand what failed
+                                        android.util.Log.e("ApiClientStream", "Serialization failed for line: '$line'", e)
                                     } catch (e: Exception) {
+                                        // Log other unexpected errors during event processing
+                                        android.util.Log.e("ApiClientStream", "Exception during event processing for line: '$line'", e)
                                     }
                                 }
                             }

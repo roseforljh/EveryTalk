@@ -20,10 +20,10 @@ data class ChatRequest(
     @SerialName("model")
     val model: String,
 
-    @SerialName("forceGoogleReasoningPrompt")
+    @SerialName("force_google_reasoning_prompt")
     val forceGoogleReasoningPrompt: Boolean? = null,
 
-    @SerialName("useWebSearch")
+    @SerialName("use_web_search")
     val useWebSearch: Boolean? = null,
 
     @SerialName("generation_config")
@@ -38,9 +38,9 @@ data class ChatRequest(
     @SerialName("qwen_enable_search")
     val qwenEnableSearch: Boolean? = null,
 
-    @SerialName("customModelParameters")
+    @SerialName("custom_model_parameters")
     val customModelParameters: Map<String, @Contextual Any>? = null,
 
-    @SerialName("customExtraBody")
+    @SerialName("custom_extra_body")
     val customExtraBody: Map<String, @Contextual Any>? = null
 )
