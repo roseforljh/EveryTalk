@@ -67,7 +67,7 @@ object ApiClient {
 
     private val backendProxyUrls = listOf(
         //"http://192.168.0.2:7860/chat", // Attempting with a common LAN IP
-        "http://anyaitotalked.zabc.net:7860/chat",
+        //"http://anyaitotalked.zabc.net:7860/chat",
         "http://backendwest.everytalk.dpdns.org:7860/chat",
         "http://backend.everytalk.dpdns.org:7860/chat",
         //"https://backdatalk-717323967862.europe-west1.run.app/chat",
