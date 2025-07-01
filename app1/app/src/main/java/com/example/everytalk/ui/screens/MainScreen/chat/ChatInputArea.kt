@@ -62,6 +62,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 
 private fun createImageFileUri(context: Context): Uri {
     val timeStamp: String = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
@@ -359,7 +360,8 @@ fun ChatInputArea(
     ) { uri ->
         try {
             if (uri != null) {
-                onAddMediaItem(SelectedMediaItem.ImageFromUri(uri))
+                val mimeType = context.contentResolver.getType(uri) ?: "image/*"
+                onAddMediaItem(SelectedMediaItem.ImageFromUri(uri, UUID.randomUUID().toString(), mimeType))
             } else {
                 Log.d("PhotoPicker", "用户取消了图片选择")
                 // 不关闭面板，让用户可以重新选择
@@ -377,7 +379,7 @@ fun ChatInputArea(
         val currentUri = tempCameraImageUri
         try {
             if (success && currentUri != null) {
-                onAddMediaItem(SelectedMediaItem.ImageFromUri(currentUri))
+                onAddMediaItem(SelectedMediaItem.ImageFromUri(currentUri, UUID.randomUUID().toString(), "image/jpeg"))
             } else {
                 Log.w("CameraLauncher", "相机拍照失败或被取消")
                 // 修复：失败时也要清理临时文件
@@ -433,9 +435,11 @@ fun ChatInputArea(
                         withContext(Dispatchers.Main) {
                             onAddMediaItem(
                                 SelectedMediaItem.GenericFile(
-                                    uri,
-                                    displayName,
-                                    mimeType
+                                    uri = uri,
+                                    id = UUID.randomUUID().toString(),
+                                    displayName = displayName,
+                                    mimeType = mimeType,
+                                    filePath = null
                                 )
                             )
                         }
@@ -453,26 +457,15 @@ fun ChatInputArea(
         }
     )
 
-    // 修复：防止竞态条件的键盘处理
+    // 由于我们现在直接发送消息，不再需要等待键盘隐藏
+    // 这段代码保留但不再使用，以防其他地方依赖它
     LaunchedEffect(Unit) {
         snapshotFlow { imeInsets.getBottom(density) > 0 }
             .distinctUntilChanged()
             .filter { isKeyboardVisible -> !isKeyboardVisible }
             .collect { _ ->
-                // 修复：安全地处理 pendingMessageTextForSend
-                val messageToSend = pendingMessageTextForSend
-                if (messageToSend != null) {
-                    try {
-                        onSendMessageRequest(messageToSend, false, selectedMediaItems.toList())
-                        pendingMessageTextForSend = null
-                        if (text == messageToSend) onTextChange("")
-                        onClearMediaItems()
-                    } catch (e: Exception) {
-                        Log.e("MessageSend", "发送消息时发生错误", e)
-                        pendingMessageTextForSend = null
-                        onShowSnackbar("发送消息失败")
-                    }
-                }
+                // 不再需要在键盘隐藏后处理消息发送
+                pendingMessageTextForSend = null
             }
     }
 
@@ -511,13 +504,14 @@ fun ChatInputArea(
                     if (isApiCalling) {
                         onStopApiCall()
                     } else if ((text.isNotBlank() || selectedMediaItems.isNotEmpty()) && selectedApiConfig != null) {
+                        // 无论键盘是否可见，都立即发送消息并滚动到底部
+                        onSendMessageRequest(text, false, selectedMediaItems.toList())
+                        onTextChange("")
+                        onClearMediaItems()
+                        
+                        // 如果键盘可见，则隐藏键盘
                         if (imeInsets.getBottom(density) > 0) {
-                            pendingMessageTextForSend = text
                             keyboardController?.hide()
-                        } else {
-                            onSendMessageRequest(text, false, selectedMediaItems.toList())
-                            onTextChange("")
-                            onClearMediaItems()
                         }
                     } else if (selectedApiConfig == null) {
                         Log.w("SendMessage", "请先选择 API 配置")

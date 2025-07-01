@@ -27,9 +27,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -50,11 +52,14 @@ internal fun ReasoningToggleAndContent(
     mainContentHasStarted: Boolean,
     reasoningTextColor: Color,
     reasoningToggleDotColor: Color,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onVisibilityChanged: () -> Unit
 ) {
     val focusManager = LocalFocusManager.current
+    val view = LocalView.current
     var showReasoningDialog by remember(currentMessageId) { mutableStateOf(false) }
 
+    var visibilityNotified by remember(currentMessageId) { mutableStateOf(false) }
     val showInlineStreamingBox = isReasoningStreaming && !messageIsError && !mainContentHasStarted
 
     val showDotsAnimationOnToggle = false
@@ -84,14 +89,17 @@ internal fun ReasoningToggleAndContent(
                     .fillMaxWidth()
                     .padding(start = 8.dp, end = 8.dp, bottom = 6.dp, top = 4.dp)
                     .heightIn(min = 50.dp, max = 180.dp)
+                    .onSizeChanged {
+                        if (it.height > 0 && !visibilityNotified) {
+                            view.post {
+                                onVisibilityChanged()
+                            }
+                            visibilityNotified = true
+                        }
+                    }
             ) {
                 Box(modifier = Modifier.fillMaxSize()) {
                     val scrollState = rememberScrollState()
-                    // This effect ensures that as new reasoning text streams in,
-                    // the view automatically scrolls to the bottom to show the latest content.
-                    // It's keyed on scrollState.maxValue, which changes whenever the size of the
-                    // content inside the scrollable container changes. This is a more reliable
-                    // trigger for scrolling than the text itself.
                     LaunchedEffect(scrollState.maxValue) {
                         if (isReasoningStreaming) {
                             scrollState.animateScrollTo(scrollState.maxValue)

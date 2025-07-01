@@ -44,7 +44,9 @@ class SharedPreferencesDataSource(context: Context) {
             val jsonString = json.encodeToString(serializer, value)
             sharedPrefs.edit { putString(key, jsonString) }
         } catch (e: SerializationException) {
+            android.util.Log.e("DataSource", "Failed to serialize data for key: $key", e)
         } catch (e: Exception) {
+            android.util.Log.e("DataSource", "An unexpected error occurred while saving data for key: $key", e)
         }
     }
 
@@ -54,8 +56,10 @@ class SharedPreferencesDataSource(context: Context) {
             try {
                 json.decodeFromString(serializer, jsonString)
             } catch (e: SerializationException) {
+                android.util.Log.e("DataSource", "Failed to deserialize data for key: $key", e)
                 defaultValue
             } catch (e: Exception) {
+                android.util.Log.e("DataSource", "An unexpected error occurred while loading data for key: $key", e)
                 defaultValue
             }
         } else {

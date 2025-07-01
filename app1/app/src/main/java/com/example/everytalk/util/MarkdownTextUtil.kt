@@ -9,12 +9,10 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.sp
+import java.util.concurrent.ConcurrentHashMap
 
 // --- 1. Data Models for AST and Styling ---
 
-/**
- * Represents a node in the inline Markdown abstract syntax tree (AST).
- */
 sealed class InlineElement {
     data class PlainText(val content: String) : InlineElement()
     data class Bold(val children: List<InlineElement>) : InlineElement()
@@ -26,10 +24,6 @@ sealed class InlineElement {
     data class Math(val content: String) : InlineElement()
 }
 
-/**
- * Configuration for styling rendered Markdown.
- * Allows for easy themeing and customization.
- */
 data class MarkdownStyleConfig(
     val linkStyle: SpanStyle = SpanStyle(color = Color(0xFF3498DB)),
     val codeStyle: SpanStyle = SpanStyle(
@@ -49,84 +43,54 @@ data class MarkdownStyleConfig(
     val boldItalicStyle: SpanStyle = SpanStyle(fontWeight = FontWeight.Bold, fontStyle = FontStyle.Italic)
 )
 
-// --- 2. Parser and Renderer ---
+// --- 2. Optimized Incremental Parser ---
 
-/**
- * A robust parser for inline Markdown elements that separates parsing from rendering.
- * It first tokenizes the input string and then builds an AST.
- */
-class InlineMarkdownParser(private val styleConfig: MarkdownStyleConfig = MarkdownStyleConfig()) {
+
+object IncrementalMarkdownParser {
+    private val styleConfig = MarkdownStyleConfig()
 
     private data class Token(val type: TokenType, val match: MatchResult)
 
     private enum class TokenType(val regex: Regex) {
-        // Order is crucial for correct parsing. More specific/longer rules come first.
-        BOLD_ITALIC(Regex("(?<!\\\\)\\*\\*\\*(.+?)\\*\\*\\*")),
-        BOLD(Regex("(?<![\\\\*])\\*\\*(.+?)\\*\\*(?![*])")),
-        ITALIC(Regex("(?<![\\\\*])\\*(?!\\*)(.+?)(?<!\\*)\\*(?![*])")),
-        LINK(Regex("(?<!\\\\)\\[(.+?)\\]\\((https?://\\S+?)\\)")),
-        IMPLICIT_LINK(Regex("(?<!\\\\)\\[(https?://\\S+?)\\]")),
-        CODE(Regex("(?<!\\\\)`([^`]+?)`")),
-        MATH(Regex("(?<!\\\\)\\$\\$([^\\$]+?)\\$\\$|(?<!\\\\)\\$([^\\$]+?)\\$")),
-        URL(Regex("\\b(https?://\\S+)")),
-        BR(Regex("<br\\s*/?>")),
-        PIPE(Regex("\\s*\\|\\s*")),
-        ESCAPE(Regex("\\\\(.)"))
+        BOLD_ITALIC(Regex("(?s)(?<!\\\\)\\*\\*\\*(.+?)\\*\\*\\*")),
+        BOLD(Regex("(?s)(?<!\\\\|\\*)\\*\\*(.+?)\\*\\*(?!\\*)")),
+        ITALIC(Regex("(?s)(?<!\\\\|\\*)\\*(.+?)\\*(?!\\*)")),
+        LINK(Regex("""\[(.+?)]\((https?://\S+?)\)""")),
+        IMPLICIT_LINK(Regex("""\[(https?://\S+?)]""")),
+        CODE(Regex("`([^`]+?)`")),
+        MATH(Regex("""\$\$([^$]+?)\$\$|\$([^$]+?)\$""")),
+        URL(Regex("""\b(https?://\S+)""")),
+        BR(Regex("""<br\s*/?>""")),
+        PIPE(Regex("""\s*\|\s*""")),
+        ESCAPE(Regex("""\\(.)"""))
     }
 
-    /**
-     * Parses a raw string into a list of InlineElement nodes (AST).
-     */
+
+
+
+
+    fun parseIncrementalStream(
+        messageId: String,
+        newText: String,
+        isComplete: Boolean = false
+    ): List<InlineElement> {
+        // Removed caching mechanism to prevent state corruption on recomposition.
+        // Always perform a full parse for correctness.
+        return parseInternal(newText)
+    }
+
+
     fun parse(text: String): List<InlineElement> {
         return parseInternal(text)
     }
 
-    /**
-     * Renders a list of InlineElement nodes (AST) into a styled AnnotatedString.
-     */
-    fun render(elements: List<InlineElement>): AnnotatedString {
-        return buildAnnotatedString {
-            elements.forEach { element ->
-                when (element) {
-                    is InlineElement.PlainText -> append(element.content)
-                    is InlineElement.Bold -> withStyle(styleConfig.boldStyle) { append(render(element.children)) }
-                    is InlineElement.Italic -> withStyle(styleConfig.italicStyle) { append(render(element.children)) }
-                    is InlineElement.BoldItalic -> withStyle(styleConfig.boldItalicStyle) { append(render(element.children)) }
-                    is InlineElement.Code -> withStyle(styleConfig.codeStyle) { append(element.content) }
-                    is InlineElement.Math -> {
-                        try {
-                            withStyle(styleConfig.mathStyle) { append(LatexToUnicode.convert(element.content)) }
-                        } catch (e: Exception) {
-                            // Graceful fallback if LatexToUnicode fails
-                            withStyle(styleConfig.codeStyle) { append(element.content) }
-                        }
-                    }
-                    is InlineElement.Link -> {
-                        pushStringAnnotation("URL", element.url)
-                        withStyle(styleConfig.linkStyle) { append(render(element.text)) }
-                        pop()
-                    }
-                    is InlineElement.AutoLink -> {
-                        pushStringAnnotation("URL", element.url)
-                        withStyle(styleConfig.linkStyle) { append(element.url) }
-                        pop()
-                    }
-                }
-            }
-        }
-    }
-
-    /**
-     * Internal recursive parsing function.
-     * Note: While this is recursive, Markdown inline nesting is typically shallow.
-     * For extremely deep nesting, a stack-based iterative approach would be more robust against StackOverflowError.
-     */
     private fun parseInternal(text: String): List<InlineElement> {
         val elements = mutableListOf<InlineElement>()
         var currentIndex = 0
 
         while (currentIndex < text.length) {
             val firstMatch = TokenType.values()
+                .asSequence()
                 .mapNotNull { type -> type.regex.find(text, currentIndex)?.let { Token(type, it) } }
                 .minByOrNull { it.match.range.first }
 
@@ -167,21 +131,110 @@ class InlineMarkdownParser(private val styleConfig: MarkdownStyleConfig = Markdo
         }
         return elements
     }
+
+    fun render(elements: List<InlineElement>): AnnotatedString {
+        return buildAnnotatedString {
+            elements.forEach { element ->
+                when (element) {
+                    is InlineElement.PlainText -> append(element.content)
+                    is InlineElement.Bold -> withStyle(styleConfig.boldStyle) { append(render(element.children)) }
+                    is InlineElement.Italic -> withStyle(styleConfig.italicStyle) { append(render(element.children)) }
+                    is InlineElement.BoldItalic -> withStyle(styleConfig.boldItalicStyle) { append(render(element.children)) }
+                    is InlineElement.Code -> withStyle(styleConfig.codeStyle) { append(element.content) }
+                    is InlineElement.Math -> {
+                        try {
+                            withStyle(styleConfig.mathStyle) { append(LatexToUnicode.convert(element.content)) }
+                        } catch (e: Exception) {
+                            withStyle(styleConfig.codeStyle) { append(element.content) }
+                        }
+                    }
+                    is InlineElement.Link -> {
+                        pushStringAnnotation("URL", element.url)
+                        withStyle(styleConfig.linkStyle) { append(render(element.text)) }
+                        pop()
+                    }
+                    is InlineElement.AutoLink -> {
+                        pushStringAnnotation("URL", element.url)
+                        withStyle(styleConfig.linkStyle) { append(element.url) }
+                        pop()
+                    }
+                }
+            }
+        }
+    }
 }
 
-/**
- * Main function to parse and render a line of Markdown.
- * This is the public API that should be used.
- *
- * @param line The raw Markdown string.
- * @param styleConfig Optional custom styling configuration.
- * @return An AnnotatedString ready for display in Compose.
- */
 fun parseInlineMarkdownToAnnotatedString(
     line: String,
     styleConfig: MarkdownStyleConfig = MarkdownStyleConfig()
 ): AnnotatedString {
-    val parser = InlineMarkdownParser(styleConfig)
-    val elements = parser.parse(line)
-    return parser.render(elements)
+    val elements = IncrementalMarkdownParser.parse(line)
+    return IncrementalMarkdownParser.render(elements)
+}
+
+sealed class RenderMode {
+    object Streaming : RenderMode()
+    object Complete : RenderMode()
+}
+
+fun parseBasicMarkdown(text: String): AnnotatedString {
+    // A simplified parser for streaming mode
+    return buildAnnotatedString {
+        val boldItalicRegex = Regex("(?<!\\\\|\\*)\\*\\*\\*([\\s\\S]+?)\\*\\*\\*(?!\\*)")
+        val boldRegex = Regex("(?<!\\\\|\\*)\\*\\*([\\s\\S]+?)\\*\\*(?!\\*)")
+        val italicRegex = Regex("(?<!\\\\|\\*)\\*([\\s\\S]+?)\\*(?!\\*)")
+
+        var currentIndex = 0
+
+        val allMatches = (
+                boldItalicRegex.findAll(text).map { "bold_italic" to it } +
+                        boldRegex.findAll(text).map { "bold" to it } +
+                        italicRegex.findAll(text).map { "italic" to it }
+                ).sortedBy { it.second.range.first }
+
+        val processedMatches = mutableSetOf<MatchResult>()
+
+        for ((type, match) in allMatches) {
+            if (match in processedMatches || match.range.first < currentIndex) continue
+
+            val isContained = allMatches.any { otherMatch ->
+                match != otherMatch.second &&
+                        match.range.first >= otherMatch.second.range.first &&
+                        match.range.last <= otherMatch.second.range.last
+            }
+
+            if (isContained) continue
+
+            if (match.range.first > currentIndex) {
+                append(text.substring(currentIndex, match.range.first))
+            }
+
+            val content = match.groupValues[1]
+            when (type) {
+                "bold_italic" -> withStyle(style = SpanStyle(fontWeight = FontWeight.Bold, fontStyle = FontStyle.Italic)) { append(parseBasicMarkdown(content)) }
+                "bold" -> withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) { append(parseBasicMarkdown(content)) }
+                "italic" -> withStyle(style = SpanStyle(fontStyle = FontStyle.Italic)) { append(parseBasicMarkdown(content)) }
+            }
+            currentIndex = match.range.last + 1
+            processedMatches.add(match)
+        }
+
+        if (currentIndex < text.length) {
+            append(text.substring(currentIndex))
+        }
+    }
+}
+
+fun parseMarkdownWithMode(
+    text: String,
+    mode: RenderMode
+): AnnotatedString {
+    return when (mode) {
+        RenderMode.Streaming -> {
+            parseBasicMarkdown(text)
+        }
+        RenderMode.Complete -> {
+            parseInlineMarkdownToAnnotatedString(text)
+        }
+    }
 }

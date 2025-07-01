@@ -1,4 +1,4 @@
-package com.example.everytalk.statecontroler
+package com.example.everytalk.statecontroller
 
 import android.os.Looper
 import androidx.compose.material3.DrawerState
@@ -12,6 +12,7 @@ import com.example.everytalk.data.DataClass.ApiConfig
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.DataClass.WebSearchResult
 import com.example.everytalk.model.SelectedMediaItem
+import com.example.everytalk.ui.util.ScrollController
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,6 +24,7 @@ data class ConversationScrollState(
 )
  
  class ViewModelStateHolder {
+    lateinit var scrollController: ScrollController
      val drawerState: DrawerState = DrawerState(initialValue = DrawerValue.Closed)
 
     val _text = MutableStateFlow("")
@@ -89,4 +91,12 @@ fun addMessage(message: Message) {
     }
     messages.add(message)
 }
+
+    fun shouldAutoScroll(): Boolean {
+        return ::scrollController.isInitialized && !scrollController.userManuallyScrolledAwayFromBottom
+    }
+
+    fun triggerScrollToBottom() {
+        _scrollToBottomEvent.tryEmit(Unit)
+    }
 }

@@ -1,4 +1,4 @@
-package com.example.everytalk.statecontroler
+package com.example.everytalk.statecontroller
 
 import android.app.Application
 import android.content.ContentResolver
@@ -232,12 +232,10 @@ private data class AttachmentProcessingResult(
         textToActuallySend: String
     ): AttachmentProcessingResult = withContext(Dispatchers.IO) {
         if (attachments.isEmpty()) {
-            val apiParts = if (shouldUsePartsApiMessage && textToActuallySend.isNotBlank()) {
-                listOf(ApiContentPart.Text(text = textToActuallySend))
-            } else {
-                emptyList()
-            }
-            return@withContext AttachmentProcessingResult(success = true, apiContentParts = apiParts)
+            return@withContext AttachmentProcessingResult(
+                success = true,
+                apiContentParts = if (shouldUsePartsApiMessage && textToActuallySend.isNotBlank()) listOf(ApiContentPart.Text(text = textToActuallySend)) else emptyList()
+            )
         }
 
         val processedAttachmentsForUi = mutableListOf<SelectedMediaItem>()
@@ -258,8 +256,8 @@ private data class AttachmentProcessingResult(
                 is SelectedMediaItem.GenericFile -> originalMediaItem.uri
                 is SelectedMediaItem.ImageFromBitmap -> Uri.EMPTY
             }
-            val originalFileNameForHint = getFileName(application.contentResolver, itemUri)
-                ?: (originalMediaItem as? SelectedMediaItem.GenericFile)?.displayName
+            val originalFileNameForHint = (originalMediaItem as? SelectedMediaItem.GenericFile)?.displayName
+                ?: getFileName(application.contentResolver, itemUri)
                 ?: (if (originalMediaItem is SelectedMediaItem.ImageFromBitmap) "camera_shot" else "attachment")
 
             val persistentFilePath: String? = when (originalMediaItem) {
@@ -292,21 +290,31 @@ private data class AttachmentProcessingResult(
             val processedItemForUi: SelectedMediaItem = when (originalMediaItem) {
                 is SelectedMediaItem.ImageFromUri, is SelectedMediaItem.ImageFromBitmap -> {
                     imageUriStringsForUi.add(persistentFileProviderUri.toString())
-                    SelectedMediaItem.ImageFromUri(persistentFileProviderUri, persistentFilePath)
+                    SelectedMediaItem.ImageFromUri(
+                        uri = persistentFileProviderUri,
+                        id = originalMediaItem.id,
+                        filePath = persistentFilePath
+                    )
                 }
-                is SelectedMediaItem.GenericFile -> SelectedMediaItem.GenericFile(
-                    uri = persistentFileProviderUri,
-                    displayName = originalMediaItem.displayName,
-                    mimeType = originalMediaItem.mimeType,
-                    filePath = persistentFilePath
-                )
+                is SelectedMediaItem.GenericFile -> {
+                    if (originalMediaItem.mimeType != "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+                        val fileBytes = application.contentResolver.openInputStream(originalMediaItem.uri)?.use { it.readBytes() }
+                        if (fileBytes != null) {
+                            val base64Data = Base64.encodeToString(fileBytes, Base64.NO_WRAP)
+                            apiContentParts.add(ApiContentPart.InlineData(mimeType = originalMediaItem.mimeType ?: "application/octet-stream", base64Data = base64Data))
+                        }
+                    }
+                    SelectedMediaItem.GenericFile(
+                        uri = persistentFileProviderUri,
+                        id = originalMediaItem.id,
+                        displayName = originalFileNameForHint,
+                        mimeType = originalMediaItem.mimeType,
+                        filePath = persistentFilePath
+                    )
+                }
             }
             processedAttachmentsForUi.add(processedItemForUi)
 
-            // The logic for Base64 encoding and adding to apiContentParts has been removed.
-            // For Gemini, we now rely on the ApiClient to send the file as a multipart/form-data part,
-            // which is the correct approach for the backend implementation.
-            // This block is intentionally left empty.
         }
         AttachmentProcessingResult(true, processedAttachmentsForUi, imageUriStringsForUi, apiContentParts)
     }
@@ -340,7 +348,7 @@ private data class AttachmentProcessingResult(
             // Always pass the attachments to the ApiClient.
             // The ApiClient will handle creating the multipart request.
             // The previous logic incorrectly sent an empty list for Gemini.
-            val attachmentsForApiClient = attachments.toList()
+            val attachmentsForApiClient = attachmentResult.processedAttachmentsForUi
 
             val newUserMessageForUi = UiMessage(
                 id = "user_${UUID.randomUUID()}", text = textToActuallySend, sender = UiSender.User,
@@ -359,58 +367,39 @@ private data class AttachmentProcessingResult(
                 triggerScrollToBottom()
             }
 
-            withContext(Dispatchers.IO) {
-                val apiMessagesForBackend = mutableListOf<AbstractApiMessage>()
-                val messagesInChatUiSnapshot = stateHolder.messages.toList()
-                val historyUiMessages =
-                    if (messagesInChatUiSnapshot.lastOrNull()?.id == newUserMessageForUi.id) {
-                        messagesInChatUiSnapshot.dropLast(1)
-                    } else {
-                        messagesInChatUiSnapshot
-                    }
 
-                var historyMessageCount = 0
-                val maxHistoryMessages = 20
-                for (uiMsg in historyUiMessages.asReversed()) {
-                    if (historyMessageCount >= maxHistoryMessages) break
-                    val roleForHistory = when (uiMsg.sender) {
+            withContext(Dispatchers.IO) {
+                val messagesInChatUiSnapshot = stateHolder.messages.toList()
+                val historyEndIndex = messagesInChatUiSnapshot.indexOfFirst { it.id == newUserMessageForUi.id }
+                val historyUiMessages = if (historyEndIndex != -1) messagesInChatUiSnapshot.subList(0, historyEndIndex) else messagesInChatUiSnapshot
+
+                val apiMessagesForBackend = historyUiMessages.mapNotNull { uiMsg ->
+                    val role = when (uiMsg.sender) {
                         UiSender.User -> "user"
                         UiSender.AI -> "assistant"
                         UiSender.System -> "system"
                         UiSender.Tool -> "tool"
                     }
-
-                    val hasContent = uiMsg.text.isNotBlank() || !uiMsg.attachments.isNullOrEmpty()
-                    if (!hasContent) continue
-
-                    // Simplified history processing. History messages should only contain text.
-                    // The backend expects multimodal content only in the last user message,
-                    // which is handled by the multipart upload.
+                    // For history, only include messages with actual text content.
+                    // Attachments from history are not sent.
                     if (uiMsg.text.isNotBlank()) {
-                        val historyMessage: AbstractApiMessage = if (shouldUsePartsApiMessage) {
-                            PartsApiMessage(
-                                role = roleForHistory,
-                                parts = listOf(ApiContentPart.Text(text = uiMsg.text.trim()))
-                            )
+                        val textContent = uiMsg.text.trim()
+                        if (shouldUsePartsApiMessage) {
+                            PartsApiMessage(role = role, parts = listOf(ApiContentPart.Text(textContent)))
                         } else {
-                            SimpleTextApiMessage(
-                                role = roleForHistory,
-                                content = uiMsg.text.trim()
-                            )
+                            SimpleTextApiMessage(role = role, content = textContent)
                         }
-                        apiMessagesForBackend.add(0, historyMessage)
-                        historyMessageCount++
-                    }
-                }
+                    } else null
+                }.toMutableList()
 
                 if (shouldUsePartsApiMessage) {
                     val currentUserParts = attachmentResult.apiContentParts
                     if (currentUserParts.isNotEmpty()) {
-                        apiMessagesForBackend.add(PartsApiMessage("user", currentUserParts))
+                        apiMessagesForBackend.add(PartsApiMessage(role = "user", parts = currentUserParts))
                     }
                 } else {
                     if (textToActuallySend.isNotBlank() || attachments.isNotEmpty()) {
-                        apiMessagesForBackend.add(SimpleTextApiMessage("user", textToActuallySend))
+                        apiMessagesForBackend.add(SimpleTextApiMessage(role = "user", content = textToActuallySend))
                     }
                 }
 
@@ -442,7 +431,17 @@ private data class AttachmentProcessingResult(
                             ) 1024 else null
                         ) else null
                     ).let { if (it.temperature != null || it.topP != null || it.maxOutputTokens != null || it.thinkingConfig != null) it else null },
-                    qwenEnableSearch = if (currentConfig.model.lowercase().contains("qwen")) stateHolder._isWebSearchEnabled.value else null
+                    qwenEnableSearch = if (currentConfig.model.lowercase().contains("qwen")) stateHolder._isWebSearchEnabled.value else null,
+                    customModelParameters = if (modelIsGeminiType) {
+                        // 为Gemini模型添加reasoning_effort参数
+                        // 根据模型类型设置不同的思考级别
+                        val reasoningEffort = when {
+                            currentConfig.model.contains("flash", ignoreCase = true) -> "low"  // 对应1024个令牌
+                            currentConfig.model.contains("pro", ignoreCase = true) -> "medium" // 对应8192个令牌
+                            else -> "high" // 对应24576个令牌
+                        }
+                        mapOf("reasoning_effort" to reasoningEffort)
+                    } else null
                 )
 
                 apiHandler.streamChatResponse(
@@ -457,7 +456,8 @@ private data class AttachmentProcessingResult(
                             val errorMessage = "发送失败: ${error.message ?: "未知错误"}"
                             showSnackbar(errorMessage)
                         }
-                    }
+                    },
+                    onNewAiMessageAdded = triggerScrollToBottom
                 )
             }
         }

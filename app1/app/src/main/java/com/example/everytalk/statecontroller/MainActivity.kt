@@ -1,4 +1,4 @@
-package com.example.everytalk.statecontroler
+package com.example.everytalk.statecontroller
 
 import android.app.Application
 import android.os.Bundle

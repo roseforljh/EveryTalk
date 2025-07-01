@@ -94,10 +94,17 @@ internal class UnorderedListParser : BlockParser {
             context.currentIndex++
 
             // Subsequent lines of the same item (continuation)
-            while (context.hasMoreLines() && context.currentLine()?.isNotBlank() == true) {
-                val trimmedLine = context.currentLine()!!.trim()
+            // Subsequent lines of the same item (continuation)
+            while (context.hasMoreLines()) {
+                val currentLine = context.currentLine()
+                if (currentLine.isNullOrBlank()) {
+                    // Stop at the first blank line. This properly separates list items.
+                    break
+                }
+
+                val trimmedLine = currentLine.trim()
                 val isNewListItem = RegexConstants.UNORDERED_LIST_REGEX.matches(trimmedLine) ||
-                                  RegexConstants.ORDERED_LIST_REGEX.matches(trimmedLine)
+                        RegexConstants.ORDERED_LIST_REGEX.matches(trimmedLine)
                 if (isNewListItem) break
 
                 val isOtherBlock = MarkdownParser.blockParsers.any {
@@ -110,7 +117,7 @@ internal class UnorderedListParser : BlockParser {
             }
             items.add(itemContent.joinToString("\n").trim())
         }
-        return MarkdownBlock.UnorderedList(items)
+        return MarkdownBlock.UnorderedList(items.filter { it.isNotBlank() })
     }
 }
 
@@ -130,10 +137,16 @@ internal class OrderedListParser : BlockParser {
             context.currentIndex++
 
             // Subsequent lines of the same item (continuation)
-            while (context.hasMoreLines() && context.currentLine()?.isNotBlank() == true) {
-                val trimmedLine = context.currentLine()!!.trim()
+            // Subsequent lines of the same item (continuation)
+            while (context.hasMoreLines()) {
+                val currentLine = context.currentLine()
+                if (currentLine.isNullOrBlank()) {
+                    // Stop at the first blank line. This properly separates list items.
+                    break
+                }
+                val trimmedLine = currentLine.trim()
                 val isNewListItem = RegexConstants.UNORDERED_LIST_REGEX.matches(trimmedLine) ||
-                                  RegexConstants.ORDERED_LIST_REGEX.matches(trimmedLine)
+                        RegexConstants.ORDERED_LIST_REGEX.matches(trimmedLine)
                 if (isNewListItem) break
 
                 val isOtherBlock = MarkdownParser.blockParsers.any {
@@ -146,7 +159,7 @@ internal class OrderedListParser : BlockParser {
             }
             items.add(itemContent.joinToString("\n").trim())
         }
-        return MarkdownBlock.OrderedList(items)
+        return MarkdownBlock.OrderedList(items.filter { it.isNotBlank() })
     }
 }
 
@@ -270,24 +283,33 @@ object MarkdownParser {
 
     fun parse(markdown: String): List<MarkdownBlock> {
         val blocks = mutableListOf<MarkdownBlock>()
-        val context = ParseContext(markdown.lines(), 0)
+        // Normalize line endings and then split. This handles \r\n, \n, and \r.
+        val lines = markdown.replace(Regex("\\r\\n?"), "\n").split('\n')
+        val context = ParseContext(lines, 0)
 
         while (context.hasMoreLines()) {
-            val line = context.currentLine()
-            if (line.isNullOrBlank()) {
+            // Skip leading blank lines
+            while (context.hasMoreLines() && context.currentLine().isNullOrBlank()) {
                 context.currentIndex++
-                continue
             }
+            if (!context.hasMoreLines()) break
 
             val parser = blockParsers.firstOrNull { it.canParse(context) }
             if (parser != null) {
                 val initialIndex = context.currentIndex
                 val block = parser.parse(context)
-                blocks.add(block)
+
+                // Add block if it's not an empty paragraph
+                if (block !is MarkdownBlock.Paragraph || block.text.isNotBlank()) {
+                    blocks.add(block)
+                }
+
+                // Safety break to prevent infinite loops if a parser fails to advance
                 if (context.currentIndex == initialIndex) {
                     context.currentIndex++
                 }
             } else {
+                // Should not happen with ParagraphParser as a fallback, but as a safety measure
                 context.currentIndex++
             }
         }

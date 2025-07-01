@@ -9,7 +9,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -17,7 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.outlined.ContentPaste
+import androidx.compose.material.icons.outlined.Article
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -42,6 +41,7 @@ import androidx.compose.ui.window.PopupProperties
 import coil3.compose.AsyncImage
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.model.SelectedMediaItem
+import kotlinx.coroutines.launch
 
 private const val CONTEXT_MENU_ANIMATION_DURATION_MS = 150
 private val CONTEXT_MENU_CORNER_RADIUS = 16.dp
@@ -62,7 +62,8 @@ internal fun UserOrErrorMessageContent(
     maxWidth: Dp,
     onEditRequest: (Message) -> Unit,
     onRegenerateRequest: (Message) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    scrollStateManager: com.example.everytalk.ui.screens.MainScreen.chat.ChatScrollStateManager
 ) {
     var isContextMenuVisible by remember(message.id) { mutableStateOf(false) }
     var pressOffset by remember(message.id) { mutableStateOf(Offset.Zero) }
@@ -70,6 +71,7 @@ internal fun UserOrErrorMessageContent(
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
     val haptic = LocalHapticFeedback.current
+    val coroutineScope = rememberCoroutineScope()
 
     Box(
         modifier = modifier
@@ -110,11 +112,76 @@ internal fun UserOrErrorMessageContent(
                                 .offset(y = (-6).dp)
                         )
                     } else if (displayedText.isNotBlank() || isError) {
-                        Text(
-                            text = displayedText.trim(),
-                            textAlign = TextAlign.Start,
-                            color = contentColor
-                        )
+                        // Use message.text as the single source of truth to avoid issues with
+                        // recomposition and unstable displayedText state from the caller.
+                        // By parsing displayedText, we enable real-time markdown rendering during streaming.
+                        val segments = remember(message.text) {
+                            parseMarkdownSegments(message.text)
+                        }
+
+                        Column {
+                            segments.forEach { segment ->
+                                when (segment) {
+                                    is TextSegment.Normal -> if (segment.text.isNotBlank()) {
+                                        val annotatedText = remember(segment.text) {
+                                            com.example.everytalk.util.parseInlineMarkdownToAnnotatedString(segment.text)
+                                        }
+                                        Text(
+                                            text = annotatedText,
+                                            textAlign = TextAlign.Start,
+                                            color = contentColor
+                                        )
+                                    }
+                                    is TextSegment.CodeBlock -> {
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f),
+                                            shape = RoundedCornerShape(8.dp),
+                                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                                        ) {
+                                            Text(
+                                                text = segment.code,
+                                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                                color = contentColor,
+                                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                            )
+                                        }
+                                    }
+                                    is TextSegment.Header -> {
+                                        val annotatedText = remember(segment.text) {
+                                            com.example.everytalk.util.parseInlineMarkdownToAnnotatedString(segment.text)
+                                        }
+                                        Text(
+                                            text = annotatedText,
+                                            style = when (segment.level) {
+                                                1 -> MaterialTheme.typography.headlineLarge
+                                                2 -> MaterialTheme.typography.headlineMedium
+                                                3 -> MaterialTheme.typography.headlineSmall
+                                                else -> MaterialTheme.typography.bodyLarge
+                                            },
+                                            color = contentColor,
+                                            modifier = Modifier.padding(vertical = 4.dp)
+                                        )
+                                    }
+                                    is TextSegment.ListItem -> {
+                                        Row(modifier = Modifier.padding(vertical = 2.dp)) {
+                                            Text(
+                                                text = "• ",
+                                                color = contentColor,
+                                                style = MaterialTheme.typography.bodyLarge
+                                            )
+                                            val annotatedText = remember(segment.text) {
+                                                com.example.everytalk.util.parseInlineMarkdownToAnnotatedString(segment.text)
+                                            }
+                                            Text(
+                                                text = annotatedText,
+                                                color = contentColor,
+                                                style = MaterialTheme.typography.bodyLarge
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -242,8 +309,18 @@ internal fun UserOrErrorMessageContent(
                             delay = 60,
                             text = { Text("重新回答") },
                             onClick = {
+                                // 重置滚动状态
+                                scrollStateManager.resetScrollState()
+                                
+                                // 执行重新回答请求
                                 onRegenerateRequest(message)
                                 isContextMenuVisible = false
+                                
+                                // 使用强制滚动方法，确保滚动到用户气泡的最底部
+                                // 多次尝试滚动，确保在不同时间点都能滚动到底部
+                                coroutineScope.launch {
+                                    scrollStateManager.jumpToBottom()
+                                }
                             },
                             leadingIcon = {
                                 Icon(
@@ -266,7 +343,9 @@ fun AttachmentsContent(
     maxWidth: Dp,
     message: Message,
     onEditRequest: (Message) -> Unit,
-    onRegenerateRequest: (Message) -> Unit
+    onRegenerateRequest: (Message) -> Unit,
+    onImageLoaded: () -> Unit,
+    scrollStateManager: com.example.everytalk.ui.screens.MainScreen.chat.ChatScrollStateManager
 ) {
     val context = LocalContext.current
     var isContextMenuVisible by remember(message.id) { mutableStateOf(false) }
@@ -274,6 +353,7 @@ fun AttachmentsContent(
     val density = LocalDensity.current
     val clipboardManager = LocalClipboardManager.current
     val haptic = LocalHapticFeedback.current
+    val coroutineScope = rememberCoroutineScope()
 
     val onLongPressHandler = { offset: Offset ->
         haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
@@ -293,6 +373,7 @@ fun AttachmentsContent(
                             model = attachment.uri,
                             imageLoader = com.example.everytalk.util.AppImageLoader.get(context),
                             contentDescription = "Image attachment",
+                            onSuccess = { _ -> onImageLoaded() },
                             modifier = Modifier
                                 .widthIn(max = maxWidth * 0.8f)
                                 .padding(vertical = 4.dp)
@@ -316,6 +397,7 @@ fun AttachmentsContent(
                             model = attachment.bitmap,
                             imageLoader = com.example.everytalk.util.AppImageLoader.get(context),
                             contentDescription = "Image attachment",
+                            onSuccess = { _ -> onImageLoaded() },
                             modifier = Modifier
                                 .widthIn(max = maxWidth * 0.8f)
                                 .padding(vertical = 4.dp)
@@ -354,13 +436,13 @@ fun AttachmentsContent(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
-                                imageVector = Icons.Default.ContentCopy, // Replace with appropriate icon
+                                imageVector = getIconForMimeType(attachment.mimeType),
                                 contentDescription = "Attachment",
                                 modifier = Modifier.size(24.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = attachment.displayName,
+                                text = attachment.displayName ?: attachment.uri.path?.substringAfterLast('/') ?: "Attached File",
                                 style = MaterialTheme.typography.bodyMedium
                             )
                         }
@@ -472,7 +554,6 @@ fun AttachmentsContent(
                                 })
                         }
 
-
                         AnimatedDropdownMenuItem(
                             menuVisibility,
                             delay = 30,
@@ -494,8 +575,18 @@ fun AttachmentsContent(
                             delay = 60,
                             text = { Text("重新回答") },
                             onClick = {
+                                // 重置滚动状态
+                                scrollStateManager.resetScrollState()
+                                
+                                // 执行重新回答请求
                                 onRegenerateRequest(message)
                                 isContextMenuVisible = false
+                                
+                                // 使用强制滚动方法，确保滚动到用户气泡的最底部
+                                // 多次尝试滚动，确保在不同时间点都能滚动到底部
+                                coroutineScope.launch {
+                                    scrollStateManager.jumpToBottom()
+                                }
                             },
                             leadingIcon = {
                                 Icon(
@@ -514,139 +605,89 @@ fun AttachmentsContent(
 sealed class TextSegment {
     data class Normal(val text: String) : TextSegment()
     data class CodeBlock(val language: String?, val code: String) : TextSegment()
+    data class Header(val level: Int, val text: String) : TextSegment()
+    data class ListItem(val text: String) : TextSegment()
 }
 
-private val GFM_CLOSED_CODE_BLOCK_REGEX =
-    Regex("```([a-zA-Z0-9_.-]*)[ \t]*\\n([\\s\\S]*?)\\n```")
-
-private val CODE_BLOCK_START_REGEX = Regex("```")
-
 fun parseMarkdownSegments(markdownInput: String): List<TextSegment> {
-    if (markdownInput.isBlank()) {
-        return emptyList()
-    }
-
     val segments = mutableListOf<TextSegment>()
-    var currentIndex = 0
+    val lines = markdownInput.lines()
+    var i = 0
+    while (i < lines.size) {
+        val line = lines[i]
+        val trimmedLine = line.trim()
 
-    var matchResult = GFM_CLOSED_CODE_BLOCK_REGEX.find(markdownInput, currentIndex)
-
-    while (matchResult != null) {
-        val matchStart = matchResult.range.first
-        val matchEnd = matchResult.range.last
-
-        if (matchStart > currentIndex) {
-            val normalText = markdownInput.substring(currentIndex, matchStart)
-            if (normalText.isNotBlank()) {
-                segments.add(TextSegment.Normal(normalText.trim()))
+        when {
+            // Code Blocks
+            trimmedLine.startsWith("```") -> {
+                val lang = trimmedLine.substring(3).trim()
+                val codeLines = mutableListOf<String>()
+                i++ // Move to next line
+                while (i < lines.size && !lines[i].trim().equals("```")) {
+                    codeLines.add(lines[i])
+                    i++
+                }
+                segments.add(TextSegment.CodeBlock(lang.ifEmpty { null }, codeLines.joinToString("\n")))
+                if (i < lines.size) {
+                    i++ // Skip the closing ```
+                }
+            }
+            // Headers
+            trimmedLine.startsWith("#") -> {
+                val level = trimmedLine.takeWhile { it == '#' }.count()
+                if (level <= 6) {
+                    val text = trimmedLine.removePrefix("#".repeat(level)).trim()
+                    segments.add(TextSegment.Header(level, text))
+                    i++
+                } else {
+                    // Not a valid header, fall through to paragraph handling
+                    val paragraphLines = mutableListOf<String>()
+                    while (i < lines.size && lines[i].trim().isNotBlank() && !lines[i].trim().startsWith("```")) {
+                        paragraphLines.add(lines[i])
+                        i++
+                    }
+                    if (paragraphLines.isNotEmpty()) {
+                        segments.add(TextSegment.Normal(paragraphLines.joinToString("\n")))
+                    }
+                }
+            }
+            // Unordered & Ordered List Items (handled one by one)
+            trimmedLine.startsWith("* ") || trimmedLine.startsWith("- ") -> {
+                segments.add(TextSegment.ListItem(trimmedLine.substring(2)))
+                i++
+            }
+            trimmedLine.matches(Regex("^\\d+\\. .*")) -> {
+                segments.add(TextSegment.ListItem(trimmedLine.substringAfter(". ")))
+                i++
+            }
+            // Paragraphs
+            trimmedLine.isNotBlank() -> {
+                val paragraphLines = mutableListOf<String>()
+                while (
+                    i < lines.size &&
+                    lines[i].trim().isNotBlank() &&
+                    !lines[i].trim().startsWith("```") &&
+                    !lines[i].trim().startsWith("#") &&
+                    !lines[i].trim().startsWith("* ") &&
+                    !lines[i].trim().startsWith("- ") &&
+                    !lines[i].trim().matches(Regex("^\\d+\\. .*"))
+                ) {
+                    paragraphLines.add(lines[i])
+                    i++
+                }
+                if (paragraphLines.isNotEmpty()) {
+                    segments.add(TextSegment.Normal(paragraphLines.joinToString("\n")))
+                }
+            }
+            // Blank lines
+            else -> {
+                i++
             }
         }
-
-        val language = matchResult.groups[1]?.value?.trim()
-            ?.takeIf { it.isNotEmpty() }
-        val code = matchResult.groups[2]?.value ?: ""
-        segments.add(TextSegment.CodeBlock(language, code))
-
-        currentIndex = matchEnd + 1
-        matchResult = GFM_CLOSED_CODE_BLOCK_REGEX.find(markdownInput, currentIndex)
     }
-
-    if (currentIndex < markdownInput.length) {
-        val remainingText = markdownInput.substring(currentIndex)
-
-        val openBlockMatch = CODE_BLOCK_START_REGEX.find(remainingText)
-        if (openBlockMatch != null) {
-            val openBlockStartInRemaining = openBlockMatch.range.first
-
-            if (openBlockStartInRemaining > 0) {
-                val normalPrefix = remainingText.substring(0, openBlockStartInRemaining)
-                if (normalPrefix.isNotBlank()) {
-                    segments.add(TextSegment.Normal(normalPrefix.trim()))
-                }
-            }
-
-            val codeBlockCandidate =
-                remainingText.substring(openBlockStartInRemaining + 3)
-            val firstNewlineIndex = codeBlockCandidate.indexOf('\n')
-            var lang: String? = null
-            var codeContent: String
-
-            if (firstNewlineIndex != -1) {
-                val langLine = codeBlockCandidate.substring(0, firstNewlineIndex).trim()
-                if (langLine.all { it.isLetterOrDigit() || it == '_' || it == '.' || it == '-' || it == '+' }) {
-                    lang = langLine.takeIf { it.isNotEmpty() }
-                }
-                codeContent = codeBlockCandidate.substring(firstNewlineIndex + 1)
-            } else {
-                val langLine = codeBlockCandidate.trim()
-                if (langLine.all { it.isLetterOrDigit() || it == '_' || it == '.' || it == '-' || it == '+' }) {
-                    lang = langLine.takeIf { it.isNotEmpty() }
-                }
-                codeContent = ""
-            }
-            segments.add(TextSegment.CodeBlock(lang, codeContent))
-
-        } else {
-            if (remainingText.isNotBlank()) {
-                segments.add(TextSegment.Normal(remainingText.trim()))
-            }
-        }
-    }
-
-    if (segments.isEmpty() && markdownInput.isNotBlank()) {
-        if (markdownInput.startsWith("```")) {
-            val codeBlockCandidate = markdownInput.substring(3)
-            val firstNewlineIndex = codeBlockCandidate.indexOf('\n')
-            var lang: String? = null
-            var codeContent: String
-            if (firstNewlineIndex != -1) {
-                val langLine = codeBlockCandidate.substring(0, firstNewlineIndex).trim()
-                if (langLine.all { it.isLetterOrDigit() || it == '_' || it == '.' || it == '-' || it == '+' }) {
-                    lang = langLine.takeIf { it.isNotEmpty() }
-                }
-                codeContent = codeBlockCandidate.substring(firstNewlineIndex + 1)
-            } else {
-                val langLine = codeBlockCandidate.trim()
-                if (langLine.all { it.isLetterOrDigit() || it == '_' || it == '.' || it == '-' || it == '+' }) {
-                    lang = langLine.takeIf { it.isNotEmpty() }
-                }
-                codeContent = ""
-            }
-            segments.add(TextSegment.CodeBlock(lang, codeContent))
-        } else {
-            segments.add(TextSegment.Normal(markdownInput.trim()))
-        }
-    }
-
     return segments
 }
 
-fun extractStreamingCodeContent(textAlreadyTrimmedAndStartsWithTripleQuote: String): Pair<String?, String> {
-    val contentAfterTripleTicks =
-        textAlreadyTrimmedAndStartsWithTripleQuote.substring(3)
-    val firstNewlineIndex = contentAfterTripleTicks.indexOf('\n')
-
-    if (firstNewlineIndex != -1) {
-        val langHint = contentAfterTripleTicks.substring(0, firstNewlineIndex).trim()
-        val code = contentAfterTripleTicks.substring(firstNewlineIndex + 1)
-        val validatedLangHint =
-            if (langHint.all { it.isLetterOrDigit() || it == '_' || it == '.' || it == '-' || it == '+' }) {
-                langHint.takeIf { it.isNotEmpty() }
-            } else {
-                null
-            }
-        return Pair(validatedLangHint, code)
-    } else {
-        val langLine = contentAfterTripleTicks.trim()
-        val validatedLangHint =
-            if (langLine.all { it.isLetterOrDigit() || it == '_' || it == '.' || it == '-' || it == '+' }) {
-                langLine.takeIf { it.isNotEmpty() }
-            } else {
-                null
-            }
-        return Pair(validatedLangHint, "")
-    }
-}
 
 
 @Composable
@@ -679,5 +720,14 @@ private fun ThreeDotsLoadingAnimation(
                     .background(dotColor.copy(alpha = animatedAlpha), RoundedCornerShape(50))
             )
         }
+    }
+}
+
+@Composable
+private fun getIconForMimeType(mimeType: String?): androidx.compose.ui.graphics.vector.ImageVector {
+    return when (mimeType?.substringBefore('/')) {
+        "application" -> Icons.Outlined.Article
+        "text" -> Icons.Outlined.Article
+        else -> Icons.Default.ContentCopy
     }
 }

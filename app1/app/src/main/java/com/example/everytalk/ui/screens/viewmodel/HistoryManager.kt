@@ -3,7 +3,7 @@ package com.example.everytalk.ui.screens.viewmodel
 import android.util.Log
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.DataClass.Sender
-import com.example.everytalk.statecontroler.ViewModelStateHolder
+import com.example.everytalk.statecontroller.ViewModelStateHolder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext

@@ -15,7 +15,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavController
 import com.example.everytalk.data.DataClass.ApiConfig
 import com.example.everytalk.data.DataClass.ModalityType
-import com.example.everytalk.statecontroler.AppViewModel
+import com.example.everytalk.statecontroller.AppViewModel
 import java.util.UUID
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -66,13 +66,22 @@ fun SettingsScreen(
     val exportSettingsLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json"),
         onResult = { uri ->
-            uri?.let {
+            uri?.let { fileUri ->
                 exportData?.second?.let { jsonContent ->
-                    context.contentResolver.openOutputStream(it)?.use { outputStream ->
-                        outputStream.write(jsonContent.toByteArray())
+                    try {
+                        context.contentResolver.openFileDescriptor(fileUri, "w")?.use { pfd ->
+                            java.io.FileOutputStream(pfd.fileDescriptor).use { outputStream ->
+                                outputStream.channel.truncate(0) // 强制清空文件
+                                outputStream.write(jsonContent.toByteArray())
+                            }
+                        }
+                        viewModel.showSnackbar("配置已导出")
+                    } catch (e: Exception) {
+                        Log.e("SettingsScreen", "导出失败", e)
+                        viewModel.showSnackbar("导出失败: ${e.message}")
+                    } finally {
+                        exportData = null
                     }
-                    viewModel.showSnackbar("配置已导出")
-                    exportData = null
                 }
             }
         }
@@ -98,6 +107,17 @@ fun SettingsScreen(
         viewModel.settingsExportRequest.collect { data ->
             exportData = data
             exportSettingsLauncher.launch(data.first)
+        }
+    }
+
+    LaunchedEffect(savedConfigs, selectedConfigForApp) {
+        val currentSelected = selectedConfigForApp
+        if (currentSelected != null && savedConfigs.none { it.id == currentSelected.id }) {
+            savedConfigs.firstOrNull()?.let {
+                viewModel.selectConfig(it)
+            } ?: viewModel.clearSelectedConfig()
+        } else if (currentSelected == null && savedConfigs.isNotEmpty()) {
+            viewModel.selectConfig(savedConfigs.first())
         }
     }
 

@@ -44,23 +44,23 @@ sealed class SelectedMediaItem {
     data class ImageFromUri(
         @Serializable(with = com.example.everytalk.util.UriSerializer::class)
         val uri: Uri,
-        val filePath: String? = null,
-        override val id: String = UUID.randomUUID().toString()
+        override val id: String,
+        val filePath: String? = null
     ) : SelectedMediaItem()
  
     @Serializable
     data class ImageFromBitmap(
         @Contextual val bitmap: Bitmap,
-        override val id: String = "bitmap_${UUID.randomUUID()}"
+        override val id: String
     ) : SelectedMediaItem()
  
     @Serializable
     data class GenericFile(
         @Serializable(with = com.example.everytalk.util.UriSerializer::class)
         val uri: Uri,
+        override val id: String,
         val displayName: String,
         val mimeType: String?,
-        val filePath: String? = null,
-        override val id: String = UUID.randomUUID().toString()
+        val filePath: String? = null
     ) : SelectedMediaItem()
 }

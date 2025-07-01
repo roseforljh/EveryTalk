@@ -3,14 +3,17 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
-sealed class AbstractApiMessage {
-    abstract val role: String
-    abstract val name: String?
+sealed class AbstractApiMessage : IMessage {
+    abstract override val role: String
+    abstract override val name: String?
 }
 
 @Serializable
 @SerialName("simple_text_message")
 data class SimpleTextApiMessage(
+    @SerialName("id")
+    override val id: String = java.util.UUID.randomUUID().toString(),
+    
     @SerialName("role")
     override val role: String,
 
@@ -24,6 +27,9 @@ data class SimpleTextApiMessage(
 @Serializable
 @SerialName("parts_message")
 data class PartsApiMessage(
+    @SerialName("id")
+    override val id: String = java.util.UUID.randomUUID().toString(),
+    
     @SerialName("role")
     override val role: String,
 

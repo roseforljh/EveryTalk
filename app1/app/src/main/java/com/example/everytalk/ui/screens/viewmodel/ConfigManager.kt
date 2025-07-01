@@ -2,8 +2,8 @@ package com.example.everytalk.ui.screens.viewmodel
 
 import android.util.Log
 import com.example.everytalk.data.DataClass.ApiConfig
-import com.example.everytalk.statecontroler.ApiHandler
-import com.example.everytalk.statecontroler.ViewModelStateHolder
+import com.example.everytalk.statecontroller.ApiHandler
+import com.example.everytalk.statecontroller.ViewModelStateHolder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.update
@@ -123,58 +123,44 @@ class ConfigManager(
         val indexToDelete = currentConfigs.indexOfFirst { it.id == configToDelete.id }
 
         if (indexToDelete == -1) {
-            Log.w(
-                TAG_CM,
-                "Attempted to delete a config not found in the list: ID=${configToDelete.id}"
-            )
+            Log.w(TAG_CM, "Attempted to delete a config not found in the list: ID=${configToDelete.id}")
             viewModelScope.launch { stateHolder._snackbarMessage.emit("删除失败：未找到配置") }
             return
         }
 
         val wasCurrentlySelected = stateHolder._selectedApiConfig.value?.id == configToDelete.id
-        var newSelectedConfigAfterDeletion: ApiConfig? = null
-
+        
         val updatedConfigs = currentConfigs.toMutableList().apply {
             removeAt(indexToDelete)
         }.toList()
+
         stateHolder._apiConfigs.value = updatedConfigs
-        Log.d(
-            TAG_CM,
-            "Config with ID ${configToDelete.id} ('${configToDelete.model}') removed from memory list."
-        )
+        Log.d(TAG_CM, "Config with ID ${configToDelete.id} ('${configToDelete.model}') removed from memory list.")
 
         if (wasCurrentlySelected) {
             apiHandler.cancelCurrentApiJob("Selected config '${configToDelete.model}' was deleted")
-            newSelectedConfigAfterDeletion = updatedConfigs.firstOrNull()
-            stateHolder._selectedApiConfig.value = newSelectedConfigAfterDeletion
-            Log.d(
-                TAG_CM,
-                "Deleted config was selected. New in-memory selection: ${newSelectedConfigAfterDeletion?.model ?: "None"}"
-            )
-        }
+            
+            val newSelectedConfig = updatedConfigs.firstOrNull()
+            stateHolder._selectedApiConfig.value = newSelectedConfig
+            Log.d(TAG_CM, "Deleted config was selected. New in-memory selection: ${newSelectedConfig?.model ?: "None"}")
 
-        viewModelScope.launch {
-            persistenceManager.saveApiConfigs(updatedConfigs)
-            Log.d(TAG_CM, "Updated API configs list (after deletion) saved to persistence.")
-            if (wasCurrentlySelected) {
-                persistenceManager.saveSelectedConfigIdentifier(newSelectedConfigAfterDeletion?.id)
-                Log.d(
-                    TAG_CM,
-                    "New selected config ID (${newSelectedConfigAfterDeletion?.id ?: "null"}) saved to persistence."
-                )
-            }
-        }
-
-        viewModelScope.launch {
-            if (wasCurrentlySelected) {
+            viewModelScope.launch {
+                persistenceManager.saveApiConfigs(updatedConfigs)
+                persistenceManager.saveSelectedConfigIdentifier(newSelectedConfig?.id)
+                Log.d(TAG_CM, "Updated configs and new selection (${newSelectedConfig?.id ?: "null"}) saved to persistence.")
+                
                 stateHolder._snackbarMessage.emit("选中的配置 '${configToDelete.model}' 已删除")
                 delay(250)
-                if (newSelectedConfigAfterDeletion == null) {
+                if (newSelectedConfig == null) {
                     stateHolder._snackbarMessage.emit("请添加或选择一个新的 API 配置")
                 } else {
-                    stateHolder._snackbarMessage.emit("已自动选择: ${newSelectedConfigAfterDeletion.model}")
+                    stateHolder._snackbarMessage.emit("已自动选择: ${newSelectedConfig.model}")
                 }
-            } else {
+            }
+        } else {
+            viewModelScope.launch {
+                persistenceManager.saveApiConfigs(updatedConfigs)
+                Log.d(TAG_CM, "Updated API configs list (after deletion) saved to persistence.")
                 stateHolder._snackbarMessage.emit("配置 '${configToDelete.model}' 已删除")
             }
         }

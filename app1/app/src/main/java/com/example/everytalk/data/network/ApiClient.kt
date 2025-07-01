@@ -23,6 +23,8 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.modules.SerializersModule
+import kotlinx.serialization.modules.contextual
 import kotlinx.serialization.SerializationException
 import java.io.IOException
 import java.io.File
@@ -37,6 +39,9 @@ object ApiClient {
             ignoreUnknownKeys = true
             isLenient = true
             encodeDefaults = true
+            serializersModule = SerializersModule {
+                contextual(Any::class, AnySerializer)
+            }
         }
     }
 
@@ -68,11 +73,11 @@ object ApiClient {
     private val backendProxyUrls = listOf(
         //"http://192.168.0.2:7860/chat", // Attempting with a common LAN IP
         //"http://anyaitotalked.zabc.net:7860/chat",
-        "http://backendwest.everytalk.dpdns.org:7860/chat",
-        "http://backend.everytalk.dpdns.org:7860/chat",
-        //"https://backdatalk-717323967862.europe-west1.run.app/chat",
-        //"https://kunze999-backendai.hf.space/chat",
-
+        //"http://backendwest.everytalk.dpdns.org:7860/chat",
+        //"http://backend.everytalk.dpdns.org:7860/chat",
+        "https://kunze999-backend.hf.space/chat",
+        //"https://uoseegiydwgx.us-west-1.clawcloudrun.com/chat",
+        //"https://dbykoynmqkkq.cloud.cloudcat.one:443/chat"
     )
 
     private fun getFileNameFromUri(context: Context, uri: Uri): String {
@@ -93,6 +98,7 @@ object ApiClient {
                     }
                 }
             } catch (e: Exception) {
+                android.util.Log.e("ApiClient", "Error getting file name from URI: $uri", e)
             }
         }
         return fileName ?: uri.lastPathSegment ?: "unknown_file_${System.currentTimeMillis()}"
@@ -176,6 +182,7 @@ object ApiClient {
                                         )
                                     }
                             } catch (e: Exception) {
+                                android.util.Log.e("ApiClient", "Error reading file for upload: $fileUri", e)
                             }
                         }
                     }
@@ -273,6 +280,7 @@ object ApiClient {
                                     jsonParser.decodeFromString(AppStreamEvent.serializer(), line)
                                 trySend(appEvent)
                             } catch (e: Exception) {
+                                android.util.Log.e("ApiClientStream", "Failed to parse or send residual data: '$line'", e)
                             }
                         }
                     }

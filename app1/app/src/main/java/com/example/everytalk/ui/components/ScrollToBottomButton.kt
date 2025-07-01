@@ -17,36 +17,16 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.delay
+import com.example.everytalk.ui.screens.MainScreen.chat.ChatScrollStateManager
 
 @Composable
 fun ScrollToBottomButton(
-    visible: Boolean,
-    isAutoScrolling: Boolean,
-    activityTrigger: Any?,
-    onClick: () -> Unit,
+    scrollStateManager: ChatScrollStateManager,
     modifier: Modifier = Modifier
 ) {
-    var fabVisibleDueToActivity by remember { mutableStateOf(true) }
-
-    // Reset the timeout whenever the button should be visible or there's user activity.
-    LaunchedEffect(visible, activityTrigger) {
-        if (visible) {
-            fabVisibleDueToActivity = true
-        }
-    }
-
-    // Hide the button after a delay of inactivity.
-    // The key includes activityTrigger to restart the timer on new activity.
-    LaunchedEffect(fabVisibleDueToActivity, visible, activityTrigger) {
-        if (fabVisibleDueToActivity && visible) {
-            delay(3000) // Hide after 3 seconds of inactivity
-            fabVisibleDueToActivity = false
-        }
-    }
-
+    val showButton by scrollStateManager.showScrollToBottomButton
     AnimatedVisibility(
-        visible = visible && fabVisibleDueToActivity && !isAutoScrolling,
+        visible = showButton,
         enter = fadeIn(
             animationSpec = tween(
                 durationMillis = 150,
@@ -61,7 +41,7 @@ fun ScrollToBottomButton(
         )
     ) {
         FloatingActionButton(
-            onClick = onClick,
+            onClick = { scrollStateManager.jumpToBottom() },
             modifier = modifier.padding(bottom = 150.dp),
             shape = CircleShape,
             containerColor = Color(0xFFF2F2F2),

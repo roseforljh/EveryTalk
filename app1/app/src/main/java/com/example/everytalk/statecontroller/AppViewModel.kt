@@ -1,4 +1,4 @@
-package com.example.everytalk.statecontroler
+package com.example.everytalk.statecontroller
 
 import android.app.Application
 import android.content.ClipboardManager
@@ -46,12 +46,13 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
 import java.util.UUID
 import androidx.annotation.Keep
 import com.example.everytalk.util.MarkdownBlock
 import kotlinx.coroutines.isActive
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.encodeToString
 import kotlinx.coroutines.yield
 import java.util.Collections
 import java.util.LinkedHashMap
@@ -69,10 +70,17 @@ class AppViewModel(
 ) : AndroidViewModel(application) {
 
     @Keep
+    @Serializable
     private data class ExportedSettings(
         val apiConfigs: List<ApiConfig>,
         val customProviders: Set<String>
     )
+
+    private val json = Json {
+        prettyPrint = true
+        isLenient = true
+        ignoreUnknownKeys = true
+    }
 
     private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -82,8 +90,6 @@ class AppViewModel(
     private val markdownCache = Collections.synchronizedMap(LRUCache<String, List<MarkdownBlock>>(500))
     private val conversationPreviewCache = Collections.synchronizedMap(LRUCache<Int, String>(100))
     private val textUpdateDebouncer = mutableMapOf<String, Job>()
-
-
     internal val stateHolder = ViewModelStateHolder()
     private val imageLoader = ImageLoader.Builder(application.applicationContext).build()
     private val persistenceManager =
@@ -102,7 +108,8 @@ class AppViewModel(
             stateHolder,
             mainScope,
             historyManager,
-            ::onAiMessageFullTextChanged
+            ::onAiMessageFullTextChanged,
+            ::triggerScrollToBottom
         )
     }
     private val configManager: ConfigManager by lazy {
@@ -122,7 +129,7 @@ class AppViewModel(
             apiHandler = apiHandler,
             historyManager = historyManager,
             showSnackbar = ::showSnackbar,
-            triggerScrollToBottom = ::triggerScrollToBottom
+            triggerScrollToBottom = { triggerScrollToBottom() }
         )
     }
 
@@ -215,9 +222,20 @@ class AppViewModel(
        messages.map { message ->
            when (message.sender) {
                Sender.AI -> {
-                   val cacheKey = "${message.id}_${message.text.hashCode()}"
-                   val blocks = synchronized(markdownCache) {
-                       markdownCache[cacheKey] ?: parseMarkdownToBlocks(message.text).also { markdownCache[cacheKey] = it }
+                   val isStreamingThisMessage = isApiCalling && message.id == currentStreamingAiMessageId
+                   val blocks = if (message.text.isBlank()) {
+                       emptyList()
+                   } else {
+                       // Always parse the full text to get incremental block updates.
+                       // Caching is used for completed messages to optimize performance.
+                       if (isStreamingThisMessage) {
+                           parseMarkdownToBlocks(message.text)
+                       } else {
+                           val cacheKey = "${message.id}_${message.text.hashCode()}"
+                           synchronized(markdownCache) {
+                               markdownCache.getOrPut(cacheKey) { parseMarkdownToBlocks(message.text) }
+                           }
+                       }
                    }
                    createAiMessageItems(message, blocks, isApiCalling, currentStreamingAiMessageId)
                }
@@ -302,8 +320,19 @@ class AppViewModel(
 
    private fun createOtherMessageItems(message: Message): List<ChatListItem> {
        return when {
-           message.sender == Sender.User -> listOf(ChatListItem.UserMessage(message))
-           message.isError -> listOf(ChatListItem.ErrorMessage(message))
+           message.sender == Sender.User -> listOf(
+               ChatListItem.UserMessage(
+                   messageId = message.id,
+                   text = message.text,
+                   attachments = message.attachments ?: emptyList()
+               )
+           )
+           message.isError -> listOf(
+               ChatListItem.ErrorMessage(
+                   messageId = message.id,
+                   text = message.text
+               )
+           )
            else -> emptyList()
        }
    }
@@ -585,6 +614,9 @@ class AppViewModel(
                     isFromRegeneration = true,
                     attachments = originalAttachments
                 )
+                if (stateHolder.shouldAutoScroll()) {
+                    triggerScrollToBottom()
+                }
             }
         }
     }
@@ -606,7 +638,9 @@ class AppViewModel(
                 stateHolder.clearForNewChat()
                 // Ensure new chats get a unique ID from the start.
                 stateHolder._currentConversationId.value = "chat_${UUID.randomUUID()}"
-                triggerScrollToBottom()
+                if (stateHolder.shouldAutoScroll()) {
+                    triggerScrollToBottom()
+                }
                 if (_isSearchActiveInDrawer.value) setSearchActiveInDrawer(false)
             }
         }
@@ -690,7 +724,10 @@ class AppViewModel(
             if (wasCurrentChatDeleted) {
                 messagesMutex.withLock {
                     dismissEditDialog(); dismissSourcesDialog()
-                    stateHolder.clearForNewChat(); triggerScrollToBottom()
+                    stateHolder.clearForNewChat()
+                    if (stateHolder.shouldAutoScroll()) {
+                        triggerScrollToBottom()
+                    }
                 }
                 apiHandler.cancelCurrentApiJob("当前聊天(#$indexToDelete)被删除，开始新聊天")
             } else {
@@ -710,7 +747,10 @@ class AppViewModel(
         mainScope.launch {
             ioScope.launch { historyManager.clearAllHistory() }.join()
             messagesMutex.withLock {
-                stateHolder.clearForNewChat(); triggerScrollToBottom()
+                stateHolder.clearForNewChat()
+                if (stateHolder.shouldAutoScroll()) {
+                    triggerScrollToBottom()
+                }
             }
             showSnackbar("所有对话已清除")
             conversationPreviewCache.clear()
@@ -773,6 +813,13 @@ class AppViewModel(
     }
     fun clearAllConfigs() = configManager.clearAllConfigs()
     fun selectConfig(config: ApiConfig) = configManager.selectConfig(config)
+    fun clearSelectedConfig() {
+        stateHolder._selectedApiConfig.value = null
+        ioScope.launch {
+            persistenceManager.saveSelectedConfigIdentifier(null)
+        }
+    }
+
 fun updateConfigGroup(representativeConfig: ApiConfig, newAddress: String, newKey: String) {
        ioScope.launch {
            val trimmedAddress = newAddress.trim()
@@ -931,6 +978,10 @@ fun updateConfigGroup(representativeConfig: ApiConfig, newAddress: String, newKe
                         stateHolder.messages[messageIndex] = messageToUpdate.copy(
                             text = currentFullText
                         )
+                        
+                        if (stateHolder.shouldAutoScroll()) {
+                            triggerScrollToBottom()
+                        }
                     }
                 }
             }
@@ -944,41 +995,57 @@ fun updateConfigGroup(representativeConfig: ApiConfig, newAddress: String, newKe
                 apiConfigs = stateHolder._apiConfigs.value,
                 customProviders = _customProviders.value
             )
-            val json = Gson().toJson(settingsToExport)
-            _settingsExportRequest.send("eztalk_settings" to json)
+            val finalJson = json.encodeToString(settingsToExport)
+            _settingsExportRequest.send("eztalk_settings" to finalJson)
         }
     }
 
     fun importSettings(jsonContent: String) {
         ioScope.launch {
             try {
-                val gson = Gson()
-                val type = object : TypeToken<ExportedSettings>() {}.type
-                val importedSettings = gson.fromJson<ExportedSettings>(jsonContent, type)
+                // Try parsing the new format first
+                try {
+                    val parsedNewSettings = json.decodeFromString<ExportedSettings>(jsonContent)
+                    if (parsedNewSettings.apiConfigs.none { it.id.isBlank() || it.provider.isBlank() }) {
+                        stateHolder._apiConfigs.value = parsedNewSettings.apiConfigs
+                        _customProviders.value = parsedNewSettings.customProviders
+                        val firstConfig = parsedNewSettings.apiConfigs.firstOrNull()
+                        stateHolder._selectedApiConfig.value = firstConfig
 
-                // Basic validation
-                if (importedSettings.apiConfigs.any { it.id.isBlank() || it.provider.isBlank() }) {
-                    withContext(Dispatchers.Main) { showSnackbar("导入失败：配置文件格式无效。") }
-                    return@launch
+                        persistenceManager.saveApiConfigs(parsedNewSettings.apiConfigs)
+                        dataSource.saveCustomProviders(parsedNewSettings.customProviders)
+                        persistenceManager.saveSelectedConfigIdentifier(firstConfig?.id)
+
+                        withContext(Dispatchers.Main) { showSnackbar("配置已成功导入") }
+                        return@launch
+                    }
+                } catch (e: Exception) {
+                    // Fall through to try the old format
                 }
 
-                stateHolder._apiConfigs.value = importedSettings.apiConfigs
-                _customProviders.value = importedSettings.customProviders
+                // Try parsing the old format (List<ApiConfig>)
+                try {
+                    val parsedOldConfigs = json.decodeFromString<List<ApiConfig>>(jsonContent)
+                    if (parsedOldConfigs.none { it.id.isBlank() || it.provider.isBlank() }) {
+                        stateHolder._apiConfigs.value = parsedOldConfigs
+                        _customProviders.value = emptySet() // Old format has no custom providers
+                        val firstConfig = parsedOldConfigs.firstOrNull()
+                        stateHolder._selectedApiConfig.value = firstConfig
 
-                persistenceManager.saveApiConfigs(importedSettings.apiConfigs)
-                dataSource.saveCustomProviders(importedSettings.customProviders)
+                        persistenceManager.saveApiConfigs(parsedOldConfigs)
+                        dataSource.saveCustomProviders(emptySet())
+                        persistenceManager.saveSelectedConfigIdentifier(firstConfig?.id)
 
-                // Reselect config if the old one is gone
-                val currentSelectedId = stateHolder._selectedApiConfig.value?.id
-                if (currentSelectedId == null || importedSettings.apiConfigs.none { it.id == currentSelectedId }) {
-                    val firstConfig = importedSettings.apiConfigs.firstOrNull()
-                    stateHolder._selectedApiConfig.value = firstConfig
-                    persistenceManager.saveSelectedConfigIdentifier(firstConfig?.id)
+                        withContext(Dispatchers.Main) { showSnackbar("旧版配置已成功导入") }
+                        return@launch
+                    }
+                } catch (e: Exception) {
+                    // Fall through to the final error
                 }
 
-                withContext(Dispatchers.Main) {
-                    showSnackbar("配置已成功导入")
-                }
+                // If both fail, show error
+                throw IllegalStateException("JSON content does not match any known valid format.")
+
             } catch (e: Exception) {
                 Log.e("AppViewModel", "Settings import failed", e)
                 withContext(Dispatchers.Main) {
@@ -1016,16 +1083,16 @@ fun getMessageById(id: String): Message? {
         val finalSelectedConfigId = stateHolder._selectedApiConfig.value?.id
         val finalCurrentChatMessages = stateHolder.messages.toList()
 
-        try {
-            runBlocking(Dispatchers.IO) {
-                launch { historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true) }
+        ioScope.launch {
+            try {
+                historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
                 persistenceManager.saveLastOpenChat(finalCurrentChatMessages)
                 persistenceManager.saveApiConfigs(finalApiConfigs)
                 persistenceManager.saveSelectedConfigIdentifier(finalSelectedConfigId)
                 dataSource.saveCustomProviders(_customProviders.value)
+            } catch (e: Exception) {
+                Log.e("AppViewModel", "Error saving state onCleared", e)
             }
-        } catch (e: Exception) {
-            Log.e("AppViewModel", "Error saving state onCleared", e)
         }
         super.onCleared()
     }

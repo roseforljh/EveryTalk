@@ -4,6 +4,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -33,21 +35,21 @@ import androidx.navigation.NavGraph.Companion.findStartDestination
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.DataClass.Sender
 import com.example.everytalk.navigation.Screen
-import com.example.everytalk.statecontroler.AppViewModel
-import com.example.everytalk.statecontroler.ConversationScrollState
+import com.example.everytalk.statecontroller.AppViewModel
+import com.example.everytalk.statecontroller.ConversationScrollState
 import com.example.everytalk.ui.components.AppTopBar
 import com.example.everytalk.ui.components.ScrollToBottomButton
 import com.example.everytalk.ui.components.WebSourcesDialog
 import com.example.everytalk.ui.screens.MainScreen.chat.ChatInputArea
 import com.example.everytalk.ui.screens.MainScreen.chat.ChatMessagesList
 import com.example.everytalk.ui.screens.MainScreen.chat.EditMessageDialog
-import com.example.everytalk.ui.screens.MainScreen.chat.ChatScrollStateManager
 import com.example.everytalk.ui.screens.MainScreen.chat.EmptyChatView
 import com.example.everytalk.ui.screens.MainScreen.chat.ModelSelectionBottomSheet
 import com.example.everytalk.ui.screens.MainScreen.chat.rememberChatScrollStateManager
+import com.example.everytalk.ui.util.ScrollController
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
-import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.delay
 
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -93,57 +95,37 @@ fun ChatScreen(
     val configuration = LocalConfiguration.current
     val keyboardController = LocalSoftwareKeyboardController.current
 
-    val bottomScrollThreshold = with(density) { 8.dp.toPx() }
-    val isAtBottom = {
-        val layoutInfo = listState.layoutInfo
-        if (layoutInfo.visibleItemsInfo.isEmpty()) {
-            true
-        } else {
-            val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
-            lastVisibleItem != null && lastVisibleItem.index >= layoutInfo.totalItemsCount - 1 &&
-                    lastVisibleItem.offset + lastVisibleItem.size <= layoutInfo.viewportEndOffset + bottomScrollThreshold
-        }
-    }
-
-    var showScrollToBottomButton by remember { mutableStateOf(false) }
-    var activityCounter by remember { mutableStateOf(0) }
-
-    val resetFabTimeout = {
-        activityCounter++
-    }
 
     val scrollStateManager = rememberChatScrollStateManager(listState, coroutineScope)
-    val isAutoScrolling by scrollStateManager::isAutoScrolling
-    var userManuallyScrolledAwayFromBottom by scrollStateManager::userManuallyScrolledAwayFromBottom
+    val isAtBottom by scrollStateManager.isAtBottom
 
-    LaunchedEffect(activityCounter) {
-        if (!isAtBottom()) {
-            showScrollToBottomButton = true
-            delay(3000)
-            showScrollToBottomButton = false
-        }
-    }
 
-    LaunchedEffect(listState) {
-        snapshotFlow { isAtBottom() }
-            .distinctUntilChanged()
-            .collect { atBottom ->
-                if (atBottom) {
-                    showScrollToBottomButton = false
-                }
-            }
-    }
 
-    DisposableEffect(conversationId) {
+    DisposableEffect(conversationId, isAtBottom) {
         val idToSaveFor = conversationId
-
         onDispose {
             val stateToSave = ConversationScrollState(
                 firstVisibleItemIndex = listState.firstVisibleItemIndex,
                 firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset,
-                userScrolledAway = showScrollToBottomButton
+                userScrolledAway = !isAtBottom,
             )
             viewModel.saveScrollState(idToSaveFor, stateToSave)
+        }
+    }
+
+    LaunchedEffect(isApiCalling) {
+        if (isApiCalling) {
+            scrollStateManager.onStreamingStarted()
+        } else {
+            // Add a small delay to allow the UI to settle before finishing streaming mode
+            delay(100)
+            scrollStateManager.onStreamingFinished()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        viewModel.scrollToBottomEvent.collect {
+            scrollStateManager.jumpToBottom()
         }
     }
 
@@ -162,62 +144,22 @@ fun ChatScreen(
 
     val filteredModelsForBottomSheet by remember(availableModels, selectedApiConfig) {
         derivedStateOf {
-            val currentKey = selectedApiConfig?.key
-            if (selectedApiConfig != null && currentKey != null && currentKey.isNotBlank()) {
-                val filteredList = availableModels.filter { it.key == currentKey }
-                if (filteredList.isEmpty()) {
+            selectedApiConfig?.key?.takeIf { it.isNotBlank() }?.let { key ->
+                availableModels.filter { it.key == key }.ifEmpty {
                     listOfNotNull(selectedApiConfig)
-                } else {
-                    filteredList
                 }
-            } else {
-                availableModels
-            }
+            } ?: availableModels
         }
     }
 
 
-    val scrollToBottomGuaranteed = scrollStateManager::scrollToBottomGuaranteed
 
 
-    LaunchedEffect(messages.size, isLoadingHistory) {
-        if (isLoadingHistory || messages.isEmpty()) return@LaunchedEffect
-
-        val lastMessage = messages.last()
-        val isNewSession = loadedHistoryIndex == null
-
-        if (lastMessage.sender == Sender.User && isNewSession) {
-            userManuallyScrolledAwayFromBottom = false
-            scrollToBottomGuaranteed("New user message")
-        }
-    }
 
     val screenWidth = configuration.screenWidthDp.dp
     val bubbleMaxWidth = remember(screenWidth) { screenWidth.coerceAtMost(600.dp) }
 
-    LaunchedEffect(Unit) {
-        viewModel.scrollToBottomEvent.collectLatest {
-            userManuallyScrolledAwayFromBottom = false
-            scrollToBottomGuaranteed("ViewModelEvent")
-        }
-    }
 
-    LaunchedEffect(currentStreamingAiMessageId) {
-        if (currentStreamingAiMessageId == null) return@LaunchedEffect
-        val scrollThrottleMs = 250L
-        var lastScrollTime = 0L
-        snapshotFlow { messages.find { it.id == currentStreamingAiMessageId }?.text }
-            .distinctUntilChanged()
-            .collect {
-                val currentTime = System.currentTimeMillis()
-                // 只有当用户没有手动滚动离开底部时才自动滚动
-                if (isActive && !userManuallyScrolledAwayFromBottom
-                    && currentTime - lastScrollTime > scrollThrottleMs) {
-                    lastScrollTime = currentTime
-                    scrollToBottomGuaranteed("AI_Streaming_ContentChanged")
-                }
-            }
-    }
 
 
     val showEditDialog by viewModel.showEditDialog.collectAsState()
@@ -265,13 +207,7 @@ fun ChatScreen(
         },
         floatingActionButton = {
             ScrollToBottomButton(
-                visible = showScrollToBottomButton,
-                isAutoScrolling = scrollStateManager.isAutoScrolling,
-                activityTrigger = activityCounter,
-                onClick = {
-                    userManuallyScrolledAwayFromBottom = false
-                    scrollToBottomGuaranteed("FAB_Click")
-                }
+                scrollStateManager = scrollStateManager
             )
         },
         floatingActionButtonPosition = FabPosition.End
@@ -288,12 +224,6 @@ fun ChatScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .pointerInput(Unit) {
-                        awaitEachGesture {
-                            awaitFirstDown(requireUnconsumed = false)
-                            resetFabTimeout()
-                        }
-                    }
             ) {
                 when {
                     isLoadingHistory -> {
@@ -314,17 +244,22 @@ fun ChatScreen(
                             chatItems = chatListItems,
                             viewModel = viewModel,
                             listState = listState,
-                            nestedScrollConnection = scrollStateManager.nestedScrollConnection,
+                            scrollStateManager = scrollStateManager,
                             bubbleMaxWidth = bubbleMaxWidth,
                             onShowAiMessageOptions = { msg ->
                                 selectedMessageForOptions = msg
                                 showAiMessageOptionsBottomSheet = true
                             },
                             onImageLoaded = {
-                                if (!userManuallyScrolledAwayFromBottom) {
-                                    scrollToBottomGuaranteed("Image loaded after check")
+                                if (!scrollStateManager.userInteracted) {
+                                    scrollStateManager.jumpToBottom()
                                 }
-                            }
+                            },
+                            onThinkingBoxVisibilityChanged = {
+                                if (!scrollStateManager.userInteracted) {
+                                    scrollStateManager.jumpToBottom()
+                                }
+                            },
                         )
                     }
                 }
@@ -334,10 +269,18 @@ fun ChatScreen(
                 text = text,
                 onTextChange = {
                     viewModel.onTextChange(it)
-                    resetFabTimeout()
                 },
                 onSendMessageRequest = { messageText, _, attachments ->
                     viewModel.onSendMessage(messageText = messageText, attachments = attachments)
+                    keyboardController?.hide()
+                    coroutineScope.launch {
+                        // 等待键盘关闭
+                        snapshotFlow { imeInsets.getBottom(density) > 0 }
+                            .filter { isVisible -> !isVisible }
+                            .first()
+                        // 滚动到底部
+                        scrollStateManager.jumpToBottom()
+                    }
                 },
                 selectedMediaItems = selectedMediaItems,
                 onAddMediaItem = { viewModel.addMediaItem(it) },
@@ -355,7 +298,9 @@ fun ChatScreen(
                 imeInsets = imeInsets,
                 density = density,
                 keyboardController = keyboardController,
-                onFocusChange = { resetFabTimeout() }
+                onFocusChange = {
+                    scrollStateManager.jumpToBottom()
+                }
             )
         }
 
@@ -399,74 +344,28 @@ fun ChatScreen(
         }
 
         if (showAiMessageOptionsBottomSheet && selectedMessageForOptions != null) {
-            ModalBottomSheet(
+            AiMessageOptionsBottomSheet(
                 onDismissRequest = { showAiMessageOptionsBottomSheet = false },
                 sheetState = aiMessageOptionsBottomSheetState,
-                containerColor = Color.White,
-            ) {
-                Column(modifier = Modifier.padding(bottom = 32.dp)) {
-                    ListItem(
-                        headlineContent = { Text("选择文本") },
-                        leadingContent = { Icon(Icons.Outlined.SelectAll, contentDescription = "选择文本") },
-                        modifier = Modifier.clickable {
-                            viewModel.showSelectableTextDialog(selectedMessageForOptions!!.text)
-                            coroutineScope.launch {
-                                aiMessageOptionsBottomSheetState.hide()
-                            }.invokeOnCompletion {
-                                if (!aiMessageOptionsBottomSheetState.isVisible) {
-                                    showAiMessageOptionsBottomSheet = false
-                                }
-                            }
-                        },
-                        colors = ListItemDefaults.colors(containerColor = Color.White)
-                    )
-                    ListItem(
-                        headlineContent = { Text("复制全文") },
-                        leadingContent = { Icon(Icons.Filled.ContentCopy, contentDescription = "复制全文") },
-                        modifier = Modifier.clickable {
-                            viewModel.copyToClipboard(selectedMessageForOptions!!.text)
-                            coroutineScope.launch {
-                                aiMessageOptionsBottomSheetState.hide()
-                            }.invokeOnCompletion {
-                                if (!aiMessageOptionsBottomSheetState.isVisible) {
-                                    showAiMessageOptionsBottomSheet = false
-                                }
-                            }
-                        },
-                        colors = ListItemDefaults.colors(containerColor = Color.White)
-                    )
-                    ListItem(
-                        headlineContent = { Text("重新回答") },
-                        leadingContent = { Icon(Icons.Filled.Refresh, contentDescription = "重新回答") },
-                        modifier = Modifier.clickable {
+                onOptionSelected = { option ->
+                    when (option) {
+                        AiMessageOption.SELECT_TEXT -> viewModel.showSelectableTextDialog(selectedMessageForOptions!!.text)
+                        AiMessageOption.COPY_FULL_TEXT -> viewModel.copyToClipboard(selectedMessageForOptions!!.text)
+                        AiMessageOption.REGENERATE -> {
                             viewModel.regenerateAiResponse(selectedMessageForOptions!!)
-                            coroutineScope.launch {
-                                aiMessageOptionsBottomSheetState.hide()
-                            }.invokeOnCompletion {
-                                if (!aiMessageOptionsBottomSheetState.isVisible) {
-                                    showAiMessageOptionsBottomSheet = false
-                                }
-                            }
-                        },
-                        colors = ListItemDefaults.colors(containerColor = Color.White)
-                    )
-                    ListItem(
-                        headlineContent = { Text("导出文本") },
-                        leadingContent = { Icon(Icons.Filled.IosShare, contentDescription = "导出文本") },
-                        modifier = Modifier.clickable {
-                            viewModel.exportMessageText(selectedMessageForOptions!!.text)
-                            coroutineScope.launch {
-                                aiMessageOptionsBottomSheetState.hide()
-                            }.invokeOnCompletion {
-                                if (!aiMessageOptionsBottomSheetState.isVisible) {
-                                    showAiMessageOptionsBottomSheet = false
-                                }
-                            }
-                        },
-                        colors = ListItemDefaults.colors(containerColor = Color.White)
-                    )
+                            scrollStateManager.jumpToBottom()
+                        }
+                        AiMessageOption.EXPORT_TEXT -> viewModel.exportMessageText(selectedMessageForOptions!!.text)
+                    }
+                    coroutineScope.launch {
+                        aiMessageOptionsBottomSheetState.hide()
+                    }.invokeOnCompletion {
+                        if (!aiMessageOptionsBottomSheetState.isVisible) {
+                            showAiMessageOptionsBottomSheet = false
+                        }
+                    }
                 }
-            }
+            )
         }
     }
 }
@@ -499,4 +398,36 @@ internal fun SelectableTextDialog(textToDisplay: String, onDismissRequest: () ->
             }
         }
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AiMessageOptionsBottomSheet(
+    onDismissRequest: () -> Unit,
+    sheetState: SheetState,
+    onOptionSelected: (AiMessageOption) -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismissRequest,
+        sheetState = sheetState,
+        containerColor = Color.White,
+    ) {
+        Column(modifier = Modifier.padding(bottom = 32.dp)) {
+            AiMessageOption.values().forEach { option ->
+                ListItem(
+                    headlineContent = { Text(option.title) },
+                    leadingContent = { Icon(option.icon, contentDescription = option.title) },
+                    modifier = Modifier.clickable { onOptionSelected(option) },
+                    colors = ListItemDefaults.colors(containerColor = Color.White)
+                )
+            }
+        }
+    }
+}
+
+private enum class AiMessageOption(val title: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
+    SELECT_TEXT("选择文本", Icons.Outlined.SelectAll),
+    COPY_FULL_TEXT("复制全文", Icons.Filled.ContentCopy),
+    REGENERATE("重新回答", Icons.Filled.Refresh),
+    EXPORT_TEXT("导出文本", Icons.Filled.IosShare)
 }

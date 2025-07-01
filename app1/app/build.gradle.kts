@@ -54,12 +54,6 @@ android {
             matchingFallbacks += listOf("release")
             isDebuggable = false
         }
-        create("benchmark1") {
-            initWith(buildTypes.getByName("release"))
-            signingConfig = signingConfigs.getByName("debug")
-            matchingFallbacks += listOf("release")
-            isDebuggable = false
-        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -125,7 +119,6 @@ android {
         implementation("io.ktor:ktor-client-content-negotiation:2.3.11")
         implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.11")
         implementation("io.ktor:ktor-client-logging:2.3.11")
-        implementation("io.ktor:ktor-client-cio:2.3.11")
         implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
 
         // Testing
@@ -149,8 +142,6 @@ android {
 
         implementation("io.coil-kt.coil3:coil-compose:3.2.0")
         implementation("io.coil-kt.coil3:coil-network-okhttp:3.2.0")
-
-        implementation ("com.google.accompanist:accompanist-flowlayout:0.30.1")
 
         implementation("com.google.code.gson:gson:2.10.1") // 添加 Gson 依赖
     }

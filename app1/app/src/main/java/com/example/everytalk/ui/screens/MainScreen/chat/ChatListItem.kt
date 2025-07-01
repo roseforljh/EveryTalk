@@ -7,8 +7,12 @@ import com.example.everytalk.util.MarkdownBlock
 sealed interface ChatListItem {
     val stableId: String
 
-    data class UserMessage(val message: Message) : ChatListItem {
-        override val stableId: String = message.id
+    data class UserMessage(
+        val messageId: String,
+        val text: String,
+        val attachments: List<com.example.everytalk.model.SelectedMediaItem>
+    ) : ChatListItem {
+        override val stableId: String = messageId
     }
 
     data class AiMessageBlock(
@@ -30,8 +34,11 @@ sealed interface ChatListItem {
         override val stableId: String = "${message.id}_footer"
     }
 
-    data class ErrorMessage(val message: Message) : ChatListItem {
-        override val stableId: String = message.id
+    data class ErrorMessage(
+        val messageId: String,
+        val text: String
+    ) : ChatListItem {
+        override val stableId: String = messageId
     }
 
     data class LoadingIndicator(val messageId: String) : ChatListItem {
