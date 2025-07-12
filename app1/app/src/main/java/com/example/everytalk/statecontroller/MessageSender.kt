@@ -297,7 +297,8 @@ private data class AttachmentProcessingResult(
                     imageUriStringsForUi.add(persistentFileProviderUri.toString())
                     SelectedMediaItem.ImageFromUri(
                         uri = persistentFileProviderUri!!,
-                        id = originalMediaItem.id
+                        id = originalMediaItem.id,
+                        filePath = persistentFilePath
                     )
                 }
                 is SelectedMediaItem.GenericFile -> {
