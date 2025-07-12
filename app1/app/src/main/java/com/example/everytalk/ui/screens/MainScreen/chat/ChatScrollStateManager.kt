@@ -45,11 +45,16 @@ class ChatScrollStateManager(
 
     val nestedScrollConnection = object : NestedScrollConnection {
         override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-            if (source == NestedScrollSource.UserInput && available.y < 0) { // User is scrolling up
-                logger.debug("User started dragging up.")
-                userInteracted = true
-                cancelAutoScroll()
-                if (!_isAtBottom.value) {
+            // Any user scroll (not just upwards) should immediately interrupt the auto-scroll.
+            // This makes the interruption much more sensitive and responsive.
+            if (source == NestedScrollSource.UserInput) {
+                if (!userInteracted) {
+                    logger.debug("User interaction detected. Interrupting auto-scroll.")
+                    userInteracted = true
+                    cancelAutoScroll()
+                }
+                // If they are scrolling up and not at the bottom, show the button.
+                if (available.y < -0.1 && !_isAtBottom.value) {
                     showAndThenHideButton()
                 }
             }
@@ -75,40 +80,48 @@ class ChatScrollStateManager(
 
     init {
         coroutineScope.launch {
-            snapshotFlow { listState.isScrollInProgress }
-                .distinctUntilChanged()
-                .collect { isScrolling ->
-                    if (!isScrolling) {
-                        // When scrolling stops, update the state, but do not re-enable auto-scroll.
-                        val atBottom = checkIfAtBottom()
-                        _isAtBottom.value = atBottom
-                        if (atBottom) {
-                            // If we are at the bottom, hide the button.
-                            cancelHideButtonJob()
-                            _showScrollToBottomButton.value = false
-                        }
-                    } else {
-                        // While scrolling, if not at the bottom, show the scroll-to-bottom button.
-                        if (!_isAtBottom.value) {
-                            showAndThenHideButton()
-                        }
-                    }
-                }
-        }
+            var prevItemCount = listState.layoutInfo.totalItemsCount
 
-        coroutineScope.launch {
-            snapshotFlow { listState.layoutInfo.totalItemsCount }
-                .distinctUntilChanged()
-                .filter { it > 0 }
-                .collect {
-                    if (!userInteracted) {
-                        if (isStreaming) {
-                            handleStreamingScroll()
-                        } else {
-                            smoothScrollToBottom()
-                        }
+            // Using a tuple (Triple) ensures that distinctUntilChanged works on structural equality,
+            // preventing the infinite loop that was causing the app to freeze.
+            // The anonymous object `object { ... }` used previously has reference equality,
+            // so it would create a new non-equal object on every check.
+            snapshotFlow {
+                val layoutInfo = listState.layoutInfo
+                Triple(
+                    listState.isScrollInProgress, // a
+                    layoutInfo.totalItemsCount,   // b
+                    layoutInfo.visibleItemsInfo.lastOrNull()?.size // c
+                )
+            }.distinctUntilChanged().collect { (isScrolling, itemCount, _) ->
+                val atBottom = checkIfAtBottom()
+
+                // Part 1: Handle UI state based on user scrolling
+                if (isScrolling) {
+                    if (!atBottom) {
+                        showAndThenHideButton()
+                    }
+                } else {
+                    _isAtBottom.value = atBottom
+                    if (atBottom) {
+                        cancelHideButtonJob()
+                        _showScrollToBottomButton.value = false
                     }
                 }
+
+                // Part 2: Handle auto-scrolling based on new content
+                val isNewItemAdded = itemCount > prevItemCount
+                prevItemCount = itemCount
+
+                // Only auto-scroll if the user hasn't interrupted AND is not currently scrolling.
+                if (!userInteracted && !isScrolling) {
+                    if (isNewItemAdded) {
+                        smoothScrollToBottom()
+                    } else if (isStreaming) {
+                        handleStreamingScroll()
+                    }
+                }
+            }
         }
     }
 
@@ -157,6 +170,7 @@ class ChatScrollStateManager(
 
     fun handleStreamingScroll() {
         if (userInteracted) return
+
         if (autoScrollJob?.isActive == true) {
             autoScrollJob?.cancel()
         }

@@ -72,9 +72,6 @@ object ApiClient {
 
     private val backendProxyUrls = listOf(
         //"http://192.168.0.2:7860/chat", // Attempting with a common LAN IP
-        //"http://anyaitotalked.zabc.net:7860/chat",
-        //"http://backendwest.everytalk.dpdns.org:7860/chat",
-        //"http://backend.everytalk.dpdns.org:7860/chat",
         "https://kunze999-backend.hf.space/chat",
         //"https://uoseegiydwgx.us-west-1.clawcloudrun.com/chat",
         //"https://dbykoynmqkkq.cloud.cloudcat.one:443/chat"
@@ -215,73 +212,43 @@ object ApiClient {
                     throw IOException("获取来自 $backendProxyUrl 的响应体通道失败。")
                 }
 
-                val buf = ByteArray(1024 * 8)
-                val sb = StringBuilder()
                 try {
-                    while (isActive && !channel.isClosedForRead) {
-                        val bytesRead = channel.readAvailable(buf, 0, buf.size)
-                        if (bytesRead == -1) {
+                    while (!channel.isClosedForRead) {
+                        val line = channel.readUTF8Line() ?: continue
+
+                        if (line.isEmpty()) continue
+                        
+                        val processedLine = if (line.startsWith("data:")) {
+                            line.substring(5).trim()
+                        } else {
+                            line
+                        }
+
+                        if (processedLine.isEmpty() || processedLine.startsWith(":")) {
+                            continue
+                        }
+
+                        if (processedLine.equals("[DONE]", ignoreCase = true)) {
+                            channel.cancel(CoroutineCancellationException("[DONE] marker received"))
                             break
                         }
-                        if (bytesRead > 0) {
-                            sb.append(String(buf, 0, bytesRead, Charsets.UTF_8))
-                            var lineBreakIndex: Int
-                            while (sb.indexOf("\n").also { lineBreakIndex = it } != -1) {
-                                var line = sb.substring(0, lineBreakIndex).trim()
-                                sb.delete(0, lineBreakIndex + 1)
 
-                                if (line.isEmpty()) continue
-                                if (line.startsWith("data:")) line = line.substring(5).trim()
-                                else if (line.startsWith(":")) {
-                                    continue
+                        try {
+                            val appEvent = jsonParser.decodeFromString(
+                                AppStreamEvent.serializer(),
+                                processedLine
+                            )
+                            val sendResult = trySend(appEvent)
+                            if (!sendResult.isSuccess) {
+                                if (!isClosedForSend && !channel.isClosedForRead) {
+                                    channel.cancel(CoroutineCancellationException("Downstream channel closed: $sendResult"))
                                 }
-
-
-                                if (line.isNotEmpty()) {
-                                    try {
-                                        if (line.equals(
-                                                "[DONE]",
-                                                ignoreCase = true
-                                            )
-                                        ) {
-                                            channel.cancel(CoroutineCancellationException("[DONE] marker received"))
-                                            break
-                                        }
-                                        val appEvent = jsonParser.decodeFromString(
-                                            AppStreamEvent.serializer(),
-                                            line
-                                        )
-                                        val sendResult = trySend(appEvent)
-                                        if (!sendResult.isSuccess) {
-                                            if (!isClosedForSend && !channel.isClosedForRead) channel.cancel(
-                                                CoroutineCancellationException("下游 ($backendProxyUrl) 已关闭: $sendResult")
-                                            )
-                                            return@execute
-                                        }
-                                    } catch (e: SerializationException) {
-                                        // Log the error and the problematic line to understand what failed
-                                        android.util.Log.e("ApiClientStream", "Serialization failed for line: '$line'", e)
-                                    } catch (e: Exception) {
-                                        // Log other unexpected errors during event processing
-                                        android.util.Log.e("ApiClientStream", "Exception during event processing for line: '$line'", e)
-                                    }
-                                }
+                                return@execute
                             }
-                        } else {
-                            yield()
-                        }
-                    }
-                    if (sb.isNotEmpty() && isActive && !isClosedForSend) {
-                        var line = sb.toString().trim()
-                        if (line.startsWith("data:")) line = line.substring(5).trim()
-                        if (line.isNotEmpty() && !line.equals("[DONE]", ignoreCase = true)) {
-                            try {
-                                val appEvent =
-                                    jsonParser.decodeFromString(AppStreamEvent.serializer(), line)
-                                trySend(appEvent)
-                            } catch (e: Exception) {
-                                android.util.Log.e("ApiClientStream", "Failed to parse or send residual data: '$line'", e)
-                            }
+                        } catch (e: SerializationException) {
+                            android.util.Log.e("ApiClientStream", "Serialization failed for line: '$processedLine'", e)
+                        } catch (e: Exception) {
+                            android.util.Log.e("ApiClientStream", "Exception during event processing for line: '$processedLine'", e)
                         }
                     }
                 } catch (e: IOException) {

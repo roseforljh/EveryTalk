@@ -96,21 +96,6 @@ fun ChatMessagesList(
  
     val isApiCalling by viewModel.isApiCalling.collectAsState()
     val renderer = remember { StreamingMarkdownRenderer() }
-    var isUserScrolling by remember { mutableStateOf(false) }
-
-    LaunchedEffect(listState) {
-        var lastFirstVisibleItemIndex = listState.firstVisibleItemIndex
-        snapshotFlow { listState.firstVisibleItemIndex }
-            .distinctUntilChanged()
-            .collect {
-                if (it < lastFirstVisibleItemIndex) {
-                    isUserScrolling = true
-                } else if (it > lastFirstVisibleItemIndex && !listState.canScrollForward) {
-                    isUserScrolling = false
-                }
-                lastFirstVisibleItemIndex = it
-            }
-    }
 
     LaunchedEffect(chatItems) {
         if (chatItems.lastOrNull() is ChatListItem.AiMessageReasoning) {
@@ -210,10 +195,11 @@ fun ChatMessagesList(
                         onImageLoaded = onImageLoaded,
                         isStreaming = isApiCalling,
                         renderer = renderer,
+                        scrollStateManager = scrollStateManager,
                         modifier = Modifier.onGloballyPositioned { coordinates ->
                             val newHeight = coordinates.size.height
                             if (lastHeight != 0 && lastHeight != newHeight) {
-                                if (isUserScrolling && index < listState.firstVisibleItemIndex) {
+                                if (scrollStateManager.userInteracted && index < listState.firstVisibleItemIndex) {
                                     val heightDiff = newHeight - lastHeight
                                     if (heightDiff != 0) {
                                         coroutineScope.launch {
@@ -296,7 +282,7 @@ private fun AiMessageBlockItem(
     onImageLoaded: () -> Unit,
     isStreaming: Boolean,
     renderer: StreamingMarkdownRenderer,
-    modifier: Modifier = Modifier
+    scrollStateManager: ChatScrollStateManager,     modifier: Modifier = Modifier
 ) {
     val uriHandler = LocalUriHandler.current
     val context = LocalContext.current
