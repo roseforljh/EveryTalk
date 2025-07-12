@@ -1,5 +1,5 @@
 package com.example.everytalk.data.DataClass
-import com.example.everytalk.model.SelectedMediaItem
+import com.example.everytalk.models.SelectedMediaItem
 import kotlinx.serialization.Serializable
 import java.util.UUID
 
@@ -33,7 +33,7 @@ data class Message(
     val webSearchResults: List<WebSearchResult>? = null,
     val currentWebSearchStage: String? = null,
     val imageUrls: List<String>? = null,
-    val attachments: List<SelectedMediaItem>? = null
+    val attachments: List<SelectedMediaItem> = emptyList()
 ) : IMessage {
     // 实现IMessage接口的role属性
     override val role: String
@@ -41,7 +41,7 @@ data class Message(
     
     // 转换为API消息
     fun toApiMessage(): AbstractApiMessage {
-        return if (attachments?.isNotEmpty() == true) {
+        return if (attachments.isNotEmpty()) {
             // 如果有附件，使用PartsApiMessage
             val parts = mutableListOf<ApiContentPart>()
             if (text.isNotBlank()) {

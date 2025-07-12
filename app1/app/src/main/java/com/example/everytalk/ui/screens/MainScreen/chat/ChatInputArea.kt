@@ -49,10 +49,11 @@ import androidx.compose.ui.window.PopupProperties
 import androidx.core.content.FileProvider
 import coil3.compose.AsyncImage
 import com.example.everytalk.data.DataClass.ApiConfig
-import com.example.everytalk.model.ImageSourceOption
-import com.example.everytalk.model.MoreOptionsType
-import com.example.everytalk.model.SelectedMediaItem
+import com.example.everytalk.models.ImageSourceOption
+import com.example.everytalk.models.MoreOptionsType
+import com.example.everytalk.models.SelectedMediaItem
 import com.example.everytalk.util.AppImageLoader
+import com.example.everytalk.util.AudioRecorderHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
@@ -305,6 +306,30 @@ fun SelectedItemPreview(
                     )
                 }
             }
+            is SelectedMediaItem.Audio -> {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Audiotrack,
+                        contentDescription = "Audio file",
+                        modifier = Modifier.size(32.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "Audio",
+                        fontSize = 12.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        color = Color.DarkGray
+                    )
+                }
+            }
         }
         IconButton(
             onClick = onRemoveClicked,
@@ -329,7 +354,7 @@ fun SelectedItemPreview(
 fun ChatInputArea(
     text: String,
     onTextChange: (String) -> Unit,
-    onSendMessageRequest: (messageText: String, isKeyboardVisible: Boolean, attachments: List<SelectedMediaItem>) -> Unit,
+    onSendMessageRequest: (messageText: String, isKeyboardVisible: Boolean, attachments: List<SelectedMediaItem>, mimeType: String?) -> Unit,
     selectedMediaItems: List<SelectedMediaItem>,
     onAddMediaItem: (SelectedMediaItem) -> Unit,
     onRemoveMediaItemAtIndex: (Int) -> Unit,
@@ -344,10 +369,13 @@ fun ChatInputArea(
     imeInsets: WindowInsets,
     density: Density,
     keyboardController: SoftwareKeyboardController?,
-    onFocusChange: (isFocused: Boolean) -> Unit
+    onFocusChange: (isFocused: Boolean) -> Unit,
+    onSendMessage: (messageText: String, isFromRegeneration: Boolean, attachments: List<SelectedMediaItem>, audioBase64: String?, mimeType: String?) -> Unit
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    var isRecording by remember { mutableStateOf(false) }
+    val audioRecorderHelper = remember { AudioRecorderHelper(context) }
 
     var pendingMessageTextForSend by remember { mutableStateOf<String?>(null) }
     var showImageSelectionPanel by remember { mutableStateOf(false) }
@@ -437,9 +465,9 @@ fun ChatInputArea(
                                 SelectedMediaItem.GenericFile(
                                     uri = uri,
                                     id = UUID.randomUUID().toString(),
-                                    displayName = displayName,
-                                    mimeType = mimeType,
-                                    filePath = null
+                                   displayName = displayName,
+                                   mimeType = mimeType,
+                                   filePath = null
                                 )
                             )
                         }
@@ -456,6 +484,17 @@ fun ChatInputArea(
             }
         }
     )
+
+    val recordAudioPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            audioRecorderHelper.startRecording()
+            isRecording = true
+        } else {
+            onShowSnackbar("需要录音权限才能录制音频")
+        }
+    }
 
     // 由于我们现在直接发送消息，不再需要等待键盘隐藏
     // 这段代码保留但不再使用，以防其他地方依赖它
@@ -505,7 +544,9 @@ fun ChatInputArea(
                         onStopApiCall()
                     } else if ((text.isNotBlank() || selectedMediaItems.isNotEmpty()) && selectedApiConfig != null) {
                         // 无论键盘是否可见，都立即发送消息并滚动到底部
-                        onSendMessageRequest(text, false, selectedMediaItems.toList())
+                        val audioItem = selectedMediaItems.firstOrNull { it is SelectedMediaItem.Audio } as? SelectedMediaItem.Audio
+                        val mimeType = audioItem?.mimeType
+                        onSendMessageRequest(text, false, selectedMediaItems.toList(), mimeType)
                         onTextChange("")
                         onClearMediaItems()
                         

@@ -9,6 +9,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Base64
 import androidx.core.content.FileProvider
+import com.example.everytalk.models.SelectedMediaItem
 import com.example.everytalk.data.DataClass.AbstractApiMessage
 import com.example.everytalk.data.DataClass.ApiContentPart
 import com.example.everytalk.data.DataClass.ChatRequest
@@ -18,7 +19,6 @@ import com.example.everytalk.data.DataClass.Message as UiMessage
 import com.example.everytalk.data.DataClass.Sender as UiSender
 import com.example.everytalk.data.DataClass.ThinkingConfig
 import com.example.everytalk.data.DataClass.GenerationConfig
-import com.example.everytalk.model.SelectedMediaItem
 import com.example.everytalk.ui.screens.viewmodel.HistoryManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -255,6 +255,7 @@ private data class AttachmentProcessingResult(
                 is SelectedMediaItem.ImageFromUri -> originalMediaItem.uri
                 is SelectedMediaItem.GenericFile -> originalMediaItem.uri
                 is SelectedMediaItem.ImageFromBitmap -> Uri.EMPTY
+                is SelectedMediaItem.Audio -> Uri.EMPTY
             }
             val originalFileNameForHint = (originalMediaItem as? SelectedMediaItem.GenericFile)?.displayName
                 ?: getFileName(application.contentResolver, itemUri)
@@ -276,41 +277,43 @@ private data class AttachmentProcessingResult(
                 is SelectedMediaItem.GenericFile -> {
                     copyUriToAppInternalStorage(application, originalMediaItem.uri, tempMessageIdForNaming, index, originalMediaItem.displayName)
                 }
+                is SelectedMediaItem.Audio -> {
+                    // 音频数据已为Base64，无需额外处理
+                    null
+                }
             }
 
-            if (persistentFilePath == null) {
+            if (persistentFilePath == null && originalMediaItem !is SelectedMediaItem.Audio) {
                 showSnackbar("无法处理附件: $originalFileNameForHint")
                 return@withContext AttachmentProcessingResult(success = false)
             }
 
-            val persistentFile = File(persistentFilePath)
+            val persistentFile = persistentFilePath?.let { File(it) }
             val authority = "${application.packageName}.provider"
-            val persistentFileProviderUri = FileProvider.getUriForFile(application, authority, persistentFile)
+            val persistentFileProviderUri = persistentFile?.let { FileProvider.getUriForFile(application, authority, it) }
 
             val processedItemForUi: SelectedMediaItem = when (originalMediaItem) {
                 is SelectedMediaItem.ImageFromUri, is SelectedMediaItem.ImageFromBitmap -> {
                     imageUriStringsForUi.add(persistentFileProviderUri.toString())
                     SelectedMediaItem.ImageFromUri(
-                        uri = persistentFileProviderUri,
-                        id = originalMediaItem.id,
-                        filePath = persistentFilePath
+                        uri = persistentFileProviderUri!!,
+                        id = originalMediaItem.id
                     )
                 }
                 is SelectedMediaItem.GenericFile -> {
-                    if (originalMediaItem.mimeType != "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
-                        val fileBytes = application.contentResolver.openInputStream(originalMediaItem.uri)?.use { it.readBytes() }
-                        if (fileBytes != null) {
-                            val base64Data = Base64.encodeToString(fileBytes, Base64.NO_WRAP)
-                            apiContentParts.add(ApiContentPart.InlineData(mimeType = originalMediaItem.mimeType ?: "application/octet-stream", base64Data = base64Data))
-                        }
-                    }
+                    // The ApiClient now handles streaming, so we don't need to read the bytes here.
+                    // We still add the item to the UI list.
                     SelectedMediaItem.GenericFile(
-                        uri = persistentFileProviderUri,
+                        uri = persistentFileProviderUri!!,
                         id = originalMediaItem.id,
                         displayName = originalFileNameForHint,
                         mimeType = originalMediaItem.mimeType,
                         filePath = persistentFilePath
                     )
+                }
+                is SelectedMediaItem.Audio -> {
+                    apiContentParts.add(ApiContentPart.InlineData(mimeType = originalMediaItem.mimeType, base64Data = originalMediaItem.data))
+                    originalMediaItem
                 }
             }
             processedAttachmentsForUi.add(processedItemForUi)
@@ -322,11 +325,17 @@ private data class AttachmentProcessingResult(
     fun sendMessage(
         messageText: String,
         isFromRegeneration: Boolean = false,
-        attachments: List<SelectedMediaItem> = emptyList()
+        attachments: List<SelectedMediaItem> = emptyList(),
+        audioBase64: String? = null,
+        mimeType: String? = null
     ) {
         val textToActuallySend = messageText.trim()
+        val allAttachments = attachments.toMutableList()
+        if (audioBase64 != null) {
+            allAttachments.add(SelectedMediaItem.Audio(id = "audio_${UUID.randomUUID()}", mimeType = mimeType ?: "audio/3gpp", data = audioBase64!!))
+        }
 
-        if (textToActuallySend.isBlank() && attachments.isEmpty()) {
+        if (textToActuallySend.isBlank() && allAttachments.isEmpty()) {
             viewModelScope.launch { showSnackbar("请输入消息内容或选择项目") }
             return
         }
@@ -340,7 +349,7 @@ private data class AttachmentProcessingResult(
             val shouldUsePartsApiMessage = modelIsGeminiType
             val providerForRequestBackend = currentConfig.provider
 
-            val attachmentResult = processAttachments(attachments, shouldUsePartsApiMessage, textToActuallySend)
+            val attachmentResult = processAttachments(allAttachments, shouldUsePartsApiMessage, textToActuallySend)
             if (!attachmentResult.success) {
                 return@launch
             }
@@ -353,10 +362,10 @@ private data class AttachmentProcessingResult(
             val newUserMessageForUi = UiMessage(
                 id = "user_${UUID.randomUUID()}", text = textToActuallySend, sender = UiSender.User,
                 timestamp = System.currentTimeMillis(), contentStarted = true,
-                imageUrls = attachmentResult.imageUriStringsForUi.ifEmpty { null },
-                attachments = attachmentResult.processedAttachmentsForUi.ifEmpty { null }
+                imageUrls = attachmentResult.imageUriStringsForUi,
+                attachments = attachmentResult.processedAttachmentsForUi
             )
- 
+
             withContext(Dispatchers.Main.immediate) {
                 stateHolder.messageAnimationStates[newUserMessageForUi.id] = true
                 stateHolder.messages.add(newUserMessageForUi)
@@ -395,10 +404,10 @@ private data class AttachmentProcessingResult(
                 if (shouldUsePartsApiMessage) {
                     val currentUserParts = attachmentResult.apiContentParts
                     if (currentUserParts.isNotEmpty()) {
-                        apiMessagesForBackend.add(PartsApiMessage(role = "user", parts = currentUserParts))
+                        apiMessagesForBackend.add(PartsApiMessage(role = "user", parts = currentUserParts.toList()))
                     }
                 } else {
-                    if (textToActuallySend.isNotBlank() || attachments.isNotEmpty()) {
+                    if (textToActuallySend.isNotBlank() || allAttachments.isNotEmpty()) {
                         apiMessagesForBackend.add(SimpleTextApiMessage(role = "user", content = textToActuallySend))
                     }
                 }
@@ -457,7 +466,9 @@ private data class AttachmentProcessingResult(
                             showSnackbar(errorMessage)
                         }
                     },
-                    onNewAiMessageAdded = triggerScrollToBottom
+                    onNewAiMessageAdded = triggerScrollToBottom,
+                    audioBase64 = audioBase64,
+                    mimeType = mimeType
                 )
             }
         }

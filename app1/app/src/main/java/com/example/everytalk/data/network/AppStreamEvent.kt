@@ -1,46 +1,51 @@
-package com.example.everytalk.data.DataClass
+package com.example.everytalk.data.network
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import com.example.everytalk.data.DataClass.WebSearchResult
 import kotlinx.serialization.json.JsonObject
 
 @Serializable
-data class AppStreamEvent(
-    @SerialName("type")
-    val type: String,
-
-    @SerialName("stage")
-    val stage: String? = null,
-
-    @SerialName("results")
-    val results: List<WebSearchResult>? = null,
-
+sealed class AppStreamEvent {
+    @Serializable
     @SerialName("text")
-    val text: String? = null,
+    data class Text(val text: String) : AppStreamEvent()
 
-    @SerialName("data")
-    val toolCallsData: List<OpenAiToolCall>? = null,
+    @Serializable
+    @SerialName("content")
+    data class Content(val text: String) : AppStreamEvent()
 
-    @SerialName("id")
-    val id: String? = null,
-    @SerialName("name")
-    val name: String? = null,
-    @SerialName("arguments_obj")
-    val argumentsObj: JsonObject? = null,
+    @Serializable
+    @SerialName("reasoning")
+    data class Reasoning(val text: String) : AppStreamEvent()
 
-    @SerialName("is_reasoning_step")
-    val isReasoningStep: Boolean? = null,
+    @Serializable
+    @SerialName("stream_end")
+    data class StreamEnd(val messageId: String) : AppStreamEvent()
 
-    @SerialName("reason")
-    val reason: String? = null,
+    @Serializable
+    @SerialName("web_search_status")
+    data class WebSearchStatus(val stage: String) : AppStreamEvent()
 
-    @SerialName("message")
-    val message: String? = null,
-    @SerialName("upstream_status")
-    val upstreamStatus: Int? = null,
+    @Serializable
+    @SerialName("web_search_results")
+    data class WebSearchResults(val results: List<WebSearchResult>) : AppStreamEvent()
 
-    @SerialName("timestamp")
-    val timestamp: String? = null
-)
+    @Serializable
+    @SerialName("tool_call")
+    data class ToolCall(
+        val id: String,
+        val name: String,
+        val argumentsObj: JsonObject,
+        val isReasoningStep: Boolean? = null
+    ) : AppStreamEvent()
+
+    @Serializable
+    @SerialName("error")
+    data class Error(val message: String, val upstreamStatus: Int? = null) : AppStreamEvent()
+    @Serializable
+    @SerialName("finish")
+    data class Finish(val reason: String) : AppStreamEvent()
+}
 
 @Serializable
 data class OpenAiToolCall(

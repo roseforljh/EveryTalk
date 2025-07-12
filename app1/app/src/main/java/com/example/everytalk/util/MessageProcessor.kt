@@ -2,7 +2,7 @@ package com.example.everytalk.util
 
 import com.example.everytalk.data.DataClass.AbstractApiMessage
 import com.example.everytalk.data.DataClass.ApiContentPart
-import com.example.everytalk.data.DataClass.AppStreamEvent
+import com.example.everytalk.data.network.AppStreamEvent
 import com.example.everytalk.data.DataClass.IMessage
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.DataClass.PartsApiMessage
@@ -46,46 +46,51 @@ class MessageProcessor {
         return PerformanceMonitor.measure("MessageProcessor.processStreamEvent") {
             messagesMutex.withLock {
                 try {
-                    when (event.type) {
-                        "reasoning" -> {
-                            if (!event.text.isNullOrEmpty()) {
-                                val chunkKey = "reasoning_${event.hashCode()}"
-                                if (!processedChunks.containsKey(chunkKey)) {
-                                    currentReasoningBuilder.get().append(event.text)
-                                    processedChunks[chunkKey] = event.text
-                                }
-                            }
-                            ProcessedEventResult.ReasoningUpdated(currentReasoningBuilder.get().toString())
-                        }
-                        "content" -> {
-                            if (!event.text.isNullOrEmpty()) {
-                                val chunkKey = "content_${event.hashCode()}"
-                                if (!processedChunks.containsKey(chunkKey)) {
-                                    currentTextBuilder.get().append(event.text)
-                                    processedChunks[chunkKey] = event.text
-                                }
-                            }
-                            ProcessedEventResult.ContentUpdated(currentTextBuilder.get().toString())
-                        }
-                        "reasoning_finish", "tool_calls_chunk", "google_function_call_request", "finish" -> {
-                            ProcessedEventResult.ReasoningComplete
-                        }
-                        "status_update" -> {
-                            ProcessedEventResult.StatusUpdate(event.stage ?: "unknown")
-                        }
-                        "web_search_results" -> {
-                            event.results?.let {
-                                ProcessedEventResult.WebSearchResults(it)
-                            } ?: ProcessedEventResult.NoChange
-                        }
-                        "error" -> {
-                            val errorMessage = "SSE Error: ${event.message} (Upstream: ${event.upstreamStatus ?: "N/A"})"
-                            ProcessedEventResult.Error(errorMessage)
-                        }
-                        else -> {
-                            ProcessedEventResult.NoChange
-                        }
-                    }
+                   when (event) {
+                       is AppStreamEvent.Text -> {
+                           if (event.text.isNotEmpty()) {
+                               val chunkKey = "content_${event.text.hashCode()}"
+                               if (!processedChunks.containsKey(chunkKey)) {
+                                   currentTextBuilder.get().append(event.text)
+                                   processedChunks[chunkKey] = event.text
+                               }
+                           }
+                           ProcessedEventResult.ContentUpdated(currentTextBuilder.get().toString())
+                       }
+                       is AppStreamEvent.Content -> {
+                           if (event.text.isNotEmpty()) {
+                               val chunkKey = "content_${event.text.hashCode()}"
+                               if (!processedChunks.containsKey(chunkKey)) {
+                                   currentTextBuilder.get().append(event.text)
+                                   processedChunks[chunkKey] = event.text
+                               }
+                           }
+                           ProcessedEventResult.ContentUpdated(currentTextBuilder.get().toString())
+                       }
+                       is AppStreamEvent.Reasoning -> {
+                           if (event.text.isNotEmpty()) {
+                               val chunkKey = "reasoning_${event.text.hashCode()}"
+                               if (!processedChunks.containsKey(chunkKey)) {
+                                   currentReasoningBuilder.get().append(event.text)
+                                   processedChunks[chunkKey] = event.text
+                               }
+                           }
+                           ProcessedEventResult.ReasoningUpdated(currentReasoningBuilder.get().toString())
+                       }
+                       is AppStreamEvent.StreamEnd, is AppStreamEvent.ToolCall, is AppStreamEvent.Finish -> {
+                           ProcessedEventResult.ReasoningComplete
+                       }
+                       is AppStreamEvent.WebSearchStatus -> {
+                           ProcessedEventResult.StatusUpdate(event.stage)
+                       }
+                       is AppStreamEvent.WebSearchResults -> {
+                           ProcessedEventResult.WebSearchResults(event.results)
+                       }
+                       is AppStreamEvent.Error -> {
+                           val errorMessage = "SSE Error: ${event.message}"
+                           ProcessedEventResult.Error(errorMessage)
+                       }
+                   }
                 } catch (e: Exception) {
                     logger.error("Error processing event", e)
                     ProcessedEventResult.Error("Error processing event: ${e.message}")
@@ -132,7 +137,7 @@ class MessageProcessor {
      * @return API消息
      */
     fun convertToApiMessage(message: Message): AbstractApiMessage {
-        return if (message.attachments?.isNotEmpty() == true) {
+        return if (message.attachments.isNotEmpty()) {
             // 如果有附件，使用PartsApiMessage
             val parts = mutableListOf<ApiContentPart>()
             if (message.text.isNotBlank()) {
@@ -179,7 +184,7 @@ class MessageProcessor {
     fun createNewUserMessage(
         text: String,
         imageUrls: List<String>? = null,
-        attachments: List<com.example.everytalk.model.SelectedMediaItem>? = null
+        attachments: List<com.example.everytalk.models.SelectedMediaItem>? = null
     ): Message {
         return Message(
             id = "user_${UUID.randomUUID()}",
@@ -188,7 +193,7 @@ class MessageProcessor {
             timestamp = System.currentTimeMillis(),
             contentStarted = true,
             imageUrls = imageUrls?.ifEmpty { null },
-            attachments = attachments?.ifEmpty { null }
+            attachments = attachments ?: emptyList()
         )
     }
 }

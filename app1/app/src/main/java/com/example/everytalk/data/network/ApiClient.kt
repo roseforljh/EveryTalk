@@ -5,9 +5,9 @@ import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import com.example.everytalk.data.DataClass.ChatRequest
-import com.example.everytalk.data.DataClass.AppStreamEvent
-import com.example.everytalk.model.SelectedMediaItem
+import com.example.everytalk.models.SelectedMediaItem
 import io.ktor.client.*
+import io.ktor.client.call.*
 import io.ktor.client.engine.android.*
 import io.ktor.client.plugins.*
 import io.ktor.client.plugins.cache.HttpCache
@@ -25,10 +25,14 @@ import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.modules.SerializersModule
 import kotlinx.serialization.modules.contextual
+import kotlinx.serialization.modules.polymorphic
+import kotlinx.serialization.modules.subclass
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import java.io.IOException
 import java.io.File
 import io.ktor.client.plugins.HttpRequestTimeoutException
+import io.ktor.utils.io.streams.asInput
 import kotlinx.coroutines.CancellationException as CoroutineCancellationException
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -41,6 +45,10 @@ object ApiClient {
             encodeDefaults = true
             serializersModule = SerializersModule {
                 contextual(Any::class, AnySerializer)
+                polymorphic(com.example.everytalk.data.DataClass.AbstractApiMessage::class) {
+                    subclass(com.example.everytalk.data.DataClass.SimpleTextApiMessage::class)
+                    subclass(com.example.everytalk.data.DataClass.PartsApiMessage::class)
+                }
             }
         }
     }
@@ -71,11 +79,14 @@ object ApiClient {
     }
 
     private val backendProxyUrls = listOf(
-        //"http://192.168.0.2:7860/chat", // Attempting with a common LAN IP
+        //"http://192.168.0.100:7860/chat", // Attempting with a common LAN IP
         "https://kunze999-backend.hf.space/chat",
         //"https://uoseegiydwgx.us-west-1.clawcloudrun.com/chat",
         //"https://dbykoynmqkkq.cloud.cloudcat.one:443/chat"
     )
+
+
+    private const val GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
 
     private fun getFileNameFromUri(context: Context, uri: Uri): String {
         var fileName: String? = null
@@ -157,6 +168,18 @@ object ApiClient {
                                 mimeTypeFromMediaItem =
                                     if (mediaItem.bitmap.hasAlpha()) ContentType.Image.PNG.toString() else ContentType.Image.JPEG.toString()
                             }
+                            is SelectedMediaItem.Audio -> {
+                                fileUri = null
+                                originalFileNameFromMediaItem = "audio_record.3gp"
+                                mimeTypeFromMediaItem = mediaItem.mimeType
+                                append(
+                                    key = "inline_data_content",
+                                    value = mediaItem.data,
+                                    headers = Headers.build {
+                                        append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                                    }
+                                )
+                            }
                         }
 
                         if (fileUri != null) {
@@ -165,18 +188,14 @@ object ApiClient {
                             try {
                                 applicationContext.contentResolver.openInputStream(fileUri)
                                     ?.use { inputStream ->
-                                        val fileBytes = inputStream.readBytes()
-                                        append(
+                                        val bytes = inputStream.readBytes()
+                                        appendInput(
                                             key = "uploaded_documents",
-                                            value = fileBytes,
                                             headers = Headers.build {
-                                                append(
-                                                    HttpHeaders.ContentDisposition,
-                                                    "filename=\"$originalFileNameFromMediaItem\""
-                                                )
+                                                append(HttpHeaders.ContentDisposition, "filename=\"$originalFileNameFromMediaItem\"")
                                                 append(HttpHeaders.ContentType, finalMimeType)
                                             }
-                                        )
+                                        ) { bytes.inputStream().asInput() }
                                     }
                             } catch (e: Exception) {
                                 android.util.Log.e("ApiClient", "Error reading file for upload: $fileUri", e)
@@ -234,8 +253,7 @@ object ApiClient {
                         }
 
                         try {
-                            val appEvent = jsonParser.decodeFromString(
-                                AppStreamEvent.serializer(),
+                            val appEvent = jsonParser.decodeFromString<AppStreamEvent>(
                                 processedLine
                             )
                             val sendResult = trySend(appEvent)
@@ -320,9 +338,11 @@ object ApiClient {
                             }
                     } catch (e: Exception) {
                         if (e !is CoroutineCancellationException) {
+                            android.util.Log.e("ApiClient", "Error connecting to $url", e)
                             synchronized(errors) {
                                 errors.add(e)
                             }
+                            
                         }
                     }
                 }
@@ -338,4 +358,67 @@ object ApiClient {
             }
         }
     }.buffer(Channel.BUFFERED).flowOn(Dispatchers.IO)
+    private const val GEMINI_UPLOAD_URL = "https://generativelanguage.googleapis.com/v1beta/files"
+
+    @Serializable
+    data class FileUploadInitialResponse(val file: FileMetadata)
+
+    @Serializable
+    data class FileMetadata(val name: String, val uri: String, @kotlinx.serialization.SerialName("upload_uri") val uploadUri: String)
+
+    private suspend fun uploadFile(apiKey: String, mimeType: String, audioBytes: ByteArray): com.example.everytalk.data.DataClass.Part.FileUri {
+        if (!isInitialized) {
+            throw IllegalStateException("ApiClient not initialized. Call initialize() first.")
+        }
+
+        // Step 1: Get the upload URI
+        val initialResponse = client.post(GEMINI_UPLOAD_URL) {
+            parameter("key", apiKey)
+            header(HttpHeaders.ContentType, "application/json")
+            setBody(mapOf("file" to mapOf("mime_type" to mimeType)))
+        }.body<FileUploadInitialResponse>()
+
+        // Step 2: Upload the file to the upload URI
+        val uploadResponse = client.post(initialResponse.file.uploadUri) {
+            header(HttpHeaders.ContentType, mimeType)
+            setBody(audioBytes)
+        }
+    
+        if (!uploadResponse.status.isSuccess()) {
+            throw IOException("Failed to upload file to ${initialResponse.file.uploadUri}: ${uploadResponse.status}")
+        }
+
+        return com.example.everytalk.data.DataClass.Part.FileUri(initialResponse.file.uri)
+    }
+
+    suspend fun generateContent(apiKey: String, request: com.example.everytalk.data.DataClass.GeminiApiRequest, audioBase64: String? = null, mimeType: String? = "audio/3gpp"): com.example.everytalk.data.DataClass.GeminiApiResponse {
+        if (!isInitialized) {
+            throw IllegalStateException("ApiClient not initialized. Call initialize() first.")
+        }
+
+        val finalRequest = if (audioBase64 != null) {
+            val audioBytes = android.util.Base64.decode(audioBase64, android.util.Base64.DEFAULT)
+            val audioPart = if (audioBytes.size > 19 * 1024 * 1024) { // 19MB to be safe
+                uploadFile(apiKey, mimeType ?: "audio/3gpp", audioBytes)
+            } else {
+                com.example.everytalk.data.DataClass.Part.InlineData(mimeType = mimeType ?: "audio/3gpp", data = audioBase64)
+            }
+
+            val updatedContents = request.contents.map { content ->
+                val newParts = content.parts.toMutableList()
+                newParts.add(audioPart)
+                content.copy(parts = newParts)
+            }
+            request.copy(contents = updatedContents)
+        } else {
+            request
+        }
+
+        return client.post {
+            url(GEMINI_API_URL)
+            parameter("key", apiKey)
+            contentType(ContentType.Application.Json)
+            setBody(finalRequest)
+        }.body<com.example.everytalk.data.DataClass.GeminiApiResponse>()
+    }
 }

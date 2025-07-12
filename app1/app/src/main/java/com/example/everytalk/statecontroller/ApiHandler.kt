@@ -4,10 +4,11 @@ import android.content.Context
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.DataClass.Sender
 import com.example.everytalk.data.DataClass.ChatRequest
-import com.example.everytalk.data.DataClass.AppStreamEvent
+import com.example.everytalk.data.network.AppStreamEvent
 import com.example.everytalk.data.DataClass.ApiContentPart
 import com.example.everytalk.data.network.ApiClient
-import com.example.everytalk.model.SelectedMediaItem
+import com.example.everytalk.models.SelectedMediaItem
+import com.example.everytalk.models.SelectedMediaItem.Audio
 import com.example.everytalk.ui.screens.viewmodel.HistoryManager
 import com.example.everytalk.util.AppLogger
 import com.example.everytalk.util.MessageProcessor
@@ -28,6 +29,7 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.IOException
+import java.util.UUID
 import java.util.concurrent.CancellationException
 
 class ApiHandler(
@@ -121,7 +123,9 @@ class ApiHandler(
         afterUserMessageId: String?,
         onMessagesProcessed: () -> Unit,
         onRequestFailed: (Throwable) -> Unit,
-        onNewAiMessageAdded: () -> Unit
+        onNewAiMessageAdded: () -> Unit,
+        audioBase64: String? = null,
+        mimeType: String? = null
     ) {
         val contextForLog = when (val lastUserMsg = requestBody.messages.lastOrNull {
             it.role == "user"
@@ -180,92 +184,127 @@ class ApiHandler(
         stateHolder.apiJob = viewModelScope.launch {
             val thisJob = coroutineContext[Job.Key]
             try {
-                ApiClient.streamChatResponse(
-                    requestBody,
-                    attachmentsToPassToApiClient,
-                    applicationContextForApiClient
-                )
-                    .onStart { logger.debug("Stream started for message $aiMessageId") }
-                    .catch { e ->
-                        if (e !is CancellationException) {
-                            logger.error("Stream error", e)
-                            updateMessageWithError(aiMessageId, e)
-                            onRequestFailed(e)
-                        }
+                val finalAttachments = attachmentsToPassToApiClient.toMutableList()
+                if (audioBase64 != null) {
+                    finalAttachments.add(Audio(id = UUID.randomUUID().toString(), mimeType = mimeType ?: "audio/3gpp", data = audioBase64))
+                }
+                if (requestBody.provider == "gemini") {
+                    try {
+                        val geminiRequest = com.example.everytalk.data.DataClass.GeminiApiRequest(
+                            contents = requestBody.messages.map {
+                                com.example.everytalk.data.DataClass.Content(
+                                    role = if (it.role == "assistant") "model" else it.role,
+                                    parts = when (it) {
+                                        is com.example.everytalk.data.DataClass.SimpleTextApiMessage -> listOf(com.example.everytalk.data.DataClass.Part.Text(it.content))
+                                        is com.example.everytalk.data.DataClass.PartsApiMessage -> it.parts.mapNotNull { part ->
+                                            when (part) {
+                                                is ApiContentPart.Text -> com.example.everytalk.data.DataClass.Part.Text(part.text)
+                                                is ApiContentPart.InlineData -> com.example.everytalk.data.DataClass.Part.InlineData(part.mimeType, part.base64Data)
+                                                is ApiContentPart.FileUri -> null
+                                            }
+                                        }
+                                        else -> emptyList()
+                                    }
+                                )
+                            }
+                        )
+                        val response = ApiClient.generateContent(requestBody.apiKey!!, geminiRequest, audioBase64, mimeType)
+                        val firstPart = response.candidates?.firstOrNull()?.content?.parts?.firstOrNull()
+                        val text = (firstPart as? com.example.everytalk.data.DataClass.Part.Text)?.text ?: ""
+                        processStreamEvent(AppStreamEvent.Text(text), aiMessageId)
+                        processStreamEvent(AppStreamEvent.StreamEnd(aiMessageId), aiMessageId)
+                    } catch (e: Exception) {
+                        updateMessageWithError(aiMessageId, e)
+                        onRequestFailed(e)
                     }
-                    .onCompletion { cause ->
-                        logger.debug("Stream completed for message $aiMessageId, cause: ${cause?.message}")
-                        newEventChannel.close()
-                        val targetMsgId = aiMessageId
-                        val isThisJobStillTheCurrentOne = stateHolder.apiJob == thisJob
-
-                        if (isThisJobStillTheCurrentOne) {
-                            stateHolder._isApiCalling.value = false
-                            if (stateHolder._currentStreamingAiMessageId.value == targetMsgId) {
-                                stateHolder._currentStreamingAiMessageId.value = null
+                } else {
+                    ApiClient.streamChatResponse(
+                        requestBody,
+                        finalAttachments,
+                        applicationContextForApiClient
+                    )
+                        .onStart { logger.debug("Stream started for message $aiMessageId") }
+                        .catch { e ->
+                            if (e !is CancellationException) {
+                                logger.error("Stream error", e)
+                                updateMessageWithError(aiMessageId, e)
+                                onRequestFailed(e)
                             }
                         }
-                        if (stateHolder.reasoningCompleteMap[targetMsgId] != true) {
-                            stateHolder.reasoningCompleteMap[targetMsgId] = true
-                        }
+                        .onCompletion { cause ->
+                            logger.debug("Stream completed for message $aiMessageId, cause: ${cause?.message}")
+                            newEventChannel.close()
+                            val targetMsgId = aiMessageId
+                            val isThisJobStillTheCurrentOne = stateHolder.apiJob == thisJob
 
-                        val cancellationMessageFromCause =
-                            (cause as? CancellationException)?.message
-                        val wasCancelledByApiHandler =
-                            cancellationMessageFromCause?.startsWith(USER_CANCEL_PREFIX) == true ||
-                                    cancellationMessageFromCause?.startsWith(
-                                        NEW_STREAM_CANCEL_PREFIX
-                                    ) == true
-
-                        if (!wasCancelledByApiHandler) {
-                            val finalFullText = messageProcessor.getCurrentText().trim()
-                            if (finalFullText.isNotBlank()) {
-                                onAiMessageFullTextChanged(targetMsgId, finalFullText)
+                            if (isThisJobStillTheCurrentOne) {
+                                stateHolder._isApiCalling.value = false
+                                if (stateHolder._currentStreamingAiMessageId.value == targetMsgId) {
+                                    stateHolder._currentStreamingAiMessageId.value = null
+                                }
                             }
-                            if (cause == null || (cause !is CancellationException)) {
-                                historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = cause != null)
+                            if (stateHolder.reasoningCompleteMap[targetMsgId] != true) {
+                                stateHolder.reasoningCompleteMap[targetMsgId] = true
                             }
-                        }
 
-                        messageProcessor.reset()
+                            val cancellationMessageFromCause =
+                                (cause as? CancellationException)?.message
+                            val wasCancelledByApiHandler =
+                                cancellationMessageFromCause?.startsWith(USER_CANCEL_PREFIX) == true ||
+                                        cancellationMessageFromCause?.startsWith(
+                                            NEW_STREAM_CANCEL_PREFIX
+                                        ) == true
 
-                        withContext(Dispatchers.Main.immediate) {
-                            val finalIdx = stateHolder.messages.indexOfFirst { it.id == targetMsgId }
-                            if (finalIdx != -1) {
-                                val msg = stateHolder.messages[finalIdx]
-                                if (cause == null && !msg.isError) {
-                                    val updatedMsg = msg.copy(
-                                        text = msg.text,
-                                        reasoning = msg.reasoning,
-                                        contentStarted = msg.contentStarted || msg.text.isNotBlank()
-                                    )
-                                    if (updatedMsg != msg) {
-                                        stateHolder.messages[finalIdx] = updatedMsg
-                                    }
-                                    if (stateHolder.messageAnimationStates[targetMsgId] != true) {
-                                        stateHolder.messageAnimationStates[targetMsgId] = true
-                                    }
-                                } else if (cause is CancellationException) {
-                                    if (!wasCancelledByApiHandler) {
-                                        val hasMeaningfulContent = msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank()
-                                        if (hasMeaningfulContent) {
-                                            historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
-                                        } else if (msg.sender == Sender.AI && !msg.isError) {
-                                            stateHolder.messages.removeAt(finalIdx)
+                            if (!wasCancelledByApiHandler) {
+                                val finalFullText = messageProcessor.getCurrentText().trim()
+                                if (finalFullText.isNotBlank()) {
+                                    onAiMessageFullTextChanged(targetMsgId, finalFullText)
+                                }
+                                if (cause == null || (cause !is CancellationException)) {
+                                    historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = cause != null)
+                                }
+                            }
+
+                            messageProcessor.reset()
+
+                            withContext(Dispatchers.Main.immediate) {
+                                val finalIdx = stateHolder.messages.indexOfFirst { it.id == targetMsgId }
+                                if (finalIdx != -1) {
+                                    val msg = stateHolder.messages[finalIdx]
+                                    if (cause == null && !msg.isError) {
+                                        val updatedMsg = msg.copy(
+                                            text = msg.text,
+                                            reasoning = msg.reasoning,
+                                            contentStarted = msg.contentStarted || msg.text.isNotBlank()
+                                        )
+                                        if (updatedMsg != msg) {
+                                            stateHolder.messages[finalIdx] = updatedMsg
+                                        }
+                                        if (stateHolder.messageAnimationStates[targetMsgId] != true) {
+                                            stateHolder.messageAnimationStates[targetMsgId] = true
+                                        }
+                                    } else if (cause is CancellationException) {
+                                        if (!wasCancelledByApiHandler) {
+                                            val hasMeaningfulContent = msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank()
+                                            if (hasMeaningfulContent) {
+                                                historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
+                                            } else if (msg.sender == Sender.AI && !msg.isError) {
+                                                stateHolder.messages.removeAt(finalIdx)
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
-                    }
-                    .collect { appEvent ->
-                        if (stateHolder.apiJob != thisJob || stateHolder._currentStreamingAiMessageId.value != aiMessageId) {
-                            thisJob?.cancel(CancellationException("API job 或 streaming ID 已更改，停止收集旧数据块"))
-                            return@collect
+                        .collect { appEvent ->
+                            if (stateHolder.apiJob != thisJob || stateHolder._currentStreamingAiMessageId.value != aiMessageId) {
+                                thisJob?.cancel(CancellationException("API job 或 streaming ID 已更改，停止收集旧数据块"))
+                                return@collect
+                            }
+                            processStreamEvent(appEvent, aiMessageId)
+                            newEventChannel.trySend(appEvent)
                         }
-                        processStreamEvent(appEvent, aiMessageId)
-                        newEventChannel.trySend(appEvent)
-                    }
+                }
             } catch (e: Exception) {
                 messageProcessor.reset()
                 when (e) {
@@ -292,57 +331,57 @@ class ApiHandler(
 
     private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: String) {
         val result = messageProcessor.processStreamEvent(appEvent, aiMessageId)
-        
-        when (result) {
-            is ProcessedEventResult.ContentUpdated -> {
-                // 内容已更新，不需要额外处理，updateMessageInState会处理
+
+        when (appEvent) {
+            is AppStreamEvent.Text -> {
+                // Handled by messageProcessor
             }
-            is ProcessedEventResult.ReasoningUpdated -> {
-                // 推理内容已更新，不需要额外处理，updateMessageInState会处理
+            is AppStreamEvent.Content -> {
+                stateHolder.appendContentToMessage(aiMessageId, appEvent.text)
             }
-            is ProcessedEventResult.ReasoningComplete -> {
-                val messageId = stateHolder._currentStreamingAiMessageId.value ?: return
-                if (stateHolder.reasoningCompleteMap[messageId] != true) {
-                    stateHolder.reasoningCompleteMap[messageId] = true
-                }
+            is AppStreamEvent.Reasoning -> {
+                stateHolder.appendReasoningToMessage(aiMessageId, appEvent.text)
             }
-            is ProcessedEventResult.StatusUpdate -> {
-                val messageId = stateHolder._currentStreamingAiMessageId.value ?: return
-                val index = stateHolder.messages.indexOfFirst { it.id == messageId }
-                if (index != -1) {
-                    val originalMessage = stateHolder.messages[index]
-                    stateHolder.messages[index] = originalMessage.copy(
-                        currentWebSearchStage = result.stage
-                    )
-                }
+            is AppStreamEvent.StreamEnd -> {
+                // Handled by onCompletion
             }
-            is ProcessedEventResult.WebSearchResults -> {
+            is AppStreamEvent.Finish -> {
+                // Handled by onCompletion
+            }
+            is AppStreamEvent.WebSearchStatus -> {
                 val messageId = stateHolder._currentStreamingAiMessageId.value ?: return
                 val index = stateHolder.messages.indexOfFirst { it.id == messageId }
                 if (index != -1) {
                     val originalMessage = stateHolder.messages[index]
                     stateHolder.messages[index] = originalMessage.copy(
-                        webSearchResults = result.results
+                        currentWebSearchStage = appEvent.stage
                     )
                 }
             }
-            is ProcessedEventResult.Error -> {
+            is AppStreamEvent.WebSearchResults -> {
+                val messageId = stateHolder._currentStreamingAiMessageId.value ?: return
+                val index = stateHolder.messages.indexOfFirst { it.id == messageId }
+                if (index != -1) {
+                    val originalMessage = stateHolder.messages[index]
+                    stateHolder.messages[index] = originalMessage.copy(
+                        webSearchResults = appEvent.results
+                    )
+                }
+            }
+            is AppStreamEvent.ToolCall -> {
+                // Handled by messageProcessor
+            }
+            is AppStreamEvent.Error -> {
                 val messageId = stateHolder._currentStreamingAiMessageId.value ?: return
                 viewModelScope.launch {
                     updateMessageWithError(
                         messageId,
-                        IOException(result.message)
+                        IOException(appEvent.message)
                     )
                 }
             }
-            is ProcessedEventResult.Cancelled -> {
-                logger.debug("Event processing cancelled")
-            }
-            is ProcessedEventResult.NoChange -> {
-                // 无变化，不需要处理
-            }
         }
-        
+
         // 更新消息状态
         val index = stateHolder.messages.indexOfFirst { it.id == aiMessageId }
         if (index != -1) {

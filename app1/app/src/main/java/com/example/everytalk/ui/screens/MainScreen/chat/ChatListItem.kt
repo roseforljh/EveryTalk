@@ -10,7 +10,7 @@ sealed interface ChatListItem {
     data class UserMessage(
         val messageId: String,
         val text: String,
-        val attachments: List<com.example.everytalk.model.SelectedMediaItem>
+        val attachments: List<com.example.everytalk.models.SelectedMediaItem>
     ) : ChatListItem {
         override val stableId: String = messageId
     }

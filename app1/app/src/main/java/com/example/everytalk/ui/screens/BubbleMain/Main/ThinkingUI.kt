@@ -112,7 +112,7 @@ internal fun ReasoningToggleAndContent(
                             .padding(horizontal = 12.dp, vertical = scrimHeight)
                     ) {
                         Text(
-                            text = displayedReasoningText.ifBlank { if (isReasoningStreaming) " " else "" },
+                            text = displayedReasoningText.ifBlank { if (isReasoningStreaming) "思考中..." else "" },
                             color = reasoningTextColor,
                             style = MaterialTheme.typography.bodySmall.copy(lineHeight = 18.sp),
                         )
@@ -229,9 +229,9 @@ internal fun ReasoningToggleAndContent(
                     ) {
                         Text(
                             text = if (displayedReasoningText.isNotBlank()) displayedReasoningText
-                            else if (isReasoningStreaming && !isReasoningComplete && !messageIsError) "Thinking in progress..."
-                            else if (messageIsError) "An error occurred during the thinking process."
-                            else "No detailed thoughts available.",
+                            else if (isReasoningStreaming && !isReasoningComplete && !messageIsError) "思考中..."
+                            else if (messageIsError) "思考过程中发生错误"
+                            else "暂无详细思考内容",
                             color = reasoningTextColor,
                             style = MaterialTheme.typography.bodyLarge
                         )

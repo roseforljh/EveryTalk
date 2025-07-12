@@ -1,5 +1,8 @@
 package com.example.everytalk.ui.screens.MainScreen
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -169,6 +172,18 @@ fun ChatScreen(
     val textForSelectionDialog by viewModel.textForSelectionDialog.collectAsState()
     val imeInsets = WindowInsets.ime
 
+    val audioPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+        onResult = { isGranted ->
+            if (isGranted) {
+                // TODO: 权限授予后开始录音
+                viewModel.showSnackbar("录音权限已授予")
+            } else {
+                viewModel.showSnackbar("需要录音权限才能使用此功能")
+            }
+        }
+    )
+
     if (showSelectableTextDialog) {
         SelectableTextDialog(
             textToDisplay = textForSelectionDialog,
@@ -269,8 +284,8 @@ fun ChatScreen(
                 onTextChange = {
                     viewModel.onTextChange(it)
                 },
-                onSendMessageRequest = { messageText, _, attachments ->
-                    viewModel.onSendMessage(messageText = messageText, attachments = attachments)
+                onSendMessageRequest = { messageText, _, attachments, mimeType ->
+                    viewModel.onSendMessage(messageText = messageText, attachments = attachments, audioBase64 = null, mimeType = mimeType)
                     keyboardController?.hide()
                     coroutineScope.launch {
                         // 等待键盘关闭
@@ -299,6 +314,15 @@ fun ChatScreen(
                 keyboardController = keyboardController,
                 onFocusChange = {
                     scrollStateManager.jumpToBottom()
+                },
+                onSendMessage = { messageText, isFromRegeneration, attachments, audioBase64, mimeType ->
+                    viewModel.onSendMessage(
+                        messageText = messageText,
+                        isFromRegeneration = isFromRegeneration,
+                        attachments = attachments,
+                        audioBase64 = audioBase64,
+                        mimeType = mimeType
+                    )
                 }
             )
         }

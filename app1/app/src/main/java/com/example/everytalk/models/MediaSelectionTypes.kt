@@ -1,4 +1,4 @@
-package com.example.everytalk.model
+package com.example.everytalk.models
 import android.graphics.Bitmap
 import android.net.Uri
 import androidx.compose.material.icons.Icons
@@ -62,5 +62,12 @@ sealed class SelectedMediaItem {
         val displayName: String,
         val mimeType: String?,
         val filePath: String? = null
+    ) : SelectedMediaItem()
+
+    @Serializable
+    data class Audio(
+        override val id: String,
+        val mimeType: String,
+        val data: String
     ) : SelectedMediaItem()
 }

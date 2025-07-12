@@ -11,7 +11,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import com.example.everytalk.data.DataClass.ApiConfig
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.DataClass.WebSearchResult
-import com.example.everytalk.model.SelectedMediaItem
+import com.example.everytalk.models.SelectedMediaItem
 import com.example.everytalk.ui.util.ScrollController
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -98,5 +98,27 @@ fun addMessage(message: Message) {
 
     fun triggerScrollToBottom() {
         _scrollToBottomEvent.tryEmit(Unit)
+    }
+    fun appendReasoningToMessage(messageId: String, text: String) {
+        val index = messages.indexOfFirst { it.id == messageId }
+        if (index != -1) {
+            val currentMessage = messages[index]
+            val updatedMessage = currentMessage.copy(
+                reasoning = (currentMessage.reasoning ?: "") + text
+            )
+            messages[index] = updatedMessage
+        }
+    }
+
+    fun appendContentToMessage(messageId: String, text: String) {
+        val index = messages.indexOfFirst { it.id == messageId }
+        if (index != -1) {
+            val currentMessage = messages[index]
+            val updatedMessage = currentMessage.copy(
+                text = currentMessage.text + text,
+                contentStarted = true
+            )
+            messages[index] = updatedMessage
+        }
     }
 }

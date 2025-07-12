@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.Article
+import androidx.compose.material.icons.outlined.Audiotrack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -40,7 +41,7 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import coil3.compose.AsyncImage
 import com.example.everytalk.data.DataClass.Message
-import com.example.everytalk.model.SelectedMediaItem
+import com.example.everytalk.models.SelectedMediaItem
 import kotlinx.coroutines.launch
 
 private const val CONTEXT_MENU_ANIMATION_DURATION_MS = 150
@@ -447,6 +448,36 @@ fun AttachmentsContent(
                             )
                         }
                     }
+                    is SelectedMediaItem.Audio -> {
+                        Row(
+                            modifier = Modifier
+                                .widthIn(max = maxWidth)
+                                .padding(vertical = 4.dp)
+                                .background(Color(0xFFF0F0F0), RoundedCornerShape(12.dp))
+                                .clip(RoundedCornerShape(12.dp))
+                                .pointerInput(message.id) {
+                                    detectTapGestures(
+                                        onTap = {
+                                            // TODO: Implement audio playback
+                                        },
+                                        onLongPress = onLongPressHandler
+                                    )
+                                }
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Audiotrack,
+                                contentDescription = "Audio Attachment",
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Audio attachment",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -611,7 +642,11 @@ sealed class TextSegment {
 
 fun parseMarkdownSegments(markdownInput: String): List<TextSegment> {
     val segments = mutableListOf<TextSegment>()
-    val lines = markdownInput.lines()
+    // First, remove all content within <thinking>...</thinking> tags
+    val thinkingRegex = "<thinking>[\\s\\S]*?<\\/thinking>".toRegex()
+    val contentWithoutThinking = thinkingRegex.replace(markdownInput, "")
+
+    val lines = contentWithoutThinking.lines()
     var i = 0
     while (i < lines.size) {
         val line = lines[i]
