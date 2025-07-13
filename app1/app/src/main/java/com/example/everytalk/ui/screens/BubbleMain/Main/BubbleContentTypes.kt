@@ -16,8 +16,16 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.Article
+import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Audiotrack
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.PictureAsPdf
+import androidx.compose.material.icons.outlined.Slideshow
+import androidx.compose.material.icons.outlined.TableChart
+import androidx.compose.material.icons.outlined.Videocam
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -760,9 +768,17 @@ private fun ThreeDotsLoadingAnimation(
 
 @Composable
 private fun getIconForMimeType(mimeType: String?): androidx.compose.ui.graphics.vector.ImageVector {
-    return when (mimeType?.substringBefore('/')) {
-        "application" -> Icons.Outlined.Article
-        "text" -> Icons.Outlined.Article
-        else -> Icons.Default.ContentCopy
+    return when (mimeType) {
+        "application/pdf" -> Icons.Outlined.PictureAsPdf
+        "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> Icons.Outlined.Description
+        "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" -> Icons.Outlined.TableChart
+        "application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.presentationml.presentation" -> Icons.Outlined.Slideshow
+        "application/zip", "application/x-rar-compressed" -> Icons.Outlined.Archive
+        else -> when {
+            mimeType?.startsWith("video/") == true -> Icons.Outlined.Videocam
+            mimeType?.startsWith("audio/") == true -> Icons.Outlined.Audiotrack
+            mimeType?.startsWith("image/") == true -> Icons.Outlined.Image
+            else -> Icons.Outlined.AttachFile
+        }
     }
 }

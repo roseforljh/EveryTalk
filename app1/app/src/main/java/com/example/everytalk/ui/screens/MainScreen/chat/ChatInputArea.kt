@@ -10,9 +10,9 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -38,6 +38,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -135,16 +137,15 @@ fun ImageSelectionPanel(
     onOptionSelected: (ImageSourceOption) -> Unit
 ) {
     var activeOption by remember { mutableStateOf<ImageSourceOption?>(null) }
-    val panelBackgroundColor = Color(0xFFf4f4f4)
-    val darkerBackgroundColor = Color(0xFFCCCCCC)
+    val panelBackgroundColor = Color(0xFFefefef)
+    val darkerBackgroundColor = Color(0xFFdcdcdc)
 
     Surface(
         modifier = modifier
             .width(150.dp)
             .wrapContentHeight(),
         shape = RoundedCornerShape(20.dp),
-        color = panelBackgroundColor,
-        shadowElevation = 4.dp
+        color = panelBackgroundColor
     ) {
         Column {
             ImageSourceOption.values().forEach { option ->
@@ -189,16 +190,15 @@ fun MoreOptionsPanel(
     onOptionSelected: (MoreOptionsType) -> Unit
 ) {
     var activeOption by remember { mutableStateOf<MoreOptionsType?>(null) }
-    val panelBackgroundColor = Color(0xFFf4f4f4)
-    val darkerBackgroundColor = Color(0xFFCCCCCC)
+    val panelBackgroundColor = Color(0xFFefefef)
+    val darkerBackgroundColor = Color(0xFFdcdcdc)
 
     Surface(
         modifier = modifier
             .width(150.dp)
             .wrapContentHeight(),
         shape = RoundedCornerShape(20.dp),
-        color = panelBackgroundColor,
-        shadowElevation = 4.dp
+        color = panelBackgroundColor
     ) {
         Column {
             MoreOptionsType.values().forEach { option ->
@@ -274,10 +274,18 @@ fun SelectedItemPreview(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
-                    val icon = when {
-                        mediaItem.mimeType?.startsWith("video/") == true -> Icons.Outlined.Videocam
-                        mediaItem.mimeType?.startsWith("audio/") == true -> Icons.Outlined.Audiotrack
-                        else -> Icons.Outlined.Description
+                    val icon = when (mediaItem.mimeType) {
+                        "application/pdf" -> Icons.Outlined.PictureAsPdf
+                        "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> Icons.Outlined.Description
+                        "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" -> Icons.Outlined.TableChart
+                        "application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.presentationml.presentation" -> Icons.Outlined.Slideshow
+                        "application/zip", "application/x-rar-compressed" -> Icons.Outlined.Archive
+                        else -> when {
+                            mediaItem.mimeType?.startsWith("video/") == true -> Icons.Outlined.Videocam
+                            mediaItem.mimeType?.startsWith("audio/") == true -> Icons.Outlined.Audiotrack
+                            mediaItem.mimeType?.startsWith("image/") == true -> Icons.Outlined.Image
+                            else -> Icons.Outlined.AttachFile
+                        }
                     }
                     Icon(
                         imageVector = icon,
@@ -442,26 +450,28 @@ fun ChatInputArea(
     }
 
     val filePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument(),
-        onResult = { uri: Uri? ->
-            if (uri != null) {
+        contract = ActivityResultContracts.OpenMultipleDocuments(),
+        onResult = { uris: List<Uri> ->
+            if (uris.isNotEmpty()) {
                 coroutineScope.launch {
                     try {
-                        val (displayName, mimeType, _) = getFileDetailsFromUri(context, uri)
-                        Log.d(
-                            "OpenDocument",
-                            "Selected Document: $displayName, URI: $uri, MIME: $mimeType"
-                        )
-                        withContext(Dispatchers.Main) {
-                            onAddMediaItem(
-                                SelectedMediaItem.GenericFile(
-                                    uri = uri,
-                                    id = UUID.randomUUID().toString(),
-                                   displayName = displayName,
-                                   mimeType = mimeType,
-                                   filePath = null
-                                )
+                        uris.forEach { uri ->
+                            val (displayName, mimeType, _) = getFileDetailsFromUri(context, uri)
+                            Log.d(
+                                "OpenDocument",
+                                "Selected Document: $displayName, URI: $uri, MIME: $mimeType"
                             )
+                            withContext(Dispatchers.Main) {
+                                onAddMediaItem(
+                                    SelectedMediaItem.GenericFile(
+                                        uri = uri,
+                                        id = UUID.randomUUID().toString(),
+                                        displayName = displayName,
+                                        mimeType = mimeType,
+                                        filePath = null
+                                    )
+                                )
+                            }
                         }
                     } catch (e: Exception) {
                         Log.e("OpenDocument", "处理选择的文件时发生错误", e)
@@ -681,13 +691,34 @@ fun ChatInputArea(
                     dismissOnClickOutside = true
                 )
             ) {
-                ImageSelectionPanel { selectedOption ->
-                    showImageSelectionPanel = false
-                    when (selectedOption) {
-                        ImageSourceOption.ALBUM -> photoPickerLauncher.launch(
-                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                        )
-                        ImageSourceOption.CAMERA -> cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                val alpha = remember { Animatable(0f) }
+                val scale = remember { Animatable(0.8f) }
+
+                LaunchedEffect(showImageSelectionPanel) {
+                    if (showImageSelectionPanel) {
+                        launch {
+                            alpha.animateTo(1f, animationSpec = tween(durationMillis = 300))
+                        }
+                        launch {
+                            scale.animateTo(1f, animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing))
+                        }
+                    }
+                }
+
+                Box(modifier = Modifier.graphicsLayer {
+                    this.alpha = alpha.value
+                    this.scaleX = scale.value
+                    this.scaleY = scale.value
+                    this.transformOrigin = TransformOrigin(0.5f, 1f)
+                }) {
+                    ImageSelectionPanel { selectedOption ->
+                        showImageSelectionPanel = false
+                        when (selectedOption) {
+                            ImageSourceOption.ALBUM -> photoPickerLauncher.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            )
+                            ImageSourceOption.CAMERA -> cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                        }
                     }
                 }
             }
@@ -713,12 +744,33 @@ fun ChatInputArea(
                     dismissOnClickOutside = true
                 )
             ) {
-                MoreOptionsPanel { selectedOption ->
-                    showMoreOptionsPanel = false
-                    val mimeTypesArray = Array(selectedOption.mimeTypes.size) { index ->
-                        selectedOption.mimeTypes[index]
+                val alpha = remember { Animatable(0f) }
+                val scale = remember { Animatable(0.8f) }
+
+                LaunchedEffect(showMoreOptionsPanel) {
+                    if (showMoreOptionsPanel) {
+                        launch {
+                            alpha.animateTo(1f, animationSpec = tween(durationMillis = 300))
+                        }
+                        launch {
+                            scale.animateTo(1f, animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing))
+                        }
                     }
-                    filePickerLauncher.launch(mimeTypesArray)
+                }
+
+                Box(modifier = Modifier.graphicsLayer {
+                    this.alpha = alpha.value
+                    this.scaleX = scale.value
+                    this.scaleY = scale.value
+                    this.transformOrigin = TransformOrigin(0.5f, 1f)
+                }) {
+                    MoreOptionsPanel { selectedOption ->
+                        showMoreOptionsPanel = false
+                        val mimeTypesArray = Array(selectedOption.mimeTypes.size) { index ->
+                            selectedOption.mimeTypes[index]
+                        }
+                        filePickerLauncher.launch(mimeTypesArray)
+                    }
                 }
             }
         }
