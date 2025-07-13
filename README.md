@@ -1,7 +1,7 @@
 # KunTalk - Your Private, Versatile, and Powerful AI Companion
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/roseforljh/KunTalkwithAi/main/app1/app/src/main/res/mipmap-xxxhdpi/kztalk.webp" alt="KunTalk Logo" width="200"/>
+  <img src="https://raw.githubusercontent.com/roseforljh/KunTalkwithAi/main/app1/app/src/main/res/mipmap-xxxhdpi/ic_launcher.webp" alt="KunTalk Logo" width="200"/>
 </p>
 
 <p align="center">
