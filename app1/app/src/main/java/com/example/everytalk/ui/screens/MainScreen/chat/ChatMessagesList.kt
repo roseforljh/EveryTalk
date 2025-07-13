@@ -1,20 +1,21 @@
+@file:OptIn(ExperimentalFoundationApi::class)
 package com.example.everytalk.ui.screens.MainScreen.chat
 
 import android.content.ActivityNotFoundException
 import android.widget.Toast
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.forEachGesture
 import androidx.compose.foundation.gestures.scrollBy
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -25,16 +26,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.*
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -60,21 +57,9 @@ import com.example.everytalk.ui.theme.ChatDimensions
 import com.example.everytalk.ui.theme.chatColors
 import com.example.everytalk.util.CodeHighlighter
 import com.example.everytalk.util.MarkdownBlock
-import com.example.everytalk.util.IncrementalMarkdownParser
-import com.example.everytalk.util.parseInlineMarkdownToAnnotatedString
-import com.example.everytalk.util.RenderMode
-import com.example.everytalk.util.parseMarkdownWithMode
-import kotlinx.coroutines.Dispatchers
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.platform.LocalDensity
 import com.example.everytalk.util.StreamingMarkdownRenderer
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -93,7 +78,8 @@ fun ChatMessagesList(
 ) {
     val haptic = LocalHapticFeedback.current
     val coroutineScope = rememberCoroutineScope()
- 
+    val animatedItems = remember { mutableStateMapOf<String, Boolean>() }
+
     val isApiCalling by viewModel.isApiCalling.collectAsState()
     val renderer = remember { StreamingMarkdownRenderer() }
 
@@ -116,153 +102,179 @@ fun ChatMessagesList(
             key = { _, item -> item.stableId },
             contentType = { _, item -> item::class.java.simpleName }
         ) { index, item ->
-            when (item) {
-                is ChatListItem.UserMessage -> {
-                    val message = viewModel.getMessageById(item.messageId)
-                    if (message != null) {
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalAlignment = Alignment.End
-                        ) {
-                            if (!item.attachments.isNullOrEmpty()) {
-                                AttachmentsContent(
-                                    attachments = item.attachments,
-                                    onAttachmentClick = { },
-                                    maxWidth = bubbleMaxWidth * ChatDimensions.BUBBLE_WIDTH_RATIO,
-                                    message = message,
-                                    onEditRequest = { viewModel.requestEditMessage(it) },
-                                    onRegenerateRequest = {
-                                        viewModel.regenerateAiResponse(it)
-                                        scrollStateManager.jumpToBottom()
-                                    },
-                                    scrollStateManager = scrollStateManager,
-                                    onImageLoaded = onImageLoaded,
-                                )
-                            }
-                            if (item.text.isNotBlank()) {
-                                UserOrErrorMessageContent(
-                                    message = message,
-                                    displayedText = item.text,
-                                    showLoadingDots = false,
-                                    bubbleColor = MaterialTheme.chatColors.userBubble,
-                                    contentColor = MaterialTheme.colorScheme.onSurface,
-                                    isError = false,
-                                    maxWidth = bubbleMaxWidth * ChatDimensions.BUBBLE_WIDTH_RATIO,
-                                    onEditRequest = { viewModel.requestEditMessage(it) },
-                                    onRegenerateRequest = {
-                                        viewModel.regenerateAiResponse(it)
-                                        scrollStateManager.jumpToBottom()
-                                    },
-                                    scrollStateManager = scrollStateManager,
-                                )
+            val alpha = remember { Animatable(0f) }
+            val translationY = remember { Animatable(50f) }
+
+            LaunchedEffect(item.stableId) {
+                if (animatedItems[item.stableId] != true) {
+                    launch {
+                        alpha.animateTo(1f, animationSpec = tween(durationMillis = 300))
+                    }
+                    launch {
+                        translationY.animateTo(0f, animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing))
+                    }
+                    animatedItems[item.stableId] = true
+                } else {
+                    alpha.snapTo(1f)
+                    translationY.snapTo(0f)
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .graphicsLayer {
+                        this.alpha = alpha.value
+                        this.translationY = translationY.value
+                    }
+            ) {
+                when (item) {
+                    is ChatListItem.UserMessage -> {
+                        val message = viewModel.getMessageById(item.messageId)
+                        if (message != null) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalAlignment = Alignment.End
+                            ) {
+                                if (!item.attachments.isNullOrEmpty()) {
+                                    AttachmentsContent(
+                                        attachments = item.attachments,
+                                        onAttachmentClick = { },
+                                        maxWidth = bubbleMaxWidth * ChatDimensions.BUBBLE_WIDTH_RATIO,
+                                        message = message,
+                                        onEditRequest = { viewModel.requestEditMessage(it) },
+                                        onRegenerateRequest = {
+                                            viewModel.regenerateAiResponse(it)
+                                            scrollStateManager.jumpToBottom()
+                                        },
+                                        scrollStateManager = scrollStateManager,
+                                        onImageLoaded = onImageLoaded,
+                                    )
+                                }
+                                if (item.text.isNotBlank()) {
+                                    UserOrErrorMessageContent(
+                                        message = message,
+                                        displayedText = item.text,
+                                        showLoadingDots = false,
+                                        bubbleColor = MaterialTheme.chatColors.userBubble,
+                                        contentColor = MaterialTheme.colorScheme.onSurface,
+                                        isError = false,
+                                        maxWidth = bubbleMaxWidth * ChatDimensions.BUBBLE_WIDTH_RATIO,
+                                        onEditRequest = { viewModel.requestEditMessage(it) },
+                                        onRegenerateRequest = {
+                                            viewModel.regenerateAiResponse(it)
+                                            scrollStateManager.jumpToBottom()
+                                        },
+                                        scrollStateManager = scrollStateManager,
+                                    )
+                                }
                             }
                         }
                     }
-                }
 
-                is ChatListItem.AiMessageReasoning -> {
-                    val reasoningCompleteMap = viewModel.reasoningCompleteMap
-                    val isReasoningStreaming = remember(isApiCalling, item.message.reasoning, reasoningCompleteMap[item.message.id]) {
-                        isApiCalling && item.message.reasoning != null && reasoningCompleteMap[item.message.id] != true
+                    is ChatListItem.AiMessageReasoning -> {
+                        val reasoningCompleteMap = viewModel.reasoningCompleteMap
+                        val isReasoningStreaming = remember(isApiCalling, item.message.reasoning, reasoningCompleteMap[item.message.id]) {
+                            isApiCalling && item.message.reasoning != null && reasoningCompleteMap[item.message.id] != true
+                        }
+                        val isReasoningComplete = reasoningCompleteMap[item.message.id] ?: false
+
+                        ReasoningToggleAndContent(
+                            modifier = Modifier.fillMaxWidth(),
+                            currentMessageId = item.message.id,
+                            displayedReasoningText = item.message.reasoning ?: "",
+                            isReasoningStreaming = isReasoningStreaming,
+                            isReasoningComplete = isReasoningComplete,
+                            messageIsError = item.message.isError,
+                            mainContentHasStarted = item.message.contentStarted,
+                            reasoningTextColor = MaterialTheme.chatColors.reasoningText,
+                            reasoningToggleDotColor = MaterialTheme.colorScheme.onSurface,
+                            onVisibilityChanged = onThinkingBoxVisibilityChanged
+                        )
                     }
-                    val isReasoningComplete = reasoningCompleteMap[item.message.id] ?: false
 
-                    ReasoningToggleAndContent(
-                        modifier = Modifier.fillMaxWidth(),
-                        currentMessageId = item.message.id,
-                        displayedReasoningText = item.message.reasoning ?: "",
-                        isReasoningStreaming = isReasoningStreaming,
-                        isReasoningComplete = isReasoningComplete,
-                        messageIsError = item.message.isError,
-                        mainContentHasStarted = item.message.contentStarted,
-                        reasoningTextColor = MaterialTheme.chatColors.reasoningText,
-                        reasoningToggleDotColor = MaterialTheme.colorScheme.onSurface,
-                        onVisibilityChanged = onThinkingBoxVisibilityChanged
-                    )
-                }
-
-                is ChatListItem.AiMessageBlock -> {
-                    var lastHeight by remember { mutableStateOf(0) }
-                    AiMessageBlockItem(
-                        item = item,
-                        maxWidth = bubbleMaxWidth,
-                        onLongPress = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            val message = viewModel.getMessageById(item.messageId)
-                            message?.let { onShowAiMessageOptions(it) }
-                        },
-                        onTap = {},
-                        onImageLoaded = onImageLoaded,
-                        isStreaming = isApiCalling,
-                        renderer = renderer,
-                        scrollStateManager = scrollStateManager,
-                        modifier = Modifier.onGloballyPositioned { coordinates ->
-                            val newHeight = coordinates.size.height
-                            if (lastHeight != 0 && lastHeight != newHeight) {
-                                if (scrollStateManager.userInteracted && index < listState.firstVisibleItemIndex) {
-                                    val heightDiff = newHeight - lastHeight
-                                    if (heightDiff != 0) {
-                                        coroutineScope.launch {
-                                            listState.scrollBy(heightDiff.toFloat())
+                    is ChatListItem.AiMessageBlock -> {
+                        var lastHeight by remember { mutableStateOf(0) }
+                        AiMessageBlockItem(
+                            item = item,
+                            maxWidth = bubbleMaxWidth,
+                            onLongPress = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                val message = viewModel.getMessageById(item.messageId)
+                                message?.let { onShowAiMessageOptions(it) }
+                            },
+                            onTap = {},
+                            onImageLoaded = onImageLoaded,
+                            isStreaming = isApiCalling,
+                            renderer = renderer,
+                            scrollStateManager = scrollStateManager,
+                            modifier = Modifier.onGloballyPositioned { coordinates ->
+                                val newHeight = coordinates.size.height
+                                if (lastHeight != 0 && lastHeight != newHeight) {
+                                    if (scrollStateManager.userInteracted && index < listState.firstVisibleItemIndex) {
+                                        val heightDiff = newHeight - lastHeight
+                                        if (heightDiff != 0) {
+                                            coroutineScope.launch {
+                                                listState.scrollBy(heightDiff.toFloat())
+                                            }
                                         }
                                     }
                                 }
+                                lastHeight = newHeight
                             }
-                            lastHeight = newHeight
-                        }
-                    )
-                }
-
-                is ChatListItem.AiMessageFooter -> {
-                    AiMessageFooterItem(
-                        message = item.message,
-                        viewModel = viewModel,
-                    )
-                }
-
-                is ChatListItem.ErrorMessage -> {
-                    val message = viewModel.getMessageById(item.messageId)
-                    if (message != null) {
-                        UserOrErrorMessageContent(
-                            message = message,
-                            displayedText = item.text,
-                            showLoadingDots = false,
-                            bubbleColor = MaterialTheme.chatColors.aiBubble,
-                            contentColor = MaterialTheme.chatColors.errorContent,
-                            isError = true,
-                            maxWidth = bubbleMaxWidth,
-                            onEditRequest = { viewModel.requestEditMessage(it) },
-                            onRegenerateRequest = {
-                                viewModel.regenerateAiResponse(it)
-                                scrollStateManager.jumpToBottom()
-                            },
-                            scrollStateManager = scrollStateManager,
                         )
                     }
-                }
 
-                is ChatListItem.LoadingIndicator -> {
-                    Row(
-                        modifier = Modifier
-                            .padding(
-                                start = ChatDimensions.HORIZONTAL_PADDING,
-                                top = ChatDimensions.VERTICAL_PADDING,
-                                bottom = ChatDimensions.VERTICAL_PADDING
-                            ),
-                        verticalAlignment = Alignment.Bottom,
-                        horizontalArrangement = Arrangement.Start
-                    ) {
-                        Text(
-                            text = stringResource(id = R.string.connecting_to_model),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface
+                    is ChatListItem.AiMessageFooter -> {
+                        AiMessageFooterItem(
+                            message = item.message,
+                            viewModel = viewModel,
                         )
-                        Spacer(Modifier.width(ChatDimensions.LOADING_SPACER_WIDTH))
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(ChatDimensions.LOADING_INDICATOR_SIZE),
-                            color = MaterialTheme.chatColors.loadingIndicator,
-                            strokeWidth = ChatDimensions.LOADING_INDICATOR_STROKE_WIDTH
-                        )
+                    }
+
+                    is ChatListItem.ErrorMessage -> {
+                        val message = viewModel.getMessageById(item.messageId)
+                        if (message != null) {
+                            UserOrErrorMessageContent(
+                                message = message,
+                                displayedText = item.text,
+                                showLoadingDots = false,
+                                bubbleColor = MaterialTheme.chatColors.aiBubble,
+                                contentColor = MaterialTheme.chatColors.errorContent,
+                                isError = true,
+                                maxWidth = bubbleMaxWidth,
+                                onEditRequest = { viewModel.requestEditMessage(it) },
+                                onRegenerateRequest = {
+                                    viewModel.regenerateAiResponse(it)
+                                    scrollStateManager.jumpToBottom()
+                                },
+                                scrollStateManager = scrollStateManager,
+                            )
+                        }
+                    }
+
+                    is ChatListItem.LoadingIndicator -> {
+                        Row(
+                            modifier = Modifier
+                                .padding(
+                                    start = ChatDimensions.HORIZONTAL_PADDING,
+                                    top = ChatDimensions.VERTICAL_PADDING,
+                                    bottom = ChatDimensions.VERTICAL_PADDING
+                                ),
+                            verticalAlignment = Alignment.Bottom,
+                            horizontalArrangement = Arrangement.Start
+                        ) {
+                            Text(
+                                text = stringResource(id = R.string.connecting_to_model),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(Modifier.width(ChatDimensions.LOADING_SPACER_WIDTH))
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(ChatDimensions.LOADING_INDICATOR_SIZE),
+                                color = MaterialTheme.chatColors.loadingIndicator,
+                                strokeWidth = ChatDimensions.LOADING_INDICATOR_STROKE_WIDTH
+                            )
+                        }
                     }
                 }
             }
@@ -282,7 +294,8 @@ private fun AiMessageBlockItem(
     onImageLoaded: () -> Unit,
     isStreaming: Boolean,
     renderer: StreamingMarkdownRenderer,
-    scrollStateManager: ChatScrollStateManager,     modifier: Modifier = Modifier
+    scrollStateManager: ChatScrollStateManager,
+    modifier: Modifier = Modifier
 ) {
     val uriHandler = LocalUriHandler.current
     val context = LocalContext.current

@@ -33,6 +33,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Loop
@@ -42,11 +45,13 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.geometry.Offset
@@ -55,6 +60,7 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.Velocity
 import com.example.everytalk.data.DataClass.ApiConfig
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -233,6 +239,18 @@ fun ModelSelectionBottomSheet(
                         contentPadding = PaddingValues(vertical = 0.dp) // 列表本身的垂直内边距设为0，使列表项更紧凑
                     ) {
                         items(items = filteredModels, key = { it.id }) { modelConfig ->
+                            val alpha = remember { Animatable(0f) }
+                            val translationY = remember { Animatable(50f) }
+
+                            LaunchedEffect(modelConfig.id) {
+                                launch {
+                                    alpha.animateTo(1f, animationSpec = tween(durationMillis = 300))
+                                }
+                                launch {
+                                    translationY.animateTo(0f, animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing))
+                                }
+                            }
+
                             ListItem(
                                 headlineContent = {
                                     Text(
@@ -263,9 +281,14 @@ fun ModelSelectionBottomSheet(
                                         Spacer(Modifier.size(20.dp)) // 保持对齐的占位符
                                     }
                                 },
-                                modifier = Modifier.clickable {
-                                    onModelSelected(modelConfig)
-                                },
+                                modifier = Modifier
+                                    .graphicsLayer {
+                                        this.alpha = alpha.value
+                                        this.translationY = translationY.value
+                                    }
+                                    .clickable {
+                                        onModelSelected(modelConfig)
+                                    },
                                 colors = ListItemDefaults.colors(
                                     containerColor = Color.Transparent // 保持背景透明
                                 )
@@ -287,9 +310,26 @@ fun PlatformSelectionDialog(
 ) {
     var tempSelectedPlatform by remember { mutableStateOf(currentPlatform) }
 
+    val alpha = remember { Animatable(0f) }
+    val scale = remember { Animatable(0.8f) }
+
+    LaunchedEffect(Unit) {
+        launch {
+            alpha.animateTo(1f, animationSpec = tween(durationMillis = 300))
+        }
+        launch {
+            scale.animateTo(1f, animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing))
+        }
+    }
+
     AlertDialog(
         onDismissRequest = onDismissRequest,
         containerColor = Color.White,
+        modifier = Modifier.graphicsLayer {
+            this.alpha = alpha.value
+            this.scaleX = scale.value
+            this.scaleY = scale.value
+        },
         title = {
             Text("切换平台", color = Color.Black)
         },

@@ -1,5 +1,11 @@
 package com.example.everytalk.ui.screens.MainScreen.drawer
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -13,6 +19,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
@@ -35,17 +42,29 @@ internal fun ConversationItemMenu(
     popupPositionProvider: PopupPositionProvider,
     isRenameEnabled: Boolean = true // 默认重命名可用
 ) {
-    if (expanded) {
-        Popup(
-            popupPositionProvider = popupPositionProvider,
-            onDismissRequest = onDismissRequest,
-            properties = PopupProperties(focusable = false) // focusable=true 允许Popup通过返回键关闭
+    Popup(
+        popupPositionProvider = popupPositionProvider,
+        onDismissRequest = onDismissRequest,
+        properties = PopupProperties(focusable = false)
+    ) {
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn(animationSpec = tween(150)) + scaleIn(
+                animationSpec = tween(150),
+                initialScale = 0.8f,
+                transformOrigin = TransformOrigin.Center
+            ),
+            exit = fadeOut(animationSpec = tween(100)) + scaleOut(
+                animationSpec = tween(100),
+                targetScale = 0.9f,
+                transformOrigin = TransformOrigin.Center
+            )
         ) {
             Surface(
                 color = Color.White,
                 shadowElevation = 8.dp,
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.widthIn(max = 120.dp) // 菜单宽度限制
+                modifier = Modifier.widthIn(max = 120.dp)
             ) {
                 Column(
                     modifier = Modifier.padding(
@@ -63,11 +82,11 @@ internal fun ConversationItemMenu(
                                 onClick = {
                                     if (isRenameEnabled) {
                                         onRenameClick()
-                                        onDismissRequest() // 操作后关闭菜单
+                                        onDismissRequest()
                                     }
                                 },
                                 interactionSource = remember { MutableInteractionSource() },
-                                indication = null // 移除默认涟漪
+                                indication = null
                             ),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -84,7 +103,7 @@ internal fun ConversationItemMenu(
                             style = MaterialTheme.typography.bodyMedium
                         )
                     }
-                    Divider(color = Color.LightGray.copy(alpha = 0.5f)) // 分隔线
+                    Divider(color = Color.LightGray.copy(alpha = 0.5f))
                     // 删除选项
                     Row(
                         modifier = Modifier
@@ -93,7 +112,7 @@ internal fun ConversationItemMenu(
                             .clickable(
                                 onClick = {
                                     onDeleteClick()
-                                    onDismissRequest() // 操作后关闭菜单
+                                    onDismissRequest()
                                 },
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null

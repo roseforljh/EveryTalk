@@ -204,12 +204,29 @@ internal fun ReasoningToggleAndContent(
                 usePlatformDefaultWidth = false
             )
         ) {
+            val alpha = remember { Animatable(0f) }
+            val scale = remember { Animatable(0.8f) }
+
+            LaunchedEffect(Unit) {
+                launch {
+                    alpha.animateTo(1f, animationSpec = tween(durationMillis = 300))
+                }
+                launch {
+                    scale.animateTo(1f, animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing))
+                }
+            }
+
             Card(
                 shape = RoundedCornerShape(24.dp),
                 modifier = Modifier
                     .fillMaxWidth(0.9f)
                     .padding(vertical = 32.dp)
-                    .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.8f),
+                    .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.8f)
+                    .graphicsLayer {
+                        this.alpha = alpha.value
+                        this.scaleX = scale.value
+                        this.scaleY = scale.value
+                    },
                 colors = CardDefaults.cardColors(containerColor = Color.White)
             ) {
                 Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 24.dp)) {

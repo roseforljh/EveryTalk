@@ -439,18 +439,31 @@ fun AppDrawerContent(
                         )
                     },
                     confirmButton = {
-                        Button(onClick = {
-                            onRenameRequest(index, newName)
-                            renamingIndex = null
-                        }) {
+                        Button(
+                            onClick = {
+                                onRenameRequest(index, newName)
+                                renamingIndex = null
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color.Black,
+                                contentColor = Color.White
+                            )
+                        ) {
                             Text("确定")
                         }
                     },
                     dismissButton = {
-                        Button(onClick = { renamingIndex = null }) {
+                        Button(
+                            onClick = { renamingIndex = null },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color.Black,
+                                contentColor = Color.White
+                            )
+                        ) {
                             Text("取消")
                         }
-                    }
+                    },
+                    containerColor = Color.White
                 )
             }
         }

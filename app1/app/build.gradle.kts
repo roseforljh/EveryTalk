@@ -84,7 +84,6 @@ android {
 
         // Compose UI - 让BOM管理版本
         implementation(libs.androidx.ui) // 或者 "androidx.compose.ui:ui"
-        implementation(libs.androidx.ui.graphics) // 或者 "androidx.compose.ui:ui-graphics"
         implementation(libs.androidx.ui.tooling.preview) // 或者 "androidx.compose.ui:ui-tooling-preview"
         implementation(libs.androidx.material3) // 恢复 BOM 管理
 
@@ -92,8 +91,6 @@ android {
         implementation("androidx.compose.material3:material3-window-size-class") // 添加 window size class
         implementation("androidx.compose.material:material-icons-core") // 这些通常也由BOM管理或有自己的稳定版本线
         implementation("androidx.compose.material:material-icons-extended")
-        implementation("androidx.compose.foundation:foundation") // BOM 会管理
-        implementation("androidx.compose.animation:animation")   // BOM 会管理
 
         debugImplementation("androidx.compose.ui:ui-tooling") // BOM 会管理
 

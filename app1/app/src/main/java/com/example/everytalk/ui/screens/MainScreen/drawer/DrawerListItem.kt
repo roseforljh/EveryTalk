@@ -1,5 +1,7 @@
 package com.example.everytalk.ui.screens.MainScreen.drawer
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -18,6 +20,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Fill
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -76,11 +79,27 @@ internal fun DrawerConversationListItem(
     var pressAndHoldJob by remember { mutableStateOf<Job?>(null) }
     val haptic = LocalHapticFeedback.current
 
+    val alpha = remember { Animatable(0f) }
+    val translationY = remember { Animatable(50f) }
+
+    LaunchedEffect(itemData.originalIndex) {
+        launch {
+            alpha.animateTo(1f, animationSpec = tween(durationMillis = 300))
+        }
+        launch {
+            translationY.animateTo(0f, animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing))
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(LIST_ITEM_MIN_HEIGHT)
             .clipToBounds()
+            .graphicsLayer {
+                this.alpha = alpha.value
+                this.translationY = translationY.value
+            }
             .pointerInput(originalIndex) {
                 detectTapGestures(
                     onPress = { offset ->
