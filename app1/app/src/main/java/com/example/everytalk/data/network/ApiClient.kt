@@ -81,8 +81,8 @@ object ApiClient {
     private val backendProxyUrls = listOf(
         //"http://192.168.0.100:7860/chat", // Attempting with a common LAN IP
         "https://kunze999-backend.hf.space/chat",
-        "https://uoseegiydwgx.us-west-1.clawcloudrun.com/chat",
-        "https://dbykoynmqkkq.cloud.cloudcat.one:443/chat"
+        //"https://uoseegiydwgx.us-west-1.clawcloudrun.com/chat",
+        //"https://dbykoynmqkkq.cloud.cloudcat.one:443/chat"
     )
 
 
@@ -313,13 +313,7 @@ object ApiClient {
         attachments: List<SelectedMediaItem>,
         applicationContext: Context
     ): Flow<AppStreamEvent> = channelFlow {
-        val targetUrls = if (!request.apiAddress.isNullOrBlank()) {
-            listOf(request.apiAddress.let { if (it.endsWith("#")) it.dropLast(1) else it.plus("/chat") })
-        } else {
-            backendProxyUrls
-        }
-
-        if (targetUrls.isEmpty()) {
+        if (backendProxyUrls.isEmpty()) {
             throw IOException("没有后端服务器URL可供尝试。")
         }
 
@@ -328,7 +322,7 @@ object ApiClient {
         val winnerFound = AtomicBoolean(false)
 
         supervisorScope {
-            for (url in targetUrls) {
+            for (url in backendProxyUrls) {
                 val job = launch {
                     try {
                         streamChatResponseInternal(url, request, attachments, applicationContext)
@@ -348,6 +342,7 @@ object ApiClient {
                             synchronized(errors) {
                                 errors.add(e)
                             }
+                            
                         }
                     }
                 }

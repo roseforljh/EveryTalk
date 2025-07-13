@@ -546,15 +546,17 @@ private fun CodeBlock(rawText: String, language: String?, contentColor: Color) {
                 bottom = ChatDimensions.CODE_BLOCK_PADDING_BOTTOM
             )
     ) {
-        Text(
-            text = annotatedString,
-            style = TextStyle(
-                fontFamily = FontFamily.Monospace,
-                fontSize = ChatDimensions.CODE_FONT_SIZE,
-                lineHeight = ChatDimensions.CODE_LINE_HEIGHT
-            ),
-            color = contentColor
-        )
+        Row(Modifier.horizontalScroll(rememberScrollState())) {
+            Text(
+                text = annotatedString,
+                style = TextStyle(
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = ChatDimensions.CODE_FONT_SIZE,
+                    lineHeight = ChatDimensions.CODE_LINE_HEIGHT
+                ),
+                color = contentColor
+            )
+        }
         Box(modifier = Modifier.fillMaxWidth()) {
             IconButton(
                 onClick = {

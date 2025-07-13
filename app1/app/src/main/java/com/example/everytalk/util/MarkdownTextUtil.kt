@@ -57,7 +57,8 @@ object IncrementalMarkdownParser {
         ITALIC(Regex("(?s)(?<!\\\\|\\*)\\*(.+?)\\*(?!\\*)")),
         LINK(Regex("""\[(.+?)]\((https?://\S+?)\)""")),
         IMPLICIT_LINK(Regex("""\[(https?://\S+?)]""")),
-        CODE(Regex("`([^`]+?)`")),
+        CODE(Regex("(?s)```([a-zA-Z]*\\n[\\s\\S]*?)```|`([^`]+?)`")),
+        OPEN_CODE(Regex("(?s)```([a-zA-Z]*\\n[\\s\\S]*)$")),
         MATH(Regex("""\$\$([^$]+?)\$\$|\$([^$]+?)\$""")),
         URL(Regex("""\b(https?://\S+)""")),
         BR(Regex("""<br\s*/?>""")),
@@ -76,20 +77,26 @@ object IncrementalMarkdownParser {
     ): List<InlineElement> {
         // Removed caching mechanism to prevent state corruption on recomposition.
         // Always perform a full parse for correctness.
-        return parseInternal(newText)
+        return parseInternal(newText, isComplete)
     }
 
 
     fun parse(text: String): List<InlineElement> {
-        return parseInternal(text)
+        return parseInternal(text, true)
     }
 
-    private fun parseInternal(text: String): List<InlineElement> {
+    private fun parseInternal(text: String, isComplete: Boolean): List<InlineElement> {
         val elements = mutableListOf<InlineElement>()
         var currentIndex = 0
 
         while (currentIndex < text.length) {
-            val firstMatch = TokenType.values()
+            val tokenTypesToSearch = if (isComplete) {
+                TokenType.values().filter { it != TokenType.OPEN_CODE }
+            } else {
+                TokenType.values().toList()
+            }
+
+            val firstMatch = tokenTypesToSearch
                 .asSequence()
                 .mapNotNull { type -> type.regex.find(text, currentIndex)?.let { Token(type, it) } }
                 .minByOrNull { it.match.range.first }
@@ -108,16 +115,26 @@ object IncrementalMarkdownParser {
                 TokenType.LINK -> {
                     val linkText = matchResult.groupValues[1]
                     val url = matchResult.groupValues[2]
-                    elements.add(InlineElement.Link(parseInternal(linkText), url))
+                    elements.add(InlineElement.Link(parseInternal(linkText, isComplete), url))
                 }
                 TokenType.IMPLICIT_LINK -> {
                     val url = matchResult.groupValues[1]
-                    elements.add(InlineElement.Link(parseInternal(url), url))
+                    elements.add(InlineElement.Link(parseInternal(url, isComplete), url))
                 }
-                TokenType.BOLD_ITALIC -> elements.add(InlineElement.BoldItalic(parseInternal(matchResult.groupValues[1])))
-                TokenType.BOLD -> elements.add(InlineElement.Bold(parseInternal(matchResult.groupValues[1])))
-                TokenType.ITALIC -> elements.add(InlineElement.Italic(parseInternal(matchResult.groupValues[1])))
-                TokenType.CODE -> elements.add(InlineElement.Code(matchResult.groupValues[1]))
+                TokenType.BOLD_ITALIC -> elements.add(InlineElement.BoldItalic(parseInternal(matchResult.groupValues[1], isComplete)))
+                TokenType.BOLD -> elements.add(InlineElement.Bold(parseInternal(matchResult.groupValues[1], isComplete)))
+                TokenType.ITALIC -> elements.add(InlineElement.Italic(parseInternal(matchResult.groupValues[1], isComplete)))
+                TokenType.CODE -> {
+                    val codeContent = if (matchResult.groupValues[1].isNotEmpty()) {
+                        matchResult.groupValues[1]
+                    } else {
+                        matchResult.groupValues[2]
+                    }
+                    elements.add(InlineElement.Code(codeContent))
+                }
+                TokenType.OPEN_CODE -> {
+                    elements.add(InlineElement.Code(matchResult.groupValues[1]))
+                }
                 TokenType.MATH -> {
                     val mathContent = if (matchResult.groupValues[1].isNotEmpty()) matchResult.groupValues[1] else matchResult.groupValues[2]
                     elements.add(InlineElement.Math(mathContent))
