@@ -313,7 +313,13 @@ object ApiClient {
         attachments: List<SelectedMediaItem>,
         applicationContext: Context
     ): Flow<AppStreamEvent> = channelFlow {
-        if (backendProxyUrls.isEmpty()) {
+        val targetUrls = if (!request.apiAddress.isNullOrBlank()) {
+            listOf(request.apiAddress.let { if (it.endsWith("#")) it.dropLast(1) else it.plus("/chat") })
+        } else {
+            backendProxyUrls
+        }
+
+        if (targetUrls.isEmpty()) {
             throw IOException("没有后端服务器URL可供尝试。")
         }
 
@@ -322,7 +328,7 @@ object ApiClient {
         val winnerFound = AtomicBoolean(false)
 
         supervisorScope {
-            for (url in backendProxyUrls) {
+            for (url in targetUrls) {
                 val job = launch {
                     try {
                         streamChatResponseInternal(url, request, attachments, applicationContext)
@@ -342,7 +348,6 @@ object ApiClient {
                             synchronized(errors) {
                                 errors.add(e)
                             }
-                            
                         }
                     }
                 }
