@@ -193,7 +193,7 @@ fun ChatScreen(
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
-        containerColor = MaterialTheme.colorScheme.surface,
+        containerColor = Color.White,
         topBar = {
             AppTopBar(
                 selectedConfigName = selectedApiConfig?.name?.takeIf { it.isNotBlank() }
@@ -229,10 +229,8 @@ fun ChatScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(scaffoldPaddingValues)
-                .background(Color.White)
+                .padding(top = scaffoldPaddingValues.calculateTopPadding())
                 .imePadding()
-                .navigationBarsPadding()
         ) {
             Box(
                 modifier = Modifier

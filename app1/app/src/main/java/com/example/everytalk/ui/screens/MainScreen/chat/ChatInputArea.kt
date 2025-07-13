@@ -30,6 +30,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -38,6 +39,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
@@ -581,105 +583,106 @@ fun ChatInputArea(
                 )
                 .background(Color.White, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
                 .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
-                .padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 8.dp)
                 .onSizeChanged { intSize -> chatInputContentHeightPx = intSize.height }
-        ) {
-            if (selectedMediaItems.isNotEmpty()) {
-                LazyRow(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    itemsIndexed(selectedMediaItems, key = { _, item -> item.id }) { index, media ->
-                        SelectedItemPreview(
-                            mediaItem = media,
-                            onRemoveClicked = { onRemoveMediaItemAtIndex(index) }
-                        )
-                    }
-                }
-            }
-
-            OutlinedTextField(
-                value = text,
-                onValueChange = onTextChange,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .focusRequester(focusRequester)
-                    .onFocusChanged { onFocusChange(it.isFocused) }
-                    .padding(bottom = 4.dp),
-                placeholder = { Text("输入消息…") },
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    unfocusedTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                    focusedContainerColor = Color.White,
-                    unfocusedContainerColor = Color.White,
-                    cursorColor = MaterialTheme.colorScheme.primary,
-                    focusedBorderColor = Color.Transparent,
-                    unfocusedBorderColor = Color.Transparent,
-                ),
-                minLines = 1,
-                maxLines = 5,
-                shape = RoundedCornerShape(16.dp)
-            )
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = onToggleWebSearch) {
-                        Icon(
-                            if (isWebSearchEnabled) Icons.Outlined.TravelExplore else Icons.Filled.Language,
-                            if (isWebSearchEnabled) "网页搜索已开启" else "网页搜索已关闭",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(25.dp)
-                        )
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    IconButton(onClick = onToggleImagePanel) {
-                        Icon(
-                            Icons.Outlined.Image,
-                            if (showImageSelectionPanel) "关闭图片选项" else "选择图片",
-                            tint = Color(0xff2cb334),
-                            modifier = Modifier.size(25.dp)
-                        )
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    IconButton(onClick = onToggleMoreOptionsPanel) {
-                        Icon(
-                            Icons.Filled.Tune,
-                            if (showMoreOptionsPanel) "关闭更多选项" else "更多选项",
-                            tint = Color(0xfff76213),
-                            modifier = Modifier.size(25.dp)
-                        )
-                    }
-                }
-
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (text.isNotEmpty() || selectedMediaItems.isNotEmpty()) {
-                        IconButton(onClick = onClearContent) {
-                            Icon(
-                                Icons.Filled.Clear,
-                                "清除内容和所选项目",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+) {
+            Column(modifier = Modifier.padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 16.dp)) {
+                if (selectedMediaItems.isNotEmpty()) {
+                    LazyRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        itemsIndexed(selectedMediaItems, key = { _, item -> item.id }) { index, media ->
+                            SelectedItemPreview(
+                                mediaItem = media,
+                                onRemoveClicked = { onRemoveMediaItemAtIndex(index) }
                             )
                         }
-                        Spacer(Modifier.width(4.dp))
                     }
-                    FilledIconButton(
-                        onClick = onSendClick,
-                        shape = CircleShape,
-                        colors = IconButtonDefaults.filledIconButtonColors(
-                            containerColor = Color.Black,
-                            contentColor = Color.White
-                        )
-                    ) {
-                        Icon(
-                            if (isApiCalling) Icons.Filled.Stop else Icons.AutoMirrored.Filled.Send,
-                            if (isApiCalling) "停止" else "发送"
-                        )
+                }
+
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = onTextChange,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(focusRequester)
+                        .onFocusChanged { onFocusChange(it.isFocused) }
+                        .padding(bottom = 4.dp),
+                    placeholder = { Text("输入消息…") },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        unfocusedTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        cursorColor = MaterialTheme.colorScheme.primary,
+                        focusedBorderColor = Color.Transparent,
+                        unfocusedBorderColor = Color.Transparent,
+                    ),
+                    minLines = 1,
+                    maxLines = 5,
+                    shape = RoundedCornerShape(16.dp)
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = onToggleWebSearch) {
+                            Icon(
+                                if (isWebSearchEnabled) Icons.Outlined.TravelExplore else Icons.Filled.Language,
+                                if (isWebSearchEnabled) "网页搜索已开启" else "网页搜索已关闭",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(25.dp)
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        IconButton(onClick = onToggleImagePanel) {
+                            Icon(
+                                Icons.Outlined.Image,
+                                if (showImageSelectionPanel) "关闭图片选项" else "选择图片",
+                                tint = Color(0xff2cb334),
+                                modifier = Modifier.size(25.dp)
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        IconButton(onClick = onToggleMoreOptionsPanel) {
+                            Icon(
+                                Icons.Filled.Tune,
+                                if (showMoreOptionsPanel) "关闭更多选项" else "更多选项",
+                                tint = Color(0xfff76213),
+                                modifier = Modifier.size(25.dp)
+                            )
+                        }
+                    }
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (text.isNotEmpty() || selectedMediaItems.isNotEmpty()) {
+                            IconButton(onClick = onClearContent) {
+                                Icon(
+                                    Icons.Filled.Clear,
+                                    "清除内容和所选项目",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Spacer(Modifier.width(4.dp))
+                        }
+                        FilledIconButton(
+                            onClick = onSendClick,
+                            shape = CircleShape,
+                            colors = IconButtonDefaults.filledIconButtonColors(
+                                containerColor = Color.Black,
+                                contentColor = Color.White
+                            )
+                        ) {
+                            Icon(
+                                if (isApiCalling) Icons.Filled.Stop else Icons.AutoMirrored.Filled.Send,
+                                if (isApiCalling) "停止" else "发送"
+                            )
+                        }
                     }
                 }
             }
