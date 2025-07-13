@@ -65,7 +65,7 @@ internal class CodeBlockParser : BlockParser {
         while (context.hasMoreLines()) {
 
             val currentLine = context.currentLine()!!
-            if (RegexConstants.CODE_BLOCK_START_REGEX.matches(currentLine.trim())) {
+            if (currentLine.trim() == "```") {
                 context.currentIndex++ // Consume the closing ```
                 break
             }
@@ -123,25 +123,40 @@ internal class UnorderedListParser : BlockParser {
 
 internal class OrderedListParser : BlockParser {
     override fun canParse(context: ParseContext): Boolean {
-        return context.currentLine()?.trim()?.let { RegexConstants.ORDERED_LIST_REGEX.matches(it) } == true
+        val line = context.currentLine()?.trim()
+        if (line == null || !RegexConstants.ORDERED_LIST_REGEX.matches(line)) {
+            return false
+        }
+        // Heuristic: if a line looks like a list item but ends with a colon,
+        // treat it as a simple paragraph to avoid misinterpreting headers as list items.
+        if (line.endsWith(':')) {
+            return false
+        }
+        return true
     }
 
     override fun parse(context: ParseContext): MarkdownBlock {
         val items = mutableListOf<String>()
         while (context.hasMoreLines() && canParse(context)) {
+            // Check if the current line is a header or other block type before treating as a list item
+            val isOtherBlock = MarkdownParser.blockParsers.any {
+                it !is OrderedListParser && it !is ParagraphParser && it.canParse(context)
+            }
+            if (isOtherBlock) {
+                break
+            }
+
             val itemContent = mutableListOf<String>()
 
             // First line of the item
             val firstLine = context.currentLine()!!.trim()
-            itemContent.add(firstLine.replaceFirst(RegexConstants.ORDERED_LIST_REGEX.pattern.replace(".*", ""), "").trim())
+            itemContent.add(firstLine.replaceFirst(Regex("^\\d+\\.\\s+"), "").trim())
             context.currentIndex++
 
-            // Subsequent lines of the same item (continuation)
             // Subsequent lines of the same item (continuation)
             while (context.hasMoreLines()) {
                 val currentLine = context.currentLine()
                 if (currentLine.isNullOrBlank()) {
-                    // Stop at the first blank line. This properly separates list items.
                     break
                 }
                 val trimmedLine = currentLine.trim()
@@ -149,10 +164,10 @@ internal class OrderedListParser : BlockParser {
                         RegexConstants.ORDERED_LIST_REGEX.matches(trimmedLine)
                 if (isNewListItem) break
 
-                val isOtherBlock = MarkdownParser.blockParsers.any {
+                val isAnotherBlock = MarkdownParser.blockParsers.any {
                     it !is ParagraphParser && it !is UnorderedListParser && it !is OrderedListParser && it.canParse(context)
                 }
-                if (isOtherBlock) break
+                if (isAnotherBlock) break
 
                 itemContent.add(trimmedLine)
                 context.currentIndex++

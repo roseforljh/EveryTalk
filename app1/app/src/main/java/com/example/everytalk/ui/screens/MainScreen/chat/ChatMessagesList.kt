@@ -532,21 +532,24 @@ private fun CodeBlock(rawText: String, language: String?, contentColor: Color) {
         }
     }
 
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
             .background(
                 MaterialTheme.chatColors.codeBlockBackground,
                 RoundedCornerShape(ChatDimensions.CODE_BLOCK_CORNER_RADIUS)
             )
-            .padding(
-                top = ChatDimensions.CODE_BLOCK_PADDING_TOP,
-                start = ChatDimensions.CODE_BLOCK_PADDING_HORIZONTAL,
-                end = ChatDimensions.CODE_BLOCK_PADDING_HORIZONTAL,
-                bottom = ChatDimensions.CODE_BLOCK_PADDING_BOTTOM
-            )
     ) {
-        Row(Modifier.horizontalScroll(rememberScrollState())) {
+        Row(
+            Modifier
+                .horizontalScroll(rememberScrollState())
+                .padding(
+                    top = ChatDimensions.CODE_BLOCK_PADDING_TOP,
+                    start = ChatDimensions.CODE_BLOCK_PADDING_HORIZONTAL,
+                    end = ChatDimensions.CODE_BLOCK_PADDING_HORIZONTAL,
+                    bottom = 32.dp
+                )
+        ) {
             Text(
                 text = annotatedString,
                 style = TextStyle(
@@ -557,21 +560,21 @@ private fun CodeBlock(rawText: String, language: String?, contentColor: Color) {
                 color = contentColor
             )
         }
-        Box(modifier = Modifier.fillMaxWidth()) {
-            IconButton(
-                onClick = {
-                    clipboardManager.setText(AnnotatedString(rawText))
-                    Toast.makeText(context, R.string.code_copied, Toast.LENGTH_SHORT).show()
-                },
-                modifier = Modifier.align(Alignment.CenterEnd)
-            ) {
-                Icon(
-                    Icons.Filled.ContentCopy,
-                    contentDescription = stringResource(id = R.string.copy),
-                    modifier = Modifier.size(ChatDimensions.COPY_ICON_SIZE),
-                    tint = contentColor.copy(alpha = 0.7f)
-                )
-            }
+        IconButton(
+            onClick = {
+                clipboardManager.setText(AnnotatedString(rawText))
+                Toast.makeText(context, R.string.code_copied, Toast.LENGTH_SHORT).show()
+            },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 4.dp, bottom = 4.dp)
+        ) {
+            Icon(
+                Icons.Filled.ContentCopy,
+                contentDescription = stringResource(id = R.string.copy),
+                modifier = Modifier.size(ChatDimensions.COPY_ICON_SIZE),
+                tint = contentColor.copy(alpha = 0.7f)
+            )
         }
     }
 }
