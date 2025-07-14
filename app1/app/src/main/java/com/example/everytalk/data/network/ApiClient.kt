@@ -27,6 +27,7 @@ import kotlinx.serialization.modules.SerializersModule
 import kotlinx.serialization.modules.contextual
 import kotlinx.serialization.modules.polymorphic
 import kotlinx.serialization.modules.subclass
+import com.example.everytalk.data.DataClass.GithubRelease
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import java.io.IOException
@@ -37,6 +38,8 @@ import kotlinx.coroutines.CancellationException as CoroutineCancellationExceptio
 import java.util.concurrent.atomic.AtomicBoolean
 
 object ApiClient {
+
+    private const val GITHUB_API_BASE_URL = "https://api.github.com/"
 
     private val jsonParser: Json by lazy {
         Json {
@@ -80,9 +83,9 @@ object ApiClient {
 
     private val backendProxyUrls = listOf(
         //"http://192.168.0.100:7860/chat", // Attempting with a common LAN IP
-        //"https://kunze999-backend.hf.space/chat",
+        "https://kunze999-backend.hf.space/chat",
         "https://uoseegiydwgx.us-west-1.clawcloudrun.com/chat",
-        //"https://dbykoynmqkkq.cloud.cloudcat.one:443/chat"
+        "https://dbykoynmqkkq.cloud.cloudcat.one:443/chat"
     )
 
 
@@ -420,5 +423,18 @@ object ApiClient {
             contentType(ContentType.Application.Json)
             setBody(finalRequest)
         }.body<com.example.everytalk.data.DataClass.GeminiApiResponse>()
+    }
+
+    suspend fun getLatestRelease(): GithubRelease {
+        if (!isInitialized) {
+            throw IllegalStateException("ApiClient not initialized. Call initialize() first.")
+        }
+        return client.get {
+            url(GITHUB_API_BASE_URL + "repos/roseforljh/KunTalkwithAi/releases/latest")
+            header(HttpHeaders.Accept, "application/vnd.github.v3+json")
+            // Add headers to bypass cache
+            header(HttpHeaders.CacheControl, "no-cache")
+            header(HttpHeaders.Pragma, "no-cache")
+        }.body<GithubRelease>()
     }
 }

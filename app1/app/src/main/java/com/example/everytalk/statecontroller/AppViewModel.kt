@@ -12,16 +12,19 @@ import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.lifecycle.AndroidViewModel
 import coil3.ImageLoader
 import com.example.everytalk.data.DataClass.ApiConfig
+import com.example.everytalk.data.DataClass.GithubRelease
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.DataClass.Sender
 import com.example.everytalk.data.DataClass.WebSearchResult
 import com.example.everytalk.data.local.SharedPreferencesDataSource
+import com.example.everytalk.data.network.ApiClient
 import com.example.everytalk.models.SelectedMediaItem
 import com.example.everytalk.ui.screens.MainScreen.chat.ChatListItem
 import com.example.everytalk.ui.screens.viewmodel.ConfigManager
 import com.example.everytalk.ui.screens.viewmodel.DataPersistenceManager
 import com.example.everytalk.ui.screens.viewmodel.HistoryManager
 import com.example.everytalk.util.MarkdownBlock
+import com.example.everytalk.util.VersionChecker
 import com.example.everytalk.util.parseMarkdownToBlocks
 import java.util.Collections
 import java.util.LinkedHashMap
@@ -234,9 +237,15 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     private val _textForSelectionDialog = MutableStateFlow("")
     val textForSelectionDialog: StateFlow<String> = _textForSelectionDialog.asStateFlow()
 
-    val chatListItems: StateFlow<List<ChatListItem>> =
-            combine(
-                            snapshotFlow { messages.toList() },
+   private val _showAboutDialog = MutableStateFlow(false)
+   val showAboutDialog: StateFlow<Boolean> = _showAboutDialog.asStateFlow()
+
+   private val _latestReleaseInfo = MutableStateFlow<GithubRelease?>(null)
+   val latestReleaseInfo: StateFlow<GithubRelease?> = _latestReleaseInfo.asStateFlow()
+
+     val chatListItems: StateFlow<List<ChatListItem>> =
+             combine(
+                             snapshotFlow { messages.toList() },
                             isApiCalling,
                             currentStreamingAiMessageId
                     ) { messages, isApiCalling, currentStreamingAiMessageId ->
@@ -313,10 +322,43 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             }
         }
     }
+ 
+    fun showAboutDialog() {
+        _showAboutDialog.value = true
+    }
 
-    private fun createAiMessageItems(
-            message: Message,
-            blocks: List<MarkdownBlock>,
+    fun dismissAboutDialog() {
+        _showAboutDialog.value = false
+    }
+
+     fun checkForUpdates() {
+         ioScope.launch {
+             try {
+                 val latestRelease = ApiClient.getLatestRelease()
+                 val currentVersion = getApplication<Application>().packageManager.getPackageInfo(getApplication<Application>().packageName, 0).versionName
+                if (currentVersion != null && VersionChecker.isNewVersionAvailable(currentVersion, latestRelease.tagName)) {
+                     _latestReleaseInfo.value = latestRelease
+                } else {
+                    withContext(Dispatchers.Main) {
+                        showSnackbar("当前已是最新版本")
+                    }
+                 }
+             } catch (e: Exception) {
+                 Log.e("AppViewModel", "Failed to check for updates", e)
+                withContext(Dispatchers.Main) {
+                    showSnackbar("检查更新失败: ${e.message}")
+                }
+             }
+         }
+     }
+
+    fun clearUpdateInfo() {
+        _latestReleaseInfo.value = null
+    }
+
+     private fun createAiMessageItems(
+             message: Message,
+             blocks: List<MarkdownBlock>,
             isApiCalling: Boolean,
             currentStreamingAiMessageId: String?
     ): List<ChatListItem> {

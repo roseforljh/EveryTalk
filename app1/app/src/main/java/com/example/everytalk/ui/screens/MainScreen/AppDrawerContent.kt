@@ -62,6 +62,7 @@ fun AppDrawerContent(
     onDeleteRequest: (index: Int) -> Unit,
     onClearAllConversationsRequest: () -> Unit,
     getPreviewForIndex: (Int) -> String,
+    onAboutClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var expandedItemIndex by remember { mutableStateOf<Int?>(null) }
@@ -396,10 +397,51 @@ fun AppDrawerContent(
                     }
                 }
             }
-
-            // --- 对话框 ---
-            DeleteConfirmationDialog(
-                showDialog = showDeleteConfirm,
+            Spacer(Modifier.weight(1f))
+            Spacer(Modifier.height(8.dp)) // Add some space before the button
+            Button(
+                onClick = { onAboutClick() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .height(40.dp), // Slightly shorter height
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color.White,
+                    contentColor = Color.Black
+                ),
+                elevation = ButtonDefaults.buttonElevation(
+                    defaultElevation = 0.dp,
+                    pressedElevation = 0.dp
+                ),
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Start
+                ) {
+                    Icon(
+                        Icons.Filled.Info,
+                        "关于图标",
+                        tint = Color.Black
+                    )
+                    Spacer(Modifier.width(20.dp))
+                    Text(
+                        "关于",
+                        fontWeight = FontWeight.Bold,
+                        color = Color.Black,
+                        fontSize = MaterialTheme.typography.bodyLarge.fontSize
+                    )
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+ 
+             // --- 对话框 ---
+             DeleteConfirmationDialog(
+                 showDialog = showDeleteConfirm,
                 selectedItemCount = selectedSet.size,
                 onDismiss = {
                     showDeleteConfirm = false

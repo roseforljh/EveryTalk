@@ -177,7 +177,8 @@ class MainActivity : ComponentActivity() {
                                         appViewModel.getConversationPreviewText(
                                             index
                                         )
-                                    }
+                                    },
+                                   onAboutClick = { appViewModel.showAboutDialog() }
                                 )
                             }
                         ) {

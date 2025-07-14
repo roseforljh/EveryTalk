@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -30,6 +31,11 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -70,9 +76,10 @@ fun ChatScreen(
     val selectedMediaItems = viewModel.selectedMediaItems
     val isLoadingHistory by viewModel.isLoadingHistory.collectAsState()
     val conversationId by viewModel.currentConversationId.collectAsState()
-
-    val coroutineScope = rememberCoroutineScope()
-    val loadedHistoryIndex by viewModel.loadedHistoryIndex.collectAsState()
+    val latestReleaseInfo by viewModel.latestReleaseInfo.collectAsState()
+ 
+     val coroutineScope = rememberCoroutineScope()
+     val loadedHistoryIndex by viewModel.loadedHistoryIndex.collectAsState()
 
 
     val listState = remember(conversationId) {
@@ -389,10 +396,138 @@ fun ChatScreen(
             )
         }
     }
+ 
+    val showAboutDialog by viewModel.showAboutDialog.collectAsState()
+
+    if (showAboutDialog) {
+        AboutDialog(
+            viewModel = viewModel,
+            onDismiss = { viewModel.dismissAboutDialog() }
+        )
+    }
+
+    if (latestReleaseInfo != null) {
+        val uriHandler = LocalUriHandler.current
+        UpdateAvailableDialog(
+            releaseInfo = latestReleaseInfo!!,
+            onDismiss = { viewModel.clearUpdateInfo() },
+            onUpdate = {
+                uriHandler.openUri(it)
+                viewModel.clearUpdateInfo()
+            }
+        )
+    }
+}
+ 
+@Composable
+private fun AboutDialog(
+    viewModel: AppViewModel,
+    onDismiss: () -> Unit
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val packageInfo = remember { context.packageManager.getPackageInfo(context.packageName, 0) }
+    val versionName = packageInfo.versionName
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("关于 EveryTalk") },
+        text = {
+            val uriHandler = LocalUriHandler.current
+            val annotatedString = buildAnnotatedString {
+                append("版本: $versionName\n\n一个开源的、可高度定制的 AI 聊天客户端。\n\nGitHub: ")
+                pushStringAnnotation(tag = "URL", annotation = "https://github.com/roseforljh/KunTalkwithAi")
+                withStyle(style = SpanStyle(color = Color(0xFF007eff))) {
+                    append("EveryTalk")
+                }
+                pop()
+            }
+
+            ClickableText(
+                text = annotatedString,
+                style = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                onClick = { offset ->
+                    annotatedString.getStringAnnotations(tag = "URL", start = offset, end = offset)
+                        .firstOrNull()?.let { annotation ->
+                            uriHandler.openUri(annotation.item)
+                        }
+                }
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    viewModel.checkForUpdates()
+                    onDismiss() // Immediately close the about dialog
+                },
+                shape = RoundedCornerShape(20.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color.Black,
+                    contentColor = Color.White
+                )
+            ) {
+                Text("检查更新")
+            }
+        },
+        dismissButton = {
+            Button(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(20.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color.DarkGray,
+                    contentColor = Color.White
+                )
+            ) {
+                Text("关闭")
+            }
+        },
+        shape = RoundedCornerShape(28.dp),
+        containerColor = Color.White
+    )
 }
 
-@Composable
-internal fun SelectableTextDialog(textToDisplay: String, onDismissRequest: () -> Unit) {
+ @Composable
+private fun UpdateAvailableDialog(
+    releaseInfo: com.example.everytalk.data.DataClass.GithubRelease,
+    onDismiss: () -> Unit,
+    onUpdate: (String) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("发现新版本: ${releaseInfo.tagName}") },
+        text = {
+            Text("有新的更新可用。建议您更新到最新版本以获得最佳体验。\n\n更新日志:\n${releaseInfo.body}")
+        },
+        confirmButton = {
+            Button(
+                onClick = { onUpdate(releaseInfo.htmlUrl) },
+                shape = RoundedCornerShape(20.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color.Black,
+                    contentColor = Color.White
+                )
+            ) {
+                Text("立即更新")
+            }
+        },
+        dismissButton = {
+            Button(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(20.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color.DarkGray,
+                    contentColor = Color.White
+                )
+            ) {
+                Text("稍后")
+            }
+        },
+        shape = RoundedCornerShape(28.dp),
+        containerColor = Color.White
+    )
+}
+
+ @Composable
+ internal fun SelectableTextDialog(textToDisplay: String, onDismissRequest: () -> Unit) {
     Dialog(
         onDismissRequest = onDismissRequest,
         properties = DialogProperties(
