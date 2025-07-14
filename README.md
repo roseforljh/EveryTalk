@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/roseforljh/KunTalkwithAi/releases/latest"><img src="https://img.shields.io/github/v/release/roseforljh/KunTalkwithAi?style=for-the-badge" alt="GitHub release (latest by date)"></a>
+  <a href="https://github.com/roseforljh/KunTalkwithAi/releases/latest"><img src="https://img.shields.io/github/v/release/roseforljh/KunTalkwithAi?style=for-the-badge&label=release" alt="GitHub release (latest by date)"></a>
   <a href="https://github.com/roseforljh/KunTalkwithAi/blob/main/LICENSE.md"><img src="https://img.shields.io/github/license/roseforljh/KunTalkwithAi?style=for-the-badge" alt="GitHub"></a>
   <a href="https://github.com/roseforljh/KunTalkwithAi/stargazers"><img src="https://img.shields.io/github/stars/roseforljh/KunTalkwithAi?style=for-the-badge" alt="GitHub stars"></a>
 </p>
