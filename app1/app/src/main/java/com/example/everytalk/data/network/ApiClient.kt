@@ -84,8 +84,9 @@ object ApiClient {
     private val backendProxyUrls = listOf(
         //"http://192.168.0.100:7860/chat", // Attempting with a common LAN IP
         "https://kunze999-backend.hf.space/chat",
-        "https://uoseegiydwgx.us-west-1.clawcloudrun.com/chat",
-        "https://dbykoynmqkkq.cloud.cloudcat.one:443/chat"
+        //"https://uoseegiydwgx.us-west-1.clawcloudrun.com/chat",
+        //"https://dbykoynmqkkq.cloud.cloudcat.one:443/chat",
+        //"https://backdaitalk.onrender.com/chat"
     )
 
 

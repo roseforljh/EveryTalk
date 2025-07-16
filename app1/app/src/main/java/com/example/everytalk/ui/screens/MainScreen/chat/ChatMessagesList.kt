@@ -518,6 +518,31 @@ private fun RenderMarkdownBlock(
                 isStreaming = isStreaming,
                 renderer = renderer
             )
+
+            is MarkdownBlock.MathBlock -> {
+                // Render math block with special styling
+                Surface(
+                    color = contentColor.copy(alpha = 0.05f),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                ) {
+                    Text(
+                        text = try {
+                            com.example.everytalk.util.LatexToUnicode.convert(block.formula)
+                        } catch (e: Exception) {
+                            block.formula // Fallback to original formula if conversion fails
+                        },
+                        style = MaterialTheme.typography.bodyLarge.copy(
+                            color = contentColor,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Default
+                        ),
+                        modifier = Modifier.padding(12.dp),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                }
+            }
         }
     }
 }
@@ -699,7 +724,8 @@ private fun MarkdownText(
     var displayText by remember { mutableStateOf(text) }
 
     LaunchedEffect(text) {
-        delay(50) // 50ms debounce
+        // 减少延迟，避免快速输出时的空白空间
+        delay(10) // 减少到10ms防抖
         displayText = text
     }
 

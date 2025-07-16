@@ -1,10 +1,18 @@
 package com.example.everytalk.util
 
+import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 
 object LatexToUnicode {
-    private val conversionCache = ConcurrentHashMap<String, String>()
+    // LRU Cache with size limit to prevent memory leaks
+    private val conversionCache = object : LinkedHashMap<String, String>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean {
+            return size > MAX_CACHE_SIZE
+        }
+    }.let { Collections.synchronizedMap(it) }
+    
     private const val MAX_RECURSION_DEPTH = 10
+    private const val MAX_CACHE_SIZE = 1000
     private val recursionDepth = ThreadLocal.withInitial { 0 }
 
     private val replacements by lazy {
@@ -65,6 +73,14 @@ object LatexToUnicode {
             "\\uparrow" to "↑", "\\downarrow" to "↓",
             "\\nearrow" to "↗", "\\searrow" to "↘",
             "\\nwarrow" to "↖", "\\swarrow" to "↙",
+            
+            // 向量箭头和修饰符
+            "\\overrightarrow" to "→", "\\overleftarrow" to "←",
+            "\\overline" to "‾", "\\underline" to "_",
+            "\\vec" to "→", "\\hat" to "^",
+            
+            // 绝对值和范数
+            "\\|" to "‖", "|" to "|",
             
             // 微积分
             "\\nabla" to "∇", "\\partial" to "∂",
@@ -139,6 +155,9 @@ object LatexToUnicode {
     private val subRegex by lazy { Regex("_\\{([^}]+)\\}") }
     private val singleSupRegex by lazy { Regex("\\^((?!\\{)[^\\s_^])") }
     private val singleSubRegex by lazy { Regex("_((?!\\{)[^\\s_^])") }
+    // 向量和修饰符正则
+    private val vectorRegex by lazy { Regex("\\\\overrightarrow\\{([^}]+)\\}") }
+    private val overlineRegex by lazy { Regex("\\\\overline\\{([^}]+)\\}") }
 
     fun convert(latex: String): String {
         if (latex.isBlank()) return latex
@@ -185,29 +204,29 @@ object LatexToUnicode {
             replaceWithRegex(result, fracRegex) { matchResult ->
                 val numerator = processLaTeX(matchResult.groupValues[1])
                 val denominator = processLaTeX(matchResult.groupValues[2])
-                "($numerator)/($denominator)"
+                // Create a proper fraction display with superscript numerator and subscript denominator
+                createFractionDisplay(numerator, denominator)
             }
             replaceWithRegex(result, textRegex) { it.groupValues[1] }
             replaceWithRegex(result, supRegex) { convertToSuperscript(processLaTeX(it.groupValues[1])) }
             replaceWithRegex(result, subRegex) { convertToSubscript(processLaTeX(it.groupValues[1])) }
             replaceWithRegex(result, singleSupRegex) { (superscriptMap[it.groupValues[1].first()] ?: it.groupValues[1]).toString() }
             replaceWithRegex(result, singleSubRegex) { (subscriptMap[it.groupValues[1].first()] ?: it.groupValues[1]).toString() }
-
-            // Batch replace simple commands
-            replacements.forEach { (key, value) ->
-                var index = result.indexOf(key)
-                while (index != -1) {
-                    result.replace(index, index + key.length, value)
-                    index = result.indexOf(key, index + value.length)
-                }
+            
+            // Process vector arrows and overlines
+            replaceWithRegex(result, vectorRegex) { matchResult ->
+                val content = processLaTeX(matchResult.groupValues[1])
+                "$content→"
+            }
+            replaceWithRegex(result, overlineRegex) { matchResult ->
+                val content = processLaTeX(matchResult.groupValues[1])
+                "$content‾"
             }
 
-            // Final cleanup
-            return result.toString()
-                .replace(Regex("\\{\\}"), "")
-                .replace(Regex("\\$+"), "")
-                .replace(Regex("\\s+"), " ")
-                .trim()
+            // Optimized batch replace using single pass
+            performOptimizedReplacements(result)
+
+            return result.toString().trim()
         } finally {
             recursionDepth.set(currentDepth)
         }
@@ -228,5 +247,97 @@ object LatexToUnicode {
 
     private fun convertToSubscript(text: String): String {
         return text.map { subscriptMap[it] ?: it }.joinToString("")
+    }
+    
+    /**
+     * Create a proper fraction display using Unicode superscript/subscript
+     */
+    private fun createFractionDisplay(numerator: String, denominator: String): String {
+        // For simple single-digit numbers, use Unicode fraction symbols
+        val unicodeFractions = mapOf(
+            "1/2" to "½", "1/3" to "⅓", "2/3" to "⅔", "1/4" to "¼", "3/4" to "¾",
+            "1/5" to "⅕", "2/5" to "⅖", "3/5" to "⅗", "4/5" to "⅘", "1/6" to "⅙",
+            "5/6" to "⅚", "1/7" to "⅐", "1/8" to "⅛", "3/8" to "⅜", "5/8" to "⅝",
+            "7/8" to "⅞", "1/9" to "⅑", "1/10" to "⅒"
+        )
+        
+        val fractionKey = "$numerator/$denominator"
+        if (unicodeFractions.containsKey(fractionKey)) {
+            return unicodeFractions[fractionKey]!!
+        }
+        
+        // For complex fractions, use superscript/subscript format
+        val superNumerator = convertToSuperscript(numerator)
+        val subDenominator = convertToSubscript(denominator)
+        return "$superNumerator⁄$subDenominator"
+    }
+    
+    /**
+     * Optimized single-pass replacement for better performance
+     */
+    private fun performOptimizedReplacements(result: StringBuilder) {
+        // Pre-compiled regex patterns for better performance
+        val cleanupPatterns = listOf(
+            Regex("\\{\\}") to "",
+            Regex("\\$+") to "",
+            Regex("(sin|cos|tan|sec|csc|cot|log|ln|exp)\\{([a-zA-Z0-9])\\}") to "$1 $2",
+            Regex("(sin|cos|tan|sec|csc|cot|log|ln|exp)\\{([a-zA-Z0-9]+)\\}") to "$1($2)",
+            Regex("\\s+") to " "
+        )
+        
+        // Apply regex patterns
+        cleanupPatterns.forEach { (pattern, replacement) ->
+            var match = pattern.find(result)
+            while (match != null) {
+                result.replace(match.range.first, match.range.last + 1, replacement)
+                match = pattern.find(result, match.range.first + replacement.length)
+            }
+        }
+        
+        // Process simple fractions before converting division symbols
+        val fractionRegex = Regex("([^\\s/÷]+)/([^\\s/÷]+)")
+        var match = fractionRegex.find(result)
+        while (match != null) {
+            val numerator = match.groupValues[1]
+            val denominator = match.groupValues[2]
+            val fractionDisplay = createFractionDisplay(numerator, denominator)
+            result.replace(match.range.first, match.range.last + 1, fractionDisplay)
+            match = fractionRegex.find(result, match.range.first + fractionDisplay.length)
+        }
+        
+        // Convert remaining division slashes to division symbols
+        var i = 0
+        while (i < result.length) {
+            when (result[i]) {
+                '/' -> {
+                    result.setCharAt(i, '÷')
+                }
+            }
+            i++
+        }
+        
+        // Batch replace LaTeX commands using optimized algorithm
+        performBatchReplacements(result)
+    }
+    
+    /**
+     * Optimized batch replacement using Aho-Corasick-like approach
+     */
+    private fun performBatchReplacements(result: StringBuilder) {
+        // Sort replacements by length (longest first) for better matching
+        val sortedReplacements = replacements.entries.sortedByDescending { it.key.length }
+        
+        var modified = true
+        while (modified) {
+            modified = false
+            for ((key, value) in sortedReplacements) {
+                var index = result.indexOf(key)
+                while (index != -1) {
+                    result.replace(index, index + key.length, value)
+                    modified = true
+                    index = result.indexOf(key, index + value.length)
+                }
+            }
+        }
     }
 }

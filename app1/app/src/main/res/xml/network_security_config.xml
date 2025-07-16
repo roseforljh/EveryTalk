@@ -1,16 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- 默认情况下，仅信任系统证书 (HTTPS) -->
-    <base-config cleartextTrafficPermitted="false">
-        <trust-anchors>
-            <certificates src="system" />
-        </trust-anchors>
-    </base-config>
-
-    <!-- 仅对本地主机地址允许明文流量，用于开发和测试 -->
     <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="true">127.0.0.1</domain>
-        <domain includeSubdomains="true">localhost</domain>
         <domain includeSubdomains="true">192.168.0.100</domain>
     </domain-config>
 </network-security-config>

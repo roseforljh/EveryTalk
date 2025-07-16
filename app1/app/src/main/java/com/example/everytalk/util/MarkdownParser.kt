@@ -11,6 +11,7 @@ sealed class MarkdownBlock {
     data class UnorderedList(val items: List<String>) : MarkdownBlock()
     data class OrderedList(val items: List<String>) : MarkdownBlock()
     object HorizontalRule : MarkdownBlock()
+    data class MathBlock(val formula: String) : MarkdownBlock()
 }
 
 // --- 2. Parser Infrastructure ---
@@ -34,6 +35,7 @@ private object RegexConstants {
     val CODE_BLOCK_START_REGEX = Regex("^```.*")
     val TABLE_ROW_REGEX = Regex("^\\|.*\\|$")
     val HORIZONTAL_RULE_REGEX = Regex("^(?:---|\\*\\*\\*|___)$")
+    val MATH_BLOCK_REGEX = Regex("^\\$\\$.*\\$\\$$")
 }
 
 internal class HeaderParser : BlockParser {
@@ -282,6 +284,19 @@ internal class ParagraphParser : BlockParser {
     }
 }
 
+internal class MathBlockParser : BlockParser {
+    override fun canParse(context: ParseContext): Boolean {
+        return context.currentLine()?.trim()?.let { RegexConstants.MATH_BLOCK_REGEX.matches(it) } == true
+    }
+
+    override fun parse(context: ParseContext): MarkdownBlock {
+        val line = context.currentLine()!!.trim()
+        val formula = line.removeSurrounding("$$").trim()
+        context.currentIndex++
+        return MarkdownBlock.MathBlock(formula)
+    }
+}
+
 // --- 4. Main Parser Object ---
 object MarkdownParser {
     internal val blockParsers: List<BlockParser> = listOf(
@@ -293,6 +308,7 @@ object MarkdownParser {
         TableParser(),
         UnorderedListParser(),
         OrderedListParser(),
+        MathBlockParser(),
         ParagraphParser() // Fallback
     )
 

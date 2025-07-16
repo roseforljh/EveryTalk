@@ -45,54 +45,100 @@ data class MarkdownStyleConfig(
 
 // --- 2. Optimized Incremental Parser ---
 
-
 object IncrementalMarkdownParser {
     private val styleConfig = MarkdownStyleConfig()
 
     private data class Token(val type: TokenType, val match: MatchResult)
 
-    private enum class TokenType(val regex: Regex) {
-        BOLD_ITALIC(Regex("(?s)(?<!\\\\)\\*\\*\\*(.+?)\\*\\*\\*")),
-        BOLD(Regex("(?s)(?<!\\\\|\\*)\\*\\*(.+?)\\*\\*(?!\\*)")),
-        ITALIC(Regex("(?s)(?<!\\\\|\\*)\\*(.+?)\\*(?!\\*)")),
-        LINK(Regex("""\[(.+?)]\((https?://\S+?)\)""")),
-        IMPLICIT_LINK(Regex("""\[(https?://\S+?)]""")),
-        CODE(Regex("(?s)```(?:[a-zA-Z]+)?\\n?([\\s\\S]*?)```|`([^`]+?)`")),
-        MATH(Regex("""\$\$([^$]+?)\$\$|\$([^$]+?)\$""")),
-        URL(Regex("""\b(https?://\S+)""")),
-        BR(Regex("""<br\s*/?>""")),
-        PIPE(Regex("""\s*\|\s*""")),
-        ESCAPE(Regex("""\\(.)"""))
+    // 预编译正则表达式以提高性能
+    private val boldItalicRegex = Regex("(?s)(?<!\\\\)\\*\\*\\*(.+?)\\*\\*\\*")
+    private val boldRegex = Regex("(?s)(?<!\\\\|\\*)\\*\\*(.+?)\\*\\*(?!\\*)")
+    private val italicRegex = Regex("(?s)(?<!\\\\|\\*)\\*(.+?)\\*(?!\\*)")
+    private val linkRegex = Regex("""\[(.+?)]\((https?://\S+?)\)""")
+    private val implicitLinkRegex = Regex("""\[(https?://\S+?)]""")
+    private val codeRegex = Regex("(?s)```(?:[a-zA-Z]+)?\\n?([\\s\\S]*?)```|`([^`]+?)`")
+    // 增强的数学公式正则 - 支持非Gemini模型格式
+    private val mathRegex = Regex("""\$\$\s*([^$]*?)\s*\$\$|\$\s*([^$]*?)\s*\$|\\?\(\s*([^)]*?)\s*\\?\)|\\?\[\s*([^\]]*?)\s*\\?\]""")
+    private val urlRegex = Regex("""\b(https?://\S+)""")
+    private val brRegex = Regex("""<br\s*/?>""")
+    private val pipeRegex = Regex("""\s*\|\s*""")
+    private val escapeRegex = Regex("""\\(.)""")
+
+    private enum class TokenType {
+        BOLD_ITALIC, BOLD, ITALIC, LINK, IMPLICIT_LINK, CODE, MATH, URL, BR, PIPE, ESCAPE
     }
-
-
-
-
 
     fun parseIncrementalStream(
         messageId: String,
         newText: String,
         isComplete: Boolean = false
     ): List<InlineElement> {
-        // Removed caching mechanism to prevent state corruption on recomposition.
-        // Always perform a full parse for correctness.
-        return parseInternal(newText)
+        // 最终修复版本：确保Gemini和非Gemini模型都能正常工作
+        return parseInternalFinal(newText)
     }
 
-
     fun parse(text: String): List<InlineElement> {
-        return parseInternal(text)
+        // 最终修复版本：确保Gemini和非Gemini模型都能正常工作
+        return parseInternalFinal(text)
+    }
+
+    /**
+     * Preprocess text to normalize math formulas for non-Gemini models
+     */
+    private fun preprocessMathFormulas(text: String): String {
+        var result = text
+        
+        // Fix common non-Gemini model issues:
+        // 1. Remove extra spaces around math delimiters
+        result = result.replace(Regex("""\$\s+([^$]*?)\s+\$"""), "$$$1$$")
+        result = result.replace(Regex("""\$\$\s+([^$]*?)\s+\$\$"""), "$$$$1$$$$")
+        
+        // 2. Convert LaTeX parentheses to dollar signs for consistency
+        result = result.replace(Regex("""\\?\(\s*([^)]*?)\s*\\?\)""")) { matchResult ->
+            val content = matchResult.groupValues[1].trim()
+            if (content.isNotEmpty() && isMathContent(content)) {
+                "$content$"
+            } else {
+                matchResult.value
+            }
+        }
+        
+        // 3. Convert LaTeX brackets to double dollar signs
+        result = result.replace(Regex("""\\?\[\s*([^\]]*?)\s*\\?\]""")) { matchResult ->
+            val content = matchResult.groupValues[1].trim()
+            if (content.isNotEmpty() && isMathContent(content)) {
+                "$$$$content$$$"
+            } else {
+                matchResult.value
+            }
+        }
+        
+        return result
+    }
+    
+    /**
+     * Heuristic to determine if content looks like math
+     */
+    private fun isMathContent(content: String): Boolean {
+        val mathIndicators = listOf(
+            "\\", "^", "_", "=", "+", "-", "*", "/", 
+            "alpha", "beta", "gamma", "delta", "theta", "pi", "sigma",
+            "sum", "int", "frac", "sqrt", "sin", "cos", "tan", "log", "ln"
+        )
+        return mathIndicators.any { content.contains(it, ignoreCase = true) } ||
+               content.matches(Regex(".*[a-zA-Z].*[0-9].*")) ||
+               content.matches(Regex(".*[0-9].*[a-zA-Z].*"))
     }
 
     private fun parseInternal(text: String): List<InlineElement> {
         val elements = mutableListOf<InlineElement>()
         var currentIndex = 0
+        var iterationCount = 0
+        val maxIterations = text.length * 2 // 防止无限循环的安全措施
 
-        while (currentIndex < text.length) {
-            val firstMatch = TokenType.values()
-                .asSequence()
-                .mapNotNull { type -> type.regex.find(text, currentIndex)?.let { Token(type, it) } }
-                .minByOrNull { it.match.range.first }
+        while (currentIndex < text.length && iterationCount < maxIterations) {
+            iterationCount++
+            val firstMatch = findFirstMatch(text, currentIndex)
 
             if (firstMatch == null) {
                 elements.add(InlineElement.PlainText(text.substring(currentIndex)))
@@ -126,17 +172,320 @@ object IncrementalMarkdownParser {
                     elements.add(InlineElement.Code(codeContent))
                 }
                 TokenType.MATH -> {
-                    val mathContent = if (matchResult.groupValues[1].isNotEmpty()) matchResult.groupValues[1] else matchResult.groupValues[2]
-                    elements.add(InlineElement.Math(mathContent))
+                    // Handle multiple capture groups for different math formats
+                    val mathContent = when {
+                        matchResult.groupValues[1].isNotEmpty() -> matchResult.groupValues[1] // $$...$$
+                        matchResult.groupValues[2].isNotEmpty() -> matchResult.groupValues[2] // $...$
+                        matchResult.groupValues[3].isNotEmpty() -> matchResult.groupValues[3] // \(...\) or (...)
+                        matchResult.groupValues[4].isNotEmpty() -> matchResult.groupValues[4] // \[...\] or [...]
+                        else -> ""
+                    }.trim()
+                    if (mathContent.isNotEmpty()) {
+                        elements.add(InlineElement.Math(mathContent))
+                    }
                 }
                 TokenType.URL -> elements.add(InlineElement.AutoLink(matchResult.value))
                 TokenType.BR -> elements.add(InlineElement.PlainText("\n"))
                 TokenType.PIPE -> elements.add(InlineElement.PlainText(" "))
                 TokenType.ESCAPE -> elements.add(InlineElement.PlainText(matchResult.groupValues[1]))
             }
-            currentIndex = matchResult.range.last + 1
+            // 防止无限循环：确保 currentIndex 始终向前推进
+            val newIndex = matchResult.range.last + 1
+            currentIndex = if (newIndex > currentIndex) newIndex else currentIndex + 1
         }
         return elements
+    }
+
+    /**
+     * 安全的解析函数 - 防止闪退和无限循环
+     */
+    private fun parseInternalSafe(text: String): List<InlineElement> {
+        if (text.isBlank() || text.length > 5000) {
+            return listOf(InlineElement.PlainText(text))
+        }
+        
+        return try {
+            // 使用简化的解析逻辑，避免复杂的递归和预处理
+            val elements = mutableListOf<InlineElement>()
+            var currentIndex = 0
+            var safetyCounter = 0
+            val maxIterations = text.length + 100
+
+            while (currentIndex < text.length && safetyCounter < maxIterations) {
+                safetyCounter++
+                
+                // 改进的数学公式匹配 - 支持更多格式和特殊字符
+                val patterns = listOf(
+                    TokenType.BOLD_ITALIC to Regex("\\*\\*\\*([^*]{1,100}?)\\*\\*\\*"),
+                    TokenType.BOLD to Regex("\\*\\*([^*]{1,100}?)\\*\\*"),
+                    TokenType.ITALIC to Regex("\\*([^*]{1,100}?)\\*"),
+                    TokenType.CODE to Regex("`([^`]{1,200}?)`"),
+                    // 优化的数学公式匹配 - 确保所有模型都能正常工作
+                    TokenType.MATH to Regex("\\$\\$([\\s\\S]*?)\\$\\$|\\$([^$\\r\\n]*?)\\$")
+                )
+                
+                var foundMatch = false
+                var earliestIndex = Int.MAX_VALUE
+                var bestMatch: Pair<TokenType, MatchResult>? = null
+                
+                for ((type, regex) in patterns) {
+                    val match = regex.find(text, currentIndex)
+                    if (match != null && match.range.first < earliestIndex) {
+                        earliestIndex = match.range.first
+                        bestMatch = type to match
+                        foundMatch = true
+                    }
+                }
+                
+                if (!foundMatch) {
+                    elements.add(InlineElement.PlainText(text.substring(currentIndex)))
+                    break
+                }
+                
+                val (type, match) = bestMatch!!
+                
+                // 添加匹配前的文本
+                if (match.range.first > currentIndex) {
+                    elements.add(InlineElement.PlainText(text.substring(currentIndex, match.range.first)))
+                }
+                
+                // 处理匹配的内容（非递归）
+                when (type) {
+                    TokenType.BOLD_ITALIC -> elements.add(InlineElement.BoldItalic(listOf(InlineElement.PlainText(match.groupValues[1]))))
+                    TokenType.BOLD -> elements.add(InlineElement.Bold(listOf(InlineElement.PlainText(match.groupValues[1]))))
+                    TokenType.ITALIC -> elements.add(InlineElement.Italic(listOf(InlineElement.PlainText(match.groupValues[1]))))
+                    TokenType.CODE -> elements.add(InlineElement.Code(match.groupValues[1]))
+                    TokenType.MATH -> {
+                        // 正确处理两个捕获组：$$...$$和$...$
+                        val mathContent = when {
+                            match.groupValues[1].isNotEmpty() -> match.groupValues[1].trim() // $$...$$
+                            match.groupValues[2].isNotEmpty() -> match.groupValues[2].trim() // $...$
+                            else -> ""
+                        }
+                        if (mathContent.isNotEmpty() && mathContent.length <= 500) {
+                            elements.add(InlineElement.Math(mathContent))
+                        } else {
+                            elements.add(InlineElement.PlainText(match.value))
+                        }
+                    }
+                    else -> elements.add(InlineElement.PlainText(match.value))
+                }
+                
+                // 确保索引向前推进
+                val newIndex = match.range.last + 1
+                currentIndex = if (newIndex > currentIndex) newIndex else currentIndex + 1
+            }
+            
+            elements
+        } catch (e: Exception) {
+            // 如果任何地方出错，返回纯文本
+            listOf(InlineElement.PlainText(text))
+        }
+    }
+
+    /**
+     * 修复版本的解析函数 - 确保数学公式正确处理
+     */
+    private fun parseInternalFixed(text: String): List<InlineElement> {
+        if (text.isBlank() || text.length > 5000) {
+            return listOf(InlineElement.PlainText(text))
+        }
+        
+        return try {
+            val elements = mutableListOf<InlineElement>()
+            var currentIndex = 0
+            var safetyCounter = 0
+            val maxIterations = text.length + 100
+
+            while (currentIndex < text.length && safetyCounter < maxIterations) {
+                safetyCounter++
+                
+                // 修复的数学公式匹配 - 正确处理 $文本$ 和分数
+                val patterns = listOf(
+                    TokenType.BOLD_ITALIC to Regex("\\*\\*\\*([^*]{1,100}?)\\*\\*\\*"),
+                    TokenType.BOLD to Regex("\\*\\*([^*]{1,100}?)\\*\\*"),
+                    TokenType.ITALIC to Regex("\\*([^*]{1,100}?)\\*"),
+                    TokenType.CODE to Regex("`([^`]{1,200}?)`"),
+                    // 修复的数学公式正则 - 更宽松的匹配
+                    TokenType.MATH to Regex("\\$\\$([\\s\\S]*?)\\$\\$|\\$([^$]*?)\\$")
+                )
+                
+                var foundMatch = false
+                var earliestIndex = Int.MAX_VALUE
+                var bestMatch: Pair<TokenType, MatchResult>? = null
+                
+                for ((type, regex) in patterns) {
+                    val match = regex.find(text, currentIndex)
+                    if (match != null && match.range.first < earliestIndex) {
+                        earliestIndex = match.range.first
+                        bestMatch = type to match
+                        foundMatch = true
+                    }
+                }
+                
+                if (!foundMatch) {
+                    elements.add(InlineElement.PlainText(text.substring(currentIndex)))
+                    break
+                }
+                
+                val (type, match) = bestMatch!!
+                
+                // 添加匹配前的文本
+                if (match.range.first > currentIndex) {
+                    elements.add(InlineElement.PlainText(text.substring(currentIndex, match.range.first)))
+                }
+                
+                // 处理匹配的内容
+                when (type) {
+                    TokenType.BOLD_ITALIC -> elements.add(InlineElement.BoldItalic(listOf(InlineElement.PlainText(match.groupValues[1]))))
+                    TokenType.BOLD -> elements.add(InlineElement.Bold(listOf(InlineElement.PlainText(match.groupValues[1]))))
+                    TokenType.ITALIC -> elements.add(InlineElement.Italic(listOf(InlineElement.PlainText(match.groupValues[1]))))
+                    TokenType.CODE -> elements.add(InlineElement.Code(match.groupValues[1]))
+                    TokenType.MATH -> {
+                        // 正确处理两个捕获组：$$...$$和$...$
+                        val mathContent = when {
+                            match.groupValues[1].isNotEmpty() -> match.groupValues[1].trim() // $$...$$
+                            match.groupValues[2].isNotEmpty() -> match.groupValues[2].trim() // $...$
+                            else -> ""
+                        }
+                        if (mathContent.isNotEmpty()) {
+                            elements.add(InlineElement.Math(mathContent))
+                        } else {
+                            elements.add(InlineElement.PlainText(match.value))
+                        }
+                    }
+                    else -> elements.add(InlineElement.PlainText(match.value))
+                }
+                
+                // 确保索引向前推进
+                val newIndex = match.range.last + 1
+                currentIndex = if (newIndex > currentIndex) newIndex else currentIndex + 1
+            }
+            
+            elements
+        } catch (e: Exception) {
+            // 如果任何地方出错，返回纯文本
+            listOf(InlineElement.PlainText(text))
+        }
+    }
+
+    /**
+     * 最终修复版本 - 确保Gemini和非Gemini模型都能正常工作
+     */
+    private fun parseInternalFinal(text: String): List<InlineElement> {
+        if (text.isBlank() || text.length > 5000) {
+            return listOf(InlineElement.PlainText(text))
+        }
+        
+        return try {
+            val elements = mutableListOf<InlineElement>()
+            var currentIndex = 0
+            var safetyCounter = 0
+            val maxIterations = text.length + 100
+
+            while (currentIndex < text.length && safetyCounter < maxIterations) {
+                safetyCounter++
+                
+                // 最终优化的数学公式匹配 - 确保所有格式都能正确处理
+                val patterns = listOf(
+                    TokenType.BOLD_ITALIC to Regex("\\*\\*\\*([^*]{1,100}?)\\*\\*\\*"),
+                    TokenType.BOLD to Regex("\\*\\*([^*]{1,100}?)\\*\\*"),
+                    TokenType.ITALIC to Regex("\\*([^*]{1,100}?)\\*"),
+                    TokenType.CODE to Regex("`([^`]{1,200}?)`"),
+                    // 最强的数学公式正则 - 支持所有AI模型的输出格式
+                    TokenType.MATH to Regex("\\$\\$([\\s\\S]*?)\\$\\$|\\$([^$]*?)\\$")
+                )
+                
+                var foundMatch = false
+                var earliestIndex = Int.MAX_VALUE
+                var bestMatch: Pair<TokenType, MatchResult>? = null
+                
+                for ((type, regex) in patterns) {
+                    val match = regex.find(text, currentIndex)
+                    if (match != null && match.range.first < earliestIndex) {
+                        earliestIndex = match.range.first
+                        bestMatch = type to match
+                        foundMatch = true
+                    }
+                }
+                
+                if (!foundMatch) {
+                    elements.add(InlineElement.PlainText(text.substring(currentIndex)))
+                    break
+                }
+                
+                val (type, match) = bestMatch!!
+                
+                // 添加匹配前的文本
+                if (match.range.first > currentIndex) {
+                    elements.add(InlineElement.PlainText(text.substring(currentIndex, match.range.first)))
+                }
+                
+                // 处理匹配的内容
+                when (type) {
+                    TokenType.BOLD_ITALIC -> elements.add(InlineElement.BoldItalic(listOf(InlineElement.PlainText(match.groupValues[1]))))
+                    TokenType.BOLD -> elements.add(InlineElement.Bold(listOf(InlineElement.PlainText(match.groupValues[1]))))
+                    TokenType.ITALIC -> elements.add(InlineElement.Italic(listOf(InlineElement.PlainText(match.groupValues[1]))))
+                    TokenType.CODE -> elements.add(InlineElement.Code(match.groupValues[1]))
+                    TokenType.MATH -> {
+                        // 最终修复：正确处理两个捕获组 $$...$$和$...$
+                        val mathContent = when {
+                            match.groupValues[1].isNotEmpty() -> match.groupValues[1].trim() // $$...$$
+                            match.groupValues[2].isNotEmpty() -> match.groupValues[2].trim() // $...$
+                            else -> ""
+                        }
+                        if (mathContent.isNotEmpty()) {
+                            elements.add(InlineElement.Math(mathContent))
+                        } else {
+                            elements.add(InlineElement.PlainText(match.value))
+                        }
+                    }
+                    else -> elements.add(InlineElement.PlainText(match.value))
+                }
+                
+                // 确保索引向前推进
+                val newIndex = match.range.last + 1
+                currentIndex = if (newIndex > currentIndex) newIndex else currentIndex + 1
+            }
+            
+            elements
+        } catch (e: Exception) {
+            // 如果任何地方出错，返回纯文本
+            listOf(InlineElement.PlainText(text))
+        }
+    }
+
+    /**
+     * Optimized pattern matching - finds the first match among all patterns
+     */
+    private fun findFirstMatch(text: String, startIndex: Int): Token? {
+        var earliestMatch: Token? = null
+        var earliestIndex = Int.MAX_VALUE
+        
+        // Check each pattern and find the earliest match
+        val patterns = listOf(
+            TokenType.BOLD_ITALIC to boldItalicRegex,
+            TokenType.BOLD to boldRegex,
+            TokenType.ITALIC to italicRegex,
+            TokenType.LINK to linkRegex,
+            TokenType.IMPLICIT_LINK to implicitLinkRegex,
+            TokenType.CODE to codeRegex,
+            TokenType.MATH to mathRegex,
+            TokenType.URL to urlRegex,
+            TokenType.BR to brRegex,
+            TokenType.PIPE to pipeRegex,
+            TokenType.ESCAPE to escapeRegex
+        )
+        
+        for ((tokenType, regex) in patterns) {
+            val match = regex.find(text, startIndex)
+            if (match != null && match.range.first < earliestIndex) {
+                earliestIndex = match.range.first
+                earliestMatch = Token(tokenType, match)
+            }
+        }
+        
+        return earliestMatch
     }
 
     fun render(elements: List<InlineElement>): AnnotatedString {

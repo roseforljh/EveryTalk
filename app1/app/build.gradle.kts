@@ -26,8 +26,8 @@ android {
         minSdk = 27
         //noinspection OldTargetApi
         targetSdk = 35 // 通常与 compileSdk 一致
-        versionCode = 5946
-        versionName = "1.3.2"
+        versionCode = 5947
+        versionName = "1.3.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
