@@ -429,7 +429,15 @@ class ApiHandler(
                         ?: msg.reasoning?.takeIf { it.isNotBlank() && msg.text.isBlank() } ?: "")
                     val errorPrefix = if (existingContent.isNotBlank()) "\n\n" else ""
                     val errorTextContent = ERROR_VISUAL_PREFIX + when (error) {
-                        is IOException -> "网络通讯故障: ${error.message ?: "IO 错误"}"
+                        is IOException -> {
+                            val message = error.message ?: "IO 错误"
+                            if (message.contains("服务器错误") || message.contains("HTTP 错误")) {
+                                // 对于 HTTP 状态错误，直接显示详细信息
+                                message
+                            } else {
+                                "网络通讯故障: $message"
+                            }
+                        }
                         else -> "处理时发生错误: ${error.message ?: "未知应用错误"}"
                     }
                     val errorMsg = msg.copy(

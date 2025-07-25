@@ -155,6 +155,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         get() = stateHolder._loadedHistoryIndex.asStateFlow()
     val isLoadingHistory: StateFlow<Boolean>
         get() = stateHolder._isLoadingHistory.asStateFlow()
+    val isLoadingHistoryData: StateFlow<Boolean>
+        get() = stateHolder._isLoadingHistoryData.asStateFlow()
     val currentConversationId: StateFlow<String>
         get() = stateHolder._currentConversationId.asStateFlow()
     val apiConfigs: StateFlow<List<ApiConfig>>
@@ -301,20 +303,32 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     init {
         ioScope.launch { _customProviders.value = dataSource.loadCustomProviders() }
 
+        // 优化：分阶段初始化，优先加载关键配置
         persistenceManager.loadInitialData(loadLastChat = false) {
                 initialConfigPresent,
                 initialHistoryPresent ->
             if (!initialConfigPresent) {
-                mainScope.launch {}
+                mainScope.launch {
+                    // 如果没有配置，可以显示引导界面
+                }
+            }
+            
+            // 历史数据加载完成后的处理
+            if (initialHistoryPresent) {
+                Log.d("AppViewModel", "历史数据已加载，共 ${stateHolder._historicalConversations.value.size} 条对话")
             }
         }
 
+        // 延迟初始化非关键组件
         ioScope.launch {
+            // 确保API配置加载完成后再初始化这些组件
+            delay(100) // 给UI一些时间渲染
             apiHandler
             configManager
             messageSender
         }
 
+        // 清理任务
         mainScope.launch {
             while (isActive) {
                 delay(30_000) // 每 30 秒
@@ -834,7 +848,10 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             val wasCurrentChatDeleted = (currentLoadedIndex == indexToDelete)
             val idsInDeletedConversation =
                     historicalConversations.getOrNull(indexToDelete)?.map { it.id } ?: emptyList()
+            
+            // HistoryManager.deleteConversation 已经包含了媒体文件清理逻辑
             ioScope.launch { historyManager.deleteConversation(indexToDelete) }.join()
+            
             if (wasCurrentChatDeleted) {
                 messagesMutex.withLock {
                     dismissEditDialog()
@@ -861,7 +878,9 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("清除所有历史记录")
         mainScope.launch {
+            // HistoryManager.clearAllHistory 已经包含了媒体文件清理逻辑
             ioScope.launch { historyManager.clearAllHistory() }.join()
+            
             messagesMutex.withLock {
                 stateHolder.clearForNewChat()
                 if (stateHolder.shouldAutoScroll()) {

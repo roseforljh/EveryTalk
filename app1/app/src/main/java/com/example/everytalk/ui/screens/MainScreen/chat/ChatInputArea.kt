@@ -119,6 +119,59 @@ private suspend fun getFileDetailsFromUri(
     }
 }
 
+private suspend fun checkFileSizeAndShowError(
+    context: Context,
+    uri: Uri,
+    fileName: String,
+    onShowSnackbar: (String) -> Unit
+): Boolean {
+    return withContext(Dispatchers.IO) {
+        try {
+            var fileSize = 0L
+            context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (sizeIndex != -1) {
+                        fileSize = cursor.getLong(sizeIndex)
+                    }
+                }
+            }
+            
+            // 如果无法从cursor获取大小，尝试通过输入流获取
+            if (fileSize <= 0) {
+                try {
+                    context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                        fileSize = inputStream.available().toLong()
+                    }
+                } catch (e: Exception) {
+                    Log.w("FileSizeCheck", "Failed to get file size from input stream", e)
+                }
+            }
+            
+            val maxFileSize = 50 * 1024 * 1024 // 50MB
+            if (fileSize > maxFileSize) {
+                val fileSizeFormatted = when {
+                    fileSize < 1024 -> "${fileSize}B"
+                    fileSize < 1024 * 1024 -> "${fileSize / 1024}KB"
+                    fileSize < 1024 * 1024 * 1024 -> "${fileSize / (1024 * 1024)}MB"
+                    else -> "${fileSize / (1024 * 1024 * 1024)}GB"
+                }
+                withContext(Dispatchers.Main) {
+                    onShowSnackbar("文件 \"$fileName\" 过大 ($fileSizeFormatted)，最大支持50MB")
+                }
+                return@withContext false
+            }
+            return@withContext true
+        } catch (e: Exception) {
+            Log.e("FileSizeCheck", "Error checking file size for $fileName", e)
+            withContext(Dispatchers.Main) {
+                onShowSnackbar("无法检查文件大小，请选择较小的文件")
+            }
+            return@withContext false
+        }
+    }
+}
+
 private fun safeDeleteTempFile(context: Context, uri: Uri?) {
     uri?.let {
         try {
@@ -394,16 +447,33 @@ fun ChatInputArea(
     val photoPickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia()
     ) { uri ->
-        try {
-            if (uri != null) {
-                val mimeType = context.contentResolver.getType(uri) ?: "image/*"
-                onAddMediaItem(SelectedMediaItem.ImageFromUri(uri, UUID.randomUUID().toString(), mimeType))
-            } else {
-                Log.d("PhotoPicker", "用户取消了图片选择")
+        if (uri != null) {
+            coroutineScope.launch {
+                try {
+                    val mimeType = context.contentResolver.getType(uri) ?: "image/*"
+                    val fileName = context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                            if (nameIndex != -1) cursor.getString(nameIndex) else null
+                        } else null
+                    } ?: "图片"
+                    
+                    // 检查文件大小
+                    val isFileSizeValid = checkFileSizeAndShowError(context, uri, fileName, onShowSnackbar)
+                    if (isFileSizeValid) {
+                        withContext(Dispatchers.Main) {
+                            onAddMediaItem(SelectedMediaItem.ImageFromUri(uri, UUID.randomUUID().toString(), mimeType))
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e("PhotoPicker", "处理选择的图片时发生错误", e)
+                    withContext(Dispatchers.Main) {
+                        onShowSnackbar("选择图片时发生错误")
+                    }
+                }
             }
-        } catch (e: Exception) {
-            Log.e("PhotoPicker", "处理选择的图片时发生错误", e)
-            onShowSnackbar("选择图片时发生错误")
+        } else {
+            Log.d("PhotoPicker", "用户取消了图片选择")
         }
     }
 
@@ -461,16 +531,21 @@ fun ChatInputArea(
                                 "OpenDocument",
                                 "Selected Document: $displayName, URI: $uri, MIME: $mimeType"
                             )
-                            withContext(Dispatchers.Main) {
-                                onAddMediaItem(
-                                    SelectedMediaItem.GenericFile(
-                                        uri = uri,
-                                        id = UUID.randomUUID().toString(),
-                                        displayName = displayName,
-                                        mimeType = mimeType,
-                                        filePath = null
+                            
+                            // 检查文件大小
+                            val isFileSizeValid = checkFileSizeAndShowError(context, uri, displayName, onShowSnackbar)
+                            if (isFileSizeValid) {
+                                withContext(Dispatchers.Main) {
+                                    onAddMediaItem(
+                                        SelectedMediaItem.GenericFile(
+                                            uri = uri,
+                                            id = UUID.randomUUID().toString(),
+                                            displayName = displayName,
+                                            mimeType = mimeType,
+                                            filePath = null
+                                        )
                                     )
-                                )
+                                }
                             }
                         }
                     } catch (e: Exception) {
@@ -593,7 +668,12 @@ fun ChatInputArea(
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(focusRequester)
-                        .onFocusChanged { onFocusChange(it.isFocused) }
+                        .onFocusChanged { focusState ->
+                            // 只有当输入框获得焦点时才滚动到底部，失去焦点时不滚动
+                            if (focusState.isFocused) {
+                                onFocusChange(true)
+                            }
+                        }
                         .padding(bottom = 4.dp),
                     placeholder = { Text("输入消息…") },
                     colors = OutlinedTextFieldDefaults.colors(

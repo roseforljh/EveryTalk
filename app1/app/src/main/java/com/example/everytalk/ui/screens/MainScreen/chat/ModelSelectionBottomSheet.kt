@@ -59,8 +59,18 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.Velocity
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.scrollable
+import androidx.compose.foundation.gestures.rememberScrollableState
+import androidx.compose.foundation.gestures.Orientation
 import com.example.everytalk.data.DataClass.ApiConfig
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -76,35 +86,118 @@ fun ModelSelectionBottomSheet(
     var searchText by remember { mutableStateOf("") }
     var showPlatformDialog by remember { mutableStateOf(false) }
     val configuration = LocalConfiguration.current
-    // 创建一个稳定的 NestedScrollConnection 实例，以避免在重组时重复创建。
-    // 这是解决奇偶次滑动行为不一致的关键。
-    val nestedScrollConnection = remember {
+    val listState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
+    
+    // 滑动状态管理
+    var isScrolling by remember { mutableStateOf(false) }
+    var lastScrollTime by remember { mutableStateOf(0L) }
+    var consecutiveScrollCount by remember { mutableStateOf(0) }
+    var lastScrollDirection by remember { mutableStateOf(0f) }
+    var scrollVelocityBuffer by remember { mutableStateOf(mutableListOf<Float>()) }
+    
+    // 检查列表是否在顶部
+    val isAtTop by remember {
+        derivedStateOf {
+            listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset <= 3
+        }
+    }
+    
+    // 检查列表是否可以滚动
+    val canScrollVertically by remember {
+        derivedStateOf {
+            listState.canScrollForward || listState.canScrollBackward
+        }
+    }
+    
+    val platforms = allApiConfigs.map { it.provider }.distinct()
+
+    val filteredModels = availableModels.filter {
+        it.name.contains(searchText, ignoreCase = true) || it.model.contains(searchText, ignoreCase = true)
+    }
+    
+    // 检查是否有足够的内容需要滚动
+    val hasScrollableContent by remember {
+        derivedStateOf {
+            filteredModels.size > 3 // 如果模型数量大于3个，认为需要滚动
+        }
+    }
+    
+    // 平衡的 NestedScrollConnection 实现 - 智能拦截
+    val nestedScrollConnection = remember(filteredModels.size) {
         object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                val currentTime = System.currentTimeMillis()
+                
+                // 防抖机制
+                if (currentTime - lastScrollTime < 16) { // 60fps间隔
+                    return Offset.Zero
+                }
+                
+                // 检测连续快速滑动
+                if (currentTime - lastScrollTime < 100) {
+                    consecutiveScrollCount++
+                } else {
+                    consecutiveScrollCount = 0
+                    scrollVelocityBuffer.clear()
+                }
+                
+                // 记录滑动速度
+                if (scrollVelocityBuffer.size > 5) {
+                    scrollVelocityBuffer.removeAt(0)
+                }
+                scrollVelocityBuffer.add(available.y)
+                
+                lastScrollTime = currentTime
+                lastScrollDirection = available.y
+                isScrolling = true
+                
+                return Offset.Zero
+            }
+            
             override fun onPostScroll(
                 consumed: Offset,
                 available: Offset,
                 source: NestedScrollSource
             ): Offset {
-                // 当用户向下滚动，且列表位于顶部时，`available.y` 将为正数。
-                // 我们消耗掉它，以防止底部抽屉被向下拖动。
-                if (available.y > 0) return Offset(x = 0f, y = available.y)
+                // 只有在特定条件下才拦截向下滑动
+                if (filteredModels.size > 3 && available.y > 0 && isAtTop) {
+                    // 计算平均滑动速度
+                    val avgVelocity = if (scrollVelocityBuffer.isNotEmpty()) {
+                        scrollVelocityBuffer.average().toFloat()
+                    } else 0f
+                    
+                    // 只有在快速连续滑动时才拦截
+                    if (consecutiveScrollCount > 2 && abs(avgVelocity) > 8f) {
+                        return Offset(x = 0f, y = available.y * 0.8f) // 部分消耗
+                    }
+                    
+                    // 或者滑动距离很小时拦截（防止误触）
+                    if (abs(available.y) < 5f) {
+                        return Offset(x = 0f, y = available.y)
+                    }
+                }
                 return Offset.Zero
             }
 
             override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
-                // 当用户向下快速滑动，且列表位于顶部时，`available.y` 将为正数。
-                // 我们消耗掉它，以防止底部抽屉响应滑动。
-                if (available.y > 0) return available
+                // 延迟重置滑动状态
+                coroutineScope.launch {
+                    kotlinx.coroutines.delay(200)
+                    isScrolling = false
+                    consecutiveScrollCount = 0
+                    scrollVelocityBuffer.clear()
+                }
+                
+                // 只有在快速连续滑动且速度很高时才拦截
+                if (filteredModels.size > 3 && available.y > 0 && isAtTop) {
+                    if (consecutiveScrollCount > 2 && abs(available.y) > 1000f) {
+                        return Velocity(x = 0f, y = available.y * 0.7f) // 部分消耗
+                    }
+                }
                 return Velocity.Zero
             }
         }
-    }
-
-
-    val platforms = allApiConfigs.map { it.provider }.distinct()
-
-    val filteredModels = availableModels.filter {
-        it.name.contains(searchText, ignoreCase = true) || it.model.contains(searchText, ignoreCase = true)
     }
 
     if (showPlatformDialog) {
@@ -223,7 +316,7 @@ fun ModelSelectionBottomSheet(
                 )
             }
 
-            // 列表部分
+            // 列表部分 - 移除过度的触摸拦截
             Box(modifier = Modifier.weight(1f)) {
                 if (filteredModels.isEmpty()) {
                     Text(
@@ -235,6 +328,7 @@ fun ModelSelectionBottomSheet(
                     )
                 } else {
                     LazyColumn(
+                        state = listState,
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(vertical = 0.dp) // 列表本身的垂直内边距设为0，使列表项更紧凑
                     ) {

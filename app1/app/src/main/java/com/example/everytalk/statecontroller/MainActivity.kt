@@ -104,6 +104,7 @@ class MainActivity : ComponentActivity() {
 
                     val isSearchActiveInDrawer by appViewModel.isSearchActiveInDrawer.collectAsState()
                     val searchQueryInDrawer by appViewModel.searchQueryInDrawer.collectAsState()
+                    val isLoadingHistoryData by appViewModel.isLoadingHistoryData.collectAsState()
 
                     LaunchedEffect(appViewModel.snackbarMessage, snackbarHostState) {
                         appViewModel.snackbarMessage.collectLatest { message ->
@@ -178,7 +179,8 @@ class MainActivity : ComponentActivity() {
                                             index
                                         )
                                     },
-                                   onAboutClick = { appViewModel.showAboutDialog() }
+                                    onAboutClick = { appViewModel.showAboutDialog() },
+                                    isLoadingHistoryData = isLoadingHistoryData
                                 )
                             }
                         ) {

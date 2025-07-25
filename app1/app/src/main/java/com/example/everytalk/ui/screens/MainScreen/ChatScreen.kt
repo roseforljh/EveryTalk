@@ -5,8 +5,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.*
@@ -75,6 +77,7 @@ fun ChatScreen(
     val isWebSearchEnabled by viewModel.isWebSearchEnabled.collectAsState()
     val selectedMediaItems = viewModel.selectedMediaItems
     val isLoadingHistory by viewModel.isLoadingHistory.collectAsState()
+    val isLoadingHistoryData by viewModel.isLoadingHistoryData.collectAsState()
     val conversationId by viewModel.currentConversationId.collectAsState()
     val latestReleaseInfo by viewModel.latestReleaseInfo.collectAsState()
  
@@ -178,6 +181,12 @@ fun ChatScreen(
     val showSelectableTextDialog by viewModel.showSelectableTextDialog.collectAsState()
     val textForSelectionDialog by viewModel.textForSelectionDialog.collectAsState()
     val imeInsets = WindowInsets.ime
+    
+    // 获取输入法高度用于整体布局偏移
+    val imeHeightPx by remember {
+        derivedStateOf { imeInsets.getBottom(density) }
+    }
+    val imeHeightDp = with(density) { imeHeightPx.toDp() }
 
     val audioPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
@@ -237,7 +246,7 @@ fun ChatScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(top = scaffoldPaddingValues.calculateTopPadding())
-                .imePadding()
+                .offset(y = -imeHeightDp)
         ) {
             Box(
                 modifier = Modifier
@@ -284,52 +293,52 @@ fun ChatScreen(
                 }
 
             }
-            ChatInputArea(
-                text = text,
-                onTextChange = {
-                    viewModel.onTextChange(it)
-                },
-                onSendMessageRequest = { messageText, _, attachments, mimeType ->
-                    viewModel.onSendMessage(messageText = messageText, attachments = attachments, audioBase64 = null, mimeType = mimeType)
-                    keyboardController?.hide()
-                    coroutineScope.launch {
-                        // 等待键盘关闭
-                        snapshotFlow { imeInsets.getBottom(density) > 0 }
-                            .filter { isVisible -> !isVisible }
-                            .first()
-                        // 滚动到底部
+                ChatInputArea(
+                    text = text,
+                    onTextChange = {
+                        viewModel.onTextChange(it)
+                    },
+                    onSendMessageRequest = { messageText, _, attachments, mimeType ->
+                        viewModel.onSendMessage(messageText = messageText, attachments = attachments, audioBase64 = null, mimeType = mimeType)
+                        keyboardController?.hide()
+                        coroutineScope.launch {
+                            // 等待键盘关闭
+                            snapshotFlow { imeInsets.getBottom(density) > 0 }
+                                .filter { isVisible -> !isVisible }
+                                .first()
+                            // 滚动到底部
+                            scrollStateManager.jumpToBottom()
+                        }
+                    },
+                    selectedMediaItems = selectedMediaItems,
+                    onAddMediaItem = { viewModel.addMediaItem(it) },
+                    onRemoveMediaItemAtIndex = { viewModel.removeMediaItemAtIndex(it) },
+                    onClearMediaItems = { viewModel.clearMediaItems() },
+                    isApiCalling = isApiCalling,
+                    isWebSearchEnabled = isWebSearchEnabled,
+                    onToggleWebSearch = {
+                        viewModel.toggleWebSearchMode(!isWebSearchEnabled)
+                    },
+                    onStopApiCall = { viewModel.onCancelAPICall() },
+                    focusRequester = focusRequester,
+                    selectedApiConfig = selectedApiConfig,
+                    onShowSnackbar = { viewModel.showSnackbar(it) },
+                    imeInsets = imeInsets,
+                    density = density,
+                    keyboardController = keyboardController,
+                    onFocusChange = {
                         scrollStateManager.jumpToBottom()
+                    },
+                    onSendMessage = { messageText, isFromRegeneration, attachments, audioBase64, mimeType ->
+                        viewModel.onSendMessage(
+                            messageText = messageText,
+                            isFromRegeneration = isFromRegeneration,
+                            attachments = attachments,
+                            audioBase64 = audioBase64,
+                            mimeType = mimeType
+                        )
                     }
-                },
-                selectedMediaItems = selectedMediaItems,
-                onAddMediaItem = { viewModel.addMediaItem(it) },
-                onRemoveMediaItemAtIndex = { viewModel.removeMediaItemAtIndex(it) },
-                onClearMediaItems = { viewModel.clearMediaItems() },
-                isApiCalling = isApiCalling,
-                isWebSearchEnabled = isWebSearchEnabled,
-                onToggleWebSearch = {
-                    viewModel.toggleWebSearchMode(!isWebSearchEnabled)
-                },
-                onStopApiCall = { viewModel.onCancelAPICall() },
-                focusRequester = focusRequester,
-                selectedApiConfig = selectedApiConfig,
-                onShowSnackbar = { viewModel.showSnackbar(it) },
-                imeInsets = imeInsets,
-                density = density,
-                keyboardController = keyboardController,
-                onFocusChange = {
-                    scrollStateManager.jumpToBottom()
-                },
-                onSendMessage = { messageText, isFromRegeneration, attachments, audioBase64, mimeType ->
-                    viewModel.onSendMessage(
-                        messageText = messageText,
-                        isFromRegeneration = isFromRegeneration,
-                        attachments = attachments,
-                        audioBase64 = audioBase64,
-                        mimeType = mimeType
-                    )
-                }
-            )
+                )
         }
 
         if (showEditDialog) {
@@ -380,8 +389,10 @@ fun ChatScreen(
                         AiMessageOption.SELECT_TEXT -> viewModel.showSelectableTextDialog(selectedMessageForOptions!!.text)
                         AiMessageOption.COPY_FULL_TEXT -> viewModel.copyToClipboard(selectedMessageForOptions!!.text)
                         AiMessageOption.REGENERATE -> {
+                            // 确保键盘隐藏，避免重新回答时弹出输入法
+                            keyboardController?.hide()
                             viewModel.regenerateAiResponse(selectedMessageForOptions!!)
-                            scrollStateManager.jumpToBottom()
+                            // 不立即滚动，让regenerateAiResponse内部的逻辑处理滚动
                         }
                         AiMessageOption.EXPORT_TEXT -> viewModel.exportMessageText(selectedMessageForOptions!!.text)
                     }

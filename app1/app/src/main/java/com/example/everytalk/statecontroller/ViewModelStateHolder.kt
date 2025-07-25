@@ -36,6 +36,7 @@ data class ConversationScrollState(
     val _historicalConversations = MutableStateFlow<List<List<Message>>>(emptyList())
     val _loadedHistoryIndex = MutableStateFlow<Int?>(null)
     val _isLoadingHistory = MutableStateFlow(false)
+    val _isLoadingHistoryData = MutableStateFlow(false) // 新增：历史数据加载状态
     val _currentConversationId = MutableStateFlow<String>("new_chat_${System.currentTimeMillis()}")
 
      val _apiConfigs = MutableStateFlow<List<ApiConfig>>(emptyList())

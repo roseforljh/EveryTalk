@@ -165,12 +165,82 @@ object LatexToUnicode {
             conversionCache.getOrPut(latex) {
                 try {
                     recursionDepth.set(0)
-                    processLaTeX(latex.trim())
+                    val preprocessed = preprocessGeminiLatex(latex.trim())
+                    processLaTeX(preprocessed)
                 } finally {
                     recursionDepth.remove()
                 }
             }
         }
+    }
+    
+    private fun preprocessGeminiLatex(latex: String): String {
+        """预处理Gemini输出的LaTeX，修复常见错误"""
+        var processed = latex
+        
+        // 修复常见的分数格式错误
+        processed = processed.replace(Regex("\\\\frac\\s+(\\w+)\\s+(\\w+)")) { match ->
+            "\\frac{${match.groupValues[1]}}{${match.groupValues[2]}}"
+        }
+        
+        // 修复根号格式错误
+        processed = processed.replace(Regex("\\\\sqrt\\s+(\\w+)")) { match ->
+            "\\sqrt{${match.groupValues[1]}}"
+        }
+        
+        // 修复求和符号格式错误
+        processed = processed.replace(Regex("\\\\sum\\s*_\\s*(\\w+)\\s*\\^\\s*(\\w+)")) { match ->
+            "\\sum_{${match.groupValues[1]}}^{${match.groupValues[2]}}"
+        }
+        
+        // 修复积分符号格式错误
+        processed = processed.replace(Regex("\\\\int\\s*_\\s*(\\w+)\\s*\\^\\s*(\\w+)")) { match ->
+            "\\int_{${match.groupValues[1]}}^{${match.groupValues[2]}}"
+        }
+        
+        // 修复缺失的大括号
+        processed = ensureBraceMatching(processed)
+        
+        // 修复空格问题
+        processed = processed.replace(Regex("\\{\\s+"), "{")
+        processed = processed.replace(Regex("\\s+\\}"), "}")
+        
+        return processed
+    }
+    
+    private fun ensureBraceMatching(latex: String): String {
+        """确保大括号匹配"""
+        val stack = mutableListOf<Char>()
+        val result = StringBuilder()
+        
+        for (char in latex) {
+            when (char) {
+                '{' -> {
+                    stack.add(char)
+                    result.append(char)
+                }
+                '}' -> {
+                    if (stack.isNotEmpty() && stack.last() == '{') {
+                        stack.removeAt(stack.size - 1)
+                        result.append(char)
+                    } else {
+                        // 不匹配的右括号，添加对应的左括号
+                        result.insert(0, '{')
+                        result.append(char)
+                    }
+                }
+                else -> result.append(char)
+            }
+        }
+        
+        // 添加缺失的右括号
+        while (stack.isNotEmpty()) {
+            if (stack.removeAt(stack.size - 1) == '{') {
+                result.append('}')
+            }
+        }
+        
+        return result.toString()
     }
 
     private fun processLaTeX(latex: String): String {

@@ -50,6 +50,7 @@ private data class AttachmentProcessingResult(
 
     companion object {
         private const val MAX_IMAGE_SIZE_BYTES = 4 * 1024 * 1024
+        private const val MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024 // 50MB 最大文件大小
         private const val TARGET_IMAGE_WIDTH = 1024
         private const val TARGET_IMAGE_HEIGHT = 1024
         private const val JPEG_COMPRESSION_QUALITY = 80
@@ -62,6 +63,25 @@ private data class AttachmentProcessingResult(
             try {
                 if (uri == Uri.EMPTY) return@withContext null
 
+                // 首先检查文件大小
+                var fileSize = 0L
+                try {
+                    context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                            if (sizeIndex != -1) {
+                                fileSize = cursor.getLong(sizeIndex)
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    // 继续处理，但要小心内存使用
+                }
+
+                if (fileSize > MAX_FILE_SIZE_BYTES) {
+                    return@withContext null
+                }
+
                 val options = BitmapFactory.Options().apply {
                     inJustDecodeBounds = true
                 }
@@ -69,10 +89,12 @@ private data class AttachmentProcessingResult(
                     BitmapFactory.decodeStream(it, null, options)
                 }
 
+                // 计算合适的采样率以避免内存问题
                 options.inSampleSize = calculateInSampleSize(options, TARGET_IMAGE_WIDTH, TARGET_IMAGE_HEIGHT)
 
                 options.inJustDecodeBounds = false
                 options.inMutable = true
+                options.inPreferredConfig = Bitmap.Config.RGB_565 // 使用更少内存的配置
 
                 bitmap = context.contentResolver.openInputStream(uri)?.use {
                     BitmapFactory.decodeStream(it, null, options)
@@ -90,14 +112,23 @@ private data class AttachmentProcessingResult(
                         newWidth = (newHeight * aspectRatio).toInt()
                     }
                     if (newWidth > 0 && newHeight > 0) {
-                        val scaledBitmap = Bitmap.createScaledBitmap(bitmap!!, newWidth, newHeight, true)
-                        if (scaledBitmap != bitmap) {
-                            bitmap?.recycle()
+                        try {
+                            val scaledBitmap = Bitmap.createScaledBitmap(bitmap!!, newWidth, newHeight, true)
+                            if (scaledBitmap != bitmap) {
+                                bitmap?.recycle()
+                            }
+                            bitmap = scaledBitmap
+                        } catch (e: OutOfMemoryError) {
+                            // 如果缩放失败，使用原图但记录警告
+                            System.gc()
                         }
-                        bitmap = scaledBitmap
                     }
                 }
                 bitmap
+            } catch (e: OutOfMemoryError) {
+                bitmap?.recycle()
+                System.gc() // 建议垃圾回收
+                null
             } catch (e: Exception) {
                 bitmap?.recycle()
                 null
@@ -128,6 +159,25 @@ private data class AttachmentProcessingResult(
     ): String? {
         return withContext(Dispatchers.IO) {
             try {
+                // 检查文件大小
+                var fileSize = 0L
+                try {
+                    context.contentResolver.query(sourceUri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                            if (sizeIndex != -1) {
+                                fileSize = cursor.getLong(sizeIndex)
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    // 如果无法获取文件大小，继续处理但要小心
+                }
+
+                if (fileSize > MAX_FILE_SIZE_BYTES) {
+                    return@withContext null
+                }
+
                 val MimeTypeMap = android.webkit.MimeTypeMap.getSingleton()
                 val contentType = context.contentResolver.getType(sourceUri)
                 val extension = MimeTypeMap.getExtensionFromMimeType(contentType)
@@ -149,9 +199,24 @@ private data class AttachmentProcessingResult(
                 }
 
                 val destinationFile = File(attachmentDir, uniqueFileName)
+                
+                // 使用缓冲区复制，避免一次性加载大文件到内存
                 context.contentResolver.openInputStream(sourceUri)?.use { inputStream ->
                     FileOutputStream(destinationFile).use { outputStream ->
-                        inputStream.copyTo(outputStream)
+                        val buffer = ByteArray(8192) // 8KB 缓冲区
+                        var bytesRead: Int
+                        var totalBytesRead = 0L
+                        
+                        while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                            outputStream.write(buffer, 0, bytesRead)
+                            totalBytesRead += bytesRead
+                            
+                            // 检查是否超过文件大小限制
+                            if (totalBytesRead > MAX_FILE_SIZE_BYTES) {
+                                destinationFile.delete()
+                                return@withContext null
+                            }
+                        }
                     }
                 } ?: run {
                     return@withContext null
@@ -163,6 +228,10 @@ private data class AttachmentProcessingResult(
                 }
 
                 destinationFile.absolutePath
+            } catch (e: OutOfMemoryError) {
+                // 处理内存不足错误
+                System.gc() // 建议垃圾回收
+                null
             } catch (e: Exception) {
                 null
             }

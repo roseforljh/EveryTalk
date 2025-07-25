@@ -52,6 +52,17 @@ object ApiClient {
                     subclass(com.example.everytalk.data.DataClass.SimpleTextApiMessage::class)
                     subclass(com.example.everytalk.data.DataClass.PartsApiMessage::class)
                 }
+                polymorphic(AppStreamEvent::class) {
+                    subclass(AppStreamEvent.Text::class)
+                    subclass(AppStreamEvent.Content::class)
+                    subclass(AppStreamEvent.Reasoning::class)
+                    subclass(AppStreamEvent.StreamEnd::class)
+                    subclass(AppStreamEvent.WebSearchStatus::class)
+                    subclass(AppStreamEvent.WebSearchResults::class)
+                    subclass(AppStreamEvent.ToolCall::class)
+                    subclass(AppStreamEvent.Error::class)
+                    subclass(AppStreamEvent.Finish::class)
+                }
             }
         }
     }
@@ -82,11 +93,9 @@ object ApiClient {
     }
 
     private val backendProxyUrls = listOf(
-        //"http://192.168.0.100:7860/chat", // Attempting with a common LAN IP
-        "https://kunze999-backend.hf.space/chat",
-        //"https://uoseegiydwgx.us-west-1.clawcloudrun.com/chat",
-        //"https://dbykoynmqkkq.cloud.cloudcat.one:443/chat",
-        //"https://backdaitalk.onrender.com/chat"
+        //"http://192.168.0.102:7860/chat", // Updated to match your local IP address
+        "https://dbykoynmqkkq.cloud.cloudcat.one:443/chat",
+        "https://backdaitalk.onrender.com/chat"
     )
 
 
@@ -296,8 +305,11 @@ object ApiClient {
                 e.response.bodyAsText()
             } catch (ex: Exception) {
                 "(无法读取错误体)"
-            }; throw IOException(
-                "HTTP 错误 ($backendProxyUrl): ${e.response.status} - $errorBody",
+            }
+            val statusCode = e.response.status.value
+            val statusDescription = e.response.status.description
+            throw IOException(
+                "服务器错误 $statusCode ($statusDescription): $errorBody",
                 e
             )
         } catch (e: IOException) {
@@ -346,7 +358,15 @@ object ApiClient {
                             synchronized(errors) {
                                 errors.add(e)
                             }
-                            
+                        } else {
+                            // 对于取消异常，检查是否是由于真实错误导致的取消
+                            val cause = e.cause
+                            if (cause != null && cause !is CoroutineCancellationException) {
+                                android.util.Log.e("ApiClient", "Cancellation caused by error for $url", cause)
+                                synchronized(errors) {
+                                    errors.add(cause)
+                                }
+                            }
                         }
                     }
                 }
@@ -356,8 +376,12 @@ object ApiClient {
 
         if (!winnerFound.get()) {
             if (errors.isNotEmpty()) {
-                throw errors.last()
+                // 抛出最具体的错误信息
+                val lastError = errors.last()
+                android.util.Log.d("ApiClient", "Throwing collected error: ${lastError.javaClass.simpleName}: ${lastError.message}")
+                throw lastError
             } else {
+                android.util.Log.w("ApiClient", "No errors collected, but no winner found. URLs: $backendProxyUrls")
                 throw IOException("无法连接到任何可用的后端服务器，且没有报告具体错误。")
             }
         }

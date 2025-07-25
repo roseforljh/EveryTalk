@@ -27,6 +27,7 @@ class FileManager(private val context: Context) {
     companion object {
         private const val CHAT_ATTACHMENTS_DIR = "chat_attachments"
         private const val MAX_IMAGE_SIZE_BYTES = 4 * 1024 * 1024
+        private const val MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024 // 50MB 最大文件大小
         private const val TARGET_IMAGE_WIDTH = 1024
         private const val TARGET_IMAGE_HEIGHT = 1024
         private const val JPEG_COMPRESSION_QUALITY = 80
@@ -50,8 +51,16 @@ class FileManager(private val context: Context) {
      * @return 压缩后的位图，如果加载失败则返回null
      */
     suspend fun loadAndCompressBitmapFromUri(uri: Uri): Bitmap? = withContext(Dispatchers.IO) {
+        var bitmap: Bitmap? = null
         try {
             if (uri == Uri.EMPTY) return@withContext null
+            
+            // 首先检查文件大小
+            val (isOverLimit, fileSize) = checkFileSize(uri)
+            if (isOverLimit) {
+                logger.error("Image file size $fileSize bytes exceeds limit $MAX_FILE_SIZE_BYTES bytes")
+                return@withContext null
+            }
             
             val options = BitmapFactory.Options().apply {
                 inJustDecodeBounds = true
@@ -60,11 +69,13 @@ class FileManager(private val context: Context) {
                 BitmapFactory.decodeStream(it, null, options)
             }
             
+            // 计算合适的采样率以避免内存问题
             options.inSampleSize = calculateInSampleSize(options, TARGET_IMAGE_WIDTH, TARGET_IMAGE_HEIGHT)
             options.inJustDecodeBounds = false
             options.inMutable = true
+            options.inPreferredConfig = Bitmap.Config.RGB_565 // 使用更少内存的配置
             
-            var bitmap = context.contentResolver.openInputStream(uri)?.use {
+            bitmap = context.contentResolver.openInputStream(uri)?.use {
                 BitmapFactory.decodeStream(it, null, options)
             }
             
@@ -82,16 +93,28 @@ class FileManager(private val context: Context) {
                 }
                 
                 if (newWidth > 0 && newHeight > 0) {
-                    val scaledBitmap = Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)
-                    if (scaledBitmap != bitmap) {
-                        bitmap.recycle()
+                    try {
+                        val scaledBitmap = Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)
+                        if (scaledBitmap != bitmap) {
+                            bitmap.recycle()
+                        }
+                        bitmap = scaledBitmap
+                    } catch (e: OutOfMemoryError) {
+                        // 如果缩放失败，使用原图但记录警告
+                        logger.warn("Failed to scale bitmap due to memory constraints, using original size")
+                        System.gc()
                     }
-                    bitmap = scaledBitmap
                 }
             }
             
             bitmap
+        } catch (e: OutOfMemoryError) {
+            bitmap?.recycle()
+            System.gc() // 建议垃圾回收
+            logger.error("Out of memory while loading bitmap", e)
+            null
         } catch (e: Exception) {
+            bitmap?.recycle()
             logger.error("Failed to load and compress bitmap", e)
             null
         }
@@ -135,6 +158,13 @@ class FileManager(private val context: Context) {
         originalFileName: String?
     ): String? = withContext(Dispatchers.IO) {
         try {
+            // 首先检查文件大小
+            val (isOverLimit, fileSize) = checkFileSize(sourceUri)
+            if (isOverLimit) {
+                logger.error("File size $fileSize bytes exceeds limit $MAX_FILE_SIZE_BYTES bytes")
+                return@withContext null
+            }
+            
             val MimeTypeMap = android.webkit.MimeTypeMap.getSingleton()
             val contentType = context.contentResolver.getType(sourceUri)
             val extension = MimeTypeMap.getExtensionFromMimeType(contentType)
@@ -150,9 +180,25 @@ class FileManager(private val context: Context) {
             val attachmentDir = getChatAttachmentsDir()
             val destinationFile = File(attachmentDir, uniqueFileName)
             
+            // 使用缓冲复制以避免内存问题
             context.contentResolver.openInputStream(sourceUri)?.use { inputStream ->
                 FileOutputStream(destinationFile).use { outputStream ->
-                    inputStream.copyTo(outputStream)
+                    val buffer = ByteArray(8192) // 8KB 缓冲区
+                    var bytesRead: Int
+                    var totalBytesRead = 0L
+                    
+                    while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                        outputStream.write(buffer, 0, bytesRead)
+                        totalBytesRead += bytesRead
+                        
+                        // 额外的安全检查，防止文件大小超出预期
+                        if (totalBytesRead > MAX_FILE_SIZE_BYTES) {
+                            logger.error("File size exceeded during copy: $totalBytesRead bytes")
+                            destinationFile.delete()
+                            return@withContext null
+                        }
+                    }
+                    outputStream.flush()
                 }
             } ?: run {
                 logger.error("Failed to open input stream for URI: $sourceUri")
@@ -167,6 +213,10 @@ class FileManager(private val context: Context) {
             
             logger.debug("File copied successfully: ${destinationFile.absolutePath}")
             destinationFile.absolutePath
+        } catch (e: OutOfMemoryError) {
+            logger.error("Out of memory while copying file", e)
+            System.gc() // 建议垃圾回收
+            null
         } catch (e: Exception) {
             logger.error("Failed to copy URI to internal storage", e)
             null
@@ -261,6 +311,61 @@ class FileManager(private val context: Context) {
         }
         
         deletedCount
+    }
+    
+    /**
+     * 检查文件大小是否超过限制
+     * @param uri 文件Uri
+     * @return Pair<Boolean, Long> - 第一个值表示是否超过限制，第二个值是文件大小（字节）
+     */
+    suspend fun checkFileSize(uri: Uri): Pair<Boolean, Long> = withContext(Dispatchers.IO) {
+        try {
+            var fileSize = 0L
+            context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (sizeIndex != -1) {
+                        fileSize = cursor.getLong(sizeIndex)
+                    }
+                }
+            }
+            
+            // 如果无法从cursor获取大小，尝试通过输入流获取
+            if (fileSize <= 0) {
+                try {
+                    context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                        fileSize = inputStream.available().toLong()
+                    }
+                } catch (e: Exception) {
+                    logger.warn("Failed to get file size from input stream")
+                }
+            }
+            
+            val isOverLimit = fileSize > MAX_FILE_SIZE_BYTES
+            if (isOverLimit) {
+                logger.warn("File size $fileSize bytes exceeds limit $MAX_FILE_SIZE_BYTES bytes")
+            }
+            
+            Pair(isOverLimit, fileSize)
+        } catch (e: Exception) {
+            logger.error("Error checking file size", e)
+            // 如果无法检查大小，假设文件过大以确保安全
+            Pair(true, 0L)
+        }
+    }
+    
+    /**
+     * 格式化文件大小为可读字符串
+     * @param bytes 文件大小（字节）
+     * @return 格式化后的文件大小字符串
+     */
+    fun formatFileSize(bytes: Long): String {
+        return when {
+            bytes < 1024 -> "${bytes}B"
+            bytes < 1024 * 1024 -> "${bytes / 1024}KB"
+            bytes < 1024 * 1024 * 1024 -> "${bytes / (1024 * 1024)}MB"
+            else -> "${bytes / (1024 * 1024 * 1024)}GB"
+        }
     }
     
     /**

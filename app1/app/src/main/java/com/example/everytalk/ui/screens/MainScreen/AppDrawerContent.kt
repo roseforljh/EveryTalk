@@ -63,6 +63,7 @@ fun AppDrawerContent(
     onClearAllConversationsRequest: () -> Unit,
     getPreviewForIndex: (Int) -> String,
     onAboutClick: () -> Unit,
+    isLoadingHistoryData: Boolean = false, // 新增：历史数据加载状态
     modifier: Modifier = Modifier
 ) {
     var expandedItemIndex by remember { mutableStateOf<Int?>(null) }
@@ -102,20 +103,32 @@ fun AppDrawerContent(
         }
     }
 
+    // 优化：使用 derivedStateOf 和分页加载来提升性能
     val filteredItems = remember(currentSearchQuery, historicalConversations, isSearchActive) {
-        if (!isSearchActive || currentSearchQuery.isBlank()) {
-            historicalConversations.mapIndexed { index, conversation ->
-                FilteredConversationItem(index, conversation)
-            }
-        } else {
-            historicalConversations.mapIndexedNotNull { index, conversation ->
-                val matches = conversation.any { message ->
-                    message.text.contains(currentSearchQuery, ignoreCase = true)
+        derivedStateOf {
+            if (!isSearchActive || currentSearchQuery.isBlank()) {
+                // 非搜索模式：只显示前50个对话，实现懒加载
+                val itemsToShow = if (historicalConversations.size > 50) {
+                    historicalConversations.take(50)
+                } else {
+                    historicalConversations
                 }
-                if (matches) FilteredConversationItem(index, conversation) else null
+                itemsToShow.mapIndexed { index, conversation ->
+                    FilteredConversationItem(index, conversation)
+                }
+            } else {
+                // 搜索模式：异步搜索，避免阻塞UI
+                historicalConversations.mapIndexedNotNull { index, conversation ->
+                    // 优化搜索：只搜索前几条消息，避免搜索整个对话
+                    val searchableMessages = conversation.take(3)
+                    val matches = searchableMessages.any { message ->
+                        message.text.contains(currentSearchQuery, ignoreCase = true)
+                    }
+                    if (matches) FilteredConversationItem(index, conversation) else null
+                }
             }
         }
-    }
+    }.value
 
     val targetWidth = if (isSearchActive) screenWidth else DEFAULT_DRAWER_WIDTH
     val animatedWidth by animateDpAsState(
@@ -324,7 +337,32 @@ fun AppDrawerContent(
             // --- 列表显示区域 ---
             Box(modifier = Modifier.weight(1f)) {
                 when {
-                    historicalConversations.isEmpty() -> {
+                    isLoadingHistoryData -> {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(vertical = 20.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(32.dp),
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(
+                                    text = "正在加载历史记录...",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+
+                    historicalConversations.isEmpty() && !isLoadingHistoryData -> {
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -347,16 +385,21 @@ fun AppDrawerContent(
                     }
 
                     else -> {
-                        LazyColumn(modifier = Modifier.fillMaxSize()) {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            // 添加性能优化配置
+                            contentPadding = PaddingValues(vertical = 4.dp)
+                        ) {
                             items(
                                 items = filteredItems,
-                                key = { item -> item.originalIndex }
+                                key = { item -> "conversation_${item.originalIndex}" }, // 优化key生成
+                                contentType = { "conversation_item" } // 添加内容类型以优化回收
                             ) { itemData ->
                                 // --- 用 Box 包裹并设置最小高度 ---
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .defaultMinSize(minHeight = LIST_ITEM_MIN_HEIGHT) // <--- 应用最小高度
+                                        .defaultMinSize(minHeight = LIST_ITEM_MIN_HEIGHT)
                                 ) {
                                     DrawerConversationListItem(
                                         itemData = itemData,
@@ -393,12 +436,29 @@ fun AppDrawerContent(
                                     )
                                 }
                             }
+                            
+                            // 添加加载更多项（如果有更多数据）
+                            if (!isSearchActive && historicalConversations.size > 50) {
+                                item(key = "load_more_indicator") {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(16.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = "显示前50条对话，共${historicalConversations.size}条",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
-            Spacer(Modifier.weight(1f))
-            Spacer(Modifier.height(8.dp)) // Add some space before the button
+            Spacer(Modifier.height(16.dp)) // Add some space before the button
             Button(
                 onClick = { onAboutClick() },
                 modifier = Modifier

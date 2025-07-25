@@ -34,7 +34,8 @@ class DataPersistenceManager(
             var initialHistoryPresent = false
 
             try {
-                Log.d(TAG, "loadInitialData: 检查API配置缓存...")
+                // 第一阶段：快速加载API配置（优先级最高）
+                Log.d(TAG, "loadInitialData: 阶段1 - 加载API配置...")
                 val loadedConfigs: List<ApiConfig> = if (stateHolder._apiConfigs.value.isEmpty()) {
                     Log.d(TAG, "loadInitialData: API配置缓存未命中。从dataSource加载...")
                     dataSource.loadApiConfigs()
@@ -43,30 +44,14 @@ class DataPersistenceManager(
                     stateHolder._apiConfigs.value
                 }
                 initialConfigPresent = loadedConfigs.isNotEmpty()
-                Log.i(
-                    TAG,
-                    "loadInitialData: API 配置加载完成。数量: ${loadedConfigs.size}, initialConfigPresent: $initialConfigPresent"
-                )
-                if (initialConfigPresent) {
-                    loadedConfigs.forEachIndexed { index, cfg ->
-                        Log.d(
-                            TAG,
-                            "Loaded Config[$index]: ID=${cfg.id.take(4)}, Model=${cfg.model}"
-                        )
-                    }
-                }
 
                 Log.d(TAG, "loadInitialData: 调用 dataSource.loadSelectedConfigId()...")
                 val selectedConfigId: String? = dataSource.loadSelectedConfigId()
-                Log.i(TAG, "loadInitialData: 加载到的选中配置ID: '$selectedConfigId'")
                 var selectedConfigFromDataSource: ApiConfig? = null
                 if (selectedConfigId != null) {
                     selectedConfigFromDataSource = loadedConfigs.find { it.id == selectedConfigId }
                     if (selectedConfigFromDataSource == null && loadedConfigs.isNotEmpty()) {
-                        Log.w(
-                            TAG,
-                            "loadInitialData: 持久化的选中配置ID '$selectedConfigId' 在当前配置列表中未找到。将清除持久化的选中ID。"
-                        )
+                        Log.w(TAG, "loadInitialData: 持久化的选中配置ID '$selectedConfigId' 在当前配置列表中未找到。将清除持久化的选中ID。")
                         dataSource.saveSelectedConfigId(null)
                     }
                 }
@@ -74,40 +59,68 @@ class DataPersistenceManager(
                 var finalSelectedConfig = selectedConfigFromDataSource
                 if (finalSelectedConfig == null && loadedConfigs.isNotEmpty()) {
                     finalSelectedConfig = loadedConfigs.first()
-                    Log.i(
-                        TAG,
-                        "loadInitialData: 无有效选中配置或之前未选中，默认选择第一个: ID='${finalSelectedConfig.id}', 模型='${finalSelectedConfig.model}'。将保存此选择。"
-                    )
+                    Log.i(TAG, "loadInitialData: 无有效选中配置或之前未选中，默认选择第一个: ID='${finalSelectedConfig.id}', 模型='${finalSelectedConfig.model}'。将保存此选择。")
                     dataSource.saveSelectedConfigId(finalSelectedConfig.id)
                 }
-                Log.i(TAG, "loadInitialData: 最终选中的配置: ${finalSelectedConfig?.model ?: "无"}")
 
-                Log.d(TAG, "loadInitialData: 检查聊天历史缓存...")
-                val loadedHistoryRaw: List<List<Message>> = if (stateHolder._historicalConversations.value.isEmpty()) {
-                    Log.d(TAG, "loadInitialData: 聊天历史缓存未命中。从dataSource加载...")
-                    dataSource.loadChatHistory()
-                } else {
-                    Log.d(TAG, "loadInitialData: 聊天历史缓存命中。使用现有数据。")
-                    stateHolder._historicalConversations.value
+                // 立即更新API配置到UI，让用户可以开始使用
+                withContext(Dispatchers.Main.immediate) {
+                    Log.d(TAG, "loadInitialData: 阶段1完成 - 更新API配置到UI...")
+                    stateHolder._apiConfigs.value = loadedConfigs
+                    stateHolder._selectedApiConfig.value = finalSelectedConfig
                 }
-                val loadedHistory = loadedHistoryRaw.map { conversation ->
-                    conversation.map { message ->
-                        message
+
+                // 第二阶段：异步加载历史数据（延迟加载）
+                launch {
+                    Log.d(TAG, "loadInitialData: 阶段2 - 开始异步加载历史数据...")
+                    
+                    // 设置加载状态
+                    withContext(Dispatchers.Main.immediate) {
+                        stateHolder._isLoadingHistoryData.value = true
+                    }
+                    
+                    try {
+                        // 检查是否需要加载历史数据
+                        val shouldLoadHistory = stateHolder._historicalConversations.value.isEmpty()
+                        val loadedHistory = if (shouldLoadHistory) {
+                            Log.d(TAG, "loadInitialData: 从dataSource加载历史数据...")
+                            val historyRaw = dataSource.loadChatHistory()
+                            // 分批处理历史数据，避免一次性处理大量数据
+                            historyRaw.chunked(10).flatMap { chunk ->
+                                chunk.map { conversation ->
+                                    conversation.map { message -> message }
+                                }
+                            }
+                        } else {
+                            Log.d(TAG, "loadInitialData: 使用缓存的历史数据。")
+                            stateHolder._historicalConversations.value
+                        }
+                        
+                        initialHistoryPresent = loadedHistory.isNotEmpty()
+                        Log.i(TAG, "loadInitialData: 历史数据加载完成。数量: ${loadedHistory.size}")
+
+                        // 更新历史数据到UI
+                        withContext(Dispatchers.Main.immediate) {
+                            Log.d(TAG, "loadInitialData: 阶段2完成 - 更新历史数据到UI...")
+                            stateHolder._historicalConversations.value = loadedHistory
+                            stateHolder._isLoadingHistoryData.value = false
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "loadInitialData: 加载历史数据时发生错误", e)
+                        withContext(Dispatchers.Main.immediate) {
+                            stateHolder._historicalConversations.value = emptyList()
+                            stateHolder._isLoadingHistoryData.value = false
+                        }
                     }
                 }
-                initialHistoryPresent = loadedHistory.isNotEmpty()
-                Log.i(
-                    TAG,
-                    "loadInitialData: 聊天历史加载并预处理完成。数量: ${loadedHistory.size}, initialHistoryPresent: $initialHistoryPresent"
-                )
 
+                // 第三阶段：处理最后打开的聊天（如果需要）
                 val processedLastOpenChatMessages = if (loadLastChat) {
-                    Log.d(TAG, "loadInitialData: 调用 dataSource.loadLastOpenChatInternal()...")
+                    Log.d(TAG, "loadInitialData: 阶段3 - 加载最后打开的聊天...")
                     val lastOpenChatMessagesLoaded: List<Message> = dataSource.loadLastOpenChatInternal()
                     Log.i(TAG, "loadInitialData: 最后打开的聊天加载完成。消息数量: ${lastOpenChatMessagesLoaded.size}")
 
                     if (lastOpenChatMessagesLoaded.isNotEmpty()) {
-                        Log.d(TAG, "loadInitialData: 开始为 lastOpenChatMessages 预处理 htmlContent 和 contentStarted...")
                         lastOpenChatMessagesLoaded.map { message ->
                             val updatedContentStarted = message.text.isNotBlank() || !message.reasoning.isNullOrBlank() || message.isError
                             message.copy(contentStarted = updatedContentStarted)
@@ -119,14 +132,10 @@ class DataPersistenceManager(
                     Log.i(TAG, "loadInitialData: 跳过加载最后打开的聊天。")
                     emptyList()
                 }
-                Log.d(TAG, "loadInitialData: lastOpenChatMessages 的 htmlContent 和 contentStarted 预处理完成。")
 
+                // 更新聊天消息到UI
                 withContext(Dispatchers.Main.immediate) {
-                    Log.d(TAG, "loadInitialData: 切换到主线程更新 StateHolder...")
-                    stateHolder._apiConfigs.value = loadedConfigs
-                    stateHolder._selectedApiConfig.value = finalSelectedConfig
-                    stateHolder._historicalConversations.value = loadedHistory
-
+                    Log.d(TAG, "loadInitialData: 阶段3完成 - 更新聊天消息...")
                     if (loadLastChat) {
                         stateHolder.messages.clear()
                         stateHolder.messages.addAll(processedLastOpenChatMessages)
@@ -142,12 +151,7 @@ class DataPersistenceManager(
                     }
 
                     stateHolder._loadedHistoryIndex.value = null
-                    Log.d(
-                        TAG,
-                        "loadInitialData: _loadedHistoryIndex 已在 StateHolder 更新中重置为 null。"
-                    )
-
-                    Log.d(TAG, "loadInitialData: StateHolder 更新完成。即将调用 onLoadingComplete。")
+                    Log.d(TAG, "loadInitialData: 所有阶段完成，调用 onLoadingComplete。")
                     onLoadingComplete(initialConfigPresent, initialHistoryPresent)
                 }
 

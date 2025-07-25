@@ -351,3 +351,207 @@ object MarkdownParser {
 fun parseMarkdownToBlocks(markdown: String): List<MarkdownBlock> {
     return MarkdownParser.parse(markdown)
 }
+
+/**
+ * Enhanced parser specifically for Gemini output with better math and table handling
+ */
+object GeminiOptimizedMarkdownParser {
+    
+    fun parseGeminiMarkdown(markdown: String): List<MarkdownBlock> {
+        // 预处理Gemini特有的格式问题
+        val preprocessed = preprocessGeminiMarkdown(markdown)
+        
+        // 使用增强的解析器
+        return MarkdownParser.parse(preprocessed)
+    }
+    
+    private fun preprocessGeminiMarkdown(markdown: String): String {
+        var processed = markdown
+        
+        // 1. 修复数学公式格式
+        processed = fixMathFormulas(processed)
+        
+        // 2. 修复表格格式
+        processed = fixTableFormat(processed)
+        
+        // 3. 修复代码块格式
+        processed = fixCodeBlocks(processed)
+        
+        // 4. 修复列表格式
+        processed = fixListFormat(processed)
+        
+        return processed
+    }
+    
+    private fun fixMathFormulas(text: String): String {
+        var fixed = text
+        
+        // 修复跨行的数学公式
+        fixed = fixed.replace(Regex("\\$([^$]*?)\\n([^$]*?)\\$")) { match ->
+            "$${match.groupValues[1]} ${match.groupValues[2]}$"
+        }
+        
+        // 修复块级数学公式
+        fixed = fixed.replace(Regex("\\$\\$([^$]*?)\\n([^$]*?)\\$\\$")) { match ->
+            "$$${match.groupValues[1]} ${match.groupValues[2]}$$"
+        }
+        
+        // 确保数学公式标记配对
+        val lines = fixed.split('\n')
+        val fixedLines = mutableListOf<String>()
+        var inMathBlock = false
+        
+        for (line in lines) {
+            if (line.contains("$$")) {
+                val count = line.count { it == '$' } / 2
+                if (count % 2 == 1) {
+                    inMathBlock = !inMathBlock
+                }
+            }
+            fixedLines.add(line)
+        }
+        
+        // 如果数学块没有正确关闭
+        if (inMathBlock) {
+            fixedLines.add("$$")
+        }
+        
+        return fixedLines.joinToString("\n")
+    }
+    
+    private fun fixTableFormat(text: String): String {
+        val lines = text.split('\n').toMutableList()
+        val fixedLines = mutableListOf<String>()
+        var i = 0
+        
+        while (i < lines.size) {
+            val line = lines[i]
+            
+            if (line.contains('|') && line.trim().isNotEmpty()) {
+                // 检测表格开始
+                val tableLines = mutableListOf<String>()
+                var j = i
+                
+                // 收集所有表格行
+                while (j < lines.size && lines[j].contains('|') && lines[j].trim().isNotEmpty()) {
+                    tableLines.add(lines[j])
+                    j++
+                }
+                
+                // 修复表格格式
+                if (tableLines.size >= 1) {
+                    val headerLine = fixTableRow(tableLines[0])
+                    fixedLines.add(headerLine)
+                    
+                    // 添加或修复分隔行
+                    if (tableLines.size > 1 && !isTableSeparator(tableLines[1])) {
+                        val cellCount = headerLine.split('|').size - 2
+                        val separator = "|" + " --- |".repeat(maxOf(1, cellCount))
+                        fixedLines.add(separator)
+                        
+                        // 添加数据行
+                        for (k in 1 until tableLines.size) {
+                            fixedLines.add(fixTableRow(tableLines[k]))
+                        }
+                    } else {
+                        // 已有分隔行，修复格式
+                        for (k in 1 until tableLines.size) {
+                            if (isTableSeparator(tableLines[k])) {
+                                fixedLines.add(fixTableSeparator(tableLines[k]))
+                            } else {
+                                fixedLines.add(fixTableRow(tableLines[k]))
+                            }
+                        }
+                    }
+                }
+                
+                i = j
+            } else {
+                fixedLines.add(line)
+                i++
+            }
+        }
+        
+        return fixedLines.joinToString("\n")
+    }
+    
+    private fun fixTableRow(row: String): String {
+        val cells = row.split('|').map { it.trim() }
+        val filteredCells = if (cells.first().isEmpty()) cells.drop(1) else cells
+        val finalCells = if (filteredCells.isNotEmpty() && filteredCells.last().isEmpty())
+            filteredCells.dropLast(1) else filteredCells
+        
+        return if (finalCells.isNotEmpty()) {
+            "| " + finalCells.joinToString(" | ") + " |"
+        } else {
+            row
+        }
+    }
+    
+    private fun isTableSeparator(line: String): Boolean {
+        return line.contains('-') && line.contains('|') &&
+               line.replace("|", "").replace("-", "").replace(":", "").replace(" ", "").isEmpty()
+    }
+    
+    private fun fixTableSeparator(separator: String): String {
+        val cellCount = separator.split('|').size - 2
+        return "|" + " --- |".repeat(maxOf(1, cellCount))
+    }
+    
+    private fun fixCodeBlocks(text: String): String {
+        val lines = text.split('\n')
+        val fixedLines = mutableListOf<String>()
+        var inCodeBlock = false
+        var codeBlockCount = 0
+        
+        for (line in lines) {
+            if (line.trim().startsWith("```")) {
+                codeBlockCount++
+                inCodeBlock = codeBlockCount % 2 == 1
+                
+                // 确保代码块标记格式正确
+                val language = line.trim().substring(3).trim()
+                fixedLines.add("```$language")
+            } else {
+                fixedLines.add(line)
+            }
+        }
+        
+        // 如果代码块没有正确关闭
+        if (inCodeBlock) {
+            fixedLines.add("```")
+        }
+        
+        return fixedLines.joinToString("\n")
+    }
+    
+    private fun fixListFormat(text: String): String {
+        val lines = text.split('\n')
+        val fixedLines = mutableListOf<String>()
+        
+        for (line in lines) {
+            when {
+                // 修复无序列表
+                line.trim().matches(Regex("^[*+-]\\s+.*")) -> {
+                    val content = line.trim().substring(2)
+                    val indent = line.length - line.trimStart().length
+                    fixedLines.add(" ".repeat(indent) + "- $content")
+                }
+                // 修复有序列表
+                line.trim().matches(Regex("^\\d+\\.\\s+.*")) -> {
+                    val match = Regex("^(\\d+)\\.\\s+(.*)").find(line.trim())
+                    if (match != null) {
+                        val (num, content) = match.destructured
+                        val indent = line.length - line.trimStart().length
+                        fixedLines.add(" ".repeat(indent) + "$num. $content")
+                    } else {
+                        fixedLines.add(line)
+                    }
+                }
+                else -> fixedLines.add(line)
+            }
+        }
+        
+        return fixedLines.joinToString("\n")
+    }
+}
