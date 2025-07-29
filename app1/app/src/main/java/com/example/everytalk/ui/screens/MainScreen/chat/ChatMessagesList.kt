@@ -59,6 +59,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import coil3.compose.AsyncImage
+import com.example.everytalk.ui.components.CodePreviewButton
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.crossfade
@@ -289,6 +290,15 @@ fun ChatMessagesList(
                                         )
                                     }
                                 }
+                                
+                                // 预览按钮，放在复制按钮下方
+                                CodePreviewButton(
+                                    code = item.block.rawText,
+                                    language = item.block.language,
+                                    modifier = Modifier
+                                        .widthIn(max = bubbleMaxWidth)
+                                        .offset(y = (-8).dp) // 向上移动8dp，与复制按钮保持一致的间距
+                                )
                             }
                         }
                     }

@@ -125,15 +125,56 @@ internal class UnorderedListParser : BlockParser {
 
 internal class OrderedListParser : BlockParser {
     override fun canParse(context: ParseContext): Boolean {
-        val line = context.currentLine()?.trim()
-        if (line == null || !RegexConstants.ORDERED_LIST_REGEX.matches(line)) {
+        val line = context.currentLine()?.trim() ?: return false
+        
+        // 基本的有序列表匹配
+        if (!RegexConstants.ORDERED_LIST_REGEX.matches(line)) {
             return false
         }
-        // Heuristic: if a line looks like a list item but ends with a colon,
-        // treat it as a simple paragraph to avoid misinterpreting headers as list items.
+        
+        // 首先检查是否是标题 - 这是最重要的检查
+        if (HeaderParser().canParse(context)) {
+            return false
+        }
+        
+        // 检查数字范围 - 如果数字太大，很可能不是列表
+        val numberMatch = Regex("^(\\d+)\\.").find(line)
+        if (numberMatch != null) {
+            val number = numberMatch.groupValues[1].toIntOrNull()
+            if (number != null && number > 50) {
+                return false
+            }
+        }
+        
+        // 启发式规则：如果行以冒号结尾，很可能是标题而不是列表项
         if (line.endsWith(':')) {
             return false
         }
+        
+        // 检查是否包含中文字符且以冒号结尾（很可能是标题）
+        if (line.contains(Regex("[\\u4e00-\\u9fff]")) && line.endsWith(':')) {
+            return false
+        }
+        
+        // 检查是否包含常见的标题关键词且以冒号结尾
+        val titleKeywords = listOf("设计", "功能", "特点", "优势", "说明", "介绍", "概述", "总结", "风格", "展示", "交互", "信息")
+        if (titleKeywords.any { line.contains(it) } && line.endsWith(':')) {
+            return false
+        }
+        
+        // 检查是否能被其他重要的块解析器解析
+        val importantParsers = listOf(
+            CodeBlockParser(),
+            ImageParser(),
+            HorizontalRuleParser(),
+            BlockquoteParser(),
+            TableParser(),
+            MathBlockParser()
+        )
+        if (importantParsers.any { it.canParse(context) }) {
+            return false
+        }
+        
         return true
     }
 
@@ -632,6 +673,27 @@ object GeminiOptimizedMarkdownParser {
         
         var cleaned = line
         
+        // 首先检查是否是标题格式（包含中文且以冒号结尾）
+        val titlePattern = Regex("^(\\s*)((?:\\d+\\.\\s+)*)(.*[\\u4e00-\\u9fff].*:)\\s*$")
+        val titleMatch = titlePattern.find(cleaned)
+        if (titleMatch != null) {
+            val indent = titleMatch.groupValues[1]
+            val content = titleMatch.groupValues[3]
+            // 对于标题，完全移除所有数字前缀
+            return "$indent$content"
+        }
+        
+        // 检查是否包含标题关键词且以冒号结尾
+        val titleKeywords = listOf("设计", "功能", "特点", "优势", "说明", "介绍", "概述", "总结", "风格", "展示", "交互", "信息")
+        val keywordTitlePattern = Regex("^(\\s*)((?:\\d+\\.\\s+)*)(.*(?:" + titleKeywords.joinToString("|") + ").*:)\\s*$")
+        val keywordMatch = keywordTitlePattern.find(cleaned)
+        if (keywordMatch != null) {
+            val indent = keywordMatch.groupValues[1]
+            val content = keywordMatch.groupValues[3]
+            // 对于包含关键词的标题，完全移除所有数字前缀
+            return "$indent$content"
+        }
+        
         // 处理重复的数字序号（如 "1. 1. 1. 内容"）
         val duplicateNumberPattern = Regex("^(\\s*)(\\d+\\.\\s+)+(\\d+\\.\\s+)(.*)$")
         val match = duplicateNumberPattern.find(cleaned)
@@ -640,6 +702,21 @@ object GeminiOptimizedMarkdownParser {
             val lastNumber = match.groupValues[3]
             val content = match.groupValues[4]
             cleaned = "$indent$lastNumber$content"
+        }
+        
+        // 处理更简单的重复情况（如 "1. 1. 内容"）
+        val simplePattern = Regex("^(\\s*)(\\d+\\.\\s+)(\\d+\\.\\s+)(.*)$")
+        val simpleMatch = simplePattern.find(cleaned)
+        if (simpleMatch != null) {
+            val indent = simpleMatch.groupValues[1]
+            val content = simpleMatch.groupValues[4]
+            // 如果内容以冒号结尾，很可能是标题，移除所有数字前缀
+            if (content.trim().endsWith(':')) {
+                cleaned = "$indent$content"
+            } else {
+                // 保留一个数字前缀
+                cleaned = "$indent${simpleMatch.groupValues[2]}$content"
+            }
         }
         
         // 处理重复的无序列表标记（如 "- - - 内容"）
