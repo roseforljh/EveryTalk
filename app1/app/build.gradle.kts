@@ -27,7 +27,7 @@ android {
         //noinspection OldTargetApi
         targetSdk = 35 // 通常与 compileSdk 一致
         versionCode = 5947
-        versionName = "1.3.3"
+        versionName = "1.3.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -79,8 +79,8 @@ android {
 
     dependencies {
         // Compose BOM
-        implementation(platform("androidx.compose:compose-bom:2025.05.00")) // 使用你指定的版本
-        androidTestImplementation(platform("androidx.compose:compose-bom:2025.05.00"))
+        implementation(platform("androidx.compose:compose-bom:2024.12.01")) // 使用更稳定的版本
+        androidTestImplementation(platform("androidx.compose:compose-bom:2024.12.01"))
 
         // Compose UI - 让BOM管理版本
         implementation(libs.androidx.ui) // 或者 "androidx.compose.ui:ui"

@@ -25,7 +25,7 @@ import com.example.everytalk.ui.screens.viewmodel.DataPersistenceManager
 import com.example.everytalk.ui.screens.viewmodel.HistoryManager
 import com.example.everytalk.util.MarkdownBlock
 import com.example.everytalk.util.VersionChecker
-import com.example.everytalk.util.parseMarkdownToBlocks
+import com.example.everytalk.util.MarkdownParser
 import java.util.Collections
 import java.util.LinkedHashMap
 import java.util.UUID
@@ -268,13 +268,13 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                                                         // Caching is used for completed messages to
                                                         // optimize performance.
                                                         if (isStreamingThisMessage) {
-                                                            parseMarkdownToBlocks(message.text)
+                                                            MarkdownParser.parse(message.text)
                                                         } else {
                                                             val cacheKey =
                                                                     "${message.id}_${message.text.hashCode()}"
                                                             synchronized(markdownCache) {
                                                                 markdownCache.getOrPut(cacheKey) {
-                                                                    parseMarkdownToBlocks(
+                                                                    MarkdownParser.parse(
                                                                             message.text
                                                                     )
                                                                 }

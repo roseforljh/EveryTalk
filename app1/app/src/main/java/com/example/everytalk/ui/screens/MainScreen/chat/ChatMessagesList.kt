@@ -6,20 +6,32 @@ import android.widget.Toast
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.unit.Velocity
+import kotlin.math.abs
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -37,12 +49,15 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import coil3.compose.AsyncImage
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
@@ -73,8 +88,7 @@ fun ChatMessagesList(
     scrollStateManager: ChatScrollStateManager,
     bubbleMaxWidth: Dp,
     onShowAiMessageOptions: (Message) -> Unit,
-    onImageLoaded: () -> Unit,
-    onThinkingBoxVisibilityChanged: () -> Unit
+    onImageLoaded: () -> Unit
 ) {
     val haptic = LocalHapticFeedback.current
     val coroutineScope = rememberCoroutineScope()
@@ -188,40 +202,95 @@ fun ChatMessagesList(
                             mainContentHasStarted = item.message.contentStarted,
                             reasoningTextColor = MaterialTheme.chatColors.reasoningText,
                             reasoningToggleDotColor = MaterialTheme.colorScheme.onSurface,
-                            onVisibilityChanged = onThinkingBoxVisibilityChanged
+                            onVisibilityChanged = { }
                         )
                     }
 
                     is ChatListItem.AiMessageBlock -> {
                         var lastHeight by remember { mutableStateOf(0) }
-                        AiMessageBlockItem(
-                            item = item,
-                            maxWidth = bubbleMaxWidth,
-                            onLongPress = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                val message = viewModel.getMessageById(item.messageId)
-                                message?.let { onShowAiMessageOptions(it) }
-                            },
-                            onTap = {},
-                            onImageLoaded = onImageLoaded,
-                            isStreaming = isApiCalling,
-                            renderer = renderer,
-                            scrollStateManager = scrollStateManager,
-                            modifier = Modifier.onGloballyPositioned { coordinates ->
-                                val newHeight = coordinates.size.height
-                                if (lastHeight != 0 && lastHeight != newHeight) {
-                                    if (scrollStateManager.userInteracted && index < listState.firstVisibleItemIndex) {
-                                        val heightDiff = newHeight - lastHeight
-                                        if (heightDiff != 0) {
-                                            coroutineScope.launch {
-                                                listState.scrollBy(heightDiff.toFloat())
+                        
+                        // 检查是否是代码块
+                        val isCodeBlock = item.block is MarkdownBlock.CodeBlock
+                        
+                        Column {
+                            AiMessageBlockItem(
+                                item = item,
+                                maxWidth = bubbleMaxWidth,
+                                onLongPress = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    val message = viewModel.getMessageById(item.messageId)
+                                    message?.let { onShowAiMessageOptions(it) }
+                                },
+                                onTap = {},
+                                onImageLoaded = onImageLoaded,
+                                isStreaming = isApiCalling,
+                                renderer = renderer,
+                                scrollStateManager = scrollStateManager,
+                                modifier = Modifier.onGloballyPositioned { coordinates ->
+                                    val newHeight = coordinates.size.height
+                                    if (lastHeight != 0 && lastHeight != newHeight) {
+                                        if (scrollStateManager.userInteracted && index < listState.firstVisibleItemIndex) {
+                                            val heightDiff = newHeight - lastHeight
+                                            if (heightDiff != 0) {
+                                                coroutineScope.launch {
+                                                    listState.scrollBy(heightDiff.toFloat())
+                                                }
                                             }
                                         }
                                     }
+                                    lastHeight = newHeight
                                 }
-                                lastHeight = newHeight
+                            )
+                            
+                            // 如果是代码块，在外部添加复制按钮，宽度与代码块一致
+                            if (isCodeBlock && item.block is MarkdownBlock.CodeBlock) {
+                                val clipboardManager = LocalClipboardManager.current
+                                val context = LocalContext.current
+                                
+                                // 复制按钮，宽度与代码块完全一致，向上移动一段距离
+                                Surface(
+                                    onClick = {
+                                        clipboardManager.setText(AnnotatedString(item.block.rawText))
+                                        Toast.makeText(context, R.string.code_copied, Toast.LENGTH_SHORT).show()
+                                    },
+                                    modifier = Modifier
+                                        .widthIn(max = bubbleMaxWidth)
+                                        .offset(y = (-8).dp), // 向上移动8dp
+                                    shape = RoundedCornerShape(
+                                        topStart = 0.dp,
+                                        topEnd = 0.dp,
+                                        bottomStart = ChatDimensions.CODE_BLOCK_CORNER_RADIUS,
+                                        bottomEnd = ChatDimensions.CODE_BLOCK_CORNER_RADIUS
+                                    ),
+                                    color = MaterialTheme.chatColors.codeBlockBackground,
+                                    border = BorderStroke(
+                                        width = 1.dp,
+                                        color = MaterialTheme.chatColors.codeBlockBackground.copy(alpha = 0.3f)
+                                    )
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                                        horizontalArrangement = Arrangement.Center,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            Icons.Filled.ContentCopy,
+                                            contentDescription = stringResource(id = R.string.copy),
+                                            modifier = Modifier.size(16.dp),
+                                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "复制代码",
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                                        )
+                                    }
+                                }
                             }
-                        )
+                        }
                     }
 
                     is ChatListItem.AiMessageFooter -> {
@@ -305,7 +374,8 @@ private fun AiMessageBlockItem(
     val shape = getBubbleShape(
         isFirstBlock = item.isFirstBlock,
         hasReasoning = item.hasReasoning,
-        isLastBlock = item.isLastBlock
+        isLastBlock = item.isLastBlock,
+        isCodeBlock = item.block is MarkdownBlock.CodeBlock
     )
     val aiReplyMessageDescription = stringResource(id = R.string.ai_reply_message)
 
@@ -315,34 +385,42 @@ private fun AiMessageBlockItem(
     ) {
         Surface(
             modifier = Modifier
-                .widthIn(max = maxWidth)
-                .pointerInput(item.messageId, annotatedString) {
-                    detectTapGestures(
-                        onLongPress = { onLongPress() },
-                        onTap = { offset ->
-                            val currentAnnotatedString = annotatedString
-                            val currentLayoutResult = textLayoutResult
-                            if (currentAnnotatedString != null && currentLayoutResult != null) {
-                                val characterIndex = currentLayoutResult.getOffsetForPosition(offset)
-                                currentAnnotatedString.getStringAnnotations(
-                                    tag = "URL",
-                                    start = characterIndex,
-                                    end = characterIndex
-                                ).firstOrNull()?.let { annotation ->
-                                    try {
-                                        uriHandler.openUri(annotation.item)
-                                    } catch (e: Exception) {
-                                        Toast.makeText(context, R.string.cannot_open_link, Toast.LENGTH_SHORT).show()
-                                    }
-                                } ?: onTap()
-                            } else {
-                                onTap()
-                            }
+                .fillMaxWidth()
+                .let { modifier ->
+                    // 如果是代码块，不添加手势检测以避免干扰水平滚动
+                    if (item.block is MarkdownBlock.CodeBlock) {
+                        modifier.semantics {
+                            contentDescription = aiReplyMessageDescription
                         }
-                    )
-                }
-                .semantics {
-                    contentDescription = aiReplyMessageDescription
+                    } else {
+                        modifier.pointerInput(item.messageId, annotatedString) {
+                            detectTapGestures(
+                                onLongPress = { onLongPress() },
+                                onTap = { offset ->
+                                    val currentAnnotatedString = annotatedString
+                                    val currentLayoutResult = textLayoutResult
+                                    if (currentAnnotatedString != null && currentLayoutResult != null) {
+                                        val characterIndex = currentLayoutResult.getOffsetForPosition(offset)
+                                        currentAnnotatedString.getStringAnnotations(
+                                            tag = "URL",
+                                            start = characterIndex,
+                                            end = characterIndex
+                                        ).firstOrNull()?.let { annotation ->
+                                            try {
+                                                uriHandler.openUri(annotation.item)
+                                            } catch (e: Exception) {
+                                                Toast.makeText(context, R.string.cannot_open_link, Toast.LENGTH_SHORT).show()
+                                            }
+                                        } ?: onTap()
+                                    } else {
+                                        onTap()
+                                    }
+                                }
+                            )
+                        }.semantics {
+                            contentDescription = aiReplyMessageDescription
+                        }
+                    }
                 },
             shape = shape,
             color = MaterialTheme.chatColors.aiBubble,
@@ -367,12 +445,12 @@ private fun AiMessageBlockItem(
     }
 }
 
-private fun getBubbleShape(isFirstBlock: Boolean, hasReasoning: Boolean, isLastBlock: Boolean): RoundedCornerShape {
+private fun getBubbleShape(isFirstBlock: Boolean, hasReasoning: Boolean, isLastBlock: Boolean, isCodeBlock: Boolean = false): RoundedCornerShape {
     return RoundedCornerShape(
         topStart = if (isFirstBlock && !hasReasoning) ChatDimensions.CORNER_RADIUS_LARGE else ChatDimensions.CORNER_RADIUS_SMALL,
         topEnd = ChatDimensions.CORNER_RADIUS_LARGE,
-        bottomStart = if (isLastBlock) ChatDimensions.CORNER_RADIUS_LARGE else ChatDimensions.CORNER_RADIUS_SMALL,
-        bottomEnd = if (isLastBlock) ChatDimensions.CORNER_RADIUS_LARGE else ChatDimensions.CORNER_RADIUS_SMALL
+        bottomStart = if (isCodeBlock) 0.dp else if (isLastBlock) ChatDimensions.CORNER_RADIUS_LARGE else ChatDimensions.CORNER_RADIUS_SMALL,
+        bottomEnd = if (isCodeBlock) 0.dp else if (isLastBlock) ChatDimensions.CORNER_RADIUS_LARGE else ChatDimensions.CORNER_RADIUS_SMALL
     )
 }
 
@@ -407,140 +485,149 @@ private fun RenderMarkdownBlock(
     isStreaming: Boolean,
     renderer: StreamingMarkdownRenderer
 ) {
-    Box(
-        modifier = Modifier
-            .padding(
-                horizontal = ChatDimensions.BUBBLE_INNER_PADDING_HORIZONTAL,
-                vertical = ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL
-            )
-    ) {
-        when (block) {
-            is MarkdownBlock.Header -> MarkdownHeader(block = block, contentColor = contentColor, isStreaming = isStreaming, renderer = renderer)
-
-            is MarkdownBlock.Paragraph -> MarkdownText(
-                text = block.text,
-                style = MaterialTheme.typography.bodyLarge.copy(color = contentColor),
-                isStreaming = isStreaming,
-                renderer = renderer,
-                messageId = block.hashCode().toString() // This is not ideal, but works for now
-            )
-
-            is MarkdownBlock.CodeBlock -> CodeBlock(
+    when (block) {
+        is MarkdownBlock.CodeBlock -> {
+            // 代码块不使用内部padding，直接填满容器宽度
+            CodeBlock(
                 rawText = block.rawText,
                 language = block.language,
                 contentColor = contentColor
             )
+        }
+        else -> {
+            // 其他类型的块使用正常的padding
+            Box(
+                modifier = Modifier
+                    .padding(
+                        horizontal = ChatDimensions.BUBBLE_INNER_PADDING_HORIZONTAL,
+                        vertical = ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL
+                    )
+            ) {
+                when (block) {
+                    is MarkdownBlock.Header -> MarkdownHeader(block = block, contentColor = contentColor, isStreaming = isStreaming, renderer = renderer)
 
-            is MarkdownBlock.UnorderedList -> {
-                Column(modifier = Modifier.padding(start = 8.dp)) {
-                    block.items.forEach { itemText ->
-                        Row(verticalAlignment = Alignment.Top) {
-                            Text("• ", style = MaterialTheme.typography.bodyLarge.copy(color = contentColor))
-                            MarkdownText(
-                                text = itemText,
-                                style = MaterialTheme.typography.bodyLarge.copy(color = contentColor),
-                                modifier = Modifier.weight(1f),
-                                isStreaming = isStreaming,
-                                renderer = renderer,
-                                messageId = itemText.hashCode().toString()
+                    is MarkdownBlock.Paragraph -> MarkdownText(
+                        text = block.text,
+                        style = MaterialTheme.typography.bodyLarge.copy(color = contentColor),
+                        isStreaming = isStreaming,
+                        renderer = renderer,
+                        messageId = block.hashCode().toString() // This is not ideal, but works for now
+                    )
+
+                    is MarkdownBlock.UnorderedList -> {
+                        Column(modifier = Modifier.padding(start = 8.dp)) {
+                            block.items.forEach { itemText ->
+                                Row(verticalAlignment = Alignment.Top) {
+                                    Text("• ", style = MaterialTheme.typography.bodyLarge.copy(color = contentColor))
+                                    MarkdownText(
+                                        text = itemText,
+                                        style = MaterialTheme.typography.bodyLarge.copy(color = contentColor),
+                                        modifier = Modifier.weight(1f),
+                                        isStreaming = isStreaming,
+                                        renderer = renderer,
+                                        messageId = itemText.hashCode().toString()
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    is MarkdownBlock.OrderedList -> {
+                        Column(modifier = Modifier.padding(start = 8.dp)) {
+                            block.items.forEachIndexed { index, itemText ->
+                                Row(verticalAlignment = Alignment.Top) {
+                                    Text("${index + 1}. ", style = MaterialTheme.typography.bodyLarge.copy(color = contentColor))
+                                    MarkdownText(
+                                        text = itemText,
+                                        style = MaterialTheme.typography.bodyLarge.copy(color = contentColor),
+                                        modifier = Modifier.weight(1f),
+                                        isStreaming = isStreaming,
+                                        renderer = renderer,
+                                        messageId = itemText.hashCode().toString()
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    is MarkdownBlock.Blockquote -> {
+                        Row {
+                            Box(
+                                modifier = Modifier
+                                    .padding(end = 8.dp)
+                                    .width(4.dp)
+                                    .fillMaxHeight()
+                                    .clip(RoundedCornerShape(2.dp))
+                                    .background(contentColor.copy(alpha = 0.3f))
+                            )
+                            Column {
+                                block.blocks.forEach { nestedBlock ->
+                                    RenderMarkdownBlock(block = nestedBlock, contentColor = contentColor, onImageLoaded = onImageLoaded, isStreaming = isStreaming, renderer = renderer)
+                                }
+                            }
+                        }
+                    }
+
+                    is MarkdownBlock.HorizontalRule -> {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(vertical = 8.dp),
+                            color = contentColor.copy(alpha = 0.2f)
+                        )
+                    }
+
+                    is MarkdownBlock.Image -> {
+                        val context = LocalContext.current
+                        AsyncImage(
+                            model = ImageRequest.Builder(context)
+                                .data(block.url)
+                                .crossfade(true)
+                                .memoryCachePolicy(CachePolicy.ENABLED)
+                                .diskCachePolicy(CachePolicy.ENABLED)
+                                .listener(onSuccess = { _, _ -> onImageLoaded() })
+                                .build(),
+                            contentDescription = block.altText,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = ChatDimensions.IMAGE_PADDING_VERTICAL)
+                                .clip(RoundedCornerShape(ChatDimensions.TABLE_CORNER_RADIUS)),
+                            error = painterResource(R.drawable.ic_launcher_foreground)
+                        )
+                    }
+
+                    is MarkdownBlock.Table -> MarkdownTable(
+                        header = block.header,
+                        rows = block.rows,
+                        contentColor = contentColor,
+                        isStreaming = isStreaming,
+                        renderer = renderer
+                    )
+
+                    is MarkdownBlock.MathBlock -> {
+                        // Render math block with special styling
+                        Surface(
+                            color = contentColor.copy(alpha = 0.05f),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = try {
+                                    com.example.everytalk.util.LatexToUnicode.convert(block.formula)
+                                } catch (e: Exception) {
+                                    block.formula // Fallback to original formula if conversion fails
+                                },
+                                style = MaterialTheme.typography.bodyLarge.copy(
+                                    color = contentColor,
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Default
+                                ),
+                                modifier = Modifier.padding(12.dp),
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
                             )
                         }
                     }
-                }
-            }
 
-            is MarkdownBlock.OrderedList -> {
-                Column(modifier = Modifier.padding(start = 8.dp)) {
-                    block.items.forEachIndexed { index, itemText ->
-                        Row(verticalAlignment = Alignment.Top) {
-                            Text("${index + 1}. ", style = MaterialTheme.typography.bodyLarge.copy(color = contentColor))
-                            MarkdownText(
-                                text = itemText,
-                                style = MaterialTheme.typography.bodyLarge.copy(color = contentColor),
-                                modifier = Modifier.weight(1f),
-                                isStreaming = isStreaming,
-                                renderer = renderer,
-                                messageId = itemText.hashCode().toString()
-                            )
-                        }
-                    }
-                }
-            }
-
-            is MarkdownBlock.Blockquote -> {
-                Row {
-                    Box(
-                        modifier = Modifier
-                            .padding(end = 8.dp)
-                            .width(4.dp)
-                            .fillMaxHeight()
-                            .clip(RoundedCornerShape(2.dp))
-                            .background(contentColor.copy(alpha = 0.3f))
-                    )
-                    Column {
-                        block.blocks.forEach { nestedBlock ->
-                            RenderMarkdownBlock(block = nestedBlock, contentColor = contentColor, onImageLoaded = onImageLoaded, isStreaming = isStreaming, renderer = renderer)
-                        }
-                    }
-                }
-            }
-
-            is MarkdownBlock.HorizontalRule -> {
-                HorizontalDivider(
-                    modifier = Modifier.padding(vertical = 8.dp),
-                    color = contentColor.copy(alpha = 0.2f)
-                )
-            }
-
-            is MarkdownBlock.Image -> {
-                val context = LocalContext.current
-                AsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data(block.url)
-                        .crossfade(true)
-                        .memoryCachePolicy(CachePolicy.ENABLED)
-                        .diskCachePolicy(CachePolicy.ENABLED)
-                        .listener(onSuccess = { _, _ -> onImageLoaded() })
-                        .build(),
-                    contentDescription = block.altText,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = ChatDimensions.IMAGE_PADDING_VERTICAL)
-                        .clip(RoundedCornerShape(ChatDimensions.TABLE_CORNER_RADIUS)),
-                    error = painterResource(R.drawable.ic_launcher_foreground)
-                )
-            }
-
-            is MarkdownBlock.Table -> MarkdownTable(
-                header = block.header,
-                rows = block.rows,
-                contentColor = contentColor,
-                isStreaming = isStreaming,
-                renderer = renderer
-            )
-
-            is MarkdownBlock.MathBlock -> {
-                // Render math block with special styling
-                Surface(
-                    color = contentColor.copy(alpha = 0.05f),
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp)
-                ) {
-                    Text(
-                        text = try {
-                            com.example.everytalk.util.LatexToUnicode.convert(block.formula)
-                        } catch (e: Exception) {
-                            block.formula // Fallback to original formula if conversion fails
-                        },
-                        style = MaterialTheme.typography.bodyLarge.copy(
-                            color = contentColor,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Default
-                        ),
-                        modifier = Modifier.padding(12.dp),
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                    )
+                    else -> {} // 处理其他情况
                 }
             }
         }
@@ -549,56 +636,47 @@ private fun RenderMarkdownBlock(
 
 @Composable
 private fun CodeBlock(rawText: String, language: String?, contentColor: Color) {
-    val clipboardManager = LocalClipboardManager.current
-    val context = LocalContext.current
     val annotatedString by produceState(initialValue = AnnotatedString(rawText), rawText, language) {
         withContext(Dispatchers.Default) {
             value = CodeHighlighter.highlightToAnnotatedString(rawText, language)
         }
     }
 
+    // Remove horizontal scrolling - code blocks will now wrap text instead
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .background(
                 MaterialTheme.chatColors.codeBlockBackground,
-                RoundedCornerShape(ChatDimensions.CODE_BLOCK_CORNER_RADIUS)
+                RoundedCornerShape(
+                    topStart = ChatDimensions.CODE_BLOCK_CORNER_RADIUS,
+                    topEnd = ChatDimensions.CODE_BLOCK_CORNER_RADIUS,
+                    bottomStart = 0.dp,
+                    bottomEnd = 0.dp
+                )
             )
     ) {
-        Row(
-            Modifier
-                .horizontalScroll(rememberScrollState())
+        Box(
+            modifier = Modifier
+                .fillMaxWidth() // Use full width instead of horizontal scrolling
                 .padding(
                     top = ChatDimensions.CODE_BLOCK_PADDING_TOP,
                     start = ChatDimensions.CODE_BLOCK_PADDING_HORIZONTAL,
                     end = ChatDimensions.CODE_BLOCK_PADDING_HORIZONTAL,
-                    bottom = 32.dp
+                    bottom = ChatDimensions.CODE_BLOCK_PADDING_BOTTOM
                 )
         ) {
             Text(
-                text = annotatedString,
+                text = annotatedString, // 使用带语法高亮的annotatedString
                 style = TextStyle(
                     fontFamily = FontFamily.Monospace,
-                    fontSize = ChatDimensions.CODE_FONT_SIZE,
+                    fontSize = ChatDimensions.CODE_FONT_SIZE, // 恢复原始字体大小
                     lineHeight = ChatDimensions.CODE_LINE_HEIGHT
+                    // 移除color参数，让AnnotatedString的语法高亮颜色生效
                 ),
-                color = contentColor
-            )
-        }
-        IconButton(
-            onClick = {
-                clipboardManager.setText(AnnotatedString(rawText))
-                Toast.makeText(context, R.string.code_copied, Toast.LENGTH_SHORT).show()
-            },
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(end = 4.dp, bottom = 4.dp)
-        ) {
-            Icon(
-                Icons.Filled.ContentCopy,
-                contentDescription = stringResource(id = R.string.copy),
-                modifier = Modifier.size(ChatDimensions.COPY_ICON_SIZE),
-                tint = contentColor.copy(alpha = 0.7f)
+                softWrap = true, // Enable text wrapping
+                modifier = Modifier.fillMaxWidth() // Use full width instead of minimum width
             )
         }
     }
@@ -712,7 +790,7 @@ private fun MarkdownHeader(block: MarkdownBlock.Header, contentColor: Color, isS
 }
 
 @Composable
-private fun MarkdownText(
+fun MarkdownText(
     text: String,
     modifier: Modifier = Modifier,
     style: TextStyle = LocalTextStyle.current,
@@ -740,7 +818,7 @@ private fun MarkdownText(
         text = annotatedString,
         modifier = modifier,
         style = style,
-        onTextLayout = { layoutResult ->
+        onTextLayout = { layoutResult: TextLayoutResult ->
             onTextLayout?.invoke(layoutResult, annotatedString)
         }
     )

@@ -54,12 +54,12 @@ object IncrementalMarkdownParser {
     private val boldItalicRegex = Regex("(?s)(?<!\\\\)\\*\\*\\*(.+?)\\*\\*\\*")
     private val boldRegex = Regex("(?s)(?<!\\\\|\\*)\\*\\*(.+?)\\*\\*(?!\\*)")
     private val italicRegex = Regex("(?s)(?<!\\\\|\\*)\\*(.+?)\\*(?!\\*)")
-    private val linkRegex = Regex("""\[(.+?)]\((https?://\S+?)\)""")
-    private val implicitLinkRegex = Regex("""\[(https?://\S+?)]""")
+    private val linkRegex = Regex("""\[(.+?)]\((https?://[^\s)]+)\)""")
+    private val implicitLinkRegex = Regex("""\[(https?://[^\s\]]+)]""")
     private val codeRegex = Regex("(?s)```(?:[a-zA-Z]+)?\\n?([\\s\\S]*?)```|`([^`]+?)`")
     // 增强的数学公式正则 - 支持非Gemini模型格式
     private val mathRegex = Regex("""\$\$\s*([^$]*?)\s*\$\$|\$\s*([^$]*?)\s*\$|\\?\(\s*([^)]*?)\s*\\?\)|\\?\[\s*([^\]]*?)\s*\\?\]""")
-    private val urlRegex = Regex("""\b(https?://\S+)""")
+    private val urlRegex = Regex("""\b(https?://[^\s]+)""")
     private val brRegex = Regex("""<br\s*/?>""")
     private val pipeRegex = Regex("""\s*\|\s*""")
     private val escapeRegex = Regex("""\\(.)""")
@@ -391,6 +391,9 @@ object IncrementalMarkdownParser {
                     TokenType.BOLD_ITALIC to Regex("\\*\\*\\*([^*]{1,100}?)\\*\\*\\*"),
                     TokenType.BOLD to Regex("\\*\\*([^*]{1,100}?)\\*\\*"),
                     TokenType.ITALIC to Regex("\\*([^*]{1,100}?)\\*"),
+                    TokenType.LINK to Regex("""\[(.+?)]\((https?://[^\s)]+)\)"""),
+                    TokenType.IMPLICIT_LINK to Regex("""\[(https?://[^\s\]]+)]"""),
+                    TokenType.URL to Regex("""\b(https?://[^\s]+)"""),
                     TokenType.CODE to Regex("`([^`]{1,200}?)`"),
                     // 最强的数学公式正则 - 支持所有AI模型的输出格式
                     TokenType.MATH to Regex("\\$\\$([\\s\\S]*?)\\$\\$|\\$([^$]*?)\\$")
@@ -426,6 +429,19 @@ object IncrementalMarkdownParser {
                     TokenType.BOLD_ITALIC -> elements.add(InlineElement.BoldItalic(listOf(InlineElement.PlainText(match.groupValues[1]))))
                     TokenType.BOLD -> elements.add(InlineElement.Bold(listOf(InlineElement.PlainText(match.groupValues[1]))))
                     TokenType.ITALIC -> elements.add(InlineElement.Italic(listOf(InlineElement.PlainText(match.groupValues[1]))))
+                    TokenType.LINK -> {
+                        val linkText = match.groupValues[1]
+                        val linkUrl = match.groupValues[2]
+                        elements.add(InlineElement.Link(listOf(InlineElement.PlainText(linkText)), linkUrl))
+                    }
+                    TokenType.IMPLICIT_LINK -> {
+                        val url = match.groupValues[1]
+                        elements.add(InlineElement.AutoLink(url))
+                    }
+                    TokenType.URL -> {
+                        val url = match.groupValues[1]
+                        elements.add(InlineElement.AutoLink(url))
+                    }
                     TokenType.CODE -> elements.add(InlineElement.Code(match.groupValues[1]))
                     TokenType.MATH -> {
                         // 最终修复：正确处理两个捕获组 $$...$$和$...$

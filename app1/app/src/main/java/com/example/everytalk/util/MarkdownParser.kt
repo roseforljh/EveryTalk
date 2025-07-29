@@ -312,6 +312,20 @@ object MarkdownParser {
         ParagraphParser() // Fallback
     )
 
+    /**
+     * 检查文本是否实际为空（包括只包含空格、制表符、换行符等不可见字符的情况）
+     */
+    private fun isEffectivelyEmpty(text: String): Boolean {
+        return text.trim().isEmpty() || text.all { it.isWhitespace() }
+    }
+
+    /**
+     * 清理连续的空行，最多保留一个空行
+     */
+    private fun cleanupConsecutiveEmptyLines(text: String): String {
+        return text.replace(Regex("\n\\s*\n\\s*\n+"), "\n\n")
+    }
+
     fun parse(markdown: String): List<MarkdownBlock> {
         val blocks = mutableListOf<MarkdownBlock>()
         // Normalize line endings and then split. This handles \r\n, \n, and \r.
@@ -330,8 +344,10 @@ object MarkdownParser {
                 val initialIndex = context.currentIndex
                 val block = parser.parse(context)
 
-                // Add block if it's not an empty paragraph
-                if (block !is MarkdownBlock.Paragraph || block.text.isNotBlank()) {
+                // 检查解析出的段落块是否为空，如果为空则不添加
+                if (block is MarkdownBlock.Paragraph && isEffectivelyEmpty(block.text)) {
+                    // 不添加空段落或只包含不可见字符的段落
+                } else {
                     blocks.add(block)
                 }
 
@@ -346,10 +362,6 @@ object MarkdownParser {
         }
         return blocks
     }
-}
-
-fun parseMarkdownToBlocks(markdown: String): List<MarkdownBlock> {
-    return MarkdownParser.parse(markdown)
 }
 
 /**
@@ -529,7 +541,13 @@ object GeminiOptimizedMarkdownParser {
         val lines = text.split('\n')
         val fixedLines = mutableListOf<String>()
         
-        for (line in lines) {
+        // 首先清理重复序号
+        val cleanedLines = lines.map { cleanupDuplicateNumbers(it) }
+        
+        // 然后重新编号有序列表
+        val renumberedLines = renumberOrderedLists(cleanedLines)
+        
+        for (line in renumberedLines) {
             when {
                 // 修复无序列表
                 line.trim().matches(Regex("^[*+-]\\s+.*")) -> {
@@ -554,4 +572,101 @@ object GeminiOptimizedMarkdownParser {
         
         return fixedLines.joinToString("\n")
     }
+    
+    /**
+     * 重新编号有序列表，确保序号正确递增
+     */
+    private fun renumberOrderedLists(lines: List<String>): List<String> {
+        val result = mutableListOf<String>()
+        // Track numbering for different indent levels
+        val indentCounters = mutableMapOf<Int, Int>()
+        
+        for (line in lines) {
+            val trimmedLine = line.trim()
+            
+            // 检查是否是有序列表项
+            val orderedListMatch = Regex("^(\\d+)\\.\\s+(.*)").find(trimmedLine)
+            
+            if (orderedListMatch != null) {
+                val (_, content) = orderedListMatch.destructured
+                val currentIndent = line.length - line.trimStart().length
+                
+                // Initialize or increment counter for this indent level
+                if (!indentCounters.containsKey(currentIndent)) {
+                    indentCounters[currentIndent] = 1
+                } else {
+                    indentCounters[currentIndent] = indentCounters[currentIndent]!! + 1
+                }
+                
+                // Reset counters for deeper indent levels
+                val keysToRemove = indentCounters.keys.filter { it > currentIndent }
+                keysToRemove.forEach { indentCounters.remove(it) }
+                
+                result.add(" ".repeat(currentIndent) + "${indentCounters[currentIndent]}. $content")
+            } else {
+                // 非有序列表项
+                if (trimmedLine.isNotEmpty() && !trimmedLine.matches(Regex("^[*+-]\\s+.*"))) {
+                    // Reset all counters when encountering non-list content
+                    indentCounters.clear()
+                }
+                result.add(line)
+            }
+        }
+        
+        return result
+    }
+    
+    /**
+     * 清理重复的序号，如 "1. 1. 1. 内容" -> "1. 内容"
+     */
+    private fun cleanupDuplicateNumbers(line: String): String {
+        // 跳过表格行（包含 |）
+        if (line.contains('|')) {
+            return line
+        }
+        
+        // 跳过看起来像表格分隔符的行
+        if (line.trim().matches(Regex("^[\\s\\-:]+$"))) {
+            return line
+        }
+        
+        var cleaned = line
+        
+        // 处理重复的数字序号（如 "1. 1. 1. 内容"）
+        val duplicateNumberPattern = Regex("^(\\s*)(\\d+\\.\\s+)+(\\d+\\.\\s+)(.*)$")
+        val match = duplicateNumberPattern.find(cleaned)
+        if (match != null) {
+            val indent = match.groupValues[1]
+            val lastNumber = match.groupValues[3]
+            val content = match.groupValues[4]
+            cleaned = "$indent$lastNumber$content"
+        }
+        
+        // 处理重复的无序列表标记（如 "- - - 内容"）
+        val duplicateBulletPattern = Regex("^(\\s*)([*+-]\\s+)+([*+-]\\s+)(.*)$")
+        val bulletMatch = duplicateBulletPattern.find(cleaned)
+        if (bulletMatch != null) {
+            val indent = bulletMatch.groupValues[1]
+            val bullet = bulletMatch.groupValues[3]
+            val content = bulletMatch.groupValues[4]
+            cleaned = "$indent$bullet$content"
+        }
+        
+        // 处理混合的重复标记（如 "1. - 1. 内容"）
+        val mixedPattern = Regex("^(\\s*)([\\d+\\.\\s+|[*+-]\\s+]+)(\\d+\\.\\s+|[*+-]\\s+)(.*)$")
+        val mixedMatch = mixedPattern.find(cleaned)
+        if (mixedMatch != null) {
+            val indent = mixedMatch.groupValues[1]
+            val lastMarker = mixedMatch.groupValues[3]
+            val content = mixedMatch.groupValues[4]
+            cleaned = "$indent$lastMarker$content"
+        }
+        
+        return cleaned
+    }
+}
+
+// 导出函数供外部使用
+fun parseGeminiMarkdown(markdown: String): List<MarkdownBlock> {
+    return GeminiOptimizedMarkdownParser.parseGeminiMarkdown(markdown)
 }

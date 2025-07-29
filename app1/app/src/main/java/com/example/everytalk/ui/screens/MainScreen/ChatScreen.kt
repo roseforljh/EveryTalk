@@ -3,6 +3,9 @@ package com.example.everytalk.ui.screens.MainScreen
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.animateScrollBy
@@ -17,6 +20,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.text.selection.TextSelectionColors
+import androidx.compose.foundation.text.selection.LocalTextSelectionColors
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
@@ -25,18 +30,23 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -57,6 +67,10 @@ import com.example.everytalk.ui.screens.MainScreen.chat.EditMessageDialog
 import com.example.everytalk.ui.screens.MainScreen.chat.EmptyChatView
 import com.example.everytalk.ui.screens.MainScreen.chat.ModelSelectionBottomSheet
 import com.example.everytalk.ui.screens.MainScreen.chat.rememberChatScrollStateManager
+import com.example.everytalk.ui.screens.MainScreen.chat.MarkdownText
+import com.example.everytalk.util.StreamingMarkdownRenderer
+import com.example.everytalk.util.parseInlineMarkdownToAnnotatedString
+import com.example.everytalk.util.MarkdownStyleConfig
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.delay
@@ -282,12 +296,7 @@ fun ChatScreen(
                                 if (!scrollStateManager.userInteracted) {
                                     scrollStateManager.jumpToBottom()
                                 }
-                            },
-                            onThinkingBoxVisibilityChanged = {
-                                if (!scrollStateManager.userInteracted) {
-                                    scrollStateManager.jumpToBottom()
-                                }
-                            },
+                            }
                         )
                     }
                 }
@@ -547,20 +556,111 @@ private fun UpdateAvailableDialog(
             usePlatformDefaultWidth = false
         )
     ) {
+        val alpha = remember { Animatable(0f) }
+        val scale = remember { Animatable(0.8f) }
+
+        LaunchedEffect(Unit) {
+            launch {
+                alpha.animateTo(1f, animationSpec = tween(durationMillis = 300))
+            }
+            launch {
+                scale.animateTo(1f, animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing))
+            }
+        }
+
         Card(
             shape = RoundedCornerShape(28.dp),
             modifier = Modifier
                 .fillMaxWidth(0.92f)
                 .padding(vertical = 24.dp)
-                .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.75f),
+                .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.75f)
+                .graphicsLayer {
+                    this.alpha = alpha.value
+                    this.scaleX = scale.value
+                    this.scaleY = scale.value
+                },
             colors = CardDefaults.cardColors(containerColor = Color.White)
         ) {
-            SelectionContainer(modifier = Modifier.padding(20.dp)) {
-                Text(
-                    text = textToDisplay,
-                    modifier = Modifier.verticalScroll(rememberScrollState()),
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface
+            // 直接显示内容，移除顶部标题栏
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(20.dp)
+            ) {
+                val scrollState = rememberScrollState()
+                val scrimHeight = 32.dp // 加大模糊效果高度
+                val scrimColor = Color.White
+                
+                // 自定义文本选择颜色
+                val customTextSelectionColors = TextSelectionColors(
+                    handleColor = Color(0xFF2196F3), // 蓝色选择手柄
+                    backgroundColor = Color(0xFF2196F3).copy(alpha = 0.3f) // 半透明蓝色背景
+                )
+                
+                CompositionLocalProvider(LocalTextSelectionColors provides customTextSelectionColors) {
+                    SelectionContainer(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(scrollState)
+                            .padding(vertical = scrimHeight)
+                    ) {
+                        // 使用完整的Markdown渲染，确保格式化正确
+                        val annotatedString by produceState(
+                            initialValue = AnnotatedString(textToDisplay),
+                            textToDisplay
+                        ) {
+                            withContext(Dispatchers.Default) {
+                                // 直接使用完整的Markdown解析，不依赖流式渲染
+                                value = parseInlineMarkdownToAnnotatedString(
+                                    textToDisplay,
+                                    MarkdownStyleConfig()
+                                )
+                            }
+                        }
+                        
+                        Text(
+                            text = annotatedString,
+                            style = MaterialTheme.typography.bodyLarge.copy(
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        )
+                    }
+                }
+                
+                // 上边框渐变模糊效果 - 加大高度和强度
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .height(scrimHeight)
+                        .background(
+                            brush = Brush.verticalGradient(
+                                colors = listOf(
+                                    scrimColor,
+                                    scrimColor.copy(alpha = 0.8f),
+                                    scrimColor.copy(alpha = 0.4f),
+                                    Color.Transparent
+                                )
+                            )
+                        )
+                )
+                
+                // 下边框渐变模糊效果 - 加大高度和强度
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(scrimHeight)
+                        .background(
+                            brush = Brush.verticalGradient(
+                                colors = listOf(
+                                    Color.Transparent,
+                                    scrimColor.copy(alpha = 0.4f),
+                                    scrimColor.copy(alpha = 0.8f),
+                                    scrimColor
+                                )
+                            )
+                        )
                 )
             }
         }

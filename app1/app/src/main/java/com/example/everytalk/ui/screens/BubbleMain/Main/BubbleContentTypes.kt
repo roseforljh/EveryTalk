@@ -10,7 +10,15 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.unit.Velocity
+import kotlin.math.abs
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
@@ -32,7 +40,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.input.pointer.pointerInput
@@ -50,7 +57,12 @@ import androidx.compose.ui.window.PopupProperties
 import coil3.compose.AsyncImage
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.models.SelectedMediaItem
+import com.example.everytalk.ui.theme.ChatDimensions
+import com.example.everytalk.ui.theme.chatColors
+import com.example.everytalk.util.CodeHighlighter
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private const val CONTEXT_MENU_ANIMATION_DURATION_MS = 150
 private val CONTEXT_MENU_CORNER_RADIUS = 16.dp
@@ -131,6 +143,17 @@ internal fun UserOrErrorMessageContent(
                         Column {
                             segments.forEach { segment ->
                                 when (segment) {
+                                    is TextSegment.ThinkingContent -> {
+                                        // 将思考内容作为普通文本显示
+                                        val annotatedText = remember(segment.content) {
+                                            com.example.everytalk.util.parseInlineMarkdownToAnnotatedString(segment.content)
+                                        }
+                                        Text(
+                                            text = annotatedText,
+                                            textAlign = TextAlign.Start,
+                                            color = contentColor
+                                        )
+                                    }
                                     is TextSegment.Normal -> if (segment.text.isNotBlank()) {
                                         val annotatedText = remember(segment.text) {
                                             com.example.everytalk.util.parseInlineMarkdownToAnnotatedString(segment.text)
@@ -142,17 +165,38 @@ internal fun UserOrErrorMessageContent(
                                         )
                                     }
                                     is TextSegment.CodeBlock -> {
+                                        // Add syntax highlighting support
+                                        val annotatedString by produceState(initialValue = AnnotatedString(segment.code), segment.code) {
+                                            withContext(Dispatchers.Default) {
+                                                value = CodeHighlighter.highlightToAnnotatedString(segment.code, segment.language)
+                                            }
+                                        }
+
                                         Surface(
-                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f),
-                                            shape = RoundedCornerShape(8.dp),
+                                            color = MaterialTheme.chatColors.codeBlockBackground,
+                                            shape = RoundedCornerShape(ChatDimensions.CODE_BLOCK_CORNER_RADIUS),
                                             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
                                         ) {
-                                            Text(
-                                                text = segment.code,
-                                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                                                color = contentColor,
-                                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
-                                            )
+                                            Box(
+                                                modifier = Modifier.fillMaxWidth() // Use full width instead of horizontal scrolling
+                                            ) {
+                                                Text(
+                                                    text = annotatedString, // Use syntax highlighted text
+                                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                                    softWrap = true, // Enable text wrapping
+                                                    style = androidx.compose.ui.text.TextStyle(
+                                                        fontSize = ChatDimensions.CODE_FONT_SIZE, // 恢复原始字体大小
+                                                        lineHeight = ChatDimensions.CODE_LINE_HEIGHT
+                                                        // 移除color参数，让AnnotatedString的语法高亮颜色生效
+                                                    ),
+                                                    modifier = Modifier
+                                                        .fillMaxWidth() // Use full width instead of minimum width
+                                                        .padding(
+                                                            horizontal = ChatDimensions.CODE_BLOCK_PADDING_HORIZONTAL,
+                                                            vertical = ChatDimensions.CODE_BLOCK_PADDING_BOTTOM
+                                                        )
+                                                )
+                                            }
                                         }
                                     }
                                     is TextSegment.Header -> {
@@ -646,15 +690,68 @@ sealed class TextSegment {
     data class CodeBlock(val language: String?, val code: String) : TextSegment()
     data class Header(val level: Int, val text: String) : TextSegment()
     data class ListItem(val text: String) : TextSegment()
+    data class ThinkingContent(val content: String) : TextSegment()
+}
+
+/**
+ * 解析结果，包含思考内容和其他内容段落
+ */
+data class ParsedMarkdownResult(
+    val segments: List<TextSegment>,
+    val thinkingContent: String?
+)
+
+/**
+ * 提取思考内容的函数
+ */
+fun extractThinkingContent(markdownInput: String): String? {
+    // 支持多种思考标签格式
+    val thinkingPatterns = listOf(
+        "<think>[\\s\\S]*?</think>".toRegex(),
+        "<thinking>[\\s\\S]*?</thinking>".toRegex(),
+        "\\*\\*思考过程\\*\\*[\\s\\S]*?(?=\\n\\n|\\*\\*|$)".toRegex(),
+        "思考：[\\s\\S]*?(?=\\n\\n|$)".toRegex()
+    )
+    
+    for (pattern in thinkingPatterns) {
+        val match = pattern.find(markdownInput)
+        if (match != null) {
+            val content = match.value
+            return when {
+                content.startsWith("<think>") -> content.removePrefix("<think>").removeSuffix("</think>").trim()
+                content.startsWith("<thinking>") -> content.removePrefix("<thinking>").removeSuffix("</thinking>").trim()
+                content.startsWith("**思考过程**") -> content.removePrefix("**思考过程**").trim()
+                content.startsWith("思考：") -> content.removePrefix("思考：").trim()
+                else -> content.trim()
+            }
+        }
+    }
+    return null
 }
 
 fun parseMarkdownSegments(markdownInput: String): List<TextSegment> {
     val segments = mutableListOf<TextSegment>()
-    // First, remove all content within <thinking>...</thinking> tags
-    val thinkingRegex = "<thinking>[\\s\\S]*?<\\/thinking>".toRegex()
-    val contentWithoutThinking = thinkingRegex.replace(markdownInput, "")
+    
+    // 移除思考内容提取逻辑，直接处理原始markdown内容
+    // val thinkingContent = extractThinkingContent(markdownInput)
+    // if (thinkingContent != null) {
+    //     segments.add(TextSegment.ThinkingContent(thinkingContent))
+    // }
+    
+    // 不再移除思考标签内容，直接处理完整的markdown
+    // val thinkingPatterns = listOf(
+    //     "<think>[\\s\\S]*?</think>".toRegex(),
+    //     "<thinking>[\\s\\S]*?</thinking>".toRegex(),
+    //     "\\*\\*思考过程\\*\\*[\\s\\S]*?(?=\\n\\n|\\*\\*|$)".toRegex(),
+    //     "思考：[\\s\\S]*?(?=\\n\\n|$)".toRegex()
+    // )
+    // 
+    // var contentWithoutThinking = markdownInput
+    // for (pattern in thinkingPatterns) {
+    //     contentWithoutThinking = pattern.replace(contentWithoutThinking, "")
+    // }
 
-    val lines = contentWithoutThinking.lines()
+    val lines = markdownInput.lines()
     var i = 0
     while (i < lines.size) {
         val line = lines[i]
