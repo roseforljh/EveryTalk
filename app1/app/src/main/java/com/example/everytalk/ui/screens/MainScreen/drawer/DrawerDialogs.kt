@@ -29,18 +29,18 @@ internal fun DeleteConfirmationDialog(
                         onConfirm()
                         onDismiss() // 确认后也关闭对话框
                     },
-                    colors = ButtonDefaults.textButtonColors(contentColor = Color.Red)
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
                 ) { Text("确定") }
             },
             dismissButton = {
                 TextButton(
                     onClick = onDismiss,
-                    colors = ButtonDefaults.textButtonColors(contentColor = Color.Black)
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)
                 ) { Text("取消") }
             },
-            containerColor = Color.White,
-            titleContentColor = Color.Black,
-            textContentColor = Color.Black
+            containerColor = MaterialTheme.colorScheme.surfaceDim,
+            titleContentColor = MaterialTheme.colorScheme.onSurface,
+            textContentColor = MaterialTheme.colorScheme.onSurface
         )
     }
 }
@@ -68,18 +68,18 @@ internal fun ClearAllConfirmationDialog(
                         onConfirm()
                         onDismiss() // 确认后也关闭对话框
                     },
-                    colors = ButtonDefaults.textButtonColors(contentColor = Color.Red)
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
                 ) { Text("确定清空") }
             },
             dismissButton = {
                 TextButton(
                     onClick = onDismiss,
-                    colors = ButtonDefaults.textButtonColors(contentColor = Color.Black)
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)
                 ) { Text("取消") }
             },
-            containerColor = Color.White,
-            titleContentColor = Color.Black,
-            textContentColor = Color.Black
+            containerColor = MaterialTheme.colorScheme.surfaceDim,
+            titleContentColor = MaterialTheme.colorScheme.onSurface,
+            textContentColor = MaterialTheme.colorScheme.onSurface
         )
     }
 }

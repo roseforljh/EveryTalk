@@ -44,7 +44,7 @@ fun EditMessageDialog(
 
     AlertDialog(
         onDismissRequest = onDismissRequest,
-        containerColor = Color.White, // Or MaterialTheme.colorScheme.surface
+        containerColor = MaterialTheme.colorScheme.surface,
         modifier = Modifier.graphicsLayer {
             this.alpha = alpha.value
             this.scaleX = scale.value
@@ -56,10 +56,20 @@ fun EditMessageDialog(
                 value = editDialogInputText,
                 onValueChange = onEditDialogTextChanged,
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("消息内容") },
-                colors = OutlinedTextFieldDefaults.colors( // Use OutlinedTextFieldDefaults.colors
+                label = {
+                    Text(
+                        text = "消息内容",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
+                colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = MaterialTheme.colorScheme.primary,
-                    // other colors will use defaults or inherit
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                    focusedLabelColor = MaterialTheme.colorScheme.primary,
+                    unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    cursorColor = MaterialTheme.colorScheme.primary,
+                    focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                    unfocusedTextColor = MaterialTheme.colorScheme.onSurface
                 ),
                 singleLine = false, maxLines = 5,
                 shape = RoundedCornerShape(8.dp)

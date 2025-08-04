@@ -15,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -43,8 +44,8 @@ fun CodePreviewButton(
             onClick = { showPreview = true },
             modifier = modifier,
             shape = RoundedCornerShape(16.dp), // 更大的圆角
-            color = Color(0xFF1E1E1E), // 代码块背景色
-            contentColor = Color(0xFFE0E0E0)
+            color = MaterialTheme.colorScheme.surfaceVariant, // 使用主题颜色
+            contentColor = MaterialTheme.colorScheme.onSurfaceVariant
         ) {
             Row(
                 modifier = Modifier
@@ -129,7 +130,7 @@ private fun CodePreviewDialog(
                         .fillMaxSize()
                         .clip(RoundedCornerShape(24.dp)), // 更大的外圆角
                     shape = RoundedCornerShape(24.dp),
-                    color = Color.White, // 纯白背景
+                    color = MaterialTheme.colorScheme.surface, // 使用主题表面色
                     tonalElevation = 16.dp
                 ) {
                     // 预览内容
@@ -139,12 +140,13 @@ private fun CodePreviewDialog(
                             .padding(8.dp) // 极窄的内边距
                             .clip(RoundedCornerShape(20.dp)), // 内容区域圆角
                         shape = RoundedCornerShape(20.dp),
-                        color = Color.White,
+                        color = MaterialTheme.colorScheme.background, // 使用主题背景色
                         tonalElevation = 0.dp
                     ) {
                         CodePreviewWebView(
                             code = code,
-                            language = language
+                            language = language,
+                            isDarkTheme = MaterialTheme.colorScheme.surface.luminance() < 0.5f
                         )
                     }
                 }
@@ -159,7 +161,8 @@ private fun CodePreviewDialog(
 @Composable
 private fun CodePreviewWebView(
     code: String,
-    language: String?
+    language: String?,
+    isDarkTheme: Boolean
 ) {
     val context = LocalContext.current
     
@@ -176,7 +179,7 @@ private fun CodePreviewWebView(
             }
         },
         update = { webView ->
-            val htmlContent = generatePreviewHtml(code, language)
+            val htmlContent = generatePreviewHtml(code, language, isDarkTheme)
             webView.loadDataWithBaseURL(
                 null,
                 htmlContent,
@@ -191,9 +194,16 @@ private fun CodePreviewWebView(
 /**
  * 生成预览用的HTML内容
  */
-private fun generatePreviewHtml(code: String, language: String?): String {
+private fun generatePreviewHtml(code: String, language: String?, isDarkTheme: Boolean): String {
     // 预处理代码，支持Markdown和数学公式渲染
     val processedCode = preprocessCodeForRendering(code, language)
+    
+    // 根据主题选择颜色
+    val backgroundColor = if (isDarkTheme) "#0D1117" else "#FFFFFF"
+    val textColor = if (isDarkTheme) "#E6EDF3" else "#24292F"
+    val surfaceColor = if (isDarkTheme) "#161B22" else "#F6F8FA"
+    val borderColor = if (isDarkTheme) "#30363D" else "#D0D7DE"
+    val codeBackgroundColor = if (isDarkTheme) "#0D1117" else "#F6F8FA"
     
     return when (language?.lowercase()) {
         "html" -> {
@@ -221,7 +231,12 @@ private fun generatePreviewHtml(code: String, language: String?): String {
                         };
                     </script>
                     <style>
-                        body { margin: 16px; font-family: system-ui, -apple-system, sans-serif; }
+                        body {
+                            margin: 16px;
+                            font-family: system-ui, -apple-system, sans-serif;
+                            background-color: $backgroundColor;
+                            color: $textColor;
+                        }
                     </style>
                 </head>
                 <body>
@@ -254,24 +269,27 @@ private fun generatePreviewHtml(code: String, language: String?): String {
                         };
                     </script>
                     <style>
-                        body { 
-                            margin: 16px; 
-                            font-family: monospace; 
-                            background: #f5f5f5;
+                        body {
+                            margin: 16px;
+                            font-family: monospace;
+                            background: $backgroundColor;
+                            color: $textColor;
                         }
                         pre {
-                            background: white;
+                            background: $surfaceColor;
+                            color: $textColor;
                             padding: 16px;
                             border-radius: 8px;
                             overflow: auto;
-                            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+                            border: 1px solid $borderColor;
                         }
                         .rendered-content {
-                            background: white;
+                            background: $surfaceColor;
+                            color: $textColor;
                             padding: 16px;
                             border-radius: 8px;
                             margin-top: 10px;
-                            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+                            border: 1px solid $borderColor;
                         }
                     </style>
                 </head>
@@ -311,29 +329,31 @@ private fun generatePreviewHtml(code: String, language: String?): String {
                         };
                     </script>
                     <style>
-                        body { 
-                            margin: 0; 
-                            padding: 16px; 
-                            display: flex; 
+                        body {
+                            margin: 0;
+                            padding: 16px;
+                            display: flex;
                             flex-direction: column;
-                            justify-content: center; 
-                            align-items: center; 
+                            justify-content: center;
+                            align-items: center;
                             min-height: 100vh;
-                            background: #f5f5f5;
+                            background: $backgroundColor;
+                            color: $textColor;
                         }
-                        svg { 
-                            max-width: 100%; 
-                            max-height: 80vh; 
-                            background: white;
+                        svg {
+                            max-width: 100%;
+                            max-height: 80vh;
+                            background: $surfaceColor;
                             border-radius: 8px;
-                            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+                            border: 1px solid $borderColor;
                         }
                         .description {
-                            background: white;
+                            background: $surfaceColor;
+                            color: $textColor;
                             padding: 16px;
                             border-radius: 8px;
                             margin-top: 10px;
-                            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+                            border: 1px solid $borderColor;
                             max-width: 600px;
                         }
                     </style>
@@ -377,25 +397,27 @@ private fun generatePreviewHtml(code: String, language: String?): String {
                 <title>Markdown Preview</title>
                 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
                 <style>
-                    body { 
-                        margin: 0; 
-                        padding: 20px; 
+                    body {
+                        margin: 0;
+                        padding: 20px;
                         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
                         line-height: 1.6;
-                        background: #f5f5f5;
+                        background: $backgroundColor;
+                        color: $textColor;
                     }
                     .content {
                         max-width: 800px;
                         margin: 0 auto;
-                        background: white;
+                        background: $surfaceColor;
+                        color: $textColor;
                         padding: 30px;
                         border-radius: 8px;
-                        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+                        border: 1px solid $borderColor;
                     }
-                    h1, h2, h3 { color: #333; }
-                    code { background: #f4f4f4; padding: 2px 4px; border-radius: 3px; }
-                    pre { background: #f4f4f4; padding: 15px; border-radius: 5px; overflow-x: auto; }
-                    blockquote { border-left: 4px solid #ddd; margin: 0; padding-left: 20px; color: #666; }
+                    h1, h2, h3 { color: $textColor; }
+                    code { background: $codeBackgroundColor; color: $textColor; padding: 2px 4px; border-radius: 3px; }
+                    pre { background: $codeBackgroundColor; color: $textColor; padding: 15px; border-radius: 5px; overflow-x: auto; border: 1px solid $borderColor; }
+                    blockquote { border-left: 4px solid $borderColor; margin: 0; padding-left: 20px; color: $textColor; opacity: 0.8; }
                 </style>
             </head>
             <body>
@@ -419,21 +441,22 @@ private fun generatePreviewHtml(code: String, language: String?): String {
                 <title>Mermaid Diagram</title>
                 <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
                 <style>
-                    body { 
-                        margin: 0; 
-                        padding: 20px; 
-                        display: flex; 
-                        justify-content: center; 
-                        align-items: center; 
+                    body {
+                        margin: 0;
+                        padding: 20px;
+                        display: flex;
+                        justify-content: center;
+                        align-items: center;
                         min-height: 100vh;
-                        background: #f5f5f5;
+                        background: $backgroundColor;
+                        color: $textColor;
                         font-family: Arial, sans-serif;
                     }
                     .mermaid {
-                        background: white;
+                        background: $surfaceColor;
                         padding: 20px;
                         border-radius: 8px;
-                        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+                        border: 1px solid $borderColor;
                     }
                 </style>
             </head>
@@ -442,7 +465,7 @@ private fun generatePreviewHtml(code: String, language: String?): String {
                     $code
                 </div>
                 <script>
-                    mermaid.initialize({ startOnLoad: true, theme: 'default' });
+                    mermaid.initialize({ startOnLoad: true, theme: ${if (isDarkTheme) "'dark'" else "'default'"} });
                 </script>
             </body>
             </html>
@@ -867,18 +890,20 @@ private fun generatePreviewHtml(code: String, language: String?): String {
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <title>JavaScript Preview</title>
                 <style>
-                    body { 
-                        margin: 0; 
-                        padding: 16px; 
+                    body {
+                        margin: 0;
+                        padding: 16px;
                         font-family: system-ui, -apple-system, sans-serif;
-                        background: #f5f5f5;
+                        background: $backgroundColor;
+                        color: $textColor;
                     }
                     #output {
-                        background: white;
+                        background: $surfaceColor;
+                        color: $textColor;
                         border-radius: 8px;
                         padding: 16px;
                         margin-top: 16px;
-                        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+                        border: 1px solid $borderColor;
                     }
                 </style>
             </head>
@@ -917,17 +942,19 @@ private fun generatePreviewHtml(code: String, language: String?): String {
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <title>Code Preview</title>
                 <style>
-                    body { 
-                        margin: 16px; 
-                        font-family: monospace; 
-                        background: #f5f5f5;
+                    body {
+                        margin: 16px;
+                        font-family: monospace;
+                        background: $backgroundColor;
+                        color: $textColor;
                     }
                     pre {
-                        background: white;
+                        background: $surfaceColor;
+                        color: $textColor;
                         padding: 16px;
                         border-radius: 8px;
                         overflow: auto;
-                        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+                        border: 1px solid $borderColor;
                     }
                 </style>
             </head>

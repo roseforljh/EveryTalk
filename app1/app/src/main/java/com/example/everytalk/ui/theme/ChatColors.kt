@@ -16,21 +16,21 @@ data class ChatColors(
 )
 
 val lightChatColors = ChatColors(
-    userBubble = Color(0xFFf4f4f4),
-    aiBubble = Color.White,
-    errorContent = Color(0xFFD32F2F), // Material Red 700
-    reasoningText = Color(0xFF444444),
-    codeBlockBackground = Color(0xFFF3F3F3),
-    loadingIndicator = Color.Black
+    userBubble = Color.White,                     // 与白天模式背景一致
+    aiBubble = Color.White,                       // 与白天模式背景一致
+    errorContent = Color(0xFFD32F2F),             // Material Red 700
+    reasoningText = Color(0xFF424242),            // 深灰色推理文字
+    codeBlockBackground = LightPopupBackground,   // 浅灰代码背景 - 响应主题
+    loadingIndicator = Color(0xFF1976D2)          // 蓝色加载指示器
 )
 
 val darkChatColors = ChatColors(
-    userBubble = Color(0xFF2D2D2D),
-    aiBubble = Color.White,
-    errorContent = Color(0xFFEF5350), // Material Red 400
-    reasoningText = Color(0xFFBBBBBB),
-    codeBlockBackground = Color(0xFF2D2D2D),
-    loadingIndicator = Color.White
+    userBubble = DarkBackground,                  // 与夜间模式背景一致
+    aiBubble = DarkBackground,                    // 与夜间模式背景一致
+    errorContent = DarkError,                     // 柔和的错误色
+    reasoningText = DarkTextSecondary,            // 柔和的次要文字颜色
+    codeBlockBackground = DarkCodeBackground,     // 统一的代码背景色
+    loadingIndicator = DarkPrimary                // 柔和的主色调指示器
 )
 
 val MaterialTheme.chatColors: ChatColors

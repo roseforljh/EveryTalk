@@ -261,7 +261,7 @@ internal fun UserOrErrorMessageContent(
             ) {
                 Surface(
                     shape = RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS),
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.surfaceDim,
                     tonalElevation = 0.dp,
                     modifier = Modifier
                         .width(CONTEXT_MENU_FIXED_WIDTH)
@@ -555,7 +555,7 @@ fun AttachmentsContent(
             ) {
                 Surface(
                     shape = RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS),
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.surfaceDim,
                     tonalElevation = 0.dp,
                     modifier = Modifier
                         .width(CONTEXT_MENU_FIXED_WIDTH)

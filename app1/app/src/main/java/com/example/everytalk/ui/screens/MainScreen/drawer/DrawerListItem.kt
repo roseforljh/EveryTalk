@@ -162,7 +162,7 @@ internal fun DrawerConversationListItem(
                     Box(
                         modifier = Modifier
                             .size(8.dp)
-                            .background(Color.Black, CircleShape)
+                            .background(MaterialTheme.colorScheme.primary, CircleShape)
                     )
                     Spacer(Modifier.width(8.dp))
                 }

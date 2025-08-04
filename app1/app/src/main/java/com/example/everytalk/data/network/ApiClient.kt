@@ -93,10 +93,9 @@ object ApiClient {
     }
 
     private val backendProxyUrls = listOf(
-        "http://192.168.0.100:7860/chat", // Updated to match your local IP address
+        "http://192.168.0.104:7860/chat",
         //"https://backdaitalk.onrender.com/chat"
         //"https://dbykoynmqkkq.cloud.cloudcat.one:443/chat",
-
     )
 
 

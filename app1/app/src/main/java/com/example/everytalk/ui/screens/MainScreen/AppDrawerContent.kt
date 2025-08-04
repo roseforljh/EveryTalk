@@ -40,7 +40,7 @@ import kotlinx.coroutines.delay
 private val DEFAULT_DRAWER_WIDTH = 320.dp
 private const val EXPAND_ANIMATION_DURATION_MS = 200
 private const val CONTENT_CHANGE_ANIMATION_DURATION_MS = 200
-private val SEARCH_BACKGROUND_COLOR = Color(0xFFF0F0F0)
+// 搜索框背景色将动态使用主题色
 private val LIST_ITEM_MIN_HEIGHT = 48.dp // <--- 控制历史列表项的最小高度
 
 @OptIn(
@@ -230,8 +230,8 @@ fun AppDrawerContent(
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = Color.Transparent,
                         unfocusedBorderColor = Color.Transparent,
-                        focusedContainerColor = SEARCH_BACKGROUND_COLOR,
-                        unfocusedContainerColor = SEARCH_BACKGROUND_COLOR,
+                        focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
                         cursorColor = MaterialTheme.colorScheme.primary
                     ),
                     singleLine = true,
@@ -252,8 +252,8 @@ fun AppDrawerContent(
                         .height(48.dp),
                     shape = RoundedCornerShape(8.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Color.White, // Or MaterialTheme.colorScheme.primaryContainer
-                        contentColor = Color.Black // Or MaterialTheme.colorScheme.onPrimaryContainer
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = MaterialTheme.colorScheme.onSurface
                     ),
                     elevation = ButtonDefaults.buttonElevation(
                         defaultElevation = 0.dp,
@@ -271,13 +271,13 @@ fun AppDrawerContent(
                         Icon(
                             Icons.Filled.AddCircleOutline,
                             "新建会话图标",
-                            tint = Color.Black
-                        ) // Or MaterialTheme.colorScheme.onPrimaryContainer
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
                         Spacer(Modifier.width(20.dp))
                         Text(
                             "新建会话",
                             fontWeight = FontWeight.Bold,
-                            color = Color.Black, // Or MaterialTheme.colorScheme.onPrimaryContainer
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontSize = MaterialTheme.typography.bodyLarge.fontSize
                         )
                     }
@@ -291,8 +291,8 @@ fun AppDrawerContent(
                         .height(48.dp),
                     shape = RoundedCornerShape(8.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Color.White, // Or MaterialTheme.colorScheme.secondaryContainer
-                        contentColor = Color.Black // Or MaterialTheme.colorScheme.onSecondaryContainer
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = MaterialTheme.colorScheme.onSurface
                     ),
                     elevation = ButtonDefaults.buttonElevation(
                         defaultElevation = 0.dp,
@@ -310,13 +310,13 @@ fun AppDrawerContent(
                         Icon(
                             Icons.Filled.ClearAll,
                             "清空记录图标",
-                            tint = Color.Black
-                        ) // Or MaterialTheme.colorScheme.onSecondaryContainer
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
                         Spacer(Modifier.width(20.dp))
                         Text(
                             "清空记录",
                             fontWeight = FontWeight.Bold,
-                            color = Color.Black, // Or MaterialTheme.colorScheme.onSecondaryContainer
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontSize = MaterialTheme.typography.bodyLarge.fontSize
                         )
                     }
@@ -467,8 +467,8 @@ fun AppDrawerContent(
                     .height(40.dp), // Slightly shorter height
                 shape = RoundedCornerShape(8.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.White,
-                    contentColor = Color.Black
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = MaterialTheme.colorScheme.onSurface
                 ),
                 elevation = ButtonDefaults.buttonElevation(
                     defaultElevation = 0.dp,
@@ -486,13 +486,13 @@ fun AppDrawerContent(
                     Icon(
                         Icons.Filled.Info,
                         "关于图标",
-                        tint = Color.Black
+                        tint = MaterialTheme.colorScheme.onSurface
                     )
                     Spacer(Modifier.width(20.dp))
                     Text(
                         "关于",
                         fontWeight = FontWeight.Bold,
-                        color = Color.Black,
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontSize = MaterialTheme.typography.bodyLarge.fontSize
                     )
                 }
@@ -547,8 +547,8 @@ fun AppDrawerContent(
                                 renamingIndex = null
                             },
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = Color.Black,
-                                contentColor = Color.White
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
                             )
                         ) {
                             Text("确定")
@@ -558,14 +558,14 @@ fun AppDrawerContent(
                         Button(
                             onClick = { renamingIndex = null },
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = Color.Black,
-                                contentColor = Color.White
+                                containerColor = MaterialTheme.colorScheme.secondary,
+                                contentColor = MaterialTheme.colorScheme.onSecondary
                             )
                         ) {
                             Text("取消")
                         }
                     },
-                    containerColor = Color.White
+                    containerColor = MaterialTheme.colorScheme.surface
                 )
             }
         }

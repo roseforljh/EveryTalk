@@ -38,19 +38,19 @@ import androidx.compose.ui.window.PopupProperties
 
 val DialogTextFieldColors
     @Composable get() = OutlinedTextFieldDefaults.colors(
-        focusedTextColor = Color.Black,
-        unfocusedTextColor = Color.Black,
-        disabledTextColor = Color.DarkGray,
-        cursorColor = Color.Gray,
-        focusedBorderColor = Color.Black,
-        unfocusedBorderColor = Color.Black,
-        disabledBorderColor = Color.LightGray,
-        focusedLabelColor = Color.Black,
-        unfocusedLabelColor = Color.Gray,
-        disabledLabelColor = Color.DarkGray,
-        focusedContainerColor = Color.White,
-        unfocusedContainerColor = Color.White,
-        disabledContainerColor = Color.White.copy(alpha = 0.8f)
+        focusedTextColor = MaterialTheme.colorScheme.onSurface,
+        unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+        disabledTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+        cursorColor = MaterialTheme.colorScheme.primary,
+        focusedBorderColor = MaterialTheme.colorScheme.primary,
+        unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+        disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+        focusedLabelColor = MaterialTheme.colorScheme.primary,
+        unfocusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+        disabledLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+        focusedContainerColor = MaterialTheme.colorScheme.surface,
+        unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+        disabledContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
     )
 val DialogShape = RoundedCornerShape(16.dp)
 
@@ -66,7 +66,7 @@ internal fun AddProviderDialog(
 
     AlertDialog(
         onDismissRequest = onDismissRequest,
-        title = { Text("添加新模型平台", color = Color.Black) },
+        title = { Text("添加新模型平台", color = MaterialTheme.colorScheme.onSurface) },
         text = {
             OutlinedTextField(
                 value = newProviderName,
@@ -87,8 +87,8 @@ internal fun AddProviderDialog(
                 onClick = onConfirm,
                 enabled = newProviderName.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.Black,
-                    contentColor = Color.White
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
                 )
             ) { Text("添加") }
         },
@@ -96,13 +96,13 @@ internal fun AddProviderDialog(
             TextButton(
                 onClick = onDismissRequest,
                 colors = ButtonDefaults.textButtonColors(
-                    contentColor = Color.Red
+                    contentColor = MaterialTheme.colorScheme.error
                 )
             ) { Text("取消") }
         },
-        containerColor = Color.White,
-        titleContentColor = Color.Black,
-        textContentColor = Color.Black
+        containerColor = MaterialTheme.colorScheme.surface,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurface
     )
 
     LaunchedEffect(Unit) {
@@ -165,7 +165,7 @@ private fun CustomStyledDropdownMenu(
                 )
                 Surface(
                     shape = DialogShape,
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.surfaceDim,
                     shadowElevation = 6.dp,
                     tonalElevation = 0.dp,
                     modifier = modifier
@@ -222,7 +222,7 @@ internal fun AddNewFullConfigDialog(
 
     AlertDialog(
         onDismissRequest = onDismissRequest,
-        title = { Text("添加配置 (1/2)", color = Color.Black) },
+        title = { Text("添加配置 (1/2)", color = MaterialTheme.colorScheme.onSurface) },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 ExposedDropdownMenuBox(
@@ -276,7 +276,7 @@ internal fun AddNewFullConfigDialog(
                                         ) {
                                             Text(
                                                 text = providerItem,
-                                                color = Color.Black,
+                                                color = MaterialTheme.colorScheme.onSurface,
                                                 modifier = Modifier.weight(1f)
                                             )
                                             val nonDeletableProviders = listOf(
@@ -298,7 +298,7 @@ internal fun AddNewFullConfigDialog(
                                                     Icon(
                                                         Icons.Filled.Close,
                                                         contentDescription = "删除 $providerItem",
-                                                        tint = Color.Gray
+                                                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                                                     )
                                                 }
                                             }
@@ -308,7 +308,7 @@ internal fun AddNewFullConfigDialog(
                                         onProviderChange(providerItem)
                                         providerMenuExpanded = false
                                     },
-                                    colors = MenuDefaults.itemColors(textColor = Color.Black)
+                                    colors = MenuDefaults.itemColors(textColor = MaterialTheme.colorScheme.onSurface)
                                 )
                             }
                         }
@@ -347,20 +347,20 @@ internal fun AddNewFullConfigDialog(
                 onClick = onConfirm,
                 enabled = apiKey.isNotBlank() && provider.isNotBlank() && apiAddress.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.Black,
-                    contentColor = Color.White
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
                 )
             ) { Text("添加模型") }
         },
         dismissButton = {
             TextButton(
                 onClick = onDismissRequest,
-                colors = ButtonDefaults.textButtonColors(contentColor = Color.Red)
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
             ) { Text("取消") }
         },
-        containerColor = Color.White,
-        titleContentColor = Color.Black,
-        textContentColor = Color.Black
+        containerColor = MaterialTheme.colorScheme.surface,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurface
     )
     LaunchedEffect(Unit) { focusRequesterApiKey.requestFocus() }
 }
@@ -378,7 +378,7 @@ internal fun AddModelToExistingKeyDialog(
     val focusRequesterModelName = remember { FocusRequester() }
     AlertDialog(
         onDismissRequest = onDismissRequest,
-        title = { Text("添加模型 (2/2)", color = Color.Black) },
+        title = { Text("添加模型 (2/2)", color = MaterialTheme.colorScheme.onSurface) },
         text = {
             Column {
                 OutlinedTextField(
@@ -401,20 +401,20 @@ internal fun AddModelToExistingKeyDialog(
                 onClick = onConfirm,
                 enabled = newModelName.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.Black,
-                    contentColor = Color.White
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
                 )
             ) { Text("保存") }
         },
         dismissButton = {
             TextButton(
                 onClick = onDismissRequest,
-                colors = ButtonDefaults.textButtonColors(contentColor = Color.Red)
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
             ) { Text("取消") }
         },
-        containerColor = Color.White,
-        titleContentColor = Color.Black,
-        textContentColor = Color.Black
+        containerColor = MaterialTheme.colorScheme.surface,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurface
     )
     LaunchedEffect(Unit) { focusRequesterModelName.requestFocus() }
 }
@@ -432,7 +432,7 @@ internal fun EditConfigDialog(
 
     AlertDialog(
         onDismissRequest = onDismissRequest,
-        title = { Text("编辑配置", color = Color.Black) },
+        title = { Text("编辑配置", color = MaterialTheme.colorScheme.onSurface) },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 OutlinedTextField(
@@ -468,21 +468,21 @@ internal fun EditConfigDialog(
                 onClick = { onConfirm(apiAddress, apiKey) },
                 enabled = apiKey.isNotBlank() && apiAddress.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.Black,
-                    contentColor = Color.White
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
                 )
             ) { Text("更新") }
         },
         dismissButton = {
             TextButton(
                 onClick = onDismissRequest,
-                colors = ButtonDefaults.textButtonColors(contentColor = Color.Red)
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
             ) { Text("取消") }
         },
-        containerColor = Color.White,
+        containerColor = MaterialTheme.colorScheme.surface,
         shape = DialogShape,
-        titleContentColor = Color.Black,
-        textContentColor = Color.Black
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurface
     )
 
     LaunchedEffect(Unit) {
@@ -499,8 +499,8 @@ internal fun ConfirmDeleteDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismissRequest,
-        title = { Text(title, color = Color.Black) },
-        text = { Text(text, color = Color.Black) },
+        title = { Text(title, color = MaterialTheme.colorScheme.onSurface) },
+        text = { Text(text, color = MaterialTheme.colorScheme.onSurface) },
         confirmButton = {
             Button(
                 onClick = {
@@ -508,8 +508,8 @@ internal fun ConfirmDeleteDialog(
                     onDismissRequest()
                 },
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFFC62828),
-                    contentColor = Color.White
+                    containerColor = MaterialTheme.colorScheme.error,
+                    contentColor = MaterialTheme.colorScheme.onError
                 )
             ) {
                 Text("确认删除")
@@ -518,15 +518,15 @@ internal fun ConfirmDeleteDialog(
         dismissButton = {
             TextButton(
                 onClick = onDismissRequest,
-                colors = ButtonDefaults.textButtonColors(contentColor = Color.Black)
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)
             ) {
                 Text("取消")
             }
         },
-        containerColor = Color.White,
+        containerColor = MaterialTheme.colorScheme.surface,
         shape = DialogShape,
-        titleContentColor = Color.Black,
-        textContentColor = Color.Black
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurface
     )
 }
 
@@ -540,10 +540,10 @@ internal fun ImportExportDialog(
     AlertDialog(
         onDismissRequest = onDismissRequest,
         shape = DialogShape,
-        containerColor = Color.White,
-        titleContentColor = Color.Black,
-        textContentColor = Color.Black,
-        title = { Text("导入 / 导出配置", color = Color.Black) },
+        containerColor = MaterialTheme.colorScheme.surface,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurface,
+        title = { Text("导入 / 导出配置", color = MaterialTheme.colorScheme.onSurface) },
         text = {
             Column(
                 modifier = Modifier.fillMaxWidth(),
@@ -555,8 +555,8 @@ internal fun ImportExportDialog(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(50.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Color.Black,
-                        contentColor = Color.White
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
                     )
                 ) {
                     Text("导出配置")
@@ -567,8 +567,8 @@ internal fun ImportExportDialog(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(50.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Color.Black,
-                        contentColor = Color.White
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
                     )
                 ) {
                     Text("导入配置")
@@ -579,7 +579,7 @@ internal fun ImportExportDialog(
         dismissButton = {
             TextButton(
                 onClick = onDismissRequest,
-                colors = ButtonDefaults.textButtonColors(contentColor = Color.Gray)
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
             ) {
                 Text("取消")
             }

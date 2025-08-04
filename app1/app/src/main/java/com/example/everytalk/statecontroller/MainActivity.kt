@@ -123,7 +123,7 @@ class MainActivity : ComponentActivity() {
 
                     Scaffold(
                         modifier = Modifier.fillMaxSize(),
-                        containerColor = Color.White,
+                        containerColor = MaterialTheme.colorScheme.background,
                         snackbarHost = {
                             SnackbarHost(
                                 hostState = snackbarHostState,
@@ -231,7 +231,7 @@ class MainActivity : ComponentActivity() {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.White),
+                .background(MaterialTheme.colorScheme.background),
             contentAlignment = androidx.compose.ui.Alignment.Center
         ) {
             Image(

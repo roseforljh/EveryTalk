@@ -50,7 +50,7 @@ internal fun SettingsScreenContent(
         modifier = Modifier
             .fillMaxSize()
             .padding(paddingValues)
-            .background(Color.White)
+            .background(MaterialTheme.colorScheme.background)
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp, vertical = 16.dp)
     ) {
@@ -60,8 +60,8 @@ internal fun SettingsScreenContent(
                 .fillMaxWidth()
                 .padding(bottom = 0.dp),
             colors = ButtonDefaults.buttonColors(
-                containerColor = Color.Black,
-                contentColor = Color.White
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary
             )
         ) {
             Icon(Icons.Filled.Add, contentDescription = "添加配置")
@@ -79,7 +79,7 @@ internal fun SettingsScreenContent(
                     .padding(vertical = 32.dp)
                     .align(Alignment.CenterHorizontally),
                 style = MaterialTheme.typography.bodyMedium,
-                color = Color.Gray
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
             )
         } else {
             apiConfigsByApiKeyAndModality.forEach { (apiKey, configsByModality) ->
@@ -136,7 +136,7 @@ private fun ApiKeyItemGroup(
             .clickable(onClick = onEditConfigClick),
         shape = RoundedCornerShape(20.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White)
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             Row(
@@ -168,7 +168,7 @@ private fun ApiKeyItemGroup(
                     Icon(
                         Icons.Outlined.Cancel,
                         contentDescription = "删除配置组",
-                        tint = Color.Gray
+                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                     )
                 }
             }
@@ -196,7 +196,7 @@ private fun ApiKeyItemGroup(
                         Icon(
                             Icons.Filled.Add,
                             contentDescription = "为此Key和类型添加模型",
-                            tint = Color.Gray
+                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                         )
                     }
                 }
@@ -291,7 +291,7 @@ private fun ModelItem(
             Icon(
                 imageVector = if (isSelected) Icons.Filled.CheckCircle else Icons.Outlined.RadioButtonUnchecked,
                 contentDescription = "选择模型",
-                tint = if (isSelected) Color.Black else Color.Gray
+                tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
             )
         }
         Spacer(Modifier.width(8.dp))
@@ -302,7 +302,7 @@ private fun ModelItem(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
-                color = Color.Black
+                color = MaterialTheme.colorScheme.onSurface
             )
         }
         IconButton(
@@ -312,7 +312,7 @@ private fun ModelItem(
             Icon(
                 Icons.Filled.Close,
                 contentDescription = "删除模型",
-                tint = Color(0xFFD32F2F)
+                tint = MaterialTheme.colorScheme.error
             )
         }
     }

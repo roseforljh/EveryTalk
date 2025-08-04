@@ -68,7 +68,7 @@ internal fun ConversationItemMenu(
                     }
             ) {
                 Surface(
-                    color = Color(0xFFefefef),
+                    color = MaterialTheme.colorScheme.surfaceDim,
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.widthIn(max = 120.dp)
                 ) {
@@ -99,17 +99,17 @@ internal fun ConversationItemMenu(
                             Icon(
                                 Icons.Filled.DriveFileRenameOutline,
                                 "重命名图标",
-                                tint = if (isRenameEnabled) Color.Black else Color.Gray,
+                                tint = if (isRenameEnabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                                 modifier = Modifier.size(20.dp)
                             )
                             Spacer(Modifier.width(12.dp))
                             Text(
                                 "重命名",
-                                color = if (isRenameEnabled) Color.Black else Color.Gray,
+                                color = if (isRenameEnabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                                 style = MaterialTheme.typography.bodyMedium
                             )
                         }
-                        Divider(color = Color.LightGray.copy(alpha = 0.5f))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
                         // 删除选项
                         Row(
                             modifier = Modifier
@@ -128,13 +128,13 @@ internal fun ConversationItemMenu(
                             Icon(
                                 Icons.Filled.Delete,
                                 "删除图标",
-                                tint = Color.Black,
+                                tint = MaterialTheme.colorScheme.onSurface,
                                 modifier = Modifier.size(20.dp)
                             )
                             Spacer(Modifier.width(12.dp))
                             Text(
                                 "删除",
-                                color = Color.Black,
+                                color = MaterialTheme.colorScheme.onSurface,
                                 style = MaterialTheme.typography.bodyMedium
                             )
                         }

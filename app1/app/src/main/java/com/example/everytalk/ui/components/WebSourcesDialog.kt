@@ -45,7 +45,7 @@ fun WebSourcesDialog(
                 .fillMaxHeight(0.8f),
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(
-                containerColor = Color.White
+                containerColor = MaterialTheme.colorScheme.surfaceDim
             ),
             elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
         ) {

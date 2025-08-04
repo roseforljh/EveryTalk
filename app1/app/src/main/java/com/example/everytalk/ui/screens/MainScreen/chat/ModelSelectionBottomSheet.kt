@@ -217,7 +217,7 @@ fun ModelSelectionBottomSheet(
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,
         sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+        containerColor = MaterialTheme.colorScheme.surfaceDim,
         dragHandle = null
     ) {
         Column(
@@ -418,7 +418,7 @@ fun PlatformSelectionDialog(
 
     AlertDialog(
         onDismissRequest = onDismissRequest,
-        containerColor = Color.White,
+        containerColor = MaterialTheme.colorScheme.surfaceDim,
         modifier = Modifier.graphicsLayer {
             this.alpha = alpha.value
             this.scaleX = scale.value

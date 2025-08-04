@@ -39,9 +39,9 @@ fun AppTopBar(
         modifier = modifier
             .fillMaxWidth()
             .height(barHeight)
-            .background(Color.White),
+            .background(MaterialTheme.colorScheme.surface),
 
-        color = Color.White,
+        color = MaterialTheme.colorScheme.surface,
     ) {
         Row(
             modifier = Modifier
@@ -60,7 +60,7 @@ fun AppTopBar(
                     Icon(
                         imageVector = Icons.Filled.Menu,
                         contentDescription = "打开导航菜单",
-                        tint = Color.Black,
+                        tint = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.size(iconSize)
                     )
                 }
@@ -77,7 +77,7 @@ fun AppTopBar(
             ) {
                 Surface(
                     shape = CircleShape,
-                    color = Color(0xffececec),
+                    color = MaterialTheme.colorScheme.surfaceDim, // 响应主题的淡灰色背景，与纯白有轻微区分
                     modifier = Modifier
                         .height(28.dp)
                         .wrapContentWidth(unbounded = false)
@@ -86,7 +86,7 @@ fun AppTopBar(
                 ) {
                     Text(
                         text = selectedConfigName,
-                        color = Color(0xff57585d),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = titleFontSize,
                         fontWeight = FontWeight.Medium,
                         textAlign = TextAlign.Center,
@@ -112,7 +112,7 @@ fun AppTopBar(
                     Icon(
                         imageVector = Icons.Filled.Settings,
                         contentDescription = "设置",
-                        tint = Color.Black,
+                        tint = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.size(iconSize)
                     )
                 }

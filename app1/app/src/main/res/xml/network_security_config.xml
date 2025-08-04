@@ -1,10 +1,32 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
+    <!-- 允许所有HTTP流量 -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system"/>
+        </trust-anchors>
+    </base-config>
+    
+    <!-- 特定域名配置，支持常见的局域网地址和开发地址 -->
     <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="true">192.168.0.102</domain>
-        <domain includeSubdomains="true">192.168.0.100</domain>
+        <!-- 本地地址 -->
         <domain includeSubdomains="true">localhost</domain>
         <domain includeSubdomains="true">127.0.0.1</domain>
         <domain includeSubdomains="true">10.0.2.2</domain>
+        
+        <!-- 常见局域网地址段 -->
+        <domain includeSubdomains="true">192.168.0.1</domain>
+        <domain includeSubdomains="true">192.168.0.100</domain>
+        <domain includeSubdomains="true">192.168.0.101</domain>
+        <domain includeSubdomains="true">192.168.0.102</domain>
+        <domain includeSubdomains="true">192.168.0.103</domain>
+        <domain includeSubdomains="true">192.168.0.104</domain>
+        <domain includeSubdomains="true">192.168.0.105</domain>
+        <domain includeSubdomains="true">192.168.1.1</domain>
+        <domain includeSubdomains="true">10.0.0.1</domain>
+        <domain includeSubdomains="true">172.16.0.1</domain>
+        
+        <!-- 支持任何IP地址模式（通配符方式） -->
+        <!-- 注意：这种方式可能不被所有版本支持，所以我们列出常见的地址 -->
     </domain-config>
 </network-security-config>

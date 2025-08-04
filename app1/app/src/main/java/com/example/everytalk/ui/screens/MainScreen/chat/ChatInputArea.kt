@@ -190,8 +190,8 @@ fun ImageSelectionPanel(
     onOptionSelected: (ImageSourceOption) -> Unit
 ) {
     var activeOption by remember { mutableStateOf<ImageSourceOption?>(null) }
-    val panelBackgroundColor = Color(0xFFefefef)
-    val darkerBackgroundColor = Color(0xFFdcdcdc)
+    val panelBackgroundColor = MaterialTheme.colorScheme.surfaceDim
+    val darkerBackgroundColor = MaterialTheme.colorScheme.surfaceVariant
 
     Surface(
         modifier = modifier
@@ -226,11 +226,11 @@ fun ImageSelectionPanel(
                     Icon(
                         imageVector = option.icon,
                         contentDescription = option.label,
-                        tint = Color(0xFF7b7b7b),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(24.dp)
                     )
                     Spacer(Modifier.width(12.dp))
-                    Text(text = option.label, color = Color.Black, fontSize = 16.sp)
+                    Text(text = option.label, color = MaterialTheme.colorScheme.onSurface, fontSize = 16.sp)
                 }
             }
         }
@@ -243,8 +243,8 @@ fun MoreOptionsPanel(
     onOptionSelected: (MoreOptionsType) -> Unit
 ) {
     var activeOption by remember { mutableStateOf<MoreOptionsType?>(null) }
-    val panelBackgroundColor = Color(0xFFefefef)
-    val darkerBackgroundColor = Color(0xFFdcdcdc)
+    val panelBackgroundColor = MaterialTheme.colorScheme.surfaceDim
+    val darkerBackgroundColor = MaterialTheme.colorScheme.surfaceVariant
 
     Surface(
         modifier = modifier
@@ -279,11 +279,11 @@ fun MoreOptionsPanel(
                     Icon(
                         imageVector = option.icon,
                         contentDescription = option.label,
-                        tint = Color(0xFF7b7b7b),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(24.dp)
                     )
                     Spacer(Modifier.width(12.dp))
-                    Text(text = option.label, color = Color.Black, fontSize = 16.sp)
+                    Text(text = option.label, color = MaterialTheme.colorScheme.onSurface, fontSize = 16.sp)
                 }
             }
         }
@@ -301,8 +301,8 @@ fun SelectedItemPreview(
         modifier = modifier
             .size(width = 100.dp, height = 80.dp)
             .clip(RoundedCornerShape(8.dp))
-            .border(1.dp, Color.LightGray, RoundedCornerShape(8.dp))
-            .background(Color.White)
+            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surface)
     ) {
         when (mediaItem) {
             is SelectedMediaItem.ImageFromUri -> AsyncImage(
@@ -352,7 +352,7 @@ fun SelectedItemPreview(
                         fontSize = 12.sp,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
-                        color = Color.DarkGray
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -376,7 +376,7 @@ fun SelectedItemPreview(
                         fontSize = 12.sp,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
-                        color = Color.DarkGray
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -387,12 +387,12 @@ fun SelectedItemPreview(
                 .align(Alignment.TopEnd)
                 .padding(2.dp)
                 .size(20.dp)
-                .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.7f), CircleShape)
         ) {
             Icon(
                 Icons.Filled.Close,
                 contentDescription = "Remove item",
-                tint = Color.White,
+                tint = MaterialTheme.colorScheme.onPrimary,
                 modifier = Modifier.size(14.dp)
             )
         }
@@ -641,7 +641,7 @@ fun ChatInputArea(
                     shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
                     clip = false
                 )
-                .background(Color.White, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
                 .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
                 .onSizeChanged { intSize -> chatInputContentHeightPx = intSize.height }
         ) {
@@ -737,8 +737,8 @@ fun ChatInputArea(
                             onClick = onSendClick,
                             shape = CircleShape,
                             colors = IconButtonDefaults.filledIconButtonColors(
-                                containerColor = Color.Black,
-                                contentColor = Color.White
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
                             )
                         ) {
                             Icon(

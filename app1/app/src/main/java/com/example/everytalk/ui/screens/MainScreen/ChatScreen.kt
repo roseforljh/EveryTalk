@@ -223,7 +223,7 @@ fun ChatScreen(
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
-        containerColor = Color.White,
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             AppTopBar(
                 selectedConfigName = selectedApiConfig?.name?.takeIf { it.isNotBlank() }
@@ -481,8 +481,8 @@ private fun AboutDialog(
                 },
                 shape = RoundedCornerShape(20.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.Black,
-                    contentColor = Color.White
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
                 )
             ) {
                 Text("检查更新")
@@ -493,15 +493,15 @@ private fun AboutDialog(
                 onClick = onDismiss,
                 shape = RoundedCornerShape(20.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.DarkGray,
-                    contentColor = Color.White
+                    containerColor = MaterialTheme.colorScheme.secondary,
+                    contentColor = MaterialTheme.colorScheme.onSecondary
                 )
             ) {
                 Text("关闭")
             }
         },
         shape = RoundedCornerShape(28.dp),
-        containerColor = Color.White
+        containerColor = MaterialTheme.colorScheme.surface
     )
 }
 
@@ -522,8 +522,8 @@ private fun UpdateAvailableDialog(
                 onClick = { onUpdate(releaseInfo.htmlUrl) },
                 shape = RoundedCornerShape(20.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.Black,
-                    contentColor = Color.White
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
                 )
             ) {
                 Text("立即更新")
@@ -534,15 +534,15 @@ private fun UpdateAvailableDialog(
                 onClick = onDismiss,
                 shape = RoundedCornerShape(20.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.DarkGray,
-                    contentColor = Color.White
+                    containerColor = MaterialTheme.colorScheme.secondary,
+                    contentColor = MaterialTheme.colorScheme.onSecondary
                 )
             ) {
                 Text("稍后")
             }
         },
         shape = RoundedCornerShape(28.dp),
-        containerColor = Color.White
+        containerColor = MaterialTheme.colorScheme.surface
     )
 }
 
@@ -579,7 +579,7 @@ private fun UpdateAvailableDialog(
                     this.scaleX = scale.value
                     this.scaleY = scale.value
                 },
-            colors = CardDefaults.cardColors(containerColor = Color.White)
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
         ) {
             // 直接显示内容，移除顶部标题栏
             Box(
@@ -589,7 +589,7 @@ private fun UpdateAvailableDialog(
             ) {
                 val scrollState = rememberScrollState()
                 val scrimHeight = 32.dp // 加大模糊效果高度
-                val scrimColor = Color.White
+                val scrimColor = MaterialTheme.colorScheme.surface
                 
                 // 自定义文本选择颜色
                 val customTextSelectionColors = TextSelectionColors(
@@ -677,15 +677,30 @@ private fun AiMessageOptionsBottomSheet(
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,
         sheetState = sheetState,
-        containerColor = Color.White,
+        containerColor = MaterialTheme.colorScheme.surfaceDim,
     ) {
         Column(modifier = Modifier.padding(bottom = 32.dp)) {
             AiMessageOption.values().forEach { option ->
                 ListItem(
-                    headlineContent = { Text(option.title) },
-                    leadingContent = { Icon(option.icon, contentDescription = option.title) },
+                    headlineContent = {
+                        Text(
+                            text = option.title,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    },
+                    leadingContent = {
+                        Icon(
+                            imageVector = option.icon,
+                            contentDescription = option.title,
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
+                    },
                     modifier = Modifier.clickable { onOptionSelected(option) },
-                    colors = ListItemDefaults.colors(containerColor = Color.White)
+                    colors = ListItemDefaults.colors(
+                        containerColor = MaterialTheme.colorScheme.surfaceDim,
+                        headlineColor = MaterialTheme.colorScheme.onSurface,
+                        leadingIconColor = MaterialTheme.colorScheme.onSurface
+                    )
                 )
             }
         }
