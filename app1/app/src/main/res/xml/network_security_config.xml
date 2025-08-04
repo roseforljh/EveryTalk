@@ -26,6 +26,11 @@
         <domain includeSubdomains="true">10.0.0.1</domain>
         <domain includeSubdomains="true">172.16.0.1</domain>
         
+        <!-- CDN 域名配置，允许数学公式渲染所需的资源 -->
+        <domain includeSubdomains="true">cdn.jsdelivr.net</domain>
+        <domain includeSubdomains="true">unpkg.com</domain>
+        <domain includeSubdomains="true">cdnjs.cloudflare.com</domain>
+        
         <!-- 支持任何IP地址模式（通配符方式） -->
         <!-- 注意：这种方式可能不被所有版本支持，所以我们列出常见的地址 -->
     </domain-config>

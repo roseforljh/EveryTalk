@@ -36,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
@@ -67,10 +68,7 @@ import com.example.everytalk.ui.screens.MainScreen.chat.EditMessageDialog
 import com.example.everytalk.ui.screens.MainScreen.chat.EmptyChatView
 import com.example.everytalk.ui.screens.MainScreen.chat.ModelSelectionBottomSheet
 import com.example.everytalk.ui.screens.MainScreen.chat.rememberChatScrollStateManager
-import com.example.everytalk.ui.screens.MainScreen.chat.MarkdownText
-import com.example.everytalk.util.StreamingMarkdownRenderer
-import com.example.everytalk.util.parseInlineMarkdownToAnnotatedString
-import com.example.everytalk.util.MarkdownStyleConfig
+import com.example.everytalk.ui.components.MarkdownText
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.delay
@@ -201,6 +199,11 @@ fun ChatScreen(
         derivedStateOf { imeInsets.getBottom(density) }
     }
     val imeHeightDp = with(density) { imeHeightPx.toDp() }
+    
+    // 计算输入法是否可见
+    val isKeyboardVisible by remember {
+        derivedStateOf { imeHeightPx > 0 }
+    }
 
     val audioPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
@@ -277,7 +280,11 @@ fun ChatScreen(
                         }
                     }
                     messages.isEmpty() -> {
-                        EmptyChatView(density = density)
+                        EmptyChatView(
+                            density = density,
+                            isKeyboardVisible = isKeyboardVisible,
+                            imeHeightDp = imeHeightDp
+                        )
                     }
                     else -> {
                         val chatListItems by viewModel.chatListItems.collectAsState()
@@ -605,25 +612,45 @@ private fun UpdateAvailableDialog(
                             .padding(vertical = scrimHeight)
                     ) {
                         // 使用完整的Markdown渲染，确保格式化正确
-                        val annotatedString by produceState(
-                            initialValue = AnnotatedString(textToDisplay),
-                            textToDisplay
+                        // 使用新的ContentBlock解析逻辑，包括数学公式支持
+                        val contentBlocks = remember(textToDisplay) {
+                            com.example.everytalk.util.parseToContentBlocks(textToDisplay)
+                        }
+
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            withContext(Dispatchers.Default) {
-                                // 直接使用完整的Markdown解析，不依赖流式渲染
-                                value = parseInlineMarkdownToAnnotatedString(
-                                    textToDisplay,
-                                    MarkdownStyleConfig()
-                                )
+                            contentBlocks.forEach { block ->
+                                when (block) {
+                                    is com.example.everytalk.util.ContentBlock.TextBlock -> {
+                                        if (block.content.isNotBlank()) {
+                                            com.example.everytalk.ui.components.MarkdownText(
+                                                markdown = block.content,
+                                                style = MaterialTheme.typography.bodyLarge,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+                                    }
+                                    is com.example.everytalk.util.ContentBlock.MathBlock -> {
+                                        com.example.everytalk.ui.components.MathView(
+                                            latex = block.latex,
+                                            isDisplay = block.isDisplay,
+                                            textColor = if (MaterialTheme.colorScheme.background.luminance() < 0.5f)
+                                                Color.White // 深色主题：纯白色
+                                            else
+                                                Color.Black, // 浅色主题：纯黑色
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
+                                    is com.example.everytalk.util.ContentBlock.CodeBlock -> {
+                                        com.example.everytalk.ui.components.CodePreview(
+                                            code = block.code,
+                                            language = block.language
+                                        )
+                                    }
+                                }
                             }
                         }
-                        
-                        Text(
-                            text = annotatedString,
-                            style = MaterialTheme.typography.bodyLarge.copy(
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        )
                     }
                 }
                 

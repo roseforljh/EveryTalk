@@ -39,9 +39,9 @@ fun AppTopBar(
         modifier = modifier
             .fillMaxWidth()
             .height(barHeight)
-            .background(MaterialTheme.colorScheme.surface),
+            .background(MaterialTheme.colorScheme.background),
 
-        color = MaterialTheme.colorScheme.surface,
+        color = MaterialTheme.colorScheme.background,
     ) {
         Row(
             modifier = Modifier

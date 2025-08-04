@@ -28,6 +28,72 @@ import androidx.compose.ui.zIndex
  * 代码预览组件
  * 支持HTML、SVG、CSS等可视化代码的预览
  */
+
+/**
+ * 简单的代码预览组件
+ * 提供代码块显示和可选的预览功能
+ */
+@Composable
+fun CodePreview(
+    code: String,
+    language: String?,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier) {
+        // 显示代码语言标签（如果有）
+        if (!language.isNullOrBlank()) {
+            Surface(
+                modifier = Modifier
+                    .padding(bottom = 4.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp)
+            ) {
+                Text(
+                    text = language,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        
+        // 代码内容区域
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            shape = RoundedCornerShape(
+                topStart = if (language.isNullOrBlank()) 8.dp else 0.dp,
+                topEnd = if (language.isNullOrBlank()) 8.dp else 0.dp,
+                bottomStart = 8.dp,
+                bottomEnd = 8.dp
+            )
+        ) {
+            Column {
+                // 代码文本
+                Text(
+                    text = code,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                    ),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                
+                // 如果支持预览，显示预览按钮
+                if (isCodePreviewable(language, code)) {
+                    CodePreviewButton(
+                        code = code,
+                        language = language,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun CodePreviewButton(
     code: String,
@@ -175,6 +241,31 @@ private fun CodePreviewWebView(
                     domStorageEnabled = true
                     allowFileAccess = false
                     allowContentAccess = false
+                    // 禁用文本选择相关功能
+                    textZoom = 100 // 禁用文本缩放
+                    setSupportZoom(false)
+                    builtInZoomControls = false
+                    displayZoomControls = false
+                }
+
+                // 禁用文本选择，但不消费长按事件，让其传递到父级
+                setOnLongClickListener { false } // 不消费长按事件，让父级处理
+                isLongClickable = false
+
+                // 重写触摸事件处理，禁用长按
+                setOnTouchListener { _, event ->
+                    when (event.action) {
+                        android.view.MotionEvent.ACTION_DOWN,
+                        android.view.MotionEvent.ACTION_MOVE,
+                        android.view.MotionEvent.ACTION_UP -> {
+                            // 允许基本的触摸事件用于滚动
+                            false // 不消费事件，让WebView处理
+                        }
+                        else -> {
+                            // 对于其他事件（如长按），不处理
+                            false
+                        }
+                    }
                 }
             }
         },
@@ -197,13 +288,25 @@ private fun CodePreviewWebView(
 private fun generatePreviewHtml(code: String, language: String?, isDarkTheme: Boolean): String {
     // 预处理代码，支持Markdown和数学公式渲染
     val processedCode = preprocessCodeForRendering(code, language)
-    
+
     // 根据主题选择颜色
     val backgroundColor = if (isDarkTheme) "#0D1117" else "#FFFFFF"
     val textColor = if (isDarkTheme) "#E6EDF3" else "#24292F"
     val surfaceColor = if (isDarkTheme) "#161B22" else "#F6F8FA"
     val borderColor = if (isDarkTheme) "#30363D" else "#D0D7DE"
     val codeBackgroundColor = if (isDarkTheme) "#0D1117" else "#F6F8FA"
+
+    // 通用的禁用文本选择CSS样式
+    val disableSelectionCSS = """
+        * {
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+            -webkit-touch-callout: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+    """.trimIndent()
     
     return when (language?.lowercase()) {
         "html" -> {
@@ -231,6 +334,7 @@ private fun generatePreviewHtml(code: String, language: String?, isDarkTheme: Bo
                         };
                     </script>
                     <style>
+                        $disableSelectionCSS
                         body {
                             margin: 16px;
                             font-family: system-ui, -apple-system, sans-serif;
@@ -269,6 +373,7 @@ private fun generatePreviewHtml(code: String, language: String?, isDarkTheme: Bo
                         };
                     </script>
                     <style>
+                        $disableSelectionCSS
                         body {
                             margin: 16px;
                             font-family: monospace;
@@ -329,6 +434,7 @@ private fun generatePreviewHtml(code: String, language: String?, isDarkTheme: Bo
                         };
                     </script>
                     <style>
+                        $disableSelectionCSS
                         body {
                             margin: 0;
                             padding: 16px;
@@ -397,6 +503,7 @@ private fun generatePreviewHtml(code: String, language: String?, isDarkTheme: Bo
                 <title>Markdown Preview</title>
                 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
                 <style>
+                    $disableSelectionCSS
                     body {
                         margin: 0;
                         padding: 20px;
@@ -441,6 +548,7 @@ private fun generatePreviewHtml(code: String, language: String?, isDarkTheme: Bo
                 <title>Mermaid Diagram</title>
                 <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
                 <style>
+                    $disableSelectionCSS
                     body {
                         margin: 0;
                         padding: 20px;
@@ -481,13 +589,14 @@ private fun generatePreviewHtml(code: String, language: String?, isDarkTheme: Bo
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <title>PlantUML Diagram</title>
                 <style>
-                    body { 
-                        margin: 0; 
-                        padding: 20px; 
-                        display: flex; 
+                    $disableSelectionCSS
+                    body {
+                        margin: 0;
+                        padding: 20px;
+                        display: flex;
                         flex-direction: column;
-                        justify-content: center; 
-                        align-items: center; 
+                        justify-content: center;
+                        align-items: center;
                         min-height: 100vh;
                         background: #f5f5f5;
                         font-family: Arial, sans-serif;
@@ -533,9 +642,10 @@ private fun generatePreviewHtml(code: String, language: String?, isDarkTheme: Bo
                 <title>D3.js Visualization</title>
                 <script src="https://d3js.org/d3.v7.min.js"></script>
                 <style>
-                    body { 
-                        margin: 0; 
-                        padding: 20px; 
+                    $disableSelectionCSS
+                    body {
+                        margin: 0;
+                        padding: 20px;
                         font-family: Arial, sans-serif;
                         background: #f5f5f5;
                     }
@@ -574,12 +684,13 @@ private fun generatePreviewHtml(code: String, language: String?, isDarkTheme: Bo
                 <title>P5.js Sketch</title>
                 <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js"></script>
                 <style>
-                    body { 
-                        margin: 0; 
-                        padding: 20px; 
-                        display: flex; 
-                        justify-content: center; 
-                        align-items: center; 
+                    $disableSelectionCSS
+                    body {
+                        margin: 0;
+                        padding: 20px;
+                        display: flex;
+                        justify-content: center;
+                        align-items: center;
                         min-height: 100vh;
                         background: #f5f5f5;
                         font-family: Arial, sans-serif;
@@ -618,9 +729,10 @@ private fun generatePreviewHtml(code: String, language: String?, isDarkTheme: Bo
                 <title>Three.js 3D Scene</title>
                 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
                 <style>
-                    body { 
-                        margin: 0; 
-                        padding: 20px; 
+                    $disableSelectionCSS
+                    body {
+                        margin: 0;
+                        padding: 20px;
                         background: #f5f5f5;
                         font-family: Arial, sans-serif;
                     }
@@ -662,9 +774,10 @@ private fun generatePreviewHtml(code: String, language: String?, isDarkTheme: Bo
                 <title>Chart.js Visualization</title>
                 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
                 <style>
-                    body { 
-                        margin: 0; 
-                        padding: 20px; 
+                    $disableSelectionCSS
+                    body {
+                        margin: 0;
+                        padding: 20px;
                         background: #f5f5f5;
                         font-family: Arial, sans-serif;
                     }
@@ -707,12 +820,13 @@ private fun generatePreviewHtml(code: String, language: String?, isDarkTheme: Bo
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <title>Canvas Drawing</title>
                 <style>
-                    body { 
-                        margin: 0; 
-                        padding: 20px; 
-                        display: flex; 
-                        justify-content: center; 
-                        align-items: center; 
+                    $disableSelectionCSS
+                    body {
+                        margin: 0;
+                        padding: 20px;
+                        display: flex;
+                        justify-content: center;
+                        align-items: center;
                         min-height: 100vh;
                         background: #f5f5f5;
                         font-family: Arial, sans-serif;
@@ -768,9 +882,10 @@ private fun generatePreviewHtml(code: String, language: String?, isDarkTheme: Bo
                     };
                 </script>
                 <style>
-                    body { 
-                        margin: 0; 
-                        padding: 20px; 
+                    $disableSelectionCSS
+                    body {
+                        margin: 0;
+                        padding: 20px;
                         font-family: 'Times New Roman', serif;
                         background: #f5f5f5;
                         line-height: 1.6;
@@ -806,9 +921,10 @@ private fun generatePreviewHtml(code: String, language: String?, isDarkTheme: Bo
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <title>JSON Data Visualization</title>
                 <style>
-                    body { 
-                        margin: 0; 
-                        padding: 20px; 
+                    $disableSelectionCSS
+                    body {
+                        margin: 0;
+                        padding: 20px;
                         font-family: 'Monaco', 'Menlo', monospace;
                         background: #f5f5f5;
                     }
@@ -890,6 +1006,7 @@ private fun generatePreviewHtml(code: String, language: String?, isDarkTheme: Bo
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <title>JavaScript Preview</title>
                 <style>
+                    $disableSelectionCSS
                     body {
                         margin: 0;
                         padding: 16px;
@@ -942,6 +1059,7 @@ private fun generatePreviewHtml(code: String, language: String?, isDarkTheme: Bo
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <title>Code Preview</title>
                 <style>
+                    $disableSelectionCSS
                     body {
                         margin: 16px;
                         font-family: monospace;

@@ -234,7 +234,7 @@ fun ModelSelectionBottomSheet(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                val searchBarColor = Color(0xFFF3F3F3)
+                val searchBarColor = MaterialTheme.colorScheme.surfaceVariant
                 BasicTextField(
                     value = searchText,
                     onValueChange = { searchText = it },
@@ -425,7 +425,7 @@ fun PlatformSelectionDialog(
             this.scaleY = scale.value
         },
         title = {
-            Text("切换平台", color = Color.Black)
+            Text("切换平台", color = MaterialTheme.colorScheme.onSurface)
         },
         text = {
             LazyColumn(
@@ -433,7 +433,7 @@ fun PlatformSelectionDialog(
             ) {
                 items(platforms) { platform ->
                     ListItem(
-                        headlineContent = { Text(platform, color = Color.Black) },
+                        headlineContent = { Text(platform, color = MaterialTheme.colorScheme.onSurface) },
                         modifier = Modifier.clickable { tempSelectedPlatform = platform },
                         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                         trailingContent = {
@@ -441,13 +441,13 @@ fun PlatformSelectionDialog(
                                 Icon(
                                     imageVector = Icons.Filled.CheckCircle,
                                     contentDescription = "Selected",
-                                    tint = Color.Black
+                                    tint = MaterialTheme.colorScheme.onSurface
                                 )
                             } else {
                                 Icon(
                                     imageVector = Icons.Filled.RadioButtonUnchecked,
                                     contentDescription = "Unselected",
-                                    tint = Color.Gray
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
@@ -457,7 +457,7 @@ fun PlatformSelectionDialog(
         },
         dismissButton = {
             TextButton(onClick = onDismissRequest) {
-                Text("取消", color = Color.Red)
+                Text("取消", color = MaterialTheme.colorScheme.error)
             }
         },
         confirmButton = {
@@ -468,10 +468,10 @@ fun PlatformSelectionDialog(
                 enabled = tempSelectedPlatform != null && tempSelectedPlatform != currentPlatform,
                 shape = CircleShape,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.Black,
-                    contentColor = Color.White,
-                    disabledContainerColor = Color.Gray,
-                    disabledContentColor = Color.White
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    disabledContainerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
+                    disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
                 )
             ) {
                 Text("确定切换")

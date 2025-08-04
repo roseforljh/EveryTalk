@@ -11,8 +11,8 @@ import com.example.everytalk.models.SelectedMediaItem
 import com.example.everytalk.models.SelectedMediaItem.Audio
 import com.example.everytalk.ui.screens.viewmodel.HistoryManager
 import com.example.everytalk.util.AppLogger
-import com.example.everytalk.util.MessageProcessor
-import com.example.everytalk.util.ProcessedEventResult
+import com.example.everytalk.util.messageprocessor.MessageProcessor
+import com.example.everytalk.util.messageprocessor.ProcessedEventResult
 import io.ktor.client.statement.HttpResponse
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -141,7 +141,12 @@ class ApiHandler(
         cancelCurrentApiJob("开始新的流式传输，上下文: '$contextForLog'", isNewMessageSend = true)
 
         // 使用MessageProcessor创建新的AI消息
-        val newAiMessage = messageProcessor.createNewAiMessage()
+        val newAiMessage = Message(
+            id = UUID.randomUUID().toString(),
+            text = "",
+            sender = Sender.AI,
+            contentStarted = false
+        )
         val aiMessageId = newAiMessage.id
 
         // 重置消息处理器
@@ -332,22 +337,27 @@ class ApiHandler(
     private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: String) {
         val result = messageProcessor.processStreamEvent(appEvent, aiMessageId)
 
+        // 根据MessageProcessor的处理结果来更新消息状态
+        when (result) {
+            is ProcessedEventResult.ContentUpdated, is ProcessedEventResult.ReasoningUpdated -> {
+                // 这些事件由 updateMessageInState 处理，这里不需要操作
+            }
+            is ProcessedEventResult.ReasoningComplete -> {
+                stateHolder.reasoningCompleteMap[aiMessageId] = true
+            }
+            is ProcessedEventResult.Error -> {
+                logger.warn("MessageProcessor reported error: ${result.message}")
+                updateMessageWithError(aiMessageId, IOException(result.message))
+                // 不要return，继续处理其他事件，因为这可能只是格式处理的警告
+                // return
+            }
+            else -> {
+                // 对于其他类型的结果，继续处理原始事件
+            }
+        }
+
+        // 继续处理一些不由MessageProcessor处理的事件类型
         when (appEvent) {
-            is AppStreamEvent.Text -> {
-                // Handled by messageProcessor
-            }
-            is AppStreamEvent.Content -> {
-                stateHolder.appendContentToMessage(aiMessageId, appEvent.text)
-            }
-            is AppStreamEvent.Reasoning -> {
-                stateHolder.appendReasoningToMessage(aiMessageId, appEvent.text)
-            }
-            is AppStreamEvent.StreamEnd -> {
-                // Handled by onCompletion
-            }
-            is AppStreamEvent.Finish -> {
-                // Handled by onCompletion
-            }
             is AppStreamEvent.WebSearchStatus -> {
                 val messageId = stateHolder._currentStreamingAiMessageId.value ?: return
                 val index = stateHolder.messages.indexOfFirst { it.id == messageId }
@@ -368,9 +378,6 @@ class ApiHandler(
                     )
                 }
             }
-            is AppStreamEvent.ToolCall -> {
-                // Handled by messageProcessor
-            }
             is AppStreamEvent.Error -> {
                 val messageId = stateHolder._currentStreamingAiMessageId.value ?: return
                 viewModelScope.launch {
@@ -380,13 +387,15 @@ class ApiHandler(
                     )
                 }
             }
+            is AppStreamEvent.OutputType -> {
+                messageProcessor.setCurrentOutputType(appEvent.type)
+            }
+            else -> {
+                // 其他事件类型
+            }
         }
 
-        // 更新消息状态
-        val index = stateHolder.messages.indexOfFirst { it.id == aiMessageId }
-        if (index != -1) {
-            updateMessageInState(index)
-        }
+        // 触发滚动（如果需要）
         if (stateHolder.shouldAutoScroll()) {
             triggerScrollToBottom()
         }
@@ -398,12 +407,16 @@ class ApiHandler(
         // 从MessageProcessor获取当前文本和推理内容
         val accumulatedFullText = messageProcessor.getCurrentText()
         val accumulatedFullReasoning = messageProcessor.getCurrentReasoning()
+        val outputType = messageProcessor.getCurrentOutputType()
         
         // 只有当内容有变化时才更新消息
-        if (accumulatedFullText != originalMessage.text || accumulatedFullReasoning != originalMessage.reasoning) {
+        if (accumulatedFullText != originalMessage.text ||
+            accumulatedFullReasoning != originalMessage.reasoning ||
+            outputType != originalMessage.outputType) {
             val updatedMessage = originalMessage.copy(
                 text = accumulatedFullText,
                 reasoning = accumulatedFullReasoning,
+                outputType = outputType,
                 contentStarted = originalMessage.contentStarted || accumulatedFullText.isNotBlank()
             )
             

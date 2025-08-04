@@ -33,7 +33,8 @@ data class Message(
     val webSearchResults: List<WebSearchResult>? = null,
     val currentWebSearchStage: String? = null,
     val imageUrls: List<String>? = null,
-    val attachments: List<SelectedMediaItem> = emptyList()
+    val attachments: List<SelectedMediaItem> = emptyList(),
+    val outputType: String = "general"
 ) : IMessage {
     // 实现IMessage接口的role属性
     override val role: String

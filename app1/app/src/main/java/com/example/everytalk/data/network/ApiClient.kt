@@ -23,6 +23,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.*
 import kotlinx.serialization.modules.SerializersModule
 import kotlinx.serialization.modules.contextual
 import kotlinx.serialization.modules.polymorphic
@@ -40,6 +41,89 @@ import java.util.concurrent.atomic.AtomicBoolean
 object ApiClient {
 
     private const val GITHUB_API_BASE_URL = "https://api.github.com/"
+    
+    /**
+     * Parse backend stream event JSON format and convert to AppStreamEvent
+     */
+    private fun parseBackendStreamEvent(jsonChunk: String): AppStreamEvent? {
+        try {
+            // Parse as JsonObject to avoid AnySerializer deserialization issues
+            val jsonObject = Json.parseToJsonElement(jsonChunk).jsonObject
+            
+            val type = jsonObject["type"]?.jsonPrimitive?.content
+            
+            return when (type) {
+                "content" -> {
+                    val text = jsonObject["text"]?.jsonPrimitive?.content ?: ""
+                    AppStreamEvent.Content(text)
+                }
+                "text" -> {
+                    val text = jsonObject["text"]?.jsonPrimitive?.content ?: ""
+                    AppStreamEvent.Text(text)
+                }
+                "reasoning" -> {
+                    val text = jsonObject["text"]?.jsonPrimitive?.content ?: ""
+                    AppStreamEvent.Reasoning(text)
+                }
+                "stream_end" -> {
+                    val messageId = jsonObject["messageId"]?.jsonPrimitive?.content ?: ""
+                    AppStreamEvent.StreamEnd(messageId)
+                }
+                "web_search_status" -> {
+                    val stage = jsonObject["stage"]?.jsonPrimitive?.content ?: ""
+                    AppStreamEvent.WebSearchStatus(stage)
+                }
+                "web_search_results" -> {
+                    val results = try {
+                        val resultsList = jsonObject["results"]?.jsonArray ?: JsonArray(emptyList())
+                        resultsList.mapIndexed { index, resultElement ->
+                            try {
+                                val resultObject = resultElement.jsonObject
+                                com.example.everytalk.data.DataClass.WebSearchResult(
+                                    index = index,
+                                    title = resultObject["title"]?.jsonPrimitive?.content ?: "",
+                                    snippet = resultObject["snippet"]?.jsonPrimitive?.content ?: "",
+                                    href = resultObject["href"]?.jsonPrimitive?.content ?: ""
+                                )
+                            } catch (e: Exception) {
+                                null
+                            }
+                        }.filterNotNull()
+                    } catch (e: Exception) {
+                        emptyList()
+                    }
+                    AppStreamEvent.WebSearchResults(results)
+                }
+                "tool_call" -> {
+                    val id = jsonObject["id"]?.jsonPrimitive?.content ?: ""
+                    val name = jsonObject["name"]?.jsonPrimitive?.content ?: ""
+                    val argumentsObj = try {
+                        jsonObject["argumentsObj"]?.jsonObject ?: buildJsonObject { }
+                    } catch (e: Exception) {
+                        buildJsonObject { }
+                    }
+                    val isReasoningStep = jsonObject["isReasoningStep"]?.jsonPrimitive?.booleanOrNull
+                    AppStreamEvent.ToolCall(id, name, argumentsObj, isReasoningStep)
+                }
+                "error" -> {
+                    val message = jsonObject["message"]?.jsonPrimitive?.content ?: ""
+                    val upstreamStatus = jsonObject["upstreamStatus"]?.jsonPrimitive?.intOrNull
+                    AppStreamEvent.Error(message, upstreamStatus)
+                }
+                "finish" -> {
+                    val reason = jsonObject["reason"]?.jsonPrimitive?.content ?: ""
+                    AppStreamEvent.Finish(reason)
+                }
+                else -> {
+                    android.util.Log.w("ApiClient", "Unknown stream event type: $type")
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("ApiClient", "Failed to parse backend stream event: $jsonChunk", e)
+            return null
+        }
+    }
 
     private val jsonParser: Json by lazy {
         Json {
@@ -81,7 +165,7 @@ object ApiClient {
                 }
                 install(HttpTimeout) {
                     requestTimeoutMillis = 300_000
-                    connectTimeoutMillis = 20_000
+                    connectTimeoutMillis = 60_000  // 增加连接超时到60秒
                     socketTimeoutMillis = 300_000
                 }
                 install(HttpCache) {
@@ -93,7 +177,7 @@ object ApiClient {
     }
 
     private val backendProxyUrls = listOf(
-        "http://192.168.0.104:7860/chat",
+        "http://192.168.0.104:7860/chat",  // 原始配置作为备用
         //"https://backdaitalk.onrender.com/chat"
         //"https://dbykoynmqkkq.cloud.cloudcat.one:443/chat",
     )
@@ -219,16 +303,21 @@ object ApiClient {
             )
 
 
+            android.util.Log.d("ApiClient", "尝试连接到: $backendProxyUrl")
+            
+            android.util.Log.d("ApiClient", "开始执行POST请求到: $backendProxyUrl")
+            
             client.preparePost(backendProxyUrl) {
                 accept(ContentType.Text.EventStream)
                 timeout {
                     requestTimeoutMillis = HttpTimeout.INFINITE_TIMEOUT_MS
-                    connectTimeoutMillis = 20_000
+                    connectTimeoutMillis = 60_000  // 增加连接超时到60秒
                     socketTimeoutMillis = HttpTimeout.INFINITE_TIMEOUT_MS
                 }
                 setBody(multiPartData)
 
             }.execute { receivedResponse ->
+                android.util.Log.d("ApiClient", "收到响应，状态码: ${receivedResponse.status.value}")
                 response = receivedResponse
 
                 if (response?.status?.isSuccess() != true) {
@@ -237,70 +326,136 @@ object ApiClient {
                     } catch (e: Exception) {
                         "(读取错误响应体失败: ${e.message})"
                     }
+                    android.util.Log.e("ApiClient", "HTTP错误响应 ($backendProxyUrl): ${response?.status?.value} - $errorBody")
                     throw IOException("代理错误 ($backendProxyUrl): ${response?.status?.value} - $errorBody")
                 }
+                
+                android.util.Log.d("ApiClient", "HTTP响应成功，开始读取流数据")
 
                 val channel: ByteReadChannel = response?.bodyAsChannel() ?: run {
                     throw IOException("获取来自 $backendProxyUrl 的响应体通道失败。")
                 }
 
+                val lineBuffer = StringBuilder()
+                var eventCount = 0
+                var lineCount = 0
                 try {
+                    android.util.Log.d("ApiClient", "开始读取流数据通道")
                     while (!channel.isClosedForRead) {
-                        val line = channel.readUTF8Line() ?: continue
-
-                        if (line.isEmpty()) continue
+                        val line = channel.readUTF8Line()
+                        lineCount++
                         
-                        val processedLine = if (line.startsWith("data:")) {
-                            line.substring(5).trim()
-                        } else {
-                            line
+                        if (lineCount <= 10) {
+                            android.util.Log.d("ApiClient", "读取行 #$lineCount: '${line ?: "NULL"}'")
+                        } else if (lineCount % 50 == 0) {
+                            android.util.Log.d("ApiClient", "已读取 $lineCount 行，当前行: '${line?.take(50) ?: "NULL"}'")
                         }
-
-                        if (processedLine.isEmpty() || processedLine.startsWith(":")) {
-                            continue
-                        }
-
-                        if (processedLine.equals("[DONE]", ignoreCase = true)) {
-                            channel.cancel(CoroutineCancellationException("[DONE] marker received"))
-                            break
-                        }
-
-                        try {
-                            val appEvent = jsonParser.decodeFromString<AppStreamEvent>(
-                                processedLine
-                            )
-                            val sendResult = trySend(appEvent)
-                            if (!sendResult.isSuccess) {
-                                if (!isClosedForSend && !channel.isClosedForRead) {
-                                    channel.cancel(CoroutineCancellationException("Downstream channel closed: $sendResult"))
+                        
+                        if (line.isNullOrEmpty()) {
+                            val chunk = lineBuffer.toString().trim()
+                            if (chunk.isNotEmpty()) {
+                                android.util.Log.d("ApiClient", "处理数据块 (长度=${chunk.length}): '${chunk.take(100)}${if(chunk.length > 100) "..." else ""}'")
+                                
+                                if (chunk.equals("[DONE]", ignoreCase = true)) {
+                                    android.util.Log.d("ApiClient", "收到[DONE]标记，结束流处理")
+                                    channel.cancel(CoroutineCancellationException("[DONE] marker received"))
+                                    break
                                 }
-                                return@execute
+                                try {
+                                    // Parse the backend JSON format and convert to AppStreamEvent
+                                    val appEvent = parseBackendStreamEvent(chunk)
+                                    if (appEvent != null) {
+                                        eventCount++
+                                        if (eventCount <= 5) {
+                                            android.util.Log.d("ApiClient", "解析到流事件 #$eventCount: ${appEvent.javaClass.simpleName}")
+                                        } else if (eventCount % 10 == 0) {
+                                            android.util.Log.d("ApiClient", "已处理 $eventCount 个流事件")
+                                        }
+                                        val sendResult = trySend(appEvent)
+                                        if (!sendResult.isSuccess) {
+                                            android.util.Log.w("ApiClient", "流事件发送失败: $sendResult")
+                                            if (!isClosedForSend && !channel.isClosedForRead) {
+                                                channel.cancel(CoroutineCancellationException("Downstream channel closed: $sendResult"))
+                                            }
+                                            return@execute
+                                        }
+                                    } else {
+                                        android.util.Log.w("ApiClient", "无法解析的流数据块: '$chunk'")
+                                    }
+                                } catch (e: SerializationException) {
+                                    android.util.Log.e("ApiClientStream", "Serialization failed for chunk: '$chunk'", e)
+                                } catch (e: Exception) {
+                                    android.util.Log.e("ApiClientStream", "Exception during event processing for chunk: '$chunk'", e)
+                                }
+                            } else {
+                                android.util.Log.d("ApiClient", "遇到空行，但lineBuffer为空")
                             }
-                        } catch (e: SerializationException) {
-                            android.util.Log.e("ApiClientStream", "Serialization failed for line: '$processedLine'", e)
-                        } catch (e: Exception) {
-                            android.util.Log.e("ApiClientStream", "Exception during event processing for line: '$processedLine'", e)
+                            lineBuffer.clear()
+                        } else if (line.startsWith("data:")) {
+                            val dataContent = line.substring(5).trim()
+                            android.util.Log.d("ApiClient", "SSE data行: '$dataContent'")
+                            lineBuffer.append(dataContent)
+                        } else {
+                            // 不是SSE格式，可能是直接的JSON流
+                            android.util.Log.d("ApiClient", "非SSE格式行，直接处理: '$line'")
+                            if (line.trim().isNotEmpty()) {
+                                try {
+                                    val appEvent = parseBackendStreamEvent(line.trim())
+                                    if (appEvent != null) {
+                                        eventCount++
+                                        android.util.Log.d("ApiClient", "非SSE格式解析到事件 #$eventCount: ${appEvent.javaClass.simpleName}")
+                                        val sendResult = trySend(appEvent)
+                                        if (!sendResult.isSuccess) {
+                                            android.util.Log.w("ApiClient", "非SSE事件发送失败: $sendResult")
+                                            if (!isClosedForSend && !channel.isClosedForRead) {
+                                                channel.cancel(CoroutineCancellationException("Downstream channel closed: $sendResult"))
+                                            }
+                                            return@execute
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    android.util.Log.e("ApiClient", "非SSE格式解析失败: '$line'", e)
+                                }
+                            }
                         }
                     }
                 } catch (e: IOException) {
+                    android.util.Log.e("ApiClient", "流读取IO异常 ($backendProxyUrl)", e)
                     if (!isClosedForSend) throw e
-                }
-                catch (e: CoroutineCancellationException) {
+                } catch (e: CoroutineCancellationException) {
+                    android.util.Log.d("ApiClient", "流读取被取消 ($backendProxyUrl): ${e.message}")
                     throw e
                 } catch (e: Exception) {
+                    android.util.Log.e("ApiClient", "流读取意外异常 ($backendProxyUrl)", e)
                     if (!isClosedForSend) throw IOException(
                         "意外流错误 ($backendProxyUrl): ${e.message}",
                         e
                     )
                 } finally {
+                    android.util.Log.d("ApiClient", "流处理结束，共读取 $lineCount 行，处理 $eventCount 个事件")
+                    if (lineCount == 0) {
+                        android.util.Log.w("ApiClient", "警告：没有读取到任何数据行！")
+                    }
+                    val chunk = lineBuffer.toString().trim()
+                    if (chunk.isNotEmpty()) {
+                        try {
+                            val appEvent = parseBackendStreamEvent(chunk)
+                            if (appEvent != null) {
+                                trySend(appEvent)
+                            }
+                        } catch (e: SerializationException) {
+                            android.util.Log.e("ApiClientStream", "Serialization failed for final chunk: '$chunk'", e)
+                        }
+                    }
                 }
             }
         } catch (e: CoroutineCancellationException) {
+            android.util.Log.d("ApiClient", "Connection cancelled for $backendProxyUrl: ${e.message}")
             throw e
         } catch (e: HttpRequestTimeoutException) {
+            android.util.Log.e("ApiClient", "Request timeout for $backendProxyUrl", e)
             throw IOException("请求超时 ($backendProxyUrl): ${e.message}", e)
-        }
-        catch (e: ResponseException) {
+        } catch (e: ResponseException) {
             val errorBody = try {
                 e.response.bodyAsText()
             } catch (ex: Exception) {
@@ -308,15 +463,19 @@ object ApiClient {
             }
             val statusCode = e.response.status.value
             val statusDescription = e.response.status.description
+            android.util.Log.e("ApiClient", "Response error for $backendProxyUrl: $statusCode $statusDescription", e)
             throw IOException(
                 "服务器错误 $statusCode ($statusDescription): $errorBody",
                 e
             )
         } catch (e: IOException) {
+            android.util.Log.e("ApiClient", "IO error for $backendProxyUrl", e)
             throw e
         } catch (e: Exception) {
             val statusInfo = response?.status?.let { " (状态: ${it.value})" }
-                ?: ""; throw IOException(
+                ?: ""
+            android.util.Log.e("ApiClient", "Unknown error for $backendProxyUrl$statusInfo", e)
+            throw IOException(
                 "未知客户端错误 ($backendProxyUrl)$statusInfo: ${e.message}",
                 e
             )
@@ -350,21 +509,43 @@ object ApiClient {
                                         }
                                     }
                                 }
+                                if (winnerFound.get()) {
+                                    synchronized(errors) {
+                                        errors.clear()
+                                    }
+                                }
                                 send(event)
                             }
                     } catch (e: Exception) {
                         if (e !is CoroutineCancellationException) {
-                            android.util.Log.e("ApiClient", "Error connecting to $url", e)
+                            android.util.Log.e("ApiClient", "详细错误信息 - URL: $url, 错误类型: ${e.javaClass.simpleName}, 消息: ${e.message}", e)
                             synchronized(errors) {
-                                errors.add(e)
+                                if (!winnerFound.get()) {
+                                    errors.add(e)
+                                    android.util.Log.d("ApiClient", "Error added to collection for $url: ${e.message}")
+                                }
                             }
                         } else {
+                            android.util.Log.d("ApiClient", "Cancellation exception for $url: ${e.message}")
                             // 对于取消异常，检查是否是由于真实错误导致的取消
                             val cause = e.cause
                             if (cause != null && cause !is CoroutineCancellationException) {
                                 android.util.Log.e("ApiClient", "Cancellation caused by error for $url", cause)
                                 synchronized(errors) {
-                                    errors.add(cause)
+                                    if (!winnerFound.get()) {
+                                        errors.add(cause)
+                                        android.util.Log.d("ApiClient", "Cancellation cause added to collection for $url: ${cause.message}")
+                                    }
+                                }
+                            } else {
+                                // 即使是普通的取消异常，也需要记录以便调试
+                                android.util.Log.d("ApiClient", "Pure cancellation for $url, no underlying error")
+                                synchronized(errors) {
+                                    if (!winnerFound.get() && errors.isEmpty()) {
+                                        // 如果没有其他错误，记录取消异常以避免"no errors collected"
+                                        errors.add(IOException("连接被取消: ${e.message}", e))
+                                        android.util.Log.d("ApiClient", "Cancellation recorded as fallback error for $url")
+                                    }
                                 }
                             }
                         }
@@ -375,17 +556,26 @@ object ApiClient {
         }
 
         if (!winnerFound.get()) {
-            if (errors.isNotEmpty()) {
-                // 抛出最具体的错误信息
-                val lastError = errors.last()
-                android.util.Log.d("ApiClient", "Throwing collected error: ${lastError.javaClass.simpleName}: ${lastError.message}")
-                throw lastError
-            } else {
-                android.util.Log.w("ApiClient", "No errors collected, but no winner found. URLs: $backendProxyUrls")
-                throw IOException("无法连接到任何可用的后端服务器，且没有报告具体错误。")
+            synchronized(errors) {
+                android.util.Log.d("ApiClient", "Final error collection status: ${errors.size} errors collected")
+                errors.forEachIndexed { index, error ->
+                    android.util.Log.d("ApiClient", "Error $index: ${error.javaClass.simpleName}: ${error.message}")
+                }
+                
+                if (errors.isNotEmpty()) {
+                    // 抛出最具体的错误信息
+                    val lastError = errors.last()
+                    android.util.Log.d("ApiClient", "Throwing collected error: ${lastError.javaClass.simpleName}: ${lastError.message}")
+                    throw lastError
+                } else {
+                    android.util.Log.w("ApiClient", "No errors collected, but no winner found. URLs: $backendProxyUrls")
+                    android.util.Log.w("ApiClient", "This usually indicates all connections were cancelled without proper error reporting")
+                    throw IOException("无法连接到任何可用的后端服务器。可能的原因：网络连接问题、服务器不可达或连接超时。")
+                }
             }
         }
     }.buffer(Channel.BUFFERED).flowOn(Dispatchers.IO)
+
     private const val GEMINI_UPLOAD_URL = "https://generativelanguage.googleapis.com/v1beta/files"
 
     @Serializable

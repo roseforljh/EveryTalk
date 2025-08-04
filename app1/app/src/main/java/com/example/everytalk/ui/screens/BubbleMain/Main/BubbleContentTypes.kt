@@ -41,12 +41,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -59,7 +62,11 @@ import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.models.SelectedMediaItem
 import com.example.everytalk.ui.theme.ChatDimensions
 import com.example.everytalk.ui.theme.chatColors
-import com.example.everytalk.util.CodeHighlighter
+import com.example.everytalk.util.ContentBlock
+import com.example.everytalk.util.parseToContentBlocks
+import com.example.everytalk.ui.components.MathView
+import com.example.everytalk.ui.components.MarkdownText
+import com.example.everytalk.ui.components.CodePreview
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -67,8 +74,8 @@ import kotlinx.coroutines.withContext
 private const val CONTEXT_MENU_ANIMATION_DURATION_MS = 150
 private val CONTEXT_MENU_CORNER_RADIUS = 16.dp
 private val CONTEXT_MENU_ITEM_ICON_SIZE = 20.dp
-private val CONTEXT_MENU_FINE_TUNE_OFFSET_X = (-120).dp
-private val CONTEXT_MENU_FINE_TUNE_OFFSET_Y = (-8).dp
+// 菜单相对于手指按下位置的Y轴偏移量（向上偏移避免手指遮挡）
+private val CONTEXT_MENU_OFFSET_FROM_PRESS_Y = (-48).dp
 private val CONTEXT_MENU_FIXED_WIDTH = 120.dp
 
 
@@ -81,18 +88,12 @@ internal fun UserOrErrorMessageContent(
     contentColor: Color,
     isError: Boolean,
     maxWidth: Dp,
-    onEditRequest: (Message) -> Unit,
-    onRegenerateRequest: (Message) -> Unit,
+    onLongPress: (Message, Offset) -> Unit,
     modifier: Modifier = Modifier,
     scrollStateManager: com.example.everytalk.ui.screens.MainScreen.chat.ChatScrollStateManager
 ) {
-    var isContextMenuVisible by remember(message.id) { mutableStateOf(false) }
-    var pressOffset by remember(message.id) { mutableStateOf(Offset.Zero) }
-    val density = LocalDensity.current
-    val context = LocalContext.current
-    val clipboardManager = LocalClipboardManager.current
     val haptic = LocalHapticFeedback.current
-    val coroutineScope = rememberCoroutineScope()
+    var globalPosition by remember { mutableStateOf(Offset.Zero) }
 
     Box(
         modifier = modifier
@@ -102,17 +103,26 @@ internal fun UserOrErrorMessageContent(
         Surface(
             color = bubbleColor,
             contentColor = contentColor,
-            shape = RoundedCornerShape(18.dp),
+            shape = RoundedCornerShape(
+                topStart = 18.dp,
+                topEnd = 0.dp,     // 右上角不要圆角
+                bottomStart = 18.dp,
+                bottomEnd = 18.dp
+            ),
             tonalElevation = if (isError) 0.dp else 1.dp,
             modifier = Modifier
-                .pointerInput(message.id) {
+                .onGloballyPositioned { coordinates ->
+                    // 存储组件在屏幕中的全局位置
+                    globalPosition = coordinates.localToRoot(Offset.Zero)
+                }
+                .pointerInput(message.id, isError) {
                     detectTapGestures(
-                        onLongPress = { offset ->
+                        onLongPress = { localOffset ->
                             haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                            if (!isError) {
-                                pressOffset = offset
-                                isContextMenuVisible = true
-                            }
+                            // 将局部坐标转换为全局屏幕坐标
+                            val globalOffset = globalPosition + localOffset
+
+                            onLongPress(message, globalOffset)
                         }
                     )
                 }
@@ -136,256 +146,49 @@ internal fun UserOrErrorMessageContent(
                         // Use message.text as the single source of truth to avoid issues with
                         // recomposition and unstable displayedText state from the caller.
                         // By parsing displayedText, we enable real-time markdown rendering during streaming.
-                        val segments = remember(message.text) {
-                            parseMarkdownSegments(message.text)
+                        val contentBlocks = remember(message.text) {
+                            parseToContentBlocks(message.text)
                         }
 
-                        Column {
-                            segments.forEach { segment ->
-                                when (segment) {
-                                    is TextSegment.ThinkingContent -> {
-                                        // 将思考内容作为普通文本显示
-                                        val annotatedText = remember(segment.content) {
-                                            com.example.everytalk.util.parseInlineMarkdownToAnnotatedString(segment.content)
-                                        }
-                                        Text(
-                                            text = annotatedText,
-                                            textAlign = TextAlign.Start,
-                                            color = contentColor
-                                        )
-                                    }
-                                    is TextSegment.Normal -> if (segment.text.isNotBlank()) {
-                                        val annotatedText = remember(segment.text) {
-                                            com.example.everytalk.util.parseInlineMarkdownToAnnotatedString(segment.text)
-                                        }
-                                        Text(
-                                            text = annotatedText,
-                                            textAlign = TextAlign.Start,
-                                            color = contentColor
-                                        )
-                                    }
-                                    is TextSegment.CodeBlock -> {
-                                        // Add syntax highlighting support
-                                        val annotatedString by produceState(initialValue = AnnotatedString(segment.code), segment.code) {
-                                            withContext(Dispatchers.Default) {
-                                                value = CodeHighlighter.highlightToAnnotatedString(segment.code, segment.language)
-                                            }
-                                        }
-
-                                        Surface(
-                                            color = MaterialTheme.chatColors.codeBlockBackground,
-                                            shape = RoundedCornerShape(ChatDimensions.CODE_BLOCK_CORNER_RADIUS),
-                                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                                        ) {
-                                            Box(
-                                                modifier = Modifier.fillMaxWidth() // Use full width instead of horizontal scrolling
-                                            ) {
-                                                Text(
-                                                    text = annotatedString, // Use syntax highlighted text
-                                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                                                    softWrap = true, // Enable text wrapping
-                                                    style = androidx.compose.ui.text.TextStyle(
-                                                        fontSize = ChatDimensions.CODE_FONT_SIZE, // 恢复原始字体大小
-                                                        lineHeight = ChatDimensions.CODE_LINE_HEIGHT
-                                                        // 移除color参数，让AnnotatedString的语法高亮颜色生效
-                                                    ),
-                                                    modifier = Modifier
-                                                        .fillMaxWidth() // Use full width instead of minimum width
-                                                        .padding(
-                                                            horizontal = ChatDimensions.CODE_BLOCK_PADDING_HORIZONTAL,
-                                                            vertical = ChatDimensions.CODE_BLOCK_PADDING_BOTTOM
-                                                        )
-                                                )
-                                            }
-                                        }
-                                    }
-                                    is TextSegment.Header -> {
-                                        val annotatedText = remember(segment.text) {
-                                            com.example.everytalk.util.parseInlineMarkdownToAnnotatedString(segment.text)
-                                        }
-                                        Text(
-                                            text = annotatedText,
-                                            style = when (segment.level) {
-                                                1 -> MaterialTheme.typography.headlineLarge
-                                                2 -> MaterialTheme.typography.headlineMedium
-                                                3 -> MaterialTheme.typography.headlineSmall
-                                                else -> MaterialTheme.typography.bodyLarge
-                                            },
-                                            color = contentColor,
-                                            modifier = Modifier.padding(vertical = 4.dp)
-                                        )
-                                    }
-                                    is TextSegment.ListItem -> {
-                                        Row(modifier = Modifier.padding(vertical = 2.dp)) {
-                                            Text(
-                                                text = "• ",
-                                                color = contentColor,
-                                                style = MaterialTheme.typography.bodyLarge
-                                            )
-                                            val annotatedText = remember(segment.text) {
-                                                com.example.everytalk.util.parseInlineMarkdownToAnnotatedString(segment.text)
-                                            }
-                                            Text(
-                                                text = annotatedText,
-                                                color = contentColor,
-                                                style = MaterialTheme.typography.bodyLarge
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if (isContextMenuVisible && !isError) {
-            val dropdownMenuOffsetX =
-                with(density) { pressOffset.x.toDp() } + CONTEXT_MENU_FINE_TUNE_OFFSET_X
-            val dropdownMenuOffsetY =
-                with(density) { pressOffset.y.toDp() } + CONTEXT_MENU_FINE_TUNE_OFFSET_Y
-
-            Popup(
-                alignment = Alignment.TopStart,
-                offset = IntOffset(
-                    x = with(density) { dropdownMenuOffsetX.roundToPx() },
-                    y = with(density) { dropdownMenuOffsetY.roundToPx() }),
-                onDismissRequest = { isContextMenuVisible = false },
-                properties = PopupProperties(
-                    focusable = true,
-                    dismissOnBackPress = true,
-                    dismissOnClickOutside = true,
-                    clippingEnabled = false
-                )
-            ) {
-                Surface(
-                    shape = RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS),
-                    color = MaterialTheme.colorScheme.surfaceDim,
-                    tonalElevation = 0.dp,
-                    modifier = Modifier
-                        .width(CONTEXT_MENU_FIXED_WIDTH)
-                        .shadow(
-                            elevation = 8.dp,
-                            shape = RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS)
-                        )
-                        .padding(1.dp)
-                ) {
-                    Column {
-                        val menuVisibility =
-                            remember { MutableTransitionState(false) }
-                        LaunchedEffect(isContextMenuVisible) {
-                            menuVisibility.targetState = isContextMenuVisible
-                        }
-
-                        @Composable
-                        fun AnimatedDropdownMenuItem(
-                            visibleState: MutableTransitionState<Boolean>,
-                            delay: Int = 0,
-                            text: @Composable () -> Unit,
-                            onClick: () -> Unit,
-                            leadingIcon: @Composable (() -> Unit)? = null
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            AnimatedVisibility(
-                                visibleState = visibleState,
-                                enter = fadeIn(
-                                    animationSpec = tween(
-                                        CONTEXT_MENU_ANIMATION_DURATION_MS,
-                                        delayMillis = delay,
-                                        easing = LinearOutSlowInEasing
-                                    )
-                                ) +
-                                        scaleIn(
-                                            animationSpec = tween(
-                                                CONTEXT_MENU_ANIMATION_DURATION_MS,
-                                                delayMillis = delay,
-                                                easing = LinearOutSlowInEasing
-                                            ), transformOrigin = TransformOrigin(0f, 0f)
-                                        ),
-                                exit = fadeOut(
-                                    animationSpec = tween(
-                                        CONTEXT_MENU_ANIMATION_DURATION_MS,
-                                        easing = FastOutLinearInEasing
-                                    )
-                                ) +
-                                        scaleOut(
-                                            animationSpec = tween(
-                                                CONTEXT_MENU_ANIMATION_DURATION_MS,
-                                                easing = FastOutLinearInEasing
-                                            ), transformOrigin = TransformOrigin(0f, 0f)
+                            contentBlocks.forEach { block ->
+                                when (block) {
+                                    is ContentBlock.TextBlock -> {
+                                        // 更宽松的检查，只跳过完全为空的内容
+                                        if (block.content.isNotEmpty()) {
+                                            com.example.everytalk.ui.components.MarkdownText(
+                                                markdown = block.content,
+                                                color = contentColor,
+                                            )
+                                        }
+                                    }
+                                    is ContentBlock.MathBlock -> {
+                                        MathView(
+                                            latex = block.latex,
+                                            isDisplay = block.isDisplay,
+                                            textColor = if (MaterialTheme.colorScheme.background.luminance() < 0.5f)
+                                                Color.White // 深色主题：纯白色
+                                            else
+                                                Color.Black, // 浅色主题：纯黑色
+                                            modifier = Modifier.fillMaxWidth()
                                         )
-                            ) {
-                                DropdownMenuItem(
-                                    text = text, onClick = onClick, leadingIcon = leadingIcon,
-                                    colors = MenuDefaults.itemColors(
-                                        textColor = MaterialTheme.colorScheme.onSurface,
-                                        leadingIconColor = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                )
+                                    }
+                                    is ContentBlock.CodeBlock -> {
+                                        CodePreview(
+                                            code = block.code,
+                                            language = block.language
+                                        )
+                                    }
+                                }
                             }
                         }
-
-                        AnimatedDropdownMenuItem(
-                            menuVisibility,
-                            text = { Text("复制") },
-                            onClick = {
-                                clipboardManager.setText(AnnotatedString(message.text))
-                                Toast.makeText(context, "内容已复制", Toast.LENGTH_SHORT).show()
-                                isContextMenuVisible = false
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Filled.ContentCopy,
-                                    "复制",
-                                    Modifier.size(CONTEXT_MENU_ITEM_ICON_SIZE)
-                                )
-                            })
-
-                        AnimatedDropdownMenuItem(
-                            menuVisibility,
-                            delay = 30,
-                            text = { Text("编辑") },
-                            onClick = {
-                                onEditRequest(message)
-                                isContextMenuVisible = false
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Filled.Edit,
-                                    "编辑",
-                                    Modifier.size(CONTEXT_MENU_ITEM_ICON_SIZE)
-                                )
-                            })
-
-                        AnimatedDropdownMenuItem(
-                            menuVisibility,
-                            delay = 60,
-                            text = { Text("重新回答") },
-                            onClick = {
-                                // 重置滚动状态
-                                scrollStateManager.resetScrollState()
-                                
-                                // 执行重新回答请求
-                                onRegenerateRequest(message)
-                                isContextMenuVisible = false
-                                
-                                // 使用强制滚动方法，确保滚动到用户气泡的最底部
-                                // 多次尝试滚动，确保在不同时间点都能滚动到底部
-                                coroutineScope.launch {
-                                    scrollStateManager.jumpToBottom()
-                                }
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Filled.Refresh,
-                                    "重新回答",
-                                    Modifier.size(CONTEXT_MENU_ITEM_ICON_SIZE)
-                                )
-                            })
                     }
                 }
             }
         }
+
     }
 }
 
@@ -397,6 +200,7 @@ fun AttachmentsContent(
     message: Message,
     onEditRequest: (Message) -> Unit,
     onRegenerateRequest: (Message) -> Unit,
+    onLongPress: (Message, Offset) -> Unit,
     onImageLoaded: () -> Unit,
     scrollStateManager: com.example.everytalk.ui.screens.MainScreen.chat.ChatScrollStateManager
 ) {
@@ -410,8 +214,7 @@ fun AttachmentsContent(
 
     val onLongPressHandler = { offset: Offset ->
         haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-        pressOffset = offset
-        isContextMenuVisible = true
+        onLongPress(message, offset)
     }
 
     Box {
@@ -431,7 +234,7 @@ fun AttachmentsContent(
                                 .widthIn(max = maxWidth * 0.8f)
                                 .padding(vertical = 4.dp)
                                 .clip(RoundedCornerShape(16.dp))
-                                .pointerInput(message.id) {
+                                .pointerInput(message.id, attachment.uri) {
                                     detectTapGestures(
                                         onTap = {
                                             val intent = Intent(Intent.ACTION_VIEW).apply {
@@ -440,7 +243,7 @@ fun AttachmentsContent(
                                             }
                                             context.startActivity(intent)
                                         },
-                                        onLongPress = onLongPressHandler
+                                        onLongPress = { offset -> onLongPressHandler(offset) }
                                     )
                                 }
                         )
@@ -455,10 +258,10 @@ fun AttachmentsContent(
                                 .widthIn(max = maxWidth * 0.8f)
                                 .padding(vertical = 4.dp)
                                 .clip(RoundedCornerShape(16.dp))
-                                .pointerInput(message.id) {
+                                .pointerInput(message.id, attachment.bitmap) {
                                     detectTapGestures(
                                         onTap = { onAttachmentClick(attachment) },
-                                        onLongPress = onLongPressHandler
+                                        onLongPress = { offset -> onLongPressHandler(offset) }
                                     )
                                 }
                         )
@@ -470,7 +273,7 @@ fun AttachmentsContent(
                                 .padding(vertical = 4.dp)
                                 .background(Color(0xFFF0F0F0), RoundedCornerShape(12.dp))
                                 .clip(RoundedCornerShape(12.dp))
-                                .pointerInput(message.id) {
+                                .pointerInput(message.id, attachment.uri) {
                                     detectTapGestures(
                                         onTap = {
                                             val intent = Intent(Intent.ACTION_VIEW).apply {
@@ -482,7 +285,7 @@ fun AttachmentsContent(
                                             }
                                             context.startActivity(intent)
                                         },
-                                        onLongPress = onLongPressHandler
+                                        onLongPress = { offset -> onLongPressHandler(offset) }
                                     )
                                 }
                                 .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -507,12 +310,12 @@ fun AttachmentsContent(
                                 .padding(vertical = 4.dp)
                                 .background(Color(0xFFF0F0F0), RoundedCornerShape(12.dp))
                                 .clip(RoundedCornerShape(12.dp))
-                                .pointerInput(message.id) {
+                                .pointerInput(message.id, attachment) {
                                     detectTapGestures(
                                         onTap = {
                                             // TODO: Implement audio playback
                                         },
-                                        onLongPress = onLongPressHandler
+                                        onLongPress = { offset -> onLongPressHandler(offset) }
                                     )
                                 }
                                 .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -534,299 +337,9 @@ fun AttachmentsContent(
             }
         }
 
-        if (isContextMenuVisible) {
-            val dropdownMenuOffsetX =
-                with(density) { pressOffset.x.toDp() } + CONTEXT_MENU_FINE_TUNE_OFFSET_X
-            val dropdownMenuOffsetY =
-                with(density) { pressOffset.y.toDp() } + CONTEXT_MENU_FINE_TUNE_OFFSET_Y
-
-            Popup(
-                alignment = Alignment.TopStart,
-                offset = IntOffset(
-                    x = with(density) { dropdownMenuOffsetX.roundToPx() },
-                    y = with(density) { dropdownMenuOffsetY.roundToPx() }),
-                onDismissRequest = { isContextMenuVisible = false },
-                properties = PopupProperties(
-                    focusable = true,
-                    dismissOnBackPress = true,
-                    dismissOnClickOutside = true,
-                    clippingEnabled = false
-                )
-            ) {
-                Surface(
-                    shape = RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS),
-                    color = MaterialTheme.colorScheme.surfaceDim,
-                    tonalElevation = 0.dp,
-                    modifier = Modifier
-                        .width(CONTEXT_MENU_FIXED_WIDTH)
-                        .shadow(
-                            elevation = 8.dp,
-                            shape = RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS)
-                        )
-                        .padding(1.dp)
-                ) {
-                    Column {
-                        val menuVisibility =
-                            remember { MutableTransitionState(false) }
-                        LaunchedEffect(isContextMenuVisible) {
-                            menuVisibility.targetState = isContextMenuVisible
-                        }
-
-                        @Composable
-                        fun AnimatedDropdownMenuItem(
-                            visibleState: MutableTransitionState<Boolean>,
-                            delay: Int = 0,
-                            text: @Composable () -> Unit,
-                            onClick: () -> Unit,
-                            leadingIcon: @Composable (() -> Unit)? = null
-                        ) {
-                            AnimatedVisibility(
-                                visibleState = visibleState,
-                                enter = fadeIn(
-                                    animationSpec = tween(
-                                        CONTEXT_MENU_ANIMATION_DURATION_MS,
-                                        delayMillis = delay,
-                                        easing = LinearOutSlowInEasing
-                                    )
-                                ) +
-                                        scaleIn(
-                                            animationSpec = tween(
-                                                CONTEXT_MENU_ANIMATION_DURATION_MS,
-                                                delayMillis = delay,
-                                                easing = LinearOutSlowInEasing
-                                            ), transformOrigin = TransformOrigin(0f, 0f)
-                                        ),
-                                exit = fadeOut(
-                                    animationSpec = tween(
-                                        CONTEXT_MENU_ANIMATION_DURATION_MS,
-                                        easing = FastOutLinearInEasing
-                                    )
-                                ) +
-                                        scaleOut(
-                                            animationSpec = tween(
-                                                CONTEXT_MENU_ANIMATION_DURATION_MS,
-                                                easing = FastOutLinearInEasing
-                                            ), transformOrigin = TransformOrigin(0f, 0f)
-                                        )
-                            ) {
-                                DropdownMenuItem(
-                                    text = text, onClick = onClick, leadingIcon = leadingIcon,
-                                    colors = MenuDefaults.itemColors(
-                                        textColor = MaterialTheme.colorScheme.onSurface,
-                                        leadingIconColor = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                )
-                            }
-                        }
-
-                        if (message.text.isNotBlank()) {
-                            AnimatedDropdownMenuItem(
-                                menuVisibility,
-                                text = { Text("复制") },
-                                onClick = {
-                                    clipboardManager.setText(AnnotatedString(message.text))
-                                    Toast.makeText(context, "内容已复制", Toast.LENGTH_SHORT).show()
-                                    isContextMenuVisible = false
-                                },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Filled.ContentCopy,
-                                        "复制",
-                                        Modifier.size(CONTEXT_MENU_ITEM_ICON_SIZE)
-                                    )
-                                })
-                        }
-
-                        AnimatedDropdownMenuItem(
-                            menuVisibility,
-                            delay = 30,
-                            text = { Text("编辑") },
-                            onClick = {
-                                onEditRequest(message)
-                                isContextMenuVisible = false
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Filled.Edit,
-                                    "编辑",
-                                    Modifier.size(CONTEXT_MENU_ITEM_ICON_SIZE)
-                                )
-                            })
-
-                        AnimatedDropdownMenuItem(
-                            menuVisibility,
-                            delay = 60,
-                            text = { Text("重新回答") },
-                            onClick = {
-                                // 重置滚动状态
-                                scrollStateManager.resetScrollState()
-                                
-                                // 执行重新回答请求
-                                onRegenerateRequest(message)
-                                isContextMenuVisible = false
-                                
-                                // 使用强制滚动方法，确保滚动到用户气泡的最底部
-                                // 多次尝试滚动，确保在不同时间点都能滚动到底部
-                                coroutineScope.launch {
-                                    scrollStateManager.jumpToBottom()
-                                }
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Filled.Refresh,
-                                    "重新回答",
-                                    Modifier.size(CONTEXT_MENU_ITEM_ICON_SIZE)
-                                )
-                            })
-                    }
-                }
-            }
-        }
     }
 }
 
-sealed class TextSegment {
-    data class Normal(val text: String) : TextSegment()
-    data class CodeBlock(val language: String?, val code: String) : TextSegment()
-    data class Header(val level: Int, val text: String) : TextSegment()
-    data class ListItem(val text: String) : TextSegment()
-    data class ThinkingContent(val content: String) : TextSegment()
-}
-
-/**
- * 解析结果，包含思考内容和其他内容段落
- */
-data class ParsedMarkdownResult(
-    val segments: List<TextSegment>,
-    val thinkingContent: String?
-)
-
-/**
- * 提取思考内容的函数
- */
-fun extractThinkingContent(markdownInput: String): String? {
-    // 支持多种思考标签格式
-    val thinkingPatterns = listOf(
-        "<think>[\\s\\S]*?</think>".toRegex(),
-        "<thinking>[\\s\\S]*?</thinking>".toRegex(),
-        "\\*\\*思考过程\\*\\*[\\s\\S]*?(?=\\n\\n|\\*\\*|$)".toRegex(),
-        "思考：[\\s\\S]*?(?=\\n\\n|$)".toRegex()
-    )
-    
-    for (pattern in thinkingPatterns) {
-        val match = pattern.find(markdownInput)
-        if (match != null) {
-            val content = match.value
-            return when {
-                content.startsWith("<think>") -> content.removePrefix("<think>").removeSuffix("</think>").trim()
-                content.startsWith("<thinking>") -> content.removePrefix("<thinking>").removeSuffix("</thinking>").trim()
-                content.startsWith("**思考过程**") -> content.removePrefix("**思考过程**").trim()
-                content.startsWith("思考：") -> content.removePrefix("思考：").trim()
-                else -> content.trim()
-            }
-        }
-    }
-    return null
-}
-
-fun parseMarkdownSegments(markdownInput: String): List<TextSegment> {
-    val segments = mutableListOf<TextSegment>()
-    
-    // 移除思考内容提取逻辑，直接处理原始markdown内容
-    // val thinkingContent = extractThinkingContent(markdownInput)
-    // if (thinkingContent != null) {
-    //     segments.add(TextSegment.ThinkingContent(thinkingContent))
-    // }
-    
-    // 不再移除思考标签内容，直接处理完整的markdown
-    // val thinkingPatterns = listOf(
-    //     "<think>[\\s\\S]*?</think>".toRegex(),
-    //     "<thinking>[\\s\\S]*?</thinking>".toRegex(),
-    //     "\\*\\*思考过程\\*\\*[\\s\\S]*?(?=\\n\\n|\\*\\*|$)".toRegex(),
-    //     "思考：[\\s\\S]*?(?=\\n\\n|$)".toRegex()
-    // )
-    // 
-    // var contentWithoutThinking = markdownInput
-    // for (pattern in thinkingPatterns) {
-    //     contentWithoutThinking = pattern.replace(contentWithoutThinking, "")
-    // }
-
-    val lines = markdownInput.lines()
-    var i = 0
-    while (i < lines.size) {
-        val line = lines[i]
-        val trimmedLine = line.trim()
-
-        when {
-            // Code Blocks
-            trimmedLine.startsWith("```") -> {
-                val lang = trimmedLine.substring(3).trim()
-                val codeLines = mutableListOf<String>()
-                i++ // Move to next line
-                while (i < lines.size && !lines[i].trim().equals("```")) {
-                    codeLines.add(lines[i])
-                    i++
-                }
-                segments.add(TextSegment.CodeBlock(lang.ifEmpty { null }, codeLines.joinToString("\n")))
-                if (i < lines.size) {
-                    i++ // Skip the closing ```
-                }
-            }
-            // Headers
-            trimmedLine.startsWith("#") -> {
-                val level = trimmedLine.takeWhile { it == '#' }.count()
-                if (level <= 6) {
-                    val text = trimmedLine.removePrefix("#".repeat(level)).trim()
-                    segments.add(TextSegment.Header(level, text))
-                    i++
-                } else {
-                    // Not a valid header, fall through to paragraph handling
-                    val paragraphLines = mutableListOf<String>()
-                    while (i < lines.size && lines[i].trim().isNotBlank() && !lines[i].trim().startsWith("```")) {
-                        paragraphLines.add(lines[i])
-                        i++
-                    }
-                    if (paragraphLines.isNotEmpty()) {
-                        segments.add(TextSegment.Normal(paragraphLines.joinToString("\n")))
-                    }
-                }
-            }
-            // Unordered & Ordered List Items (handled one by one)
-            trimmedLine.startsWith("* ") || trimmedLine.startsWith("- ") -> {
-                segments.add(TextSegment.ListItem(trimmedLine.substring(2)))
-                i++
-            }
-            trimmedLine.matches(Regex("^\\d+\\. .*")) -> {
-                segments.add(TextSegment.ListItem(trimmedLine.substringAfter(". ")))
-                i++
-            }
-            // Paragraphs
-            trimmedLine.isNotBlank() -> {
-                val paragraphLines = mutableListOf<String>()
-                while (
-                    i < lines.size &&
-                    lines[i].trim().isNotBlank() &&
-                    !lines[i].trim().startsWith("```") &&
-                    !lines[i].trim().startsWith("#") &&
-                    !lines[i].trim().startsWith("* ") &&
-                    !lines[i].trim().startsWith("- ") &&
-                    !lines[i].trim().matches(Regex("^\\d+\\. .*"))
-                ) {
-                    paragraphLines.add(lines[i])
-                    i++
-                }
-                if (paragraphLines.isNotEmpty()) {
-                    segments.add(TextSegment.Normal(paragraphLines.joinToString("\n")))
-                }
-            }
-            // Blank lines
-            else -> {
-                i++
-            }
-        }
-    }
-    return segments
-}
 
 
 
@@ -876,6 +389,172 @@ private fun getIconForMimeType(mimeType: String?): androidx.compose.ui.graphics.
             mimeType?.startsWith("audio/") == true -> Icons.Outlined.Audiotrack
             mimeType?.startsWith("image/") == true -> Icons.Outlined.Image
             else -> Icons.Outlined.AttachFile
+        }
+    }
+}
+
+@Composable
+fun MessageContextMenu(
+    isVisible: Boolean,
+    message: Message,
+    onDismiss: () -> Unit,
+    onCopy: (Message) -> Unit,
+    onEdit: (Message) -> Unit,
+    onRegenerate: (Message) -> Unit,
+    pressOffset: Offset = Offset.Zero
+) {
+    if (isVisible) {
+        val context = LocalContext.current
+        val clipboardManager = LocalClipboardManager.current
+        val density = LocalDensity.current
+        val configuration = LocalConfiguration.current
+        
+        // 计算菜单位置，使菜单的右上角对齐到手指按下的位置
+        val menuWidthPx = with(density) { CONTEXT_MENU_FIXED_WIDTH.toPx() }
+        val offsetY = with(density) { CONTEXT_MENU_OFFSET_FROM_PRESS_Y.toPx() }
+        val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
+        val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
+
+        // 估算菜单高度（3个菜单项 + 内边距）
+        val estimatedMenuHeightPx = with(density) { (48.dp * 3 + 16.dp).toPx() }
+
+        // 计算菜单位置：让菜单的右上角对齐到手指按压位置
+        // 注意：pressOffset 应该已经是全局坐标（通过 localToRoot 转换）
+
+        // X坐标：菜单右边缘对齐到按压点，所以菜单左上角 = 按压点X - 菜单宽度
+        val targetX = pressOffset.x - menuWidthPx
+        // Y坐标：菜单上边缘对齐到按压点，并向上偏移一点避免手指遮挡
+        val targetY = pressOffset.y + offsetY
+
+
+        // 确保菜单不会超出屏幕边界
+        val finalX = targetX.coerceAtLeast(0f).coerceAtMost(screenWidthPx - menuWidthPx)
+        val finalY = targetY.coerceAtLeast(0f).coerceAtMost(screenHeightPx - estimatedMenuHeightPx)
+
+        Popup(
+            alignment = Alignment.TopStart,
+            offset = IntOffset(
+                x = finalX.toInt(),  // 菜单左上角X坐标，使菜单右上角对齐到按压点
+                y = finalY.toInt()), // 菜单左上角Y坐标，向上偏移避免手指遮挡
+            onDismissRequest = onDismiss,
+            properties = PopupProperties(
+                focusable = true,
+                dismissOnBackPress = true,
+                dismissOnClickOutside = true,
+                clippingEnabled = false
+            )
+        ) {
+            Surface(
+                shape = RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS),
+                color = MaterialTheme.colorScheme.surfaceDim,
+                tonalElevation = 0.dp,
+                modifier = Modifier
+                    .width(CONTEXT_MENU_FIXED_WIDTH)
+                    .shadow(
+                        elevation = 8.dp,
+                        shape = RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS)
+                    )
+                    .padding(1.dp)
+            ) {
+                Column {
+                    val menuVisibility =
+                        remember { MutableTransitionState(false) }
+                    LaunchedEffect(isVisible) {
+                        menuVisibility.targetState = isVisible
+                    }
+
+                    @Composable
+                    fun AnimatedDropdownMenuItem(
+                        visibleState: MutableTransitionState<Boolean>,
+                        delay: Int = 0,
+                        text: @Composable () -> Unit,
+                        onClick: () -> Unit,
+                        leadingIcon: @Composable (() -> Unit)? = null
+                    ) {
+                        AnimatedVisibility(
+                            visibleState = visibleState,
+                            enter = fadeIn(
+                                animationSpec = tween(
+                                    CONTEXT_MENU_ANIMATION_DURATION_MS,
+                                    delayMillis = delay,
+                                    easing = LinearOutSlowInEasing
+                                )
+                            ) +
+                                    scaleIn(
+                                        animationSpec = tween(
+                                            CONTEXT_MENU_ANIMATION_DURATION_MS,
+                                            delayMillis = delay,
+                                            easing = LinearOutSlowInEasing
+                                        ), transformOrigin = TransformOrigin(0f, 0f)
+                                    ),
+                            exit = fadeOut(
+                                animationSpec = tween(
+                                    CONTEXT_MENU_ANIMATION_DURATION_MS,
+                                    easing = FastOutLinearInEasing
+                                )
+                            ) +
+                                    scaleOut(
+                                        animationSpec = tween(
+                                            CONTEXT_MENU_ANIMATION_DURATION_MS,
+                                            easing = FastOutLinearInEasing
+                                        ), transformOrigin = TransformOrigin(0f, 0f)
+                                    )
+                        ) {
+                            DropdownMenuItem(
+                                text = text, onClick = onClick, leadingIcon = leadingIcon,
+                                colors = MenuDefaults.itemColors(
+                                    textColor = MaterialTheme.colorScheme.onSurface,
+                                    leadingIconColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            )
+                        }
+                    }
+
+                    AnimatedDropdownMenuItem(
+                        menuVisibility,
+                        text = { Text("复制") },
+                        onClick = {
+                            onCopy(message)
+                        },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Filled.ContentCopy,
+                                "复制",
+                                Modifier.size(CONTEXT_MENU_ITEM_ICON_SIZE)
+                            )
+                        })
+
+                    AnimatedDropdownMenuItem(
+                        menuVisibility,
+                        delay = 30,
+                        text = { Text("编辑") },
+                        onClick = {
+                            onEdit(message)
+                        },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Filled.Edit,
+                                "编辑",
+                                Modifier.size(CONTEXT_MENU_ITEM_ICON_SIZE)
+                            )
+                        })
+
+                    AnimatedDropdownMenuItem(
+                        menuVisibility,
+                        delay = 60,
+                        text = { Text("重新回答") },
+                        onClick = {
+                            onRegenerate(message)
+                        },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Filled.Refresh,
+                                "重新回答",
+                                Modifier.size(CONTEXT_MENU_ITEM_ICON_SIZE)
+                            )
+                        })
+                }
+            }
         }
     }
 }

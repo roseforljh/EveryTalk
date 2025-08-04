@@ -1,8 +1,6 @@
 package com.example.everytalk.ui.screens.MainScreen.chat
 
 import com.example.everytalk.data.DataClass.Message
-import com.example.everytalk.util.MarkdownBlock
-
 
 sealed interface ChatListItem {
     val stableId: String
@@ -15,15 +13,29 @@ sealed interface ChatListItem {
         override val stableId: String = messageId
     }
 
-    data class AiMessageBlock(
+    // 简化的 AI 消息项，直接使用文本内容而不是复杂的 Markdown 块
+    data class AiMessage(
         val messageId: String,
-        val block: MarkdownBlock,
-        val blockIndex: Int,
-        val isFirstBlock: Boolean,
-        val isLastBlock: Boolean,
+        val text: String,
         val hasReasoning: Boolean
     ) : ChatListItem {
-        override val stableId: String = "${messageId}_block_$blockIndex"
+        override val stableId: String = messageId
+    }
+
+    data class AiMessageMath(
+        val messageId: String,
+        val text: String,
+        val hasReasoning: Boolean
+    ) : ChatListItem {
+        override val stableId: String = "${messageId}_math"
+    }
+
+    data class AiMessageCode(
+        val messageId: String,
+        val text: String,
+        val hasReasoning: Boolean
+    ) : ChatListItem {
+        override val stableId: String = "${messageId}_code"
     }
 
     data class AiMessageReasoning(val message: Message) : ChatListItem {

@@ -13,10 +13,18 @@ sealed class AppStreamEvent {
     @Serializable
     @SerialName("content")
     data class Content(val text: String) : AppStreamEvent()
+    
+    @Serializable
+    @SerialName("content_final")
+    data class ContentFinal(val text: String) : AppStreamEvent()
 
     @Serializable
     @SerialName("reasoning")
     data class Reasoning(val text: String) : AppStreamEvent()
+
+    @Serializable
+    @SerialName("output_type")
+    data class OutputType(val type: String) : AppStreamEvent()
 
     @Serializable
     @SerialName("stream_end")

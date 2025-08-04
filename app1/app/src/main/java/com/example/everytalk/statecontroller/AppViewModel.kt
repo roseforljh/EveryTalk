@@ -23,9 +23,7 @@ import com.example.everytalk.ui.screens.MainScreen.chat.ChatListItem
 import com.example.everytalk.ui.screens.viewmodel.ConfigManager
 import com.example.everytalk.ui.screens.viewmodel.DataPersistenceManager
 import com.example.everytalk.ui.screens.viewmodel.HistoryManager
-import com.example.everytalk.util.MarkdownBlock
 import com.example.everytalk.util.VersionChecker
-import com.example.everytalk.util.MarkdownParser
 import java.util.Collections
 import java.util.LinkedHashMap
 import java.util.UUID
@@ -86,8 +84,6 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     private val defaultScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val messagesMutex = Mutex()
-    private val markdownCache =
-            Collections.synchronizedMap(LRUCache<String, List<MarkdownBlock>>(500))
     private val conversationPreviewCache = Collections.synchronizedMap(LRUCache<Int, String>(100))
     private val textUpdateDebouncer = mutableMapOf<String, Job>()
     internal val stateHolder = ViewModelStateHolder()
@@ -255,35 +251,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                                 .map { message ->
                                     when (message.sender) {
                                         Sender.AI -> {
-                                            val isStreamingThisMessage =
-                                                    isApiCalling &&
-                                                            message.id ==
-                                                                    currentStreamingAiMessageId
-                                            val blocks =
-                                                    if (message.text.isBlank()) {
-                                                        emptyList()
-                                                    } else {
-                                                        // Always parse the full text to get
-                                                        // incremental block updates.
-                                                        // Caching is used for completed messages to
-                                                        // optimize performance.
-                                                        if (isStreamingThisMessage) {
-                                                            MarkdownParser.parse(message.text)
-                                                        } else {
-                                                            val cacheKey =
-                                                                    "${message.id}_${message.text.hashCode()}"
-                                                            synchronized(markdownCache) {
-                                                                markdownCache.getOrPut(cacheKey) {
-                                                                    MarkdownParser.parse(
-                                                                            message.text
-                                                                    )
-                                                                }
-                                                            }
-                                                        }
-                                                    }
                                             createAiMessageItems(
                                                     message,
-                                                    blocks,
                                                     isApiCalling,
                                                     currentStreamingAiMessageId
                                             )
@@ -372,7 +341,6 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
 
      private fun createAiMessageItems(
              message: Message,
-             blocks: List<MarkdownBlock>,
             isApiCalling: Boolean,
             currentStreamingAiMessageId: String?
     ): List<ChatListItem> {
@@ -395,17 +363,18 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 }
 
         val hasReasoning = reasoningItem.isNotEmpty()
-        val blockItems =
-                blocks.mapIndexed { index, block ->
-                    ChatListItem.AiMessageBlock(
-                            messageId = message.id,
-                            block = block,
-                            blockIndex = index,
-                            isFirstBlock = index == 0,
-                            isLastBlock = index == blocks.size - 1,
-                            hasReasoning = hasReasoning
-                    )
-                }
+        
+        // 简化处理：直接使用消息文本，不进行复杂的 Markdown 解析
+        val messageItem = if (message.text.isNotBlank()) {
+            when (message.outputType) {
+                "math" -> listOf(ChatListItem.AiMessageMath(message.id, message.text, hasReasoning))
+                "code" -> listOf(ChatListItem.AiMessageCode(message.id, message.text, hasReasoning))
+                // "json" an so on
+                else -> listOf(ChatListItem.AiMessage(message.id, message.text, hasReasoning))
+            }
+        } else {
+            emptyList()
+        }
 
         val footerItem =
                 if (!message.webSearchResults.isNullOrEmpty() &&
@@ -416,7 +385,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                     emptyList()
                 }
 
-        return reasoningItem + blockItems + footerItem
+        return reasoningItem + messageItem + footerItem
     }
 
     private fun createOtherMessageItems(message: Message): List<ChatListItem> {

@@ -66,7 +66,7 @@ internal fun ReasoningToggleAndContent(
 
     val showDotsAnimationOnToggle = false
 
-    val boxBackgroundColor = Color.White.copy(alpha = 0.95f)
+    val boxBackgroundColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)
     val scrimColor = boxBackgroundColor
     val scrimHeight = 28.dp
 
@@ -166,7 +166,7 @@ internal fun ReasoningToggleAndContent(
                         .height(16.dp)
                         .width(16.dp)
                         .clip(RoundedCornerShape(12.dp))
-                        .background(Color.White.copy(alpha = if (showInlineStreamingBox) 0.7f else 1.0f))
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = if (showInlineStreamingBox) 0.7f else 1.0f))
                         .clickable(
                             indication = null,
                             interactionSource = remember { MutableInteractionSource() }) {
@@ -229,7 +229,7 @@ internal fun ReasoningToggleAndContent(
                         this.scaleX = scale.value
                         this.scaleY = scale.value
                     },
-                colors = CardDefaults.cardColors(containerColor = Color.White)
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
                 Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 24.dp)) {
                     Text(
