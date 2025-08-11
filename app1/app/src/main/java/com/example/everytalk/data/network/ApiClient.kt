@@ -180,9 +180,9 @@ object ApiClient {
 
     private fun getBackendUrls(): List<String> {
         return listOf(
-            "http://192.168.0.103:7860/chat",  // 原始配置作为备用
-            //"https://backdaitalk.onrender.com/chat",
-            //"https://kunzzz003-my-backend-code.hf.space/chat"
+            //"http://192.168.0.103:7860/chat",  // 原始配置作为备用
+            "https://backdaitalk.onrender.com/chat",
+            "https://kunzzz003-my-backend-code.hf.space/chat"
         )
     }
 
@@ -645,16 +645,36 @@ object ApiClient {
         }.body<com.example.everytalk.data.DataClass.GeminiApiResponse>()
     }
 
+    private fun getUpdateUrls(): List<String> {
+        return listOf(
+            GITHUB_API_BASE_URL + "repos/roseforljh/KunTalkwithAi/releases/latest",
+            "https://kuntalk-update-checker.onrender.com/latest"
+        )
+    }
+
     suspend fun getLatestRelease(): GithubRelease {
         if (!isInitialized) {
             throw IllegalStateException("ApiClient not initialized. Call initialize() first.")
         }
-        return client.get {
-            url(GITHUB_API_BASE_URL + "repos/roseforljh/KunTalkwithAi/releases/latest")
-            header(HttpHeaders.Accept, "application/vnd.github.v3+json")
-            // Add headers to bypass cache
-            header(HttpHeaders.CacheControl, "no-cache")
-            header(HttpHeaders.Pragma, "no-cache")
-        }.body<GithubRelease>()
+
+        val urls = getUpdateUrls()
+        var lastException: Exception? = null
+
+        for (url in urls) {
+            try {
+                return client.get {
+                    url(url)
+                    header(HttpHeaders.Accept, "application/vnd.github.v3+json")
+                    header(HttpHeaders.CacheControl, "no-cache")
+                    header(HttpHeaders.Pragma, "no-cache")
+                }.body<GithubRelease>()
+            } catch (e: Exception) {
+                lastException = e
+                // Log the exception and try the next URL
+                android.util.Log.w("ApiClient", "Failed to fetch release from $url", e)
+            }
+        }
+
+        throw IOException("Failed to check for updates from all available sources.", lastException)
     }
 }
