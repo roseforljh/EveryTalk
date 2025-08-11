@@ -216,7 +216,9 @@ class ApiHandler(
                         val response = ApiClient.generateContent(requestBody.apiKey!!, geminiRequest, audioBase64, mimeType)
                         val firstPart = response.candidates?.firstOrNull()?.content?.parts?.firstOrNull()
                         val text = (firstPart as? com.example.everytalk.data.DataClass.Part.Text)?.text ?: ""
-                        processStreamEvent(AppStreamEvent.Text(text), aiMessageId)
+                        
+                        // 使用ContentFinal事件避免双重更新，直接设置最终内容
+                        processStreamEvent(AppStreamEvent.ContentFinal(text), aiMessageId)
                         processStreamEvent(AppStreamEvent.StreamEnd(aiMessageId), aiMessageId)
                     } catch (e: Exception) {
                         updateMessageWithError(aiMessageId, e)

@@ -13,17 +13,6 @@ sealed interface ContentBlock {
 fun parseToContentBlocks(markdown: String): List<ContentBlock> {
     val blocks = mutableListOf<ContentBlock>()
     
-    // 改进的正则表达式，更好地处理数学公式边界和转义字符
-    val pattern = "(?s)" +
-            "```([^\\n]*\\n)?(.*?)```" +        // Code blocks - 改进了语言检测
-            "|\\$\\$(.*?)\\$\\$" +              // Block Math $$
-            "|\\\\\\[(.*?)\\\\\\]" +              // Block Math \[
-            "|(?<!\\\\)\\$([^\\$\\n]+?)\\$" +   // Inline Math $ - 避免转义的$
-            "|\\\\\\((.*?)\\\\\\)"               // Inline Math \(
-    
-    val regex = Regex(pattern)
-    var lastIndex = 0
-
     // 预处理：修复破损的LaTeX语法
     var processedMarkdown = markdown
         .replace(Regex("\\\\\\}\\s*-\\s*\\\\\\]"), "") // 修复 \} - \] 错误
@@ -31,47 +20,112 @@ fun parseToContentBlocks(markdown: String): List<ContentBlock> {
         .replace(Regex("\\\\frac\\s*([^{])"), "\\\\frac{\$1") // 修复缺失的大括号
         .replace(Regex("([^}])\\}\\s*([^{])\\{"), "\$1}{\$2}") // 修复分数表达式的大括号
 
-    regex.findAll(processedMarkdown).forEach { match ->
+    var currentIndex = 0
+    
+    while (currentIndex < processedMarkdown.length) {
+        // 检查是否遇到代码块开始标记
+        val codeBlockStart = processedMarkdown.indexOf("```", currentIndex)
+        
+        if (codeBlockStart != -1) {
+            // 添加代码块之前的文本
+            if (codeBlockStart > currentIndex) {
+                val textBefore = processedMarkdown.substring(currentIndex, codeBlockStart)
+                val textBlocks = parseNonCodeContent(textBefore)
+                blocks.addAll(textBlocks)
+            }
+            
+            // 解析代码块
+            val lineEnd = processedMarkdown.indexOf('\n', codeBlockStart)
+            val language = if (lineEnd != -1 && lineEnd > codeBlockStart + 3) {
+                processedMarkdown.substring(codeBlockStart + 3, lineEnd).trim().ifEmpty { null }
+            } else {
+                null
+            }
+            
+            val codeStart = if (lineEnd != -1) lineEnd + 1 else codeBlockStart + 3
+            
+            // 查找代码块结束标记
+            val codeBlockEnd = processedMarkdown.indexOf("```", codeStart)
+            
+            if (codeBlockEnd != -1) {
+                // 完整的代码块
+                val code = processedMarkdown.substring(codeStart, codeBlockEnd)
+                blocks.add(ContentBlock.CodeBlock(code, language))
+                currentIndex = codeBlockEnd + 3
+            } else {
+                // 未完成的代码块 - 实时渲染关键部分
+                val code = processedMarkdown.substring(codeStart)
+                if (code.isNotEmpty()) {
+                    blocks.add(ContentBlock.CodeBlock(code, language))
+                }
+                currentIndex = processedMarkdown.length
+            }
+        } else {
+            // 没有更多代码块，处理剩余的文本和数学公式
+            val remainingText = processedMarkdown.substring(currentIndex)
+            if (remainingText.isNotEmpty()) {
+                val textBlocks = parseNonCodeContent(remainingText)
+                blocks.addAll(textBlocks)
+            }
+            break
+        }
+    }
+    
+    return blocks
+}
+
+/**
+ * 解析不包含代码块的内容（文本和数学公式）
+ */
+private fun parseNonCodeContent(text: String): List<ContentBlock> {
+    val blocks = mutableListOf<ContentBlock>()
+    
+    // 数学公式的正则表达式
+    val mathPattern = "(?s)" +
+            "\\$\\$(.*?)\\$\\$" +              // Block Math $$
+            "|\\\\\\[(.*?)\\\\\\]" +              // Block Math \[
+            "|(?<!\\\\)\\$([^\\$\\n]+?)\\$" +   // Inline Math $ - 避免转义的$
+            "|\\\\\\((.*?)\\\\\\)"               // Inline Math \(
+    
+    val regex = Regex(mathPattern)
+    var lastIndex = 0
+    
+    regex.findAll(text).forEach { match ->
+        // 添加数学公式之前的文本
         if (match.range.first > lastIndex) {
-            val text = processedMarkdown.substring(lastIndex, match.range.first)
-            if (text.isNotEmpty()) {
-                blocks.add(ContentBlock.TextBlock(text))
+            val textContent = text.substring(lastIndex, match.range.first)
+            if (textContent.isNotEmpty()) {
+                blocks.add(ContentBlock.TextBlock(textContent))
             }
         }
-
+        
         val groups = match.groupValues
         
         when {
-            // 代码块检测 - 改进逻辑
-            groups.size > 2 && (groups[1].isNotEmpty() || groups[2].isNotEmpty()) -> {
-                val language = groups[1].trim().replace("\n", "").ifEmpty { null }
-                val code = groups[2]
-                blocks.add(ContentBlock.CodeBlock(code, language))
-            }
             // 块级数学公式 $$...$$
-            groups.size > 3 && groups[3].isNotEmpty() -> {
-                val latex = groups[3].trim()
+            groups.size > 1 && groups[1].isNotEmpty() -> {
+                val latex = groups[1].trim()
                 if (latex.isNotEmpty()) {
                     blocks.add(ContentBlock.MathBlock(latex, isDisplay = true))
                 }
             }
             // 块级数学公式 \[...\]
-            groups.size > 4 && groups[4].isNotEmpty() -> {
-                val latex = groups[4].trim()
+            groups.size > 2 && groups[2].isNotEmpty() -> {
+                val latex = groups[2].trim()
                 if (latex.isNotEmpty()) {
                     blocks.add(ContentBlock.MathBlock(latex, isDisplay = true))
                 }
             }
             // 行内数学公式 $...$
-            groups.size > 5 && groups[5].isNotEmpty() -> {
-                val latex = groups[5].trim()
+            groups.size > 3 && groups[3].isNotEmpty() -> {
+                val latex = groups[3].trim()
                 if (latex.isNotEmpty()) {
                     blocks.add(ContentBlock.MathBlock(latex, isDisplay = false))
                 }
             }
             // 行内数学公式 \(...\)
-            groups.size > 6 && groups[6].isNotEmpty() -> {
-                val latex = groups[6].trim()
+            groups.size > 4 && groups[4].isNotEmpty() -> {
+                val latex = groups[4].trim()
                 if (latex.isNotEmpty()) {
                     blocks.add(ContentBlock.MathBlock(latex, isDisplay = false))
                 }
@@ -79,13 +133,14 @@ fun parseToContentBlocks(markdown: String): List<ContentBlock> {
         }
         lastIndex = match.range.last + 1
     }
-
-    if (lastIndex < processedMarkdown.length) {
-        val text = processedMarkdown.substring(lastIndex)
-        if (text.isNotEmpty()) {
-            blocks.add(ContentBlock.TextBlock(text.trim()))
+    
+    // 添加剩余的文本
+    if (lastIndex < text.length) {
+        val remainingText = text.substring(lastIndex)
+        if (remainingText.isNotEmpty()) {
+            blocks.add(ContentBlock.TextBlock(remainingText))
         }
     }
-
+    
     return blocks
 }

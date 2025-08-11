@@ -62,7 +62,7 @@ internal fun ReasoningToggleAndContent(
     var visibilityNotified by remember(currentMessageId) { mutableStateOf(false) }
     // 修改显示条件：当有推理内容且正在流式传输时显示思考框，不受mainContentHasStarted限制
     // 这样可以在<think>标签内容正在输出时实时显示
-    val showInlineStreamingBox = isReasoningStreaming && !messageIsError
+    val showInlineStreamingBox = isReasoningStreaming && !messageIsError && !isReasoningComplete
 
     val showDotsAnimationOnToggle = false
 
@@ -150,8 +150,9 @@ internal fun ReasoningToggleAndContent(
                 }
             }
         }
-        val shouldShowReviewDotToggle =
-            isReasoningComplete && displayedReasoningText.isNotBlank() && !messageIsError
+        // 修复思考完成后的圆点显示逻辑：确保有推理内容时就显示圆点
+        val shouldShowReviewDotToggle = displayedReasoningText.isNotBlank() && !messageIsError &&
+            (isReasoningComplete || (!isReasoningStreaming && displayedReasoningText.isNotEmpty()))
         if (shouldShowReviewDotToggle) {
             Box(
                 modifier = Modifier.padding(

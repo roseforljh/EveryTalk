@@ -14,6 +14,7 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
@@ -235,7 +236,10 @@ class MainActivity : ComponentActivity() {
             contentAlignment = androidx.compose.ui.Alignment.Center
         ) {
             Image(
-                painter = androidx.compose.ui.res.painterResource(id = com.example.everytalk.R.drawable.ic_foreground_logo),
+                painter = androidx.compose.ui.res.painterResource(
+                    id = if (isSystemInDarkTheme()) com.example.everytalk.R.drawable.logo_dark
+                         else com.example.everytalk.R.drawable.ic_foreground_logo
+                ),
                 contentDescription = "Logo",
                 modifier = Modifier.scale(scale)
             )

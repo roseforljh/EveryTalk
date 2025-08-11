@@ -70,7 +70,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     @Serializable
     private data class ExportedSettings(
             val apiConfigs: List<ApiConfig>,
-            val customProviders: Set<String>
+            val customProviders: Set<String> = emptySet()
     )
 
     private val json = Json {
@@ -191,38 +191,21 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     private val _searchQueryInDrawer = MutableStateFlow("")
     val searchQueryInDrawer: StateFlow<String> = _searchQueryInDrawer.asStateFlow()
 
-    private val _customProviders = MutableStateFlow<Set<String>>(emptySet())
-
     private val predefinedPlatformsList =
             listOf("openai compatible", "google", "硅基流动", "阿里云百炼", "火山引擎", "深度求索", "OpenRouter")
 
-    val allProviders: StateFlow<List<String>> =
-            combine(_customProviders) { customsArray: Array<Set<String>> ->
-                        val customs = customsArray[0]
-                        val combinedList = (predefinedPlatformsList + customs.toList()).distinct()
-                        val predefinedOrderMap =
-                                predefinedPlatformsList.withIndex().associate {
-                                    it.value.lowercase().trim() to it.index
-                                }
-                        combinedList.sortedWith(
-                                compareBy<String> { platform ->
-                                    predefinedOrderMap[platform.lowercase().trim()]
-                                            ?: (predefinedPlatformsList.size +
-                                                    customs
-                                                            .indexOfFirst {
-                                                                it.equals(
-                                                                        platform,
-                                                                        ignoreCase = true
-                                                                )
-                                                            }
-                                                            .let {
-                                                                if (it == -1) Int.MAX_VALUE else it
-                                                            })
-                                }
-                                        .thenBy { it }
-                        )
-                    }
-                    .stateIn(ioScope, SharingStarted.Eagerly, predefinedPlatformsList)
+    private val _customProviders = MutableStateFlow<Set<String>>(emptySet())
+    val customProviders: StateFlow<Set<String>> = _customProviders.asStateFlow()
+
+    val allProviders: StateFlow<List<String>> = combine(
+        _customProviders
+    ) { customProvidersArray ->
+        predefinedPlatformsList + customProvidersArray[0].toList()
+    }.stateIn(
+        scope = mainScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = predefinedPlatformsList
+    )
     val isWebSearchEnabled: StateFlow<Boolean>
         get() = stateHolder._isWebSearchEnabled.asStateFlow()
     val showSourcesDialog: StateFlow<Boolean>
@@ -270,7 +253,11 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                     )
 
     init {
-        ioScope.launch { _customProviders.value = dataSource.loadCustomProviders() }
+        // 加载自定义提供商
+        ioScope.launch {
+            val loadedCustomProviders = dataSource.loadCustomProviders()
+            _customProviders.value = loadedCustomProviders
+        }
 
         // 优化：分阶段初始化，优先加载关键配置
         persistenceManager.loadInitialData(loadLastChat = false) {
@@ -446,64 +433,6 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         stateHolder._isWebSearchEnabled.value = enabled
     }
 
-    fun addProvider(providerName: String) {
-        val trimmedName = providerName.trim()
-        if (trimmedName.isNotBlank()) {
-            ioScope.launch {
-                val currentCustomProviders = _customProviders.value.toMutableSet()
-
-                if (predefinedPlatformsList.any { it.equals(trimmedName, ignoreCase = true) }) {
-                    withContext(Dispatchers.Main) {
-                        showSnackbar("平台名称 '$trimmedName' 是预设名称或已存在，无法添加。")
-                    }
-                    return@launch
-                }
-                if (currentCustomProviders.any { it.equals(trimmedName, ignoreCase = true) }) {
-                    withContext(Dispatchers.Main) { showSnackbar("模型平台 '$trimmedName' 已存在") }
-                    return@launch
-                }
-                currentCustomProviders.add(trimmedName)
-                _customProviders.value = currentCustomProviders.toSet()
-                dataSource.saveCustomProviders(currentCustomProviders.toSet())
-                withContext(Dispatchers.Main) { showSnackbar("模型平台 '$trimmedName' 已添加") }
-            }
-        } else {
-            showSnackbar("平台名称不能为空")
-        }
-    }
-
-    fun deleteProvider(providerName: String) {
-        ioScope.launch {
-            val trimmedProviderName = providerName.trim()
-
-            if (predefinedPlatformsList.any { it.equals(trimmedProviderName, ignoreCase = true) }) {
-                withContext(Dispatchers.Main) { showSnackbar("预设平台 '$trimmedProviderName' 不可删除。") }
-                return@launch
-            }
-
-            val currentCustomProviders = _customProviders.value.toMutableSet()
-            val removed =
-                    currentCustomProviders.removeIf {
-                        it.equals(trimmedProviderName, ignoreCase = true)
-                    }
-
-            if (removed) {
-                _customProviders.value = currentCustomProviders.toSet()
-                dataSource.saveCustomProviders(currentCustomProviders.toSet())
-
-                val configsToDelete =
-                        stateHolder._apiConfigs.value.filter {
-                            it.provider.equals(trimmedProviderName, ignoreCase = true)
-                        }
-                configsToDelete.forEach { config -> configManager.deleteConfig(config) }
-                withContext(Dispatchers.Main) { showSnackbar("模型平台 '$trimmedProviderName' 已删除") }
-            } else {
-                withContext(Dispatchers.Main) {
-                    showSnackbar("未能删除模型平台 '$trimmedProviderName'，可能它不是一个自定义平台。")
-                }
-            }
-        }
-    }
 
     fun showSnackbar(message: String) {
         mainScope.launch { stateHolder._snackbarMessage.emit(message) }
@@ -900,6 +829,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         }
     }
 
+
     fun addConfig(config: ApiConfig) = configManager.addConfig(config)
     fun updateConfig(config: ApiConfig) = configManager.updateConfig(config)
     fun deleteConfig(config: ApiConfig) = configManager.deleteConfig(config)
@@ -924,6 +854,36 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     fun clearSelectedConfig() {
         stateHolder._selectedApiConfig.value = null
         ioScope.launch { persistenceManager.saveSelectedConfigIdentifier(null) }
+    }
+
+    fun addProvider(providerName: String) {
+        val trimmedName = providerName.trim()
+        if (trimmedName.isNotBlank() && !predefinedPlatformsList.contains(trimmedName)) {
+            val currentCustomProviders = _customProviders.value
+            if (!currentCustomProviders.contains(trimmedName)) {
+                _customProviders.value = currentCustomProviders + trimmedName
+                ioScope.launch {
+                    dataSource.saveCustomProviders(_customProviders.value)
+                }
+            }
+        }
+    }
+
+    fun deleteProvider(providerName: String) {
+        val currentCustomProviders = _customProviders.value
+        if (currentCustomProviders.contains(providerName)) {
+            // 删除使用此提供商的所有配置
+            val configsToDelete = stateHolder._apiConfigs.value.filter { it.provider == providerName }
+            configsToDelete.forEach { config ->
+                configManager.deleteConfig(config)
+            }
+            
+            // 从自定义提供商列表中移除
+            _customProviders.value = currentCustomProviders - providerName
+            ioScope.launch {
+                dataSource.saveCustomProviders(_customProviders.value)
+            }
+        }
     }
 
     fun updateConfigGroup(representativeConfig: ApiConfig, newAddress: String, newKey: String) {
@@ -1139,8 +1099,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         ioScope.launch {
             val settingsToExport =
                     ExportedSettings(
-                            apiConfigs = stateHolder._apiConfigs.value,
-                            customProviders = _customProviders.value
+                            apiConfigs = stateHolder._apiConfigs.value
                     )
             val finalJson = json.encodeToString(settingsToExport)
             _settingsExportRequest.send("eztalk_settings" to finalJson)

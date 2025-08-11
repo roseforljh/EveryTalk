@@ -208,19 +208,15 @@ class RealtimePreprocessor(
     }
     
     /**
-     * 预处理Markdown标记
+     * 预处理Markdown标记 - 简化版本，只处理基本格式
      */
     private fun preprocessMarkdown(text: String): String {
         var processed = text
-        
+
         // 确保标题标记格式正确
         processed = processed.replace(Regex("^(#{1,6})([^\\s#])"), "$1 $2")
         processed = processed.replace(Regex("\n(#{1,6})([^\\s#])"), "\n$1 $2")
-        
-        // 确保列表标记格式正确
-        processed = processed.replace(Regex("^([\\-\\*\\+])([^\\s])"), "$1 $2")
-        processed = processed.replace(Regex("\n([\\-\\*\\+])([^\\s])"), "\n$1 $2")
-        
+
         return processed
     }
     

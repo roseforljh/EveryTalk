@@ -122,7 +122,7 @@ class MessageProcessor {
     }
     
     /**
-     * 检查新文本是否只是空白字符或重复内容
+     * 检查新文本是否只是空白字符或重复内容 - 改进版本
      */
     private fun shouldSkipTextChunk(newText: String, existingText: String): Boolean {
         // 如果新文本完全为空，跳过
@@ -144,6 +144,59 @@ class MessageProcessor {
         // 检查是否是完全重复的内容
         if (existingText.isNotEmpty() && newText == existingText) {
             return true
+        }
+
+        // 改进的重复检测逻辑 - 更精确地检测重复内容
+        if (existingText.isNotEmpty() && existingText.length > newText.length) {
+            val normalizedNew = normalizeText(newText)
+            val normalizedExisting = normalizeText(existingText)
+            
+            // 检查是否为完全相同的子串
+            if (normalizedExisting.contains(normalizedNew) && normalizedNew.length > 10) {
+                // 但是要排除一些特殊情况
+                
+                // 1. 如果新内容包含重要的标点符号或格式标记，不跳过
+                val hasImportantContent = listOf("：", ":", "公式", "解释", "**", "*", "$", "\\", "=").any { normalizedNew.contains(it) }
+                if (hasImportantContent) {
+                    logger.debug("Not skipping content with important formatting: ${normalizedNew.take(30)}...")
+                    return false
+                }
+                
+                // 2. 检查是否为句子的不同部分（如标题和内容）
+                val newTrimmed = normalizedNew.trim()
+                val existingTrimmed = normalizedExisting.trim()
+                
+                // 如果新内容是现有内容的精确子串且位置合理，可能是重复
+                val indexInExisting = existingTrimmed.indexOf(newTrimmed)
+                if (indexInExisting >= 0) {
+                    // 检查前后文本，如果是自然的文本流，不跳过
+                    val beforeSubstring = existingTrimmed.substring(0, indexInExisting).trim()
+                    val afterSubstring = existingTrimmed.substring(indexInExisting + newTrimmed.length).trim()
+                    
+                    // 如果子串前后都有实质内容，可能是合理的重复（如标题重复），允许
+                    if (beforeSubstring.isNotEmpty() && afterSubstring.isNotEmpty()) {
+                        logger.debug("Allowing potential title/content repetition: ${newTrimmed.take(30)}...")
+                        return false
+                    }
+                    
+                    logger.debug("Skipping duplicate content found in existing text: ${normalizedNew.take(50)}...")
+                    return true
+                }
+            }
+            
+            // 检查行级重复，但更保守
+            val lines = normalizedNew.split("\n").filter { it.trim().isNotEmpty() }
+            if (lines.isNotEmpty() && lines.size > 2) { // 只对多行内容进行行级重复检查
+                val duplicateLineCount = lines.count { line ->
+                    val trimmedLine = line.trim()
+                    normalizedExisting.contains(trimmedLine) && trimmedLine.length > 10 // 提高阈值
+                }
+                // 提高重复阈值到80%，且至少要有3行重复
+                if (duplicateLineCount >= 3 && duplicateLineCount.toDouble() / lines.size > 0.8) {
+                    logger.debug("Skipping chunk with ${duplicateLineCount}/${lines.size} duplicate lines")
+                    return true
+                }
+            }
         }
 
         return false
@@ -190,17 +243,25 @@ class MessageProcessor {
                                     processedChunks.clear()
                                     logger.debug("Applied Gemini final cleanup to message content")
                                 } else {
-                                    if (shouldSkipTextChunk(eventText, currentTextBuilder.get().toString())) {
-                                        // Continue to final formatting even if chunk is skipped
+                                    // 改进的重复检测逻辑
+                                    val currentText = currentTextBuilder.get().toString()
+                                    val skipChunk = shouldSkipTextChunk(eventText, currentText)
+                                    
+                                    if (skipChunk) {
+                                        logger.debug("Skipping text chunk due to duplication: ${eventText.take(50)}...")
+                                        // 继续处理格式化，但不添加内容
                                     }
-    
+     
                                     val normalizedText = normalizeText(eventText)
                                     val textChunkKey = "text_${normalizedText.hashCode()}"
                                     val contentChunkKey = "content_${normalizedText.hashCode()}"
-    
-                                    if (processedChunks.containsKey(textChunkKey) || processedChunks.containsKey(contentChunkKey)) {
-                                        logger.debug("Skipping duplicate content processing for chunk: $normalizedText")
-                                    } else {
+     
+                                    // 改进的已处理内容检查
+                                    val alreadyProcessed = processedChunks.containsKey(textChunkKey) || processedChunks.containsKey(contentChunkKey)
+                                    
+                                    if (alreadyProcessed) {
+                                        logger.debug("Skipping already processed chunk: ${normalizedText.take(30)}...")
+                                    } else if (!skipChunk) { // 只有在不跳过且未处理过的情况下才处理
                                         // 检测数学内容，对数学内容使用更保守的预处理
                                         val isMathContent = eventText.contains("\\") || eventText.contains("$") ||
                                                 listOf("frac", "sqrt", "计算", "第一步", "第二步", "=", "^").any { eventText.contains(it) }
@@ -236,29 +297,59 @@ class MessageProcessor {
                                             val existing = currentTextBuilder.get().toString()
                                             if (regular.isNotEmpty() && regular != existing) {
                                                 if (regular.startsWith(existing)) {
-                                                    // Cumulative stream, append the new part
+                                                    // 累积流：添加新的部分
                                                     val delta = regular.substring(existing.length)
-                                                    currentTextBuilder.get().append(delta)
-                                                } else {
-                                                    // Non-cumulative stream. Check for overlap to prevent duplication.
-                                                    var overlap = 0
-                                                    val searchRange = minOf(existing.length, regular.length)
-                                                    for (i in searchRange downTo 1) {
-                                                        if (existing.endsWith(regular.substring(0, i))) {
-                                                            overlap = i
-                                                            break
-                                                        }
+                                                    if (delta.isNotEmpty() && !shouldSkipTextChunk(delta, existing)) {
+                                                        currentTextBuilder.get().append(delta)
+                                                        logger.debug("Appended delta: ${delta.take(30)}...")
                                                     }
+                                                } else {
+                                                    // 非累积流：检查重叠以防止重复
+                                                    var overlap = 0
+                                                    val searchRange = minOf(existing.length, regular.length, 200) // 限制搜索范围
+                                                    
+                                                    // 智能重叠检测，避免数学内容和重要格式的误判
+                                                    val isMathOrImportant = regular.contains("\\") || regular.contains("$") ||
+                                                                           listOf("frac", "sqrt", "=", "^", "公式解释", "：", ":").any { regular.contains(it) }
+                                                    
+                                                    if (!isMathOrImportant) {
+                                                        for (i in searchRange downTo 10) { // 最小重叠长度为10
+                                                            val suffix = existing.takeLast(i)
+                                                            val prefix = regular.take(i)
+                                                            if (suffix == prefix) {
+                                                                overlap = i
+                                                                logger.debug("Found overlap of $i characters")
+                                                                break
+                                                            }
+                                                        }
+                                                    } else {
+                                                        logger.debug("Skipping overlap detection for math/important content")
+                                                    }
+                                                    
                                                     val textToAppend = regular.substring(overlap)
                                                     if (textToAppend.isNotEmpty()) {
-                                                        currentTextBuilder.get().append(textToAppend)
-                                                    } else {
-                                                        logger.debug("Skipping append, new chunk is fully overlapped.")
+                                                        // 对重要内容（如标题、公式说明）更宽松的重复检测
+                                                        val isImportantContent = listOf("公式解释", "：", "解释", "说明").any { textToAppend.contains(it) }
+                                                        val shouldSkip = if (isImportantContent) {
+                                                            // 对重要内容只检查完全相同的重复
+                                                            existing.contains(textToAppend.trim()) && textToAppend.trim().length > 5
+                                                        } else {
+                                                            shouldSkipTextChunk(textToAppend, existing)
+                                                        }
+                                                        
+                                                        if (!shouldSkip) {
+                                                            currentTextBuilder.get().append(textToAppend)
+                                                            logger.debug("Appended non-cumulative content: ${textToAppend.take(30)}...")
+                                                        } else {
+                                                            logger.debug("Skipping append, content filtered by duplication detection: ${textToAppend.take(30)}...")
+                                                        }
                                                     }
                                                 }
                                             }
                                         }
                                         processedChunks[if (event is AppStreamEvent.Text) textChunkKey else contentChunkKey] = normalizedText
+                                    } else {
+                                        logger.debug("Skipped processing for chunk due to duplication or already processed")
                                     }
                                 }
                             }

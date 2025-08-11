@@ -153,33 +153,42 @@ internal fun UserOrErrorMessageContent(
                         Column(
                             verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            contentBlocks.forEach { block ->
-                                when (block) {
-                                    is ContentBlock.TextBlock -> {
-                                        // 更宽松的检查，只跳过完全为空的内容
-                                        if (block.content.isNotEmpty()) {
-                                            com.example.everytalk.ui.components.MarkdownText(
-                                                markdown = block.content,
-                                                color = contentColor,
+                            contentBlocks.forEachIndexed { index, block ->
+                                // 为每个内容块添加唯一的键，确保Compose正确管理状态
+                                // 对于代码块，使用更详细的键来确保唯一性
+                                val blockKey = when (block) {
+                                    is ContentBlock.CodeBlock -> "${message.id}_bubble_code_${index}_${block.code.hashCode()}_${block.language.hashCode()}"
+                                    else -> "${message.id}_bubble_block_$index"
+                                }
+                                key(blockKey) {
+                                    when (block) {
+                                        is ContentBlock.TextBlock -> {
+                                            // 更宽松的检查，只跳过完全为空的内容
+                                            if (block.content.isNotEmpty()) {
+                                                com.example.everytalk.ui.components.MarkdownText(
+                                                    markdown = block.content,
+                                                    color = contentColor
+                                                )
+                                            }
+                                        }
+                                        is ContentBlock.MathBlock -> {
+                                            MathView(
+                                                latex = block.latex,
+                                                isDisplay = block.isDisplay,
+                                                textColor = if (MaterialTheme.colorScheme.background.luminance() < 0.5f)
+                                                    Color.White // 深色主题：纯白色
+                                                else
+                                                    Color.Black, // 浅色主题：纯黑色
+                                                modifier = Modifier.fillMaxWidth()
                                             )
                                         }
-                                    }
-                                    is ContentBlock.MathBlock -> {
-                                        MathView(
-                                            latex = block.latex,
-                                            isDisplay = block.isDisplay,
-                                            textColor = if (MaterialTheme.colorScheme.background.luminance() < 0.5f)
-                                                Color.White // 深色主题：纯白色
-                                            else
-                                                Color.Black, // 浅色主题：纯黑色
-                                            modifier = Modifier.fillMaxWidth()
-                                        )
-                                    }
-                                    is ContentBlock.CodeBlock -> {
-                                        CodePreview(
-                                            code = block.code,
-                                            language = block.language
-                                        )
+                                        is ContentBlock.CodeBlock -> {
+                                            CodePreview(
+                                                code = block.code,
+                                                language = block.language,
+                                                backgroundColor = bubbleColor
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -202,7 +211,8 @@ fun AttachmentsContent(
     onRegenerateRequest: (Message) -> Unit,
     onLongPress: (Message, Offset) -> Unit,
     onImageLoaded: () -> Unit,
-    scrollStateManager: com.example.everytalk.ui.screens.MainScreen.chat.ChatScrollStateManager
+    scrollStateManager: com.example.everytalk.ui.screens.MainScreen.chat.ChatScrollStateManager,
+    bubbleColor: Color = MaterialTheme.colorScheme.surfaceVariant
 ) {
     val context = LocalContext.current
     var isContextMenuVisible by remember(message.id) { mutableStateOf(false) }
@@ -271,7 +281,7 @@ fun AttachmentsContent(
                             modifier = Modifier
                                 .widthIn(max = maxWidth)
                                 .padding(vertical = 4.dp)
-                                .background(Color(0xFFF0F0F0), RoundedCornerShape(12.dp))
+                                .background(bubbleColor, RoundedCornerShape(12.dp))
                                 .clip(RoundedCornerShape(12.dp))
                                 .pointerInput(message.id, attachment.uri) {
                                     detectTapGestures(
@@ -294,12 +304,14 @@ fun AttachmentsContent(
                             Icon(
                                 imageVector = getIconForMimeType(attachment.mimeType),
                                 contentDescription = "Attachment",
-                                modifier = Modifier.size(24.dp)
+                                modifier = Modifier.size(24.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = attachment.displayName ?: attachment.uri.path?.substringAfterLast('/') ?: "Attached File",
-                                style = MaterialTheme.typography.bodyMedium
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
@@ -308,7 +320,7 @@ fun AttachmentsContent(
                             modifier = Modifier
                                 .widthIn(max = maxWidth)
                                 .padding(vertical = 4.dp)
-                                .background(Color(0xFFF0F0F0), RoundedCornerShape(12.dp))
+                                .background(bubbleColor, RoundedCornerShape(12.dp))
                                 .clip(RoundedCornerShape(12.dp))
                                 .pointerInput(message.id, attachment) {
                                     detectTapGestures(
@@ -324,12 +336,14 @@ fun AttachmentsContent(
                             Icon(
                                 imageVector = Icons.Outlined.Audiotrack,
                                 contentDescription = "Audio Attachment",
-                                modifier = Modifier.size(24.dp)
+                                modifier = Modifier.size(24.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = "Audio attachment",
-                                style = MaterialTheme.typography.bodyMedium
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }

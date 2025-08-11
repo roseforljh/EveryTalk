@@ -69,6 +69,7 @@ import com.example.everytalk.ui.screens.MainScreen.chat.EmptyChatView
 import com.example.everytalk.ui.screens.MainScreen.chat.ModelSelectionBottomSheet
 import com.example.everytalk.ui.screens.MainScreen.chat.rememberChatScrollStateManager
 import com.example.everytalk.ui.components.MarkdownText
+import com.example.everytalk.ui.theme.chatColors
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.delay
@@ -620,33 +621,42 @@ private fun UpdateAvailableDialog(
                         Column(
                             verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            contentBlocks.forEach { block ->
-                                when (block) {
-                                    is com.example.everytalk.util.ContentBlock.TextBlock -> {
-                                        if (block.content.isNotBlank()) {
-                                            com.example.everytalk.ui.components.MarkdownText(
-                                                markdown = block.content,
-                                                style = MaterialTheme.typography.bodyLarge,
-                                                color = MaterialTheme.colorScheme.onSurface
+                            contentBlocks.forEachIndexed { index, block ->
+                                // 为每个内容块添加唯一的键，确保Compose正确管理状态
+                                // 对于代码块，使用更详细的键来确保唯一性
+                                val blockKey = when (block) {
+                                    is com.example.everytalk.util.ContentBlock.CodeBlock -> "dialog_code_${index}_${block.code.hashCode()}_${block.language.hashCode()}"
+                                    else -> "dialog_block_$index"
+                                }
+                                key(blockKey) {
+                                    when (block) {
+                                        is com.example.everytalk.util.ContentBlock.TextBlock -> {
+                                            if (block.content.isNotBlank()) {
+                                                com.example.everytalk.ui.components.MarkdownText(
+                                                    markdown = block.content,
+                                                    style = MaterialTheme.typography.bodyLarge,
+                                                    color = MaterialTheme.colorScheme.onSurface
+                                                )
+                                            }
+                                        }
+                                        is com.example.everytalk.util.ContentBlock.MathBlock -> {
+                                            com.example.everytalk.ui.components.MathView(
+                                                latex = block.latex,
+                                                isDisplay = block.isDisplay,
+                                                textColor = if (MaterialTheme.colorScheme.background.luminance() < 0.5f)
+                                                    Color.White // 深色主题：纯白色
+                                                else
+                                                    Color.Black, // 浅色主题：纯黑色
+                                                modifier = Modifier.fillMaxWidth()
                                             )
                                         }
-                                    }
-                                    is com.example.everytalk.util.ContentBlock.MathBlock -> {
-                                        com.example.everytalk.ui.components.MathView(
-                                            latex = block.latex,
-                                            isDisplay = block.isDisplay,
-                                            textColor = if (MaterialTheme.colorScheme.background.luminance() < 0.5f)
-                                                Color.White // 深色主题：纯白色
-                                            else
-                                                Color.Black, // 浅色主题：纯黑色
-                                            modifier = Modifier.fillMaxWidth()
-                                        )
-                                    }
-                                    is com.example.everytalk.util.ContentBlock.CodeBlock -> {
-                                        com.example.everytalk.ui.components.CodePreview(
-                                            code = block.code,
-                                            language = block.language
-                                        )
+                                        is com.example.everytalk.util.ContentBlock.CodeBlock -> {
+                                            com.example.everytalk.ui.components.CodePreview(
+                                                code = block.code,
+                                                language = block.language,
+                                                backgroundColor = MaterialTheme.chatColors.userBubble
+                                            )
+                                        }
                                     }
                                 }
                             }

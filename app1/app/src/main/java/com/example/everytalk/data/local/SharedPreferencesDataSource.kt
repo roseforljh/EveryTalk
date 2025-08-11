@@ -93,14 +93,11 @@ class SharedPreferencesDataSource(context: Context) {
     fun saveChatHistory(history: List<List<Message>>) =
         saveData(KEY_CHAT_HISTORY, history, chatHistorySerializer)
 
-    fun saveCustomProviders(providers: Set<String>) {
-        val trimmedProviders = providers.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
-        saveData(KEY_CUSTOM_PROVIDERS, trimmedProviders, customProvidersSerializer)
-    }
-
     fun loadCustomProviders(): Set<String> =
         loadData(KEY_CUSTOM_PROVIDERS, customProvidersSerializer, emptySet())
-            .map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+
+    fun saveCustomProviders(providers: Set<String>) =
+        saveData(KEY_CUSTOM_PROVIDERS, providers, customProvidersSerializer)
 
     fun clearApiConfigs() = remove(KEY_API_CONFIG_LIST)
     fun clearChatHistory() = remove(KEY_CHAT_HISTORY)

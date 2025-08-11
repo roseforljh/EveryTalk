@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import com.example.everytalk.data.DataClass.ApiConfig
 import com.example.everytalk.data.DataClass.ModalityType
 import androidx.compose.ui.unit.sp
+import com.example.everytalk.ui.screens.viewmodel.ConfigManager
 
 @SuppressLint("ConfigurationScreenWidthHeight")
 @OptIn(ExperimentalMaterial3Api::class)

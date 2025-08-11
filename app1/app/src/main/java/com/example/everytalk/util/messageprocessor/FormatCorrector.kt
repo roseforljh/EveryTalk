@@ -386,21 +386,73 @@ class FormatCorrector(
     }
     
     /**
-     * 修复粗体和斜体格式
+     * 修复粗体和斜体格式 - 改进版本，避免重复处理，修复混合格式错误
      */
     private fun fixTextStyleFormat(text: String): String {
         var fixed = text
         
-        // 修复不完整的粗体格式
-        fixed = fixed.replace(Regex("\\*\\*([^*]+)(?!\\*\\*)"), "**$1**")
-        fixed = fixed.replace(Regex("(?<!\\*)\\*\\*([^*]+)\\*(?!\\*)"), "**$1**")
+        // 1. 首先处理最常见的混合格式错误：**text* 或 **text*一些文本
+        // 这种情况下应该修复为 **text**
+        fixed = fixed.replace(Regex("\\*\\*([^*]+?)\\*(?!\\*)")) { matchResult ->
+            val content = matchResult.groupValues[1]
+            "**$content**"
+        }
         
-        // 修复不完整的斜体格式
-        fixed = fixed.replace(Regex("(?<!\\*)\\*([^*\\s][^*]*[^*\\s])\\*(?!\\*)"), "*$1*")
+        // 2. 处理另一种混合格式：*text**
+        fixed = fixed.replace(Regex("(?<!\\*)\\*([^*]+?)\\*\\*")) { matchResult ->
+            val content = matchResult.groupValues[1]
+            "**$content**"
+        }
         
-        // 修复下划线格式
-        fixed = fixed.replace(Regex("__([^_]+)(?!__)"), "__$1__")
-        fixed = fixed.replace(Regex("(?<!_)_([^_\\s][^_]*[^_\\s])_(?!_)"), "_$1_")
+        // 3. 修复标准的不完整粗体格式：**text (没有结束标记)
+        val incompleteDoubleAsterisk = Regex("\\*\\*([^*]+?)(?<!\\*)$")
+        if (incompleteDoubleAsterisk.containsMatchIn(fixed)) {
+            fixed = incompleteDoubleAsterisk.replace(fixed) { matchResult ->
+                val content = matchResult.groupValues[1]
+                "**$content**"
+            }
+        }
+        
+        // 4. 修复不完整的粗体格式（在句中）：**text 后面跟着空格或标点
+        fixed = fixed.replace(Regex("\\*\\*([^*]+?)(?<!\\*)(?=\\s|[。，！？：；])")) { matchResult ->
+            val content = matchResult.groupValues[1]
+            "**$content**"
+        }
+        
+        // 5. 修复斜体格式，但要更加小心避免与粗体冲突
+        // 只处理明确的单个*包围的文本，且不在**内部
+        val singleAsteriskPattern = Regex("(?<!\\*)\\*([^*\\s]+(?:\\s+[^*\\s]+)*)\\*(?!\\*)")
+        val matches = singleAsteriskPattern.findAll(fixed).toList()
+        
+        for (match in matches.reversed()) { // 从后往前处理，避免索引偏移
+            val matchStart = match.range.first
+            val matchEnd = match.range.last
+            
+            // 检查这个匹配是否在**...**内部
+            val textBefore = fixed.substring(0, matchStart)
+            val textAfter = fixed.substring(matchEnd + 1)
+            
+            // 计算前面未配对的**数量
+            val doubleBefore = textBefore.windowed(2).count { it == "**" }
+            val doubleAfter = textAfter.windowed(2).count { it == "**" }
+            
+            // 如果**数量是偶数，说明我们在**...**外部，可以安全处理斜体
+            if (doubleBefore % 2 == 0 && doubleAfter % 2 == 0) {
+                val content = match.groupValues[1]
+                fixed = fixed.replaceRange(match.range, "*$content*")
+            }
+        }
+        
+        // 6. 修复下划线格式
+        fixed = fixed.replace(Regex("__([^_]+?)_(?!_)")) { matchResult ->
+            val content = matchResult.groupValues[1]
+            "__${content}__"
+        }
+        
+        fixed = fixed.replace(Regex("(?<!_)_([^_]+?)__")) { matchResult ->
+            val content = matchResult.groupValues[1]
+            "__${content}__"
+        }
         
         return fixed
     }
@@ -426,7 +478,7 @@ class FormatCorrector(
     
     /**
      * 清理文本中的多余空白段落，特别针对OpenAI兼容接口的输出
-     * 保护数学公式和LaTeX语法
+     * 保护数学公式和LaTeX语法，避免强制换行
      */
     fun cleanExcessiveWhitespace(text: String): String {
         if (text.isBlank()) return ""
@@ -438,10 +490,8 @@ class FormatCorrector(
                            listOf("frac", "sqrt", "sum", "int", "lim").any { text.contains("\\$it") }
         
         if (hasMathContent) {
-            // 对于包含数学公式的文本，只做最基本的清理
-            cleaned = cleaned.replace(Regex("[ \t]+\n"), "\n") // 移除行尾空白
-            cleaned = cleaned.replace(Regex("\n{5,}"), "\n\n\n") // 只处理过多的空行
-            cleaned = cleaned.trim()
+            // 对于包含数学公式的文本，采用智能清理策略
+            cleaned = smartMathContentCleaning(cleaned)
             return cleaned
         }
         
@@ -482,6 +532,102 @@ class FormatCorrector(
         if (cleaned.isBlank()) return text.trim()
         
         return cleaned
+    }
+    
+    /**
+     * 智能数学内容清理 - 避免破坏数学公式的行内显示，修复重复文本问题
+     */
+    private fun smartMathContentCleaning(text: String): String {
+        var cleaned = text
+        
+        // 1. 移除行尾空白，但保护数学公式
+        cleaned = cleaned.replace(Regex("[ \t]+\n"), "\n")
+        
+        // 2. 处理数学公式周围的空白 - 关键修复
+        // 保持行内数学公式与文本的自然连接，避免强制换行
+        cleaned = cleaned.replace(Regex("\\s*\n+\\s*(\\\$[^$]+\\\$)\\s*\n+\\s*"), " $1 ")
+        
+        // 3. 处理块级数学公式的合理间距
+        cleaned = cleaned.replace(Regex("\\s*\n{3,}\\s*(\\\$\\\$[^$]+\\\$\\\$)\\s*\n{3,}\\s*"), "\n\n$1\n\n")
+        
+        // 4. 修复被错误分离的中文文本，但要避免重复合并
+        // 改进：检查是否已经是连续的中文文本，避免重复处理
+        cleaned = safeRegexReplace(cleaned, Regex("([\u4e00-\u9fa5])\\s*\n+\\s*([\u4e00-\u9fa5])")) { matchResult ->
+            val char1 = matchResult.groupValues[1]
+            val char2 = matchResult.groupValues[2]
+            // 检查是否可能导致重复
+            val beforeMatch = cleaned.substring(0, matchResult.range.first)
+            val afterMatch = cleaned.substring(matchResult.range.last + 1)
+            
+            // 如果前后文本已经包含这些字符，可能会造成重复，保持原样
+            if (beforeMatch.endsWith(char1 + char2) || afterMatch.startsWith(char1 + char2)) {
+                matchResult.value // 保持原样
+            } else {
+                "$char1$char2"
+            }
+        }
+        
+        // 5. 处理中文标点符号后的不当换行，避免重复
+        cleaned = safeRegexReplace(cleaned, Regex("([，。！？；：])\\s*\n+\\s*([\u4e00-\u9fa5])")) { matchResult ->
+            val punctuation = matchResult.groupValues[1]
+            val nextChar = matchResult.groupValues[2]
+            
+            // 检查是否已经是正确格式
+            val beforeMatch = cleaned.substring(0, maxOf(0, matchResult.range.first - 10))
+            val pattern = "$punctuation $nextChar"
+            
+            if (beforeMatch.contains(pattern)) {
+                matchResult.value // 如果已经存在正确格式，保持原样
+            } else {
+                "$punctuation $nextChar"
+            }
+        }
+        
+        // 6. 只处理过多的空行（超过4行的情况）
+        cleaned = cleaned.replace(Regex("\n{5,}"), "\n\n\n")
+        
+        // 7. 保护LaTeX命令周围的格式
+        cleaned = cleaned.replace(Regex("\\s*\n+\\s*(\\\\[a-zA-Z]+)\\s*\n+\\s*"), " $1 ")
+        
+        // 8. 检查重复段落并移除
+        cleaned = removeDuplicateSegments(cleaned)
+        
+        // 9. 最终清理
+        cleaned = cleaned.trim()
+        
+        return cleaned
+    }
+    
+    /**
+     * 移除重复的文本段落
+     */
+    private fun removeDuplicateSegments(text: String): String {
+        val lines = text.split("\n")
+        val processedLines = mutableListOf<String>()
+        
+        for (line in lines) {
+            val trimmedLine = line.trim()
+            
+            // 如果这一行不为空且不是重复行，添加到结果中
+            if (trimmedLine.isNotEmpty()) {
+                // 检查最近几行是否有重复
+                val recentLines = processedLines.takeLast(3)
+                val isDuplicate = recentLines.any { it.trim() == trimmedLine }
+                
+                if (!isDuplicate) {
+                    processedLines.add(line)
+                } else {
+                    logger.debug("Removing duplicate line: $trimmedLine")
+                }
+            } else {
+                // 空行直接添加，但避免连续多个空行
+                if (processedLines.lastOrNull()?.trim()?.isNotEmpty() == true) {
+                    processedLines.add(line)
+                }
+            }
+        }
+        
+        return processedLines.joinToString("\n")
     }
     
     /**

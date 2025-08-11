@@ -30,6 +30,7 @@ import kotlinx.serialization.modules.polymorphic
 import kotlinx.serialization.modules.subclass
 import com.example.everytalk.data.DataClass.GithubRelease
 import kotlinx.serialization.Serializable
+import com.example.everytalk.data.local.SharedPreferencesDataSource
 import kotlinx.serialization.SerializationException
 import java.io.IOException
 import java.io.File
@@ -39,7 +40,7 @@ import kotlinx.coroutines.CancellationException as CoroutineCancellationExceptio
 import java.util.concurrent.atomic.AtomicBoolean
 
 object ApiClient {
-
+    private var sharedPreferencesDataSource: SharedPreferencesDataSource? = null
     private const val GITHUB_API_BASE_URL = "https://api.github.com/"
     
     /**
@@ -158,6 +159,7 @@ object ApiClient {
         if (isInitialized) return
         synchronized(this) {
             if (isInitialized) return
+            sharedPreferencesDataSource = SharedPreferencesDataSource(context)
             val cacheFile = File(context.cacheDir, "ktor_http_cache")
             client = HttpClient(Android) {
                 install(ContentNegotiation) {
@@ -176,11 +178,13 @@ object ApiClient {
         }
     }
 
-    private val backendProxyUrls = listOf(
-        "http://192.168.0.104:7860/chat",  // 原始配置作为备用
-        //"https://backdaitalk.onrender.com/chat"
-        //"https://dbykoynmqkkq.cloud.cloudcat.one:443/chat",
-    )
+    private fun getBackendUrls(): List<String> {
+        return listOf(
+            "http://192.168.0.103:7860/chat",  // 原始配置作为备用
+            //"https://backdaitalk.onrender.com/chat",
+            //"https://kunzzz003-my-backend-code.hf.space/chat"
+        )
+    }
 
 
     private const val GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
@@ -488,6 +492,7 @@ object ApiClient {
         attachments: List<SelectedMediaItem>,
         applicationContext: Context
     ): Flow<AppStreamEvent> = channelFlow {
+        val backendProxyUrls = getBackendUrls()
         if (backendProxyUrls.isEmpty()) {
             throw IOException("没有后端服务器URL可供尝试。")
         }

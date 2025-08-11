@@ -11,6 +11,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.FontFamily
@@ -32,9 +33,11 @@ fun MarkdownText(
     color: Color = MaterialTheme.colorScheme.onSurface,
     style: TextStyle = MaterialTheme.typography.bodyMedium
 ) {
+    // 获取当前主题的颜色方案，用于内联代码适配
+    val isDarkTheme = MaterialTheme.colorScheme.surface.luminance() < 0.5f
     val uriHandler = LocalUriHandler.current
-    val annotatedString = remember(markdown, color, style) {
-        buildMarkdownAnnotatedString(markdown, color, style)
+    val annotatedString = remember(markdown, color, style, isDarkTheme) {
+        buildMarkdownAnnotatedString(markdown, color, style, isDarkTheme)
     }
     
     // 检查是否包含链接
@@ -78,14 +81,42 @@ fun MarkdownText(
 private fun buildMarkdownAnnotatedString(
     markdown: String,
     baseColor: Color,
-    baseStyle: TextStyle
+    baseStyle: TextStyle,
+    isDarkTheme: Boolean = false
 ): AnnotatedString {
     return buildAnnotatedString {
         var currentIndex = 0
-        val text = markdown.replace(Regex("`([^`]+)`"), "$1") // 移除代码块的反引号
+        val text = markdown
         
         // 处理各种Markdown语法
         val patterns = listOf(
+            // 标题 # ## ### (行首)
+            MarkdownPattern(
+                pattern = Pattern.compile("^(#{1,6})\\s+(.+)$", Pattern.MULTILINE),
+                processor = { match, builder ->
+                    val headerLevel = match.groupValues[1].length
+                    val headerText = match.groupValues[2]
+                    
+                    val fontSize = when (headerLevel) {
+                        1 -> baseStyle.fontSize * 1.5f
+                        2 -> baseStyle.fontSize * 1.3f
+                        3 -> baseStyle.fontSize * 1.2f
+                        4 -> baseStyle.fontSize * 1.1f
+                        5 -> baseStyle.fontSize * 1.05f
+                        else -> baseStyle.fontSize
+                    }
+                    
+                    builder.withStyle(
+                        style = SpanStyle(
+                            fontWeight = FontWeight.Bold,
+                            fontSize = fontSize
+                        )
+                    ) {
+                        append(headerText)
+                    }
+                }
+            ),
+            
             // 链接 [text](url)
             MarkdownPattern(
                 pattern = Pattern.compile("\\[([^\\]]+)\\]\\(([^)]+)\\)"),
@@ -137,8 +168,10 @@ private fun buildMarkdownAnnotatedString(
                     builder.withStyle(
                         style = SpanStyle(
                             fontFamily = FontFamily.Monospace,
-                            background = Color(0x1A000000),
-                            fontSize = baseStyle.fontSize * 0.9f
+                            background = if (isDarkTheme) Color(0xFF1A1A1A) else Color.White,
+                            color = if (isDarkTheme) Color.White else Color.Black,
+                            fontSize = baseStyle.fontSize * 0.9f,
+                            fontWeight = FontWeight.Bold
                         )
                     ) {
                         append(match.groupValues[1])
@@ -178,12 +211,43 @@ private fun buildMarkdownAnnotatedString(
             }
         }
         
-        // 按位置排序
+        // 按位置排序，并解决重叠问题
         matches.sortBy { it.start }
+        
+        // 移除重叠的匹配项，优先保留更长的匹配
+        val filteredMatches = mutableListOf<MarkdownMatch>()
+        for (match in matches) {
+            val hasOverlap = filteredMatches.any { existing ->
+                // 检查是否有重叠
+                (match.start < existing.end && match.end > existing.start)
+            }
+            
+            if (!hasOverlap) {
+                filteredMatches.add(match)
+            } else {
+                // 如果有重叠，选择更长的匹配项或更具体的匹配项
+                val overlapping = filteredMatches.filter { existing ->
+                    match.start < existing.end && match.end > existing.start
+                }
+                
+                // 找到最长的匹配，如果长度相同，优先保留已有的
+                val longestExisting = overlapping.maxByOrNull { it.end - it.start }
+                val currentLength = match.end - match.start
+                val existingLength = longestExisting?.let { it.end - it.start } ?: 0
+                
+                if (currentLength > existingLength) {
+                    // 移除被重叠的较短匹配，添加当前较长匹配
+                    filteredMatches.removeAll(overlapping)
+                    filteredMatches.add(match)
+                    filteredMatches.sortBy { it.start }
+                }
+                // 否则保持现状，不添加当前匹配
+            }
+        }
         
         // 处理文本
         var lastIndex = 0
-        for (match in matches) {
+        for (match in filteredMatches) {
             // 添加匹配前的普通文本
             if (match.start > lastIndex) {
                 append(text.substring(lastIndex, match.start))

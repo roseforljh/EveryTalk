@@ -140,6 +140,7 @@ fun ChatMessagesList(
                                         },
                                         scrollStateManager = scrollStateManager,
                                         onImageLoaded = onImageLoaded,
+                                        bubbleColor = MaterialTheme.chatColors.userBubble
                                     )
                                 }
                                 if (item.text.isNotBlank()) {
@@ -369,33 +370,44 @@ private fun AiMessageItem(
 
                 Column {
                     contentBlocks.forEachIndexed { index, block ->
-                        when (block) {
-                            is ContentBlock.TextBlock -> {
-                                // 更宽松的检查，只跳过完全为空的内容
-                                if (block.content.isNotEmpty()) {
-                                    com.example.everytalk.ui.components.MarkdownText(
-                                        markdown = block.content,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        style = MaterialTheme.typography.bodyLarge
+                        // 为每个内容块添加唯一的键，确保Compose正确管理状态
+                        // 对于代码块，使用更详细的键来确保唯一性
+                        val blockKey = when (block) {
+                            is ContentBlock.CodeBlock -> "${message.id}_chat_code_${index}_${block.code.hashCode()}_${block.language.hashCode()}"
+                            else -> "${message.id}_block_$index"
+                        }
+                        key(blockKey) {
+                            when (block) {
+                                is ContentBlock.TextBlock -> {
+                                    // 更宽松的检查，只跳过完全为空的内容
+                                    if (block.content.isNotEmpty()) {
+                                        com.example.everytalk.ui.components.MarkdownText(
+                                            markdown = block.content,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            style = MaterialTheme.typography.bodyLarge
+                                        )
+                                    }
+                                }
+                                is ContentBlock.MathBlock -> {
+                                    MathView(
+                                        latex = block.latex,
+                                        isDisplay = block.isDisplay,
+                                        textColor = if (MaterialTheme.colorScheme.background.luminance() < 0.5f)
+                                            Color.White // 深色主题：纯白色
+                                        else
+                                            Color.Black, // 浅色主题：纯黑色
+                                        modifier = Modifier.fillMaxWidth()
                                     )
                                 }
-                            }
-                            is ContentBlock.MathBlock -> {
-                                MathView(
-                                    latex = block.latex,
-                                    isDisplay = block.isDisplay,
-                                    textColor = if (MaterialTheme.colorScheme.background.luminance() < 0.5f)
-                                        Color.White // 深色主题：纯白色
-                                    else
-                                        Color.Black, // 浅色主题：纯黑色
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                            }
-                            is ContentBlock.CodeBlock -> {
-                                CodePreview(
-                                    code = block.code,
-                                    language = block.language
-                                )
+                                is ContentBlock.CodeBlock -> {
+                                    // 为每个代码块添加唯一的modifier，确保状态独立
+                                    CodePreview(
+                                        code = block.code,
+                                        language = block.language,
+                                        backgroundColor = MaterialTheme.chatColors.userBubble,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                }
                             }
                         }
                         
