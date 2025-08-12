@@ -62,10 +62,9 @@ import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.models.SelectedMediaItem
 import com.example.everytalk.ui.theme.ChatDimensions
 import com.example.everytalk.ui.theme.chatColors
-import com.example.everytalk.util.ContentBlock
-import com.example.everytalk.util.parseToContentBlocks
+
 import com.example.everytalk.ui.components.MathView
-import com.example.everytalk.ui.components.MarkdownText
+import com.example.everytalk.ui.components.EnhancedMarkdownText
 import com.example.everytalk.ui.components.CodePreview
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -143,56 +142,11 @@ internal fun UserOrErrorMessageContent(
                                 .offset(y = (-6).dp)
                         )
                     } else if (displayedText.isNotBlank() || isError) {
-                        // Use message.text as the single source of truth to avoid issues with
-                        // recomposition and unstable displayedText state from the caller.
-                        // By parsing displayedText, we enable real-time markdown rendering during streaming.
-                        val contentBlocks = remember(message.text) {
-                            parseToContentBlocks(message.text)
-                        }
-
-                        Column(
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            contentBlocks.forEachIndexed { index, block ->
-                                // 为每个内容块添加唯一的键，确保Compose正确管理状态
-                                // 对于代码块，使用更详细的键来确保唯一性
-                                val blockKey = when (block) {
-                                    is ContentBlock.CodeBlock -> "${message.id}_bubble_code_${index}_${block.code.hashCode()}_${block.language.hashCode()}"
-                                    else -> "${message.id}_bubble_block_$index"
-                                }
-                                key(blockKey) {
-                                    when (block) {
-                                        is ContentBlock.TextBlock -> {
-                                            // 更宽松的检查，只跳过完全为空的内容
-                                            if (block.content.isNotEmpty()) {
-                                                com.example.everytalk.ui.components.MarkdownText(
-                                                    markdown = block.content,
-                                                    color = contentColor
-                                                )
-                                            }
-                                        }
-                                        is ContentBlock.MathBlock -> {
-                                            MathView(
-                                                latex = block.latex,
-                                                isDisplay = block.isDisplay,
-                                                textColor = if (MaterialTheme.colorScheme.background.luminance() < 0.5f)
-                                                    Color.White // 深色主题：纯白色
-                                                else
-                                                    Color.Black, // 浅色主题：纯黑色
-                                                modifier = Modifier.fillMaxWidth()
-                                            )
-                                        }
-                                        is ContentBlock.CodeBlock -> {
-                                            CodePreview(
-                                                code = block.code,
-                                                language = block.language,
-                                                backgroundColor = bubbleColor
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        // 直接使用EnhancedMarkdownText渲染整个文本
+                        EnhancedMarkdownText(
+                            markdown = message.text,
+                            color = contentColor
+                        )
                     }
                 }
             }

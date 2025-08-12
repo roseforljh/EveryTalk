@@ -68,7 +68,7 @@ import com.example.everytalk.ui.screens.MainScreen.chat.EditMessageDialog
 import com.example.everytalk.ui.screens.MainScreen.chat.EmptyChatView
 import com.example.everytalk.ui.screens.MainScreen.chat.ModelSelectionBottomSheet
 import com.example.everytalk.ui.screens.MainScreen.chat.rememberChatScrollStateManager
-import com.example.everytalk.ui.components.MarkdownText
+import com.example.everytalk.ui.components.EnhancedMarkdownText
 import com.example.everytalk.ui.theme.chatColors
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -612,55 +612,12 @@ private fun UpdateAvailableDialog(
                             .verticalScroll(scrollState)
                             .padding(vertical = scrimHeight)
                     ) {
-                        // 使用完整的Markdown渲染，确保格式化正确
-                        // 使用新的ContentBlock解析逻辑，包括数学公式支持
-                        val contentBlocks = remember(textToDisplay) {
-                            com.example.everytalk.util.parseToContentBlocks(textToDisplay)
-                        }
-
-                        Column(
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            contentBlocks.forEachIndexed { index, block ->
-                                // 为每个内容块添加唯一的键，确保Compose正确管理状态
-                                // 对于代码块，使用更详细的键来确保唯一性
-                                val blockKey = when (block) {
-                                    is com.example.everytalk.util.ContentBlock.CodeBlock -> "dialog_code_${index}_${block.code.hashCode()}_${block.language.hashCode()}"
-                                    else -> "dialog_block_$index"
-                                }
-                                key(blockKey) {
-                                    when (block) {
-                                        is com.example.everytalk.util.ContentBlock.TextBlock -> {
-                                            if (block.content.isNotBlank()) {
-                                                com.example.everytalk.ui.components.MarkdownText(
-                                                    markdown = block.content,
-                                                    style = MaterialTheme.typography.bodyLarge,
-                                                    color = MaterialTheme.colorScheme.onSurface
-                                                )
-                                            }
-                                        }
-                                        is com.example.everytalk.util.ContentBlock.MathBlock -> {
-                                            com.example.everytalk.ui.components.MathView(
-                                                latex = block.latex,
-                                                isDisplay = block.isDisplay,
-                                                textColor = if (MaterialTheme.colorScheme.background.luminance() < 0.5f)
-                                                    Color.White // 深色主题：纯白色
-                                                else
-                                                    Color.Black, // 浅色主题：纯黑色
-                                                modifier = Modifier.fillMaxWidth()
-                                            )
-                                        }
-                                        is com.example.everytalk.util.ContentBlock.CodeBlock -> {
-                                            com.example.everytalk.ui.components.CodePreview(
-                                                code = block.code,
-                                                language = block.language,
-                                                backgroundColor = MaterialTheme.chatColors.userBubble
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        // 直接使用EnhancedMarkdownText渲染整个文本
+                        EnhancedMarkdownText(
+                            markdown = textToDisplay,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
                     }
                 }
                 

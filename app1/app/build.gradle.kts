@@ -90,6 +90,8 @@ android {
         implementation(libs.androidx.material3) // 恢复 BOM 管理
 
         implementation("androidx.compose.material:material") // 保留基础 Material 依赖
+        // 使用 compose-markdown 库来渲染 Markdown
+        implementation("com.github.jeziellago:compose-markdown:0.5.7")
         implementation("androidx.compose.material3:material3-window-size-class") // 添加 window size class
         implementation("androidx.compose.material:material-icons-core") // 这些通常也由BOM管理或有自己的稳定版本线
         implementation("androidx.compose.material:material-icons-extended")
@@ -132,10 +134,11 @@ android {
         implementation(libs.androidx.profileinstaller)
         implementation ("org.slf4j:slf4j-nop:2.0.12")
 
-        implementation("org.commonmark:commonmark:0.24.0") // 请检查最新版本
-        implementation("org.commonmark:commonmark-ext-gfm-tables:0.24.0")
-        implementation("org.commonmark:commonmark-ext-gfm-strikethrough:0.24.0")
-        implementation("org.commonmark:commonmark-ext-autolink:0.24.0")
+        // commonmark 依赖已由 compose-markdown 库自动包含，移除重复依赖
+        // implementation("org.commonmark:commonmark:0.24.0")
+        // implementation("org.commonmark:commonmark-ext-gfm-tables:0.24.0")
+        // implementation("org.commonmark:commonmark-ext-gfm-strikethrough:0.24.0")
+        // implementation("org.commonmark:commonmark-ext-autolink:0.24.0")
 
         implementation("org.jsoup:jsoup:1.17.2")
 
@@ -143,5 +146,9 @@ android {
         implementation("io.coil-kt.coil3:coil-network-okhttp:3.2.0")
 
         implementation("com.google.code.gson:gson:2.10.1") // 添加 Gson 依赖
+        
+        // 数学公式渲染库 - 使用WebView + KaTeX
+    // 数学公式渲染支持
+     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
     }
 

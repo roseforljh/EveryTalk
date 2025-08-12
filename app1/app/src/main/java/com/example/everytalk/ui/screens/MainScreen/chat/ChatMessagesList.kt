@@ -40,10 +40,9 @@ import com.example.everytalk.ui.screens.BubbleMain.Main.UserOrErrorMessageConten
 import com.example.everytalk.ui.screens.BubbleMain.Main.MessageContextMenu
 import com.example.everytalk.ui.theme.ChatDimensions
 import com.example.everytalk.ui.theme.chatColors
-import com.example.everytalk.util.ContentBlock
-import com.example.everytalk.util.parseToContentBlocks
+
 import com.example.everytalk.ui.components.MathView
-import com.example.everytalk.ui.components.MarkdownText
+import com.example.everytalk.ui.components.EnhancedMarkdownText
 import com.example.everytalk.ui.components.CodePreview
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -363,70 +362,12 @@ private fun AiMessageItem(
                         vertical = ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL
                     )
             ) {
-                // 使用新的ContentBlock解析逻辑，包括数学公式支持
-                val contentBlocks = remember(text) {
-                    parseToContentBlocks(text)
-                }
-
-                Column {
-                    contentBlocks.forEachIndexed { index, block ->
-                        // 为每个内容块添加唯一的键，确保Compose正确管理状态
-                        // 对于代码块，使用更详细的键来确保唯一性
-                        val blockKey = when (block) {
-                            is ContentBlock.CodeBlock -> "${message.id}_chat_code_${index}_${block.code.hashCode()}_${block.language.hashCode()}"
-                            else -> "${message.id}_block_$index"
-                        }
-                        key(blockKey) {
-                            when (block) {
-                                is ContentBlock.TextBlock -> {
-                                    // 更宽松的检查，只跳过完全为空的内容
-                                    if (block.content.isNotEmpty()) {
-                                        com.example.everytalk.ui.components.MarkdownText(
-                                            markdown = block.content,
-                                            color = MaterialTheme.colorScheme.onSurface,
-                                            style = MaterialTheme.typography.bodyLarge
-                                        )
-                                    }
-                                }
-                                is ContentBlock.MathBlock -> {
-                                    MathView(
-                                        latex = block.latex,
-                                        isDisplay = block.isDisplay,
-                                        textColor = if (MaterialTheme.colorScheme.background.luminance() < 0.5f)
-                                            Color.White // 深色主题：纯白色
-                                        else
-                                            Color.Black, // 浅色主题：纯黑色
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
-                                }
-                                is ContentBlock.CodeBlock -> {
-                                    // 为每个代码块添加唯一的modifier，确保状态独立
-                                    CodePreview(
-                                        code = block.code,
-                                        language = block.language,
-                                        backgroundColor = MaterialTheme.chatColors.userBubble,
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
-                                }
-                            }
-                        }
-                        
-                        // 智能间距：根据当前块和下一个块的类型来决定间距
-                        if (index < contentBlocks.size - 1) {
-                            val currentBlock = block
-                            val nextBlock = contentBlocks[index + 1]
-                            val spacing = when {
-                                // 数学公式之间或数学公式与文本之间使用较小间距
-                                currentBlock is ContentBlock.MathBlock || nextBlock is ContentBlock.MathBlock -> 2.dp
-                                // 代码块需要更多间距
-                                currentBlock is ContentBlock.CodeBlock || nextBlock is ContentBlock.CodeBlock -> 6.dp
-                                // 普通文本块之间使用默认间距
-                                else -> 4.dp
-                            }
-                            Spacer(modifier = Modifier.height(spacing))
-                        }
-                    }
-                }
+                // 直接使用EnhancedMarkdownText渲染整个文本
+                EnhancedMarkdownText(
+                    markdown = text,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
             }
         }
     }

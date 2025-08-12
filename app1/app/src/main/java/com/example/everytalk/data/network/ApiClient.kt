@@ -167,7 +167,7 @@ object ApiClient {
                 }
                 install(HttpTimeout) {
                     requestTimeoutMillis = 300_000
-                    connectTimeoutMillis = 60_000  // 增加连接超时到60秒
+                    connectTimeoutMillis = 60_000  // VPN环境下增加连接超时到120秒
                     socketTimeoutMillis = 300_000
                 }
                 install(HttpCache) {
@@ -648,7 +648,11 @@ object ApiClient {
     private fun getUpdateUrls(): List<String> {
         return listOf(
             GITHUB_API_BASE_URL + "repos/roseforljh/KunTalkwithAi/releases/latest",
-            "https://kuntalk-update-checker.onrender.com/latest"
+            "https://kuntalk-update-checker.onrender.com/latest",
+            "https://kuntalk-backup-updater.vercel.app/latest",
+            // 使用不同的GitHub镜像站点
+            "https://hub.fastgit.xyz/api/repos/roseforljh/KunTalkwithAi/releases/latest",
+            "https://github.com.cnpmjs.org/api/repos/roseforljh/KunTalkwithAi/releases/latest"
         )
     }
 
@@ -659,22 +663,52 @@ object ApiClient {
 
         val urls = getUpdateUrls()
         var lastException: Exception? = null
+        val maxRetries = 2  // VPN环境下增加重试次数
 
         for (url in urls) {
-            try {
-                return client.get {
-                    url(url)
-                    header(HttpHeaders.Accept, "application/vnd.github.v3+json")
-                    header(HttpHeaders.CacheControl, "no-cache")
-                    header(HttpHeaders.Pragma, "no-cache")
-                }.body<GithubRelease>()
-            } catch (e: Exception) {
-                lastException = e
-                // Log the exception and try the next URL
-                android.util.Log.w("ApiClient", "Failed to fetch release from $url", e)
+            repeat(maxRetries + 1) { attempt ->
+                try {
+                    android.util.Log.d("ApiClient", "尝试获取更新信息 - URL: $url, 尝试次数: ${attempt + 1}")
+                    
+                    val response = client.get {
+                        url(url)
+                        header(HttpHeaders.Accept, "application/vnd.github.v3+json")
+                        header(HttpHeaders.CacheControl, "no-cache")
+                        header(HttpHeaders.Pragma, "no-cache")
+                        header(HttpHeaders.UserAgent, "KunTalkAI/1.3.7")
+                        
+                        // VPN环境下的特殊超时配置
+                        timeout {
+                            requestTimeoutMillis = 60_000
+                            connectTimeoutMillis = 30_000
+                            socketTimeoutMillis = 60_000
+                        }
+                    }.body<GithubRelease>()
+                    
+                    android.util.Log.d("ApiClient", "成功获取更新信息从: $url")
+                    return response
+                    
+                } catch (e: Exception) {
+                    lastException = e
+                    val isLastAttempt = attempt == maxRetries
+                    val isLastUrl = url == urls.last()
+                    
+                    android.util.Log.w("ApiClient",
+                        "获取更新失败 - URL: $url, 尝试: ${attempt + 1}/$maxRetries, 错误: ${e.message}", e)
+                    
+                    if (!isLastAttempt && !isLastUrl) {
+                        // 在VPN环境下，在重试前增加延迟
+                        kotlinx.coroutines.delay(1000L * (attempt + 1))
+                        android.util.Log.d("ApiClient", "等待 ${1000L * (attempt + 1)}ms 后重试...")
+                    }
+                    
+                    if (isLastAttempt) {
+                        return@repeat  // 这个URL的所有重试都失败了，尝试下一个URL
+                    }
+                }
             }
         }
 
-        throw IOException("Failed to check for updates from all available sources.", lastException)
+        throw IOException("从所有可用源检查更新失败。可能的原因：网络连接问题、VPN干扰、或服务器不可达。", lastException)
     }
 }

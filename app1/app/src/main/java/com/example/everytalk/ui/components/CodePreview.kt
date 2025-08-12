@@ -27,6 +27,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.zIndex
+import com.example.everytalk.ui.theme.DarkCodeBackground
+import com.example.everytalk.ui.theme.chatColors
+import androidx.compose.foundation.isSystemInDarkTheme
 
 /**
  * 代码预览组件
@@ -42,7 +45,7 @@ fun CodePreview(
     code: String,
     language: String?,
     modifier: Modifier = Modifier,
-    backgroundColor: Color = MaterialTheme.colorScheme.surface
+    backgroundColor: Color = MaterialTheme.chatColors.userBubble
 ) {
     // 为每个代码块实例创建稳定的唯一标识符
     // 使用UUID确保每个组件实例都有唯一的ID，避免状态冲突
@@ -87,8 +90,7 @@ fun CodePreview(
                         .fillMaxWidth()
                         .padding(12.dp),
                     style = MaterialTheme.typography.bodySmall.copy(
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
                     ),
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -116,11 +118,7 @@ fun CodePreview(
                                 showPreview = true
                             },
                             modifier = Modifier
-                                .weight(1f)
-                                .clickable {
-                                    android.util.Log.d("CodePreview", "Preview clickable triggered for ID: $stableInstanceId")
-                                    showPreview = true
-                                },
+                                .weight(1f),
                             shape = RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp, topEnd = 0.dp, bottomEnd = 0.dp),
                             color = backgroundColor,
                             contentColor = MaterialTheme.colorScheme.onSurface
@@ -152,11 +150,7 @@ fun CodePreview(
                                 clipboardManager.setText(AnnotatedString(code))
                             },
                             modifier = Modifier
-                                .weight(1f)
-                                .clickable {
-                                    android.util.Log.d("CodePreview", "Copy clickable triggered for ID: $stableInstanceId")
-                                    clipboardManager.setText(AnnotatedString(code))
-                                },
+                                .weight(1f),
                             shape = RoundedCornerShape(topStart = 0.dp, bottomStart = 0.dp, topEnd = 16.dp, bottomEnd = 16.dp),
                             color = backgroundColor,
                             contentColor = MaterialTheme.colorScheme.onSurface
@@ -188,11 +182,7 @@ fun CodePreview(
                                 clipboardManager.setText(AnnotatedString(code))
                             },
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    android.util.Log.d("CodePreview", "Full-width copy clickable triggered for ID: $stableInstanceId")
-                                    clipboardManager.setText(AnnotatedString(code))
-                                },
+                                .fillMaxWidth(),
                             shape = RoundedCornerShape(16.dp),
                             color = backgroundColor,
                             contentColor = MaterialTheme.colorScheme.onSurface
