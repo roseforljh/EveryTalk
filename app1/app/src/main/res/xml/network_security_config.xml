@@ -1,20 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- 允许所有HTTP流量 -->
+    <!-- 允许所有HTTP流量，包括明文传输 -->
     <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system"/>
+            <certificates src="user"/>
         </trust-anchors>
     </base-config>
     
-    <!-- 特定域名配置，支持常见的局域网地址和开发地址 -->
+    <!-- 调试配置：允许所有本地和私有IP地址 -->
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="system"/>
+            <certificates src="user"/>
+        </trust-anchors>
+    </debug-overrides>
+    
+    <!-- 特定域名配置，支持所有常见的局域网地址 -->
     <domain-config cleartextTrafficPermitted="true">
         <!-- 本地地址 -->
         <domain includeSubdomains="true">localhost</domain>
         <domain includeSubdomains="true">127.0.0.1</domain>
         <domain includeSubdomains="true">10.0.2.2</domain>
         
-        <!-- 常见局域网地址段 -->
+        <!-- 192.168.0.x 网段 -->
         <domain includeSubdomains="true">192.168.0.1</domain>
         <domain includeSubdomains="true">192.168.0.100</domain>
         <domain includeSubdomains="true">192.168.0.101</domain>
@@ -22,16 +31,25 @@
         <domain includeSubdomains="true">192.168.0.103</domain>
         <domain includeSubdomains="true">192.168.0.104</domain>
         <domain includeSubdomains="true">192.168.0.105</domain>
+        
+        <!-- 192.168.1.x 网段 -->
         <domain includeSubdomains="true">192.168.1.1</domain>
+        <domain includeSubdomains="true">192.168.1.100</domain>
+        <domain includeSubdomains="true">192.168.1.101</domain>
+        <domain includeSubdomains="true">192.168.1.102</domain>
+        <domain includeSubdomains="true">192.168.1.103</domain>
+        
+        <!-- 10.x.x.x 网段 -->
         <domain includeSubdomains="true">10.0.0.1</domain>
+        <domain includeSubdomains="true">10.0.0.2</domain>
+        <domain includeSubdomains="true">10.0.0.3</domain>
+        
+        <!-- 172.16.x.x 网段 -->
         <domain includeSubdomains="true">172.16.0.1</domain>
         
         <!-- CDN 域名配置，允许数学公式渲染所需的资源 -->
         <domain includeSubdomains="true">cdn.jsdelivr.net</domain>
         <domain includeSubdomains="true">unpkg.com</domain>
         <domain includeSubdomains="true">cdnjs.cloudflare.com</domain>
-        
-        <!-- 支持任何IP地址模式（通配符方式） -->
-        <!-- 注意：这种方式可能不被所有版本支持，所以我们列出常见的地址 -->
     </domain-config>
 </network-security-config>

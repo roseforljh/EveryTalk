@@ -159,46 +159,24 @@ class FormatCorrector(
     }
     
     /**
-     * 应用格式矫正
+     * 应用格式矫正 - 改进版：优化处理顺序，避免格式冲突
      */
     private fun applyFormatCorrections(text: String): String {
         var corrected = text
         
-        // 根据配置应用不同的矫正功能
-        if (formatConfig.enableCodeBlockCorrection) {
-            corrected = fixCodeBlockFormat(corrected)
+        try {
+            // 只进行最基本的代码块修复
+            if (formatConfig.enableCodeBlockCorrection) {
+                corrected = fixCodeBlockFormat(corrected)
+            }
+            
+            // 只进行基本的空白清理，不进行复杂的格式处理
+            corrected = corrected.replace(Regex("\n{3,}"), "\n\n")
+            
+        } catch (e: Exception) {
+            // 如果出现任何错误，返回原文本
+            return text
         }
-        
-        if (formatConfig.enableMarkdownCorrection) {
-            corrected = fixMarkdownHeaders(corrected)
-        }
-        
-        if (formatConfig.enableListCorrection) {
-            corrected = fixListFormat(corrected)
-        }
-        
-        if (formatConfig.enableLinkCorrection) {
-            corrected = fixLinkFormat(corrected)
-        }
-        
-        if (formatConfig.enableTableCorrection) {
-            corrected = fixTableFormat(corrected)
-        }
-        
-        if (formatConfig.enableQuoteCorrection) {
-            corrected = fixQuoteFormat(corrected)
-        }
-        
-        if (formatConfig.enableTextStyleCorrection) {
-            corrected = fixTextStyleFormat(corrected)
-        }
-        
-        if (formatConfig.enableParagraphCorrection) {
-            corrected = fixParagraphFormat(corrected)
-        }
-        
-        // 最后清理多余空白
-        corrected = cleanExcessiveWhitespace(corrected)
         
         return corrected
     }
@@ -263,25 +241,87 @@ class FormatCorrector(
     private fun fixCodeBlockFormat(text: String): String {
         var fixed = text
         
-        // 修复不完整的代码块开始标记
-        fixed = fixed.replace(Regex("```([a-zA-Z]*)\n?(?!.*```)"), "```$1\n")
+        // 更保守的代码块修复策略，避免过度修复
+        val incompleteCodeBlockPattern = Regex("```([a-zA-Z0-9+#-]*)\\n([^`]*?)(?=\\n\\n|\\n```|$)", RegexOption.DOT_MATCHES_ALL)
         
-        // 修复缺失的代码块结束标记
-        val codeBlockPattern = Regex("```([a-zA-Z]*)\n(.*?)(?:\n```|$)", RegexOption.DOT_MATCHES_ALL)
-        fixed = codeBlockPattern.replace(fixed) { matchResult ->
+        fixed = incompleteCodeBlockPattern.replace(fixed) { matchResult ->
             val language = matchResult.groupValues[1]
-            val code = matchResult.groupValues[2].trimEnd()
-            if (matchResult.value.endsWith("```")) {
-                matchResult.value
+            val codeContent = matchResult.groupValues[2].trim()
+            
+            // 只有在代码内容不为空且确实缺少结束标记时才修复
+            if (codeContent.isNotEmpty() && 
+                !matchResult.value.endsWith("```") &&
+                !codeContent.contains("。") && // 避免包含中文句号的普通文本
+                !codeContent.contains("，") && // 避免包含中文逗号的普通文本
+                codeContent.lines().size <= 50) { // 限制代码行数，避免匹配过长内容
+                "```$language\n$codeContent\n```"
             } else {
-                "```$language\n$code\n```"
+                matchResult.value
             }
         }
         
-        // 修复单行代码块（反引号）
-        fixed = fixed.replace(Regex("`([^`\n]+)(?!`)"), "`$1`")
+        // 修复单行代码块（反引号）- 更保守的策略
+        fixed = fixed.replace(Regex("`([^`\n]{1,100})(?!`)")) { match ->
+            val content = match.groupValues[1]
+            if (!content.contains("。") && !content.contains("，")) {
+                "`$content`"
+            } else {
+                match.value
+            }
+        }
         
         return fixed
+    }
+    
+    /**
+     * 检查位置是否在受保护的范围内（如代码块）
+     */
+    private fun isInProtectedRange(position: Int, protectedRanges: List<IntRange>): Boolean {
+        return protectedRanges.any { range -> position in range }
+    }
+    
+    /**
+     * 移除重复的格式标记
+     */
+    private fun removeDuplicateFormatMarkers(text: String): String {
+        var cleaned = text
+        
+        // 移除重复的粗体标记：****text**** -> **text**
+        cleaned = cleaned.replace(Regex("\\*{3,}([^*]+?)\\*{3,}")) { match ->
+            val content = match.groupValues[1]
+            "**$content**"
+        }
+        
+        // 移除重复的斜体标记：***text*** -> *text*
+        cleaned = cleaned.replace(Regex("(?<!\\*)\\*{2}([^*]+?)\\*{2}(?!\\*)")) { match ->
+            val content = match.groupValues[1]
+            // 检查是否应该是粗体
+            if (content.length > 1 && !content.contains(" ")) {
+                "**$content**"
+            } else {
+                "*$content*"
+            }
+        }
+        
+        // 移除重复的下划线标记
+        cleaned = cleaned.replace(Regex("_{3,}([^_]+?)_{3,}")) { match ->
+            val content = match.groupValues[1]
+            "__${content}__"
+        }
+        
+        // 修复混合的格式标记：**text* -> **text**
+        cleaned = cleaned.replace(Regex("\\*\\*([^*]+?)\\*(?!\\*)")) { match ->
+            val content = match.groupValues[1]
+            "**$content**"
+        }
+        
+        // 修复混合的格式标记：*text** -> **text**
+        cleaned = cleaned.replace(Regex("(?<!\\*)\\*([^*]+?)\\*\\*")) { match ->
+            val content = match.groupValues[1]
+            "**$content**"
+        }
+        
+        return cleaned
     }
     
     /**
@@ -323,20 +363,26 @@ class FormatCorrector(
     }
     
     /**
-     * 修复链接格式
+     * 修复链接格式 - 改进版：避免与其他格式冲突
      */
     private fun fixLinkFormat(text: String): String {
         var fixed = text
         
-        // 修复不完整的Markdown链接格式
-        fixed = fixed.replace(Regex("\\[([^\\]]+)\\]\\s*\\(([^\\)]+)\\)"), "[$1]($2)")
+        // 修复不完整的Markdown链接格式，但要避免在代码块中处理
+        fixed = safeRegexReplace(fixed, Regex("\\[([^\\]]+)\\]\\s*\\(([^\\)]+)\\)")) { match ->
+            "[${match.groupValues[1]}](${match.groupValues[2]})"
+        }
         
         // 修复缺失的链接文本
-        fixed = fixed.replace(Regex("\\[\\]\\(([^\\)]+)\\)"), "[$1]($1)")
+        fixed = safeRegexReplace(fixed, Regex("\\[\\]\\(([^\\)]+)\\)")) { match ->
+            val url = match.groupValues[1]
+            "[$url]($url)"
+        }
         
-        // 修复纯URL，转换为链接格式
-        fixed = fixed.replace(Regex("(?<!\\[|\\()https?://[^\\s\\)\\]]+(?!\\)|\\])")) { matchResult ->
-            val url = matchResult.value
+        // 修复纯URL，转换为链接格式（但要更加谨慎）
+        fixed = safeRegexReplace(fixed, Regex("(?<!\\[|\\(|`)https?://[^\\s\\)\\]`]+(?!\\)|\\]|`)")) { match ->
+            val url = match.value
+            // 检查URL是否已经在链接或代码中
             "[$url]($url)"
         }
         
@@ -344,24 +390,28 @@ class FormatCorrector(
     }
     
     /**
-     * 修复表格格式
+     * 修复表格格式 - 改进版：更智能的表格检测和修复
      */
     private fun fixTableFormat(text: String): String {
         var fixed = text
         
-        // 修复表格分隔符
-        fixed = fixed.replace(Regex("\\|\\s*-+\\s*\\|"), "| --- |")
-        fixed = fixed.replace(Regex("\\|\\s*-+\\s*"), "| --- ")
-        fixed = fixed.replace(Regex("\\s*-+\\s*\\|"), " --- |")
+        // 只在确实是表格的情况下进行修复
+        val tableLinePattern = Regex("\\|[^\\n]*\\|", RegexOption.MULTILINE)
+        val tableLines = tableLinePattern.findAll(fixed).toList()
         
-        // 确保表格行前后有换行
-        val tablePattern = Regex("(\\|.+\\|)", RegexOption.MULTILINE)
-        fixed = tablePattern.replace(fixed) { matchResult ->
-            val line = matchResult.value
-            if (matchResult.range.first == 0 || fixed[matchResult.range.first - 1] != '\n') {
-                "\n$line"
-            } else {
-                line
+        if (tableLines.size >= 2) { // 至少需要2行才认为是表格
+            // 修复表格分隔符
+            fixed = fixed.replace(Regex("\\|\\s*-+\\s*\\|"), "| --- |")
+            fixed = fixed.replace(Regex("\\|\\s*-+\\s*(?=\\|)"), "| --- ")
+            fixed = fixed.replace(Regex("(?<=\\|)\\s*-+\\s*\\|"), " --- |")
+            
+            // 确保表格前后有适当的换行
+            fixed = fixed.replace(Regex("([^\\n])\\n(\\|[^\\n]*\\|)")) { match ->
+                "${match.groupValues[1]}\n\n${match.groupValues[2]}"
+            }
+            
+            fixed = fixed.replace(Regex("(\\|[^\\n]*\\|)\\n([^\\n\\|])")) { match ->
+                "${match.groupValues[1]}\n\n${match.groupValues[2]}"
             }
         }
         
@@ -386,72 +436,55 @@ class FormatCorrector(
     }
     
     /**
-     * 修复粗体和斜体格式 - 改进版本，避免重复处理，修复混合格式错误
+     * 极度保守的文本样式格式修复，只修复明显的格式错误
      */
-    private fun fixTextStyleFormat(text: String): String {
+    private fun fixTextStyleFormatSafely(text: String): String {
+        // 如果文本包含大量中文或复杂内容，跳过处理
+        if (text.length > 1000 || text.count { it.toString().matches("[\u4e00-\u9fa5]".toRegex()) } > text.length * 0.3) {
+            return text
+        }
+        
+        // 首先检查是否包含代码块，如果有则跳过代码块内容
+        val codeBlockRegex = "```[\\s\\S]*?```".toRegex()
+        val inlineCodeRegex = "`[^`]+`".toRegex()
+        
+        val codeBlocks = codeBlockRegex.findAll(text).map { it.range }.toList()
+        val inlineCodes = inlineCodeRegex.findAll(text).map { it.range }.toList()
+        val protectedRanges = (codeBlocks + inlineCodes).sortedBy { it.first }
+        
+        return fixTextStyleFormatWithProtection(text, protectedRanges)
+    }
+    
+    /**
+     * 极简的文本样式格式修复，只处理最明显的错误
+     */
+    private fun fixTextStyleFormatWithProtection(text: String, protectedRanges: List<IntRange>): String {
         var fixed = text
         
-        // 1. 首先处理最常见的混合格式错误：**text* 或 **text*一些文本
-        // 这种情况下应该修复为 **text**
-        fixed = fixed.replace(Regex("\\*\\*([^*]+?)\\*(?!\\*)")) { matchResult ->
-            val content = matchResult.groupValues[1]
-            "**$content**"
-        }
-        
-        // 2. 处理另一种混合格式：*text**
-        fixed = fixed.replace(Regex("(?<!\\*)\\*([^*]+?)\\*\\*")) { matchResult ->
-            val content = matchResult.groupValues[1]
-            "**$content**"
-        }
-        
-        // 3. 修复标准的不完整粗体格式：**text (没有结束标记)
-        val incompleteDoubleAsterisk = Regex("\\*\\*([^*]+?)(?<!\\*)$")
-        if (incompleteDoubleAsterisk.containsMatchIn(fixed)) {
-            fixed = incompleteDoubleAsterisk.replace(fixed) { matchResult ->
-                val content = matchResult.groupValues[1]
-                "**$content**"
+        try {
+            // 只修复最明显的不完整粗体格式：**text 在行尾
+            fixed = fixed.replace(Regex("\\*\\*([^*\n]{1,50})$")) { matchResult ->
+                val content = matchResult.groupValues[1].trim()
+                if (content.isNotEmpty() && !content.contains("```")) {
+                    "**$content**"
+                } else {
+                    matchResult.value
+                }
             }
-        }
-        
-        // 4. 修复不完整的粗体格式（在句中）：**text 后面跟着空格或标点
-        fixed = fixed.replace(Regex("\\*\\*([^*]+?)(?<!\\*)(?=\\s|[。，！？：；])")) { matchResult ->
-            val content = matchResult.groupValues[1]
-            "**$content**"
-        }
-        
-        // 5. 修复斜体格式，但要更加小心避免与粗体冲突
-        // 只处理明确的单个*包围的文本，且不在**内部
-        val singleAsteriskPattern = Regex("(?<!\\*)\\*([^*\\s]+(?:\\s+[^*\\s]+)*)\\*(?!\\*)")
-        val matches = singleAsteriskPattern.findAll(fixed).toList()
-        
-        for (match in matches.reversed()) { // 从后往前处理，避免索引偏移
-            val matchStart = match.range.first
-            val matchEnd = match.range.last
             
-            // 检查这个匹配是否在**...**内部
-            val textBefore = fixed.substring(0, matchStart)
-            val textAfter = fixed.substring(matchEnd + 1)
-            
-            // 计算前面未配对的**数量
-            val doubleBefore = textBefore.windowed(2).count { it == "**" }
-            val doubleAfter = textAfter.windowed(2).count { it == "**" }
-            
-            // 如果**数量是偶数，说明我们在**...**外部，可以安全处理斜体
-            if (doubleBefore % 2 == 0 && doubleAfter % 2 == 0) {
-                val content = match.groupValues[1]
-                fixed = fixed.replaceRange(match.range, "*$content*")
+            // 只修复最明显的不完整粗体格式：**text 后面跟着换行
+            fixed = fixed.replace(Regex("\\*\\*([^*\n]{1,50})(?=\n)")) { matchResult ->
+                val content = matchResult.groupValues[1].trim()
+                if (content.isNotEmpty() && !content.contains("```")) {
+                    "**$content**"
+                } else {
+                    matchResult.value
+                }
             }
-        }
-        
-        // 6. 修复下划线格式
-        fixed = fixed.replace(Regex("__([^_]+?)_(?!_)")) { matchResult ->
-            val content = matchResult.groupValues[1]
-            "__${content}__"
-        }
-        
-        fixed = fixed.replace(Regex("(?<!_)_([^_]+?)__")) { matchResult ->
-            val content = matchResult.groupValues[1]
-            "__${content}__"
+            
+        } catch (e: Exception) {
+            // 如果出现任何错误，返回原文本
+            return text
         }
         
         return fixed
@@ -463,15 +496,15 @@ class FormatCorrector(
     private fun fixParagraphFormat(text: String): String {
         var fixed = text
         
-        // 修复段落之间的间距
+        // 只修复明显的段落间距问题，不强制合并换行
+        // 修复段落之间的间距（句号后跟大写字母）
         fixed = fixed.replace(Regex("([.!?])\\s*\n([A-Z])"), "$1\n\n$2")
         
-        // 修复句子内部的换行
-        fixed = fixed.replace(Regex("([^.!?\\n])\\s*\n([a-z])"), "$1 $2")
-        
-        // 修复中文段落格式
+        // 修复中文段落格式（中文标点后跟中文字符）
         fixed = fixed.replace(Regex("([。！？])\\s*\n([\\u4e00-\\u9fa5])"), "$1\n\n$2")
-        fixed = fixed.replace(Regex("([^。！？\\n])\\s*\n([\\u4e00-\\u9fa5])"), "$1$2")
+        
+        // 移除过度的换行合并逻辑，保持原有的换行结构
+        // 不再强制将句子内部的换行替换为空格
         
         return fixed
     }

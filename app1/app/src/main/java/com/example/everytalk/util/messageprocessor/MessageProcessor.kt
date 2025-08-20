@@ -124,6 +124,113 @@ class MessageProcessor {
     /**
      * 检查新文本是否只是空白字符或重复内容 - 改进版本
      */
+    /**
+     * 内容类型枚举
+     */
+    private enum class ContentType {
+        MARKDOWN_HEADER,
+        MATH_FORMULA,
+        CODE_BLOCK,
+        IMPORTANT_TEXT,
+        REGULAR_TEXT
+    }
+    
+    /**
+     * 检测数学内容
+     */
+    private fun detectMathContent(text: String): Boolean {
+        return text.contains("\\") || text.contains("$") ||
+                listOf(
+                    "frac", "sqrt", "sum", "int", "lim", "alpha", "beta", "gamma", "delta",
+                    "计算", "第一步", "第二步", "公式", "解", "=", "^", "_", "±", "∑", "∫",
+                    "\\begin", "\\end", "\\left", "\\right"
+                ).any { text.contains(it) }
+    }
+    
+    /**
+     * 保护数学格式
+     */
+    private fun protectMathFormatting(text: String): String {
+        // 对数学内容只做最基本的处理，保护重要的数学符号和格式
+        return text.trim().let { trimmed ->
+            // 确保数学公式前后的空格得到保护
+            if (trimmed.contains("$") || trimmed.contains("\\")) {
+                trimmed
+            } else {
+                trimmed
+            }
+        }
+    }
+    
+    /**
+     * 检查是否包含受保护的Markdown内容
+     */
+    private fun hasProtectedMarkdownContent(text: String): Boolean {
+        return text.contains("\\") || text.contains("$") ||
+                listOf(
+                    "#", "**", "*", "`", "```", ">", "[", "]", "(", ")",
+                    "公式解释", "：", ":", "解释", "说明", "步骤", "计算"
+                ).any { text.contains(it) }
+    }
+    
+    /**
+     * 检查是否为Markdown边界
+     */
+    private fun isMarkdownBoundary(text: String): Boolean {
+        val trimmed = text.trim()
+        return trimmed.startsWith("#") || trimmed.startsWith("```") || 
+               trimmed.startsWith("*") || trimmed.startsWith(">") ||
+               trimmed.endsWith("```") || trimmed.contains("$")
+    }
+    
+    /**
+     * 分类内容类型
+     */
+    private fun classifyContentType(text: String): ContentType {
+        val trimmed = text.trim()
+        
+        return when {
+            trimmed.startsWith("#") -> ContentType.MARKDOWN_HEADER
+            trimmed.contains("$") || trimmed.contains("\\") || 
+            listOf("frac", "sqrt", "公式", "计算", "=").any { trimmed.contains(it) } -> ContentType.MATH_FORMULA
+            trimmed.startsWith("```") || trimmed.contains("`") -> ContentType.CODE_BLOCK
+            listOf("公式解释", "解释", "说明", "步骤", "：", ":").any { trimmed.contains(it) } -> ContentType.IMPORTANT_TEXT
+            else -> ContentType.REGULAR_TEXT
+        }
+    }
+    
+    /**
+     * 检查是否为完全相同的标题
+     */
+    private fun isExactDuplicateHeader(newText: String, existingText: String): Boolean {
+        val newHeader = newText.trim()
+        val lines = existingText.split("\n")
+        return lines.any { line ->
+            val existingHeader = line.trim()
+            existingHeader == newHeader && existingHeader.startsWith("#")
+        }
+    }
+    
+    /**
+     * 检查是否为完全相同的数学公式
+     */
+    private fun isExactDuplicateFormula(newText: String, existingText: String): Boolean {
+        val newFormula = newText.trim()
+        // 对于数学公式，要求完全匹配才认为是重复
+        return existingText.contains(newFormula) && newFormula.length > 10 &&
+               (newFormula.contains("$") || newFormula.contains("\\"))
+    }
+    
+    /**
+     * 检查是否为完全相同的代码块
+     */
+    private fun isExactDuplicateCode(newText: String, existingText: String): Boolean {
+        val newCode = newText.trim()
+        // 对于代码块，检查是否有相同的代码内容
+        return existingText.contains(newCode) && newCode.length > 5 &&
+               (newCode.startsWith("`") || newCode.contains("```"))
+    }
+
     private fun shouldSkipTextChunk(newText: String, existingText: String): Boolean {
         // 如果新文本完全为空，跳过
         if (newText.isEmpty()) return true
@@ -262,14 +369,13 @@ class MessageProcessor {
                                     if (alreadyProcessed) {
                                         logger.debug("Skipping already processed chunk: ${normalizedText.take(30)}...")
                                     } else if (!skipChunk) { // 只有在不跳过且未处理过的情况下才处理
-                                        // 检测数学内容，对数学内容使用更保守的预处理
-                                        val isMathContent = eventText.contains("\\") || eventText.contains("$") ||
-                                                listOf("frac", "sqrt", "计算", "第一步", "第二步", "=", "^").any { eventText.contains(it) }
+                                        // 增强的数学内容检测，包括更多数学符号和模式
+                                        val isMathContent = detectMathContent(eventText)
                                         
                                         val preprocessedText = try {
                                             if (isMathContent || realtimePreprocessor.shouldSkipProcessing(eventText, "realtimePreprocessing")) {
-                                                // 对数学内容只做最基本的处理
-                                                eventText.trim()
+                                                // 对数学内容只做最基本的处理，保护格式
+                                                protectMathFormatting(eventText)
                                             } else {
                                                 realtimePreprocessor.realtimeFormatPreprocessing(eventText)
                                             }
@@ -308,40 +414,55 @@ class MessageProcessor {
                                                     var overlap = 0
                                                     val searchRange = minOf(existing.length, regular.length, 200) // 限制搜索范围
                                                     
-                                                    // 智能重叠检测，避免数学内容和重要格式的误判
-                                                    val isMathOrImportant = regular.contains("\\") || regular.contains("$") ||
-                                                                           listOf("frac", "sqrt", "=", "^", "公式解释", "：", ":").any { regular.contains(it) }
+                                                    // 智能重叠检测，增强对Markdown格式的保护
+                                                    val hasProtectedContent = hasProtectedMarkdownContent(regular)
                                                     
-                                                    if (!isMathOrImportant) {
+                                                    if (!hasProtectedContent) {
                                                         for (i in searchRange downTo 10) { // 最小重叠长度为10
                                                             val suffix = existing.takeLast(i)
                                                             val prefix = regular.take(i)
-                                                            if (suffix == prefix) {
+                                                            if (suffix == prefix && !isMarkdownBoundary(suffix)) {
                                                                 overlap = i
-                                                                logger.debug("Found overlap of $i characters")
+                                                                logger.debug("Found safe overlap of $i characters")
                                                                 break
                                                             }
                                                         }
                                                     } else {
-                                                        logger.debug("Skipping overlap detection for math/important content")
+                                                        logger.debug("Skipping overlap detection for protected Markdown content")
                                                     }
                                                     
                                                     val textToAppend = regular.substring(overlap)
                                                     if (textToAppend.isNotEmpty()) {
-                                                        // 对重要内容（如标题、公式说明）更宽松的重复检测
-                                                        val isImportantContent = listOf("公式解释", "：", "解释", "说明").any { textToAppend.contains(it) }
-                                                        val shouldSkip = if (isImportantContent) {
-                                                            // 对重要内容只检查完全相同的重复
-                                                            existing.contains(textToAppend.trim()) && textToAppend.trim().length > 5
-                                                        } else {
-                                                            shouldSkipTextChunk(textToAppend, existing)
+                                                        // 增强的内容重要性检测和重复过滤
+                                                        val contentType = classifyContentType(textToAppend)
+                                                        val shouldSkip = when (contentType) {
+                                                            ContentType.MARKDOWN_HEADER -> {
+                                                                // 标题内容：检查是否为完全相同的标题
+                                                                isExactDuplicateHeader(textToAppend, existing)
+                                                            }
+                                                            ContentType.MATH_FORMULA -> {
+                                                                // 数学公式：更严格的重复检测
+                                                                isExactDuplicateFormula(textToAppend, existing)
+                                                            }
+                                                            ContentType.CODE_BLOCK -> {
+                                                                // 代码块：保护代码格式
+                                                                isExactDuplicateCode(textToAppend, existing)
+                                                            }
+                                                            ContentType.IMPORTANT_TEXT -> {
+                                                                // 重要文本：宽松的重复检测
+                                                                existing.contains(textToAppend.trim()) && textToAppend.trim().length > 5
+                                                            }
+                                                            ContentType.REGULAR_TEXT -> {
+                                                                // 普通文本：标准重复检测
+                                                                shouldSkipTextChunk(textToAppend, existing)
+                                                            }
                                                         }
                                                         
                                                         if (!shouldSkip) {
                                                             currentTextBuilder.get().append(textToAppend)
-                                                            logger.debug("Appended non-cumulative content: ${textToAppend.take(30)}...")
+                                                            logger.debug("Appended ${contentType.name.lowercase()} content: ${textToAppend.take(30)}...")
                                                         } else {
-                                                            logger.debug("Skipping append, content filtered by duplication detection: ${textToAppend.take(30)}...")
+                                                            logger.debug("Skipping ${contentType.name.lowercase()} content due to duplication: ${textToAppend.take(30)}...")
                                                         }
                                                     }
                                                 }

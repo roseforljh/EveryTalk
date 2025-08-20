@@ -38,11 +38,22 @@ fun MathView(
     val backgroundColor = if (isDarkTheme) "#1a1a1a" else "#ffffff"
     val mathTextColor = if (isDarkTheme) "#ffffff" else "#000000"
     
+    // 使用记忆化来避免重复创建相同的HTML内容
+    val htmlContent = remember(latex, isDisplay, mathTextColor, backgroundColor, textSize.value) {
+        createMathHtmlContent(latex, isDisplay, mathTextColor, backgroundColor, textSize.value)
+    }
+    
     AndroidView(
         modifier = modifier,
         factory = { ctx ->
             WebView(ctx).apply {
-                webViewClient = WebViewClient()
+                webViewClient = object : WebViewClient() {
+                    override fun onPageFinished(view: WebView?, url: String?) {
+                        super.onPageFinished(view, url)
+                        // 页面加载完成后设置透明度，减少闪白
+                        view?.alpha = 1f
+                    }
+                }
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
                 settings.loadWithOverviewMode = true
@@ -52,80 +63,100 @@ fun MathView(
                 setOnLongClickListener { true }
                 isLongClickable = false
                 
-                val displayMode = if (isDisplay) "true" else "false"
-                val fontSize = textSize.value
-                
-                val htmlContent = """
-                    <!DOCTYPE html>
-                    <html>
-                    <head>
-                        <meta charset="UTF-8">
-                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                        <link rel="stylesheet" href="file:///android_asset/katex.min.css">
-                        <script src="file:///android_asset/katex.min.js"></script>
-                        <script src="file:///android_asset/auto-render.min.js"></script>
-                        <style>
-                            body {
-                                margin: 0;
-                                padding: 8px;
-                                font-size: ${fontSize}px;
-                                color: $mathTextColor;
-                                background: $backgroundColor;
-                                font-family: 'KaTeX_Main', 'Times New Roman', serif;
-                            }
-                            .katex {
-                                color: $mathTextColor !important;
-                            }
-                            .katex-display {
-                                margin: 0;
-                                text-align: left;
-                                background: $backgroundColor;
-                                padding: 4px 8px;
-                                border-radius: 4px;
-                            }
-                            .katex .base {
-                                color: $mathTextColor !important;
-                            }
-                        </style>
-                    </head>
-                    <body>
-                        <div id="math-content"></div>
-                        <script>
-                            try {
-                                const mathContent = document.getElementById('math-content');
-                                const latex = `${latex.replace("`", "\\`").replace("$", "\\$")}`;
-                                
-                                katex.render(latex, mathContent, {
-                                    displayMode: $displayMode,
-                                    throwOnError: false,
-                                    errorColor: '$mathTextColor',
-                                    macros: {
-                                        "\\RR": "\\mathbb{R}",
-                                        "\\NN": "\\mathbb{N}",
-                                        "\\ZZ": "\\mathbb{Z}",
-                                        "\\QQ": "\\mathbb{Q}",
-                                        "\\CC": "\\mathbb{C}"
-                                    }
-                                });
-                                
-                                // 强制设置所有数学元素的颜色
-                                const allMathElements = mathContent.querySelectorAll('*');
-                                allMathElements.forEach(el => {
-                                    el.style.color = '$mathTextColor';
-                                });
-                            } catch (error) {
-                                document.getElementById('math-content').innerHTML = 
-                                    '<span style="color: red;">Math rendering error: ' + error.message + '</span>';
-                            }
-                        </script>
-                    </body>
-                    </html>
-                """.trimIndent()
+                // 初始设置透明度为0，减少闪白
+                alpha = 0f
                 
                 loadDataWithBaseURL("file:///android_asset/", htmlContent, "text/html", "UTF-8", null)
             }
+        },
+        update = { webView ->
+            // 只有当内容真正改变时才重新加载
+            if (webView.tag != htmlContent.hashCode()) {
+                webView.tag = htmlContent.hashCode()
+                webView.alpha = 0f
+                webView.loadDataWithBaseURL("file:///android_asset/", htmlContent, "text/html", "UTF-8", null)
+            }
         }
     )
+}
+
+private fun createMathHtmlContent(
+    latex: String,
+    isDisplay: Boolean,
+    mathTextColor: String,
+    backgroundColor: String,
+    fontSize: Float
+): String {
+    val displayMode = if (isDisplay) "true" else "false"
+    
+    return """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <link rel="stylesheet" href="file:///android_asset/katex.min.css">
+            <script src="file:///android_asset/katex.min.js"></script>
+            <script src="file:///android_asset/auto-render.min.js"></script>
+            <style>
+                body {
+                    margin: 0;
+                    padding: 8px;
+                    font-size: ${fontSize}px;
+                    color: $mathTextColor;
+                    background: $backgroundColor;
+                    font-family: 'KaTeX_Main', 'Times New Roman', serif;
+                    opacity: 1;
+                    transition: opacity 0.1s ease-in;
+                }
+                .katex {
+                    color: $mathTextColor !important;
+                }
+                .katex-display {
+                    margin: 0;
+                    text-align: left;
+                    background: $backgroundColor;
+                    padding: 4px 8px;
+                    border-radius: 4px;
+                }
+                .katex .base {
+                    color: $mathTextColor !important;
+                }
+            </style>
+        </head>
+        <body>
+            <div id="math-content"></div>
+            <script>
+                try {
+                    const mathContent = document.getElementById('math-content');
+                    const latex = `${latex.replace("`", "\\`").replace("$", "\\$")}`;
+                    
+                    katex.render(latex, mathContent, {
+                        displayMode: $displayMode,
+                        throwOnError: false,
+                        errorColor: '$mathTextColor',
+                        macros: {
+                            "\\\\RR": "\\\\mathbb{R}",
+                            "\\\\NN": "\\\\mathbb{N}",
+                            "\\\\ZZ": "\\\\mathbb{Z}",
+                            "\\\\QQ": "\\\\mathbb{Q}",
+                            "\\\\CC": "\\\\mathbb{C}"
+                        }
+                    });
+                    
+                    // 强制设置所有数学元素的颜色
+                    const allMathElements = mathContent.querySelectorAll('*');
+                    allMathElements.forEach(el => {
+                        el.style.color = '$mathTextColor';
+                    });
+                } catch (error) {
+                    document.getElementById('math-content').innerHTML = 
+                        '<span style="color: red;">Math rendering error: ' + error.message + '</span>';
+                }
+            </script>
+        </body>
+        </html>
+    """.trimIndent()
 }
 
 /**

@@ -162,6 +162,11 @@ object ApiClient {
             sharedPreferencesDataSource = SharedPreferencesDataSource(context)
             val cacheFile = File(context.cacheDir, "ktor_http_cache")
             client = HttpClient(Android) {
+                engine {
+                    // 允许所有主机名验证（用于本地开发）
+                    connectTimeout = 60_000
+                    socketTimeout = 300_000
+                }
                 install(ContentNegotiation) {
                     json(jsonParser)
                 }
@@ -173,6 +178,15 @@ object ApiClient {
                 install(HttpCache) {
                     publicStorage(FileStorage(cacheFile))
                 }
+                // 添加更详细的日志记录
+                install(io.ktor.client.plugins.logging.Logging) {
+                    logger = object : io.ktor.client.plugins.logging.Logger {
+                        override fun log(message: String) {
+                            android.util.Log.d("ApiClient-HTTP", message)
+                        }
+                    }
+                    level = io.ktor.client.plugins.logging.LogLevel.INFO
+                }
             }
             isInitialized = true
         }
@@ -180,9 +194,9 @@ object ApiClient {
 
     private fun getBackendUrls(): List<String> {
         return listOf(
-            //"http://192.168.0.103:7860/chat",  // 原始配置作为备用
-            "https://backdaitalk.onrender.com/chat",
-            "https://kunzzz003-my-backend-code.hf.space/chat"
+            "http://192.168.0.101:7861/chat",  // 本地测试服务器
+            //"https://backdaitalk.onrender.com/chat",
+            //"https://kunzzz003-my-backend-code.hf.space/chat"
         )
     }
 
