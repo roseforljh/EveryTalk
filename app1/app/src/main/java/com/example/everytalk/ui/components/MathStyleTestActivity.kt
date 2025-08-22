@@ -9,6 +9,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.unit.dp
 
 /**
@@ -81,18 +83,25 @@ fun MathStyleTestScreen() {
             ) {
                 Text("直接 MathView 测试:", style = MaterialTheme.typography.titleMedium)
                 
+                // 根据主题设置数学公式的正确颜色
+                val mathTextColor = if (MaterialTheme.colorScheme.surface.luminance() > 0.5f) {
+                    Color.Black // 浅色主题使用纯黑色
+                } else {
+                    Color.White // 深色主题使用纯白色
+                }
+                
                 Text("内联数学公式:", style = MaterialTheme.typography.bodyMedium)
                 MathView(
                     latex = "E = mc^2",
                     isDisplay = false,
-                    textColor = MaterialTheme.colorScheme.onSurface
+                    textColor = mathTextColor
                 )
                 
                 Text("块级数学公式:", style = MaterialTheme.typography.bodyMedium)
                 MathView(
                     latex = "\\int_0^{\\infty} e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2}",
                     isDisplay = true,
-                    textColor = MaterialTheme.colorScheme.onSurface
+                    textColor = mathTextColor
                 )
             }
         }

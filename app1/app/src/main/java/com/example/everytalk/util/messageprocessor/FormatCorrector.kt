@@ -164,19 +164,47 @@ class FormatCorrector(
     private fun applyFormatCorrections(text: String): String {
         var corrected = text
         
-        try {
-            // 只进行最基本的代码块修复
-            if (formatConfig.enableCodeBlockCorrection) {
-                corrected = fixCodeBlockFormat(corrected)
-            }
-            
-            // 只进行基本的空白清理，不进行复杂的格式处理
-            corrected = corrected.replace(Regex("\n{3,}"), "\n\n")
-            
-        } catch (e: Exception) {
-            // 如果出现任何错误，返回原文本
-            return text
+        // 第一阶段：处理块级元素（优先级最高，避免被其他格式干扰）
+        if (formatConfig.enableCodeBlockCorrection) {
+            corrected = fixCodeBlockFormat(corrected)
         }
+        
+        // 第二阶段：处理结构化格式
+        if (formatConfig.enableMarkdownCorrection) {
+            corrected = fixMarkdownHeaders(corrected)
+        }
+        
+        if (formatConfig.enableListCorrection) {
+            corrected = fixListFormat(corrected)
+        }
+        
+        if (formatConfig.enableTableCorrection) {
+            corrected = fixTableFormat(corrected)
+        }
+        
+        if (formatConfig.enableQuoteCorrection) {
+            corrected = fixQuoteFormat(corrected)
+        }
+        
+        // 第三阶段：处理内联格式（在结构化格式之后）
+        if (formatConfig.enableLinkCorrection) {
+            corrected = fixLinkFormat(corrected)
+        }
+        
+        if (formatConfig.enableTextStyleCorrection) {
+            corrected = fixTextStyleFormatSafely(corrected)
+        }
+        
+        // 第四阶段：处理段落和空白（最后处理）
+        if (formatConfig.enableParagraphCorrection) {
+            corrected = fixParagraphFormat(corrected)
+        }
+        
+        // 最后清理多余空白
+        corrected = cleanExcessiveWhitespace(corrected)
+        
+        // 最终检查：移除重复的格式标记
+        corrected = removeDuplicateFormatMarkers(corrected)
         
         return corrected
     }
@@ -292,15 +320,11 @@ class FormatCorrector(
             "**$content**"
         }
         
-        // 移除重复的斜体标记：***text*** -> *text*
-        cleaned = cleaned.replace(Regex("(?<!\\*)\\*{2}([^*]+?)\\*{2}(?!\\*)")) { match ->
+        // 移除重复的斜体标记：***text*** -> *text*（但不要处理正常的粗体**text**）
+        cleaned = cleaned.replace(Regex("(?<!\\*)\\*{3}([^*]+?)\\*{3}(?!\\*)")) { match ->
             val content = match.groupValues[1]
-            // 检查是否应该是粗体
-            if (content.length > 1 && !content.contains(" ")) {
-                "**$content**"
-            } else {
-                "*$content*"
-            }
+            // 三个星号的情况，转换为斜体
+            "*$content*"
         }
         
         // 移除重复的下划线标记
@@ -577,8 +601,9 @@ class FormatCorrector(
         cleaned = cleaned.replace(Regex("[ \t]+\n"), "\n")
         
         // 2. 处理数学公式周围的空白 - 关键修复
-        // 保持行内数学公式与文本的自然连接，避免强制换行
-        cleaned = cleaned.replace(Regex("\\s*\n+\\s*(\\\$[^$]+\\\$)\\s*\n+\\s*"), " $1 ")
+        // 只处理被错误分离到单独行的短数学公式，保持原本应该行内显示的公式
+        // 修复：只有当数学公式前后都是换行符且公式较短时才合并为行内显示
+        cleaned = cleaned.replace(Regex("\n\\s*(\\\$[^$\n]{1,20}\\\$)\\s*\n(?=[\u4e00-\u9fa5a-zA-Z])"), " $1 ")
         
         // 3. 处理块级数学公式的合理间距
         cleaned = cleaned.replace(Regex("\\s*\n{3,}\\s*(\\\$\\\$[^$]+\\\$\\\$)\\s*\n{3,}\\s*"), "\n\n$1\n\n")

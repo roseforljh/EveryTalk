@@ -28,56 +28,94 @@ fun MathView(
     isDisplay: Boolean,
     textColor: Color,
     modifier: Modifier = Modifier,
-    textSize: TextUnit = 16.sp
+    textSize: TextUnit = 16.sp,
+    delayMs: Long = 0L
 ) {
     val context = LocalContext.current
     val isDarkTheme = isSystemInDarkTheme()
     val colorHex = String.format("#%06X", 0xFFFFFF and textColor.toArgb())
     
-    // 根据主题设置背景色
-    val backgroundColor = if (isDarkTheme) "#1a1a1a" else "#ffffff"
-    val mathTextColor = if (isDarkTheme) "#ffffff" else "#000000"
+    // 设置完全透明的背景色，避免大白块问题
+    val backgroundColor = "transparent"
+    // 使用传入的textColor参数，而不是硬编码
+    val mathTextColor = colorHex
+    
+    // 延迟渲染状态
+    var shouldRender by remember { mutableStateOf(delayMs == 0L) }
+    
+    // 延迟渲染逻辑
+    LaunchedEffect(latex, delayMs) {
+        if (delayMs > 0L) {
+            shouldRender = false
+            delay(delayMs)
+            shouldRender = true
+        } else {
+            // 当delayMs为0时，立即显示
+            shouldRender = true
+        }
+    }
     
     // 使用记忆化来避免重复创建相同的HTML内容
     val htmlContent = remember(latex, isDisplay, mathTextColor, backgroundColor, textSize.value) {
         createMathHtmlContent(latex, isDisplay, mathTextColor, backgroundColor, textSize.value)
     }
     
-    AndroidView(
-        modifier = modifier,
-        factory = { ctx ->
-            WebView(ctx).apply {
-                webViewClient = object : WebViewClient() {
-                    override fun onPageFinished(view: WebView?, url: String?) {
-                        super.onPageFinished(view, url)
-                        // 页面加载完成后设置透明度，减少闪白
-                        view?.alpha = 1f
+    if (shouldRender) {
+        AndroidView(
+            modifier = modifier,
+            factory = { ctx ->
+                WebView(ctx).apply {
+                    webViewClient = object : WebViewClient() {
+                        override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                            super.onPageStarted(view, url, favicon)
+                            // 页面开始加载时保持透明，避免闪白
+                            view?.alpha = 0f
+                        }
+                        
+                        override fun onPageFinished(view: WebView?, url: String?) {
+                            super.onPageFinished(view, url)
+                            // 页面加载完成后立即显示，无过渡动画
+                            view?.alpha = 1f
+                        }
                     }
+                    settings.javaScriptEnabled = true
+                    settings.domStorageEnabled = true
+                    settings.loadWithOverviewMode = true
+                    settings.useWideViewPort = true
+                    settings.setSupportZoom(false)
+                    settings.builtInZoomControls = false
+                    settings.displayZoomControls = false
+                    
+                    // 启用水平滚动
+                    isHorizontalScrollBarEnabled = true
+                    isVerticalScrollBarEnabled = false
+                    
+                    // 禁用长按和文本选择
+                    setOnLongClickListener { true }
+                    isLongClickable = false
+                    
+                    // 确保触摸事件不被拦截
+                    requestDisallowInterceptTouchEvent(false)
+                    
+                    // 设置完全透明的背景色，避免大白块问题
+                    setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                    
+                    // 初始设置透明度为0，减少闪白
+                    alpha = 0f
+                    
+                    loadDataWithBaseURL("file:///android_asset/", htmlContent, "text/html", "UTF-8", null)
                 }
-                settings.javaScriptEnabled = true
-                settings.domStorageEnabled = true
-                settings.loadWithOverviewMode = true
-                settings.useWideViewPort = true
-                
-                // 禁用长按和文本选择
-                setOnLongClickListener { true }
-                isLongClickable = false
-                
-                // 初始设置透明度为0，减少闪白
-                alpha = 0f
-                
-                loadDataWithBaseURL("file:///android_asset/", htmlContent, "text/html", "UTF-8", null)
+            },
+            update = { webView ->
+                // 只有当内容真正改变时才重新加载
+                if (webView.tag != htmlContent.hashCode()) {
+                    webView.tag = htmlContent.hashCode()
+                    webView.alpha = 0f
+                    webView.loadDataWithBaseURL("file:///android_asset/", htmlContent, "text/html", "UTF-8", null)
+                }
             }
-        },
-        update = { webView ->
-            // 只有当内容真正改变时才重新加载
-            if (webView.tag != htmlContent.hashCode()) {
-                webView.tag = htmlContent.hashCode()
-                webView.alpha = 0f
-                webView.loadDataWithBaseURL("file:///android_asset/", htmlContent, "text/html", "UTF-8", null)
-            }
-        }
-    )
+        )
+    }
 }
 
 private fun createMathHtmlContent(
@@ -104,23 +142,58 @@ private fun createMathHtmlContent(
                     padding: 8px;
                     font-size: ${fontSize}px;
                     color: $mathTextColor;
-                    background: $backgroundColor;
+                    background: transparent;
                     font-family: 'KaTeX_Main', 'Times New Roman', serif;
-                    opacity: 1;
-                    transition: opacity 0.1s ease-in;
+                    width: 100%;
+                    max-width: 100%;
+                    box-sizing: border-box;
+                    overflow-x: visible;
                 }
                 .katex {
                     color: $mathTextColor !important;
+                    background: transparent !important;
+                    display: inline-block;
+                    max-width: 100%;
+                }
+                .katex * {
+                    background: transparent !important;
+                    color: inherit !important;
                 }
                 .katex-display {
                     margin: 0;
                     text-align: left;
-                    background: $backgroundColor;
+                    background: transparent;
                     padding: 4px 8px;
                     border-radius: 4px;
+                    display: block;
+                    max-width: 100%;
+                    overflow-x: visible;
+                    white-space: normal;
+                    word-wrap: break-word;
+                    overflow-wrap: break-word;
                 }
                 .katex .base {
                     color: $mathTextColor !important;
+                }
+                /* 容器宽度限制 */
+                html, body {
+                    width: 100%;
+                    max-width: 100%;
+                    overflow-x: visible;
+                }
+                /* 优化滚动条样式 */
+                ::-webkit-scrollbar {
+                    height: 4px;
+                }
+                ::-webkit-scrollbar-track {
+                    background: transparent;
+                }
+                ::-webkit-scrollbar-thumb {
+                    background: rgba(128, 128, 128, 0.3);
+                    border-radius: 2px;
+                }
+                ::-webkit-scrollbar-thumb:hover {
+                    background: rgba(128, 128, 128, 0.5);
                 }
             </style>
         </head>
@@ -187,7 +260,8 @@ fun SmartMathView(
     modifier: Modifier = Modifier,
     textColor: Color = MaterialTheme.colorScheme.onSurface,
     textSize: TextUnit = 16.sp,
-    isDisplay: Boolean = false
+    isDisplay: Boolean = false,
+    delayMs: Long = 0L
 ) {
     // 检查是否包含复杂的LaTeX语法
     val hasComplexMath = expression.contains(Regex("\\\\(frac|sqrt|sum|int|lim|prod|binom|matrix)"))
@@ -199,7 +273,8 @@ fun SmartMathView(
             isDisplay = isDisplay,
             textColor = textColor,
             modifier = modifier,
-            textSize = textSize
+            textSize = textSize,
+            delayMs = delayMs
         )
     } else {
         // 使用简单文本替换
@@ -221,8 +296,9 @@ fun WebMathView(
     isDisplay: Boolean,
     textColor: Color,
     modifier: Modifier = Modifier,
+    delayMs: Long = 0L
 ) {
-    MathView(latex, isDisplay, textColor, modifier)
+    MathView(latex, isDisplay, textColor, modifier, delayMs = delayMs)
 }
 
 /**

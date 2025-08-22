@@ -194,7 +194,7 @@ object ApiClient {
 
     private fun getBackendUrls(): List<String> {
         return listOf(
-            "http://192.168.0.101:7861/chat",  // 本地测试服务器
+             "http://192.168.0.100:7860/chat",  // 本地测试服务器
             //"https://backdaitalk.onrender.com/chat",
             //"https://kunzzz003-my-backend-code.hf.space/chat"
         )

@@ -195,7 +195,8 @@ fun ChatMessagesList(
                                 onLongPress = {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     onShowAiMessageOptions(message)
-                                }
+                                },
+                                isMessageComplete = viewModel.currentStreamingAiMessageId.collectAsState().value != message.id
                             )
                         }
                     }
@@ -210,7 +211,8 @@ fun ChatMessagesList(
                                 onLongPress = {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     onShowAiMessageOptions(message)
-                                }
+                                },
+                                isMessageComplete = viewModel.currentStreamingAiMessageId.collectAsState().value != message.id
                             )
                         }
                     }
@@ -225,7 +227,8 @@ fun ChatMessagesList(
                                 onLongPress = {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     onShowAiMessageOptions(message)
-                                }
+                                },
+                                isMessageComplete = viewModel.currentStreamingAiMessageId.collectAsState().value != message.id
                             )
                         }
                     }
@@ -324,7 +327,8 @@ private fun AiMessageItem(
     maxWidth: Dp,
     hasReasoning: Boolean,
     onLongPress: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isMessageComplete: Boolean = true
 ) {
     val shape = RoundedCornerShape(
         topStart = if (!hasReasoning) ChatDimensions.CORNER_RADIUS_LARGE else ChatDimensions.CORNER_RADIUS_SMALL,
@@ -363,10 +367,13 @@ private fun AiMessageItem(
                     )
             ) {
                 // 直接使用EnhancedMarkdownText渲染整个文本
+                // 对于缓存的完整消息，立即渲染所有内容
+                // 只有在消息正在流式传输时才延迟渲染数学公式和表格
                 EnhancedMarkdownText(
                     markdown = text,
                     style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = MaterialTheme.colorScheme.onSurface,
+                    delayMs = 0L // 移除延迟，确保缓存内容立即显示
                 )
             }
         }

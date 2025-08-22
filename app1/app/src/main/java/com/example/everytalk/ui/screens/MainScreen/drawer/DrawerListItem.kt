@@ -56,7 +56,7 @@ internal fun DrawerConversationListItem(
     longPressPositionForMenu: Offset?,
 ) {
     val originalIndex = itemData.originalIndex
-    val definitivePreviewText = remember(itemData) { getPreviewForIndex(originalIndex) }
+    val definitivePreviewText = getPreviewForIndex(originalIndex)
 
     val isActuallyActive = loadedHistoryIndex == originalIndex
 

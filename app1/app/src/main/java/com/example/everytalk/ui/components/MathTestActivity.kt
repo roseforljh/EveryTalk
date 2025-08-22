@@ -11,6 +11,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -50,11 +51,18 @@ fun MathTestScreen() {
             ) {
                 Text("KaTeX数学公式测试:", style = MaterialTheme.typography.titleMedium)
                 
+                // 根据主题设置数学公式的正确颜色
+                val mathTextColor = if (MaterialTheme.colorScheme.surface.luminance() > 0.5f) {
+                    Color.Black // 浅色主题使用纯黑色
+                } else {
+                    Color.White // 深色主题使用纯白色
+                }
+                
                 // 基本符号
                 MathView(
                     latex = "\\alpha + \\beta = \\gamma",
                     isDisplay = false,
-                    textColor = MaterialTheme.colorScheme.onSurface,
+                    textColor = mathTextColor,
                     textSize = 16.sp
                 )
                 
@@ -62,7 +70,7 @@ fun MathTestScreen() {
                 MathView(
                     latex = "x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}",
                     isDisplay = true,
-                    textColor = MaterialTheme.colorScheme.onSurface,
+                    textColor = mathTextColor,
                     textSize = 18.sp
                 )
                 
@@ -70,7 +78,7 @@ fun MathTestScreen() {
                 MathView(
                     latex = "\\int_0^{\\infty} e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2}",
                     isDisplay = true,
-                    textColor = MaterialTheme.colorScheme.onSurface,
+                    textColor = mathTextColor,
                     textSize = 18.sp
                 )
                 
@@ -78,7 +86,7 @@ fun MathTestScreen() {
                 MathView(
                     latex = "\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}",
                     isDisplay = true,
-                    textColor = MaterialTheme.colorScheme.onSurface,
+                    textColor = mathTextColor,
                     textSize = 18.sp
                 )
                 
@@ -86,7 +94,7 @@ fun MathTestScreen() {
                 MathView(
                     latex = "e^{i\\pi} + 1 = 0",
                     isDisplay = true,
-                    textColor = MaterialTheme.colorScheme.primary,
+                    textColor = mathTextColor,
                     textSize = 20.sp
                 )
             }
@@ -120,16 +128,23 @@ fun MathTestScreen() {
             ) {
                 Text("SmartMathView测试:", style = MaterialTheme.typography.titleMedium)
                 
+                // 根据主题设置数学公式的正确颜色
+                val mathTextColor = if (MaterialTheme.colorScheme.surface.luminance() > 0.5f) {
+                    Color.Black // 浅色主题使用纯黑色
+                } else {
+                    Color.White // 深色主题使用纯白色
+                }
+                
                 SmartMathView(
                     expression = "\\int_0^\\infty e^{-x} dx = 1",
-                    textColor = MaterialTheme.colorScheme.onSurface,
+                    textColor = mathTextColor,
                     textSize = 16.sp,
                     isDisplay = true
                 )
                 
                 SmartMathView(
                     expression = "\\sqrt{a^2 + b^2}",
-                    textColor = MaterialTheme.colorScheme.onSurface,
+                    textColor = mathTextColor,
                     textSize = 14.sp
                 )
             }
@@ -142,10 +157,17 @@ fun MathTestScreen() {
             ) {
                 Text("WebMathView (向后兼容)测试:", style = MaterialTheme.typography.titleMedium)
                 
+                // 根据主题设置数学公式的正确颜色
+                val mathTextColor = if (MaterialTheme.colorScheme.surface.luminance() > 0.5f) {
+                    Color.Black // 浅色主题使用纯黑色
+                } else {
+                    Color.White // 深色主题使用纯白色
+                }
+                
                 WebMathView(
                     latex = "\\theta = \\arctan(\\frac{y}{x})",
                     isDisplay = false,
-                    textColor = MaterialTheme.colorScheme.onSurface
+                    textColor = mathTextColor
                 )
             }
         }

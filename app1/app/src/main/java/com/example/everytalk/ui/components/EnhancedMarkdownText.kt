@@ -11,6 +11,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -470,6 +471,49 @@ fun preprocessMarkdownForCustomCodeStyle(markdown: String, isDarkTheme: Boolean)
     // 不在这里处理表格，而是在parseMarkdownParts中处理
     // result = convertMarkdownTableToHtml(result, isDarkTheme)
     
+    // 处理编号列表：1. xxx -> <ol><li>xxx</li></ol>
+    // 首先处理连续的编号列表项
+    val numberedListRegex = "^(\\d+\\.)\\s+(.+)$".toRegex(RegexOption.MULTILINE)
+    val numberedListMatches = numberedListRegex.findAll(result).toList()
+    
+    if (numberedListMatches.isNotEmpty()) {
+        // 按行分组处理连续的编号列表
+        val lines = result.split("\n").toMutableList()
+        var i = 0
+        while (i < lines.size) {
+            val line = lines[i]
+            if (numberedListRegex.matches(line)) {
+                // 找到编号列表的开始
+                val listItems = mutableListOf<String>()
+                var j = i
+                
+                // 收集连续的编号列表项
+                while (j < lines.size && numberedListRegex.matches(lines[j])) {
+                    val match = numberedListRegex.find(lines[j])!!
+                    val content = match.groupValues[2]
+                    listItems.add("<li style=\"margin:4px 0;word-wrap:break-word;overflow-wrap:break-word;white-space:normal;\">$content</li>")
+                    j++
+                }
+                
+                // 替换为HTML有序列表
+                val listHtml = "<ol style=\"color:$textColor;margin:8px 0;padding-left:20px;word-wrap:break-word;overflow-wrap:break-word;white-space:normal;\">" + 
+                              listItems.joinToString("") + 
+                              "</ol>"
+                
+                // 替换原始行
+                for (k in i until j) {
+                    lines[k] = if (k == i) listHtml else ""
+                }
+                
+                i = j
+            } else {
+                i++
+            }
+        }
+        
+        result = lines.filter { it.isNotEmpty() }.joinToString("\n")
+    }
+    
     // 处理标题：### -> <h3>, ## -> <h2>, # -> <h1>
     result = result.replace("^#{6}\\s+(.+)$".toRegex(RegexOption.MULTILINE)) { matchResult ->
         val titleContent = matchResult.groupValues[1]
@@ -531,9 +575,17 @@ fun EnhancedMarkdownText(
     markdown: String,
     modifier: Modifier = Modifier,
     color: Color = MaterialTheme.colorScheme.onSurface,
-    style: TextStyle = MaterialTheme.typography.bodyLarge
+    style: TextStyle = MaterialTheme.typography.bodyLarge,
+    delayMs: Long = 0L
 ) {
     val isDarkTheme = isSystemInDarkTheme()
+    
+    // 根据主题设置数学公式的正确颜色
+    val mathTextColor = if (MaterialTheme.colorScheme.surface.luminance() > 0.5f) {
+        Color.Black // 浅色主题使用纯黑色
+    } else {
+        Color.White // 深色主题使用纯白色
+    }
     
     // 使用记忆化来避免不必要的重新解析
     val parts = remember(markdown) {
@@ -573,14 +625,16 @@ fun EnhancedMarkdownText(
                         MathView(
                             latex = part.latex,
                             isDisplay = part.isDisplay,
-                            textColor = color
+                            textColor = mathTextColor,
+                            delayMs = delayMs
                         )
                     }
                     is MarkdownPart.InlineMath -> {
                         MathView(
                             latex = part.latex,
                             isDisplay = false,
-                            textColor = color
+                            textColor = mathTextColor,
+                            delayMs = delayMs
                         )
                     }
                     is MarkdownPart.HtmlContent -> {
@@ -592,7 +646,8 @@ fun EnhancedMarkdownText(
                     is MarkdownPart.Table -> {
                         ComposeTable(
                             tableData = part.tableData,
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth(),
+                            delayMs = delayMs
                         )
                     }
                 }

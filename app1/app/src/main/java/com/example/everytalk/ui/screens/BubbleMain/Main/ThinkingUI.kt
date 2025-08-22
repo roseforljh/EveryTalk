@@ -60,9 +60,9 @@ internal fun ReasoningToggleAndContent(
     var showReasoningDialog by remember(currentMessageId) { mutableStateOf(false) }
 
     var visibilityNotified by remember(currentMessageId) { mutableStateOf(false) }
-    // 修改显示条件：当有推理内容且正在流式传输时显示思考框，不受mainContentHasStarted限制
-    // 这样可以在<think>标签内容正在输出时实时显示
-    val showInlineStreamingBox = isReasoningStreaming && !messageIsError && !isReasoningComplete
+    // 修改显示条件：当有推理内容且正在流式传输时显示思考框，但当AI开始输出正式内容时应该收起
+    // 这样可以在<think>标签内容正在输出时实时显示，但在开始输出正式内容时自动收起变成小黑点
+    val showInlineStreamingBox = isReasoningStreaming && !messageIsError && !isReasoningComplete && !mainContentHasStarted
 
     val showDotsAnimationOnToggle = false
 
