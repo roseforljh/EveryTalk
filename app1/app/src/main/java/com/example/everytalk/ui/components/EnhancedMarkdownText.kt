@@ -39,18 +39,9 @@ sealed class MarkdownPart {
  * 增强版：改进匹配算法，避免重叠和冲突
  */
 fun parseMarkdownParts(markdown: String): List<MarkdownPart> {
-    // 全局换行修复：在解析前，确保所有块级元素都有正确的间距
-    // 1. 将所有CRLF转换为LF
-    var processedMarkdown = markdown.replace("\r\n", "\n")
-    // 2. 将段落内的单个换行符替换为硬换行（两个空格+换行符），以便Markdown正确渲染
-    //    这个正则表达式确保我们不会影响列表项、标题等已经正确的块级元素
-    processedMarkdown = processedMarkdown.replace("(?<=[^\\n])\\n(?=[^\\n#*`\\[\\]|-])".toRegex(), "  \n")
-    // 3. 清理可能由修复产生的多余空行
-    processedMarkdown = processedMarkdown.replace("\\n{3,}".toRegex(), "\n\n")
-
-
     val parts = mutableListOf<MarkdownPart>()
-    
+    val processedMarkdown = markdown // Use original markdown
+
     // 首先检测并处理表格
     if (detectMarkdownTable(processedMarkdown)) {
         return parseMarkdownWithTables(processedMarkdown)
