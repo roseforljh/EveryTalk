@@ -1,0 +1,13 @@
+# EveryTalk 应用的后端 URL 配置
+#
+# **重要提示**: 请将此文件复制为同目录下的 "local.properties" 文件，
+# 并填入您真实的后端 URL。
+# "local.properties" 文件默认被 Git 忽略，绝不应该被提交到版本库。
+
+# 用于 Release (生产) 构建，请提供一个用逗号分隔的生产环境后端 URL 列表。
+# 示例: BACKEND_URLS_RELEASE="http://prod1.example.com/chat,http://prod2.example.com/chat"
+BACKEND_URLS_RELEASE="你的生产环境URL_1,你的生产环境URL_2"
+
+# 用于 Debug (调试) 构建，请提供您本地或测试环境的后端 URL。
+# 示例: BACKEND_URLS_DEBUG="http://127.0.0.1:XXXX/chat"
+BACKEND_URLS_DEBUG="你的调试环境URL"

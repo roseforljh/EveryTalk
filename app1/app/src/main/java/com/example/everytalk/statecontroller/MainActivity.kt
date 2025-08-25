@@ -2,6 +2,13 @@ package com.example.everytalk.statecontroller
 
 import android.app.Application
 import android.os.Bundle
+import androidx.profileinstaller.ProfileInstaller
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleObserver
+import androidx.lifecycle.OnLifecycleEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -80,6 +87,17 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        lifecycleScope.launch(Dispatchers.IO) {
+            ProfileInstaller.writeProfile(this@MainActivity)
+        }
+        
+        lifecycle.addObserver(object : LifecycleObserver {
+            @OnLifecycleEvent(Lifecycle.Event.ON_STOP)
+            fun onAppBackgrounded() {
+                // App is in background, suggest GC to free up memory
+                System.gc()
+            }
+        })
         WindowCompat.setDecorFitsSystemWindows(window, false)
         ApiClient.initialize(this)
         enableEdgeToEdge()

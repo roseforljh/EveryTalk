@@ -1,86 +1,51 @@
 package com.example.everytalk.config
 
-import android.content.Context
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
-import java.io.IOException
+import com.example.everytalk.BuildConfig
 
-@Serializable
-data class BackendConfiguration(
-    val backend_urls: List<String>,
-    val primary_url: String,
-    val fallback_enabled: Boolean = true,
-    val timeout_ms: Long = 60000,
-    val concurrent_request_enabled: Boolean = true,
-    val race_timeout_ms: Long = 10000
-)
-
+/**
+ * Modern, build-aware backend configuration provider.
+ *
+ * This object safely retrieves backend settings directly from the generated
+ * BuildConfig class. This approach eliminates the need for asset-based JSON
+ * files, enhancing security and simplifying build variant management.
+ */
 object BackendConfig {
-    private var config: BackendConfiguration? = null
-    private val json = Json { ignoreUnknownKeys = true }
-    
-    fun initialize(context: Context, isDebugMode: Boolean = false) {
-        if (config != null) return
+
+    /**
+     * A list of backend URLs, populated from the build configuration.
+     * The URLs are parsed from a comma-separated string.
+     */
+    val backendUrls: List<String> by lazy {
+        val configUrls = BuildConfig.BACKEND_URLS
+        android.util.Log.d("BackendConfig", "原始配置URLs: '$configUrls'")
         
-        val configFileName = if (isDebugMode) "backend_config_debug.json" else "backend_config.json"
-        try {
-            val configJson = context.assets.open(configFileName).bufferedReader().use { it.readText() }
-            config = json.decodeFromString(BackendConfiguration.serializer(), configJson)
-            android.util.Log.d("BackendConfig", "Backend config loaded successfully from $configFileName")
-        } catch (e: IOException) {
-            android.util.Log.e("BackendConfig", "Failed to load backend config from $configFileName", e)
-            // 使用空的默认配置，避免暴露接口地址
-            config = BackendConfiguration(
-                backend_urls = emptyList(),
-                primary_url = "",
-                fallback_enabled = true,
-                timeout_ms = 30000,
-                concurrent_request_enabled = true,
-                race_timeout_ms = 10000
-            )
-        } catch (e: Exception) {
-            android.util.Log.e("BackendConfig", "Failed to parse backend config from $configFileName", e)
-            // 使用空的默认配置，避免暴露接口地址
-            config = BackendConfiguration(
-                backend_urls = emptyList(),
-                primary_url = "",
-                fallback_enabled = true,
-                timeout_ms = 30000,
-                concurrent_request_enabled = true,
-                race_timeout_ms = 10000
-            )
+        if (configUrls.isBlank()) {
+            android.util.Log.e("BackendConfig", "BuildConfig.BACKEND_URLS 为空或空白!")
+            emptyList()
+        } else {
+            val urlList = configUrls
+                .split(',')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+            
+            android.util.Log.d("BackendConfig", "解析后的URL列表: $urlList")
+            urlList
         }
     }
-    
-    fun getBackendUrls(): List<String> {
-        return config?.backend_urls ?: emptyList()
-    }
-    
-    fun getPrimaryUrl(): String {
-        return config?.primary_url ?: ""
-    }
-    
-    fun isFallbackEnabled(): Boolean {
-        return config?.fallback_enabled ?: true
-    }
-    
-    fun getTimeoutMs(): Long {
-        return config?.timeout_ms ?: 30000
-    }
-    
-    fun isConcurrentRequestEnabled(): Boolean {
-        return config?.concurrent_request_enabled ?: true
-    }
-    
-    fun getRaceTimeoutMs(): Long {
-        return config?.race_timeout_ms ?: 10000
-    }
-    
+
     /**
-     * 初始化调试模式配置
-     * 使用本地调试配置文件 backend_config_debug.json
+     * Determines if concurrent requests to multiple backends are enabled.
+     * This value is sourced directly from the build configuration.
      */
-    fun initializeDebugMode(context: Context) {
-        initialize(context, isDebugMode = true)
+    val isConcurrentRequestEnabled: Boolean by lazy {
+        BuildConfig.CONCURRENT_REQUEST_ENABLED
     }
+
+    // Default values for other configurations, which were previously in JSON.
+    // These can be moved to BuildConfig fields as well if they need to vary by build type.
+    const val TIMEOUT_MS: Long = 30000
+    const val RACE_TIMEOUT_MS: Long = 10000
+    const val IS_FALLBACK_ENABLED: Boolean = true
+
+
 }

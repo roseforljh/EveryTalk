@@ -164,11 +164,6 @@ object ApiClient {
             if (isInitialized) return
             sharedPreferencesDataSource = SharedPreferencesDataSource(context)
             // 根据构建类型自动选择配置
-            if (com.example.everytalk.BuildConfig.DEBUG) {
-                BackendConfig.initialize(context, isDebugMode = true)
-            } else {
-                BackendConfig.initialize(context, isDebugMode = false)
-            }
             val cacheFile = File(context.cacheDir, "ktor_http_cache")
             client = HttpClient(Android) {
                 engine {
@@ -201,12 +196,8 @@ object ApiClient {
         }
     }
 
-    private fun getBackendUrls(): List<String> {
-        return BackendConfig.getBackendUrls()
-    }
 
 
-    private const val GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
 
     private fun getFileNameFromUri(context: Context, uri: Uri): String {
         var fileName: String? = null
@@ -521,14 +512,14 @@ object ApiClient {
         attachments: List<SelectedMediaItem>,
         applicationContext: Context
     ): Flow<AppStreamEvent> = channelFlow {
-        val backendProxyUrls = getBackendUrls()
+        val backendProxyUrls = BackendConfig.backendUrls
         if (backendProxyUrls.isEmpty()) {
-            throw IOException("未配置后端服务器URL。请检查 assets/backend_config.json 文件是否存在且配置正确。")
+            throw IOException("未配置后端服务器URL。请检查项目根目录的 'local.properties' 文件是否已根据 'local.properties.example' 模板正确配置。")
         }
 
         // 检查是否启用并发请求
-        val isConcurrentEnabled = BackendConfig.isConcurrentRequestEnabled()
-        val raceTimeoutMs = BackendConfig.getRaceTimeoutMs()
+        val isConcurrentEnabled = BackendConfig.isConcurrentRequestEnabled
+        val raceTimeoutMs = BackendConfig.RACE_TIMEOUT_MS
         
         if (!isConcurrentEnabled || backendProxyUrls.size == 1) {
             // 顺序请求模式：逐个尝试URL直到成功
@@ -639,69 +630,6 @@ object ApiClient {
         }
     }.buffer(Channel.BUFFERED).flowOn(Dispatchers.IO)
 
-    private const val GEMINI_UPLOAD_URL = "https://generativelanguage.googleapis.com/v1beta/files"
-
-    @Serializable
-    data class FileUploadInitialResponse(val file: FileMetadata)
-
-    @Serializable
-    data class FileMetadata(val name: String, val uri: String, @kotlinx.serialization.SerialName("upload_uri") val uploadUri: String)
-
-    private suspend fun uploadFile(apiKey: String, mimeType: String, audioBytes: ByteArray): com.example.everytalk.data.DataClass.Part.FileUri {
-        if (!isInitialized) {
-            throw IllegalStateException("ApiClient not initialized. Call initialize() first.")
-        }
-
-        // Step 1: Get the upload URI
-        val initialResponse = client.post(GEMINI_UPLOAD_URL) {
-            parameter("key", apiKey)
-            header(HttpHeaders.ContentType, "application/json")
-            setBody(mapOf("file" to mapOf("mime_type" to mimeType)))
-        }.body<FileUploadInitialResponse>()
-
-        // Step 2: Upload the file to the upload URI
-        val uploadResponse = client.post(initialResponse.file.uploadUri) {
-            header(HttpHeaders.ContentType, mimeType)
-            setBody(audioBytes)
-        }
-    
-        if (!uploadResponse.status.isSuccess()) {
-            throw IOException("Failed to upload file to ${initialResponse.file.uploadUri}: ${uploadResponse.status}")
-        }
-
-        return com.example.everytalk.data.DataClass.Part.FileUri(initialResponse.file.uri)
-    }
-
-    suspend fun generateContent(apiKey: String, request: com.example.everytalk.data.DataClass.GeminiApiRequest, audioBase64: String? = null, mimeType: String? = "audio/3gpp"): com.example.everytalk.data.DataClass.GeminiApiResponse {
-        if (!isInitialized) {
-            throw IllegalStateException("ApiClient not initialized. Call initialize() first.")
-        }
-
-        val finalRequest = if (audioBase64 != null) {
-            val audioBytes = android.util.Base64.decode(audioBase64, android.util.Base64.DEFAULT)
-            val audioPart = if (audioBytes.size > 19 * 1024 * 1024) { // 19MB to be safe
-                uploadFile(apiKey, mimeType ?: "audio/3gpp", audioBytes)
-            } else {
-                com.example.everytalk.data.DataClass.Part.InlineData(mimeType = mimeType ?: "audio/3gpp", data = audioBase64)
-            }
-
-            val updatedContents = request.contents.map { content ->
-                val newParts = content.parts.toMutableList()
-                newParts.add(audioPart)
-                content.copy(parts = newParts)
-            }
-            request.copy(contents = updatedContents)
-        } else {
-            request
-        }
-
-        return client.post {
-            url(GEMINI_API_URL)
-            parameter("key", apiKey)
-            contentType(ContentType.Application.Json)
-            setBody(finalRequest)
-        }.body<com.example.everytalk.data.DataClass.GeminiApiResponse>()
-    }
 
     private fun getUpdateUrls(): List<String> {
         return listOf(

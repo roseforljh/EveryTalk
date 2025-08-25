@@ -1,4 +1,18 @@
 // app/build.gradle.kts
+import java.util.Properties
+import java.io.FileInputStream
+
+// Function to safely load properties from a file
+fun loadProperties(project: Project): Properties {
+    val properties = Properties()
+    val localPropertiesFile = project.rootProject.file("local.properties")
+    if (localPropertiesFile.exists()) {
+        properties.load(FileInputStream(localPropertiesFile))
+    }
+    return properties
+}
+
+val localProperties = loadProperties(project)
 
 // 用于解决 org.jetbrains:annotations 版本冲突 (如果需要)
 configurations.all {
@@ -19,7 +33,8 @@ plugins {
 
 android {
     namespace = "com.example.everytalk"
-    compileSdk = 35 // 建议与 targetSdk 和 Compose BOM 推荐的 SDK 版本对齐
+    compileSdk = 36
+    // 建议与 targetSdk 和 Compose BOM 推荐的 SDK 版本对齐
 
     defaultConfig {
         applicationId = "com.example.everytalk"
@@ -38,21 +53,34 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = true
-            this.isShrinkResources = true
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
+            isShrinkResources = true
+            postprocessing {
+                isRemoveUnusedCode = true
+                isObfuscate = true
+                isOptimizeCode = true
+                proguardFiles.clear()
+                proguardFile("proguard-rules.pro")
+            }
             signingConfig = signingConfigs.getByName("debug")
+            // Inject backend configuration for Release
+            buildConfigField("String", "BACKEND_URLS", "\"${localProperties.getProperty("BACKEND_URLS_RELEASE", "")}\"")
+            buildConfigField("boolean", "CONCURRENT_REQUEST_ENABLED", "false")
         }
         debug {
             isProfileable = false // debug 构建也可以设为 profileable，方便测试
+            // Inject backend configuration for Debug
+            buildConfigField("String", "BACKEND_URLS", "\"${localProperties.getProperty("BACKEND_URLS_DEBUG", "")}\"")
+            buildConfigField("boolean", "CONCURRENT_REQUEST_ENABLED", "false")
         }
         create("benchmark") {
             initWith(buildTypes.getByName("release"))
             signingConfig = signingConfigs.getByName("debug")
             matchingFallbacks += listOf("release")
             isDebuggable = false
+        }
+        create("release-profileable") {
+            initWith(buildTypes.getByName("release"))
+            isProfileable = true
         }
     }
     compileOptions {
@@ -75,6 +103,8 @@ android {
             pickFirsts+="META-INF/LICENSE-W3C-TEST"
         }
     }
+    buildToolsVersion = "36.0.0"
+    ndkVersion = "25.2.9519653"
 
 
 }

@@ -15,3 +15,7 @@
 local.properties
 # Github properties should be local
 github.properties
+
+
+# Backend config files that should not be committed
+/app/src/main/assets/backend_config.json
