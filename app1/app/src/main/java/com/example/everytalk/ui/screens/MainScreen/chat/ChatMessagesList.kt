@@ -196,7 +196,8 @@ fun ChatMessagesList(
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     onShowAiMessageOptions(message)
                                 },
-                                isMessageComplete = viewModel.currentStreamingAiMessageId.collectAsState().value != message.id
+                                isStreaming = viewModel.currentStreamingAiMessageId.collectAsState().value == message.id,
+                                messageOutputType = message.outputType
                             )
                         }
                     }
@@ -212,7 +213,8 @@ fun ChatMessagesList(
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     onShowAiMessageOptions(message)
                                 },
-                                isMessageComplete = viewModel.currentStreamingAiMessageId.collectAsState().value != message.id
+                                isStreaming = viewModel.currentStreamingAiMessageId.collectAsState().value == message.id,
+                                messageOutputType = message.outputType
                             )
                         }
                     }
@@ -228,7 +230,8 @@ fun ChatMessagesList(
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     onShowAiMessageOptions(message)
                                 },
-                                isMessageComplete = viewModel.currentStreamingAiMessageId.collectAsState().value != message.id
+                                isStreaming = viewModel.currentStreamingAiMessageId.collectAsState().value == message.id,
+                                messageOutputType = message.outputType
                             )
                         }
                     }
@@ -328,7 +331,8 @@ private fun AiMessageItem(
     hasReasoning: Boolean,
     onLongPress: () -> Unit,
     modifier: Modifier = Modifier,
-    isMessageComplete: Boolean = true
+    isStreaming: Boolean,
+    messageOutputType: String
 ) {
     val shape = RoundedCornerShape(
         topStart = if (!hasReasoning) ChatDimensions.CORNER_RADIUS_LARGE else ChatDimensions.CORNER_RADIUS_SMALL,
@@ -373,7 +377,8 @@ private fun AiMessageItem(
                     markdown = text,
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurface,
-                    delayMs = 0L // 移除延迟，确保缓存内容立即显示
+                    isStreaming = isStreaming,
+                    messageOutputType = messageOutputType
                 )
             }
         }

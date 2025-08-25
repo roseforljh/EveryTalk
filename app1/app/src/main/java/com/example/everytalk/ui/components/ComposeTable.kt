@@ -8,7 +8,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
-import dev.jeziellago.compose.markdowntext.MarkdownText
+// 移除第三方MarkdownText库的导入，改用EnhancedMarkdownText和Text组件
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -73,8 +73,9 @@ fun ComposeTable(
                 .padding(8.dp)
         ) {
             tableData.headers.forEachIndexed { index, header ->
-                MarkdownText(
-                    markdown = header,
+                // 表格头部使用简单文本渲染，不包含代码块
+                Text(
+                    text = header,
                     modifier = Modifier
                         .weight(1f)
                         .padding(horizontal = 8.dp),
@@ -109,7 +110,8 @@ fun ComposeTable(
                     .padding(8.dp)
             ) {
                 row.forEachIndexed { cellIndex, cell ->
-                    MarkdownText(
+                    // 表格单元格内容，统一使用EnhancedMarkdownText进行渲染以支持内部Markdown格式
+                    EnhancedMarkdownText(
                         markdown = cell,
                         modifier = Modifier
                             .weight(1f)

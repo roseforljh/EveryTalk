@@ -5,11 +5,13 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.util.Log
 import androidx.annotation.Keep
+import androidx.collection.LruCache
 import androidx.compose.material3.DrawerState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import coil3.ImageLoader
 import com.example.everytalk.data.DataClass.ApiConfig
 import com.example.everytalk.data.DataClass.GithubRelease
@@ -24,14 +26,9 @@ import com.example.everytalk.ui.screens.viewmodel.ConfigManager
 import com.example.everytalk.ui.screens.viewmodel.DataPersistenceManager
 import com.example.everytalk.ui.screens.viewmodel.HistoryManager
 import com.example.everytalk.util.VersionChecker
-import java.util.Collections
-import java.util.LinkedHashMap
 import java.util.UUID
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -56,13 +53,6 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
-@Keep
-class LRUCache<K, V>(private val maxSize: Int) : LinkedHashMap<K, V>(maxSize + 1, 0.75f, true) {
-    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<K, V>): Boolean {
-        return size > maxSize
-    }
-}
-
 class AppViewModel(application: Application, private val dataSource: SharedPreferencesDataSource) :
         AndroidViewModel(application) {
 
@@ -79,12 +69,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         ignoreUnknownKeys = true
     }
 
-    private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val defaultScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-
     private val messagesMutex = Mutex()
-    private val conversationPreviewCache = Collections.synchronizedMap(LRUCache<Int, String>(100))
+    private val conversationPreviewCache = LruCache<Int, String>(100)
     private val textUpdateDebouncer = mutableMapOf<String, Job>()
     internal val stateHolder = ViewModelStateHolder()
     private val imageLoader = ImageLoader.Builder(application.applicationContext).build()
@@ -93,35 +79,35 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                     application.applicationContext,
                     dataSource,
                     stateHolder,
-                    ioScope,
+                    viewModelScope,
                     imageLoader
-            )
+             )
 
     private val historyManager: HistoryManager =
             HistoryManager(
                     stateHolder,
                     persistenceManager,
                     ::areMessageListsEffectivelyEqual,
-                    onHistoryModified = { conversationPreviewCache.clear() }
+                    onHistoryModified = { conversationPreviewCache.evictAll() }
             )
 
     private val apiHandler: ApiHandler by lazy {
         ApiHandler(
                 stateHolder,
-                mainScope,
+                viewModelScope,
                 historyManager,
                 ::onAiMessageFullTextChanged,
                 ::triggerScrollToBottom
         )
     }
     private val configManager: ConfigManager by lazy {
-        ConfigManager(stateHolder, persistenceManager, apiHandler, ioScope)
+        ConfigManager(stateHolder, persistenceManager, apiHandler, viewModelScope)
     }
 
     private val messageSender: MessageSender by lazy {
         MessageSender(
                 application = getApplication(),
-                viewModelScope = mainScope,
+                viewModelScope = viewModelScope,
                 stateHolder = stateHolder,
                 apiHandler = apiHandler,
                 historyManager = historyManager,
@@ -202,7 +188,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     ) { customProvidersArray ->
         predefinedPlatformsList + customProvidersArray[0].toList()
     }.stateIn(
-        scope = mainScope,
+        scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = predefinedPlatformsList
     )
@@ -247,14 +233,14 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                     }
                     .flowOn(Dispatchers.Default)
                     .stateIn(
-                            scope = defaultScope,
+                            scope = viewModelScope,
                             started = SharingStarted.WhileSubscribed(5000),
                             initialValue = emptyList()
                     )
 
     init {
         // 加载自定义提供商
-        ioScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val loadedCustomProviders = dataSource.loadCustomProviders()
             _customProviders.value = loadedCustomProviders
         }
@@ -264,11 +250,11 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 initialConfigPresent,
                 initialHistoryPresent ->
             if (!initialConfigPresent) {
-                mainScope.launch {
+                viewModelScope.launch {
                     // 如果没有配置，可以显示引导界面
                 }
             }
-            
+
             // 历史数据加载完成后的处理
             if (initialHistoryPresent) {
                 Log.d("AppViewModel", "历史数据已加载，共 ${stateHolder._historicalConversations.value.size} 条对话")
@@ -276,7 +262,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         }
 
         // 延迟初始化非关键组件
-        ioScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             // 确保API配置加载完成后再初始化这些组件
             delay(100) // 给UI一些时间渲染
             apiHandler
@@ -285,7 +271,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         }
 
         // 清理任务
-        mainScope.launch {
+        viewModelScope.launch {
             while (isActive) {
                 delay(30_000) // 每 30 秒
                 textUpdateDebouncer.entries.removeIf { !it.value.isActive }
@@ -302,7 +288,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     }
 
      fun checkForUpdates() {
-         ioScope.launch {
+         viewModelScope.launch(Dispatchers.IO) {
              try {
                  val latestRelease = ApiClient.getLatestRelease()
                  val currentVersion = getApplication<Application>().packageManager.getPackageInfo(getApplication<Application>().packageName, 0).versionName
@@ -435,7 +421,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
 
 
     fun showSnackbar(message: String) {
-        mainScope.launch { stateHolder._snackbarMessage.emit(message) }
+        viewModelScope.launch { stateHolder._snackbarMessage.emit(message) }
     }
 
     fun setSearchActiveInDrawer(isActive: Boolean) {
@@ -496,7 +482,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     fun confirmMessageEdit() {
         val messageIdToEdit = _editingMessageId.value ?: return
         val updatedText = stateHolder._editDialogInputText.value.trim()
-        mainScope.launch {
+        viewModelScope.launch {
             var needsHistorySave = false
             messagesMutex.withLock {
                 val messageIndex = stateHolder.messages.indexOfFirst { it.id == messageIdToEdit }
@@ -517,7 +503,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 }
             }
             if (needsHistorySave) {
-                ioScope.launch { historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true) }
+                viewModelScope.launch(Dispatchers.IO) { historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true) }
             }
             withContext(Dispatchers.Main.immediate) { dismissEditDialog() }
         }
@@ -573,7 +559,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 }
                         ?: emptyList()
 
-        defaultScope.launch {
+        viewModelScope.launch {
             val success =
                     withContext(Dispatchers.Default) {
                         val userMessageIndex =
@@ -628,7 +614,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                     }
 
             if (success) {
-                ioScope.launch { historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true) }
+                viewModelScope.launch(Dispatchers.IO) { historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true) }
                 onSendMessage(
                         messageText = originalUserMessageText,
                         isFromRegeneration = true,
@@ -642,7 +628,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     }
 
     fun triggerScrollToBottom() {
-        mainScope.launch { stateHolder._scrollToBottomEvent.tryEmit(Unit) }
+        viewModelScope.launch { stateHolder._scrollToBottomEvent.tryEmit(Unit) }
     }
 
     fun onCancelAPICall() {
@@ -653,8 +639,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         dismissEditDialog()
         dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("开始新聊天")
-        mainScope.launch {
-            ioScope.launch { historyManager.saveCurrentChatToHistoryIfNeeded() }.join()
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { historyManager.saveCurrentChatToHistoryIfNeeded() }
             messagesMutex.withLock {
                 stateHolder.clearForNewChat()
                 // Ensure new chats get a unique ID from the start.
@@ -671,9 +657,9 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         dismissEditDialog()
         dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("加载历史索引 $index")
-        mainScope.launch {
+        viewModelScope.launch {
             stateHolder._isLoadingHistory.value = true
-            ioScope.launch { historyManager.saveCurrentChatToHistoryIfNeeded() }.join()
+            withContext(Dispatchers.IO) { historyManager.saveCurrentChatToHistoryIfNeeded() }
 
             val conversationList = stateHolder._historicalConversations.value
             if (index < 0 || index >= conversationList.size) {
@@ -687,7 +673,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             yield() // Allow UI to recompose with new ID and loading state before proceeding
 
             val (processedConversation, newReasoningMap, newAnimationStates) =
-                    withContext(defaultScope.coroutineContext) {
+                    withContext(Dispatchers.Default) {
                         val newReasoning = mutableMapOf<String, Boolean>()
                         val newAnimation = mutableMapOf<String, Boolean>()
 
@@ -742,14 +728,14 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             showSnackbar("无法删除：无效的索引")
             return
         }
-        mainScope.launch {
+        viewModelScope.launch {
             val wasCurrentChatDeleted = (currentLoadedIndex == indexToDelete)
             val idsInDeletedConversation =
                     historicalConversations.getOrNull(indexToDelete)?.map { it.id } ?: emptyList()
-            
+
             // HistoryManager.deleteConversation 已经包含了媒体文件清理逻辑
-            ioScope.launch { historyManager.deleteConversation(indexToDelete) }.join()
-            
+            withContext(Dispatchers.IO) { historyManager.deleteConversation(indexToDelete) }
+
             if (wasCurrentChatDeleted) {
                 messagesMutex.withLock {
                     dismissEditDialog()
@@ -767,7 +753,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 stateHolder.messageAnimationStates.keys.removeAll(idsToRemove)
             }
             showSnackbar("对话已删除")
-            conversationPreviewCache.clear()
+            conversationPreviewCache.evictAll()
         }
     }
 
@@ -775,10 +761,10 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         dismissEditDialog()
         dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("清除所有历史记录")
-        mainScope.launch {
+        viewModelScope.launch {
             // HistoryManager.clearAllHistory 已经包含了媒体文件清理逻辑
-            ioScope.launch { historyManager.clearAllHistory() }.join()
-            
+            withContext(Dispatchers.IO) { historyManager.clearAllHistory() }
+
             messagesMutex.withLock {
                 stateHolder.clearForNewChat()
                 if (stateHolder.shouldAutoScroll()) {
@@ -786,19 +772,19 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 }
             }
             showSnackbar("所有对话已清除")
-            conversationPreviewCache.clear()
+            conversationPreviewCache.evictAll()
         }
     }
 
     fun showSourcesDialog(sources: List<WebSearchResult>) {
-        mainScope.launch {
+        viewModelScope.launch {
             stateHolder._sourcesForDialog.value = sources
             stateHolder._showSourcesDialog.value = true
         }
     }
 
     fun dismissSourcesDialog() {
-        mainScope.launch {
+        viewModelScope.launch {
             if (stateHolder._showSourcesDialog.value) stateHolder._showSourcesDialog.value = false
         }
     }
@@ -823,7 +809,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     }
 
     fun exportMessageText(text: String) {
-        mainScope.launch {
+        viewModelScope.launch {
             val fileName = "conversation_export.md"
             _exportRequest.send(fileName to text)
         }
@@ -837,7 +823,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             apiKey: String,
             modalityType: com.example.everytalk.data.DataClass.ModalityType
     ) {
-        ioScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val configsToDelete =
                     stateHolder._apiConfigs.value.filter {
                         it.key == apiKey && it.modalityType == modalityType
@@ -853,7 +839,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     fun selectConfig(config: ApiConfig) = configManager.selectConfig(config)
     fun clearSelectedConfig() {
         stateHolder._selectedApiConfig.value = null
-        ioScope.launch { persistenceManager.saveSelectedConfigIdentifier(null) }
+        viewModelScope.launch(Dispatchers.IO) { persistenceManager.saveSelectedConfigIdentifier(null) }
     }
 
     fun addProvider(providerName: String) {
@@ -862,7 +848,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             val currentCustomProviders = _customProviders.value
             if (!currentCustomProviders.contains(trimmedName)) {
                 _customProviders.value = currentCustomProviders + trimmedName
-                ioScope.launch {
+                viewModelScope.launch(Dispatchers.IO) {
                     dataSource.saveCustomProviders(_customProviders.value)
                 }
             }
@@ -880,14 +866,14 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             
             // 从自定义提供商列表中移除
             _customProviders.value = currentCustomProviders - providerName
-            ioScope.launch {
+            viewModelScope.launch(Dispatchers.IO) {
                 dataSource.saveCustomProviders(_customProviders.value)
             }
         }
     }
 
     fun updateConfigGroup(representativeConfig: ApiConfig, newAddress: String, newKey: String) {
-        ioScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val trimmedAddress = newAddress.trim()
             val trimmedKey = newKey.trim()
 
@@ -923,7 +909,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     }
 
     fun onAnimationComplete(messageId: String) {
-        mainScope.launch(Dispatchers.Main.immediate) {
+        viewModelScope.launch(Dispatchers.Main.immediate) {
             if (stateHolder.messageAnimationStates[messageId] != true) {
                 stateHolder.messageAnimationStates[messageId] = true
             }
@@ -935,40 +921,38 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     }
 
     fun getConversationPreviewText(index: Int): String {
-        synchronized(conversationPreviewCache) {
-            val cachedPreview = conversationPreviewCache[index]
-            if (cachedPreview != null) return cachedPreview
+        val cachedPreview = conversationPreviewCache.get(index)
+        if (cachedPreview != null) return cachedPreview
 
-            val conversation =
-                    stateHolder._historicalConversations.value.getOrNull(index)
-                            ?: return "对话 ${index + 1}".also {
-                                conversationPreviewCache[index] = it
-                            }
+        val conversation =
+                stateHolder._historicalConversations.value.getOrNull(index)
+                        ?: return "对话 ${index + 1}".also {
+                            conversationPreviewCache.put(index, it)
+                        }
 
-            val newPreview =
-                    (conversation
-                            .firstOrNull {
-                                it.sender == Sender.System &&
-                                        it.isPlaceholderName &&
-                                        it.text.isNotBlank()
-                            }
-                            ?.text
-                            ?.trim()
-                            ?: conversation
-                                    .firstOrNull {
-                                        it.sender == Sender.User && it.text.isNotBlank()
-                                    }
-                                    ?.text
-                                    ?.trim()
-                                    ?: conversation
-                                    .firstOrNull { it.sender == Sender.AI && it.text.isNotBlank() }
-                                    ?.text
-                                    ?.trim()
-                                    ?: "对话 ${index + 1}")
+        val newPreview =
+                (conversation
+                        .firstOrNull {
+                            it.sender == Sender.System &&
+                                    it.isPlaceholderName &&
+                                    it.text.isNotBlank()
+                        }
+                        ?.text
+                        ?.trim()
+                        ?: conversation
+                                .firstOrNull {
+                                    it.sender == Sender.User && it.text.isNotBlank()
+                                }
+                                ?.text
+                                ?.trim()
+                                ?: conversation
+                                .firstOrNull { it.sender == Sender.AI && it.text.isNotBlank() }
+                                ?.text
+                                ?.trim()
+                                ?: "对话 ${index + 1}")
 
-            conversationPreviewCache[index] = newPreview
-            return newPreview
-        }
+        conversationPreviewCache.put(index, newPreview)
+        return newPreview
     }
 
     fun renameConversation(index: Int, newName: String) {
@@ -977,7 +961,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             showSnackbar("新名称不能为空")
             return
         }
-        defaultScope.launch {
+        viewModelScope.launch {
             val success =
                     withContext(Dispatchers.Default) {
                         val currentHistoricalConvos = stateHolder._historicalConversations.value
@@ -1026,13 +1010,11 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                                     updatedHistoricalConversationsList.toList()
                         }
 
-                        ioScope
-                                .launch {
-                                    persistenceManager.saveChatHistory(
-                                            stateHolder._historicalConversations.value
-                                    )
-                                }
-                                .join()
+                        withContext(Dispatchers.IO) {
+                            persistenceManager.saveChatHistory(
+                                    stateHolder._historicalConversations.value
+                            )
+                        }
 
                         if (stateHolder._loadedHistoryIndex.value == index) {
                             val reloadedConversation =
@@ -1075,7 +1057,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     private fun onAiMessageFullTextChanged(messageId: String, currentFullText: String) {
         textUpdateDebouncer[messageId]?.cancel()
         textUpdateDebouncer[messageId] =
-                mainScope.launch {
+                viewModelScope.launch {
                     delay(120)
                     messagesMutex.withLock {
                         val messageIndex = stateHolder.messages.indexOfFirst { it.id == messageId }
@@ -1096,7 +1078,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     }
 
     fun exportSettings() {
-        ioScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val settingsToExport =
                     ExportedSettings(
                             apiConfigs = stateHolder._apiConfigs.value
@@ -1107,7 +1089,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     }
 
     fun importSettings(jsonContent: String) {
-        ioScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 // Try parsing the new format first
                 try {
@@ -1172,13 +1154,13 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     }
 
     fun appendReasoningToMessage(messageId: String, text: String) {
-        mainScope.launch(Dispatchers.Main.immediate) {
+        viewModelScope.launch(Dispatchers.Main.immediate) {
             stateHolder.appendReasoningToMessage(messageId, text)
         }
     }
 
     fun appendContentToMessage(messageId: String, text: String) {
-        mainScope.launch(Dispatchers.Main.immediate) {
+        viewModelScope.launch(Dispatchers.Main.immediate) {
             stateHolder.appendContentToMessage(messageId, text)
             onAiMessageFullTextChanged(messageId, stateHolder.messages.find { it.id == messageId }?.text ?: "")
         }
@@ -1188,13 +1170,6 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         return stateHolder.conversationScrollStates[conversationId]
     }
     override fun onCleared() {
-        try {
-            mainScope.cancel()
-            ioScope.cancel()
-            defaultScope.cancel()
-        } catch (e: Exception) {
-            Log.e("AppViewModel", "Error during cleanup", e)
-        }
         dismissEditDialog()
         dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("ViewModel cleared", isNewMessageSend = false)
@@ -1203,7 +1178,10 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         val finalSelectedConfigId = stateHolder._selectedApiConfig.value?.id
         val finalCurrentChatMessages = stateHolder.messages.toList()
 
-        ioScope.launch {
+        // Use a final blocking launch for critical cleanup if needed, but viewModelScope handles cancellation.
+        // For saving, it's better to do it in onPause/onStop of the Activity.
+        // However, to keep the logic, we'll do a final launch.
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
                 persistenceManager.saveLastOpenChat(finalCurrentChatMessages)

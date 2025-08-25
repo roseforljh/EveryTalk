@@ -5,8 +5,11 @@ import android.webkit.WebViewClient
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
@@ -83,17 +86,71 @@ fun CodePreview(
             )
         ) {
             Column {
-                // 代码文本
-                Text(
-                    text = code,
+                // 代码文本 - 支持水平滚动，带有视觉指示器
+                val scrollState = rememberScrollState()
+                val isDarkTheme = isSystemInDarkTheme()
+                val scrollIndicatorColor = if (isDarkTheme) Color.White.copy(alpha = 0.3f) else Color.Black.copy(alpha = 0.2f)
+                
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(12.dp),
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                    ),
-                    color = MaterialTheme.colorScheme.onSurface
-                )
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    // 代码内容区域
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                color = if (isDarkTheme) Color.Black.copy(alpha = 0.2f) else Color.Gray.copy(alpha = 0.1f),
+                                shape = RoundedCornerShape(6.dp)
+                            )
+                            .border(
+                                width = 1.dp,
+                                color = if (isDarkTheme) Color.White.copy(alpha = 0.1f) else Color.Gray.copy(alpha = 0.3f),
+                                shape = RoundedCornerShape(6.dp)
+                            )
+                            .horizontalScroll(scrollState)
+                            .padding(12.dp)
+                    ) {
+                        Text(
+                            text = code,
+                            modifier = Modifier.widthIn(min = 0.dp), // 允许文本超出容器宽度
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                lineHeight = MaterialTheme.typography.bodySmall.lineHeight * 1.3f, // 增加行高提升可读性
+                                fontSize = MaterialTheme.typography.bodySmall.fontSize * 0.95f // 稍微减小字体以适应更多内容
+                            ),
+                            color = MaterialTheme.colorScheme.onSurface,
+                            softWrap = false, // 禁用自动换行，保持代码格式
+                            maxLines = Int.MAX_VALUE // 允许多行显示
+                        )
+                    }
+                    
+                    // 右侧滚动指示器（当内容可滚动时显示）
+                    if (scrollState.maxValue > 0) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.CenterEnd)
+                                .width(20.dp)
+                                .height(40.dp)
+                                .background(
+                                    brush = androidx.compose.ui.graphics.Brush.horizontalGradient(
+                                        colors = listOf(
+                                            Color.Transparent,
+                                            backgroundColor.copy(alpha = 0.8f)
+                                        )
+                                    )
+                                )
+                        ) {
+                            Text(
+                                text = "→",
+                                modifier = Modifier.align(Alignment.Center),
+                                color = scrollIndicatorColor,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                }
                 
                 // 预览对话框状态 - 使用稳定的键确保状态独立
                 var showPreview by remember(stableInstanceId) { mutableStateOf(false) }

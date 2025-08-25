@@ -12,7 +12,7 @@ sealed class AppStreamEvent {
 
     @Serializable
     @SerialName("content")
-    data class Content(val text: String) : AppStreamEvent()
+    data class Content(val text: String, val output_type: String? = null) : AppStreamEvent()
     
     @Serializable
     @SerialName("content_final")

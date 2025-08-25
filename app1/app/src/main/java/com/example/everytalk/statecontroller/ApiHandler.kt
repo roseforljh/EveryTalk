@@ -360,6 +360,18 @@ class ApiHandler(
 
         // 继续处理一些不由MessageProcessor处理的事件类型
         when (appEvent) {
+            is AppStreamEvent.Content -> {
+                if (!appEvent.output_type.isNullOrBlank()) {
+                    val messageId = stateHolder._currentStreamingAiMessageId.value ?: return
+                    val index = stateHolder.messages.indexOfFirst { it.id == messageId }
+                    if (index != -1) {
+                        val originalMessage = stateHolder.messages[index]
+                        if (originalMessage.outputType != appEvent.output_type) {
+                            stateHolder.messages[index] = originalMessage.copy(outputType = appEvent.output_type)
+                        }
+                    }
+                }
+            }
             is AppStreamEvent.WebSearchStatus -> {
                 val messageId = stateHolder._currentStreamingAiMessageId.value ?: return
                 val index = stateHolder.messages.indexOfFirst { it.id == messageId }

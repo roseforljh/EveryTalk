@@ -22,6 +22,7 @@ import io.ktor.utils.io.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.*
 import kotlinx.serialization.modules.SerializersModule
@@ -31,6 +32,8 @@ import kotlinx.serialization.modules.subclass
 import com.example.everytalk.data.DataClass.GithubRelease
 import kotlinx.serialization.Serializable
 import com.example.everytalk.data.local.SharedPreferencesDataSource
+import com.example.everytalk.config.BackendConfig
+import com.example.everytalk.BuildConfig
 import kotlinx.serialization.SerializationException
 import java.io.IOException
 import java.io.File
@@ -160,6 +163,12 @@ object ApiClient {
         synchronized(this) {
             if (isInitialized) return
             sharedPreferencesDataSource = SharedPreferencesDataSource(context)
+            // 根据构建类型自动选择配置
+            if (com.example.everytalk.BuildConfig.DEBUG) {
+                BackendConfig.initialize(context, isDebugMode = true)
+            } else {
+                BackendConfig.initialize(context, isDebugMode = false)
+            }
             val cacheFile = File(context.cacheDir, "ktor_http_cache")
             client = HttpClient(Android) {
                 engine {
@@ -193,11 +202,7 @@ object ApiClient {
     }
 
     private fun getBackendUrls(): List<String> {
-        return listOf(
-             "http://192.168.0.100:7860/chat",  // 本地测试服务器
-            //"https://backdaitalk.onrender.com/chat",
-            //"https://kunzzz003-my-backend-code.hf.space/chat"
-        )
+        return BackendConfig.getBackendUrls()
     }
 
 
@@ -482,10 +487,20 @@ object ApiClient {
             val statusCode = e.response.status.value
             val statusDescription = e.response.status.description
             android.util.Log.e("ApiClient", "Response error for $backendProxyUrl: $statusCode $statusDescription", e)
-            throw IOException(
-                "服务器错误 $statusCode ($statusDescription): $errorBody",
-                e
-            )
+            
+            // 为特定HTTP状态码提供更友好的错误信息
+            val friendlyErrorMessage = when (statusCode) {
+                429 -> "请求频率过高 (429 Too Many Requests)，请稍后重试。服务器暂时限制了请求频率。"
+                401 -> "身份验证失败 (401 Unauthorized)，请检查API密钥配置。"
+                403 -> "访问被拒绝 (403 Forbidden)，请检查权限设置。"
+                404 -> "服务端点未找到 (404 Not Found)，请检查服务器配置。"
+                500 -> "服务器内部错误 (500 Internal Server Error)，请稍后重试。"
+                502 -> "网关错误 (502 Bad Gateway)，服务器可能暂时不可用。"
+                503 -> "服务不可用 (503 Service Unavailable)，服务器正在维护中。"
+                else -> "服务器错误 $statusCode ($statusDescription): $errorBody"
+            }
+            
+            throw IOException(friendlyErrorMessage, e)
         } catch (e: IOException) {
             android.util.Log.e("ApiClient", "IO error for $backendProxyUrl", e)
             throw e
@@ -508,88 +523,117 @@ object ApiClient {
     ): Flow<AppStreamEvent> = channelFlow {
         val backendProxyUrls = getBackendUrls()
         if (backendProxyUrls.isEmpty()) {
-            throw IOException("没有后端服务器URL可供尝试。")
+            throw IOException("未配置后端服务器URL。请检查 assets/backend_config.json 文件是否存在且配置正确。")
         }
 
-        val errors = mutableListOf<Throwable>()
-        val jobs = mutableListOf<Job>()
-        val winnerFound = AtomicBoolean(false)
-
-        supervisorScope {
+        // 检查是否启用并发请求
+        val isConcurrentEnabled = BackendConfig.isConcurrentRequestEnabled()
+        val raceTimeoutMs = BackendConfig.getRaceTimeoutMs()
+        
+        if (!isConcurrentEnabled || backendProxyUrls.size == 1) {
+            // 顺序请求模式：逐个尝试URL直到成功
+            var lastException: Exception? = null
             for (url in backendProxyUrls) {
-                val job = launch {
-                    try {
-                        streamChatResponseInternal(url, request, attachments, applicationContext)
-                            .collect { event ->
-                                if (winnerFound.compareAndSet(false, true)) {
-                                    jobs.forEach {
-                                        if (it != coroutineContext[Job]) {
-                                            it.cancel(CoroutineCancellationException("Another stream responded faster."))
+                try {
+                    android.util.Log.d("ApiClient", "尝试连接到: $url")
+                    streamChatResponseInternal(url, request, attachments, applicationContext)
+                        .collect { event -> send(event) }
+                    return@channelFlow // 成功则退出
+                } catch (e: Exception) {
+                    android.util.Log.w("ApiClient", "URL $url 连接失败: ${e.message}")
+                    lastException = e
+                    // 继续尝试下一个URL
+                }
+            }
+            // 所有URL都失败了
+            throw lastException ?: IOException("所有后端服务器都无法连接")
+        } else {
+            // 并发竞速模式：同时请求所有URL，谁先响应就用谁
+            android.util.Log.d("ApiClient", "启动并发请求模式，竞速超时: ${raceTimeoutMs}ms")
+            
+            val errors = mutableListOf<Throwable>()
+            val jobs = mutableListOf<Job>()
+            val winnerFound = AtomicBoolean(false)
+            val firstResponseReceived = AtomicBoolean(false)
+
+            supervisorScope {
+                // 为每个URL启动一个协程
+                for (url in backendProxyUrls) {
+                    val job = launch {
+                        try {
+                            android.util.Log.d("ApiClient", "并发请求启动: $url")
+                            streamChatResponseInternal(url, request, attachments, applicationContext)
+                                .collect { event ->
+                                    // 第一个响应的获胜
+                                    if (firstResponseReceived.compareAndSet(false, true)) {
+                                        android.util.Log.d("ApiClient", "获胜者: $url")
+                                        winnerFound.set(true)
+                                        // 取消其他所有请求
+                                        jobs.forEach { otherJob ->
+                                            if (otherJob != coroutineContext[Job]) {
+                                                otherJob.cancel(CoroutineCancellationException("另一个服务器响应更快"))
+                                            }
                                         }
+                                        // 清空错误列表，因为已经有成功的响应
+                                        synchronized(errors) { errors.clear() }
+                                    }
+                                    
+                                    // 只有获胜者才能发送事件
+                                    if (winnerFound.get()) {
+                                        send(event)
                                     }
                                 }
-                                if (winnerFound.get()) {
-                                    synchronized(errors) {
-                                        errors.clear()
-                                    }
-                                }
-                                send(event)
-                            }
-                    } catch (e: Exception) {
-                        if (e !is CoroutineCancellationException) {
-                            android.util.Log.e("ApiClient", "详细错误信息 - URL: $url, 错误类型: ${e.javaClass.simpleName}, 消息: ${e.message}", e)
-                            synchronized(errors) {
-                                if (!winnerFound.get()) {
-                                    errors.add(e)
-                                    android.util.Log.d("ApiClient", "Error added to collection for $url: ${e.message}")
-                                }
-                            }
-                        } else {
-                            android.util.Log.d("ApiClient", "Cancellation exception for $url: ${e.message}")
-                            // 对于取消异常，检查是否是由于真实错误导致的取消
-                            val cause = e.cause
-                            if (cause != null && cause !is CoroutineCancellationException) {
-                                android.util.Log.e("ApiClient", "Cancellation caused by error for $url", cause)
+                        } catch (e: Exception) {
+                            if (e !is CoroutineCancellationException) {
+                                android.util.Log.w("ApiClient", "URL $url 请求失败: ${e.javaClass.simpleName}: ${e.message}")
                                 synchronized(errors) {
                                     if (!winnerFound.get()) {
-                                        errors.add(cause)
-                                        android.util.Log.d("ApiClient", "Cancellation cause added to collection for $url: ${cause.message}")
+                                        errors.add(e)
                                     }
                                 }
                             } else {
-                                // 即使是普通的取消异常，也需要记录以便调试
-                                android.util.Log.d("ApiClient", "Pure cancellation for $url, no underlying error")
-                                synchronized(errors) {
-                                    if (!winnerFound.get() && errors.isEmpty()) {
-                                        // 如果没有其他错误，记录取消异常以避免"no errors collected"
-                                        errors.add(IOException("连接被取消: ${e.message}", e))
-                                        android.util.Log.d("ApiClient", "Cancellation recorded as fallback error for $url")
+                                android.util.Log.d("ApiClient", "URL $url 请求被取消: ${e.message}")
+                                // 检查取消的原因
+                                val cause = e.cause
+                                if (cause != null && cause !is CoroutineCancellationException) {
+                                    synchronized(errors) {
+                                        if (!winnerFound.get()) {
+                                            errors.add(cause)
+                                        }
                                     }
                                 }
                             }
                         }
                     }
-                }
-                jobs.add(job)
-            }
-        }
-
-        if (!winnerFound.get()) {
-            synchronized(errors) {
-                android.util.Log.d("ApiClient", "Final error collection status: ${errors.size} errors collected")
-                errors.forEachIndexed { index, error ->
-                    android.util.Log.d("ApiClient", "Error $index: ${error.javaClass.simpleName}: ${error.message}")
+                    jobs.add(job)
                 }
                 
-                if (errors.isNotEmpty()) {
-                    // 抛出最具体的错误信息
-                    val lastError = errors.last()
-                    android.util.Log.d("ApiClient", "Throwing collected error: ${lastError.javaClass.simpleName}: ${lastError.message}")
-                    throw lastError
-                } else {
-                    android.util.Log.w("ApiClient", "No errors collected, but no winner found. URLs: $backendProxyUrls")
-                    android.util.Log.w("ApiClient", "This usually indicates all connections were cancelled without proper error reporting")
-                    throw IOException("无法连接到任何可用的后端服务器。可能的原因：网络连接问题、服务器不可达或连接超时。")
+                // 等待竞速超时或所有任务完成
+                try {
+                    withTimeout(raceTimeoutMs) {
+                        jobs.joinAll()
+                    }
+                } catch (e: TimeoutCancellationException) {
+                    android.util.Log.w("ApiClient", "竞速超时 (${raceTimeoutMs}ms)，取消所有请求")
+                    jobs.forEach { it.cancel() }
+                }
+            }
+
+            // 如果没有获胜者，抛出错误
+            if (!winnerFound.get()) {
+                synchronized(errors) {
+                    android.util.Log.e("ApiClient", "所有并发请求都失败了，错误数量: ${errors.size}")
+                    errors.forEachIndexed { index, error ->
+                        android.util.Log.e("ApiClient", "错误 $index: ${error.javaClass.simpleName}: ${error.message}")
+                    }
+                    
+                    if (errors.isNotEmpty()) {
+                        // 抛出最后一个错误
+                        val lastError = errors.last()
+                        throw lastError
+                    } else {
+                        throw IOException("无法连接到任何后端服务器 (${backendProxyUrls.size} 个URL都失败了)")
+                    }
                 }
             }
         }

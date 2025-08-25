@@ -1,6 +1,10 @@
 package com.example.everytalk.ui.components
 
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.ui.Alignment
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -16,6 +20,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.jeziellago.compose.markdowntext.MarkdownText
+import com.example.everytalk.ui.theme.chatColors
 
 /**
  * 表示 Markdown 内容的一个部分
@@ -34,15 +39,27 @@ sealed class MarkdownPart {
  * 增强版：改进匹配算法，避免重叠和冲突
  */
 fun parseMarkdownParts(markdown: String): List<MarkdownPart> {
+    // 全局换行修复：在解析前，确保所有块级元素都有正确的间距
+    // 1. 将所有CRLF转换为LF
+    var processedMarkdown = markdown.replace("\r\n", "\n")
+    // 2. 将段落内的单个换行符替换为硬换行（两个空格+换行符），以便Markdown正确渲染
+    //    这个正则表达式确保我们不会影响列表项、标题等已经正确的块级元素
+    processedMarkdown = processedMarkdown.replace("(?<=[^\\n])\\n(?=[^\\n#*`\\[\\]|-])".toRegex(), "  \n")
+    // 3. 清理可能由修复产生的多余空行
+    processedMarkdown = processedMarkdown.replace("\\n{3,}".toRegex(), "\n\n")
+
+
     val parts = mutableListOf<MarkdownPart>()
     
     // 首先检测并处理表格
-    if (detectMarkdownTable(markdown)) {
-        return parseMarkdownWithTables(markdown)
+    if (detectMarkdownTable(processedMarkdown)) {
+        return parseMarkdownWithTables(processedMarkdown)
     }
     
-    // 定义各种块的正则表达式 - 修复版：使用贪婪匹配确保代码块完整匹配
-    val codeBlockRegex = "```([a-zA-Z0-9+#-]*)?\\s*\\n?([\\s\\S]*?)(?=\\n```|$)".toRegex()
+    // 定义各种块的正则表达式 - 修复版：支持更宽松的代码块格式匹配
+    // 支持后端修复后可能出现的格式：```language` 或 ```language
+    // 支持可选的换行符，更好地匹配AI输出的各种代码块格式
+    val codeBlockRegex = """(?m)^\s*```\s*(\S*)\s*\n?([\s\S]+?)\n?\s*```\s*$""".toRegex()
     val mathBlockRegex = "\\$\\$([\\s\\S]*?)\\$\\$".toRegex()
     val inlineMathRegex = "(?<!\\$)\\$([^\\$\\n]+?)\\$(?!\\$)".toRegex()
     
@@ -84,8 +101,8 @@ fun parseMarkdownParts(markdown: String): List<MarkdownPart> {
             "code" -> {
                 val language = match.groupValues[1].trim()
                 val codeContent = match.groupValues[2].trim()
-                // 确保代码内容不为空且不包含明显的非代码内容
-                if (codeContent.isNotEmpty() && !codeContent.contains("```")) {
+                // 确保代码内容不为空
+                if (codeContent.isNotEmpty()) {
                     parts.add(MarkdownPart.CodeBlock(codeContent, language.ifEmpty { "text" }))
                 }
             }
@@ -576,6 +593,8 @@ fun EnhancedMarkdownText(
     modifier: Modifier = Modifier,
     color: Color = MaterialTheme.colorScheme.onSurface,
     style: TextStyle = MaterialTheme.typography.bodyLarge,
+    isStreaming: Boolean = false,
+    messageOutputType: String = "general",
     delayMs: Long = 0L
 ) {
     val isDarkTheme = isSystemInDarkTheme()
@@ -618,24 +637,37 @@ fun EnhancedMarkdownText(
                     is MarkdownPart.CodeBlock -> {
                         CodePreview(
                             code = part.content,
-                            language = part.language.ifEmpty { "text" }
+                            language = part.language.ifEmpty { "text" },
+                            backgroundColor = MaterialTheme.chatColors.codeBlockBackground
                         )
                     }
                     is MarkdownPart.MathBlock -> {
-                        MathView(
-                            latex = part.latex,
-                            isDisplay = part.isDisplay,
-                            textColor = mathTextColor,
-                            delayMs = delayMs
-                        )
+                        // 如果正在流式传输数学内容，则显示占位符
+                        if (isStreaming && messageOutputType == "math") {
+                            Box(modifier = Modifier.fillMaxWidth().height(48.dp), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                            }
+                        } else {
+                            MathView(
+                                latex = part.latex,
+                                isDisplay = part.isDisplay,
+                                textColor = mathTextColor,
+                                delayMs = delayMs
+                            )
+                        }
                     }
                     is MarkdownPart.InlineMath -> {
-                        MathView(
-                            latex = part.latex,
-                            isDisplay = false,
-                            textColor = mathTextColor,
-                            delayMs = delayMs
-                        )
+                        if (isStreaming) {
+                            // 在流式传输期间，可以显示一个小的文本占位符或不显示任何内容
+                            // 以避免渲染不完整的内联公式
+                        } else {
+                            MathView(
+                                latex = part.latex,
+                                isDisplay = false,
+                                textColor = mathTextColor,
+                                delayMs = delayMs
+                            )
+                        }
                     }
                     is MarkdownPart.HtmlContent -> {
                         HtmlView(
@@ -662,36 +694,81 @@ fun EnhancedMarkdownText(
 }
 
 /**
- * 稳定的MarkdownText组件，使用记忆化来避免不必要的重新渲染
- * 特别优化表格渲染性能
+ * 稳定的 Markdown 文本组件
+ * 使用自定义解析逻辑，确保所有代码块都通过CodePreview组件渲染
  */
 @Composable
 private fun StableMarkdownText(
     markdown: String,
     style: TextStyle
 ) {
-    // 检测是否包含表格 - 改进的检测逻辑
-    val hasTable = remember(markdown) {
-        detectMarkdownTable(markdown)
+    val isDarkTheme = isSystemInDarkTheme()
+    
+    // 解析Markdown内容
+    val parts = remember(markdown) {
+        parseMarkdownParts(markdown)
     }
     
-    // 使用记忆化的内容哈希来避免不必要的重新渲染
-    val contentHash = remember(markdown) { markdown.hashCode() }
+    // 处理解析后的部分
+    val processedParts = remember(parts, isDarkTheme) {
+        parts.map { part ->
+            when (part) {
+                is MarkdownPart.Text -> {
+                    part.copy(content = preprocessMarkdownForCustomCodeStyle(part.content, isDarkTheme))
+                }
+                else -> part
+            }
+        }
+    }
     
-    // 对于表格内容，使用key来确保稳定的渲染
-     if (hasTable) {
-         key(contentHash) {
-             MarkdownText(
-                 markdown = markdown,
-                 style = style
-             )
-         }
-     } else {
-        // 对于普通内容，直接渲染
-        MarkdownText(
-            markdown = markdown,
-            style = style
-        )
+    Column {
+        processedParts.forEachIndexed { index, part ->
+            key("${part.hashCode()}_$index") {
+                when (part) {
+                    is MarkdownPart.Text -> {
+                        // 对于纯文本内容，使用第三方库渲染（但不包含代码块）
+                        MarkdownText(
+                            markdown = part.content,
+                            style = style
+                        )
+                    }
+                    is MarkdownPart.CodeBlock -> {
+                        // 所有代码块都使用CodePreview组件
+                        CodePreview(
+                            code = part.content,
+                            language = part.language.ifEmpty { "text" },
+                            backgroundColor = MaterialTheme.chatColors.codeBlockBackground
+                        )
+                    }
+                    is MarkdownPart.MathBlock -> {
+                        MathView(
+                            latex = part.latex,
+                            isDisplay = part.isDisplay,
+                            textColor = if (MaterialTheme.colorScheme.surface.luminance() > 0.5f) Color.Black else Color.White
+                        )
+                    }
+                    is MarkdownPart.InlineMath -> {
+                        MathView(
+                            latex = part.latex,
+                            isDisplay = false,
+                            textColor = if (MaterialTheme.colorScheme.surface.luminance() > 0.5f) Color.Black else Color.White
+                        )
+                    }
+                    is MarkdownPart.Table -> {
+                        ComposeTable(
+                            tableData = part.tableData,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    is MarkdownPart.HtmlContent -> {
+                        HtmlView(
+                            htmlContent = part.html,
+                            textColor = style.color
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 

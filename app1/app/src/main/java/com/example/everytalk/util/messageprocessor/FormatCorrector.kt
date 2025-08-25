@@ -269,22 +269,30 @@ class FormatCorrector(
     private fun fixCodeBlockFormat(text: String): String {
         var fixed = text
         
-        // 更保守的代码块修复策略，避免过度修复
-        val incompleteCodeBlockPattern = Regex("```([a-zA-Z0-9+#-]*)\\n([^`]*?)(?=\\n\\n|\\n```|$)", RegexOption.DOT_MATCHES_ALL)
+        // 更保守的代码块修复策略，只修复明确缺少结束标记的代码块
+        // 首先检查是否有不完整的代码块（开始标记后没有对应的结束标记）
+        val incompleteCodeBlockPattern = Regex("```([a-zA-Z0-9+#-]*)\\n([\\s\\S]*?)(?=\\n```|$)", RegexOption.DOT_MATCHES_ALL)
         
-        fixed = incompleteCodeBlockPattern.replace(fixed) { matchResult ->
-            val language = matchResult.groupValues[1]
-            val codeContent = matchResult.groupValues[2].trim()
-            
-            // 只有在代码内容不为空且确实缺少结束标记时才修复
-            if (codeContent.isNotEmpty() && 
-                !matchResult.value.endsWith("```") &&
-                !codeContent.contains("。") && // 避免包含中文句号的普通文本
-                !codeContent.contains("，") && // 避免包含中文逗号的普通文本
-                codeContent.lines().size <= 50) { // 限制代码行数，避免匹配过长内容
-                "```$language\n$codeContent\n```"
-            } else {
-                matchResult.value
+        // 只有当文本中确实存在不匹配的```时才进行修复
+        val codeBlockStarts = text.split("```").size - 1
+        if (codeBlockStarts % 2 != 0) { // 奇数个```说明有不完整的代码块
+            fixed = incompleteCodeBlockPattern.replace(fixed) { matchResult ->
+                val language = matchResult.groupValues[1]
+                val codeContent = matchResult.groupValues[2].trim()
+                
+                // 严格条件：只修复真正的代码内容
+                if (codeContent.isNotEmpty() && 
+                    !matchResult.value.endsWith("```") &&
+                    !codeContent.contains("。") && // 避免包含中文句号的普通文本
+                    !codeContent.contains("，") && // 避免包含中文逗号的普通文本
+                    !codeContent.contains("？") && // 避免包含中文问号的普通文本
+                    !codeContent.contains("！") && // 避免包含中文感叹号的普通文本
+                    codeContent.lines().size <= 20 && // 更严格的行数限制
+                    codeContent.length <= 500) { // 添加长度限制
+                    "```$language\n$codeContent\n```"
+                } else {
+                    matchResult.value
+                }
             }
         }
         

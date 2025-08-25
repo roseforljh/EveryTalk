@@ -1,0 +1,11 @@
+{
+  "backend_urls": [
+    "https://backdaitalk.onrender.com/chat",
+    "https://kunzzz003-my-backend-code.hf.space/chat"
+  ],
+  "primary_url": "https://backdaitalk.onrender.com/chat",
+  "fallback_enabled": true,
+  "timeout_ms": 30000,
+  "concurrent_request_enabled": true,
+  "race_timeout_ms": 10000
+}
