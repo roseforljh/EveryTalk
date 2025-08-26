@@ -572,6 +572,7 @@ fun ChatInputArea(
         }
     }
 
+
     LaunchedEffect(Unit) {
         snapshotFlow { imeInsets.getBottom(density) > 0 }
             .distinctUntilChanged()

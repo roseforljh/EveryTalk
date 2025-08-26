@@ -13,6 +13,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.ArrowDropUp
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -53,7 +55,7 @@ val DialogTextFieldColors
         unfocusedContainerColor = MaterialTheme.colorScheme.surface,
         disabledContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
     )
-val DialogShape = RoundedCornerShape(16.dp)
+val DialogShape = RoundedCornerShape(24.dp)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -117,6 +119,7 @@ private fun CustomStyledDropdownMenu(
     onDismissRequest: () -> Unit,
     anchorBounds: Rect?,
     modifier: Modifier = Modifier,
+    yOffsetDp: Dp = 74.dp,
     content: @Composable ColumnScope.() -> Unit
 ) {
     Log.d(
@@ -128,8 +131,7 @@ private fun CustomStyledDropdownMenu(
         val density = LocalDensity.current
         val menuWidth = with(density) { anchorBounds.width.toDp() }
 
-        val yAdjustmentDp: Dp = 74.dp
-        val yAdjustmentInPx = with(density) { yAdjustmentDp.toPx() }.toInt()
+        val yAdjustmentInPx = with(density) { yOffsetDp.toPx() }.toInt()
         val yOffset = anchorBounds.bottom.toInt() - yAdjustmentInPx
 
         val xAdjustmentDp: Dp = 24.dp
@@ -203,18 +205,29 @@ internal fun AddNewFullConfigDialog(
     apiKey: String,
     onApiKeyChange: (String) -> Unit,
     onDismissRequest: () -> Unit,
-    onConfirm: (String, String, String) -> Unit
+    onConfirm: (String, String, String, String) -> Unit
 ) {
     var providerMenuExpanded by remember { mutableStateOf(false) }
+    var channelMenuExpanded by remember { mutableStateOf(false) }
+    val channels = listOf("OpenAI兼容", "Gemini")
+    var selectedChannel by remember { mutableStateOf(channels.first()) }
     val focusRequesterApiKey = remember { FocusRequester() }
     var textFieldAnchorBounds by remember { mutableStateOf<Rect?>(null) }
+    var channelTextFieldAnchorBounds by remember { mutableStateOf<Rect?>(null) }
 
     val providerMenuTransitionState = remember { MutableTransitionState(initialState = false) }
+    val channelMenuTransitionState = remember { MutableTransitionState(initialState = false) }
+
     val shouldShowCustomMenuLogical =
         providerMenuExpanded && allProviders.isNotEmpty() && textFieldAnchorBounds != null
+    val shouldShowChannelMenuLogical = channelMenuExpanded && channelTextFieldAnchorBounds != null
 
     LaunchedEffect(shouldShowCustomMenuLogical) {
         providerMenuTransitionState.targetState = shouldShowCustomMenuLogical
+    }
+
+    LaunchedEffect(shouldShowChannelMenuLogical) {
+        channelMenuTransitionState.targetState = shouldShowChannelMenuLogical
     }
 
     LaunchedEffect(allProviders) {
@@ -315,6 +328,48 @@ internal fun AddNewFullConfigDialog(
                         }
                     }
                 }
+                ExposedDropdownMenuBox(
+                    expanded = channelMenuExpanded,
+                    onExpandedChange = { channelMenuExpanded = !channelMenuExpanded },
+                    modifier = Modifier.padding(bottom = 12.dp)
+                ) {
+                    OutlinedTextField(
+                        value = selectedChannel,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("渠道") },
+                        modifier = Modifier
+                            .menuAnchor()
+                            .fillMaxWidth()
+                            .onGloballyPositioned { coordinates ->
+                                channelTextFieldAnchorBounds = coordinates.boundsInWindow()
+                            },
+                        trailingIcon = {
+                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = channelMenuExpanded)
+                        },
+                        shape = DialogShape,
+                        colors = DialogTextFieldColors
+                    )
+
+                    CustomStyledDropdownMenu(
+                        transitionState = channelMenuTransitionState,
+                        onDismissRequest = {
+                            channelMenuExpanded = false
+                        },
+                        anchorBounds = channelTextFieldAnchorBounds,
+                        yOffsetDp = 150.dp
+                    ) {
+                        channels.forEach { channel ->
+                            DropdownMenuItem(
+                                text = { Text(channel) },
+                                onClick = {
+                                    selectedChannel = channel
+                                    channelMenuExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
                 OutlinedTextField(
                     value = apiAddress,
                     onValueChange = onApiAddressChange,
@@ -339,7 +394,7 @@ internal fun AddNewFullConfigDialog(
                     keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
                     keyboardActions = KeyboardActions(onDone = {
                         if (apiKey.isNotBlank() && provider.isNotBlank() && apiAddress.isNotBlank()) {
-                            onConfirm(provider, apiAddress, apiKey)
+                            onConfirm(provider, apiAddress, apiKey, selectedChannel)
                         }
                     }),
                     shape = DialogShape,
@@ -349,7 +404,7 @@ internal fun AddNewFullConfigDialog(
         },
         confirmButton = {
             Button(
-                onClick = { onConfirm(provider, apiAddress, apiKey) },
+                onClick = { onConfirm(provider, apiAddress, apiKey, selectedChannel) },
                 enabled = apiKey.isNotBlank() && provider.isNotBlank() && apiAddress.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary,

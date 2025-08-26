@@ -1227,7 +1227,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         }
     }
 
-    fun createConfigAndFetchModels(provider: String, address: String, key: String) {
+    fun createConfigAndFetchModels(provider: String, address: String, key: String, channel: String) {
         viewModelScope.launch {
             // 1. 创建一个临时的配置以立即更新UI
             val tempId = UUID.randomUUID().toString()
@@ -1238,7 +1238,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 address = address,
                 key = key,
                 model = "temp_model_placeholder",
-                modalityType = com.example.everytalk.data.DataClass.ModalityType.TEXT
+                modalityType = com.example.everytalk.data.DataClass.ModalityType.TEXT,
+                channel = channel
             )
             configManager.addConfig(tempConfig)
 
@@ -1262,7 +1263,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                             name = modelName,
                             id = UUID.randomUUID().toString(),
                             isValid = true,
-                            modalityType = com.example.everytalk.data.DataClass.ModalityType.TEXT
+                            modalityType = com.example.everytalk.data.DataClass.ModalityType.TEXT,
+                            channel = channel
                         )
                     }
                     addMultipleConfigs(newConfigs)
@@ -1271,7 +1273,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                     val placeholderConfig = tempConfig.copy(
                         id = UUID.randomUUID().toString(),
                         name = provider,
-                        model = ""
+                        model = "",
+                        channel = channel
                     )
                     configManager.addConfig(placeholderConfig)
                 }
@@ -1280,7 +1283,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 // 获取失败，更新临时配置以提示用户
                  val errorConfig = tempConfig.copy(
                     name = provider,
-                    model = ""
+                    model = "",
+                    channel = channel
                 )
                 configManager.updateConfig(errorConfig)
             }

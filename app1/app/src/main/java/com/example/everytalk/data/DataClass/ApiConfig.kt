@@ -12,6 +12,7 @@ data class ApiConfig(
     val provider: String,
     val id: String = UUID.randomUUID().toString(),
     val name: String,
+    val channel: String = "OpenAI兼容",
     val isValid: Boolean = true,
     val modalityType: ModalityType = ModalityType.TEXT,
     val temperature: Float = 0.0f,

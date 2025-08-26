@@ -15,6 +15,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -137,6 +138,7 @@ fun ChatScreen(
             viewModel.saveScrollState(idToSaveFor, stateToSave)
         }
     }
+
 
     LaunchedEffect(isApiCalling) {
         if (isApiCalling) {
@@ -269,7 +271,8 @@ fun ChatScreen(
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .fillMaxWidth()
+                    .fillMaxWidth(),
+                contentAlignment = Alignment.BottomCenter
             ) {
                 when {
                     isLoadingHistory -> {
@@ -281,11 +284,7 @@ fun ChatScreen(
                         }
                     }
                     messages.isEmpty() -> {
-                        EmptyChatView(
-                            density = density,
-                            isKeyboardVisible = isKeyboardVisible,
-                            imeHeightDp = imeHeightDp
-                        )
+                        EmptyChatView()
                     }
                     else -> {
                         val chatListItems by viewModel.chatListItems.collectAsState()
@@ -311,51 +310,51 @@ fun ChatScreen(
 
             }
                 ChatInputArea(
-                    text = text,
-                    onTextChange = {
-                        viewModel.onTextChange(it)
-                    },
-                    onSendMessageRequest = { messageText, _, attachments, mimeType ->
-                        viewModel.onSendMessage(messageText = messageText, attachments = attachments, audioBase64 = null, mimeType = mimeType)
-                        keyboardController?.hide()
-                        coroutineScope.launch {
-                            // 等待键盘关闭
-                            snapshotFlow { imeInsets.getBottom(density) > 0 }
-                                .filter { isVisible -> !isVisible }
-                                .first()
-                            // 滚动到底部
-                            scrollStateManager.jumpToBottom()
-                        }
-                    },
-                    selectedMediaItems = selectedMediaItems,
-                    onAddMediaItem = { viewModel.addMediaItem(it) },
-                    onRemoveMediaItemAtIndex = { viewModel.removeMediaItemAtIndex(it) },
-                    onClearMediaItems = { viewModel.clearMediaItems() },
-                    isApiCalling = isApiCalling,
-                    isWebSearchEnabled = isWebSearchEnabled,
-                    onToggleWebSearch = {
-                        viewModel.toggleWebSearchMode(!isWebSearchEnabled)
-                    },
-                    onStopApiCall = { viewModel.onCancelAPICall() },
-                    focusRequester = focusRequester,
-                    selectedApiConfig = selectedApiConfig,
-                    onShowSnackbar = { viewModel.showSnackbar(it) },
-                    imeInsets = imeInsets,
-                    density = density,
-                    keyboardController = keyboardController,
-                    onFocusChange = {
-                        scrollStateManager.jumpToBottom()
-                    },
-                    onSendMessage = { messageText, isFromRegeneration, attachments, audioBase64, mimeType ->
-                        viewModel.onSendMessage(
-                            messageText = messageText,
-                            isFromRegeneration = isFromRegeneration,
-                            attachments = attachments,
-                            audioBase64 = audioBase64,
-                            mimeType = mimeType
-                        )
-                    }
-                )
+                   text = text,
+                   onTextChange = {
+                       viewModel.onTextChange(it)
+                   },
+                   onSendMessageRequest = { messageText, _, attachments, mimeType ->
+                       viewModel.onSendMessage(messageText = messageText, attachments = attachments, audioBase64 = null, mimeType = mimeType)
+                       keyboardController?.hide()
+                       coroutineScope.launch {
+                           // 等待键盘关闭
+                           snapshotFlow { imeInsets.getBottom(density) > 0 }
+                               .filter { isVisible -> !isVisible }
+                               .first()
+                           // 滚动到底部
+                           scrollStateManager.jumpToBottom()
+                       }
+                   },
+                   selectedMediaItems = selectedMediaItems,
+                   onAddMediaItem = { viewModel.addMediaItem(it) },
+                   onRemoveMediaItemAtIndex = { viewModel.removeMediaItemAtIndex(it) },
+                   onClearMediaItems = { viewModel.clearMediaItems() },
+                   isApiCalling = isApiCalling,
+                   isWebSearchEnabled = isWebSearchEnabled,
+                   onToggleWebSearch = {
+                       viewModel.toggleWebSearchMode(!isWebSearchEnabled)
+                   },
+                   onStopApiCall = { viewModel.onCancelAPICall() },
+                   focusRequester = focusRequester,
+                   selectedApiConfig = selectedApiConfig,
+                   onShowSnackbar = { viewModel.showSnackbar(it) },
+                   imeInsets = imeInsets,
+                   density = density,
+                   keyboardController = keyboardController,
+                   onFocusChange = {
+                       scrollStateManager.jumpToBottom()
+                   },
+                   onSendMessage = { messageText, isFromRegeneration, attachments, audioBase64, mimeType ->
+                       viewModel.onSendMessage(
+                           messageText = messageText,
+                           isFromRegeneration = isFromRegeneration,
+                           attachments = attachments,
+                           audioBase64 = audioBase64,
+                           mimeType = mimeType
+                       )
+                   }
+               )
         }
 
         if (showEditDialog) {

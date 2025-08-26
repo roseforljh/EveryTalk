@@ -11,6 +11,9 @@ data class ChatRequest(
     @SerialName("provider")
     val provider: String,
 
+    @SerialName("channel")
+    val channel: String,
+
     @SerialName("api_address")
     val apiAddress: String?,
 

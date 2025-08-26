@@ -28,36 +28,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 @Composable
-fun EmptyChatView(
-    density: Density,
-    isKeyboardVisible: Boolean = false,
-    imeHeightDp: androidx.compose.ui.unit.Dp = 0.dp
-) {
-    // 缩放动画，当输入法弹出时触发
-    val scaleAnimation = remember { Animatable(1f) }
-    
-    LaunchedEffect(isKeyboardVisible) {
-        if (isKeyboardVisible) {
-            // 输入法弹出时，缩放到 0.8
-            scaleAnimation.animateTo(
-                targetValue = 0.8f,
-                animationSpec = tween(
-                    durationMillis = 400,
-                    easing = FastOutSlowInEasing
-                )
-            )
-        } else {
-            // 输入法隐藏时，恢复到原始大小
-            scaleAnimation.animateTo(
-                targetValue = 1f,
-                animationSpec = tween(
-                    durationMillis = 400,
-                    easing = FastOutSlowInEasing
-                )
-            )
-        }
-    }
-
+fun EmptyChatView() {
     Box(
         Modifier
             .fillMaxSize()
@@ -67,20 +38,14 @@ fun EmptyChatView(
         Row(
             verticalAlignment = Alignment.Bottom,
             horizontalArrangement = Arrangement.Center,
-            modifier = Modifier
-                .graphicsLayer {
-                    scaleX = scaleAnimation.value
-                    scaleY = scaleAnimation.value
-                }
-                // 当输入法弹出时，通过 offset 抵消界面上移，让"你好"保持在原位
-                .offset(y = if (isKeyboardVisible) imeHeightDp else 0.dp)
         ) {
             val style = MaterialTheme.typography.displayMedium.copy(
                 fontWeight = FontWeight.ExtraBold,
             )
             Text("你好", style = style)
             val animY = remember { List(3) { Animatable(0f) } }
-            val coroutineScope = rememberCoroutineScope() // Needed for cancellation reset
+            val coroutineScope = rememberCoroutineScope()
+            val density = androidx.compose.ui.platform.LocalDensity.current
 
             LaunchedEffect(Unit) {
                 animY.forEach { it.snapTo(0f) } // Initialize

@@ -219,9 +219,9 @@ fun SettingsScreen(
                 // 重置获取的模型列表
                 viewModel.clearFetchedModels()
             },
-            onConfirm = { provider, address, key ->
+            onConfirm = { provider, address, key, channel ->
                 if (key.isNotBlank() && provider.isNotBlank() && address.isNotBlank()) {
-                    viewModel.createConfigAndFetchModels(provider, address, key)
+                    viewModel.createConfigAndFetchModels(provider, address, key, channel)
                     showAddFullConfigDialog = false
                     viewModel.clearFetchedModels()
                 }

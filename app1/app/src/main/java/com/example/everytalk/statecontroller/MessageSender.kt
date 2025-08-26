@@ -493,6 +493,7 @@ private data class AttachmentProcessingResult(
                 val chatRequestForApi = ChatRequest(
                     messages = apiMessagesForBackend,
                     provider = providerForRequestBackend,
+                    channel = currentConfig.channel,
                     apiAddress = currentConfig.address,
                     apiKey = currentConfig.key,
                     model = currentConfig.model,

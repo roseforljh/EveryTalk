@@ -193,7 +193,7 @@ class ApiHandler(
                 if (audioBase64 != null) {
                     finalAttachments.add(Audio(id = UUID.randomUUID().toString(), mimeType = mimeType ?: "audio/3gpp", data = audioBase64))
                 }
-                if (requestBody.provider == "gemini") {
+                if (requestBody.channel == "Gemini") {
                     try {
                         val geminiRequest = com.example.everytalk.data.DataClass.GeminiApiRequest(
                             contents = requestBody.messages.map {
