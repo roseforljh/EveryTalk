@@ -4,12 +4,16 @@ import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import com.example.everytalk.BuildConfig
+import com.example.everytalk.config.BackendConfig
 import com.example.everytalk.data.DataClass.ChatRequest
+import com.example.everytalk.data.DataClass.GithubRelease
+import com.example.everytalk.data.local.SharedPreferencesDataSource
 import com.example.everytalk.models.SelectedMediaItem
 import io.ktor.client.*
 import io.ktor.client.call.*
-import io.ktor.client.engine.android.*
 import io.ktor.client.plugins.*
+import io.ktor.client.plugins.HttpRequestTimeoutException
 import io.ktor.client.plugins.cache.HttpCache
 import io.ktor.client.plugins.cache.storage.FileStorage
 import io.ktor.client.plugins.contentnegotiation.*
@@ -19,28 +23,28 @@ import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import io.ktor.utils.io.*
+import io.ktor.utils.io.streams.asInput
+import java.io.File
+import java.io.IOException
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.*
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.serialization.json.Json
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.*
 import kotlinx.serialization.modules.SerializersModule
 import kotlinx.serialization.modules.contextual
 import kotlinx.serialization.modules.polymorphic
 import kotlinx.serialization.modules.subclass
-import com.example.everytalk.data.DataClass.GithubRelease
-import kotlinx.serialization.Serializable
-import com.example.everytalk.data.local.SharedPreferencesDataSource
-import com.example.everytalk.config.BackendConfig
-import com.example.everytalk.BuildConfig
-import kotlinx.serialization.SerializationException
-import java.io.IOException
-import java.io.File
-import io.ktor.client.plugins.HttpRequestTimeoutException
-import io.ktor.utils.io.streams.asInput
 import kotlinx.coroutines.CancellationException as CoroutineCancellationException
-import java.util.concurrent.atomic.AtomicBoolean
+
+@Serializable
+data class ModelInfo(val id: String)
+
+@Serializable
+data class ModelsResponse(val data: List<ModelInfo>)
 
 object ApiClient {
     private var sharedPreferencesDataSource: SharedPreferencesDataSource? = null
@@ -165,11 +169,14 @@ object ApiClient {
             sharedPreferencesDataSource = SharedPreferencesDataSource(context)
             // 根据构建类型自动选择配置
             val cacheFile = File(context.cacheDir, "ktor_http_cache")
-            client = HttpClient(Android) {
+            client = HttpClient(io.ktor.client.engine.okhttp.OkHttp) {
                 engine {
                     // 允许所有主机名验证（用于本地开发）
-                    connectTimeout = 60_000
-                    socketTimeout = 300_000
+                    config {
+                        connectTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+                        readTimeout(300, java.util.concurrent.TimeUnit.SECONDS)
+                        writeTimeout(300, java.util.concurrent.TimeUnit.SECONDS)
+                    }
                 }
                 install(ContentNegotiation) {
                     json(jsonParser)
@@ -696,5 +703,41 @@ object ApiClient {
         }
 
         throw IOException("从所有可用源检查更新失败。可能的原因：网络连接问题、VPN干扰、或服务器不可达。", lastException)
+    }
+
+    suspend fun getModels(apiUrl: String, apiKey: String): List<String> {
+        if (!isInitialized) {
+            throw IllegalStateException("ApiClient not initialized. Call initialize() first.")
+        }
+
+        val url = apiUrl.removeSuffix("/") + "/v1/models"
+
+        return try {
+            val response = client.get {
+                url(url)
+                header(HttpHeaders.Authorization, "Bearer $apiKey")
+                header(HttpHeaders.Accept, "application/json")
+                header(HttpHeaders.UserAgent, "KunTalkwithAi/1.0")
+            }
+
+            val responseBody = response.bodyAsText()
+
+            // 尝试解析第一种格式: {"data": [...]}
+            try {
+                val modelsResponse = jsonParser.decodeFromString<ModelsResponse>(responseBody)
+                return modelsResponse.data.map { it.id }
+            } catch (e: SerializationException) {
+                // 如果第一种格式解析失败，尝试第二种格式: [...]
+                try {
+                    val modelsList = jsonParser.decodeFromString<List<ModelInfo>>(responseBody)
+                    return modelsList.map { it.id }
+                } catch (e2: SerializationException) {
+                    throw IOException("无法解析模型列表的响应。请检查API端点返回的数据格式是否正确。", e2)
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("ApiClient", "从 $url 获取模型列表失败", e)
+            throw IOException("从 $url 获取模型列表失败: ${e.message}", e)
+        }
     }
 }

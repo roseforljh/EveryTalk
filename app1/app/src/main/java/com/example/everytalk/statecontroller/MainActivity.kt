@@ -91,13 +91,6 @@ class MainActivity : ComponentActivity() {
             ProfileInstaller.writeProfile(this@MainActivity)
         }
         
-        lifecycle.addObserver(object : LifecycleObserver {
-            @OnLifecycleEvent(Lifecycle.Event.ON_STOP)
-            fun onAppBackgrounded() {
-                // App is in background, suggest GC to free up memory
-                System.gc()
-            }
-        })
         WindowCompat.setDecorFitsSystemWindows(window, false)
         ApiClient.initialize(this)
         enableEdgeToEdge()

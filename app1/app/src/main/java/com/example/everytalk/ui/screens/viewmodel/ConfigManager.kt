@@ -19,49 +19,44 @@ class ConfigManager(
     private val TAG_CM = "ConfigManager"
 
     fun addConfig(configToAdd: ApiConfig) {
-        val contentExists = stateHolder._apiConfigs.value.any { existingConfig ->
-            existingConfig.address.trim().equals(configToAdd.address.trim(), ignoreCase = true) &&
-                    existingConfig.key.trim() == configToAdd.key.trim() &&
-                    existingConfig.model.trim()
-                        .equals(configToAdd.model.trim(), ignoreCase = true) &&
-                    existingConfig.provider.trim()
-                        .equals(configToAdd.provider.trim(), ignoreCase = true)
+        val isDuplicate = stateHolder._apiConfigs.value.any {
+            it.key == configToAdd.key &&
+            it.model == configToAdd.model &&
+            it.address == configToAdd.address &&
+            it.provider == configToAdd.provider
         }
 
-        if (!contentExists) {
-            val finalConfig = if (stateHolder._apiConfigs.value.any { it.id == configToAdd.id })
-                configToAdd.copy(id = UUID.randomUUID().toString()) else configToAdd
+        if (isDuplicate) {
+            Log.d(TAG_CM, "Skipping duplicate config: '${configToAdd.model}'")
+            return
+        }
 
-            stateHolder._apiConfigs.update { it + finalConfig }
-            Log.d(TAG_CM, "Added new config '${finalConfig.model}' to in-memory list.")
+        val finalConfig = if (stateHolder._apiConfigs.value.any { it.id == configToAdd.id })
+            configToAdd.copy(id = UUID.randomUUID().toString()) else configToAdd
 
-            viewModelScope.launch {
-                persistenceManager.saveApiConfigs(stateHolder._apiConfigs.value)
-                Log.d(TAG_CM, "Saved API configs list to persistence after add.")
+        stateHolder._apiConfigs.update { it + finalConfig }
+        Log.d(TAG_CM, "Added new config '${finalConfig.model}' to in-memory list.")
 
-                if (stateHolder._selectedApiConfig.value == null || stateHolder._apiConfigs.value.size == 1) {
-                    stateHolder._selectedApiConfig.value = finalConfig
-                    persistenceManager.saveSelectedConfigIdentifier(finalConfig.id)
-                    Log.d(
-                        TAG_CM,
-                        "Added and selected new config: ${finalConfig.model}. Selection saved."
-                    )
-                }
-            }
-            if (stateHolder._selectedApiConfig.value?.id == finalConfig.id) {
-                Log.d(TAG_CM, "UI feedback: Added and selected new config: ${finalConfig.model}")
-            } else {
+        // 立即保存配置到持久化存储
+        viewModelScope.launch {
+            persistenceManager.saveApiConfigs(stateHolder._apiConfigs.value)
+            Log.d(TAG_CM, "Saved API configs to persistence after adding '${finalConfig.model}'")
+            
+            if (stateHolder._selectedApiConfig.value == null || stateHolder._apiConfigs.value.size == 1) {
+                stateHolder._selectedApiConfig.value = finalConfig
+                persistenceManager.saveSelectedConfigIdentifier(finalConfig.id)
                 Log.d(
                     TAG_CM,
-                    "UI feedback: Added new config: ${finalConfig.model}, selection unchanged."
+                    "Added and selected new config: ${finalConfig.model}. Selection saved."
                 )
             }
-
+        }
+        if (stateHolder._selectedApiConfig.value?.id == finalConfig.id) {
+            Log.d(TAG_CM, "UI feedback: Added and selected new config: ${finalConfig.model}")
         } else {
-            viewModelScope.launch { stateHolder._snackbarMessage.emit("具有相同内容的配置已存在") }
             Log.d(
                 TAG_CM,
-                "Config add attempt failed - duplicate content for: ${configToAdd.model}."
+                "UI feedback: Added new config: ${finalConfig.model}, selection unchanged."
             )
         }
     }
@@ -124,7 +119,9 @@ class ConfigManager(
 
         if (indexToDelete == -1) {
             Log.w(TAG_CM, "Attempted to delete a config not found in the list: ID=${configToDelete.id}")
-            viewModelScope.launch { stateHolder._snackbarMessage.emit("删除失败：未找到配置") }
+            viewModelScope.launch {
+                // Silent failure as per user request
+            }
             return
         }
 
@@ -149,19 +146,13 @@ class ConfigManager(
                 persistenceManager.saveSelectedConfigIdentifier(newSelectedConfig?.id)
                 Log.d(TAG_CM, "Updated configs and new selection (${newSelectedConfig?.id ?: "null"}) saved to persistence.")
                 
-                stateHolder._snackbarMessage.emit("选中的配置 '${configToDelete.model}' 已删除")
-                delay(250)
-                if (newSelectedConfig == null) {
-                    stateHolder._snackbarMessage.emit("请添加或选择一个新的 API 配置")
-                } else {
-                    stateHolder._snackbarMessage.emit("已自动选择: ${newSelectedConfig.model}")
-                }
+                // Silent deletion as per user request
             }
         } else {
             viewModelScope.launch {
                 persistenceManager.saveApiConfigs(updatedConfigs)
                 Log.d(TAG_CM, "Updated API configs list (after deletion) saved to persistence.")
-                stateHolder._snackbarMessage.emit("配置 '${configToDelete.model}' 已删除")
+                // Silent deletion as per user request
             }
         }
     }

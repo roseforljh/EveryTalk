@@ -32,6 +32,7 @@
 
         <activity
             android:name="com.example.everytalk.statecontroller.MainActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden|keyboard"
             android:exported="true"
             android:theme="@style/Theme.App1"
             android:windowSoftInputMode="adjustResize"

@@ -1,6 +1,7 @@
 -keep class com.google.gson.reflect.TypeToken
 -keep class * extends com.google.gson.reflect.TypeToken
 -keep class com.example.everytalk.data.DataClass.** { *; }
+-keep class com.google.android.gms.** { *; }
 # Add project specific ProGuard rules here.
 # You can control the set of applied configuration files using the
 # proguardFiles setting in build.gradle.

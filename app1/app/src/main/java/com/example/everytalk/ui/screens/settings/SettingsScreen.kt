@@ -29,6 +29,8 @@ fun SettingsScreen(
     val savedConfigs by viewModel.apiConfigs.collectAsState()
     val selectedConfigForApp by viewModel.selectedApiConfig.collectAsState()
     val allProviders by viewModel.allProviders.collectAsState()
+    val isFetchingModels by viewModel.isFetchingModels.collectAsState()
+    val fetchedModels by viewModel.fetchedModels.collectAsState()
 
     val apiConfigsByApiKeyAndModality = remember(savedConfigs) {
         savedConfigs.groupBy { it.key }
@@ -120,6 +122,7 @@ fun SettingsScreen(
             viewModel.selectConfig(savedConfigs.first())
         }
     }
+
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -213,42 +216,36 @@ fun SettingsScreen(
             onApiKeyChange = { newFullConfigKey = it },
             onDismissRequest = {
                 showAddFullConfigDialog = false
+                // 重置获取的模型列表
+                viewModel.clearFetchedModels()
             },
-            onConfirm = {
-                if (newFullConfigKey.isNotBlank() && newFullConfigProvider.isNotBlank() && newFullConfigAddress.isNotBlank()) {
+            onConfirm = { provider, address, key ->
+                if (key.isNotBlank() && provider.isNotBlank() && address.isNotBlank()) {
+                    viewModel.createConfigAndFetchModels(provider, address, key)
                     showAddFullConfigDialog = false
-                    addModelToKeyTargetApiKey = newFullConfigKey.trim()
-                    addModelToKeyTargetProvider = newFullConfigProvider.trim()
-                    addModelToKeyTargetAddress = newFullConfigAddress.trim()
-                    addModelToKeyTargetModality = ModalityType.TEXT
-                    addModelToKeyNewModelName = ""
-                    showAddModelToKeyDialog = true
+                    viewModel.clearFetchedModels()
                 }
             }
         )
     }
 
+
     if (showAddModelToKeyDialog) {
-        AddModelToExistingKeyDialog(
-            targetProvider = addModelToKeyTargetProvider,
-            targetAddress = addModelToKeyTargetAddress,
-            newModelName = addModelToKeyNewModelName,
-            onNewModelNameChange = { addModelToKeyNewModelName = it },
-            onDismissRequest = {
-                showAddModelToKeyDialog = false
-            },
-            onConfirm = {
-                if (addModelToKeyNewModelName.isNotBlank()) {
-                    val newConfig = ApiConfig(
-                        id = UUID.randomUUID().toString(),
-                        address = addModelToKeyTargetAddress.trim(),
-                        key = addModelToKeyTargetApiKey.trim(),
-                        model = addModelToKeyNewModelName.trim(),
-                        provider = addModelToKeyTargetProvider.trim(),
-                        name = addModelToKeyNewModelName.trim(),
-                        modalityType = addModelToKeyTargetModality
+        // This dialog is no longer used in the new workflow, but we keep the logic here
+        // in case it's needed in the future.
+    }
+
+    if (showAddModelToKeyDialog) {
+        AddModelDialog(
+            onDismissRequest = { showAddModelToKeyDialog = false },
+            onConfirm = { newModelName ->
+                if (newModelName.isNotBlank()) {
+                    viewModel.addModelToConfigGroup(
+                        apiKey = addModelToKeyTargetApiKey,
+                        provider = addModelToKeyTargetProvider,
+                        address = addModelToKeyTargetAddress,
+                        modelName = newModelName
                     )
-                    viewModel.addConfig(newConfig)
                     showAddModelToKeyDialog = false
                 }
             }

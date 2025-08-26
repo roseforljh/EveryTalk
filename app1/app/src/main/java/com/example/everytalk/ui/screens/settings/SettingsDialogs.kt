@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.compose.animation.*
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -202,7 +203,7 @@ internal fun AddNewFullConfigDialog(
     apiKey: String,
     onApiKeyChange: (String) -> Unit,
     onDismissRequest: () -> Unit,
-    onConfirm: () -> Unit
+    onConfirm: (String, String, String) -> Unit
 ) {
     var providerMenuExpanded by remember { mutableStateOf(false) }
     val focusRequesterApiKey = remember { FocusRequester() }
@@ -222,7 +223,7 @@ internal fun AddNewFullConfigDialog(
 
     AlertDialog(
         onDismissRequest = onDismissRequest,
-        title = { Text("添加配置 (1/2)", color = MaterialTheme.colorScheme.onSurface) },
+        title = { Text("添加配置", color = MaterialTheme.colorScheme.onSurface) },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 ExposedDropdownMenuBox(
@@ -336,7 +337,11 @@ internal fun AddNewFullConfigDialog(
                         .focusRequester(focusRequesterApiKey),
                     singleLine = true,
                     keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(onDone = { onConfirm() }),
+                    keyboardActions = KeyboardActions(onDone = {
+                        if (apiKey.isNotBlank() && provider.isNotBlank() && apiAddress.isNotBlank()) {
+                            onConfirm(provider, apiAddress, apiKey)
+                        }
+                    }),
                     shape = DialogShape,
                     colors = DialogTextFieldColors
                 )
@@ -344,68 +349,16 @@ internal fun AddNewFullConfigDialog(
         },
         confirmButton = {
             Button(
-                onClick = onConfirm,
+                onClick = { onConfirm(provider, apiAddress, apiKey) },
                 enabled = apiKey.isNotBlank() && provider.isNotBlank() && apiAddress.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary
                 )
-            ) { Text("添加模型") }
-        },
-        dismissButton = {
-            TextButton(
-                onClick = onDismissRequest,
-                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-            ) { Text("取消") }
-        },
-        containerColor = MaterialTheme.colorScheme.surface,
-        titleContentColor = MaterialTheme.colorScheme.onSurface,
-        textContentColor = MaterialTheme.colorScheme.onSurface
-    )
-    LaunchedEffect(Unit) { focusRequesterApiKey.requestFocus() }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-internal fun AddModelToExistingKeyDialog(
-    targetProvider: String,
-    targetAddress: String,
-    newModelName: String,
-    onNewModelNameChange: (String) -> Unit,
-    onDismissRequest: () -> Unit,
-    onConfirm: () -> Unit
-) {
-    val focusRequesterModelName = remember { FocusRequester() }
-    AlertDialog(
-        onDismissRequest = onDismissRequest,
-        title = { Text("添加模型 (2/2)", color = MaterialTheme.colorScheme.onSurface) },
-        text = {
-            Column {
-                OutlinedTextField(
-                    value = newModelName,
-                    onValueChange = onNewModelNameChange,
-                    label = { Text("模型名称") },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .focusRequester(focusRequesterModelName),
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(onDone = { onConfirm() }),
-                    shape = DialogShape,
-                    colors = DialogTextFieldColors
-                )
+            ) {
+                Text("确定")
             }
         },
-        confirmButton = {
-            Button(
-                onClick = onConfirm,
-                enabled = newModelName.isNotBlank(),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary
-                )
-            ) { Text("保存") }
-        },
         dismissButton = {
             TextButton(
                 onClick = onDismissRequest,
@@ -416,8 +369,8 @@ internal fun AddModelToExistingKeyDialog(
         titleContentColor = MaterialTheme.colorScheme.onSurface,
         textContentColor = MaterialTheme.colorScheme.onSurface
     )
-    LaunchedEffect(Unit) { focusRequesterModelName.requestFocus() }
 }
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -585,4 +538,58 @@ internal fun ImportExportDialog(
             }
         }
     )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun AddModelDialog(
+    onDismissRequest: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var modelName by remember { mutableStateOf("") }
+    val focusRequester = remember { FocusRequester() }
+
+    AlertDialog(
+        onDismissRequest = onDismissRequest,
+        title = { Text("添加新模型", color = MaterialTheme.colorScheme.onSurface) },
+        text = {
+            OutlinedTextField(
+                value = modelName,
+                onValueChange = { modelName = it },
+                label = { Text("模型名称") },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(focusRequester),
+                keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { if (modelName.isNotBlank()) onConfirm(modelName) }),
+                shape = DialogShape,
+                colors = DialogTextFieldColors
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirm(modelName) },
+                enabled = modelName.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
+                )
+            ) { Text("添加") }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismissRequest,
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+            ) { Text("取消") }
+        },
+        containerColor = MaterialTheme.colorScheme.surface,
+        shape = DialogShape,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurface
+    )
+
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+    }
 }

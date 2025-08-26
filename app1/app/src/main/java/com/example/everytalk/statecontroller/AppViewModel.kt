@@ -237,6 +237,11 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                             started = SharingStarted.WhileSubscribed(5000),
                             initialValue = emptyList()
                     )
+    private val _isFetchingModels = MutableStateFlow(false)
+    val isFetchingModels: StateFlow<Boolean> = _isFetchingModels.asStateFlow()
+
+    private val _fetchedModels = MutableStateFlow<List<String>>(emptyList())
+    val fetchedModels: StateFlow<List<String>> = _fetchedModels.asStateFlow()
 
     init {
         // 加载自定义提供商
@@ -817,6 +822,15 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
 
 
     fun addConfig(config: ApiConfig) = configManager.addConfig(config)
+
+    fun addMultipleConfigs(configs: List<ApiConfig>) {
+        viewModelScope.launch {
+            val distinctConfigs = configs.distinctBy { it.model }
+            distinctConfigs.forEach { config ->
+                configManager.addConfig(config)
+            }
+        }
+    }
     fun updateConfig(config: ApiConfig) = configManager.updateConfig(config)
     fun deleteConfig(config: ApiConfig) = configManager.deleteConfig(config)
     fun deleteConfigGroup(
@@ -824,14 +838,14 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             modalityType: com.example.everytalk.data.DataClass.ModalityType
     ) {
         viewModelScope.launch(Dispatchers.IO) {
-            val configsToDelete =
-                    stateHolder._apiConfigs.value.filter {
-                        it.key == apiKey && it.modalityType == modalityType
-                    }
+            val originalConfigs = stateHolder._apiConfigs.value
+            val configsToKeep = originalConfigs.filterNot {
+                it.key == apiKey && it.modalityType == modalityType
+            }
 
-            if (configsToDelete.isNotEmpty()) {
-                configsToDelete.forEach { config -> configManager.deleteConfig(config) }
-                withContext(Dispatchers.Main) { showSnackbar("配置组已删除") }
+            if (originalConfigs.size != configsToKeep.size) {
+                stateHolder._apiConfigs.value = configsToKeep
+                persistenceManager.saveApiConfigs(configsToKeep)
             }
         }
     }
@@ -840,6 +854,12 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     fun clearSelectedConfig() {
         stateHolder._selectedApiConfig.value = null
         viewModelScope.launch(Dispatchers.IO) { persistenceManager.saveSelectedConfigIdentifier(null) }
+    }
+
+    fun saveApiConfigs() {
+        viewModelScope.launch(Dispatchers.IO) {
+            persistenceManager.saveApiConfigs(stateHolder._apiConfigs.value)
+        }
     }
 
     fun addProvider(providerName: String) {
@@ -1140,6 +1160,145 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 Log.e("AppViewModel", "Settings import failed", e)
                 withContext(Dispatchers.Main) { showSnackbar("导入失败: 文件内容或格式无效") }
             }
+        }
+    }
+
+    fun fetchModels(apiUrl: String, apiKey: String) {
+        viewModelScope.launch {
+            _isFetchingModels.value = true
+            _fetchedModels.value = emptyList()
+            try {
+                val models = withContext(Dispatchers.IO) {
+                    ApiClient.getModels(apiUrl, apiKey)
+                }
+                _fetchedModels.value = models
+                withContext(Dispatchers.Main) { showSnackbar("获取到 ${models.size} 个模型") }
+            } catch (e: Exception) {
+                Log.e("AppViewModel", "Failed to fetch models", e)
+                withContext(Dispatchers.Main) { showSnackbar("获取模型失败: ${e.message}") }
+            } finally {
+                _isFetchingModels.value = false
+            }
+        }
+    }
+
+    fun clearFetchedModels() {
+        _fetchedModels.value = emptyList()
+        _isFetchingModels.value = false
+    }
+
+    fun createMultipleConfigs(provider: String, address: String, key: String, modelNames: List<String>) {
+        if (modelNames.isEmpty()) {
+            showSnackbar("请至少选择一个模型")
+            return
+        }
+        
+        viewModelScope.launch {
+            val successfulConfigs = mutableListOf<String>()
+            val failedConfigs = mutableListOf<String>()
+            
+            modelNames.forEach { modelName ->
+                try {
+                    val config = ApiConfig(
+                        address = address.trim(),
+                        key = key.trim(),
+                        model = modelName,
+                        provider = provider,
+                        name = modelName, // 使用模型名作为配置名
+                        id = java.util.UUID.randomUUID().toString(),
+                        isValid = true,
+                        modalityType = com.example.everytalk.data.DataClass.ModalityType.TEXT
+                    )
+                    configManager.addConfig(config)
+                    successfulConfigs.add(modelName)
+                } catch (e: Exception) {
+                    Log.e("AppViewModel", "Failed to create config for model: $modelName", e)
+                    failedConfigs.add(modelName)
+                }
+            }
+            
+            // 显示创建结果
+            if (successfulConfigs.isNotEmpty()) {
+                showSnackbar("成功创建 ${successfulConfigs.size} 个配置")
+            }
+            if (failedConfigs.isNotEmpty()) {
+                showSnackbar("${failedConfigs.size} 个配置创建失败")
+            }
+        }
+    }
+
+    fun createConfigAndFetchModels(provider: String, address: String, key: String) {
+        viewModelScope.launch {
+            // 1. 创建一个临时的配置以立即更新UI
+            val tempId = UUID.randomUUID().toString()
+            val tempConfig = ApiConfig(
+                id = tempId,
+                name = "正在获取模型...",
+                provider = provider,
+                address = address,
+                key = key,
+                model = "temp_model_placeholder",
+                modalityType = com.example.everytalk.data.DataClass.ModalityType.TEXT
+            )
+            configManager.addConfig(tempConfig)
+
+            // 2. 在后台获取模型
+            try {
+                val models = withContext(Dispatchers.IO) {
+                    ApiClient.getModels(address, key)
+                }
+                
+                // 3. 删除临时配置
+                configManager.deleteConfig(tempConfig)
+
+                // 4. 添加获取到的新配置
+                if (models.isNotEmpty()) {
+                    val newConfigs = models.map { modelName ->
+                        ApiConfig(
+                            address = address.trim(),
+                            key = key.trim(),
+                            model = modelName,
+                            provider = provider,
+                            name = modelName,
+                            id = UUID.randomUUID().toString(),
+                            isValid = true,
+                            modalityType = com.example.everytalk.data.DataClass.ModalityType.TEXT
+                        )
+                    }
+                    addMultipleConfigs(newConfigs)
+                } else {
+                     // 如果没有获取到模型，仍然创建一个空的占位配置
+                    val placeholderConfig = tempConfig.copy(
+                        id = UUID.randomUUID().toString(),
+                        name = provider,
+                        model = ""
+                    )
+                    configManager.addConfig(placeholderConfig)
+                }
+            } catch (e: Exception) {
+                Log.e("AppViewModel", "获取模型失败", e)
+                // 获取失败，更新临时配置以提示用户
+                 val errorConfig = tempConfig.copy(
+                    name = provider,
+                    model = ""
+                )
+                configManager.updateConfig(errorConfig)
+            }
+        }
+    }
+
+    fun addModelToConfigGroup(apiKey: String, provider: String, address: String, modelName: String) {
+        viewModelScope.launch {
+            val newConfig = ApiConfig(
+                id = UUID.randomUUID().toString(),
+                name = modelName,
+                provider = provider,
+                address = address,
+                key = apiKey,
+                model = modelName,
+                modalityType = com.example.everytalk.data.DataClass.ModalityType.TEXT
+            )
+            configManager.addConfig(newConfig)
         }
     }
 
