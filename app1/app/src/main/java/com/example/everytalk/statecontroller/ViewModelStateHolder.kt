@@ -49,6 +49,8 @@ data class ConversationScrollState(
     val expandedReasoningStates: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
     val messageAnimationStates: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
     val conversationScrollStates = mutableStateMapOf<String, ConversationScrollState>()
+    val systemPromptExpandedState = mutableStateMapOf<String, Boolean>()
+    val systemPrompts = mutableStateMapOf<String, String>()
  
      val _snackbarMessage =
          MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 1)
@@ -77,6 +79,8 @@ data class ConversationScrollState(
         reasoningCompleteMap.clear()
         expandedReasoningStates.clear()
         messageAnimationStates.clear()
+        systemPromptExpandedState.clear()
+        systemPrompts.clear()
         _showSourcesDialog.value = false
         _sourcesForDialog.value = emptyList()
         _loadedHistoryIndex.value = null

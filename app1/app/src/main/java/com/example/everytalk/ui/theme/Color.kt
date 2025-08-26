@@ -79,3 +79,4 @@ val DarkBorderLight = Color(0xFF404040)        // 浅边框色
 // 弹出选项卡专用颜色 - 响应主题变化
 val LightPopupBackground = Color(0xFFF5F5F5)    // 白天模式弹出选项卡背景 - 淡灰色
 val DarkPopupBackground = Color(0xFF363636)     // 夜间模式弹出选项卡背景 - 深灰色
+val DarkGreen = Color(0xFF2E7D32)

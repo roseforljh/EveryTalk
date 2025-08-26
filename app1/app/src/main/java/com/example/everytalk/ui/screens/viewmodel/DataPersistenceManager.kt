@@ -103,6 +103,13 @@ class DataPersistenceManager(
                         withContext(Dispatchers.Main.immediate) {
                             Log.d(TAG, "loadInitialData: 阶段2完成 - 更新历史数据到UI...")
                             stateHolder._historicalConversations.value = loadedHistory
+                            loadedHistory.forEach { conversation ->
+                                val id = conversation.firstOrNull()?.id
+                                if (id != null) {
+                                    val prompt = conversation.firstOrNull { it.sender == com.example.everytalk.data.DataClass.Sender.System }?.text ?: ""
+                                    stateHolder.systemPrompts[id] = prompt
+                                }
+                            }
                             stateHolder._isLoadingHistoryData.value = false
                         }
                     } catch (e: Exception) {

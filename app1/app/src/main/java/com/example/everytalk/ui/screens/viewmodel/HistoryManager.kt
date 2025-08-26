@@ -22,7 +22,7 @@ class HistoryManager(
             (
                 (msg.sender == Sender.User) ||
                 (msg.sender == Sender.AI && (msg.contentStarted || msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank())) ||
-                (msg.sender == Sender.System && msg.isPlaceholderName)
+                (msg.sender == Sender.System)
             )
         }.toList()
     }
@@ -41,7 +41,13 @@ class HistoryManager(
 
     suspend fun saveCurrentChatToHistoryIfNeeded(forceSave: Boolean = false): Boolean {
         val currentMessagesSnapshot = stateHolder.messages.toList()
-        val messagesToSave = filterMessagesForSaving(currentMessagesSnapshot)
+        val currentPrompt = stateHolder.systemPrompts[stateHolder._currentConversationId.value] ?: ""
+        val messagesWithPrompt = if (currentPrompt.isNotBlank()) {
+            listOf(Message(sender = Sender.System, text = currentPrompt)) + currentMessagesSnapshot
+        } else {
+            currentMessagesSnapshot
+        }
+        val messagesToSave = filterMessagesForSaving(messagesWithPrompt)
         var historyListModified = false
         var loadedIndexChanged = false
 

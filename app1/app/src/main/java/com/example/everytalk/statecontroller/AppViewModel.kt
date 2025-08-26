@@ -40,6 +40,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
@@ -70,6 +71,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     }
 
     private val messagesMutex = Mutex()
+    private val historyMutex = Mutex()
     private val conversationPreviewCache = LruCache<Int, String>(100)
     private val textUpdateDebouncer = mutableMapOf<String, Job>()
     internal val stateHolder = ViewModelStateHolder()
@@ -161,6 +163,9 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     val selectedMediaItems: SnapshotStateList<SelectedMediaItem>
         get() = stateHolder.selectedMediaItems
 
+    val systemPromptExpandedState: SnapshotStateMap<String, Boolean>
+        get() = stateHolder.systemPromptExpandedState
+
     private val _exportRequest = Channel<Pair<String, String>>(Channel.BUFFERED)
     val exportRequest: Flow<Pair<String, String>> = _exportRequest.receiveAsFlow()
 
@@ -204,9 +209,17 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     private val _textForSelectionDialog = MutableStateFlow("")
     val textForSelectionDialog: StateFlow<String> = _textForSelectionDialog.asStateFlow()
 
+    private val _showSystemPromptDialog = MutableStateFlow(false)
+    val showSystemPromptDialog: StateFlow<Boolean> = _showSystemPromptDialog.asStateFlow()
+
+    val systemPrompt: StateFlow<String> = stateHolder._currentConversationId.flatMapLatest { id ->
+        snapshotFlow { stateHolder.systemPrompts[id] ?: "" }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+    private var originalSystemPrompt: String? = null
+ 
    private val _showAboutDialog = MutableStateFlow(false)
    val showAboutDialog: StateFlow<Boolean> = _showAboutDialog.asStateFlow()
-
+ 
    private val _latestReleaseInfo = MutableStateFlow<GithubRelease?>(null)
    val latestReleaseInfo: StateFlow<GithubRelease?> = _latestReleaseInfo.asStateFlow()
 
@@ -408,14 +421,12 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     private fun filterMessagesForComparison(messagesToFilter: List<Message>): List<Message> {
         return messagesToFilter
                 .filter { msg ->
-                    (msg.sender != Sender.System || msg.isPlaceholderName) &&
-                            (msg.sender == Sender.User ||
-                                    (msg.sender == Sender.AI &&
-                                            (msg.contentStarted ||
-                                                    msg.text.isNotBlank() ||
-                                                    !msg.reasoning.isNullOrBlank())) ||
-                                    (msg.sender == Sender.System && msg.isPlaceholderName) ||
-                                    msg.isError)
+                    (!msg.isError) &&
+                    (
+                        (msg.sender == Sender.User) ||
+                        (msg.sender == Sender.AI && (msg.contentStarted || msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank())) ||
+                        (msg.sender == Sender.System)
+                    )
                 }
                 .toList()
     }
@@ -454,7 +465,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 isFromRegeneration,
                 attachments,
                 audioBase64 = audioBase64,
-                mimeType = mimeType
+                mimeType = mimeType,
+                systemPrompt = systemPrompt.value
         )
     }
 
@@ -632,6 +644,108 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         }
     }
 
+   fun showSystemPromptDialog() {
+       originalSystemPrompt = systemPrompt.value
+       _showSystemPromptDialog.value = true
+   }
+
+   fun dismissSystemPromptDialog() {
+       _showSystemPromptDialog.value = false
+       originalSystemPrompt?.let {
+           val conversationId = stateHolder._currentConversationId.value
+           stateHolder.systemPrompts[conversationId] = it
+       }
+       originalSystemPrompt = null
+       val conversationId = stateHolder._currentConversationId.value
+       stateHolder.systemPromptExpandedState[conversationId] = false
+   }
+
+   fun onSystemPromptChange(newPrompt: String) {
+       val conversationId = stateHolder._currentConversationId.value
+       stateHolder.systemPrompts[conversationId] = newPrompt
+   }
+
+   /**
+     * 清空系统提示
+     * 这个方法专门用于处理系统提示的清空操作，确保originalSystemPrompt也被正确设置
+     */
+    fun clearSystemPrompt() {
+        val conversationId = stateHolder._currentConversationId.value
+        stateHolder.systemPrompts[conversationId] = ""
+        originalSystemPrompt = "" // 特别设置originalSystemPrompt为空字符串，防止dismiss时恢复
+        saveSystemPrompt()
+    }
+
+    fun saveSystemPrompt() {
+         val conversationId = stateHolder._currentConversationId.value
+         val newPrompt = stateHolder.systemPrompts[conversationId] ?: ""
+
+         _showSystemPromptDialog.value = false
+         originalSystemPrompt = null
+         stateHolder.systemPromptExpandedState[conversationId] = false
+
+         viewModelScope.launch {
+             historyMutex.withLock {
+                 var modifiedMessages: List<Message>? = null
+                 messagesMutex.withLock {
+                     val currentMessages = stateHolder.messages.toMutableList()
+                     val systemMessageIndex =
+                         currentMessages.indexOfFirst { it.sender == Sender.System && !it.isPlaceholderName }
+
+                     var changed = false
+                     if (systemMessageIndex != -1) {
+                         val oldPrompt = currentMessages[systemMessageIndex].text
+                         if (newPrompt.isNotBlank()) {
+                             if (oldPrompt != newPrompt) {
+                                 currentMessages[systemMessageIndex] =
+                                     currentMessages[systemMessageIndex].copy(text = newPrompt)
+                                 changed = true
+                             }
+                         } else {
+                             currentMessages.removeAt(systemMessageIndex)
+                             changed = true
+                         }
+                     } else if (newPrompt.isNotBlank()) {
+                         val systemMessage = Message(
+                             id = "system_${conversationId}",
+                             text = newPrompt,
+                             sender = Sender.System,
+                             timestamp = System.currentTimeMillis(),
+                             contentStarted = true
+                         )
+                         currentMessages.add(0, systemMessage)
+                         changed = true
+                     }
+
+                     if (changed) {
+                         modifiedMessages = currentMessages.toList()
+                         stateHolder.messages.clear()
+                         stateHolder.messages.addAll(modifiedMessages!!)
+                     }
+                 }
+
+                 if (modifiedMessages != null) {
+                     val loadedIndex = stateHolder._loadedHistoryIndex.value
+                     if (loadedIndex != null) {
+                         val currentHistory = stateHolder._historicalConversations.value.toMutableList()
+                         if (loadedIndex >= 0 && loadedIndex < currentHistory.size) {
+                             currentHistory[loadedIndex] = modifiedMessages!!
+                             stateHolder._historicalConversations.value = currentHistory.toList()
+                             conversationPreviewCache.remove(loadedIndex)
+                         }
+                     }
+                     historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
+                 }
+             }
+         }
+    }
+
+   fun toggleSystemPromptExpanded() {
+       val conversationId = stateHolder._currentConversationId.value
+       val currentState = stateHolder.systemPromptExpandedState[conversationId] ?: false
+       stateHolder.systemPromptExpandedState[conversationId] = !currentState
+   }
+
     fun triggerScrollToBottom() {
         viewModelScope.launch { stateHolder._scrollToBottomEvent.tryEmit(Unit) }
     }
@@ -650,6 +764,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 stateHolder.clearForNewChat()
                 // Ensure new chats get a unique ID from the start.
                 stateHolder._currentConversationId.value = "chat_${UUID.randomUUID()}"
+                stateHolder.systemPrompts[stateHolder._currentConversationId.value] = ""
                 if (stateHolder.shouldAutoScroll()) {
                     triggerScrollToBottom()
                 }
@@ -663,8 +778,14 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("加载历史索引 $index")
         viewModelScope.launch {
+            stateHolder._text.value = ""
+            if (stateHolder._isApiCalling.value) {
+                apiHandler.cancelCurrentApiJob("加载历史记录，取消当前任务")
+            }
             stateHolder._isLoadingHistory.value = true
-            withContext(Dispatchers.IO) { historyManager.saveCurrentChatToHistoryIfNeeded() }
+            historyMutex.withLock {
+                withContext(Dispatchers.IO) { historyManager.saveCurrentChatToHistoryIfNeeded() }
+            }
 
             val conversationList = stateHolder._historicalConversations.value
             if (index < 0 || index >= conversationList.size) {
@@ -675,6 +796,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             val conversationToLoad = conversationList[index]
             val stableId = conversationToLoad.firstOrNull()?.id ?: "history_${UUID.randomUUID()}"
             stateHolder._currentConversationId.value = stableId
+            stateHolder.systemPrompts[stableId] = conversationToLoad.firstOrNull { it.sender == Sender.System && !it.isPlaceholderName }?.text ?: ""
             yield() // Allow UI to recompose with new ID and loading state before proceeding
 
             val (processedConversation, newReasoningMap, newAnimationStates) =

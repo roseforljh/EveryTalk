@@ -397,7 +397,8 @@ private data class AttachmentProcessingResult(
         isFromRegeneration: Boolean = false,
         attachments: List<SelectedMediaItem> = emptyList(),
         audioBase64: String? = null,
-        mimeType: String? = null
+        mimeType: String? = null,
+        systemPrompt: String? = null
     ) {
         val textToActuallySend = messageText.trim()
         val allAttachments = attachments.toMutableList()
@@ -470,6 +471,14 @@ private data class AttachmentProcessingResult(
                         }
                     } else null
                 }.toMutableList()
+               if (!systemPrompt.isNullOrBlank()) {
+                   val systemMessage = if (shouldUsePartsApiMessage) {
+                       PartsApiMessage(role = "system", parts = listOf(ApiContentPart.Text(systemPrompt)))
+                   } else {
+                       SimpleTextApiMessage(role = "system", content = systemPrompt)
+                   }
+                   apiMessagesForBackend.add(0, systemMessage)
+               }
 
                 if (shouldUsePartsApiMessage) {
                     val currentUserParts = attachmentResult.apiContentParts

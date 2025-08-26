@@ -66,6 +66,7 @@ import com.example.everytalk.ui.components.WebSourcesDialog
 import com.example.everytalk.ui.screens.MainScreen.chat.ChatInputArea
 import com.example.everytalk.ui.screens.MainScreen.chat.ChatMessagesList
 import com.example.everytalk.ui.screens.MainScreen.chat.EditMessageDialog
+import com.example.everytalk.ui.screens.MainScreen.chat.SystemPromptDialog
 import com.example.everytalk.ui.screens.MainScreen.chat.EmptyChatView
 import com.example.everytalk.ui.screens.MainScreen.chat.ModelSelectionBottomSheet
 import com.example.everytalk.ui.screens.MainScreen.chat.rememberChatScrollStateManager
@@ -94,6 +95,12 @@ fun ChatScreen(
     val isLoadingHistoryData by viewModel.isLoadingHistoryData.collectAsState()
     val conversationId by viewModel.currentConversationId.collectAsState()
     val latestReleaseInfo by viewModel.latestReleaseInfo.collectAsState()
+   val systemPrompt by viewModel.systemPrompt.collectAsState()
+   val isSystemPromptExpanded by remember(conversationId) {
+       derivedStateOf {
+           viewModel.systemPromptExpandedState[conversationId] ?: false
+       }
+   }
  
      val coroutineScope = rememberCoroutineScope()
      val loadedHistoryIndex by viewModel.loadedHistoryIndex.collectAsState()
@@ -252,7 +259,13 @@ fun ChatScreen(
                             viewModel.showSnackbar("当前无可用模型配置")
                         }
                     }
-                }
+                },
+               onSystemPromptClick = {
+                   viewModel.toggleSystemPromptExpanded()
+                   viewModel.showSystemPromptDialog()
+               },
+               systemPrompt = systemPrompt,
+               isSystemPromptExpanded = isSystemPromptExpanded
             )
         },
         floatingActionButton = {
@@ -442,6 +455,17 @@ fun ChatScreen(
                 uriHandler.openUri(it)
                 viewModel.clearUpdateInfo()
             }
+        )
+    }
+   val showSystemPromptDialog by viewModel.showSystemPromptDialog.collectAsState()
+
+   if (showSystemPromptDialog) {
+        SystemPromptDialog(
+            prompt = systemPrompt,
+            onDismissRequest = { viewModel.dismissSystemPromptDialog() },
+            onPromptChange = { newPrompt -> viewModel.onSystemPromptChange(newPrompt) },
+            onConfirm = { viewModel.saveSystemPrompt() },
+            onClear = { viewModel.clearSystemPrompt() }  // 添加onClear参数
         )
     }
 }

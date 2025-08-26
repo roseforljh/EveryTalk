@@ -3,6 +3,7 @@ package com.example.everytalk.ui.screens.MainScreen.chat
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
@@ -15,7 +16,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -88,6 +92,47 @@ fun EditMessageDialog(
             ) { Text("取消") }
         },
         shape = RoundedCornerShape(20.dp)
+    )
+}
+@Composable
+fun SystemPromptDialog(
+    prompt: String,
+    onDismissRequest: () -> Unit,
+    onPromptChange: (String) -> Unit,
+    onConfirm: () -> Unit,
+    onClear: (() -> Unit)? = null  // 添加一个可选的onClear参数
+) {
+    AlertDialog(
+        onDismissRequest = onDismissRequest,
+        title = { Text("自定义提示") },
+        text = {
+            OutlinedTextField(
+                value = prompt,
+                onValueChange = onPromptChange,
+                modifier = Modifier.fillMaxWidth().height(200.dp),
+                label = { Text("设置系统提示") },
+                shape = RoundedCornerShape(16.dp)
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text("确定")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = {
+                if (onClear != null) {
+                    // 如果提供了onClear回调，则调用它
+                    onClear()
+                } else {
+                    // 否则使用默认行为
+                    onPromptChange("")
+                    onConfirm()
+                }
+            }) {
+                Text("清空")
+            }
+        }
     )
 }
 

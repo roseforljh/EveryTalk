@@ -17,6 +17,7 @@ private const val KEY_SELECTED_API_CONFIG_ID = "selected_api_config_id_v1"
 private const val KEY_CHAT_HISTORY = "chat_history_v1"
 private const val KEY_LAST_OPEN_CHAT = "last_open_chat_v1"
 private const val KEY_CUSTOM_PROVIDERS = "custom_providers_v1"
+private const val KEY_SYSTEM_PROMPT = "system_prompt_v1"
 
 
 private val json = Json {
@@ -110,4 +111,7 @@ class SharedPreferencesDataSource(context: Context) {
 
     fun loadLastOpenChatInternal(): List<Message> =
         loadData(KEY_LAST_OPEN_CHAT, singleChatSerializer, emptyList())
+
+   fun loadSystemPrompt(): String = getString(KEY_SYSTEM_PROMPT, "") ?: ""
+   fun saveSystemPrompt(prompt: String) = saveString(KEY_SYSTEM_PROMPT, prompt)
 }
