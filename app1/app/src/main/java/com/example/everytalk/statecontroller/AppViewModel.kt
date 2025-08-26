@@ -44,6 +44,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -255,7 +256,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
 
     private val _fetchedModels = MutableStateFlow<List<String>>(emptyList())
     val fetchedModels: StateFlow<List<String>> = _fetchedModels.asStateFlow()
-
+    private val _isRefreshingModels = MutableStateFlow<Set<String>>(emptySet())
+    val isRefreshingModels: StateFlow<Set<String>> = _isRefreshingModels.asStateFlow()
     init {
         // 加载自定义提供商
         viewModelScope.launch(Dispatchers.IO) {
@@ -1425,6 +1427,66 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 modalityType = com.example.everytalk.data.DataClass.ModalityType.TEXT
             )
             configManager.addConfig(newConfig)
+        }
+    }
+
+    fun refreshModelsForConfig(config: ApiConfig) {
+        val refreshId = "${config.key}-${config.modalityType}"
+        viewModelScope.launch {
+            _isRefreshingModels.update { it + refreshId }
+            try {
+                val models = withContext(Dispatchers.IO) {
+                    ApiClient.getModels(config.address, config.key)
+                }
+
+                // 1. 删除与此API密钥和模态类型匹配的所有现有配置
+                val currentConfigs = stateHolder._apiConfigs.value
+                val configsToKeep = currentConfigs.filterNot {
+                    it.key == config.key && it.modalityType == config.modalityType
+                }
+
+                // 2. 根据获取的模型创建新配置
+                val newConfigs = models.map { modelName ->
+                    ApiConfig(
+                        address = config.address,
+                        key = config.key,
+                        model = modelName,
+                        provider = config.provider,
+                        name = modelName,
+                        id = UUID.randomUUID().toString(),
+                        isValid = true,
+                        modalityType = config.modalityType,
+                        channel = config.channel
+                    )
+                }
+
+                val finalConfigs = configsToKeep + newConfigs
+
+                // 3. 更新配置状态并保存
+                stateHolder._apiConfigs.value = finalConfigs
+                persistenceManager.saveApiConfigs(finalConfigs)
+
+                // 4. 更新选中的配置（如果需要）
+                val currentSelectedConfig = stateHolder._selectedApiConfig.value
+                if (currentSelectedConfig != null &&
+                    currentSelectedConfig.key == config.key &&
+                    currentSelectedConfig.modalityType == config.modalityType &&
+                    !finalConfigs.any { it.id == currentSelectedConfig.id }
+                ) {
+                    val newSelection = finalConfigs.firstOrNull {
+                        it.key == config.key && it.modalityType == config.modalityType
+                    }
+                    stateHolder._selectedApiConfig.value = newSelection
+                    persistenceManager.saveSelectedConfigIdentifier(newSelection?.id)
+                }
+
+                showSnackbar("刷新成功，获取到 ${models.size} 个模型")
+            } catch (e: Exception) {
+                Log.e("AppViewModel", "刷新模型失败", e)
+                showSnackbar("刷新模型失败: ${e.message}")
+            } finally {
+                _isRefreshingModels.update { it - refreshId }
+            }
         }
     }
 

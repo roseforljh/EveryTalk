@@ -31,6 +31,7 @@ fun SettingsScreen(
     val allProviders by viewModel.allProviders.collectAsState()
     val isFetchingModels by viewModel.isFetchingModels.collectAsState()
     val fetchedModels by viewModel.fetchedModels.collectAsState()
+    val isRefreshingModels by viewModel.isRefreshingModels.collectAsState()
 
     val apiConfigsByApiKeyAndModality = remember(savedConfigs) {
         savedConfigs.groupBy { it.key }
@@ -192,7 +193,11 @@ fun SettingsScreen(
             },
             onDeleteConfigGroup = { apiKey, modalityType ->
                 viewModel.deleteConfigGroup(apiKey, modalityType)
-            }
+            },
+            onRefreshModelsClick = { config ->
+                viewModel.refreshModelsForConfig(config)
+            },
+            isRefreshingModels = isRefreshingModels
         )
     }
 

@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.Cancel
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material3.*
@@ -45,7 +46,9 @@ internal fun SettingsScreenContent(
     onAddModelForApiKeyClick: (apiKey: String, existingProvider: String, existingAddress: String, existingModality: ModalityType) -> Unit,
     onDeleteModelForApiKey: (configToDelete: ApiConfig) -> Unit,
     onEditConfigClick: (config: ApiConfig) -> Unit,
-    onDeleteConfigGroup: (apiKey: String, modalityType: ModalityType) -> Unit
+    onDeleteConfigGroup: (apiKey: String, modalityType: ModalityType) -> Unit,
+    onRefreshModelsClick: (config: ApiConfig) -> Unit,
+    isRefreshingModels: Set<String>
 ) {
     Column(
         modifier = Modifier
@@ -103,7 +106,9 @@ internal fun SettingsScreenContent(
                             },
                             onDeleteModelForApiKey = onDeleteModelForApiKey,
                             onEditConfigClick = { onEditConfigClick(configsForKeyAndModality.first()) },
-                            onDeleteGroup = { onDeleteConfigGroup(apiKey, modalityType) }
+                            onDeleteGroup = { onDeleteConfigGroup(apiKey, modalityType) },
+                            onRefreshModelsClick = { onRefreshModelsClick(configsForKeyAndModality.first()) },
+                            isRefreshing = isRefreshingModels.contains("$apiKey-${modalityType}")
                         )
                         Spacer(Modifier.height(18.dp))
                     }
@@ -124,7 +129,9 @@ private fun ApiKeyItemGroup(
     onAddModelForApiKeyClick: () -> Unit,
     onDeleteModelForApiKey: (ApiConfig) -> Unit,
     onEditConfigClick: () -> Unit,
-    onDeleteGroup: () -> Unit
+    onDeleteGroup: () -> Unit,
+    onRefreshModelsClick: () -> Unit,
+    isRefreshing: Boolean
 ) {
     var expandedModels by remember { mutableStateOf(false) }
     var showConfirmDeleteGroupDialog by remember { mutableStateOf(false) }
@@ -190,6 +197,23 @@ private fun ApiKeyItemGroup(
                     modifier = Modifier.weight(1f)
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (isRefreshing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        IconButton(
+                            onClick = onRefreshModelsClick,
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Refresh,
+                                contentDescription = "刷新模型列表",
+                                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                            )
+                        }
+                    }
                     IconButton(
                         onClick = onAddModelForApiKeyClick,
                         modifier = Modifier.size(36.dp)
