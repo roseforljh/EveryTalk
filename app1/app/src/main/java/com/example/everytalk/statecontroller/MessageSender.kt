@@ -18,6 +18,7 @@ import com.example.everytalk.data.DataClass.SimpleTextApiMessage
 import com.example.everytalk.data.DataClass.Message as UiMessage
 import com.example.everytalk.data.DataClass.Sender as UiSender
 import com.example.everytalk.data.DataClass.ThinkingConfig
+import com.example.everytalk.data.DataClass.ImageGenRequest
 import com.example.everytalk.data.DataClass.GenerationConfig
 import com.example.everytalk.ui.screens.viewmodel.HistoryManager
 import kotlinx.coroutines.CoroutineScope
@@ -362,10 +363,18 @@ private data class AttachmentProcessingResult(
             val persistentFileProviderUri = persistentFile?.let { FileProvider.getUriForFile(application, authority, it) }
 
             val processedItemForUi: SelectedMediaItem = when (originalMediaItem) {
-                is SelectedMediaItem.ImageFromUri, is SelectedMediaItem.ImageFromBitmap -> {
+                is SelectedMediaItem.ImageFromUri -> {
                     imageUriStringsForUi.add(persistentFileProviderUri.toString())
                     SelectedMediaItem.ImageFromUri(
                         uri = persistentFileProviderUri!!,
+                        id = originalMediaItem.id,
+                        filePath = persistentFilePath
+                    )
+                }
+                is SelectedMediaItem.ImageFromBitmap -> {
+                    imageUriStringsForUi.add(persistentFileProviderUri.toString())
+                    SelectedMediaItem.ImageFromBitmap(
+                        bitmap = originalMediaItem.bitmap,
                         id = originalMediaItem.id,
                         filePath = persistentFilePath
                     )
@@ -398,7 +407,8 @@ private data class AttachmentProcessingResult(
         attachments: List<SelectedMediaItem> = emptyList(),
         audioBase64: String? = null,
         mimeType: String? = null,
-        systemPrompt: String? = null
+        systemPrompt: String? = null,
+        isImageGeneration: Boolean = false
     ) {
         val textToActuallySend = messageText.trim()
         val allAttachments = attachments.toMutableList()
@@ -410,8 +420,8 @@ private data class AttachmentProcessingResult(
             viewModelScope.launch { showSnackbar("请输入消息内容或选择项目") }
             return
         }
-        val currentConfig = stateHolder._selectedApiConfig.value ?: run {
-            viewModelScope.launch { showSnackbar("请先选择 API 配置") }
+        val currentConfig = (if (isImageGeneration) stateHolder._selectedImageGenApiConfig.value else stateHolder._selectedApiConfig.value) ?: run {
+            viewModelScope.launch { showSnackbar(if (isImageGeneration) "请先选择 图像生成 的API配置" else "请先选择 API 配置") }
             return
         }
 
@@ -439,7 +449,11 @@ private data class AttachmentProcessingResult(
 
             withContext(Dispatchers.Main.immediate) {
                 stateHolder.messageAnimationStates[newUserMessageForUi.id] = true
-                stateHolder.messages.add(newUserMessageForUi)
+                if (isImageGeneration) {
+                    stateHolder.imageGenerationMessages.add(newUserMessageForUi)
+                } else {
+                    stateHolder.messages.add(newUserMessageForUi)
+                }
                 if (!isFromRegeneration) {
                    stateHolder._text.value = ""
                    stateHolder.clearSelectedMedia()
@@ -449,7 +463,7 @@ private data class AttachmentProcessingResult(
 
 
             withContext(Dispatchers.IO) {
-                val messagesInChatUiSnapshot = stateHolder.messages.toList()
+                val messagesInChatUiSnapshot = if (isImageGeneration) stateHolder.imageGenerationMessages.toList() else stateHolder.messages.toList()
                 val historyEndIndex = messagesInChatUiSnapshot.indexOfFirst { it.id == newUserMessageForUi.id }
                 val historyUiMessages = if (historyEndIndex != -1) messagesInChatUiSnapshot.subList(0, historyEndIndex) else messagesInChatUiSnapshot
 
@@ -499,6 +513,9 @@ private data class AttachmentProcessingResult(
                     return@withContext
                 }
 
+                // 规范化图像尺寸：为空或包含占位符时回退到 1024x1024
+                val sanitizedImageSize = currentConfig.imageSize?.takeIf { it.isNotBlank() && !it.contains("<") } ?: "1024x1024"
+
                 val chatRequestForApi = ChatRequest(
                     messages = apiMessagesForBackend,
                     provider = providerForRequestBackend,
@@ -514,9 +531,9 @@ private data class AttachmentProcessingResult(
                         thinkingConfig = if (modelIsGeminiType) ThinkingConfig(
                             includeThoughts = true,
                             thinkingBudget = if (currentConfig.model.contains(
-                                    "flash",
-                                    ignoreCase = true
-                                )
+                                "flash",
+                                ignoreCase = true
+                            )
                             ) 1024 else null
                         ) else null
                     ).let { if (it.temperature != null || it.topP != null || it.maxOutputTokens != null || it.thinkingConfig != null) it else null },
@@ -530,6 +547,25 @@ private data class AttachmentProcessingResult(
                             else -> "high" // 对应24576个令牌
                         }
                         mapOf("reasoning_effort" to reasoningEffort)
+                    } else null,
+                    imageGenRequest = if (isImageGeneration) {
+                        // 计算上游完整图片生成端点
+                        val upstreamBase = currentConfig.address.trim().trimEnd('/')
+                        val upstreamApiForImageGen = if (upstreamBase.endsWith("/v1/images/generations")) {
+                            upstreamBase
+                        } else {
+                            "$upstreamBase/v1/images/generations"
+                        }
+                        ImageGenRequest(
+                            model = currentConfig.model,
+                            prompt = textToActuallySend,
+                            imageSize = sanitizedImageSize,
+                            batchSize = 1,
+                            numInferenceSteps = currentConfig.numInferenceSteps,
+                            guidanceScale = currentConfig.guidanceScale,
+                            apiAddress = upstreamApiForImageGen,
+                            apiKey = currentConfig.key
+                        )
                     } else null
                 )
 
@@ -539,7 +575,14 @@ private data class AttachmentProcessingResult(
                     applicationContextForApiClient = application,
                     userMessageTextForContext = textToActuallySend,
                     afterUserMessageId = newUserMessageForUi.id,
-                    onMessagesProcessed = { viewModelScope.launch { historyManager.saveCurrentChatToHistoryIfNeeded() } },
+                    onMessagesProcessed = {
+                        // 避免图像模式在AI占位阶段过早入库，仅文本模式此处保存
+                        if (!isImageGeneration) {
+                            viewModelScope.launch {
+                                historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = false)
+                            }
+                        }
+                    },
                     onRequestFailed = { error ->
                         viewModelScope.launch(Dispatchers.Main) {
                             val errorMessage = "发送失败: ${error.message ?: "未知错误"}"
@@ -548,7 +591,8 @@ private data class AttachmentProcessingResult(
                     },
                     onNewAiMessageAdded = triggerScrollToBottom,
                     audioBase64 = audioBase64,
-                    mimeType = mimeType
+                    mimeType = mimeType,
+                    isImageGeneration = isImageGeneration
                 )
             }
         }

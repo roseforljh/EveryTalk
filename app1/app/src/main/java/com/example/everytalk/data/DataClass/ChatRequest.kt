@@ -4,6 +4,26 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Contextual
 
 @Serializable
+data class ImageGenRequest(
+   @SerialName("model")
+   val model: String,
+   @SerialName("prompt")
+   val prompt: String,
+   @SerialName("image_size")
+   val imageSize: String?,
+   @SerialName("batch_size")
+   val batchSize: Int?,
+   @SerialName("num_inference_steps")
+   val numInferenceSteps: Int?,
+   @SerialName("guidance_scale")
+   val guidanceScale: Float?,
+   @SerialName("apiAddress")
+   val apiAddress: String,
+   @SerialName("apiKey")
+   val apiKey: String
+)
+
+@Serializable
 data class ChatRequest(
     @SerialName("messages")
     val messages: List<AbstractApiMessage>,
@@ -45,5 +65,8 @@ data class ChatRequest(
     val customModelParameters: Map<String, @Contextual Any>? = null,
 
     @SerialName("custom_extra_body")
-    val customExtraBody: Map<String, @Contextual Any>? = null
+    val customExtraBody: Map<String, @Contextual Any>? = null,
+
+    @SerialName("image_gen_request")
+    val imageGenRequest: ImageGenRequest? = null
 )

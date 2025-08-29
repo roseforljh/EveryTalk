@@ -70,6 +70,23 @@ class DataPersistenceManager(
                     stateHolder._selectedApiConfig.value = finalSelectedConfig
                 }
 
+                // Load image generation configs
+                val loadedImageGenConfigs: List<ApiConfig> = dataSource.loadImageGenApiConfigs()
+                val selectedImageGenConfigId: String? = dataSource.loadSelectedImageGenConfigId()
+                var selectedImageGenConfig: ApiConfig? = null
+                if (selectedImageGenConfigId != null) {
+                    selectedImageGenConfig = loadedImageGenConfigs.find { it.id == selectedImageGenConfigId }
+                }
+                if (selectedImageGenConfig == null && loadedImageGenConfigs.isNotEmpty()) {
+                    selectedImageGenConfig = loadedImageGenConfigs.first()
+                    dataSource.saveSelectedImageGenConfigId(selectedImageGenConfig.id)
+                }
+
+                withContext(Dispatchers.Main.immediate) {
+                    stateHolder._imageGenApiConfigs.value = loadedImageGenConfigs
+                    stateHolder._selectedImageGenApiConfig.value = selectedImageGenConfig
+                }
+
                 // 第二阶段：异步加载历史数据（延迟加载）
                 launch {
                     Log.d(TAG, "loadInitialData: 阶段2 - 开始异步加载历史数据...")
@@ -119,48 +136,38 @@ class DataPersistenceManager(
                             stateHolder._isLoadingHistoryData.value = false
                         }
                     }
+
+                   // Load image generation history
+                   val loadedImageGenHistory = dataSource.loadImageGenerationHistory()
+                   withContext(Dispatchers.Main.immediate) {
+                       stateHolder._imageGenerationHistoricalConversations.value = loadedImageGenHistory
+                   }
                 }
 
-                // 第三阶段：处理最后打开的聊天（如果需要）
-                val processedLastOpenChatMessages = if (loadLastChat) {
-                    Log.d(TAG, "loadInitialData: 阶段3 - 加载最后打开的聊天...")
-                    val lastOpenChatMessagesLoaded: List<Message> = dataSource.loadLastOpenChatInternal()
-                    Log.i(TAG, "loadInitialData: 最后打开的聊天加载完成。消息数量: ${lastOpenChatMessagesLoaded.size}")
-
-                    if (lastOpenChatMessagesLoaded.isNotEmpty()) {
-                        lastOpenChatMessagesLoaded.map { message ->
-                            val updatedContentStarted = message.text.isNotBlank() || !message.reasoning.isNullOrBlank() || message.isError
-                            message.copy(contentStarted = updatedContentStarted)
-                        }
-                    } else {
-                        emptyList()
+                // Phase 3: Load last open chats if needed
+                if (loadLastChat) {
+                    Log.d(TAG, "loadInitialData: Phase 3 - Loading last open chats...")
+                    val lastOpenChat = dataSource.loadLastOpenChat()
+                    val lastOpenImageGenChat = dataSource.loadLastOpenImageGenerationChat()
+                    withContext(Dispatchers.Main.immediate) {
+                        stateHolder.messages.clear()
+                        stateHolder.messages.addAll(lastOpenChat)
+                        stateHolder.imageGenerationMessages.clear()
+                        stateHolder.imageGenerationMessages.addAll(lastOpenImageGenChat)
+                        stateHolder._loadedHistoryIndex.value = null
+                        stateHolder._loadedImageGenerationHistoryIndex.value = null
                     }
+                    Log.i(TAG, "loadInitialData: Last open chats loaded. Text: ${lastOpenChat.size}, Image: ${lastOpenImageGenChat.size}")
                 } else {
-                    Log.i(TAG, "loadInitialData: 跳过加载最后打开的聊天。")
-                    emptyList()
-                }
-
-                // 更新聊天消息到UI
-                withContext(Dispatchers.Main.immediate) {
-                    Log.d(TAG, "loadInitialData: 阶段3完成 - 更新聊天消息...")
-                    if (loadLastChat) {
+                    withContext(Dispatchers.Main.immediate) {
                         stateHolder.messages.clear()
-                        stateHolder.messages.addAll(processedLastOpenChatMessages)
-                        stateHolder.messages.forEach { msg ->
-                            if (msg.contentStarted || msg.isError) {
-                                stateHolder.messageAnimationStates[msg.id] = true
-                            }
-                        }
-                        Log.d(TAG, "loadInitialData: StateHolder.messages 已更新为最后打开的聊天。数量: ${stateHolder.messages.size}")
-                    } else {
-                        stateHolder.messages.clear()
-                        Log.d(TAG, "loadInitialData: StateHolder.messages 已清空，因为 loadLastChat=false。")
+                        stateHolder.imageGenerationMessages.clear()
+                        stateHolder._loadedHistoryIndex.value = null
+                        stateHolder._loadedImageGenerationHistoryIndex.value = null
                     }
-
-                    stateHolder._loadedHistoryIndex.value = null
-                    Log.d(TAG, "loadInitialData: 所有阶段完成，调用 onLoadingComplete。")
-                    onLoadingComplete(initialConfigPresent, initialHistoryPresent)
+                    Log.i(TAG, "loadInitialData: Skipped loading last open chats.")
                 }
+                onLoadingComplete(initialConfigPresent, initialHistoryPresent)
 
             } catch (e: Exception) {
                 Log.e(TAG, "loadInitialData: 加载初始数据时发生严重错误", e)
@@ -178,46 +185,54 @@ class DataPersistenceManager(
         }
     }
 
-    suspend fun saveLastOpenChat(messages: List<Message>) {
-        withContext(Dispatchers.IO) {
-            Log.d(
-                TAG,
-                "saveLastOpenChat: 请求 dataSource 保存最后打开的聊天 (${messages.size} 条)。"
-            )
-            dataSource.saveLastOpenChatInternal(messages)
-            Log.i(TAG, "saveLastOpenChat: 最后打开的聊天已通过 dataSource 保存。")
-        }
-    }
 
     suspend fun clearAllChatHistory() {
         withContext(Dispatchers.IO) {
             Log.d(TAG, "clearAllChatHistory: 请求 dataSource 清除聊天历史...")
             dataSource.clearChatHistory()
+            dataSource.clearImageGenerationHistory()
             Log.i(TAG, "clearAllChatHistory: dataSource 已清除聊天历史。")
         }
     }
 
-    suspend fun saveApiConfigs(configsToSave: List<ApiConfig>) {
+    suspend fun saveApiConfigs(configsToSave: List<ApiConfig>, isImageGen: Boolean = false) {
         withContext(Dispatchers.IO) {
-            Log.d(TAG, "saveApiConfigs: 保存 ${configsToSave.size} 个 API 配置到 dataSource...")
-            dataSource.saveApiConfigs(configsToSave)
-            Log.i(TAG, "saveApiConfigs: API 配置已通过 dataSource 保存。")
+            if (isImageGen) {
+                Log.d(TAG, "saveApiConfigs: 保存 ${configsToSave.size} 个图像生成 API 配置到 dataSource...")
+                dataSource.saveImageGenApiConfigs(configsToSave)
+                Log.i(TAG, "saveApiConfigs: 图像生成 API 配置已通过 dataSource 保存。")
+            } else {
+                Log.d(TAG, "saveApiConfigs: 保存 ${configsToSave.size} 个 API 配置到 dataSource...")
+                dataSource.saveApiConfigs(configsToSave)
+                Log.i(TAG, "saveApiConfigs: API 配置已通过 dataSource 保存。")
+            }
         }
     }
 
-    suspend fun saveChatHistory(historyToSave: List<List<Message>>) {
+    suspend fun saveChatHistory(historyToSave: List<List<Message>>, isImageGeneration: Boolean = false) {
         withContext(Dispatchers.IO) {
             Log.d(TAG, "saveChatHistory: 保存 ${historyToSave.size} 条对话到 dataSource...")
-            dataSource.saveChatHistory(historyToSave)
+            if (isImageGeneration) {
+                dataSource.saveImageGenerationHistory(historyToSave)
+            } else {
+                dataSource.saveChatHistory(historyToSave)
+            }
             Log.i(TAG, "saveChatHistory: 聊天历史已通过 dataSource 保存。")
         }
     }
 
-    suspend fun saveSelectedConfigIdentifier(configId: String?) {
+
+    suspend fun saveSelectedConfigIdentifier(configId: String?, isImageGen: Boolean = false) {
         withContext(Dispatchers.IO) {
-            Log.d(TAG, "saveSelectedConfigIdentifier: 保存选中配置ID '$configId' 到 dataSource...")
-            dataSource.saveSelectedConfigId(configId)
-            Log.i(TAG, "saveSelectedConfigIdentifier: 选中配置ID已通过 dataSource 保存。")
+            if (isImageGen) {
+                Log.d(TAG, "saveSelectedConfigIdentifier: 保存选中的图像生成配置ID '$configId' 到 dataSource...")
+                dataSource.saveSelectedImageGenConfigId(configId)
+                Log.i(TAG, "saveSelectedConfigIdentifier: 选中的图像生成配置ID已通过 dataSource 保存。")
+            } else {
+                Log.d(TAG, "saveSelectedConfigIdentifier: 保存选中配置ID '$configId' 到 dataSource...")
+                dataSource.saveSelectedConfigId(configId)
+                Log.i(TAG, "saveSelectedConfigIdentifier: 选中配置ID已通过 dataSource 保存。")
+            }
         }
     }
 
@@ -226,72 +241,100 @@ class DataPersistenceManager(
             Log.d(TAG, "clearAllApiConfigData: 请求 dataSource 清除API配置并取消选中...")
             dataSource.clearApiConfigs()
             dataSource.saveSelectedConfigId(null) // 确保选中的也被清掉
+            dataSource.clearImageGenApiConfigs()
+            dataSource.saveSelectedImageGenConfigId(null)
             Log.i(TAG, "clearAllApiConfigData: API配置数据已通过 dataSource 清除。")
         }
     }
-    suspend fun deleteMediaFilesForMessages(conversations: List<List<Message>>) {
-        withContext(Dispatchers.IO) {
-            Log.d(TAG, "Starting deletion of media files for ${conversations.size} conversations.")
-            var deletedFilesCount = 0
-            val allFilePathsToDelete = mutableSetOf<String>()
-            val allHttpUrisToClearFromCache = mutableSetOf<String>()
- 
-            conversations.forEach { conversation ->
-                conversation.forEach { message ->
-                    // Collect file paths from attachments
-                    message.attachments?.forEach { attachment ->
-                        val path = when (attachment) {
-                            is SelectedMediaItem.ImageFromUri -> attachment.filePath
-                            is SelectedMediaItem.GenericFile -> attachment.filePath
-                            else -> null
-                        }
-                        if (!path.isNullOrBlank()) {
-                            allFilePathsToDelete.add(path)
-                        }
-                    }
- 
-                    // Collect http(s) urls from imageUrls to clear from cache
-                    message.imageUrls?.forEach { urlString ->
-                        try {
-                            val uri = Uri.parse(urlString)
-                            if (uri.scheme == "http" || uri.scheme == "https") {
-                                allHttpUrisToClearFromCache.add(urlString)
-                            }
-                        } catch (e: Exception) {
-                            // Ignore parsing errors
-                        }
-                    }
-                }
-            }
- 
-            // Delete all collected unique file paths
-            allFilePathsToDelete.forEach { path ->
-                try {
-                    val file = File(path)
-                    if (file.exists()) {
-                        if (file.delete()) {
-                            Log.d(TAG, "Successfully deleted media file: $path")
-                            deletedFilesCount++
-                        } else {
-                            Log.w(TAG, "Failed to delete media file: $path")
-                        }
-                    } else {
-                        Log.w(TAG, "Media file to delete does not exist: $path")
-                    }
-                } catch (e: SecurityException) {
-                    Log.e(TAG, "Security exception deleting media file: $path", e)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error deleting media file: $path", e)
-                }
-            }
- 
-            // Clear http(s) images from cache
-            allHttpUrisToClearFromCache.forEach { url ->
-                imageLoader.diskCache?.remove(url)
-                Log.d(TAG, "Removed image from cache: $url")
-            }
- 
-            Log.d(TAG, "Finished media file deletion. Total files deleted: $deletedFilesCount")
-        }
-    }
+   suspend fun saveLastOpenChat(messages: List<Message>, isImageGeneration: Boolean = false) {
+       withContext(Dispatchers.IO) {
+           Log.d(TAG, "saveLastOpenChat: Saving ${messages.size} messages for isImageGen=$isImageGeneration")
+           if (isImageGeneration) {
+               dataSource.saveLastOpenImageGenerationChat(messages)
+           } else {
+               dataSource.saveLastOpenChat(messages)
+           }
+       }
+   }
+
+   suspend fun clearLastOpenChat(isImageGeneration: Boolean = false) {
+       withContext(Dispatchers.IO) {
+           if (isImageGeneration) {
+               dataSource.saveLastOpenImageGenerationChat(emptyList())
+           } else {
+               dataSource.saveLastOpenChat(emptyList())
+           }
+           Log.d(TAG, "Cleared last open chat for isImageGeneration=$isImageGeneration")
+       }
+   }
+   suspend fun deleteMediaFilesForMessages(conversations: List<List<Message>>) {
+       withContext(Dispatchers.IO) {
+           Log.d(TAG, "Starting deletion of media files for ${conversations.size} conversations.")
+           var deletedFilesCount = 0
+           val allFilePathsToDelete = mutableSetOf<String>()
+           val allHttpUrisToClearFromCache = mutableSetOf<String>()
+
+           conversations.forEach { conversation ->
+               conversation.forEach { message ->
+                   message.attachments.forEach { attachment ->
+                       val path = when (attachment) {
+                           is SelectedMediaItem.ImageFromUri -> attachment.filePath
+                           is SelectedMediaItem.GenericFile -> attachment.filePath
+                           is SelectedMediaItem.Audio -> attachment.data
+                           is SelectedMediaItem.ImageFromBitmap -> attachment.filePath
+                       }
+                       if (!path.isNullOrBlank()) {
+                           allFilePathsToDelete.add(path)
+                       }
+                   }
+
+                   message.imageUrls?.forEach { urlString ->
+                       try {
+                           val uri = Uri.parse(urlString)
+                           if (uri.scheme == "http" || uri.scheme == "https") {
+                               allHttpUrisToClearFromCache.add(urlString)
+                           } else {
+                               val path = uri.path
+                               if (path != null) {
+                                   allFilePathsToDelete.add(path)
+                               }
+                           }
+                       } catch (e: Exception) {
+                           // Fallback for non-URI strings that might be file paths
+                           val file = File(urlString)
+                           if (file.exists()) {
+                               allFilePathsToDelete.add(urlString)
+                           }
+                       }
+                   }
+               }
+           }
+
+           allFilePathsToDelete.forEach { path ->
+               try {
+                   val file = File(path)
+                   if (file.exists()) {
+                       if (file.delete()) {
+                           Log.d(TAG, "Successfully deleted media file: $path")
+                           deletedFilesCount++
+                       } else {
+                           Log.w(TAG, "Failed to delete media file: $path")
+                       }
+                   } else {
+                       Log.w(TAG, "Media file to delete does not exist: $path")
+                   }
+               } catch (e: SecurityException) {
+                   Log.e(TAG, "Security exception deleting media file: $path", e)
+               } catch (e: Exception) {
+                   Log.e(TAG, "Error deleting media file: $path", e)
+               }
+           }
+
+           allHttpUrisToClearFromCache.forEach { url ->
+               imageLoader.diskCache?.remove(url)
+           }
+
+           Log.d(TAG, "Finished media file deletion. Total files deleted: $deletedFilesCount")
+       }
+   }
 }

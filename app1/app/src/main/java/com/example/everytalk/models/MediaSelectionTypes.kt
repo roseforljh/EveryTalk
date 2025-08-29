@@ -52,7 +52,8 @@ sealed class SelectedMediaItem {
     @Serializable
     data class ImageFromBitmap(
         @Contextual val bitmap: Bitmap,
-        override val id: String
+        override val id: String,
+        val filePath: String? = null
     ) : SelectedMediaItem()
  
     @Serializable

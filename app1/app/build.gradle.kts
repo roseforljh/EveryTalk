@@ -41,8 +41,8 @@ android {
         minSdk = 27
         //noinspection OldTargetApi
         targetSdk = 35 // 通常与 compileSdk 一致
-        versionCode = 5947
-        versionName = "1.3.7"
+        versionCode = 5948
+        versionName = "1.3.8"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -175,8 +175,12 @@ android {
 
         implementation("io.coil-kt.coil3:coil-compose:3.2.0")
         implementation("io.coil-kt.coil3:coil-network-okhttp:3.2.0")
+        implementation("io.coil-kt.coil3:coil-video:3.2.0")
 
         implementation("com.google.code.gson:gson:2.10.1") // 添加 Gson 依赖
+        
+        // 网络 - OkHttp（用于稳定下载图片字节）
+        implementation("com.squareup.okhttp3:okhttp:4.12.0")
         
         // 数学公式渲染库 - 使用WebView + KaTeX
     // 数学公式渲染支持

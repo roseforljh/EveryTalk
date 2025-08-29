@@ -34,6 +34,7 @@ import androidx.compose.material.icons.outlined.PictureAsPdf
 import androidx.compose.material.icons.outlined.Slideshow
 import androidx.compose.material.icons.outlined.TableChart
 import androidx.compose.material.icons.outlined.Videocam
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -191,7 +192,6 @@ fun AttachmentsContent(
                     is SelectedMediaItem.ImageFromUri -> {
                         AsyncImage(
                             model = attachment.uri,
-                            imageLoader = com.example.everytalk.util.AppImageLoader.get(context),
                             contentDescription = "Image attachment",
                             onSuccess = { _ -> onImageLoaded() },
                             modifier = Modifier
@@ -201,11 +201,7 @@ fun AttachmentsContent(
                                 .pointerInput(message.id, attachment.uri) {
                                     detectTapGestures(
                                         onTap = {
-                                            val intent = Intent(Intent.ACTION_VIEW).apply {
-                                                setDataAndType(attachment.uri, "image/*")
-                                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                            }
-                                            context.startActivity(intent)
+                                            onAttachmentClick(attachment)
                                         },
                                         onLongPress = { offset -> onLongPressHandler(offset) }
                                     )
@@ -215,7 +211,6 @@ fun AttachmentsContent(
                     is SelectedMediaItem.ImageFromBitmap -> {
                         AsyncImage(
                             model = attachment.bitmap,
-                            imageLoader = com.example.everytalk.util.AppImageLoader.get(context),
                             contentDescription = "Image attachment",
                             onSuccess = { _ -> onImageLoaded() },
                             modifier = Modifier
@@ -385,16 +380,14 @@ fun MessageContextMenu(
 
         // 估算菜单高度（3个菜单项 + 内边距）
         val estimatedMenuHeightPx = with(density) { (48.dp * 3 + 16.dp).toPx() }
-
-        // 计算菜单位置：让菜单的右上角对齐到手指按压位置
-        // 注意：pressOffset 应该已经是全局坐标（通过 localToRoot 转换）
-
-        // X坐标：菜单右边缘对齐到按压点，所以菜单左上角 = 按压点X - 菜单宽度
-        val targetX = pressOffset.x - menuWidthPx
-        // Y坐标：菜单上边缘对齐到按压点，并向上偏移一点避免手指遮挡
-        val targetY = pressOffset.y + offsetY
-
-
+ 
+        // 计算菜单位置：让菜单出现在按压点的右下角，增加少量偏移防止遮挡
+        val offsetX = with(density) { 8.dp.toPx() }
+        val offsetYPositive = with(density) { 32.dp.toPx() }
+ 
+        val targetX = pressOffset.x + offsetX
+        val targetY = pressOffset.y + offsetYPositive
+ 
         // 确保菜单不会超出屏幕边界
         val finalX = targetX.coerceAtLeast(0f).coerceAtMost(screenWidthPx - menuWidthPx)
         val finalY = targetY.coerceAtLeast(0f).coerceAtMost(screenHeightPx - estimatedMenuHeightPx)
@@ -525,4 +518,141 @@ fun MessageContextMenu(
             }
         }
     }
+}
+
+@Composable
+fun ImageContextMenu(
+   isVisible: Boolean,
+   message: Message,
+   onDismiss: () -> Unit,
+   onView: (Message) -> Unit,
+   onDownload: (Message) -> Unit,
+   pressOffset: Offset = Offset.Zero
+) {
+   if (isVisible) {
+       val density = LocalDensity.current
+       val configuration = LocalConfiguration.current
+
+       val menuWidthPx = with(density) { CONTEXT_MENU_FIXED_WIDTH.toPx() }
+       val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
+       val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
+
+       // 2 个菜单项 + 内边距 估算
+       val estimatedMenuHeightPx = with(density) { (48.dp * 2 + 16.dp).toPx() }
+
+       // 右下角定位 + 少量偏移
+       val offsetX = with(density) { 8.dp.toPx() }
+       val offsetY = with(density) { 32.dp.toPx() }
+       val targetX = pressOffset.x + offsetX
+       val targetY = pressOffset.y + offsetY
+
+       val finalX = targetX.coerceAtLeast(0f).coerceAtMost(screenWidthPx - menuWidthPx)
+       val finalY = targetY.coerceAtLeast(0f).coerceAtMost(screenHeightPx - estimatedMenuHeightPx)
+
+       Popup(
+           alignment = Alignment.TopStart,
+           offset = IntOffset(finalX.toInt(), finalY.toInt()),
+           onDismissRequest = onDismiss,
+           properties = PopupProperties(
+               focusable = true,
+               dismissOnBackPress = true,
+               dismissOnClickOutside = true,
+               clippingEnabled = false
+           )
+       ) {
+           Surface(
+               shape = RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS),
+               color = MaterialTheme.colorScheme.surfaceDim,
+               tonalElevation = 0.dp,
+               modifier = Modifier
+                   .width(CONTEXT_MENU_FIXED_WIDTH)
+                   .shadow(
+                       elevation = 8.dp,
+                       shape = RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS)
+                   )
+                   .padding(1.dp)
+           ) {
+               Column {
+                   val menuVisibility = remember { MutableTransitionState(false) }
+                   LaunchedEffect(isVisible) { menuVisibility.targetState = isVisible }
+
+                   @Composable
+                   fun AnimatedDropdownMenuItem(
+                       visibleState: MutableTransitionState<Boolean>,
+                       delay: Int = 0,
+                       text: @Composable () -> Unit,
+                       onClick: () -> Unit,
+                       leadingIcon: @Composable (() -> Unit)? = null
+                   ) {
+                       AnimatedVisibility(
+                           visibleState = visibleState,
+                           enter = fadeIn(
+                               animationSpec = tween(
+                                   CONTEXT_MENU_ANIMATION_DURATION_MS,
+                                   delayMillis = delay,
+                                   easing = LinearOutSlowInEasing
+                               )
+                           ) + scaleIn(
+                               animationSpec = tween(
+                                   CONTEXT_MENU_ANIMATION_DURATION_MS,
+                                   delayMillis = delay,
+                                   easing = LinearOutSlowInEasing
+                               ),
+                               transformOrigin = TransformOrigin(0f, 0f)
+                           ),
+                           exit = fadeOut(
+                               animationSpec = tween(
+                                   CONTEXT_MENU_ANIMATION_DURATION_MS,
+                                   easing = FastOutLinearInEasing
+                               )
+                           ) + scaleOut(
+                               animationSpec = tween(
+                                   CONTEXT_MENU_ANIMATION_DURATION_MS,
+                                   easing = FastOutLinearInEasing
+                               ),
+                               transformOrigin = TransformOrigin(0f, 0f)
+                           )
+                       ) {
+                           DropdownMenuItem(
+                               text = text,
+                               onClick = onClick,
+                               leadingIcon = leadingIcon,
+                               colors = MenuDefaults.itemColors(
+                                   textColor = MaterialTheme.colorScheme.onSurface,
+                                   leadingIconColor = MaterialTheme.colorScheme.onSurfaceVariant
+                               )
+                           )
+                       }
+                   }
+
+                   AnimatedDropdownMenuItem(
+                       menuVisibility,
+                       text = { Text("查看图片") },
+                       onClick = { onView(message) },
+                       leadingIcon = {
+                           Icon(
+                               Icons.Outlined.Image,
+                               "查看图片",
+                               Modifier.size(CONTEXT_MENU_ITEM_ICON_SIZE)
+                           )
+                       }
+                   )
+
+                   AnimatedDropdownMenuItem(
+                       menuVisibility,
+                       delay = 30,
+                       text = { Text("下载图片") },
+                       onClick = { onDownload(message) },
+                       leadingIcon = {
+                           Icon(
+                               Icons.Outlined.Download,
+                               "下载图片",
+                               Modifier.size(CONTEXT_MENU_ITEM_ICON_SIZE)
+                           )
+                       }
+                   )
+               }
+           }
+       }
+   }
 }

@@ -205,7 +205,7 @@ internal fun AddNewFullConfigDialog(
     apiKey: String,
     onApiKeyChange: (String) -> Unit,
     onDismissRequest: () -> Unit,
-    onConfirm: (String, String, String, String) -> Unit
+    onConfirm: (String, String, String, String, String?, Int?, Float?) -> Unit
 ) {
     var providerMenuExpanded by remember { mutableStateOf(false) }
     var channelMenuExpanded by remember { mutableStateOf(false) }
@@ -214,6 +214,9 @@ internal fun AddNewFullConfigDialog(
     val focusRequesterApiKey = remember { FocusRequester() }
     var textFieldAnchorBounds by remember { mutableStateOf<Rect?>(null) }
     var channelTextFieldAnchorBounds by remember { mutableStateOf<Rect?>(null) }
+   var imageSize by remember { mutableStateOf("1024x1024") }
+   var numInferenceSteps by remember { mutableStateOf("20") }
+   var guidanceScale by remember { mutableStateOf("7.5") }
 
     val providerMenuTransitionState = remember { MutableTransitionState(initialState = false) }
     val channelMenuTransitionState = remember { MutableTransitionState(initialState = false) }
@@ -394,17 +397,46 @@ internal fun AddNewFullConfigDialog(
                     keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
                     keyboardActions = KeyboardActions(onDone = {
                         if (apiKey.isNotBlank() && provider.isNotBlank() && apiAddress.isNotBlank()) {
-                            onConfirm(provider, apiAddress, apiKey, selectedChannel)
+                           onConfirm(provider, apiAddress, apiKey, selectedChannel, imageSize, numInferenceSteps.toIntOrNull(), guidanceScale.toFloatOrNull())
                         }
                     }),
                     shape = DialogShape,
                     colors = DialogTextFieldColors
                 )
+               if (selectedChannel == "Image") {
+                   OutlinedTextField(
+                       value = imageSize,
+                       onValueChange = { imageSize = it },
+                       label = { Text("Image Size") },
+                       modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                       singleLine = true,
+                       shape = DialogShape,
+                       colors = DialogTextFieldColors
+                   )
+                   OutlinedTextField(
+                       value = numInferenceSteps,
+                       onValueChange = { numInferenceSteps = it },
+                       label = { Text("Num Inference Steps") },
+                       modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                       singleLine = true,
+                       shape = DialogShape,
+                       colors = DialogTextFieldColors
+                   )
+                   OutlinedTextField(
+                       value = guidanceScale,
+                       onValueChange = { guidanceScale = it },
+                       label = { Text("Guidance Scale") },
+                       modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                       singleLine = true,
+                       shape = DialogShape,
+                       colors = DialogTextFieldColors
+                   )
+               }
             }
         },
         confirmButton = {
             Button(
-                onClick = { onConfirm(provider, apiAddress, apiKey, selectedChannel) },
+                onClick = { onConfirm(provider, apiAddress, apiKey, selectedChannel, imageSize, numInferenceSteps.toIntOrNull(), guidanceScale.toFloatOrNull()) },
                 enabled = apiKey.isNotBlank() && provider.isNotBlank() && apiAddress.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary,

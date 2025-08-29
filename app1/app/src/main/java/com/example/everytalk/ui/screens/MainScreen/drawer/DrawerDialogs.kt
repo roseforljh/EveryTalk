@@ -83,3 +83,35 @@ internal fun ClearAllConfirmationDialog(
         )
     }
 }
+@Composable
+internal fun ClearImageHistoryConfirmationDialog(
+   showDialog: Boolean,
+   onDismiss: () -> Unit,
+   onConfirm: () -> Unit
+) {
+   if (showDialog) {
+       AlertDialog(
+           onDismissRequest = onDismiss,
+           title = { Text("确定清空所有图像生成历史？") },
+           text = { Text("此操作无法撤销，所有图像生成历史将被永久删除。") },
+           confirmButton = {
+               TextButton(
+                   onClick = {
+                       onConfirm()
+                       onDismiss()
+                   },
+                   colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+               ) { Text("确定清空") }
+           },
+           dismissButton = {
+               TextButton(
+                   onClick = onDismiss,
+                   colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)
+               ) { Text("取消") }
+           },
+           containerColor = MaterialTheme.colorScheme.background,
+           titleContentColor = MaterialTheme.colorScheme.onSurface,
+           textContentColor = MaterialTheme.colorScheme.onSurface
+       )
+   }
+}

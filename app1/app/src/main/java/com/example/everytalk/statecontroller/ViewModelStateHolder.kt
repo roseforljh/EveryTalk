@@ -29,20 +29,26 @@ data class ConversationScrollState(
 
     val _text = MutableStateFlow("")
     val messages: SnapshotStateList<Message> = mutableStateListOf()
+    val imageGenerationMessages: SnapshotStateList<Message> = mutableStateListOf()
 
     val selectedMediaItems: SnapshotStateList<SelectedMediaItem> =
         mutableStateListOf()
 
     val _historicalConversations = MutableStateFlow<List<List<Message>>>(emptyList())
+    val _imageGenerationHistoricalConversations = MutableStateFlow<List<List<Message>>>(emptyList())
     val _loadedHistoryIndex = MutableStateFlow<Int?>(null)
+    val _loadedImageGenerationHistoryIndex = MutableStateFlow<Int?>(null)
     val _isLoadingHistory = MutableStateFlow(false)
     val _isLoadingHistoryData = MutableStateFlow(false) // 新增：历史数据加载状态
     val _currentConversationId = MutableStateFlow<String>("new_chat_${System.currentTimeMillis()}")
+    val _currentImageGenerationConversationId = MutableStateFlow<String>("new_image_generation_${System.currentTimeMillis()}")
 
      val _apiConfigs = MutableStateFlow<List<ApiConfig>>(emptyList())
      val _selectedApiConfig = MutableStateFlow<ApiConfig?>(null)
-
-    val _isApiCalling = MutableStateFlow(false)
+    val _imageGenApiConfigs = MutableStateFlow<List<ApiConfig>>(emptyList())
+    val _selectedImageGenApiConfig = MutableStateFlow<ApiConfig?>(null)
+ 
+     val _isApiCalling = MutableStateFlow(false)
     var apiJob: Job? = null
     val _currentStreamingAiMessageId = MutableStateFlow<String?>(null)
     val reasoningCompleteMap: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
@@ -71,6 +77,7 @@ data class ConversationScrollState(
     fun clearForNewChat() {
         _text.value = ""
         messages.clear()
+        imageGenerationMessages.clear()
         selectedMediaItems.clear()
         _isApiCalling.value = false
         apiJob?.cancel()
@@ -84,17 +91,23 @@ data class ConversationScrollState(
         _showSourcesDialog.value = false
         _sourcesForDialog.value = emptyList()
         _loadedHistoryIndex.value = null
+        _loadedImageGenerationHistoryIndex.value = null
         _currentConversationId.value = "new_chat_${System.currentTimeMillis()}"
+        _currentImageGenerationConversationId.value = "new_image_generation_${System.currentTimeMillis()}"
     }
  
      fun clearSelectedMedia() {
         selectedMediaItems.clear()
     }
-fun addMessage(message: Message) {
+fun addMessage(message: Message, isImageGeneration: Boolean = false) {
     check(Looper.myLooper() == Looper.getMainLooper()) {
         "addMessage must be called from the main thread"
     }
-    messages.add(message)
+    if (isImageGeneration) {
+        imageGenerationMessages.add(message)
+    } else {
+        messages.add(message)
+    }
 }
 
     fun shouldAutoScroll(): Boolean {
@@ -104,26 +117,28 @@ fun addMessage(message: Message) {
     fun triggerScrollToBottom() {
         _scrollToBottomEvent.tryEmit(Unit)
     }
-    fun appendReasoningToMessage(messageId: String, text: String) {
-        val index = messages.indexOfFirst { it.id == messageId }
+    fun appendReasoningToMessage(messageId: String, text: String, isImageGeneration: Boolean = false) {
+        val messageList = if (isImageGeneration) imageGenerationMessages else messages
+        val index = messageList.indexOfFirst { it.id == messageId }
         if (index != -1) {
-            val currentMessage = messages[index]
+            val currentMessage = messageList[index]
             val updatedMessage = currentMessage.copy(
                 reasoning = (currentMessage.reasoning ?: "") + text
             )
-            messages[index] = updatedMessage
+            messageList[index] = updatedMessage
         }
     }
 
-    fun appendContentToMessage(messageId: String, text: String) {
-        val index = messages.indexOfFirst { it.id == messageId }
+    fun appendContentToMessage(messageId: String, text: String, isImageGeneration: Boolean = false) {
+        val messageList = if (isImageGeneration) imageGenerationMessages else messages
+        val index = messageList.indexOfFirst { it.id == messageId }
         if (index != -1) {
-            val currentMessage = messages[index]
+            val currentMessage = messageList[index]
             val updatedMessage = currentMessage.copy(
                 text = currentMessage.text + text,
                 contentStarted = true
             )
-            messages[index] = updatedMessage
+            messageList[index] = updatedMessage
         }
     }
 }

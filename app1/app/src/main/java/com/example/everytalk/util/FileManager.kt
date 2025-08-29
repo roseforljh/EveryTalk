@@ -6,12 +6,15 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.util.Base64
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -32,7 +35,7 @@ class FileManager(private val context: Context) {
         private const val TARGET_IMAGE_HEIGHT = 1024
         private const val JPEG_COMPRESSION_QUALITY = 80
     }
-    
+
     /**
      * 获取聊天附件目录
      * @return 聊天附件目录
@@ -46,6 +49,70 @@ class FileManager(private val context: Context) {
     }
     
     /**
+     * 检查文件大小是否超过限制
+     * @param uri 文件Uri
+     * @return Pair<Boolean, Long> - 第一个值表示是否超过限制，第二个值是文件大小（字节）
+     */
+    suspend fun checkFileSize(uri: Uri): Pair<Boolean, Long> = withContext(Dispatchers.IO) {
+        try {
+            var fileSize = 0L
+            context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (sizeIndex != -1) {
+                        fileSize = cursor.getLong(sizeIndex)
+                    }
+                }
+            }
+            
+            // 如果无法从cursor获取大小，尝试通过输入流获取
+            if (fileSize <= 0) {
+                try {
+                    context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                        fileSize = inputStream.available().toLong()
+                    }
+                } catch (e: Exception) {
+                    logger.warn("Failed to get file size from input stream")
+                }
+            }
+            
+            val isOverLimit = fileSize > MAX_FILE_SIZE_BYTES
+            if (isOverLimit) {
+                logger.warn("File size $fileSize bytes exceeds limit $MAX_FILE_SIZE_BYTES bytes")
+            }
+            
+            Pair(isOverLimit, fileSize)
+        } catch (e: Exception) {
+            logger.error("Error checking file size", e)
+            // 如果无法检查大小，假设文件过大以确保安全
+            Pair(true, 0L)
+        }
+    }
+
+    /**
+     * 计算图片采样大小
+     * @param options BitmapFactory.Options
+     * @param reqWidth 目标宽度
+     * @param reqHeight 目标高度
+     * @return 采样大小
+     */
+    private fun calculateInSampleSize(options: BitmapFactory.Options, reqWidth: Int, reqHeight: Int): Int {
+        val (height: Int, width: Int) = options.run { outHeight to outWidth }
+        var inSampleSize = 1
+        
+        if (height > reqHeight || width > reqWidth) {
+            val halfHeight: Int = height / 2
+            val halfWidth: Int = width / 2
+            
+            while (halfHeight / inSampleSize >= reqHeight && halfWidth / inSampleSize >= reqWidth) {
+                inSampleSize *= 2
+            }
+        }
+        
+        return inSampleSize
+    }
+    
+    /**
      * 从Uri加载并压缩位图
      * @param uri 图片Uri
      * @return 压缩后的位图，如果加载失败则返回null
@@ -56,7 +123,9 @@ class FileManager(private val context: Context) {
             if (uri == Uri.EMPTY) return@withContext null
             
             // 首先检查文件大小
-            val (isOverLimit, fileSize) = checkFileSize(uri)
+            val sizePair = checkFileSize(uri)
+            val isOverLimit = sizePair.first
+            val fileSize = sizePair.second
             if (isOverLimit) {
                 logger.error("Image file size $fileSize bytes exceeds limit $MAX_FILE_SIZE_BYTES bytes")
                 return@withContext null
@@ -121,26 +190,104 @@ class FileManager(private val context: Context) {
     }
     
     /**
-     * 计算图片采样大小
-     * @param options BitmapFactory.Options
-     * @param reqWidth 目标宽度
-     * @param reqHeight 目标高度
-     * @return 采样大小
+     * 直接从网络URL下载并压缩位图
      */
-    private fun calculateInSampleSize(options: BitmapFactory.Options, reqWidth: Int, reqHeight: Int): Int {
-        val (height: Int, width: Int) = options.run { outHeight to outWidth }
-        var inSampleSize = 1
-        
-        if (height > reqHeight || width > reqWidth) {
-            val halfHeight: Int = height / 2
-            val halfWidth: Int = width / 2
-            
-            while (halfHeight / inSampleSize >= reqHeight && halfWidth / inSampleSize >= reqWidth) {
-                inSampleSize *= 2
+    suspend fun loadAndCompressBitmapFromUrl(urlStr: String): Bitmap? = withContext(Dispatchers.IO) {
+        if (urlStr.isBlank()) return@withContext null
+        var conn: HttpURLConnection? = null
+        try {
+            val url = URL(urlStr)
+            conn = (url.openConnection() as HttpURLConnection).apply {
+                connectTimeout = 30000
+                readTimeout = 30000
+                instanceFollowRedirects = true
             }
+            conn.connect()
+            if (conn.responseCode !in 200..299) {
+                logger.error("HTTP ${'$'}{conn.responseCode} while downloading image: ${'$'}urlStr")
+                return@withContext null
+            }
+
+            // 读取为字节数组并限制最大大小
+            val bos = ByteArrayOutputStream()
+            conn.inputStream.use { input ->
+                val buf = ByteArray(8192)
+                var n: Int
+                var total = 0L
+                while (input.read(buf).also { n = it } != -1) {
+                    bos.write(buf, 0, n)
+                    total += n
+                    if (total > MAX_FILE_SIZE_BYTES) {
+                        logger.warn("Image bytes exceed limit during download: ${'$'}total")
+                        return@withContext null
+                    }
+                }
+            }
+            val bytes = bos.toByteArray()
+
+            // 解析尺寸
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+
+            // 实际解码并压缩
+            val opts = BitmapFactory.Options().apply {
+                inSampleSize = calculateInSampleSize(bounds, TARGET_IMAGE_WIDTH, TARGET_IMAGE_HEIGHT)
+                inJustDecodeBounds = false
+                inMutable = true
+                inPreferredConfig = Bitmap.Config.RGB_565
+            }
+            var bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+
+            // 如有必要，再缩放一遍
+            if (bitmap != null && (bitmap.width > TARGET_IMAGE_WIDTH || bitmap.height > TARGET_IMAGE_HEIGHT)) {
+                val aspect = bitmap.width.toFloat() / bitmap.height.toFloat()
+                val (newW, newH) = if (bitmap.width > bitmap.height) {
+                    TARGET_IMAGE_WIDTH to (TARGET_IMAGE_WIDTH / aspect).toInt()
+                } else {
+                    (TARGET_IMAGE_HEIGHT * aspect).toInt() to TARGET_IMAGE_HEIGHT
+                }
+                if (newW > 0 && newH > 0) {
+                    try {
+                        val scaled = Bitmap.createScaledBitmap(bitmap, newW, newH, true)
+                        if (scaled != bitmap) bitmap.recycle()
+                        bitmap = scaled
+                    } catch (_: OutOfMemoryError) {
+                        logger.warn("OOM when scaling downloaded bitmap; using decoded size")
+                        System.gc()
+                    }
+                }
+            }
+            bitmap
+        } catch (e: Exception) {
+            logger.error("Failed to download and compress bitmap from URL: ${'$'}urlStr", e)
+            null
+        } finally {
+            try { conn?.disconnect() } catch (_: Exception) {}
         }
-        
-        return inSampleSize
+    }
+
+    /**
+     * 从 data:image/(any);base64,XXX 字符串解码位图
+     */
+    suspend fun loadBitmapFromDataUrl(dataUrl: String): Bitmap? = withContext(Dispatchers.IO) {
+        try {
+            val comma = dataUrl.indexOf(',')
+            if (comma <= 0) return@withContext null
+            val base64Part = dataUrl.substring(comma + 1)
+            val bytes = Base64.decode(base64Part, Base64.DEFAULT)
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            val opts = BitmapFactory.Options().apply {
+                inSampleSize = calculateInSampleSize(bounds, TARGET_IMAGE_WIDTH, TARGET_IMAGE_HEIGHT)
+                inJustDecodeBounds = false
+                inPreferredConfig = Bitmap.Config.RGB_565
+                inMutable = true
+            }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+        } catch (e: Exception) {
+            logger.error("Failed to decode bitmap from data URL", e)
+            null
+        }
     }
     
     /**
@@ -311,47 +458,6 @@ class FileManager(private val context: Context) {
         }
         
         deletedCount
-    }
-    
-    /**
-     * 检查文件大小是否超过限制
-     * @param uri 文件Uri
-     * @return Pair<Boolean, Long> - 第一个值表示是否超过限制，第二个值是文件大小（字节）
-     */
-    suspend fun checkFileSize(uri: Uri): Pair<Boolean, Long> = withContext(Dispatchers.IO) {
-        try {
-            var fileSize = 0L
-            context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
-                if (cursor.moveToFirst()) {
-                    val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
-                    if (sizeIndex != -1) {
-                        fileSize = cursor.getLong(sizeIndex)
-                    }
-                }
-            }
-            
-            // 如果无法从cursor获取大小，尝试通过输入流获取
-            if (fileSize <= 0) {
-                try {
-                    context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                        fileSize = inputStream.available().toLong()
-                    }
-                } catch (e: Exception) {
-                    logger.warn("Failed to get file size from input stream")
-                }
-            }
-            
-            val isOverLimit = fileSize > MAX_FILE_SIZE_BYTES
-            if (isOverLimit) {
-                logger.warn("File size $fileSize bytes exceeds limit $MAX_FILE_SIZE_BYTES bytes")
-            }
-            
-            Pair(isOverLimit, fileSize)
-        } catch (e: Exception) {
-            logger.error("Error checking file size", e)
-            // 如果无法检查大小，假设文件过大以确保安全
-            Pair(true, 0L)
-        }
     }
     
     /**

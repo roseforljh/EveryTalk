@@ -1,4 +1,4 @@
-package com.example.everytalk.ui.screens.MainScreen.chat
+package com.example.everytalk.ui.screens.ImageGeneration
 
 import android.Manifest
 import android.content.Context
@@ -8,7 +8,6 @@ import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -28,7 +27,6 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import com.example.everytalk.ui.theme.SeaBlue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
@@ -55,10 +53,9 @@ import androidx.compose.ui.window.PopupProperties
 import androidx.core.content.FileProvider
 import coil3.compose.AsyncImage
 import com.example.everytalk.data.DataClass.ApiConfig
+import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.models.ImageSourceOption
-import com.example.everytalk.models.MoreOptionsType
 import com.example.everytalk.models.SelectedMediaItem
-import com.example.everytalk.util.AudioRecorderHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
@@ -81,47 +78,9 @@ private fun createImageFileUri(context: Context): Uri {
     return FileProvider.getUriForFile(context, "${context.packageName}.provider", imageFile)
 }
 
-private suspend fun getFileDetailsFromUri(
-    context: Context,
-    uri: Uri
-): Triple<String, String?, String?> {
-    return withContext(Dispatchers.IO) {
-        var displayName: String? = null
-        try {
-            context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-                if (cursor.moveToFirst()) {
-                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                    if (nameIndex != -1) {
-                        displayName = cursor.getString(nameIndex)
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.e("FileDetails", "Error querying URI for display name: $uri", e)
-        }
-        if (displayName == null) {
-            displayName = uri.lastPathSegment
-        }
-        var mimeType: String? = try {
-            context.contentResolver.getType(uri)
-        } catch (e: Exception) {
-            Log.e("FileDetails", "Error getting MIME type for URI: $uri", e)
-            null
-        }
-        if (mimeType == null && displayName != null) {
-            val fileExtension = displayName!!.substringAfterLast('.', "").lowercase(Locale.getDefault())
-            if (fileExtension.isNotEmpty()) {
-                mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(fileExtension)
-            }
-        }
-        Triple(displayName ?: "Unknown File", mimeType, uri.toString())
-    }
-}
-
 private suspend fun checkFileSizeAndShowError(
     context: Context,
     uri: Uri,
-    fileName: String,
     onShowSnackbar: (String) -> Unit
 ): Boolean {
     return withContext(Dispatchers.IO) {
@@ -135,8 +94,7 @@ private suspend fun checkFileSizeAndShowError(
                     }
                 }
             }
-            
-            // 如果无法从cursor获取大小，尝试通过输入流获取
+
             if (fileSize <= 0) {
                 try {
                     context.contentResolver.openInputStream(uri)?.use { inputStream ->
@@ -146,7 +104,7 @@ private suspend fun checkFileSizeAndShowError(
                     Log.w("FileSizeCheck", "Failed to get file size from input stream", e)
                 }
             }
-            
+
             val maxFileSize = 50 * 1024 * 1024 // 50MB
             if (fileSize > maxFileSize) {
                 val fileSizeFormatted = when {
@@ -156,15 +114,15 @@ private suspend fun checkFileSizeAndShowError(
                     else -> "${fileSize / (1024 * 1024 * 1024)}GB"
                 }
                 withContext(Dispatchers.Main) {
-                    onShowSnackbar("文件 \"$fileName\" 过大 ($fileSizeFormatted)，最大支持50MB")
+                    onShowSnackbar("File is too large ($fileSizeFormatted), max size is 50MB")
                 }
                 return@withContext false
             }
             return@withContext true
         } catch (e: Exception) {
-            Log.e("FileSizeCheck", "Error checking file size for $fileName", e)
+            Log.e("FileSizeCheck", "Error checking file size for $uri", e)
             withContext(Dispatchers.Main) {
-                onShowSnackbar("无法检查文件大小，请选择较小的文件")
+                onShowSnackbar("Could not check file size, please select a smaller file")
             }
             return@withContext false
         }
@@ -176,9 +134,9 @@ private fun safeDeleteTempFile(context: Context, uri: Uri?) {
         try {
             context.contentResolver.delete(it, null, null)
         } catch (e: SecurityException) {
-            Log.w("FileCleanup", "无法删除临时文件: $uri", e)
+            Log.w("FileCleanup", "Could not delete temp file: $uri", e)
         } catch (e: Exception) {
-            Log.e("FileCleanup", "删除临时文件时发生错误: $uri", e)
+            Log.e("FileCleanup", "Error deleting temp file: $uri", e)
         }
     }
 }
@@ -237,59 +195,6 @@ fun ImageSelectionPanel(
 }
 
 @Composable
-fun MoreOptionsPanel(
-    modifier: Modifier = Modifier,
-    onOptionSelected: (MoreOptionsType) -> Unit
-) {
-    var activeOption by remember { mutableStateOf<MoreOptionsType?>(null) }
-    val panelBackgroundColor = MaterialTheme.colorScheme.surfaceDim
-    val darkerBackgroundColor = MaterialTheme.colorScheme.surfaceVariant
-
-    Surface(
-        modifier = modifier
-            .width(150.dp)
-            .wrapContentHeight(),
-        shape = RoundedCornerShape(20.dp),
-        color = panelBackgroundColor
-    ) {
-        Column {
-            MoreOptionsType.values().forEach { option ->
-                val isSelected = activeOption == option
-                val animatedBackgroundColor by animateColorAsState(
-                    targetValue = if (isSelected) darkerBackgroundColor else panelBackgroundColor,
-                    animationSpec = tween(durationMillis = 200),
-                    label = "MoreOptionPanelItemBackground"
-                )
-                val onClickCallback = remember(option) {
-                    {
-                        activeOption = option
-                        onOptionSelected(option)
-                        Unit
-                    }
-                }
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(onClick = onClickCallback)
-                        .background(animatedBackgroundColor)
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = option.icon,
-                        contentDescription = option.label,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Text(text = option.label, color = MaterialTheme.colorScheme.onSurface, fontSize = 16.sp)
-                }
-            }
-        }
-    }
-}
-
-@Composable
 fun SelectedItemPreview(
     mediaItem: SelectedMediaItem,
     onRemoveClicked: () -> Unit,
@@ -316,67 +221,7 @@ fun SelectedItemPreview(
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
             )
-            is SelectedMediaItem.GenericFile -> {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(8.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    val icon = when (mediaItem.mimeType) {
-                        "application/pdf" -> Icons.Outlined.PictureAsPdf
-                        "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> Icons.Outlined.Description
-                        "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" -> Icons.Outlined.TableChart
-                        "application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.presentationml.presentation" -> Icons.Outlined.Slideshow
-                        "application/zip", "application/x-rar-compressed" -> Icons.Outlined.Archive
-                        else -> when {
-                            mediaItem.mimeType?.startsWith("video/") == true -> Icons.Outlined.Videocam
-                            mediaItem.mimeType?.startsWith("audio/") == true -> Icons.Outlined.Audiotrack
-                            mediaItem.mimeType?.startsWith("image/") == true -> Icons.Outlined.Image
-                            else -> Icons.Outlined.AttachFile
-                        }
-                    }
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = mediaItem.displayName,
-                        modifier = Modifier.size(32.dp),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = mediaItem.displayName,
-                        fontSize = 12.sp,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-            is SelectedMediaItem.Audio -> {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(8.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Audiotrack,
-                        contentDescription = "Audio file",
-                        modifier = Modifier.size(32.dp),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = "Audio",
-                        fontSize = 12.sp,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
+            else -> {}
         }
         IconButton(
             onClick = onRemoveClicked,
@@ -396,31 +241,17 @@ fun SelectedItemPreview(
     }
 }
 
-@Composable
-fun Modifier.noRippleClickable(onClick: () -> Unit): Modifier =
-    composed {
-        this.then(
-            Modifier.clickable(
-                indication = null,
-                interactionSource = remember { MutableInteractionSource() }) {
-                onClick()
-            }
-        )
-    }
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatInputArea(
+fun ImageGenerationInputArea(
     text: String,
     onTextChange: (String) -> Unit,
-    onSendMessageRequest: (messageText: String, isKeyboardVisible: Boolean, attachments: List<SelectedMediaItem>, mimeType: String?) -> Unit,
+    onSendMessageRequest: (messageText: String, attachments: List<SelectedMediaItem>) -> Unit,
     selectedMediaItems: List<SelectedMediaItem>,
     onAddMediaItem: (SelectedMediaItem) -> Unit,
     onRemoveMediaItemAtIndex: (Int) -> Unit,
     onClearMediaItems: () -> Unit,
     isApiCalling: Boolean,
-    isWebSearchEnabled: Boolean,
-    onToggleWebSearch: () -> Unit,
     onStopApiCall: () -> Unit,
     focusRequester: FocusRequester,
     selectedApiConfig: ApiConfig?,
@@ -429,16 +260,13 @@ fun ChatInputArea(
     density: Density,
     keyboardController: SoftwareKeyboardController?,
     onFocusChange: (isFocused: Boolean) -> Unit,
-    onSendMessage: (messageText: String, isFromRegeneration: Boolean, attachments: List<SelectedMediaItem>, audioBase64: String?, mimeType: String?) -> Unit
+    editingMessage: Message?,
+    onCancelEdit: () -> Unit
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    var isRecording by remember { mutableStateOf(false) }
-    val audioRecorderHelper = remember { AudioRecorderHelper(context) }
 
-    var pendingMessageTextForSend by remember { mutableStateOf<String?>(null) }
     var showImageSelectionPanel by remember { mutableStateOf(false) }
-    var showMoreOptionsPanel by remember { mutableStateOf(false) }
     var tempCameraImageUri by remember { mutableStateOf<Uri?>(null) }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
@@ -448,29 +276,20 @@ fun ChatInputArea(
             coroutineScope.launch {
                 try {
                     val mimeType = context.contentResolver.getType(uri) ?: "image/*"
-                    val fileName = context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-                        if (cursor.moveToFirst()) {
-                            val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                            if (nameIndex != -1) cursor.getString(nameIndex) else null
-                        } else null
-                    } ?: "图片"
                     
-                    // 检查文件大小
-                    val isFileSizeValid = checkFileSizeAndShowError(context, uri, fileName, onShowSnackbar)
+                    val isFileSizeValid = checkFileSizeAndShowError(context, uri, onShowSnackbar)
                     if (isFileSizeValid) {
                         withContext(Dispatchers.Main) {
                             onAddMediaItem(SelectedMediaItem.ImageFromUri(uri, UUID.randomUUID().toString(), mimeType))
                         }
                     }
                 } catch (e: Exception) {
-                    Log.e("PhotoPicker", "处理选择的图片时发生错误", e)
+                    Log.e("PhotoPicker", "Error processing selected image", e)
                     withContext(Dispatchers.Main) {
-                        onShowSnackbar("选择图片时发生错误")
+                        onShowSnackbar("Error selecting image")
                     }
                 }
             }
-        } else {
-            Log.d("PhotoPicker", "用户取消了图片选择")
         }
     }
 
@@ -482,14 +301,13 @@ fun ChatInputArea(
             if (success && currentUri != null) {
                 onAddMediaItem(SelectedMediaItem.ImageFromUri(currentUri, UUID.randomUUID().toString(), "image/jpeg"))
             } else {
-                Log.w("CameraLauncher", "相机拍照失败或被取消")
                 if (currentUri != null) {
                     safeDeleteTempFile(context, currentUri)
                 }
             }
         } catch (e: Exception) {
-            Log.e("CameraLauncher", "处理相机照片时发生错误", e)
-            onShowSnackbar("拍照时发生错误")
+            Log.e("CameraLauncher", "Error processing camera photo", e)
+            onShowSnackbar("Error taking photo")
             if (currentUri != null) {
                 safeDeleteTempFile(context, currentUri)
             }
@@ -507,87 +325,18 @@ fun ChatInputArea(
                 tempCameraImageUri = newUri
                 cameraLauncher.launch(newUri)
             } catch (e: Exception) {
-                Log.e("CameraPermission", "创建相机文件 URI 时发生错误", e)
-                onShowSnackbar("启动相机时发生错误")
+                Log.e("CameraPermission", "Error creating camera file URI", e)
+                onShowSnackbar("Error starting camera")
             }
         } else {
-            Log.w("CameraPermission", "相机权限被拒绝")
-            onShowSnackbar("需要相机权限才能拍照")
+            onShowSnackbar("Camera permission is required to take photos")
         }
-    }
-
-    val filePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenMultipleDocuments(),
-        onResult = { uris: List<Uri> ->
-            if (uris.isNotEmpty()) {
-                coroutineScope.launch {
-                    try {
-                        uris.forEach { uri ->
-                            val (displayName, mimeType, _) = getFileDetailsFromUri(context, uri)
-                            Log.d(
-                                "OpenDocument",
-                                "Selected Document: $displayName, URI: $uri, MIME: $mimeType"
-                            )
-                            
-                            // 检查文件大小
-                            val isFileSizeValid = checkFileSizeAndShowError(context, uri, displayName, onShowSnackbar)
-                            if (isFileSizeValid) {
-                                withContext(Dispatchers.Main) {
-                                    onAddMediaItem(
-                                        SelectedMediaItem.GenericFile(
-                                            uri = uri,
-                                            id = UUID.randomUUID().toString(),
-                                            displayName = displayName,
-                                            mimeType = mimeType,
-                                            filePath = null
-                                        )
-                                    )
-                                }
-                            }
-                        }
-                    } catch (e: Exception) {
-                        Log.e("OpenDocument", "处理选择的文件时发生错误", e)
-                        withContext(Dispatchers.Main) {
-                            onShowSnackbar("处理文件时发生错误")
-                        }
-                    }
-                }
-            } else {
-                Log.d("OpenDocument", "用户取消了文件选择")
-            }
-        }
-    )
-
-    val recordAudioPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            audioRecorderHelper.startRecording()
-            isRecording = true
-        } else {
-            onShowSnackbar("需要录音权限才能录制音频")
-        }
-    }
-
-
-    LaunchedEffect(Unit) {
-        snapshotFlow { imeInsets.getBottom(density) > 0 }
-            .distinctUntilChanged()
-            .filter { isKeyboardVisible -> !isKeyboardVisible }
-            .collect { _ ->
-                pendingMessageTextForSend = null
-            }
     }
 
     var chatInputContentHeightPx by remember { mutableIntStateOf(0) }
 
     val onToggleImagePanel = {
-        if (showMoreOptionsPanel) showMoreOptionsPanel = false
         showImageSelectionPanel = !showImageSelectionPanel
-    }
-    val onToggleMoreOptionsPanel = {
-        if (showImageSelectionPanel) showImageSelectionPanel = false
-        showMoreOptionsPanel = !showMoreOptionsPanel
     }
 
     val onClearContent = remember {
@@ -605,9 +354,7 @@ fun ChatInputArea(
                     if (isApiCalling) {
                         onStopApiCall()
                     } else if ((text.isNotBlank() || selectedMediaItems.isNotEmpty()) && selectedApiConfig != null) {
-                        val audioItem = selectedMediaItems.firstOrNull { it is SelectedMediaItem.Audio } as? SelectedMediaItem.Audio
-                        val mimeType = audioItem?.mimeType
-                        onSendMessageRequest(text, false, selectedMediaItems.toList(), mimeType)
+                        onSendMessageRequest(text, selectedMediaItems.toList())
                         onTextChange("")
                         onClearMediaItems()
                         
@@ -615,15 +362,13 @@ fun ChatInputArea(
                             keyboardController?.hide()
                         }
                     } else if (selectedApiConfig == null) {
-                        Log.w("SendMessage", "请先选择 API 配置")
-                        onShowSnackbar("请先选择 API 配置")
+                        onShowSnackbar("Please select an API configuration first")
                     } else {
-                        Log.w("SendMessage", "请输入消息内容或选择项目")
-                        onShowSnackbar("请输入消息内容或选择项目")
+                        onShowSnackbar("Please enter a message or select an item")
                     }
                 } catch (e: Exception) {
-                    Log.e("SendMessage", "发送消息时发生错误", e)
-                    onShowSnackbar("发送消息失败")
+                    Log.e("SendMessage", "Error sending message", e)
+                    onShowSnackbar("Failed to send message")
                 }
                 Unit
             }
@@ -644,6 +389,31 @@ fun ChatInputArea(
                 .onSizeChanged { intSize -> chatInputContentHeightPx = intSize.height }
         ) {
             Column(modifier = Modifier.padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 16.dp)) {
+                if (editingMessage != null) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 8.dp)
+                            .background(MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("正在编辑", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                            Text(
+                                text = editingMessage.text,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        IconButton(onClick = onCancelEdit, modifier = Modifier.size(24.dp)) {
+                            Icon(Icons.Default.Close, "取消编辑", tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                        }
+                    }
+                }
                 if (selectedMediaItems.isNotEmpty()) {
                     LazyRow(
                         modifier = Modifier
@@ -667,13 +437,12 @@ fun ChatInputArea(
                         .fillMaxWidth()
                         .focusRequester(focusRequester)
                         .onFocusChanged { focusState ->
-                            // 只有当输入框获得焦点时才滚动到底部，失去焦点时不滚动
                             if (focusState.isFocused) {
                                 onFocusChange(true)
                             }
                         }
                         .padding(bottom = 4.dp),
-                    placeholder = { Text("输入消息…") },
+                    placeholder = { Text("Enter a prompt...") },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
                         unfocusedTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
@@ -694,28 +463,11 @@ fun ChatInputArea(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = onToggleWebSearch) {
-                            Icon(
-                                if (isWebSearchEnabled) Icons.Outlined.TravelExplore else Icons.Filled.Language,
-                                if (isWebSearchEnabled) "网页搜索已开启" else "网页搜索已关闭",
-                                tint = SeaBlue,
-                                modifier = Modifier.size(25.dp)
-                            )
-                        }
-                        Spacer(Modifier.width(8.dp))
                         IconButton(onClick = onToggleImagePanel) {
                             Icon(
                                 Icons.Outlined.Image,
-                                if (showImageSelectionPanel) "关闭图片选项" else "选择图片",
-                                tint = Color(0xff2cb334)
-                            )
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        IconButton(onClick = onToggleMoreOptionsPanel) {
-                            Icon(
-                                Icons.Filled.Tune,
-                                if (showMoreOptionsPanel) "关闭更多选项" else "更多选项",
-                                tint = Color(0xfff76213)
+                                if (showImageSelectionPanel) "Close image options" else "Select image",
+                                tint = MaterialTheme.colorScheme.primary
                             )
                         }
                     }
@@ -725,7 +477,7 @@ fun ChatInputArea(
                             IconButton(onClick = onClearContent) {
                                 Icon(
                                     Icons.Filled.Clear,
-                                    "清除内容和所选项目",
+                                    "Clear content and selected items",
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
@@ -741,7 +493,7 @@ fun ChatInputArea(
                         ) {
                             Icon(
                                 if (isApiCalling) Icons.Filled.Stop else Icons.AutoMirrored.Filled.Send,
-                                if (isApiCalling) "停止" else "发送"
+                                if (isApiCalling) "Stop" else "Send"
                             )
                         }
                     }
@@ -753,9 +505,8 @@ fun ChatInputArea(
 
         if (showImageSelectionPanel) {
             val iconButtonApproxWidth = 48.dp
-            val spacerWidth = 8.dp
             val columnStartPadding = 8.dp
-            val imageButtonCenterX = columnStartPadding + iconButtonApproxWidth + spacerWidth + (iconButtonApproxWidth / 2)
+            val imageButtonCenterX = columnStartPadding + (iconButtonApproxWidth / 2)
             val panelWidthDp = 150.dp
             val xOffsetForPopup = imageButtonCenterX - (panelWidthDp / 2)
             val xOffsetPx = with(density) { xOffsetForPopup.toPx() }
@@ -797,57 +548,6 @@ fun ChatInputArea(
                             )
                             ImageSourceOption.CAMERA -> cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
                         }
-                    }
-                }
-            }
-        }
-
-        if (showMoreOptionsPanel) {
-            val iconButtonApproxWidth = 48.dp
-            val spacerWidth = 8.dp
-            val columnStartPadding = 8.dp
-            val tuneButtonCenterX =
-                columnStartPadding + iconButtonApproxWidth + spacerWidth + iconButtonApproxWidth + spacerWidth + (iconButtonApproxWidth / 2)
-            val panelWidthDp = 150.dp
-            val xOffsetForPopup = tuneButtonCenterX - (panelWidthDp / 2)
-            val xOffsetForMoreOptionsPanelPx = with(density) { xOffsetForPopup.toPx() }
-
-            Popup(
-                alignment = Alignment.BottomStart,
-                offset = IntOffset(xOffsetForMoreOptionsPanelPx.toInt(), yOffsetPx.toInt()),
-                onDismissRequest = { showMoreOptionsPanel = false },
-                properties = PopupProperties(
-                    focusable = false,
-                    dismissOnBackPress = true,
-                    dismissOnClickOutside = true
-                )
-            ) {
-                val alpha = remember { Animatable(0f) }
-                val scale = remember { Animatable(0.8f) }
-
-                LaunchedEffect(showMoreOptionsPanel) {
-                    if (showMoreOptionsPanel) {
-                        launch {
-                            alpha.animateTo(1f, animationSpec = tween(durationMillis = 300))
-                        }
-                        launch {
-                            scale.animateTo(1f, animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing))
-                        }
-                    }
-                }
-
-                Box(modifier = Modifier.graphicsLayer {
-                    this.alpha = alpha.value
-                    this.scaleX = scale.value
-                    this.scaleY = scale.value
-                    this.transformOrigin = TransformOrigin(0.5f, 1f)
-                }) {
-                    MoreOptionsPanel { selectedOption ->
-                        showMoreOptionsPanel = false
-                        val mimeTypesArray = Array(selectedOption.mimeTypes.size) { index ->
-                            selectedOption.mimeTypes[index]
-                        }
-                        filePickerLauncher.launch(mimeTypesArray)
                     }
                 }
             }

@@ -129,7 +129,7 @@ fun ChatMessagesList(
                                         message = message,
                                         onEditRequest = { viewModel.requestEditMessage(it) },
                                         onRegenerateRequest = {
-                                            viewModel.regenerateAiResponse(it)
+                                            viewModel.regenerateAiResponse(it, isImageGeneration = false)
                                             scrollStateManager.jumpToBottom()
                                         },
                                        onLongPress = { message, offset ->
@@ -312,7 +312,7 @@ fun ChatMessagesList(
                 },
                 onRegenerate = {
                     scrollStateManager.resetScrollState()
-                    viewModel.regenerateAiResponse(it)
+                    viewModel.regenerateAiResponse(it, isImageGeneration = false)
                     isContextMenuVisible = false
                     coroutineScope.launch {
                         scrollStateManager.jumpToBottom()

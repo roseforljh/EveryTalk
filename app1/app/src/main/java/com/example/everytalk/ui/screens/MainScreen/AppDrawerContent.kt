@@ -60,10 +60,16 @@ fun AppDrawerContent(
     onNewChatClick: () -> Unit,
     onRenameRequest: (index: Int, newName: String) -> Unit,
     onDeleteRequest: (index: Int) -> Unit,
-    onClearAllConversationsRequest: () -> Unit,
+   onClearAllConversationsRequest: () -> Unit,
+   onClearAllImageGenerationConversationsRequest: () -> Unit,
+   showClearImageHistoryDialog: Boolean,
+   onShowClearImageHistoryDialog: () -> Unit,
+   onDismissClearImageHistoryDialog: () -> Unit,
     getPreviewForIndex: (Int) -> String,
     onAboutClick: () -> Unit,
+    onImageGenerationClick: () -> Unit,
     isLoadingHistoryData: Boolean = false, // 新增：历史数据加载状态
+    isImageGenerationMode: Boolean,
     modifier: Modifier = Modifier
 ) {
     var expandedItemIndex by remember { mutableStateOf<Int?>(null) }
@@ -245,7 +251,13 @@ fun AppDrawerContent(
             Column {
                 Spacer(Modifier.height(8.dp))
                 Button(
-                    onClick = { onNewChatClick() },
+                    onClick = {
+                        if (isImageGenerationMode) {
+                            onImageGenerationClick()
+                        } else {
+                            onNewChatClick()
+                        }
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp)
@@ -275,7 +287,7 @@ fun AppDrawerContent(
                         )
                         Spacer(Modifier.width(20.dp))
                         Text(
-                            "新建会话",
+                            if (isImageGenerationMode) "新建图像生成" else "新建会话",
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface,
                             fontSize = MaterialTheme.typography.bodyLarge.fontSize
@@ -284,7 +296,13 @@ fun AppDrawerContent(
                 }
                 Spacer(Modifier.height(5.dp))
                 Button(
-                    onClick = { showClearAllConfirm = true },
+                    onClick = {
+                       if (isImageGenerationMode) {
+                           onShowClearImageHistoryDialog()
+                       } else {
+                           showClearAllConfirm = true
+                       }
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp)
@@ -321,13 +339,102 @@ fun AppDrawerContent(
                         )
                     }
                 }
+                Spacer(Modifier.height(5.dp))
+                if (isImageGenerationMode) {
+                    Button(
+                        onClick = {
+                            onNewChatClick()
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                            .height(48.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+                            contentColor = MaterialTheme.colorScheme.onSurface
+                        ),
+                        elevation = ButtonDefaults.buttonElevation(
+                            defaultElevation = 0.dp,
+                            pressedElevation = 0.dp
+                        ),
+                        contentPadding = PaddingValues(0.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Start
+                        ) {
+                            Icon(
+                                Icons.Filled.TextFields,
+                                "文本生成图标",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(Modifier.width(20.dp))
+                            Text(
+                                "文本生成",
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontSize = MaterialTheme.typography.bodyLarge.fontSize
+                            )
+                        }
+                    }
+                } else {
+                    Button(
+                        onClick = {
+                            if (isImageGenerationMode) {
+                                // Already in image gen mode, so just start a new chat
+                                onNewChatClick()
+                            } else {
+                                onImageGenerationClick()
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                            .height(48.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+                            contentColor = MaterialTheme.colorScheme.onSurface
+                        ),
+                        elevation = ButtonDefaults.buttonElevation(
+                            defaultElevation = 0.dp,
+                            pressedElevation = 0.dp
+                        ),
+                        contentPadding = PaddingValues(0.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Start
+                        ) {
+                            Icon(
+                                Icons.Filled.Image,
+                                "图像生成图标",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(Modifier.width(20.dp))
+                            Text(
+                                "图像生成",
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontSize = MaterialTheme.typography.bodyLarge.fontSize
+                            )
+                        }
+                    }
+                }
             }
 
             // --- "聊天" 列表标题 ---
             Column {
                 Spacer(Modifier.height(16.dp))
                 Text(
-                    text = "聊天",
+                    text = if (isImageGenerationMode) "图像生成历史" else "聊天",
                     style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                     modifier = Modifier.padding(start = 24.dp, top = 8.dp, bottom = 8.dp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -527,6 +634,15 @@ fun AppDrawerContent(
                     expandedItemIndex = null
                 }
             )
+
+           ClearImageHistoryConfirmationDialog(
+               showDialog = showClearImageHistoryDialog,
+               onDismiss = onDismissClearImageHistoryDialog,
+               onConfirm = {
+                   onClearAllImageGenerationConversationsRequest()
+                   onDismissClearImageHistoryDialog()
+               }
+           )
 
             renamingIndex?.let { index ->
                 var newName by remember(index) { mutableStateOf(getPreviewForIndex(index)) }

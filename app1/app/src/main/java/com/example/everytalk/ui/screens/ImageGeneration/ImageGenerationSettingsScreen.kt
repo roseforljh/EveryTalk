@@ -1,4 +1,4 @@
-package com.example.everytalk.ui.screens.settings
+package com.example.everytalk.ui.screens.ImageGeneration
 
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -16,25 +16,33 @@ import androidx.navigation.NavController
 import com.example.everytalk.data.DataClass.ApiConfig
 import com.example.everytalk.data.DataClass.ModalityType
 import com.example.everytalk.statecontroller.AppViewModel
+import com.example.everytalk.ui.screens.settings.AddNewFullConfigDialog
+import com.example.everytalk.ui.screens.settings.AddProviderDialog
+import com.example.everytalk.ui.screens.settings.ConfirmDeleteDialog
+import com.example.everytalk.ui.screens.settings.EditConfigDialog
+import com.example.everytalk.ui.screens.settings.ImportExportDialog
+import com.example.everytalk.ui.screens.settings.SettingsScreenContent
+import com.example.everytalk.ui.screens.settings.defaultApiAddresses
 import java.util.UUID
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(
+fun ImageGenerationSettingsScreen(
     viewModel: AppViewModel,
     navController: NavController,
     modifier: Modifier = Modifier
 ) {
-    Log.i("ScreenComposition", "SettingsScreen Composing/Recomposing.")
-    val savedConfigs by viewModel.apiConfigs.collectAsState()
-    val selectedConfigForApp by viewModel.selectedApiConfig.collectAsState()
+    Log.i("ScreenComposition", "ImageGenerationSettingsScreen Composing/Recomposing.")
+    val savedConfigs by viewModel.imageGenApiConfigs.collectAsState()
+    val selectedConfigForApp by viewModel.selectedImageGenApiConfig.collectAsState()
     val allProviders by viewModel.allProviders.collectAsState()
     val isFetchingModels by viewModel.isFetchingModels.collectAsState()
     val fetchedModels by viewModel.fetchedModels.collectAsState()
     val isRefreshingModels by viewModel.isRefreshingModels.collectAsState()
 
     val apiConfigsByApiKeyAndModality = remember(savedConfigs) {
-        savedConfigs.groupBy { it.key }
+        savedConfigs.filter { it.modalityType == ModalityType.IMAGE }
+            .groupBy { it.key }
             .mapValues { entry ->
                 entry.value.groupBy { it.modalityType }
             }
@@ -47,10 +55,12 @@ fun SettingsScreen(
     var newFullConfigKey by remember { mutableStateOf("") }
 
     var showAddModelToKeyDialog by remember { mutableStateOf(false) }
+    var showAddModelNameDialog by remember { mutableStateOf(false) }
+    var pendingFullConfig by remember { mutableStateOf<ApiConfig?>(null) }
     var addModelToKeyTargetApiKey by remember { mutableStateOf("") }
     var addModelToKeyTargetProvider by remember { mutableStateOf("") }
     var addModelToKeyTargetAddress by remember { mutableStateOf("") }
-    var addModelToKeyTargetModality by remember { mutableStateOf(ModalityType.TEXT) }
+    var addModelToKeyTargetModality by remember { mutableStateOf(ModalityType.IMAGE) }
     var addModelToKeyNewModelName by remember { mutableStateOf("") }
 
     var showAddCustomProviderDialog by remember { mutableStateOf(false) }
@@ -115,22 +125,22 @@ fun SettingsScreen(
 
     LaunchedEffect(savedConfigs, selectedConfigForApp) {
         val currentSelected = selectedConfigForApp
-        if (currentSelected != null && savedConfigs.none { it.id == currentSelected.id }) {
-            savedConfigs.firstOrNull()?.let {
+        val imageConfigs = savedConfigs.filter { it.modalityType == ModalityType.IMAGE }
+        if (currentSelected != null && imageConfigs.none { it.id == currentSelected.id }) {
+            imageConfigs.firstOrNull()?.let {
                 viewModel.selectConfig(it)
             } ?: viewModel.clearSelectedConfig()
-        } else if (currentSelected == null && savedConfigs.isNotEmpty()) {
-            viewModel.selectConfig(savedConfigs.first())
+        } else if (currentSelected == null && imageConfigs.isNotEmpty()) {
+            viewModel.selectConfig(imageConfigs.first())
         }
     }
-
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text("API 配置", color = MaterialTheme.colorScheme.onSurface) },
+                title = { Text("图像模型配置", color = MaterialTheme.colorScheme.onSurface) },
                 navigationIcon = {
                     IconButton(onClick = {
                         if (backButtonEnabled) {
@@ -173,7 +183,7 @@ fun SettingsScreen(
                 showAddFullConfigDialog = true
             },
             onSelectConfig = { configToSelect ->
-                viewModel.selectConfig(configToSelect)
+                viewModel.selectConfig(configToSelect, isImageGen = true)
             },
             selectedConfigIdInApp = selectedConfigForApp?.id,
             onAddModelForApiKeyClick = { apiKey, existingProvider, existingAddress, existingModality ->
@@ -185,7 +195,7 @@ fun SettingsScreen(
                 showAddModelToKeyDialog = true
             },
             onDeleteModelForApiKey = { configToDelete ->
-                viewModel.deleteConfig(configToDelete)
+                viewModel.deleteConfig(configToDelete, isImageGen = true)
             },
             onEditConfigClick = { config ->
                 configToEdit = config
@@ -221,38 +231,66 @@ fun SettingsScreen(
             onApiKeyChange = { newFullConfigKey = it },
             onDismissRequest = {
                 showAddFullConfigDialog = false
-                // 重置获取的模型列表
                 viewModel.clearFetchedModels()
             },
-            onConfirm = { provider, address, key, channel, _, _, _ ->
-                if (key.isNotBlank() && provider.isNotBlank() && address.isNotBlank()) {
-                    viewModel.createConfigAndFetchModels(provider, address, key, channel)
-                    showAddFullConfigDialog = false
-                    viewModel.clearFetchedModels()
+           onConfirm = { provider, address, key, channel, imageSize, numInferenceSteps, guidanceScale ->
+               if (key.isNotBlank() && provider.isNotBlank() && address.isNotBlank()) {
+                   pendingFullConfig = ApiConfig(
+                       address = address,
+                       key = key,
+                       model = "",
+                       provider = provider,
+                       name = "",
+                       channel = channel,
+                       modalityType = ModalityType.IMAGE,
+                       imageSize = imageSize,
+                       numInferenceSteps = numInferenceSteps,
+                       guidanceScale = guidanceScale
+                   )
+                   showAddFullConfigDialog = false
+                   showAddModelNameDialog = true
+                   viewModel.clearFetchedModels()
+               }
+           }
+        )
+    }
+
+    if (showAddModelNameDialog) {
+        AddImageModelToKeyDialog(
+            onDismissRequest = {
+                showAddModelNameDialog = false
+                pendingFullConfig = null
+            },
+            onConfirm = { modelName ->
+                pendingFullConfig?.let {
+                    val finalConfig = it.copy(
+                        id = UUID.randomUUID().toString(),
+                        model = modelName,
+                        name = modelName
+                    )
+                    viewModel.addConfig(finalConfig, isImageGen = true)
                 }
+                showAddModelNameDialog = false
+                pendingFullConfig = null
             }
         )
     }
 
-
     if (showAddModelToKeyDialog) {
-        // This dialog is no longer used in the new workflow, but we keep the logic here
-        // in case it's needed in the future.
-    }
-
-    if (showAddModelToKeyDialog) {
-        AddModelDialog(
+        AddImageModelToKeyDialog(
             onDismissRequest = { showAddModelToKeyDialog = false },
-            onConfirm = { newModelName ->
-                if (newModelName.isNotBlank()) {
-                    viewModel.addModelToConfigGroup(
-                        apiKey = addModelToKeyTargetApiKey,
-                        provider = addModelToKeyTargetProvider,
-                        address = addModelToKeyTargetAddress,
-                        modelName = newModelName
-                    )
-                    showAddModelToKeyDialog = false
-                }
+            onConfirm = { modelName ->
+                val config = ApiConfig(
+                    id = UUID.randomUUID().toString(),
+                    address = addModelToKeyTargetAddress,
+                    key = addModelToKeyTargetApiKey,
+                    model = modelName,
+                    provider = addModelToKeyTargetProvider,
+                    name = modelName,
+                    modalityType = ModalityType.IMAGE
+                )
+                viewModel.addConfig(config, isImageGen = true)
+                showAddModelToKeyDialog = false
             }
         )
     }
@@ -334,4 +372,41 @@ fun SettingsScreen(
             isExportEnabled = savedConfigs.isNotEmpty()
         )
     }
+}
+
+@Composable
+private fun AddImageModelToKeyDialog(
+    onDismissRequest: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var modelName by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismissRequest,
+        title = { Text("添加图像模型") },
+        text = {
+            OutlinedTextField(
+                value = modelName,
+                onValueChange = { modelName = it },
+                label = { Text("模型名称") },
+                modifier = Modifier.fillMaxWidth()
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (modelName.isNotBlank()) {
+                        onConfirm(modelName)
+                    }
+                }
+            ) {
+                Text("确认")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismissRequest) {
+                Text("取消")
+            }
+        }
+    )
 }

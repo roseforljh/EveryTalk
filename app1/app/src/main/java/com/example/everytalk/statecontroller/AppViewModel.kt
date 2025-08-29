@@ -27,7 +27,19 @@ import com.example.everytalk.ui.screens.viewmodel.DataPersistenceManager
 import com.example.everytalk.ui.screens.viewmodel.HistoryManager
 import com.example.everytalk.util.VersionChecker
 import java.util.UUID
+import android.content.ContentValues
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
+import android.os.Build
+import android.provider.MediaStore
+import android.util.Base64
+import coil3.request.ImageRequest
+import coil3.size.Size
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import kotlinx.coroutines.Dispatchers
+import java.io.File
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -99,7 +111,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 stateHolder,
                 viewModelScope,
                 historyManager,
-                ::onAiMessageFullTextChanged,
+                onAiMessageFullTextChanged = { _, _ -> },
                 ::triggerScrollToBottom
         )
     }
@@ -134,20 +146,32 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         get() = stateHolder._text.asStateFlow()
     val messages: SnapshotStateList<Message>
         get() = stateHolder.messages
+    val imageGenerationMessages: SnapshotStateList<Message>
+        get() = stateHolder.imageGenerationMessages
     val historicalConversations: StateFlow<List<List<Message>>>
         get() = stateHolder._historicalConversations.asStateFlow()
+    val imageGenerationHistoricalConversations: StateFlow<List<List<Message>>>
+        get() = stateHolder._imageGenerationHistoricalConversations.asStateFlow()
     val loadedHistoryIndex: StateFlow<Int?>
         get() = stateHolder._loadedHistoryIndex.asStateFlow()
+    val loadedImageGenerationHistoryIndex: StateFlow<Int?>
+        get() = stateHolder._loadedImageGenerationHistoryIndex.asStateFlow()
     val isLoadingHistory: StateFlow<Boolean>
         get() = stateHolder._isLoadingHistory.asStateFlow()
     val isLoadingHistoryData: StateFlow<Boolean>
         get() = stateHolder._isLoadingHistoryData.asStateFlow()
     val currentConversationId: StateFlow<String>
         get() = stateHolder._currentConversationId.asStateFlow()
+    val currentImageGenerationConversationId: StateFlow<String>
+        get() = stateHolder._currentImageGenerationConversationId.asStateFlow()
     val apiConfigs: StateFlow<List<ApiConfig>>
         get() = stateHolder._apiConfigs.asStateFlow()
     val selectedApiConfig: StateFlow<ApiConfig?>
         get() = stateHolder._selectedApiConfig.asStateFlow()
+   val imageGenApiConfigs: StateFlow<List<ApiConfig>>
+       get() = stateHolder._imageGenApiConfigs.asStateFlow()
+   val selectedImageGenApiConfig: StateFlow<ApiConfig?>
+       get() = stateHolder._selectedImageGenApiConfig.asStateFlow()
     val isApiCalling: StateFlow<Boolean>
         get() = stateHolder._isApiCalling.asStateFlow()
     val currentStreamingAiMessageId: StateFlow<String?>
@@ -176,6 +200,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     private val _showEditDialog = MutableStateFlow(false)
     val showEditDialog: StateFlow<Boolean> = _showEditDialog.asStateFlow()
     private val _editingMessageId = MutableStateFlow<String?>(null)
+    private val _editingMessage = MutableStateFlow<Message?>(null)
+    val editingMessage: StateFlow<Message?> = _editingMessage.asStateFlow()
     val editDialogInputText: StateFlow<String>
         get() = stateHolder._editDialogInputText.asStateFlow()
     private val _isSearchActiveInDrawer = MutableStateFlow(false)
@@ -224,33 +250,63 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
    private val _latestReleaseInfo = MutableStateFlow<GithubRelease?>(null)
    val latestReleaseInfo: StateFlow<GithubRelease?> = _latestReleaseInfo.asStateFlow()
 
+   private val _showClearImageHistoryDialog = MutableStateFlow(false)
+   val showClearImageHistoryDialog: StateFlow<Boolean> = _showClearImageHistoryDialog.asStateFlow()
      val chatListItems: StateFlow<List<ChatListItem>> =
              combine(
                              snapshotFlow { messages.toList() },
                             isApiCalling,
                             currentStreamingAiMessageId
-                    ) { messages, isApiCalling, currentStreamingAiMessageId ->
-                        messages
-                                .map { message ->
-                                    when (message.sender) {
-                                        Sender.AI -> {
-                                            createAiMessageItems(
-                                                    message,
-                                                    isApiCalling,
-                                                    currentStreamingAiMessageId
-                                            )
-                                        }
-                                        else -> createOtherMessageItems(message)
-                                    }
-                                }
-                                .flatten()
+                     ) { messages, isApiCalling, currentStreamingAiMessageId ->
+                         messages
+                                 .map { message ->
+                                     when (message.sender) {
+                                         Sender.AI -> {
+                                             createAiMessageItems(
+                                                     message,
+                                                     isApiCalling,
+                                                     currentStreamingAiMessageId
+                                             )
+                                         }
+                                         else -> createOtherMessageItems(message)
+                                     }
+                                 }
+                                 .flatten()
+                     }
+                     .flowOn(Dispatchers.Default)
+                     .stateIn(
+                             scope = viewModelScope,
+                             started = SharingStarted.WhileSubscribed(5000),
+                             initialValue = emptyList()
+                     )
+
+    val imageGenerationChatListItems: StateFlow<List<ChatListItem>> =
+        combine(
+            snapshotFlow { imageGenerationMessages.toList() },
+            isApiCalling,
+            currentStreamingAiMessageId
+        ) { messages, isApiCalling, currentStreamingAiMessageId ->
+            messages
+                .map { message ->
+                    when (message.sender) {
+                        Sender.AI -> {
+                            createAiMessageItems(
+                                message,
+                                isApiCalling,
+                                currentStreamingAiMessageId
+                            )
+                        }
+                        else -> createOtherMessageItems(message)
                     }
-                    .flowOn(Dispatchers.Default)
-                    .stateIn(
-                            scope = viewModelScope,
-                            started = SharingStarted.WhileSubscribed(5000),
-                            initialValue = emptyList()
-                    )
+                }
+                .flatten()
+        }
+        .flowOn(Dispatchers.Default)
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
     private val _isFetchingModels = MutableStateFlow(false)
     val isFetchingModels: StateFlow<Boolean> = _isFetchingModels.asStateFlow()
 
@@ -266,7 +322,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         }
 
         // 优化：分阶段初始化，优先加载关键配置
-        persistenceManager.loadInitialData(loadLastChat = false) {
+        persistenceManager.loadInitialData(loadLastChat = true) {
                 initialConfigPresent,
                 initialHistoryPresent ->
             if (!initialConfigPresent) {
@@ -297,8 +353,11 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 textUpdateDebouncer.entries.removeIf { !it.value.isActive }
             }
         }
+       if (messages.isEmpty() && imageGenerationMessages.isEmpty()) {
+           startNewChat()
+       }
     }
- 
+
     fun showAboutDialog() {
         _showAboutDialog.value = true
     }
@@ -358,7 +417,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         val hasReasoning = reasoningItem.isNotEmpty()
         
         // 简化处理：直接使用消息文本，不进行复杂的 Markdown 解析
-        val messageItem = if (message.text.isNotBlank()) {
+        val messageItem = if (message.text.isNotBlank() || !message.imageUrls.isNullOrEmpty()) {
             when (message.outputType) {
                 "math" -> listOf(ChatListItem.AiMessageMath(message.id, message.text, hasReasoning))
                 "code" -> listOf(ChatListItem.AiMessageCode(message.id, message.text, hasReasoning))
@@ -397,27 +456,48 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         }
     }
 
-    private fun areMessageListsEffectivelyEqual(
-            list1: List<Message>?,
-            list2: List<Message>?
-    ): Boolean {
-        if (list1 == null && list2 == null) return true
-        if (list1 == null || list2 == null) return false
+    private suspend fun areMessageListsEffectivelyEqual(
+        list1: List<Message>?,
+        list2: List<Message>?
+    ): Boolean = withContext(Dispatchers.Default) {
+        if (list1 == null && list2 == null) return@withContext true
+        if (list1 == null || list2 == null) return@withContext false
         val filteredList1 = filterMessagesForComparison(list1)
         val filteredList2 = filterMessagesForComparison(list2)
-        if (filteredList1.size != filteredList2.size) return false
+        if (filteredList1.size != filteredList2.size) return@withContext false
+
         for (i in filteredList1.indices) {
             val msg1 = filteredList1[i]
             val msg2 = filteredList2[i]
+
+            val textMatch = msg1.text.trim() == msg2.text.trim()
+            val reasoningMatch = msg1.reasoning?.trim() == msg2.reasoning?.trim()
+            val attachmentsMatch = msg1.attachments.size == msg2.attachments.size &&
+                    msg1.attachments.map {
+                        when (it) {
+                            is SelectedMediaItem.ImageFromUri -> it.uri
+                            is SelectedMediaItem.GenericFile -> it.uri
+                            else -> null
+                        }
+                    }.filterNotNull().toSet() == msg2.attachments.map {
+                        when (it) {
+                            is SelectedMediaItem.ImageFromUri -> it.uri
+                            is SelectedMediaItem.GenericFile -> it.uri
+                            else -> null
+                        }
+                    }.filterNotNull().toSet()
+
             if (msg1.id != msg2.id ||
-                            msg1.sender != msg2.sender ||
-                            msg1.text.trim() != msg2.text.trim() ||
-                            msg1.reasoning?.trim() != msg2.reasoning?.trim() ||
-                            msg1.isError != msg2.isError
-            )
-                    return false
+                msg1.sender != msg2.sender ||
+                !textMatch ||
+                !reasoningMatch ||
+                msg1.isError != msg2.isError ||
+                !attachmentsMatch
+            ) {
+                return@withContext false
+            }
         }
-        return true
+        return@withContext true
     }
 
     private fun filterMessagesForComparison(messagesToFilter: List<Message>): List<Message> {
@@ -456,20 +536,26 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     }
 
     fun onSendMessage(
-            messageText: String,
-            isFromRegeneration: Boolean = false,
-            attachments: List<SelectedMediaItem> = emptyList(),
-            audioBase64: String? = null,
-            mimeType: String? = null
+        messageText: String,
+        isFromRegeneration: Boolean = false,
+        attachments: List<SelectedMediaItem> = emptyList(),
+        audioBase64: String? = null,
+        mimeType: String? = null,
+        isImageGeneration: Boolean = false
     ) {
-        messageSender.sendMessage(
+        if (_editingMessage.value != null && isImageGeneration) {
+            confirmImageGenerationMessageEdit(messageText)
+        } else {
+            messageSender.sendMessage(
                 messageText,
                 isFromRegeneration,
                 attachments,
                 audioBase64 = audioBase64,
                 mimeType = mimeType,
-                systemPrompt = systemPrompt.value
-        )
+                systemPrompt = systemPrompt.value,
+                isImageGeneration = isImageGeneration
+            )
+        }
     }
 
     fun addMediaItem(item: SelectedMediaItem) {
@@ -490,11 +576,16 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         stateHolder._editDialogInputText.value = newText
     }
 
-    fun requestEditMessage(message: Message) {
+    fun requestEditMessage(message: Message, isImageGeneration: Boolean = false) {
         if (message.sender == Sender.User) {
-            _editingMessageId.value = message.id
-            stateHolder._editDialogInputText.value = message.text
-            _showEditDialog.value = true
+            if (isImageGeneration) {
+                _editingMessage.value = message
+                stateHolder._text.value = message.text
+            } else {
+                _editingMessageId.value = message.id
+                stateHolder._editDialogInputText.value = message.text
+                _showEditDialog.value = true
+            }
         }
     }
 
@@ -528,24 +619,56 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         }
     }
 
+    fun confirmImageGenerationMessageEdit(updatedText: String) {
+        val messageToEdit = _editingMessage.value ?: return
+        viewModelScope.launch {
+            var needsHistorySave = false
+            messagesMutex.withLock {
+                val messageIndex = imageGenerationMessages.indexOfFirst { it.id == messageToEdit.id }
+                if (messageIndex != -1) {
+                    val originalMessage = imageGenerationMessages[messageIndex]
+                    if (originalMessage.text != updatedText) {
+                        val updatedMessage = originalMessage.copy(
+                            text = updatedText,
+                            timestamp = System.currentTimeMillis()
+                        )
+                        imageGenerationMessages[messageIndex] = updatedMessage
+                        needsHistorySave = true
+                    }
+                }
+            }
+            if (needsHistorySave) {
+                historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = true)
+            }
+            _editingMessage.value = null
+            stateHolder._text.value = ""
+        }
+    }
+
     fun dismissEditDialog() {
         _showEditDialog.value = false
         _editingMessageId.value = null
         stateHolder._editDialogInputText.value = ""
     }
 
-    fun regenerateAiResponse(message: Message) {
+    fun cancelEditing() {
+        _editingMessage.value = null
+        stateHolder._text.value = ""
+    }
+
+    fun regenerateAiResponse(message: Message, isImageGeneration: Boolean = false) {
+        val messageList = if (isImageGeneration) imageGenerationMessages else messages
         val messageToRegenerateFrom =
-                if (message.sender == Sender.AI) {
-                    val aiMessageIndex = messages.indexOf(message)
-                    if (aiMessageIndex > 0) {
-                        messages.subList(0, aiMessageIndex).findLast { it.sender == Sender.User }
-                    } else {
-                        null
-                    }
+            (if (message.sender == Sender.AI) {
+                val aiMessageIndex = messageList.indexOfFirst { it.id == message.id }
+                if (aiMessageIndex > 0) {
+                    messageList.subList(0, aiMessageIndex).findLast { it.sender == Sender.User }
                 } else {
-                    message
+                    null
                 }
+            } else {
+                messageList.find { it.id == message.id }
+            })
 
         if (messageToRegenerateFrom == null || messageToRegenerateFrom.sender != Sender.User) {
             showSnackbar("无法找到对应的用户消息来重新生成回答")
@@ -582,7 +705,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             val success =
                     withContext(Dispatchers.Default) {
                         val userMessageIndex =
-                                stateHolder.messages.indexOfFirst { it.id == originalUserMessageId }
+                                messageList.indexOfFirst { it.id == originalUserMessageId }
                         if (userMessageIndex == -1) {
                             withContext(Dispatchers.Main) {
                                 showSnackbar("无法重新生成：原始用户消息在当前列表中未找到。")
@@ -592,8 +715,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
 
                         val messagesToRemove = mutableListOf<Message>()
                         var currentIndexToInspect = userMessageIndex + 1
-                        while (currentIndexToInspect < stateHolder.messages.size) {
-                            val message = stateHolder.messages[currentIndexToInspect]
+                        while (currentIndexToInspect < messageList.size) {
+                            val message = messageList[currentIndexToInspect]
                             if (message.sender == Sender.AI) {
                                 messagesToRemove.add(message)
                                 currentIndexToInspect++
@@ -617,15 +740,20 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                                 stateHolder.expandedReasoningStates.keys.removeAll(idsToRemove)
                                 stateHolder.messageAnimationStates.keys.removeAll(idsToRemove)
 
-                                stateHolder.messages.removeAll(messagesToRemove.toSet())
+                                // 删除旧消息之前，先删除关联的媒体文件
+                                viewModelScope.launch(Dispatchers.IO) {
+                                    persistenceManager.deleteMediaFilesForMessages(listOf(messagesToRemove))
+                                }
 
+                                messageList.removeAll(messagesToRemove.toSet())
+ 
                                 val finalUserMessageIndex =
-                                        stateHolder.messages.indexOfFirst {
+                                        messageList.indexOfFirst {
                                             it.id == originalUserMessageId
                                         }
                                 if (finalUserMessageIndex != -1) {
                                     stateHolder.messageAnimationStates.remove(originalUserMessageId)
-                                    stateHolder.messages.removeAt(finalUserMessageIndex)
+                                    messageList.removeAt(finalUserMessageIndex)
                                 }
                             }
                         }
@@ -633,11 +761,12 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                     }
 
             if (success) {
-                viewModelScope.launch(Dispatchers.IO) { historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true) }
+                viewModelScope.launch(Dispatchers.IO) { historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration) }
                 onSendMessage(
                         messageText = originalUserMessageText,
                         isFromRegeneration = true,
-                        attachments = originalAttachments
+                        attachments = originalAttachments,
+                        isImageGeneration = isImageGeneration
                 )
                 if (stateHolder.shouldAutoScroll()) {
                     triggerScrollToBottom()
@@ -764,9 +893,33 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             withContext(Dispatchers.IO) { historyManager.saveCurrentChatToHistoryIfNeeded() }
             messagesMutex.withLock {
                 stateHolder.clearForNewChat()
+                stateHolder._loadedHistoryIndex.value = null
                 // Ensure new chats get a unique ID from the start.
                 stateHolder._currentConversationId.value = "chat_${UUID.randomUUID()}"
                 stateHolder.systemPrompts[stateHolder._currentConversationId.value] = ""
+                if (stateHolder.shouldAutoScroll()) {
+                    triggerScrollToBottom()
+                }
+                if (_isSearchActiveInDrawer.value) setSearchActiveInDrawer(false)
+            }
+        }
+    }
+
+    fun startNewImageGeneration() {
+        dismissEditDialog()
+        dismissSourcesDialog()
+        apiHandler.cancelCurrentApiJob("开始新的图像生成")
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true) }
+            messagesMutex.withLock {
+                // 仅重置图像生成相关状态，避免影响文本聊天状态
+                stateHolder.imageGenerationMessages.clear()
+                stateHolder._isApiCalling.value = false
+                stateHolder.apiJob?.cancel()
+                stateHolder.apiJob = null
+                stateHolder._currentStreamingAiMessageId.value = null
+                stateHolder._loadedImageGenerationHistoryIndex.value = null
+                stateHolder._currentImageGenerationConversationId.value = "image_generation_${UUID.randomUUID()}"
                 if (stateHolder.shouldAutoScroll()) {
                     triggerScrollToBottom()
                 }
@@ -786,7 +939,11 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             }
             stateHolder._isLoadingHistory.value = true
             historyMutex.withLock {
-                withContext(Dispatchers.IO) { historyManager.saveCurrentChatToHistoryIfNeeded() }
+                // Save BOTH, just in case user switches modes and has pending changes
+                withContext(Dispatchers.IO) {
+                    historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = false)
+                    historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true)
+                }
             }
 
             val conversationList = stateHolder._historicalConversations.value
@@ -840,12 +997,52 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                     stateHolder.messageAnimationStates.putAll(newAnimationStates)
 
                     stateHolder._loadedHistoryIndex.value = index
+                    
+                    // Explicitly clear image generation messages if switching from image to text mode
                 }
             }
 
             if (_isSearchActiveInDrawer.value)
                     withContext(Dispatchers.Main.immediate) { setSearchActiveInDrawer(false) }
             // Crucially, set loading to false AFTER all state has been updated.
+            stateHolder._isLoadingHistory.value = false
+        }
+    }
+
+    fun loadImageGenerationConversationFromHistory(index: Int) {
+        dismissEditDialog()
+        dismissSourcesDialog()
+        apiHandler.cancelCurrentApiJob("加载图像生成历史索引 $index")
+        viewModelScope.launch {
+            stateHolder._text.value = ""
+            if (stateHolder._isApiCalling.value) {
+                apiHandler.cancelCurrentApiJob("加载历史记录，取消当前任务")
+            }
+            stateHolder._isLoadingHistory.value = true
+            historyMutex.withLock {
+                withContext(Dispatchers.IO) {
+                    historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = false)
+                    historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true)
+                 }
+            }
+
+            val conversationList = stateHolder._imageGenerationHistoricalConversations.value
+            if (index < 0 || index >= conversationList.size) {
+                showSnackbar("无法加载对话：无效的索引")
+                stateHolder._isLoadingHistory.value = false
+                return@launch
+            }
+            val conversationToLoad = conversationList[index]
+            
+            messagesMutex.withLock {
+                withContext(Dispatchers.Main.immediate) {
+                    stateHolder.imageGenerationMessages.clear()
+                    stateHolder.imageGenerationMessages.addAll(conversationToLoad)
+                    stateHolder._loadedImageGenerationHistoryIndex.value = index
+
+                    // Clear text chat state
+                }
+            }
             stateHolder._isLoadingHistory.value = false
         }
     }
@@ -885,6 +1082,34 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             conversationPreviewCache.evictAll()
         }
     }
+    fun deleteImageGenerationConversation(indexToDelete: Int) {
+        val currentLoadedIndex = stateHolder._loadedImageGenerationHistoryIndex.value
+        val historicalConversations = stateHolder._imageGenerationHistoricalConversations.value
+        if (indexToDelete < 0 || indexToDelete >= historicalConversations.size) {
+            showSnackbar("无法删除：无效的索引")
+            return
+        }
+        viewModelScope.launch {
+            val wasCurrentChatDeleted = (currentLoadedIndex == indexToDelete)
+            withContext(Dispatchers.IO) { historyManager.deleteConversation(indexToDelete, isImageGeneration = true) }
+
+            if (wasCurrentChatDeleted) {
+                messagesMutex.withLock {
+                   dismissEditDialog()
+                   dismissSourcesDialog()
+                   stateHolder.imageGenerationMessages.clear()
+                   stateHolder._loadedImageGenerationHistoryIndex.value = null
+                   stateHolder._currentImageGenerationConversationId.value = "image_generation_${UUID.randomUUID()}"
+                   if (stateHolder.shouldAutoScroll()) {
+                       triggerScrollToBottom()
+                   }
+                }
+                apiHandler.cancelCurrentApiJob("当前图像生成聊天(#$indexToDelete)被删除，开始新聊天")
+            }
+            showSnackbar("对话已删除")
+            conversationPreviewCache.evictAll()
+        }
+    }
 
     fun clearAllConversations() {
         dismissEditDialog()
@@ -905,6 +1130,37 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         }
     }
 
+    fun clearAllImageGenerationConversations() {
+        dismissEditDialog()
+        dismissSourcesDialog()
+        apiHandler.cancelCurrentApiJob("清除所有图像生成历史记录")
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { historyManager.clearAllHistory(isImageGeneration = true) }
+            messagesMutex.withLock {
+                // 仅清理图像生成状态，保留文本聊天内容
+                stateHolder.imageGenerationMessages.clear()
+                stateHolder._isApiCalling.value = false
+                stateHolder.apiJob?.cancel()
+                stateHolder.apiJob = null
+                stateHolder._currentStreamingAiMessageId.value = null
+                stateHolder._loadedImageGenerationHistoryIndex.value = null
+                stateHolder._currentImageGenerationConversationId.value = "image_generation_${UUID.randomUUID()}"
+                if (stateHolder.shouldAutoScroll()) {
+                    triggerScrollToBottom()
+                }
+            }
+            showSnackbar("所有图像生成对话已清除")
+            conversationPreviewCache.evictAll()
+        }
+    }
+
+    fun showClearImageHistoryDialog() {
+       _showClearImageHistoryDialog.value = true
+   }
+
+   fun dismissClearImageHistoryDialog() {
+       _showClearImageHistoryDialog.value = false
+   }
     fun showSourcesDialog(sources: List<WebSearchResult>) {
         viewModelScope.launch {
             stateHolder._sourcesForDialog.value = sources
@@ -944,8 +1200,128 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         }
     }
 
+    fun downloadImageFromMessage(message: Message) {
+        viewModelScope.launch {
+            val imageUrl = message.imageUrls?.firstOrNull() ?: run {
+                showSnackbar("没有可下载的图片")
+                return@launch
+            }
 
-    fun addConfig(config: ApiConfig) = configManager.addConfig(config)
+            try {
+                // 兼容多种来源：http(s)、content://、file://、本地绝对路径、data:image;base64
+                val bitmap: Bitmap? = withContext(Dispatchers.IO) {
+                    val s = imageUrl
+                    val uri = try { Uri.parse(s) } catch (_: Exception) { null }
+                    val scheme = uri?.scheme?.lowercase()
+
+                    fun decodeHttp(url: String): Bitmap? {
+                        val client = OkHttpClient()
+                        val request = Request.Builder().url(url).build()
+                        client.newCall(request).execute().use { response ->
+                            if (!response.isSuccessful) throw Exception("HTTP ${response.code}")
+                            val body = response.body ?: return null
+                            val bytes = body.bytes()
+                            return BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                        }
+                    }
+
+                    fun decodeContent(u: Uri): Bitmap? {
+                        val cr = getApplication<Application>().contentResolver
+                        val input = cr.openInputStream(u) ?: return null
+                        input.use { stream ->
+                            return BitmapFactory.decodeStream(stream)
+                        }
+                    }
+
+                    fun decodeFile(path: String?): Bitmap? {
+                        if (path.isNullOrBlank()) return null
+                        val f = File(path)
+                        if (!f.exists()) return null
+                        return BitmapFactory.decodeFile(path)
+                    }
+
+                    return@withContext when {
+                        s.startsWith("data:image", ignoreCase = true) -> {
+                            val base64Part = s.substringAfter(",", missingDelimiterValue = "")
+                            if (base64Part.isNotBlank()) {
+                                val bytes = Base64.decode(base64Part, Base64.DEFAULT)
+                                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                            } else null
+                        }
+                        scheme == "http" || scheme == "https" -> {
+                            decodeHttp(s)
+                        }
+                        scheme == "content" -> {
+                            decodeContent(uri!!)
+                        }
+                        scheme == "file" -> {
+                            decodeFile(uri?.path)
+                        }
+                        uri?.scheme.isNullOrBlank() -> {
+                            // 无 scheme，当作本地绝对路径
+                            decodeFile(s)
+                        }
+                        else -> {
+                            // 兜底：尝试 content，再尝试文件路径
+                            (uri?.let { decodeContent(it) }) ?: decodeFile(uri?.path)
+                        }
+                    }
+                }
+
+                if (bitmap != null) {
+                    saveBitmapToDownloads(bitmap)
+                    showSnackbar("图片已保存到相册")
+                } else {
+                    showSnackbar("无法加载图片，请重试")
+                }
+            } catch (e: Exception) {
+                Log.e("DownloadImage", "下载图片失败", e)
+                showSnackbar("下载失败: ${e.message}")
+            }
+        }
+    }
+
+    private fun saveBitmapToDownloads(bitmap: Bitmap) {
+        val context = getApplication<Application>()
+        val contentResolver = context.contentResolver
+        val imageCollection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        } else {
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        }
+
+        val contentDetails = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, "EveryTalk_Image_${System.currentTimeMillis()}.jpg")
+            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(MediaStore.Images.Media.IS_PENDING, 1)
+            }
+        }
+
+        val imageUri = contentResolver.insert(imageCollection, contentDetails)
+        imageUri?.let {
+            try {
+                contentResolver.openOutputStream(it).use { outputStream ->
+                    if (outputStream != null) {
+                        bitmap.compress(Bitmap.CompressFormat.JPEG, 100, outputStream)
+                    } else {
+                        throw Exception("无法打开输出流")
+                    }
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    contentDetails.clear()
+                    contentDetails.put(MediaStore.Images.Media.IS_PENDING, 0)
+                    contentResolver.update(it, contentDetails, null, null)
+                }
+            } catch (e: Exception) {
+                Log.e("SaveBitmap", "保存图片失败", e)
+                contentResolver.delete(it, null, null) // 清理失败的条目
+                throw e
+            }
+        } ?: throw Exception("无法创建MediaStore条目")
+    }
+ 
+    fun addConfig(config: ApiConfig, isImageGen: Boolean = false) = configManager.addConfig(config, isImageGen)
 
     fun addMultipleConfigs(configs: List<ApiConfig>) {
         viewModelScope.launch {
@@ -955,8 +1331,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             }
         }
     }
-    fun updateConfig(config: ApiConfig) = configManager.updateConfig(config)
-    fun deleteConfig(config: ApiConfig) = configManager.deleteConfig(config)
+    fun updateConfig(config: ApiConfig, isImageGen: Boolean = false) = configManager.updateConfig(config, isImageGen)
+    fun deleteConfig(config: ApiConfig, isImageGen: Boolean = false) = configManager.deleteConfig(config, isImageGen)
     fun deleteConfigGroup(
             apiKey: String,
             modalityType: com.example.everytalk.data.DataClass.ModalityType
@@ -973,9 +1349,9 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             }
         }
     }
-    fun clearAllConfigs() = configManager.clearAllConfigs()
-    fun selectConfig(config: ApiConfig) = configManager.selectConfig(config)
-    fun clearSelectedConfig() {
+    fun clearAllConfigs(isImageGen: Boolean = false) = configManager.clearAllConfigs(isImageGen)
+    fun selectConfig(config: ApiConfig, isImageGen: Boolean = false) = configManager.selectConfig(config, isImageGen)
+    fun clearSelectedConfig(isImageGen: Boolean = false) {
         stateHolder._selectedApiConfig.value = null
         viewModelScope.launch(Dispatchers.IO) { persistenceManager.saveSelectedConfigIdentifier(null) }
     }
@@ -1064,42 +1440,29 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         return stateHolder.messageAnimationStates[messageId] ?: false
     }
 
-    fun getConversationPreviewText(index: Int): String {
-        val cachedPreview = conversationPreviewCache.get(index)
+    fun getConversationPreviewText(index: Int, isImageGeneration: Boolean = false): String {
+        val cacheKey = if (isImageGeneration) "img_$index" else "txt_$index"
+        val cachedPreview = conversationPreviewCache.get(cacheKey.hashCode())
         if (cachedPreview != null) return cachedPreview
 
-        val conversation =
-                stateHolder._historicalConversations.value.getOrNull(index)
-                        ?: return "对话 ${index + 1}".also {
-                            conversationPreviewCache.put(index, it)
-                        }
+        val conversationList = if (isImageGeneration) {
+            stateHolder._imageGenerationHistoricalConversations.value
+        } else {
+            stateHolder._historicalConversations.value
+        }
 
-        val newPreview =
-                (conversation
-                        .firstOrNull {
-                            it.sender == Sender.System &&
-                                    it.isPlaceholderName &&
-                                    it.text.isNotBlank()
-                        }
-                        ?.text
-                        ?.trim()
-                        ?: conversation
-                                .firstOrNull {
-                                    it.sender == Sender.User && it.text.isNotBlank()
-                                }
-                                ?.text
-                                ?.trim()
-                                ?: conversation
-                                .firstOrNull { it.sender == Sender.AI && it.text.isNotBlank() }
-                                ?.text
-                                ?.trim()
-                                ?: "对话 ${index + 1}")
+        val conversation = conversationList.getOrNull(index)
+            ?: return "对话 ${index + 1}".also {
+                conversationPreviewCache.put(cacheKey.hashCode(), it)
+            }
 
-        conversationPreviewCache.put(index, newPreview)
+        val newPreview = conversation.firstOrNull { it.text.isNotBlank() }?.text?.trim() ?: "对话 ${index + 1}"
+
+        conversationPreviewCache.put(cacheKey.hashCode(), newPreview)
         return newPreview
     }
 
-    fun renameConversation(index: Int, newName: String) {
+    fun renameConversation(index: Int, newName: String, isImageGeneration: Boolean = false) {
         val trimmedNewName = newName.trim()
         if (trimmedNewName.isBlank()) {
             showSnackbar("新名称不能为空")
@@ -1108,12 +1471,15 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         viewModelScope.launch {
             val success =
                     withContext(Dispatchers.Default) {
-                        val currentHistoricalConvos = stateHolder._historicalConversations.value
+                        val currentHistoricalConvos = if (isImageGeneration)
+                            stateHolder._imageGenerationHistoricalConversations.value
+                        else
+                            stateHolder._historicalConversations.value
                         if (index < 0 || index >= currentHistoricalConvos.size) {
                             withContext(Dispatchers.Main) { showSnackbar("无法重命名：对话索引错误") }
                             return@withContext false
                         }
-
+    
                         val originalConversationAtIndex =
                                 currentHistoricalConvos[index].toMutableList()
                         var titleMessageUpdatedOrAdded = false
@@ -1121,7 +1487,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                                 originalConversationAtIndex.indexOfFirst {
                                     it.sender == Sender.System && it.isPlaceholderName
                                 }
-
+    
                         if (existingTitleIndex != -1) {
                             originalConversationAtIndex[existingTitleIndex] =
                                     originalConversationAtIndex[existingTitleIndex].copy(
@@ -1130,7 +1496,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                                     )
                             titleMessageUpdatedOrAdded = true
                         }
-
+    
                         if (!titleMessageUpdatedOrAdded) {
                             val titleMessage =
                                     Message(
@@ -1143,24 +1509,36 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                                     )
                             originalConversationAtIndex.add(0, titleMessage)
                         }
-
+    
                         val updatedHistoricalConversationsList =
                                 currentHistoricalConvos.toMutableList().apply {
                                     this[index] = originalConversationAtIndex.toList()
-                                }
-
+                                 }
+    
                         withContext(Dispatchers.Main.immediate) {
-                            stateHolder._historicalConversations.value =
+                            if (isImageGeneration) {
+                                stateHolder._imageGenerationHistoricalConversations.value =
                                     updatedHistoricalConversationsList.toList()
+                            } else {
+                                stateHolder._historicalConversations.value =
+                                    updatedHistoricalConversationsList.toList()
+                            }
                         }
-
+    
                         withContext(Dispatchers.IO) {
                             persistenceManager.saveChatHistory(
-                                    stateHolder._historicalConversations.value
+                                    if (isImageGeneration)
+                                        stateHolder._imageGenerationHistoricalConversations.value
+                                    else
+                                        stateHolder._historicalConversations.value,
+                                    isImageGeneration = isImageGeneration
                             )
                         }
-
-                        if (stateHolder._loadedHistoryIndex.value == index) {
+    
+                        val loadedIndex =
+                            if (isImageGeneration) stateHolder._loadedImageGenerationHistoryIndex.value
+                            else stateHolder._loadedHistoryIndex.value
+                        if (loadedIndex == index) {
                             val reloadedConversation =
                                     originalConversationAtIndex.toList().map { msg ->
                                         val updatedContentStarted =
@@ -1171,8 +1549,13 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                                     }
                             messagesMutex.withLock {
                                 withContext(Dispatchers.Main.immediate) {
-                                    stateHolder.messages.clear()
-                                    stateHolder.messages.addAll(reloadedConversation)
+                                    if (isImageGeneration) {
+                                        stateHolder.imageGenerationMessages.clear()
+                                        stateHolder.imageGenerationMessages.addAll(reloadedConversation)
+                                    } else {
+                                        stateHolder.messages.clear()
+                                        stateHolder.messages.addAll(reloadedConversation)
+                                    }
                                     reloadedConversation.forEach { msg ->
                                         val hasContentOrError = msg.contentStarted || msg.isError
                                         val hasReasoning = !msg.reasoning.isNullOrBlank()
@@ -1193,7 +1576,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                     }
             if (success) {
                 withContext(Dispatchers.Main) { showSnackbar("对话已重命名") }
-                conversationPreviewCache.put(index, trimmedNewName)
+                val cacheKey = if (isImageGeneration) "img_$index" else "txt_$index"
+                conversationPreviewCache.put(cacheKey.hashCode(), trimmedNewName)
             }
         }
     }
@@ -1491,7 +1875,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     }
 
     fun getMessageById(id: String): Message? {
-        return messages.find { it.id == id }
+        return messages.find { it.id == id } ?: imageGenerationMessages.find { it.id == id }
     }
 
     fun saveScrollState(conversationId: String, scrollState: ConversationScrollState) {
@@ -1516,7 +1900,20 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     fun getScrollState(conversationId: String): ConversationScrollState? {
         return stateHolder.conversationScrollStates[conversationId]
     }
-    override fun onCleared() {
+    fun onAppStop() {
+       viewModelScope.launch(Dispatchers.IO) {
+           val textMessages = stateHolder.messages.toList()
+           if (textMessages.isNotEmpty()) {
+               persistenceManager.saveLastOpenChat(textMessages, isImageGeneration = false)
+           }
+
+           val imageGenMessages = stateHolder.imageGenerationMessages.toList()
+           if (imageGenMessages.isNotEmpty()) {
+               persistenceManager.saveLastOpenChat(imageGenMessages, isImageGeneration = true)
+           }
+       }
+   }
+   override fun onCleared() {
         dismissEditDialog()
         dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("ViewModel cleared", isNewMessageSend = false)
@@ -1530,8 +1927,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         // However, to keep the logic, we'll do a final launch.
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
-                persistenceManager.saveLastOpenChat(finalCurrentChatMessages)
+                historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = false)
+                historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = true)
                 persistenceManager.saveApiConfigs(finalApiConfigs)
                 persistenceManager.saveSelectedConfigIdentifier(finalSelectedConfigId)
                 dataSource.saveCustomProviders(_customProviders.value)

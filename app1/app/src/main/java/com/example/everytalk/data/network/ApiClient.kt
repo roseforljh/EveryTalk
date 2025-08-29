@@ -7,6 +7,7 @@ import android.provider.OpenableColumns
 import com.example.everytalk.BuildConfig
 import com.example.everytalk.config.BackendConfig
 import com.example.everytalk.data.DataClass.ChatRequest
+import com.example.everytalk.data.DataClass.ImageGenerationResponse
 import com.example.everytalk.data.DataClass.GithubRelease
 import com.example.everytalk.data.local.SharedPreferencesDataSource
 import com.example.everytalk.models.SelectedMediaItem
@@ -738,6 +739,74 @@ object ApiClient {
         } catch (e: Exception) {
             android.util.Log.e("ApiClient", "从 $url 获取模型列表失败", e)
             throw IOException("从 $url 获取模型列表失败: ${e.message}", e)
+        }
+    }
+    suspend fun generateImage(chatRequest: ChatRequest): ImageGenerationResponse {
+        if (!isInitialized) {
+            throw IllegalStateException("ApiClient not initialized. Call initialize() first.")
+        }
+        val backendUrlRaw = BackendConfig.backendUrls.firstOrNull()
+            ?: throw IOException("No backend URL configured.")
+
+        // 规范化基础URL：剥离尾部的 "/" 与可选的 "/chat"
+        var base = backendUrlRaw.trimEnd('/')
+        if (base.endsWith("/chat")) {
+            base = base.removeSuffix("/chat").trimEnd('/')
+        }
+        val url = "$base/v1/images/generations"
+
+        val imgReq = chatRequest.imageGenRequest
+            ?: throw IOException("缺少 imageGenRequest 配置，无法发起图像生成。")
+
+        val promptFromMsg = try {
+            chatRequest.messages.lastOrNull { it.role == "user" }?.let { msg ->
+                when (msg) {
+                    is com.example.everytalk.data.DataClass.SimpleTextApiMessage -> msg.content
+                    is com.example.everytalk.data.DataClass.PartsApiMessage -> msg.parts
+                        .filterIsInstance<com.example.everytalk.data.DataClass.ApiContentPart.Text>()
+                        .joinToString(" ") { it.text }
+                    else -> null
+                }
+            }
+        } catch (_: Exception) { null }
+
+        val finalPrompt = (imgReq.prompt.ifBlank { promptFromMsg ?: "" }).ifBlank {
+            throw IOException("Prompt 为空，无法发起图像生成。")
+        }
+
+        val payload = buildJsonObject {
+            // 使用图像生成配置中的模型，避免把聊天模型发给上游
+            put("model", imgReq.model)
+            put("prompt", finalPrompt)
+            imgReq.imageSize?.let { put("image_size", it) }
+            imgReq.batchSize?.let { put("batch_size", it) }
+            imgReq.numInferenceSteps?.let { put("num_inference_steps", it) }
+            imgReq.guidanceScale?.let { put("guidance_scale", it) }
+            put("apiAddress", imgReq.apiAddress)
+            put("apiKey", imgReq.apiKey)
+        }
+
+        return try {
+            val response = client.post(url) {
+                contentType(ContentType.Application.Json)
+                setBody(payload)
+            }
+            if (!response.status.isSuccess()) {
+                val errTxt = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
+                android.util.Log.e("ApiClient", "Image generation HTTP ${response.status.value}: $errTxt")
+                throw IOException("上游错误 ${response.status.value}: ${errTxt.take(300)}")
+            }
+            val bodyText = response.bodyAsText()
+            // 先尝试直接解析；若失败，记录原文方便排障
+            try {
+                jsonParser.decodeFromString(ImageGenerationResponse.serializer(), bodyText)
+            } catch (e: SerializationException) {
+                android.util.Log.e("ApiClient", "ImageGenerationResponse 解析失败，原始响应: ${bodyText.take(500)}", e)
+                throw IOException("响应解析失败: ${e.message}")
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("ApiClient", "Image generation failed", e)
+            throw IOException("Image generation failed: ${e.message}", e)
         }
     }
 }

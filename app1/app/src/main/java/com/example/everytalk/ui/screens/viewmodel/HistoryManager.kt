@@ -7,11 +7,12 @@ import com.example.everytalk.statecontroller.ViewModelStateHolder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.runBlocking
 
 class HistoryManager(
     private val stateHolder: ViewModelStateHolder,
     private val persistenceManager: DataPersistenceManager,
-    private val compareMessageLists: (List<Message>?, List<Message>?) -> Boolean,
+    private val compareMessageLists: suspend (List<Message>?, List<Message>?) -> Boolean,
     private val onHistoryModified: () -> Unit
 ) {
     private val TAG_HM = "HistoryManager"
@@ -27,21 +28,25 @@ class HistoryManager(
         }.toList()
     }
 
-    suspend fun findChatInHistory(messagesToFind: List<Message>): Int = withContext(Dispatchers.Default) {
+    suspend fun findChatInHistory(messagesToFind: List<Message>, isImageGeneration: Boolean = false): Int = withContext(Dispatchers.Default) {
         val filteredMessagesToFind = filterMessagesForSaving(messagesToFind)
-        if (filteredMessagesToFind.isEmpty() && messagesToFind.isNotEmpty()) {
-            return@withContext -1
-        }
         if (filteredMessagesToFind.isEmpty()) return@withContext -1
 
-        stateHolder._historicalConversations.value.indexOfFirst { historyChat ->
-            compareMessageLists(filterMessagesForSaving(historyChat), filteredMessagesToFind)
+        val history = if (isImageGeneration) {
+            stateHolder._imageGenerationHistoricalConversations.value
+        } else {
+            stateHolder._historicalConversations.value
+        }
+
+        history.indexOfFirst { historyChat ->
+            runBlocking { compareMessageLists(filterMessagesForSaving(historyChat), filteredMessagesToFind) }
         }
     }
 
-    suspend fun saveCurrentChatToHistoryIfNeeded(forceSave: Boolean = false): Boolean {
-        val currentMessagesSnapshot = stateHolder.messages.toList()
-        val currentPrompt = stateHolder.systemPrompts[stateHolder._currentConversationId.value] ?: ""
+    suspend fun saveCurrentChatToHistoryIfNeeded(forceSave: Boolean = false, isImageGeneration: Boolean = false): Boolean {
+        val currentMessagesSnapshot = if (isImageGeneration) stateHolder.imageGenerationMessages.toList() else stateHolder.messages.toList()
+        val currentConversationId = if (isImageGeneration) stateHolder._currentImageGenerationConversationId.value else stateHolder._currentConversationId.value
+        val currentPrompt = stateHolder.systemPrompts[currentConversationId] ?: ""
         val messagesWithPrompt = if (currentPrompt.isNotBlank()) {
             listOf(Message(sender = Sender.System, text = currentPrompt)) + currentMessagesSnapshot
         } else {
@@ -51,9 +56,10 @@ class HistoryManager(
         var historyListModified = false
         var loadedIndexChanged = false
 
+        val loadedHistoryIndex = if (isImageGeneration) stateHolder._loadedImageGenerationHistoryIndex.value else stateHolder._loadedHistoryIndex.value
         Log.d(
             TAG_HM,
-            "saveCurrent: Snapshot msgs=${currentMessagesSnapshot.size}, Filtered to save=${messagesToSave.size}, Force=$forceSave, CurrentLoadedIdx=${stateHolder._loadedHistoryIndex.value}"
+            "saveCurrent: Snapshot msgs=${currentMessagesSnapshot.size}, Filtered to save=${messagesToSave.size}, Force=$forceSave, CurrentLoadedIdx=$loadedHistoryIndex, isImageGeneration=$isImageGeneration"
         )
 
         if (messagesToSave.isEmpty() && !forceSave) {
@@ -63,17 +69,18 @@ class HistoryManager(
             )
         }
 
-        var finalNewLoadedIndex: Int? = stateHolder._loadedHistoryIndex.value
+        var finalNewLoadedIndex: Int? = loadedHistoryIndex
         var needsPersistenceSaveOfHistoryList = false
 
-        stateHolder._historicalConversations.update { currentHistory ->
+        val historicalConversations = if (isImageGeneration) stateHolder._imageGenerationHistoricalConversations else stateHolder._historicalConversations
+        historicalConversations.update { currentHistory ->
             val mutableHistory = currentHistory.toMutableList()
-            val currentLoadedIdx = stateHolder._loadedHistoryIndex.value
+            val currentLoadedIdx = loadedHistoryIndex
 
             if (currentLoadedIdx != null && currentLoadedIdx >= 0 && currentLoadedIdx < mutableHistory.size) {
                 val existingChatInHistoryFiltered =
                     filterMessagesForSaving(mutableHistory[currentLoadedIdx])
-                val contentChanged = withContext(Dispatchers.Default) {
+                val contentChanged = runBlocking {
                     !compareMessageLists(
                         messagesToSave,
                         existingChatInHistoryFiltered
@@ -102,11 +109,8 @@ class HistoryManager(
                     return@update currentHistory
                 }
             } else {
-                if (messagesToSave.isNotEmpty() || forceSave) {
-                    val duplicateIndex =
-                        if (forceSave && currentLoadedIdx == null) -1 else findChatInHistory(
-                            messagesToSave
-                        )
+                if (messagesToSave.isNotEmpty()) {
+                    val duplicateIndex = findChatInHistory(messagesToSave, isImageGeneration)
                     if (duplicateIndex == -1) {
                         Log.d(
                             TAG_HM,
@@ -126,7 +130,7 @@ class HistoryManager(
                 } else {
                     Log.d(
                         TAG_HM,
-                        "Current new conversation is empty and not force saving, not adding to history."
+                        "Current new conversation is empty, not adding to history."
                     )
                     return@update currentHistory
                 }
@@ -134,18 +138,22 @@ class HistoryManager(
             mutableHistory
         }
 
-        if (stateHolder._loadedHistoryIndex.value != finalNewLoadedIndex) {
-            stateHolder._loadedHistoryIndex.value = finalNewLoadedIndex
+        if (loadedHistoryIndex != finalNewLoadedIndex) {
+            if (isImageGeneration) {
+                stateHolder._loadedImageGenerationHistoryIndex.value = finalNewLoadedIndex
+            } else {
+                stateHolder._loadedHistoryIndex.value = finalNewLoadedIndex
+            }
             loadedIndexChanged = true
             Log.d(TAG_HM, "LoadedHistoryIndex updated to: $finalNewLoadedIndex")
         }
 
         if (needsPersistenceSaveOfHistoryList) {
-            persistenceManager.saveChatHistory(stateHolder._historicalConversations.value)
+            persistenceManager.saveChatHistory(historicalConversations.value, isImageGeneration)
             Log.d(TAG_HM, "Chat history list persisted.")
         }
 
-        persistenceManager.saveLastOpenChat(emptyList())
+        persistenceManager.clearLastOpenChat(isImageGeneration)
         Log.d(TAG_HM, "\"Last open chat\" record has been cleared in persistence.")
 
         if (historyListModified) {
@@ -159,13 +167,15 @@ class HistoryManager(
         return historyListModified || loadedIndexChanged
     }
 
-    suspend fun deleteConversation(indexToDelete: Int) {
+    suspend fun deleteConversation(indexToDelete: Int, isImageGeneration: Boolean = false) {
         Log.d(TAG_HM, "Requesting to delete history index $indexToDelete.")
         var successfullyDeleted = false
-        var finalLoadedIndexAfterDelete: Int? = stateHolder._loadedHistoryIndex.value
+        val historicalConversations = if (isImageGeneration) stateHolder._imageGenerationHistoricalConversations else stateHolder._historicalConversations
+        val loadedHistoryIndex = if (isImageGeneration) stateHolder._loadedImageGenerationHistoryIndex else stateHolder._loadedHistoryIndex
+        var finalLoadedIndexAfterDelete: Int? = loadedHistoryIndex.value
         var conversationToDelete: List<Message>? = null
 
-        stateHolder._historicalConversations.update { currentHistory ->
+        historicalConversations.update { currentHistory ->
             if (indexToDelete >= 0 && indexToDelete < currentHistory.size) {
                 val mutableHistory = currentHistory.toMutableList()
                 conversationToDelete = mutableHistory[indexToDelete]
@@ -173,7 +183,7 @@ class HistoryManager(
                 successfullyDeleted = true
                 Log.d(TAG_HM, "Removed conversation at index $indexToDelete from memory.")
 
-                val currentLoadedIdx = stateHolder._loadedHistoryIndex.value
+                val currentLoadedIdx = loadedHistoryIndex.value
                 if (currentLoadedIdx == indexToDelete) {
                     finalLoadedIndexAfterDelete = null
                     Log.d(TAG_HM, "Deleted currently loaded conversation. New loadedIndex is null.")
@@ -195,34 +205,42 @@ class HistoryManager(
         }
 
         if (successfullyDeleted) {
-            conversationToDelete?.let {
-                persistenceManager.deleteMediaFilesForMessages(listOf(it))
-            }
-            if (stateHolder._loadedHistoryIndex.value != finalLoadedIndexAfterDelete) {
-                stateHolder._loadedHistoryIndex.value = finalLoadedIndexAfterDelete
+           conversationToDelete?.let {
+               persistenceManager.deleteMediaFilesForMessages(listOf(it))
+           }
+            if (loadedHistoryIndex.value != finalLoadedIndexAfterDelete) {
+                loadedHistoryIndex.value = finalLoadedIndexAfterDelete
                 Log.d(
                     TAG_HM,
                     "Due to deletion, LoadedHistoryIndex updated to: $finalLoadedIndexAfterDelete"
                 )
             }
-            persistenceManager.saveChatHistory(stateHolder._historicalConversations.value)
-            persistenceManager.saveLastOpenChat(emptyList())
+           persistenceManager.saveChatHistory(historicalConversations.value, isImageGeneration)
+           if (finalLoadedIndexAfterDelete == null) {
+               persistenceManager.clearLastOpenChat(isImageGeneration)
+           }
             Log.d(TAG_HM, "Chat history list persisted after deletion. \"Last open chat\" cleared.")
         }
     }
 
-    suspend fun clearAllHistory() {
+    suspend fun clearAllHistory(isImageGeneration: Boolean = false) {
         Log.d(TAG_HM, "Requesting to clear all history.")
-        val historyToClear = stateHolder._historicalConversations.value
-        if (historyToClear.isNotEmpty() || stateHolder._loadedHistoryIndex.value != null) {
+        val historyToClear = if (isImageGeneration) stateHolder._imageGenerationHistoricalConversations.value else stateHolder._historicalConversations.value
+        val loadedHistoryIndex = if (isImageGeneration) stateHolder._loadedImageGenerationHistoryIndex else stateHolder._loadedHistoryIndex
+        if (historyToClear.isNotEmpty() || loadedHistoryIndex.value != null) {
             persistenceManager.deleteMediaFilesForMessages(historyToClear)
 
-            stateHolder._historicalConversations.value = emptyList()
-            stateHolder._loadedHistoryIndex.value = null
+            if (isImageGeneration) {
+                stateHolder._imageGenerationHistoricalConversations.value = emptyList()
+                loadedHistoryIndex.value = null
+            } else {
+                stateHolder._historicalConversations.value = emptyList()
+                loadedHistoryIndex.value = null
+            }
             Log.d(TAG_HM, "In-memory history cleared, loadedHistoryIndex reset to null.")
 
-            persistenceManager.saveChatHistory(stateHolder._historicalConversations.value)
-            persistenceManager.saveLastOpenChat(emptyList())
+            persistenceManager.saveChatHistory(emptyList(), isImageGeneration)
+            persistenceManager.clearLastOpenChat(isImageGeneration)
             Log.d(TAG_HM, "Persisted history list cleared. \"Last open chat\" cleared.")
         } else {
             Log.d(TAG_HM, "No history to clear.")

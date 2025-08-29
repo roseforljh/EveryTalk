@@ -40,12 +40,14 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.everytalk.data.local.SharedPreferencesDataSource
 import com.example.everytalk.data.network.ApiClient
 import com.example.everytalk.navigation.Screen
 import com.example.everytalk.ui.screens.MainScreen.AppDrawerContent
 import com.example.everytalk.ui.screens.MainScreen.ChatScreen
+import com.example.everytalk.ui.screens.ImageGeneration.ImageGenerationScreen
 import com.example.everytalk.ui.screens.settings.SettingsScreen
 import com.example.everytalk.ui.theme.App1Theme
 import kotlinx.coroutines.flow.collectLatest
@@ -70,7 +72,7 @@ private val defaultDrawerWidth = 320.dp
 class MainActivity : ComponentActivity() {
 
     private var fileContentToSave: String? = null
-
+   private lateinit var appViewModel: AppViewModel
     private val createDocument = registerForActivityResult(ActivityResultContracts.CreateDocument("text/markdown")) { uri ->
         uri?.let {
             fileContentToSave?.let { content ->
@@ -107,7 +109,7 @@ class MainActivity : ComponentActivity() {
                     val navController = rememberNavController()
                     val coroutineScope = rememberCoroutineScope()
 
-                    val appViewModel: AppViewModel = viewModel(
+                    appViewModel = viewModel(
                         factory = AppViewModelFactory(
                             application,
                             SharedPreferencesDataSource(applicationContext)
@@ -160,9 +162,13 @@ class MainActivity : ComponentActivity() {
                             gesturesEnabled = true,
                             modifier = Modifier.fillMaxSize(),
                             drawerContent = {
+                                val navBackStackEntry by navController.currentBackStackEntryAsState()
+                                val currentRoute = navBackStackEntry?.destination?.route
+                                val isImageGenerationMode = currentRoute == Screen.IMAGE_GENERATION_SCREEN
+
                                 AppDrawerContent(
-                                    historicalConversations = appViewModel.historicalConversations.collectAsState().value,
-                                    loadedHistoryIndex = appViewModel.loadedHistoryIndex.collectAsState().value,
+                                    historicalConversations = if (isImageGenerationMode) appViewModel.imageGenerationHistoricalConversations.collectAsState().value else appViewModel.historicalConversations.collectAsState().value,
+                                    loadedHistoryIndex = if (isImageGenerationMode) appViewModel.loadedImageGenerationHistoryIndex.collectAsState().value else appViewModel.loadedHistoryIndex.collectAsState().value,
                                     isSearchActive = isSearchActiveInDrawer,
                                     currentSearchQuery = searchQueryInDrawer,
                                     onSearchActiveChange = { isActive ->
@@ -176,23 +182,56 @@ class MainActivity : ComponentActivity() {
                                         )
                                     },
                                     onConversationClick = { index ->
-                                        appViewModel.loadConversationFromHistory(index)
+                                        if (isImageGenerationMode) {
+                                            appViewModel.loadImageGenerationConversationFromHistory(index)
+                                        } else {
+                                            appViewModel.loadConversationFromHistory(index)
+                                        }
                                         coroutineScope.launch { appViewModel.drawerState.close() }
                                     },
                                     onNewChatClick = {
-                                        appViewModel.startNewChat()
+                                        if (isImageGenerationMode) {
+                                            coroutineScope.launch { appViewModel.drawerState.close() }
+                                            navController.navigate(Screen.CHAT_SCREEN)
+                                            appViewModel.startNewChat()
+                                        } else {
+                                            appViewModel.startNewChat()
+                                        }
                                         coroutineScope.launch { appViewModel.drawerState.close() }
                                     },
-                                    onRenameRequest = { index, newName -> appViewModel.renameConversation(index, newName) },
-                                    onDeleteRequest = { index -> appViewModel.deleteConversation(index) },
-                                    onClearAllConversationsRequest = { appViewModel.clearAllConversations() },
+                                    onRenameRequest = { index, newName ->
+                                        appViewModel.renameConversation(
+                                            index,
+                                            newName,
+                                            isImageGeneration = isImageGenerationMode
+                                        )
+                                    },
+                                    onDeleteRequest = { index ->
+                                        if (isImageGenerationMode) {
+                                            appViewModel.deleteImageGenerationConversation(index)
+                                        } else {
+                                            appViewModel.deleteConversation(index)
+                                        }
+                                    },
+                                    onClearAllConversationsRequest = appViewModel::clearAllConversations,
+                                   onClearAllImageGenerationConversationsRequest = appViewModel::clearAllImageGenerationConversations,
+                                   showClearImageHistoryDialog = appViewModel.showClearImageHistoryDialog.collectAsState().value,
+                                   onShowClearImageHistoryDialog = appViewModel::showClearImageHistoryDialog,
+                                   onDismissClearImageHistoryDialog = appViewModel::dismissClearImageHistoryDialog,
                                     getPreviewForIndex = { index ->
                                         appViewModel.getConversationPreviewText(
-                                            index
+                                            index,
+                                            isImageGenerationMode
                                         )
                                     },
                                     onAboutClick = { appViewModel.showAboutDialog() },
-                                    isLoadingHistoryData = isLoadingHistoryData
+                                    onImageGenerationClick = {
+                                        coroutineScope.launch { appViewModel.drawerState.close() }
+                                        navController.navigate(Screen.IMAGE_GENERATION_SCREEN)
+                                        appViewModel.startNewImageGeneration()
+                                    },
+                                    isLoadingHistoryData = isLoadingHistoryData,
+                                    isImageGenerationMode = isImageGenerationMode
                                 )
                             }
                         ) {
@@ -204,6 +243,9 @@ class MainActivity : ComponentActivity() {
                             ) {
                                 composable(Screen.CHAT_SCREEN) {
                                     ChatScreen(viewModel = appViewModel, navController = navController)
+                                }
+                                composable(Screen.IMAGE_GENERATION_SCREEN) {
+                                    ImageGenerationScreen(viewModel = appViewModel, navController = navController)
                                 }
                                 composable(
                                     route = Screen.SETTINGS_SCREEN,
@@ -217,6 +259,18 @@ class MainActivity : ComponentActivity() {
                                         navController = navController
                                     )
                                 }
+                               composable(
+                                   route = Screen.IMAGE_GENERATION_SETTINGS_SCREEN,
+                                   enterTransition = { androidx.compose.animation.EnterTransition.None },
+                                   exitTransition = { ExitTransition.None },
+                                   popEnterTransition = { androidx.compose.animation.EnterTransition.None },
+                                   popExitTransition = { ExitTransition.None }
+                               ) {
+                                   com.example.everytalk.ui.screens.ImageGeneration.ImageGenerationSettingsScreen(
+                                       viewModel = appViewModel,
+                                       navController = navController
+                                   )
+                               }
                             }
                         }
                     }
@@ -224,7 +278,12 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-
+   override fun onStop() {
+       super.onStop()
+       if (this::appViewModel.isInitialized) {
+           appViewModel.onAppStop()
+       }
+   }
     @Composable
     fun SplashScreen(onAnimationEnd: () -> Unit) {
         var startAnimation by remember { mutableStateOf(false) }
