@@ -538,7 +538,7 @@ fun ChatInputArea(
                                             uri = uri,
                                             id = UUID.randomUUID().toString(),
                                             displayName = displayName,
-                                            mimeType = mimeType,
+                                            mimeType = mimeType ?: "*/*",
                                             filePath = null
                                         )
                                     )

@@ -46,7 +46,8 @@ private data class AttachmentProcessingResult(
     private val apiHandler: ApiHandler,
     private val historyManager: HistoryManager,
     private val showSnackbar: (String) -> Unit,
-    private val triggerScrollToBottom: () -> Unit
+    private val triggerScrollToBottom: () -> Unit,
+    private val uriToBase64Encoder: (Uri) -> String?
 ) {
 
     companion object {
@@ -467,41 +468,20 @@ private data class AttachmentProcessingResult(
                 val historyEndIndex = messagesInChatUiSnapshot.indexOfFirst { it.id == newUserMessageForUi.id }
                 val historyUiMessages = if (historyEndIndex != -1) messagesInChatUiSnapshot.subList(0, historyEndIndex) else messagesInChatUiSnapshot
 
-                val apiMessagesForBackend = historyUiMessages.mapNotNull { uiMsg ->
-                    val role = when (uiMsg.sender) {
-                        UiSender.User -> "user"
-                        UiSender.AI -> "assistant"
-                        UiSender.System -> "system"
-                        UiSender.Tool -> "tool"
-                    }
-                    // For history, only include messages with actual text content.
-                    // Attachments from history are not sent.
-                    if (uiMsg.text.isNotBlank()) {
-                        val textContent = uiMsg.text.trim()
-                        if (shouldUsePartsApiMessage) {
-                            PartsApiMessage(role = role, parts = listOf(ApiContentPart.Text(textContent)))
-                        } else {
-                            SimpleTextApiMessage(role = role, content = textContent)
-                        }
-                    } else null
-                }.toMutableList()
-               if (!systemPrompt.isNullOrBlank()) {
-                   val systemMessage = if (shouldUsePartsApiMessage) {
-                       PartsApiMessage(role = "system", parts = listOf(ApiContentPart.Text(systemPrompt)))
-                   } else {
-                       SimpleTextApiMessage(role = "system", content = systemPrompt)
-                   }
-                   apiMessagesForBackend.add(0, systemMessage)
-               }
+                val apiMessagesForBackend = historyUiMessages.map { it.toApiMessage(uriToBase64Encoder) }.toMutableList()
 
-                if (shouldUsePartsApiMessage) {
-                    val currentUserParts = attachmentResult.apiContentParts
-                    if (currentUserParts.isNotEmpty()) {
-                        apiMessagesForBackend.add(PartsApiMessage(role = "user", parts = currentUserParts.toList()))
-                    }
-                } else {
-                    if (textToActuallySend.isNotBlank() || allAttachments.isNotEmpty()) {
-                        apiMessagesForBackend.add(SimpleTextApiMessage(role = "user", content = textToActuallySend))
+                // Add the current user message with attachments
+                apiMessagesForBackend.add(newUserMessageForUi.toApiMessage(uriToBase64Encoder))
+
+
+                if (!systemPrompt.isNullOrBlank()) {
+                    val systemMessage = SimpleTextApiMessage(role = "system", content = systemPrompt)
+                    // a more robust way to handle system messages
+                    val existingSystemMessageIndex = apiMessagesForBackend.indexOfFirst { it.role == "system" }
+                    if (existingSystemMessageIndex != -1) {
+                        apiMessagesForBackend[existingSystemMessageIndex] = systemMessage
+                    } else {
+                        apiMessagesForBackend.add(0, systemMessage)
                     }
                 }
 

@@ -1,4 +1,5 @@
 package com.example.everytalk.models
+
 import android.graphics.Bitmap
 import android.net.Uri
 import androidx.compose.material.icons.Icons
@@ -7,6 +8,11 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Contextual
 import java.util.UUID
+
+interface IMediaItem {
+    val id: String
+    val mimeType: String
+}
 
 enum class ImageSourceOption(val label: String, val icon: ImageVector) {
     ALBUM("相册", Icons.Outlined.PhotoLibrary),
@@ -38,38 +44,38 @@ enum class MoreOptionsType(val label: String, val icon: ImageVector, val mimeTyp
 }
 
 @Serializable
-sealed class SelectedMediaItem {
-    abstract val id: String
- 
+sealed class SelectedMediaItem : IMediaItem {
     @Serializable
     data class ImageFromUri(
         @Serializable(with = com.example.everytalk.util.UriSerializer::class)
         val uri: Uri,
         override val id: String,
+        override val mimeType: String = "image/jpeg",
         val filePath: String? = null
     ) : SelectedMediaItem()
- 
+
     @Serializable
     data class ImageFromBitmap(
         @Contextual val bitmap: Bitmap,
         override val id: String,
+        override val mimeType: String = "image/png",
         val filePath: String? = null
     ) : SelectedMediaItem()
- 
+
     @Serializable
     data class GenericFile(
         @Serializable(with = com.example.everytalk.util.UriSerializer::class)
         val uri: Uri,
         override val id: String,
         val displayName: String,
-        val mimeType: String?,
+        override val mimeType: String,
         val filePath: String? = null
     ) : SelectedMediaItem()
 
     @Serializable
     data class Audio(
         override val id: String,
-        val mimeType: String,
+        override val mimeType: String,
         val data: String
     ) : SelectedMediaItem()
 }

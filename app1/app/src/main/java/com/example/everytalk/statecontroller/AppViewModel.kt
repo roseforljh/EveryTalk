@@ -127,7 +127,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 apiHandler = apiHandler,
                 historyManager = historyManager,
                 showSnackbar = ::showSnackbar,
-                triggerScrollToBottom = { triggerScrollToBottom() }
+                triggerScrollToBottom = { triggerScrollToBottom() },
+                uriToBase64Encoder = ::encodeUriAsBase64
         )
     }
 
@@ -1937,5 +1938,18 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             }
         }
         super.onCleared()
+    }
+
+    private fun encodeUriAsBase64(uri: Uri): String? {
+        return try {
+            val contentResolver = getApplication<Application>().contentResolver
+            contentResolver.openInputStream(uri)?.use { inputStream ->
+                val bytes = inputStream.readBytes()
+                Base64.encodeToString(bytes, Base64.NO_WRAP)
+            }
+        } catch (e: Exception) {
+            Log.e("AppViewModel", "Failed to encode URI to Base64", e)
+            null
+        }
     }
 }

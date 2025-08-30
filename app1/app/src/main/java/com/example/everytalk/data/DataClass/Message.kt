@@ -1,4 +1,5 @@
 package com.example.everytalk.data.DataClass
+import android.net.Uri
 import com.example.everytalk.models.SelectedMediaItem
 import kotlinx.serialization.Serializable
 import java.util.UUID
@@ -41,17 +42,24 @@ data class Message(
         get() = sender.toRole()
     
     // 转换为API消息
-    fun toApiMessage(): AbstractApiMessage {
+    fun toApiMessage(uriEncoder: (Uri) -> String?): AbstractApiMessage {
         return if (attachments.isNotEmpty()) {
-            // 如果有附件，使用PartsApiMessage
             val parts = mutableListOf<ApiContentPart>()
             if (text.isNotBlank()) {
                 parts.add(ApiContentPart.Text(text))
             }
-            // 这里可以添加附件转换逻辑
+            attachments.forEach { mediaItem ->
+                when (mediaItem) {
+                    is SelectedMediaItem.ImageFromUri -> {
+                        uriEncoder(mediaItem.uri)?.let { base64 ->
+                            parts.add(ApiContentPart.InlineData(base64Data = base64, mimeType = mediaItem.mimeType))
+                        }
+                    }
+                    else -> {} // Handle other attachment types if necessary
+                }
+            }
             PartsApiMessage(id = id, role = role, parts = parts, name = name)
         } else {
-            // 如果没有附件，使用SimpleTextApiMessage
             SimpleTextApiMessage(id = id, role = role, content = text, name = name)
         }
     }
