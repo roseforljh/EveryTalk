@@ -199,55 +199,34 @@ class ApiHandler(
                if (isImageGeneration) {
                    try {
                        val response = ApiClient.generateImage(requestBody)
-                       val fileManager = FileManager(applicationContextForApiClient)
+                       logger.debug("[ImageGen] Received response from backend: $response")
+                       
+                       val imageUrlsFromResponse = response.images.mapNotNull { it.url.takeIf { url -> url.isNotBlank() } }
 
-                       val downloadedImageUris = mutableListOf<String>()
-                       for ((idx, imageUrl) in response.images.withIndex()) {
-                           val url = imageUrl.url
-                           if (url.isNullOrBlank()) continue
-
-                           val bitmap = when {
-                               url.startsWith("data:", ignoreCase = true) ->
-                                   fileManager.loadBitmapFromDataUrl(url)
-                               url.startsWith("http://", ignoreCase = true) || url.startsWith("https://", ignoreCase = true) ->
-                                   fileManager.loadAndCompressBitmapFromUrl(url)
-                               else ->
-                                   fileManager.loadAndCompressBitmapFromUri(Uri.parse(url))
-                           }
-
-                           if (bitmap != null) {
-                               val savedPath = fileManager.saveBitmapToAppInternalStorage(bitmap, aiMessageId, idx)
-                               if (savedPath != null) {
-                                  downloadedImageUris.add(savedPath)
+                       withContext(Dispatchers.Main.immediate) {
+                           val messageList = stateHolder.imageGenerationMessages
+                           val index = messageList.indexOfFirst { it.id == aiMessageId }
+                           if (index != -1) {
+                               val responseText = response.text ?: ""
+                               if (responseText.startsWith("[CONTENT_FILTER]")) {
+                                   val userFriendlyMessage = responseText.removePrefix("[CONTENT_FILTER]").trim()
+                                   stateHolder.showSnackbar(userFriendlyMessage)
+                                   messageList.removeAt(index)
+                               } else {
+                                   val currentMessage = messageList[index]
+                                   val updatedMessage = currentMessage.copy(
+                                       imageUrls = if (imageUrlsFromResponse.isNotEmpty()) imageUrlsFromResponse else currentMessage.imageUrls,
+                                       text = responseText,
+                                       contentStarted = true
+                                   )
+                                   logger.debug("[ImageGen] Updating message ${updatedMessage.id} with ${updatedMessage.imageUrls?.size ?: 0} images.")
+                                   messageList[index] = updatedMessage
                                }
                            }
                        }
-
-                        withContext(Dispatchers.Main.immediate) {
-                            val messageList = stateHolder.imageGenerationMessages
-                            val index = messageList.indexOfFirst { it.id == aiMessageId }
-                            if (index != -1) {
-                                val responseText = response.text ?: ""
-                                if (responseText.startsWith("[CONTENT_FILTER]")) {
-                                    // This is a content filter signal, show snackbar and remove placeholder
-                                    val userFriendlyMessage = responseText.removePrefix("[CONTENT_FILTER]").trim()
-                                    stateHolder.showSnackbar(userFriendlyMessage)
-                                    messageList.removeAt(index)
-                                } else {
-                                    val currentMessage = messageList[index]
-                                    val updatedMessage = currentMessage.copy(
-                                        imageUrls = if (downloadedImageUris.isNotEmpty()) downloadedImageUris else currentMessage.imageUrls,
-                                        text = responseText,
-                                        contentStarted = true
-                                    )
-                                    messageList[index] = updatedMessage
-                                }
-                            }
-                        }
-                        // 图像或文本已成功下载并更新到消息后，立即持久化历史
-                        viewModelScope.launch(Dispatchers.IO) {
-                            historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true)
-                        }
+                       viewModelScope.launch(Dispatchers.IO) {
+                           historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true)
+                       }
                    } catch (e: Exception) {
                        logger.error("[ImageGen] Image processing failed for message $aiMessageId", e)
                        updateMessageWithError(aiMessageId, e, isImageGeneration = true)
