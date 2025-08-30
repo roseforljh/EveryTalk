@@ -279,13 +279,6 @@ fun ChatScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(top = scaffoldPaddingValues.calculateTopPadding())
-                .then(
-                    if (messages.isNotEmpty()) {
-                        Modifier.offset(y = -imeHeightDp)
-                    } else {
-                        Modifier
-                    }
-                )
         ) {
             Box(
                 modifier = Modifier
@@ -329,56 +322,7 @@ fun ChatScreen(
 
             }
 
-            if (messages.isEmpty()) {
-                Box(modifier = Modifier.imePadding()) {
-                    ChatInputArea(
-                        text = text,
-                        onTextChange = {
-                            viewModel.onTextChange(it)
-                        },
-                        onSendMessageRequest = { messageText, _, attachments, mimeType ->
-                            viewModel.onSendMessage(messageText = messageText, attachments = attachments, audioBase64 = null, mimeType = mimeType)
-                            keyboardController?.hide()
-                            coroutineScope.launch {
-                                // 等待键盘关闭
-                                snapshotFlow { imeInsets.getBottom(density) > 0 }
-                                    .filter { isVisible -> !isVisible }
-                                    .first()
-                                // 滚动到底部
-                                scrollStateManager.jumpToBottom()
-                            }
-                        },
-                        selectedMediaItems = selectedMediaItems,
-                        onAddMediaItem = { viewModel.addMediaItem(it) },
-                        onRemoveMediaItemAtIndex = { viewModel.removeMediaItemAtIndex(it) },
-                        onClearMediaItems = { viewModel.clearMediaItems() },
-                        isApiCalling = isApiCalling,
-                        isWebSearchEnabled = isWebSearchEnabled,
-                        onToggleWebSearch = {
-                            viewModel.toggleWebSearchMode(!isWebSearchEnabled)
-                        },
-                        onStopApiCall = { viewModel.onCancelAPICall() },
-                        focusRequester = focusRequester,
-                        selectedApiConfig = selectedApiConfig,
-                        onShowSnackbar = { viewModel.showSnackbar(it) },
-                        imeInsets = imeInsets,
-                        density = density,
-                        keyboardController = keyboardController,
-                        onFocusChange = {
-                            scrollStateManager.jumpToBottom()
-                        },
-                        onSendMessage = { messageText, isFromRegeneration, attachments, audioBase64, mimeType ->
-                            viewModel.onSendMessage(
-                                messageText = messageText,
-                                isFromRegeneration = isFromRegeneration,
-                                attachments = attachments,
-                                audioBase64 = audioBase64,
-                                mimeType = mimeType
-                            )
-                        }
-                    )
-                }
-            } else {
+            Box(modifier = Modifier.imePadding()) {
                 ChatInputArea(
                     text = text,
                     onTextChange = {

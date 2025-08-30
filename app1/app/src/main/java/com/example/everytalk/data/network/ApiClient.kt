@@ -123,6 +123,10 @@ object ApiClient {
                     val reason = jsonObject["reason"]?.jsonPrimitive?.content ?: ""
                     AppStreamEvent.Finish(reason)
                 }
+                "image_generation" -> {
+                    val imageUrl = jsonObject["imageUrl"]?.jsonPrimitive?.content ?: ""
+                    AppStreamEvent.ImageGeneration(imageUrl)
+                }
                 else -> {
                     android.util.Log.w("ApiClient", "Unknown stream event type: $type")
                     null
@@ -155,6 +159,7 @@ object ApiClient {
                     subclass(AppStreamEvent.ToolCall::class)
                     subclass(AppStreamEvent.Error::class)
                     subclass(AppStreamEvent.Finish::class)
+                    subclass(AppStreamEvent.ImageGeneration::class)
                 }
             }
         }
@@ -775,9 +780,36 @@ object ApiClient {
         }
 
         val payload = buildJsonObject {
-            // 使用图像生成配置中的模型，避免把聊天模型发给上游
             put("model", imgReq.model)
             put("prompt", finalPrompt)
+
+            // 检查并添加图片附件，用于图文编辑
+            val imageAttachments = chatRequest.messages
+                .lastOrNull { it.role == "user" }
+                ?.let { msg ->
+                    (msg as? com.example.everytalk.data.DataClass.PartsApiMessage)?.parts
+                        ?.filterIsInstance<com.example.everytalk.data.DataClass.ApiContentPart.InlineData>()
+                }
+
+            if (!imageAttachments.isNullOrEmpty()) {
+                val contentsArray = buildJsonArray {
+                    // Gemini's multimodal format requires a list of parts
+                    val textPart = buildJsonObject { put("text", finalPrompt) }
+                    add(textPart)
+
+                    imageAttachments.forEach { attachment ->
+                        val imagePart = buildJsonObject {
+                            put("inline_data", buildJsonObject {
+                                put("mime_type", attachment.mimeType)
+                                put("data", attachment.base64Data)
+                            })
+                        }
+                        add(imagePart)
+                    }
+                }
+                put("contents", contentsArray)
+            }
+
             imgReq.imageSize?.let { put("image_size", it) }
             imgReq.batchSize?.let { put("batch_size", it) }
             imgReq.numInferenceSteps?.let { put("num_inference_steps", it) }

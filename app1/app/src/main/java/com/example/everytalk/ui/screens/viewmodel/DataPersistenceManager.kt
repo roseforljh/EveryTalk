@@ -81,11 +81,11 @@ class DataPersistenceManager(
                     selectedImageGenConfig = loadedImageGenConfigs.first()
                     dataSource.saveSelectedImageGenConfigId(selectedImageGenConfig.id)
                 }
-
-                withContext(Dispatchers.Main.immediate) {
-                    stateHolder._imageGenApiConfigs.value = loadedImageGenConfigs
-                    stateHolder._selectedImageGenApiConfig.value = selectedImageGenConfig
-                }
+ 
+                 withContext(Dispatchers.Main.immediate) {
+                     stateHolder._imageGenApiConfigs.value = loadedImageGenConfigs
+                     stateHolder._selectedImageGenApiConfig.value = selectedImageGenConfig
+                 }
 
                 // 第二阶段：异步加载历史数据（延迟加载）
                 launch {

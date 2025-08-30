@@ -53,6 +53,10 @@ sealed class AppStreamEvent {
     @Serializable
     @SerialName("finish")
     data class Finish(val reason: String) : AppStreamEvent()
+
+    @Serializable
+    @SerialName("image_generation")
+    data class ImageGeneration(val imageUrl: String) : AppStreamEvent()
 }
 
 @Serializable

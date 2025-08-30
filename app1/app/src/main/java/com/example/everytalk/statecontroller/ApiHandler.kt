@@ -223,23 +223,23 @@ class ApiHandler(
                            }
                        }
 
-                       if (downloadedImageUris.isNotEmpty()) {
-                           withContext(Dispatchers.Main.immediate) {
-                               val messageList = stateHolder.imageGenerationMessages
-                               val index = messageList.indexOfFirst { it.id == aiMessageId }
-                               if (index != -1) {
-                                   val updatedMessage = messageList[index].copy(
-                                       imageUrls = downloadedImageUris,
-                                       contentStarted = true
-                                   )
-                                   messageList[index] = updatedMessage
-                               }
-                           }
-                           // 图像已成功下载并更新到消息后，立即持久化图像生成历史
-                           viewModelScope.launch(Dispatchers.IO) {
-                               historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true)
-                           }
-                       }
+                        withContext(Dispatchers.Main.immediate) {
+                            val messageList = stateHolder.imageGenerationMessages
+                            val index = messageList.indexOfFirst { it.id == aiMessageId }
+                            if (index != -1) {
+                                val currentMessage = messageList[index]
+                                val updatedMessage = currentMessage.copy(
+                                    imageUrls = if (downloadedImageUris.isNotEmpty()) downloadedImageUris else currentMessage.imageUrls,
+                                    text = response.text ?: currentMessage.text,
+                                    contentStarted = true
+                                )
+                                messageList[index] = updatedMessage
+                            }
+                        }
+                        // 图像或文本已成功下载并更新到消息后，立即持久化历史
+                        viewModelScope.launch(Dispatchers.IO) {
+                            historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true)
+                        }
                    } catch (e: Exception) {
                        logger.error("[ImageGen] Image processing failed for message $aiMessageId", e)
                        updateMessageWithError(aiMessageId, e, isImageGeneration = true)
@@ -463,6 +463,20 @@ class ApiHandler(
             }
             is AppStreamEvent.OutputType -> {
                 messageProcessor.setCurrentOutputType(appEvent.type)
+            }
+            is AppStreamEvent.ImageGeneration -> {
+                val messageId = stateHolder._currentStreamingAiMessageId.value ?: return
+                val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
+                val index = messageList.indexOfFirst { it.id == messageId }
+                if (index != -1) {
+                    val originalMessage = messageList[index]
+                    val updatedImageUrls = (originalMessage.imageUrls ?: emptyList()) + appEvent.imageUrl
+                    val updatedMessage = originalMessage.copy(
+                        imageUrls = updatedImageUrls,
+                        contentStarted = true
+                    )
+                    messageList[index] = updatedMessage
+                }
             }
             else -> {
                 // 其他事件类型

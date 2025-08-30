@@ -19,6 +19,8 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.atomic.AtomicBoolean
 
+
+
 /**
  * 统一的消息处理类，用于解决消息处理冲突
  * 提供线程安全的消息处理机制
@@ -559,6 +561,11 @@ class MessageProcessor {
                             // This event is handled in ApiHandler, but we need to acknowledge it here
                             // to make the 'when' statement exhaustive.
                             ProcessedEventResult.StatusUpdate("output_type_received")
+                        }
+                        is AppStreamEvent.ImageGeneration -> {
+                            // Not handled by MessageProcessor, ApiHandler will handle it.
+                            // Return a neutral event.
+                            ProcessedEventResult.StatusUpdate("image_generation_event_received")
                         }
                     }
                 } catch (e: Exception) {

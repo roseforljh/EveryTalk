@@ -67,6 +67,7 @@ fun ChatMessagesList(
     var contextMenuPressOffset by remember { mutableStateOf(Offset.Zero) }
 
     val isApiCalling by viewModel.isApiCalling.collectAsState()
+   val density = LocalDensity.current
 
     LaunchedEffect(chatItems) {
         if (chatItems.lastOrNull() is ChatListItem.AiMessageReasoning) {
@@ -300,7 +301,13 @@ fun ChatMessagesList(
             MessageContextMenu(
                 isVisible = isContextMenuVisible,
                 message = message,
-                pressOffset = contextMenuPressOffset,
+                pressOffset = with(density) {
+                    if (message.sender == com.example.everytalk.data.DataClass.Sender.User) {
+                        Offset(contextMenuPressOffset.x, contextMenuPressOffset.y)
+                    } else {
+                        Offset(contextMenuPressOffset.x, contextMenuPressOffset.y)
+                    }
+                },
                 onDismiss = { isContextMenuVisible = false },
                 onCopy = {
                     viewModel.copyToClipboard(it.text)

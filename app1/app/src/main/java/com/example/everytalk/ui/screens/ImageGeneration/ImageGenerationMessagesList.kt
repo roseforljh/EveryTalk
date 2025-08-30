@@ -59,7 +59,8 @@ fun ImageGenerationMessagesList(
     val haptic = LocalHapticFeedback.current
     val coroutineScope = rememberCoroutineScope()
     val animatedItems = remember { mutableStateMapOf<String, Boolean>() }
-
+    val density = LocalDensity.current
+ 
     var isContextMenuVisible by remember { mutableStateOf(false) }
     var contextMenuMessage by remember { mutableStateOf<Message?>(null) }
     var contextMenuPressOffset by remember { mutableStateOf(Offset.Zero) }
@@ -219,7 +220,13 @@ fun ImageGenerationMessagesList(
             MessageContextMenu(
                 isVisible = isContextMenuVisible,
                 message = message,
-                pressOffset = contextMenuPressOffset,
+                pressOffset = with(density) {
+                    if (message.sender == com.example.everytalk.data.DataClass.Sender.User) {
+                        Offset(contextMenuPressOffset.x, contextMenuPressOffset.y)
+                    } else {
+                        Offset(contextMenuPressOffset.x, contextMenuPressOffset.y + 100.dp.toPx())
+                    }
+                },
                 onDismiss = { isContextMenuVisible = false },
                 onCopy = {
                     viewModel.copyToClipboard(it.text)
@@ -355,34 +362,41 @@ private fun AiMessageItem(
                         vertical = ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL
                     )
             ) {
-               if (message.imageUrls != null && message.imageUrls.isNotEmpty()) {
-                   AttachmentsContent(
-                       attachments = message.imageUrls.map { SelectedMediaItem.ImageFromUri(Uri.parse(it), UUID.randomUUID().toString()) },
-                       onAttachmentClick = { att ->
-                           when (att) {
-                               is SelectedMediaItem.ImageFromUri -> onOpenPreview(att.uri)
-                               is SelectedMediaItem.ImageFromBitmap -> onOpenPreview(att.bitmap)
-                               else -> { /* ignore */ }
-                           }
-                       },
-                       maxWidth = maxWidth,
-                       message = message,
-                       onEditRequest = {},
-                       onRegenerateRequest = {},
-                       onLongPress = { msg, offset -> onLongPress(msg, offset) },
-                       onImageLoaded = onImageLoaded,
-                       bubbleColor = MaterialTheme.chatColors.aiBubble,
-                       scrollStateManager = scrollStateManager
-                   )
-               } else {
-                   EnhancedMarkdownText(
-                       markdown = text,
-                       style = MaterialTheme.typography.bodyLarge,
-                       color = MaterialTheme.colorScheme.onSurface,
-                       isStreaming = isStreaming,
-                       messageOutputType = message.outputType
-                   )
-               }
+                Column {
+                    if (text.isNotBlank()) {
+                        EnhancedMarkdownText(
+                            markdown = text,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            isStreaming = isStreaming,
+                            messageOutputType = message.outputType
+                        )
+                    }
+                    if (message.imageUrls != null && message.imageUrls.isNotEmpty()) {
+                        // Add a little space between text and image
+                        if (text.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                        AttachmentsContent(
+                            attachments = message.imageUrls.map { SelectedMediaItem.ImageFromUri(Uri.parse(it), UUID.randomUUID().toString()) },
+                            onAttachmentClick = { att ->
+                                when (att) {
+                                    is SelectedMediaItem.ImageFromUri -> onOpenPreview(att.uri)
+                                    is SelectedMediaItem.ImageFromBitmap -> onOpenPreview(att.bitmap)
+                                    else -> { /* ignore */ }
+                                }
+                            },
+                            maxWidth = maxWidth,
+                            message = message,
+                            onEditRequest = {},
+                            onRegenerateRequest = {},
+                            onLongPress = { msg, offset -> onLongPress(msg, offset) },
+                            onImageLoaded = onImageLoaded,
+                            bubbleColor = MaterialTheme.chatColors.aiBubble,
+                            scrollStateManager = scrollStateManager
+                        )
+                    }
+                }
             }
         }
     }

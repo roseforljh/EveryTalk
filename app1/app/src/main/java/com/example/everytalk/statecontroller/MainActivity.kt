@@ -244,9 +244,9 @@ class MainActivity : ComponentActivity() {
                                 composable(Screen.CHAT_SCREEN) {
                                     ChatScreen(viewModel = appViewModel, navController = navController)
                                 }
-                                composable(Screen.IMAGE_GENERATION_SCREEN) {
+                               composable(Screen.IMAGE_GENERATION_SCREEN) {
                                     ImageGenerationScreen(viewModel = appViewModel, navController = navController)
-                                }
+                               }
                                 composable(
                                     route = Screen.SETTINGS_SCREEN,
                                     enterTransition = { androidx.compose.animation.EnterTransition.None },

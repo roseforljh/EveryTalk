@@ -170,17 +170,7 @@ fun AttachmentsContent(
     bubbleColor: Color = MaterialTheme.colorScheme.surfaceVariant
 ) {
     val context = LocalContext.current
-    var isContextMenuVisible by remember(message.id) { mutableStateOf(false) }
-    var pressOffset by remember(message.id) { mutableStateOf(Offset.Zero) }
-    val density = LocalDensity.current
-    val clipboardManager = LocalClipboardManager.current
     val haptic = LocalHapticFeedback.current
-    val coroutineScope = rememberCoroutineScope()
-
-    val onLongPressHandler = { offset: Offset ->
-        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-        onLongPress(message, offset)
-    }
 
     Box {
         Column(
@@ -190,6 +180,7 @@ fun AttachmentsContent(
             attachments.forEach { attachment ->
                 when (attachment) {
                     is SelectedMediaItem.ImageFromUri -> {
+                        var imageGlobalPosition by remember { mutableStateOf(Offset.Zero) }
                         AsyncImage(
                             model = attachment.uri,
                             contentDescription = "Image attachment",
@@ -198,17 +189,25 @@ fun AttachmentsContent(
                                 .widthIn(max = maxWidth * 0.8f)
                                 .padding(vertical = 4.dp)
                                 .clip(RoundedCornerShape(16.dp))
+                                .onGloballyPositioned {
+                                    imageGlobalPosition = it.localToRoot(Offset.Zero)
+                                }
                                 .pointerInput(message.id, attachment.uri) {
                                     detectTapGestures(
                                         onTap = {
                                             onAttachmentClick(attachment)
                                         },
-                                        onLongPress = { offset -> onLongPressHandler(offset) }
+                                        onLongPress = { localOffset ->
+                                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                            val globalOffset = imageGlobalPosition + localOffset
+                                            onLongPress(message, globalOffset)
+                                        }
                                     )
                                 }
                         )
                     }
                     is SelectedMediaItem.ImageFromBitmap -> {
+                        var imageGlobalPosition by remember { mutableStateOf(Offset.Zero) }
                         AsyncImage(
                             model = attachment.bitmap,
                             contentDescription = "Image attachment",
@@ -217,21 +216,32 @@ fun AttachmentsContent(
                                 .widthIn(max = maxWidth * 0.8f)
                                 .padding(vertical = 4.dp)
                                 .clip(RoundedCornerShape(16.dp))
+                                .onGloballyPositioned {
+                                    imageGlobalPosition = it.localToRoot(Offset.Zero)
+                                }
                                 .pointerInput(message.id, attachment.bitmap) {
                                     detectTapGestures(
                                         onTap = { onAttachmentClick(attachment) },
-                                        onLongPress = { offset -> onLongPressHandler(offset) }
+                                        onLongPress = { localOffset ->
+                                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                            val globalOffset = imageGlobalPosition + localOffset
+                                            onLongPress(message, globalOffset)
+                                        }
                                     )
                                 }
                         )
                     }
                     is SelectedMediaItem.GenericFile -> {
+                        var itemGlobalPosition by remember { mutableStateOf(Offset.Zero) }
                         Row(
                             modifier = Modifier
                                 .widthIn(max = maxWidth)
                                 .padding(vertical = 4.dp)
                                 .background(bubbleColor, RoundedCornerShape(12.dp))
                                 .clip(RoundedCornerShape(12.dp))
+                                .onGloballyPositioned {
+                                    itemGlobalPosition = it.localToRoot(Offset.Zero)
+                                }
                                 .pointerInput(message.id, attachment.uri) {
                                     detectTapGestures(
                                         onTap = {
@@ -244,7 +254,11 @@ fun AttachmentsContent(
                                             }
                                             context.startActivity(intent)
                                         },
-                                        onLongPress = { offset -> onLongPressHandler(offset) }
+                                        onLongPress = { localOffset ->
+                                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                            val globalOffset = itemGlobalPosition + localOffset
+                                            onLongPress(message, globalOffset)
+                                        }
                                     )
                                 }
                                 .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -258,25 +272,35 @@ fun AttachmentsContent(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = attachment.displayName ?: attachment.uri.path?.substringAfterLast('/') ?: "Attached File",
+                                text = attachment.displayName
+                                    ?: attachment.uri.path?.substringAfterLast('/')
+                                    ?: "Attached File",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
                     is SelectedMediaItem.Audio -> {
+                        var itemGlobalPosition by remember { mutableStateOf(Offset.Zero) }
                         Row(
                             modifier = Modifier
                                 .widthIn(max = maxWidth)
                                 .padding(vertical = 4.dp)
                                 .background(bubbleColor, RoundedCornerShape(12.dp))
                                 .clip(RoundedCornerShape(12.dp))
+                                .onGloballyPositioned {
+                                    itemGlobalPosition = it.localToRoot(Offset.Zero)
+                                }
                                 .pointerInput(message.id, attachment) {
                                     detectTapGestures(
                                         onTap = {
                                             // TODO: Implement audio playback
                                         },
-                                        onLongPress = { offset -> onLongPressHandler(offset) }
+                                        onLongPress = { localOffset ->
+                                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                            val globalOffset = itemGlobalPosition + localOffset
+                                            onLongPress(message, globalOffset)
+                                        }
                                     )
                                 }
                                 .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -372,31 +396,12 @@ fun MessageContextMenu(
         val density = LocalDensity.current
         val configuration = LocalConfiguration.current
         
-        // 计算菜单位置，使菜单的右上角对齐到手指按下的位置
-        val menuWidthPx = with(density) { CONTEXT_MENU_FIXED_WIDTH.toPx() }
-        val offsetY = with(density) { CONTEXT_MENU_OFFSET_FROM_PRESS_Y.toPx() }
-        val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
-        val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
-
-        // 估算菜单高度（3个菜单项 + 内边距）
-        val estimatedMenuHeightPx = with(density) { (48.dp * 3 + 16.dp).toPx() }
- 
-        // 计算菜单位置：让菜单出现在按压点的右下角，增加少量偏移防止遮挡
-        val offsetX = with(density) { 8.dp.toPx() }
-        val offsetYPositive = with(density) { 32.dp.toPx() }
- 
-        val targetX = pressOffset.x + offsetX
-        val targetY = pressOffset.y + offsetYPositive
- 
-        // 确保菜单不会超出屏幕边界
-        val finalX = targetX.coerceAtLeast(0f).coerceAtMost(screenWidthPx - menuWidthPx)
-        val finalY = targetY.coerceAtLeast(0f).coerceAtMost(screenHeightPx - estimatedMenuHeightPx)
-
         Popup(
             alignment = Alignment.TopStart,
             offset = IntOffset(
-                x = finalX.toInt(),  // 菜单左上角X坐标，使菜单右上角对齐到按压点
-                y = finalY.toInt()), // 菜单左上角Y坐标，向上偏移避免手指遮挡
+                (pressOffset.x - with(density) { CONTEXT_MENU_FIXED_WIDTH.toPx() }).toInt(),
+                (pressOffset.y + with(density) { CONTEXT_MENU_OFFSET_FROM_PRESS_Y.toPx() }).toInt()
+            ),
             onDismissRequest = onDismiss,
             properties = PopupProperties(
                 focusable = true,
@@ -551,7 +556,10 @@ fun ImageContextMenu(
 
        Popup(
            alignment = Alignment.TopStart,
-           offset = IntOffset(finalX.toInt(), finalY.toInt()),
+           offset = IntOffset(
+               (pressOffset.x - with(density) { CONTEXT_MENU_FIXED_WIDTH.toPx() }).toInt(),
+               (pressOffset.y + with(density) { CONTEXT_MENU_OFFSET_FROM_PRESS_Y.toPx() }).toInt()
+           ),
            onDismissRequest = onDismiss,
            properties = PopupProperties(
                focusable = true,

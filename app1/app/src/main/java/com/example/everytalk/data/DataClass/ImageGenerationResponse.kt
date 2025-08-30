@@ -15,6 +15,7 @@ data class Timings(
 @Serializable
 data class ImageGenerationResponse(
     val images: List<ImageUrl>,
+    val text: String? = null,
     val timings: Timings,
     val seed: Int
 )
