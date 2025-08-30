@@ -40,10 +40,20 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
     var showModelSelection by remember { mutableStateOf(false) }
 
     if (showModelSelection) {
+        val allImageConfigs by viewModel.imageGenApiConfigs.collectAsState()
+        val availableModels = remember(selectedApiConfig, allImageConfigs) {
+            val currentSelectedConfig = selectedApiConfig
+            if (currentSelectedConfig != null) {
+                allImageConfigs.filter { it.key == currentSelectedConfig.key }
+            } else {
+                allImageConfigs
+            }
+        }
+
         ModelSelectionBottomSheet(
             onDismissRequest = { showModelSelection = false },
             sheetState = androidx.compose.material3.rememberModalBottomSheetState(),
-            availableModels = viewModel.imageGenApiConfigs.collectAsState().value,
+            availableModels = availableModels,
             onModelSelected = {
                 viewModel.selectConfig(it, isImageGen = true)
                 showModelSelection = false

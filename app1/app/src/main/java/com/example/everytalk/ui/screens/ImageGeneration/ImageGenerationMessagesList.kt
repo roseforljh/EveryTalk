@@ -75,17 +75,20 @@ fun ImageGenerationMessagesList(
     var imagePreviewModel by remember { mutableStateOf<Any?>(null) }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .fillMaxSize()
-                .nestedScroll(scrollStateManager.nestedScrollConnection),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            itemsIndexed(
-                items = chatItems,
-                key = { _, item -> item.stableId },
+        if (chatItems.isEmpty()) {
+            EmptyImageGenerationView()
+        } else {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .nestedScroll(scrollStateManager.nestedScrollConnection),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                itemsIndexed(
+                    items = chatItems,
+                    key = { _, item -> item.stableId },
                 contentType = { _, item -> item::class.java.simpleName }
             ) { index, item ->
                 val alpha = remember { Animatable(0f) }
@@ -211,8 +214,9 @@ fun ImageGenerationMessagesList(
                     }
                 }
             }
-            item(key = "chat_screen_footer_spacer_in_list") {
-                Spacer(modifier = Modifier.height(1.dp))
+                item(key = "chat_screen_footer_spacer_in_list") {
+                    Spacer(modifier = Modifier.height(1.dp))
+                }
             }
         }
 

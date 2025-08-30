@@ -227,13 +227,21 @@ class ApiHandler(
                             val messageList = stateHolder.imageGenerationMessages
                             val index = messageList.indexOfFirst { it.id == aiMessageId }
                             if (index != -1) {
-                                val currentMessage = messageList[index]
-                                val updatedMessage = currentMessage.copy(
-                                    imageUrls = if (downloadedImageUris.isNotEmpty()) downloadedImageUris else currentMessage.imageUrls,
-                                    text = response.text ?: currentMessage.text,
-                                    contentStarted = true
-                                )
-                                messageList[index] = updatedMessage
+                                val responseText = response.text ?: ""
+                                if (responseText.startsWith("[CONTENT_FILTER]")) {
+                                    // This is a content filter signal, show snackbar and remove placeholder
+                                    val userFriendlyMessage = responseText.removePrefix("[CONTENT_FILTER]").trim()
+                                    stateHolder.showSnackbar(userFriendlyMessage)
+                                    messageList.removeAt(index)
+                                } else {
+                                    val currentMessage = messageList[index]
+                                    val updatedMessage = currentMessage.copy(
+                                        imageUrls = if (downloadedImageUris.isNotEmpty()) downloadedImageUris else currentMessage.imageUrls,
+                                        text = responseText,
+                                        contentStarted = true
+                                    )
+                                    messageList[index] = updatedMessage
+                                }
                             }
                         }
                         // 图像或文本已成功下载并更新到消息后，立即持久化历史

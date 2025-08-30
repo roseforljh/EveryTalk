@@ -173,10 +173,10 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
        get() = stateHolder._imageGenApiConfigs.asStateFlow()
    val selectedImageGenApiConfig: StateFlow<ApiConfig?>
        get() = stateHolder._selectedImageGenApiConfig.asStateFlow()
-    val isApiCalling: StateFlow<Boolean>
-        get() = stateHolder._isApiCalling.asStateFlow()
-    val currentStreamingAiMessageId: StateFlow<String?>
-        get() = stateHolder._currentStreamingAiMessageId.asStateFlow()
+   val isApiCalling: StateFlow<Boolean>
+       get() = stateHolder._isApiCalling.asStateFlow()
+   val currentStreamingAiMessageId: StateFlow<String?>
+       get() = stateHolder._currentStreamingAiMessageId.asStateFlow()
     val reasoningCompleteMap: SnapshotStateMap<String, Boolean>
         get() = stateHolder.reasoningCompleteMap
     @Suppress("unused")
@@ -990,6 +990,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
 
             messagesMutex.withLock {
                 withContext(Dispatchers.Main.immediate) {
+                    stateHolder._loadedHistoryIndex.value = null // 强制刷新状态
                     stateHolder.messages.clear()
                     stateHolder.messages.addAll(processedConversation)
                     stateHolder.reasoningCompleteMap.clear()
@@ -1037,6 +1038,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             
             messagesMutex.withLock {
                 withContext(Dispatchers.Main.immediate) {
+                    stateHolder._loadedImageGenerationHistoryIndex.value = null
                     stateHolder.imageGenerationMessages.clear()
                     stateHolder.imageGenerationMessages.addAll(conversationToLoad)
                     stateHolder._loadedImageGenerationHistoryIndex.value = index

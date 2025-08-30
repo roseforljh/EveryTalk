@@ -114,6 +114,10 @@ fun addMessage(message: Message, isImageGeneration: Boolean = false) {
         return ::scrollController.isInitialized && !scrollController.userManuallyScrolledAwayFromBottom
     }
 
+    fun showSnackbar(message: String) {
+        _snackbarMessage.tryEmit(message)
+    }
+
     fun triggerScrollToBottom() {
         _scrollToBottomEvent.tryEmit(Unit)
     }
