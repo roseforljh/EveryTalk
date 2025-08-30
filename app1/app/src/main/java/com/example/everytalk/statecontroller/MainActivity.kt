@@ -192,7 +192,13 @@ class MainActivity : ComponentActivity() {
                                     onNewChatClick = {
                                         if (isImageGenerationMode) {
                                             coroutineScope.launch { appViewModel.drawerState.close() }
-                                            navController.navigate(Screen.CHAT_SCREEN)
+                                            navController.navigate(Screen.CHAT_SCREEN) {
+                                                popUpTo(navController.graph.startDestinationRoute!!) {
+                                                    saveState = true
+                                                }
+                                                launchSingleTop = true
+                                                restoreState = true
+                                            }
                                             appViewModel.startNewChat()
                                         } else {
                                             appViewModel.startNewChat()
@@ -227,7 +233,13 @@ class MainActivity : ComponentActivity() {
                                     onAboutClick = { appViewModel.showAboutDialog() },
                                     onImageGenerationClick = {
                                         coroutineScope.launch { appViewModel.drawerState.close() }
-                                        navController.navigate(Screen.IMAGE_GENERATION_SCREEN)
+                                        navController.navigate(Screen.IMAGE_GENERATION_SCREEN) {
+                                            popUpTo(navController.graph.startDestinationRoute!!) {
+                                                saveState = true
+                                            }
+                                            launchSingleTop = true
+                                            restoreState = true
+                                        }
                                         appViewModel.startNewImageGeneration()
                                     },
                                     isLoadingHistoryData = isLoadingHistoryData,
