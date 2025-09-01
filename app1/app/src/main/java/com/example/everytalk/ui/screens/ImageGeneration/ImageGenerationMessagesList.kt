@@ -40,10 +40,36 @@ import com.example.everytalk.ui.screens.BubbleMain.Main.AttachmentsContent
 import com.example.everytalk.ui.screens.BubbleMain.Main.UserOrErrorMessageContent
 import com.example.everytalk.ui.screens.BubbleMain.Main.MessageContextMenu
 import com.example.everytalk.ui.screens.BubbleMain.Main.ImageContextMenu
+import com.example.everytalk.ui.screens.BubbleMain.Main.ThreeDotsWaveAnimation
 import com.example.everytalk.ui.theme.ChatDimensions
 import com.example.everytalk.ui.theme.chatColors
 import com.example.everytalk.ui.components.EnhancedMarkdownText
 import kotlinx.coroutines.launch
+
+@Composable
+fun ImageGenerationLoadingView() {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            ThreeDotsWaveAnimation(
+                dotColor = MaterialTheme.colorScheme.primary,
+                dotSize = 12.dp,
+                spacing = 8.dp
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "正在连接图像大模型...",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+            )
+        }
+    }
+}
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -75,8 +101,14 @@ fun ImageGenerationMessagesList(
     var imagePreviewModel by remember { mutableStateOf<Any?>(null) }
 
     Box(modifier = Modifier.fillMaxSize()) {
+        val isApiCalling by viewModel.isImageApiCalling.collectAsState()
+
         if (chatItems.isEmpty()) {
-            EmptyImageGenerationView()
+            if (isApiCalling) {
+                ImageGenerationLoadingView()
+            } else {
+                EmptyImageGenerationView()
+            }
         } else {
             LazyColumn(
                 state = listState,
@@ -207,7 +239,7 @@ fun ImageGenerationMessagesList(
                         }
                         is ChatListItem.LoadingIndicator -> {
                             Box(modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
-                                CircularProgressIndicator()
+                                ThreeDotsWaveAnimation()
                             }
                         }
                         else -> {}

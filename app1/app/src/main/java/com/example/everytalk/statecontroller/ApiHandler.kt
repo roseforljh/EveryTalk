@@ -29,6 +29,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.consumeAsFlow
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.conflate
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.IOException
@@ -193,12 +194,12 @@ class ApiHandler(
         }
 
         eventChannel?.close()
-        val newEventChannel = Channel<AppStreamEvent>(Channel.UNLIMITED)
+        val newEventChannel = Channel<AppStreamEvent>(Channel.CONFLATED)
         eventChannel = newEventChannel
 
         viewModelScope.launch(Dispatchers.Default) {
             newEventChannel.consumeAsFlow()
-                .buffer(Channel.UNLIMITED)
+                .conflate()
                 .collect {
                     val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
                     val currentChunkIndex = messageList.indexOfFirst { it.id == aiMessageId }
@@ -313,6 +314,10 @@ class ApiHandler(
                                    // 若任务已切换/取消则退出
                                    val stillThisJob = stateHolder.imageApiJob == thisJob
                                    if (!stillThisJob) break
+                                   withContext(Dispatchers.Main.immediate) {
+                                       // 提示重试进度（不强制修改 isImageApiCalling，用户可随时取消）
+                                       stateHolder.showSnackbar("图像生成失败，正在重试 (${attempt + 1}/$maxAttempts)...")
+                                   }
                                    kotlinx.coroutines.delay(600)
                                    attempt++
                                } else {
@@ -446,10 +451,12 @@ class ApiHandler(
                                 if (finalIdx != -1) {
                                     val msg = messageList[finalIdx]
                                     if (cause == null && !msg.isError) {
+                                        val latestText = messageProcessor.getCurrentText()
+                                        val latestReasoning = messageProcessor.getCurrentReasoning()
                                         val updatedMsg = msg.copy(
-                                            text = msg.text,
-                                            reasoning = msg.reasoning,
-                                            contentStarted = msg.contentStarted || msg.text.isNotBlank()
+                                            text = if (latestText.isNotBlank()) latestText else msg.text,
+                                            reasoning = latestReasoning ?: msg.reasoning,
+                                            contentStarted = msg.contentStarted || latestText.isNotBlank() || !(latestReasoning.isNullOrBlank())
                                         )
                                         if (updatedMsg != msg) {
                                             messageList[finalIdx] = updatedMsg

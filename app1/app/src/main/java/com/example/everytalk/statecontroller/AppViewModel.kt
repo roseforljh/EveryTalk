@@ -906,7 +906,9 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     }
 
     fun onCancelAPICall() {
-        apiHandler.cancelCurrentApiJob("用户取消操作")
+        // 根据当前模式取消对应的流/任务，确保图像模式可被中止
+        val isImageMode = simpleModeManager.isInImageMode()
+        apiHandler.cancelCurrentApiJob("用户取消操作", isNewMessageSend = false, isImageGeneration = isImageMode)
     }
 
     fun startNewChat() {

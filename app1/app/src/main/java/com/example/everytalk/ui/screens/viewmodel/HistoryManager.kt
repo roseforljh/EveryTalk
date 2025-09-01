@@ -45,8 +45,16 @@ class HistoryManager(
 
     suspend fun saveCurrentChatToHistoryIfNeeded(forceSave: Boolean = false, isImageGeneration: Boolean = false): Boolean {
         val currentMessagesSnapshot = if (isImageGeneration) stateHolder.imageGenerationMessages.toList() else stateHolder.messages.toList()
-        val currentConversationId = if (isImageGeneration) stateHolder._currentImageGenerationConversationId.value else stateHolder._currentConversationId.value
-        val currentPrompt = stateHolder.systemPrompts[currentConversationId] ?: ""
+        
+        // 只有文本模式才处理系统提示
+        val currentConversationId = if (isImageGeneration) {
+            stateHolder._currentImageGenerationConversationId.value
+        } else {
+            stateHolder._currentConversationId.value
+        }
+        val currentPrompt = if (!isImageGeneration) {
+            stateHolder.systemPrompts[currentConversationId] ?: ""
+        } else ""
         val messagesWithPrompt = if (currentPrompt.isNotBlank()) {
             listOf(Message(sender = Sender.System, text = currentPrompt)) + currentMessagesSnapshot
         } else {
@@ -75,20 +83,12 @@ class HistoryManager(
             "saveCurrent: Mode=${if (isImageGeneration) "IMAGE" else "TEXT"}, Snapshot msgs=${currentMessagesSnapshot.size}, Filtered to save=${messagesToSave.size}, Force=$forceSave, CurrentLoadedIdx=$loadedHistoryIndex, HasMessages=$currentModeHasMessages"
         )
 
-        if (messagesToSave.isEmpty() && !forceSave) {
+        if (messagesToSave.isEmpty() && !forceSave && !isImageGeneration) {
             Log.d(
                 TAG_HM,
-                "No valid messages to save to history, and not forcing save of empty list."
+                "No valid messages to save and not in image generation mode. Not saving."
             )
-            // 关键修复：如果当前没有加载任何历史项，直接返回，避免影响模式切换
-            if (loadedHistoryIndex == null) {
-                Log.d(TAG_HM, "Current new conversation is empty, not adding to history.")
-                Log.d(
-                    TAG_HM,
-                    "saveCurrentChatToHistoryIfNeeded completed. HistoryModified: false, LoadedIndexChanged: false"
-                )
-                return false
-            }
+            return false
         }
 
         var finalNewLoadedIndex: Int? = loadedHistoryIndex

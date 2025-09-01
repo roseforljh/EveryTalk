@@ -330,6 +330,12 @@ class DataPersistenceManager(
                }
            }
 
+           // Also clear Coil disk cache for local file paths
+           allFilePathsToDelete.forEach { path ->
+               imageLoader.diskCache?.remove(path)
+               imageLoader.diskCache?.remove("file://$path")
+           }
+
            allHttpUrisToClearFromCache.forEach { url ->
                imageLoader.diskCache?.remove(url)
            }
