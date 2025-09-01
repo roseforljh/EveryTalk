@@ -213,37 +213,129 @@ class ApiHandler(
 
         val job = viewModelScope.launch {
             val thisJob = coroutineContext[Job]
+            if (isImageGeneration) {
+                stateHolder.imageApiJob = thisJob
+            } else {
+                stateHolder.textApiJob = thisJob
+            }
             try {
                if (isImageGeneration) {
                    try {
-                       val response = ApiClient.generateImage(requestBody)
-                       logger.debug("[ImageGen] Received response from backend: $response")
-                       
-                       val imageUrlsFromResponse = response.images.mapNotNull { it.url.takeIf { url -> url.isNotBlank() } }
-
-                       withContext(Dispatchers.Main.immediate) {
-                           val messageList = stateHolder.imageGenerationMessages
-                           val index = messageList.indexOfFirst { it.id == aiMessageId }
-                           if (index != -1) {
-                               val responseText = response.text ?: ""
-                               if (responseText.startsWith("[CONTENT_FILTER]")) {
+                       val lastUserText = when (val lastUserMsg = requestBody.messages.lastOrNull { it.role == "user" }) {
+                            is com.example.everytalk.data.DataClass.SimpleTextApiMessage -> lastUserMsg.content
+                            is com.example.everytalk.data.DataClass.PartsApiMessage -> lastUserMsg.parts.filterIsInstance<ApiContentPart.Text>().joinToString(" ") { it.text }
+                            else -> null
+                        }
+                        val textOnly = isTextOnlyIntent(lastUserText)
+                        val maxAttempts = if (textOnly) 1 else 3
+                        var attempt = 1
+                        var finalText: String? = null
+                        while (attempt <= maxAttempts) {
+                           val response = ApiClient.generateImage(requestBody)
+                           logger.debug("[ImageGen] Attempt $attempt/$maxAttempts, response: $response")
+                           
+                           val imageUrlsFromResponse = response.images.mapNotNull { it.url.takeIf { url -> url.isNotBlank() } }
+                           val responseText = response.text ?: ""
+                           
+                           // 内容过滤：提示并终止
+                           if (responseText.startsWith("[CONTENT_FILTER]")) {
+                               withContext(Dispatchers.Main.immediate) {
                                    val userFriendlyMessage = responseText.removePrefix("[CONTENT_FILTER]").trim()
                                    stateHolder.showSnackbar(userFriendlyMessage)
-                                   messageList.removeAt(index)
-                               } else {
-                                   val currentMessage = messageList[index]
-                                   val updatedMessage = currentMessage.copy(
-                                       imageUrls = if (imageUrlsFromResponse.isNotEmpty()) imageUrlsFromResponse else currentMessage.imageUrls,
-                                       text = responseText,
-                                       contentStarted = true
-                                   )
-                                   logger.debug("[ImageGen] Updating message ${updatedMessage.id} with ${updatedMessage.imageUrls?.size ?: 0} images.")
-                                   messageList[index] = updatedMessage
+                                   val messageList = stateHolder.imageGenerationMessages
+                                   val index = messageList.indexOfFirst { it.id == aiMessageId }
+                                   if (index != -1) {
+                                       messageList.removeAt(index)
+                                   }
+                               }
+                               break
+                           }
+                           
+                           // 若先返回文本：先展示文本（模型可能后续才给图）
+                           if (finalText.isNullOrBlank() && responseText.isNotBlank()) {
+                               finalText = responseText
+                               withContext(Dispatchers.Main.immediate) {
+                                   val messageList = stateHolder.imageGenerationMessages
+                                   val index = messageList.indexOfFirst { it.id == aiMessageId }
+                                   if (index != -1) {
+                                       val currentMessage = messageList[index]
+                                       val updatedMessage = currentMessage.copy(
+                                           text = responseText,
+                                           contentStarted = true
+                                       )
+                                       messageList[index] = updatedMessage
+                                   }
                                }
                            }
-                       }
-                       viewModelScope.launch(Dispatchers.IO) {
-                           historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true)
+                           
+                           // 如果后端返回明确的错误提示（如区域限制/上游错误/网络异常等），不再重试，直接以文本结束
+                           if (imageUrlsFromResponse.isEmpty() && isBackendErrorResponseText(responseText)) {
+                               withContext(Dispatchers.Main.immediate) {
+                                   val messageList = stateHolder.imageGenerationMessages
+                                   val index = messageList.indexOfFirst { it.id == aiMessageId }
+                                   if (index != -1) {
+                                       val currentMessage = messageList[index]
+                                       val updatedMessage = currentMessage.copy(
+                                           text = finalText ?: responseText,
+                                           contentStarted = true
+                                       )
+                                       messageList[index] = updatedMessage
+                                   }
+                               }
+                               viewModelScope.launch(Dispatchers.IO) {
+                                   historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true)
+                               }
+                               break
+                           }
+                           if (imageUrlsFromResponse.isNotEmpty()) {
+                               // 获得图片：合并文本与图片并结束
+                               withContext(Dispatchers.Main.immediate) {
+                                   val messageList = stateHolder.imageGenerationMessages
+                                   val index = messageList.indexOfFirst { it.id == aiMessageId }
+                                   if (index != -1) {
+                                       val currentMessage = messageList[index]
+                                       val updatedMessage = currentMessage.copy(
+                                           imageUrls = imageUrlsFromResponse,
+                                           text = finalText ?: responseText,
+                                           contentStarted = true
+                                       )
+                                       logger.debug("[ImageGen] Updating message ${updatedMessage.id} with ${updatedMessage.imageUrls?.size ?: 0} images.")
+                                       messageList[index] = updatedMessage
+                                   }
+                               }
+                               viewModelScope.launch(Dispatchers.IO) {
+                                   historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true)
+                               }
+                               break
+                           } else {
+                               // 无图片：自动重试（保持 isImageApiCalling=true）
+                               if (attempt < maxAttempts) {
+                                   // 若任务已切换/取消则退出
+                                   val stillThisJob = stateHolder.imageApiJob == thisJob
+                                   if (!stillThisJob) break
+                                   kotlinx.coroutines.delay(600)
+                                   attempt++
+                               } else {
+                                   // 最终仍无图：保留已有文本并提示
+                                   withContext(Dispatchers.Main.immediate) {
+                                       val messageList = stateHolder.imageGenerationMessages
+                                       val index = messageList.indexOfFirst { it.id == aiMessageId }
+                                       if (index != -1) {
+                                           val currentMessage = messageList[index]
+                                           val updatedMessage = currentMessage.copy(
+                                               text = finalText ?: currentMessage.text,
+                                               contentStarted = true
+                                           )
+                                           messageList[index] = updatedMessage
+                                       }
+                                       if (!textOnly) {  }
+                                   }
+                                   viewModelScope.launch(Dispatchers.IO) {
+                                       historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true)
+                                   }
+                                   break
+                               }
+                           }
                        }
                    } catch (e: Exception) {
                        logger.error("[ImageGen] Image processing failed for message $aiMessageId", e)
@@ -425,7 +517,6 @@ class ApiHandler(
             }
         }
     }
-
     private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: String, isImageGeneration: Boolean = false) {
         val result = messageProcessor.processStreamEvent(appEvent, aiMessageId)
 
@@ -631,6 +722,74 @@ class ApiHandler(
                 errorBody.take(150).replace(Regex("<[^>]*>"), "")
             }${if (errorBody.length > 150) "..." else ""}"
         }
+    }
+
+    private fun isTextOnlyIntent(promptRaw: String?): Boolean {
+        val p = promptRaw?.lowercase()?.trim() ?: return false
+        if (p.isBlank()) return false
+
+        // 先匹配“仅文本”硬条件，避免被“图片”等词误判
+        val textOnlyHard = listOf(
+            // 中文明确仅文本
+            "仅返回文本", "只返回文本", "只输出文本", "仅文本", "纯文本", "只输出文字", "只输出结果",
+            "只要文字", "只文字", "文字即可", "只要描述", "只要说明", "只解释", "只讲文字",
+            "不要图片", "不需要图片", "不要图像", "不需要图像", "不要出图", "别画图", "不用配图", "不要配图",
+            // 英文变体
+            "text only", "text-only", "only text", "just text", "just answer",
+            "no image", "no images", "no picture", "no pictures", "no graphics",
+            "no drawing", "dont draw", "don't draw", "no pic", "no pics"
+        )
+        if (textOnlyHard.any { p.contains(it) }) return true
+
+        // 若有明显出图意图，则不是仅文本
+        val imageHints = listOf(
+            // 中文绘图/图片意图
+            "画", "绘制", "画个", "画张", "画一张", "来一张", "给我一张", "出一张", "生成图片", "生成", "生成几张", "生成多张",
+            "出图", "图片", "图像", "配图", "背景图", "封面图", "插画", "插图", "海报", "头像", "壁纸", "封面",
+            "表情包", "贴图", "示意图", "场景图", "示例图", "图标",
+            "手绘", "素描", "线稿", "上色", "涂色", "水彩", "油画", "像素画", "漫画", "二次元", "渲染",
+            "p图", "p一张", "制作一张", "做一张", "合成一张",
+            // 英文意图
+            "image", "picture", "pictures", "photo", "photos", "art", "artwork", "illustration", "render", "rendering",
+            "draw", "sketch", "paint", "painting", "watercolor", "oil painting", "pixel art", "comic", "manga", "sticker",
+            "cover", "wallpaper", "avatar", "banner", "logo", "icon",
+            "generate image", "generate a picture", "create an image", "make an image", "image generation",
+            // 常见模型/工具词（提示也多为出图意图）
+            "stable diffusion", "sdxl", "midjourney", "mj"
+        )
+        if (imageHints.any { p.contains(it) }) return false
+
+        // 简短致谢/寒暄/确认类——且长度很短时视为仅文本
+        val ack = listOf(
+            // 中文口语化
+            "谢谢", "谢谢啦", "多谢", "多谢啦", "谢谢你", "感谢", "感谢你", "辛苦了", "辛苦啦",
+            "你好", "您好", "嗨", "哈喽", "嘿", "早上好", "早安", "午安", "晚上好", "晚安",
+            "好的", "好吧", "行", "行吧", "可以", "可以了", "行了", "好滴", "好嘞", "好哒", "嗯", "嗯嗯", "哦", "噢", "额", "emmm",
+            "没事", "不客气", "打扰了", "抱歉", "不好意思",
+            "牛", "牛逼", "牛批", "nb", "tql", "yyds", "绝了", "给力", "666", "6", "赞", "棒",
+            // 英文常见
+            "hi", "hello", "ok", "okay", "roger", "got it", "copy", "ack",
+            "thx", "thanks", "thank you", "tks", "ty",
+            "great", "awesome", "cool", "nice", "nice one"
+        )
+        val containsAck = ack.any { p.contains(it) }
+        if (!containsAck) return false
+
+        // 简短启发：仅当很短时判定为仅文本，避免“帮我画猫，谢谢”被误判（含“画”等词已优先排除）
+        val normalized = p.replace(Regex("[\\p{Punct}\\s]+"), "")
+        if (normalized.length <= 8) return true
+        val tokenCount = p.split(Regex("\\s+")).filter { it.isNotBlank() }.size
+        return tokenCount <= 3
+    }
+
+    private fun isBackendErrorResponseText(text: String?): Boolean {
+        if (text.isNullOrBlank()) return false
+        val t = text.lowercase()
+        val keywords = listOf(
+            "区域限制", "上游错误", "网络异常", "非json",
+            "failed_precondition", "user location is not supported", "provider returned error"
+        )
+        return keywords.any { t.contains(it) }
     }
 
     private companion object {
