@@ -66,7 +66,7 @@ fun ChatMessagesList(
     var contextMenuMessage by remember { mutableStateOf<Message?>(null) }
     var contextMenuPressOffset by remember { mutableStateOf(Offset.Zero) }
 
-    val isApiCalling by viewModel.isApiCalling.collectAsState()
+    val isApiCalling by viewModel.isTextApiCalling.collectAsState()
    val density = LocalDensity.current
 
     LaunchedEffect(chatItems) {
@@ -165,7 +165,7 @@ fun ChatMessagesList(
                     }
 
                     is ChatListItem.AiMessageReasoning -> {
-                        val reasoningCompleteMap = viewModel.reasoningCompleteMap
+                        val reasoningCompleteMap = viewModel.textReasoningCompleteMap
                         val isReasoningStreaming = remember(isApiCalling, item.message.reasoning, reasoningCompleteMap[item.message.id]) {
                             isApiCalling && item.message.reasoning != null && reasoningCompleteMap[item.message.id] != true
                         }
@@ -197,7 +197,7 @@ fun ChatMessagesList(
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     onShowAiMessageOptions(message)
                                 },
-                                isStreaming = viewModel.currentStreamingAiMessageId.collectAsState().value == message.id,
+                                isStreaming = viewModel.currentTextStreamingAiMessageId.collectAsState().value == message.id,
                                 messageOutputType = message.outputType
                             )
                         }
@@ -214,7 +214,7 @@ fun ChatMessagesList(
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     onShowAiMessageOptions(message)
                                 },
-                                isStreaming = viewModel.currentStreamingAiMessageId.collectAsState().value == message.id,
+                                isStreaming = viewModel.currentTextStreamingAiMessageId.collectAsState().value == message.id,
                                 messageOutputType = message.outputType
                             )
                         }
@@ -231,7 +231,7 @@ fun ChatMessagesList(
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     onShowAiMessageOptions(message)
                                 },
-                                isStreaming = viewModel.currentStreamingAiMessageId.collectAsState().value == message.id,
+                                isStreaming = viewModel.currentTextStreamingAiMessageId.collectAsState().value == message.id,
                                 messageOutputType = message.outputType
                             )
                         }

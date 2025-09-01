@@ -107,7 +107,7 @@ fun ImageGenerationSettingsScreen(
                 try {
                     context.contentResolver.openInputStream(it)?.use { inputStream ->
                         val jsonContent = inputStream.bufferedReader().use { reader -> reader.readText() }
-                        viewModel.importSettings(jsonContent)
+                        viewModel.importSettings(jsonContent, isImageGen = true)
                     }
                 } catch (e: Exception) {
                     viewModel.showSnackbar("导入失败: ${e.message}")
@@ -202,7 +202,7 @@ fun ImageGenerationSettingsScreen(
                 showEditConfigDialog = true
             },
             onDeleteConfigGroup = { apiKey, modalityType ->
-                viewModel.deleteConfigGroup(apiKey, modalityType)
+                viewModel.deleteImageGenConfigGroup(apiKey, modalityType)
             },
             onRefreshModelsClick = { config ->
                 viewModel.refreshModelsForConfig(config)
@@ -362,7 +362,7 @@ fun ImageGenerationSettingsScreen(
         ImportExportDialog(
             onDismissRequest = { showImportExportDialog = false },
             onExport = {
-                viewModel.exportSettings()
+                viewModel.exportSettings(isImageGen = true)
                 showImportExportDialog = false
             },
             onImport = {

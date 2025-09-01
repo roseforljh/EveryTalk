@@ -31,6 +31,71 @@ data class ConversationScrollState(
     val messages: SnapshotStateList<Message> = mutableStateListOf()
     val imageGenerationMessages: SnapshotStateList<Message> = mutableStateListOf()
 
+    // 分离的API状态
+    val _isTextApiCalling = MutableStateFlow(false)
+    val _isImageApiCalling = MutableStateFlow(false)
+
+    // 分离的流式消息ID
+    val _currentTextStreamingAiMessageId = MutableStateFlow<String?>(null)
+    val _currentImageStreamingAiMessageId = MutableStateFlow<String?>(null)
+
+    // 分离的API Job
+    var textApiJob: Job? = null
+    var imageApiJob: Job? = null
+
+    // 分离的推理完成状态
+    val textReasoningCompleteMap: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
+    val imageReasoningCompleteMap: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
+
+    // 分离的展开推理状态
+    val textExpandedReasoningStates: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
+    val imageExpandedReasoningStates: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
+
+    // 分离的消息动画状态
+    val textMessageAnimationStates: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
+    val imageMessageAnimationStates: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
+
+    // 分离的历史加载状态
+    val _isLoadingTextHistory = MutableStateFlow(false)
+    val _isLoadingImageHistory = MutableStateFlow(false)
+    
+    val conversationScrollStates = mutableStateMapOf<String, ConversationScrollState>()
+    val systemPromptExpandedState = mutableStateMapOf<String, Boolean>()
+    val systemPrompts = mutableStateMapOf<String, String>()
+
+
+    // 清理文本模式状态的方法
+    fun clearForNewTextChat() {
+        _text.value = ""
+        messages.clear()
+        selectedMediaItems.clear()
+        _isTextApiCalling.value = false
+        textApiJob?.cancel()
+        textApiJob = null
+        _currentTextStreamingAiMessageId.value = null
+        textReasoningCompleteMap.clear()
+        textExpandedReasoningStates.clear()
+        textMessageAnimationStates.clear()
+        _showSourcesDialog.value = false
+        _sourcesForDialog.value = emptyList()
+        _loadedHistoryIndex.value = null
+        _currentConversationId.value = "new_chat_${System.currentTimeMillis()}"
+    }
+
+    // 清理图像模式状态的方法
+    fun clearForNewImageChat() {
+        imageGenerationMessages.clear()
+        _isImageApiCalling.value = false
+        imageApiJob?.cancel()
+        imageApiJob = null
+        _currentImageStreamingAiMessageId.value = null
+        imageReasoningCompleteMap.clear()
+        imageExpandedReasoningStates.clear()
+        imageMessageAnimationStates.clear()
+        _loadedImageGenerationHistoryIndex.value = null
+        _currentImageGenerationConversationId.value = "new_image_generation_${System.currentTimeMillis()}"
+    }
+
     val selectedMediaItems: SnapshotStateList<SelectedMediaItem> =
         mutableStateListOf()
 
@@ -39,7 +104,7 @@ data class ConversationScrollState(
     val _loadedHistoryIndex = MutableStateFlow<Int?>(null)
     val _loadedImageGenerationHistoryIndex = MutableStateFlow<Int?>(null)
     val _isLoadingHistory = MutableStateFlow(false)
-    val _isLoadingHistoryData = MutableStateFlow(false) // 新增：历史数据加载状态
+    val _isLoadingHistoryData = MutableStateFlow(false)
     val _currentConversationId = MutableStateFlow<String>("new_chat_${System.currentTimeMillis()}")
     val _currentImageGenerationConversationId = MutableStateFlow<String>("new_image_generation_${System.currentTimeMillis()}")
 
@@ -48,15 +113,6 @@ data class ConversationScrollState(
     val _imageGenApiConfigs = MutableStateFlow<List<ApiConfig>>(emptyList())
     val _selectedImageGenApiConfig = MutableStateFlow<ApiConfig?>(null)
  
-     val _isApiCalling = MutableStateFlow(false)
-    var apiJob: Job? = null
-    val _currentStreamingAiMessageId = MutableStateFlow<String?>(null)
-    val reasoningCompleteMap: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
-    val expandedReasoningStates: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
-    val messageAnimationStates: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
-    val conversationScrollStates = mutableStateMapOf<String, ConversationScrollState>()
-    val systemPromptExpandedState = mutableStateMapOf<String, Boolean>()
-    val systemPrompts = mutableStateMapOf<String, String>()
  
      val _snackbarMessage =
          MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 1)
@@ -74,27 +130,6 @@ data class ConversationScrollState(
 
     internal val _requestScrollForReasoningBoxEvent = MutableSharedFlow<Unit>(replay = 0, extraBufferCapacity = 1)
 
-    fun clearForNewChat() {
-        _text.value = ""
-        messages.clear()
-        imageGenerationMessages.clear()
-        selectedMediaItems.clear()
-        _isApiCalling.value = false
-        apiJob?.cancel()
-        apiJob = null
-        _currentStreamingAiMessageId.value = null
-        reasoningCompleteMap.clear()
-        expandedReasoningStates.clear()
-        messageAnimationStates.clear()
-        systemPromptExpandedState.clear()
-        systemPrompts.clear()
-        _showSourcesDialog.value = false
-        _sourcesForDialog.value = emptyList()
-        _loadedHistoryIndex.value = null
-        _loadedImageGenerationHistoryIndex.value = null
-        _currentConversationId.value = "new_chat_${System.currentTimeMillis()}"
-        _currentImageGenerationConversationId.value = "new_image_generation_${System.currentTimeMillis()}"
-    }
  
      fun clearSelectedMedia() {
         selectedMediaItems.clear()

@@ -55,13 +55,16 @@ class ApiHandler(
 
 
     fun cancelCurrentApiJob(reason: String, isNewMessageSend: Boolean = false, isImageGeneration: Boolean = false) {
-        logger.debug("Cancelling API job: $reason, isNewMessageSend=$isNewMessageSend, isImageGeneration=$isImageGeneration")
-        val jobToCancel = stateHolder.apiJob
-        val messageIdBeingCancelled = stateHolder._currentStreamingAiMessageId.value
+        // 关键修复：增强日志，明确显示模式信息
+        val modeInfo = if (isImageGeneration) "IMAGE_MODE" else "TEXT_MODE"
+        logger.debug("Cancelling API job: $reason, Mode=$modeInfo, isNewMessageSend=$isNewMessageSend, isImageGeneration=$isImageGeneration")
+        
+        val jobToCancel = if (isImageGeneration) stateHolder.imageApiJob else stateHolder.textApiJob
+        val messageIdBeingCancelled = if (isImageGeneration) stateHolder._currentImageStreamingAiMessageId.value else stateHolder._currentTextStreamingAiMessageId.value
         val specificCancelReason =
-            if (isNewMessageSend) "$NEW_STREAM_CANCEL_PREFIX $reason" else "$USER_CANCEL_PREFIX $reason"
+            if (isNewMessageSend) "$NEW_STREAM_CANCEL_PREFIX [$modeInfo] $reason" else "$USER_CANCEL_PREFIX [$modeInfo] $reason"
 
-        if (jobToCancel?.isActive == true && messageIdBeingCancelled != null) {
+        if (jobToCancel?.isActive == true) {
             val partialText = messageProcessor.getCurrentText().trim()
             val partialReasoning = messageProcessor.getCurrentReasoning()
 
@@ -80,7 +83,7 @@ class ApiHandler(
                         )
                         messageList[index] = updatedMessage
 
-                        if (partialText.isNotBlank()) {
+                        if (partialText.isNotBlank() && messageIdBeingCancelled != null) {
                             onAiMessageFullTextChanged(messageIdBeingCancelled, partialText)
                         }
                         historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration)
@@ -89,14 +92,25 @@ class ApiHandler(
             }
         }
 
-        stateHolder._isApiCalling.value = false
-        if (!isNewMessageSend && stateHolder._currentStreamingAiMessageId.value == messageIdBeingCancelled) {
-            stateHolder._currentStreamingAiMessageId.value = null
+        if (isImageGeneration) {
+            stateHolder._isImageApiCalling.value = false
+            if (!isNewMessageSend && stateHolder._currentImageStreamingAiMessageId.value == messageIdBeingCancelled) {
+                stateHolder._currentImageStreamingAiMessageId.value = null
+            }
+        } else {
+            stateHolder._isTextApiCalling.value = false
+            if (!isNewMessageSend && stateHolder._currentTextStreamingAiMessageId.value == messageIdBeingCancelled) {
+                stateHolder._currentTextStreamingAiMessageId.value = null
+            }
         }
         messageProcessor.reset()
 
         if (messageIdBeingCancelled != null) {
-            stateHolder.reasoningCompleteMap.remove(messageIdBeingCancelled)
+            if (isImageGeneration) {
+                stateHolder.imageReasoningCompleteMap.remove(messageIdBeingCancelled)
+            } else {
+                stateHolder.textReasoningCompleteMap.remove(messageIdBeingCancelled)
+            }
             if (!isNewMessageSend) {
                 viewModelScope.launch(Dispatchers.Main.immediate) {
                     val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
@@ -107,7 +121,8 @@ class ApiHandler(
                         val isPlaceholder = msg.sender == Sender.AI && msg.text.isBlank() &&
                                 msg.reasoning.isNullOrBlank() && msg.webSearchResults.isNullOrEmpty() &&
                                 msg.currentWebSearchStage.isNullOrEmpty() && !msg.contentStarted && !msg.isError
-                        if (isPlaceholder) {
+                        val isHistoryLoaded = stateHolder._loadedHistoryIndex.value != null || stateHolder._loadedImageGenerationHistoryIndex.value != null
+                        if (isPlaceholder && !isHistoryLoaded) {
                             logger.debug("Removing placeholder message: ${msg.id}")
                             messageList.removeAt(index)
                         }
@@ -115,8 +130,12 @@ class ApiHandler(
                 }
             }
         }
-        jobToCancel?.takeIf { it.isActive }?.cancel(CancellationException(specificCancelReason))
-        stateHolder.apiJob = null
+        jobToCancel?.cancel(CancellationException(specificCancelReason))
+        if (isImageGeneration) {
+            stateHolder.imageApiJob = null
+        } else {
+            stateHolder.textApiJob = null
+        }
     }
 
     fun streamChatResponse(
@@ -160,18 +179,17 @@ class ApiHandler(
         viewModelScope.launch(Dispatchers.Main.immediate) {
             val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
             var insertAtIndex = messageList.size
-            if (afterUserMessageId != null) {
-                val userMessageIndex =
-                    messageList.indexOfFirst { it.id == afterUserMessageId }
-                if (userMessageIndex != -1) insertAtIndex = userMessageIndex + 1
-            }
-            insertAtIndex = insertAtIndex.coerceAtMost(messageList.size)
-            messageList.add(insertAtIndex, newAiMessage)
+            messageList.add(newAiMessage)
             onNewAiMessageAdded()
-            stateHolder._currentStreamingAiMessageId.value = aiMessageId
-            stateHolder._isApiCalling.value = true
-            stateHolder.reasoningCompleteMap[aiMessageId] = false
-            onMessagesProcessed()
+            if (isImageGeneration) {
+                stateHolder._currentImageStreamingAiMessageId.value = aiMessageId
+                stateHolder._isImageApiCalling.value = true
+                stateHolder.imageReasoningCompleteMap[aiMessageId] = false
+            } else {
+                stateHolder._currentTextStreamingAiMessageId.value = aiMessageId
+                stateHolder._isTextApiCalling.value = true
+                stateHolder.textReasoningCompleteMap[aiMessageId] = false
+            }
         }
 
         eventChannel?.close()
@@ -193,8 +211,8 @@ class ApiHandler(
                 }
         }
 
-        stateHolder.apiJob = viewModelScope.launch {
-            val thisJob = coroutineContext[Job.Key]
+        val job = viewModelScope.launch {
+            val thisJob = coroutineContext[Job]
             try {
                if (isImageGeneration) {
                    try {
@@ -283,17 +301,31 @@ class ApiHandler(
                             logger.debug("Stream completed for message $aiMessageId, cause: ${cause?.message}")
                             newEventChannel.close()
                             val targetMsgId = aiMessageId
-                            val isThisJobStillTheCurrentOne = stateHolder.apiJob == thisJob
+                            val currentJob = if (isImageGeneration) stateHolder.imageApiJob else stateHolder.textApiJob
+                            val isThisJobStillTheCurrentOne = currentJob == thisJob
 
                             if (isThisJobStillTheCurrentOne) {
-                                stateHolder._isApiCalling.value = false
-                                if (stateHolder._currentStreamingAiMessageId.value == targetMsgId) {
-                                    stateHolder._currentStreamingAiMessageId.value = null
+                                if (isImageGeneration) {
+                                    stateHolder._isImageApiCalling.value = false
+                                } else {
+                                    stateHolder._isTextApiCalling.value = false
+                                }
+                                val currentStreamingId = if (isImageGeneration)
+                                    stateHolder._currentImageStreamingAiMessageId.value
+                                else
+                                    stateHolder._currentTextStreamingAiMessageId.value
+                                if (currentStreamingId == targetMsgId) {
+                                    if (isImageGeneration) {
+                                        stateHolder._currentImageStreamingAiMessageId.value = null
+                                    } else {
+                                        stateHolder._currentTextStreamingAiMessageId.value = null
+                                    }
                                 }
                             }
-                            if (stateHolder.reasoningCompleteMap[targetMsgId] != true) {
-                                stateHolder.reasoningCompleteMap[targetMsgId] = true
-                            }
+                                val reasoningMap = if (isImageGeneration) stateHolder.imageReasoningCompleteMap else stateHolder.textReasoningCompleteMap
+                                if (reasoningMap[targetMsgId] != true) {
+                                    reasoningMap[targetMsgId] = true
+                                }
 
                             val cancellationMessageFromCause =
                                 (cause as? CancellationException)?.message
@@ -329,8 +361,9 @@ class ApiHandler(
                                         if (updatedMsg != msg) {
                                             messageList[finalIdx] = updatedMsg
                                         }
-                                        if (stateHolder.messageAnimationStates[targetMsgId] != true) {
-                                            stateHolder.messageAnimationStates[targetMsgId] = true
+                                        val animationMap = if (isImageGeneration) stateHolder.imageMessageAnimationStates else stateHolder.textMessageAnimationStates
+                                        if (animationMap[targetMsgId] != true) {
+                                            animationMap[targetMsgId] = true
                                         }
                                     } else if (cause is CancellationException) {
                                         if (!wasCancelledByApiHandler) {
@@ -346,7 +379,12 @@ class ApiHandler(
                             }
                         }
                         .collect { appEvent ->
-                            if (stateHolder.apiJob != thisJob || stateHolder._currentStreamingAiMessageId.value != aiMessageId) {
+                            val currentJob = if (isImageGeneration) stateHolder.imageApiJob else stateHolder.textApiJob
+                            val currentStreamingId = if (isImageGeneration) 
+                                stateHolder._currentImageStreamingAiMessageId.value 
+                            else 
+                                stateHolder._currentTextStreamingAiMessageId.value
+                            if (currentJob != thisJob || currentStreamingId != aiMessageId) {
                                 thisJob?.cancel(CancellationException("API job 或 streaming ID 已更改，停止收集旧数据块"))
                                 return@collect
                             }
@@ -368,11 +406,20 @@ class ApiHandler(
                     }
                 }
             } finally {
-                if (stateHolder.apiJob == thisJob) {
-                    stateHolder.apiJob = null
-                    if (stateHolder._isApiCalling.value && stateHolder._currentStreamingAiMessageId.value == aiMessageId) {
-                        stateHolder._isApiCalling.value = false
-                        stateHolder._currentStreamingAiMessageId.value = null
+                val currentJob = if (isImageGeneration) stateHolder.imageApiJob else stateHolder.textApiJob
+                if (currentJob == thisJob) {
+                    if (isImageGeneration) {
+                        stateHolder.imageApiJob = null
+                        if (stateHolder._isImageApiCalling.value && stateHolder._currentImageStreamingAiMessageId.value == aiMessageId) {
+                            stateHolder._isImageApiCalling.value = false
+                            stateHolder._currentImageStreamingAiMessageId.value = null
+                        }
+                    } else {
+                        stateHolder.textApiJob = null
+                        if (stateHolder._isTextApiCalling.value && stateHolder._currentTextStreamingAiMessageId.value == aiMessageId) {
+                            stateHolder._isTextApiCalling.value = false
+                            stateHolder._currentTextStreamingAiMessageId.value = null
+                        }
                     }
                 }
             }
@@ -388,7 +435,8 @@ class ApiHandler(
                 // 这些事件由 updateMessageInState 处理，这里不需要操作
             }
             is ProcessedEventResult.ReasoningComplete -> {
-                stateHolder.reasoningCompleteMap[aiMessageId] = true
+                val reasoningMap = if (isImageGeneration) stateHolder.imageReasoningCompleteMap else stateHolder.textReasoningCompleteMap
+                reasoningMap[aiMessageId] = true
             }
             is ProcessedEventResult.Error -> {
                 logger.warn("MessageProcessor reported error: ${result.message}")
@@ -405,7 +453,11 @@ class ApiHandler(
         when (appEvent) {
             is AppStreamEvent.Content -> {
                 if (!appEvent.output_type.isNullOrBlank()) {
-                    val messageId = stateHolder._currentStreamingAiMessageId.value ?: return
+                    val messageId = if (isImageGeneration) 
+                        stateHolder._currentImageStreamingAiMessageId.value 
+                    else 
+                        stateHolder._currentTextStreamingAiMessageId.value
+                    messageId ?: return
                     val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
                     val index = messageList.indexOfFirst { it.id == messageId }
                     if (index != -1) {
@@ -417,7 +469,8 @@ class ApiHandler(
                 }
             }
             is AppStreamEvent.WebSearchStatus -> {
-                val messageId = stateHolder._currentStreamingAiMessageId.value ?: return
+                val messageId = if (isImageGeneration) stateHolder._currentImageStreamingAiMessageId.value else stateHolder._currentTextStreamingAiMessageId.value
+                messageId ?: return
                 val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
                 val index = messageList.indexOfFirst { it.id == messageId }
                 if (index != -1) {
@@ -428,7 +481,8 @@ class ApiHandler(
                 }
             }
             is AppStreamEvent.WebSearchResults -> {
-                val messageId = stateHolder._currentStreamingAiMessageId.value ?: return
+                val messageId = if (isImageGeneration) stateHolder._currentImageStreamingAiMessageId.value else stateHolder._currentTextStreamingAiMessageId.value
+                messageId ?: return
                 val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
                 val index = messageList.indexOfFirst { it.id == messageId }
                 if (index != -1) {
@@ -439,7 +493,8 @@ class ApiHandler(
                 }
             }
             is AppStreamEvent.Error -> {
-                val messageId = stateHolder._currentStreamingAiMessageId.value ?: return
+                val messageId = if (isImageGeneration) stateHolder._currentImageStreamingAiMessageId.value else stateHolder._currentTextStreamingAiMessageId.value
+                messageId ?: return
                 viewModelScope.launch {
                     updateMessageWithError(
                         messageId,
@@ -452,7 +507,8 @@ class ApiHandler(
                 messageProcessor.setCurrentOutputType(appEvent.type)
             }
             is AppStreamEvent.ImageGeneration -> {
-                val messageId = stateHolder._currentStreamingAiMessageId.value ?: return
+                val messageId = if (isImageGeneration) stateHolder._currentImageStreamingAiMessageId.value else stateHolder._currentTextStreamingAiMessageId.value
+                messageId ?: return
                 val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
                 val index = messageList.indexOfFirst { it.id == messageId }
                 if (index != -1) {
@@ -538,15 +594,30 @@ class ApiHandler(
                         currentWebSearchStage = msg.currentWebSearchStage ?: "error_occurred"
                     )
                     messageList[idx] = errorMsg
-                    if (stateHolder.messageAnimationStates[messageId] != true) {
-                        stateHolder.messageAnimationStates[messageId] = true
+                    val animationMap = if (isImageGeneration) stateHolder.imageMessageAnimationStates else stateHolder.textMessageAnimationStates
+                    if (animationMap[messageId] != true) {
+                        animationMap[messageId] = true
                     }
                     historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration)
                 }
             }
-            if (stateHolder._currentStreamingAiMessageId.value == messageId && stateHolder._isApiCalling.value) {
-                stateHolder._isApiCalling.value = false
-                stateHolder._currentStreamingAiMessageId.value = null
+            val currentStreamingId = if (isImageGeneration) 
+                stateHolder._currentImageStreamingAiMessageId.value 
+            else 
+                stateHolder._currentTextStreamingAiMessageId.value
+            val isApiCalling = if (isImageGeneration) 
+                stateHolder._isImageApiCalling.value 
+            else 
+                stateHolder._isTextApiCalling.value
+                
+            if (currentStreamingId == messageId && isApiCalling) {
+                if (isImageGeneration) {
+                    stateHolder._isImageApiCalling.value = false
+                    stateHolder._currentImageStreamingAiMessageId.value = null
+                } else {
+                    stateHolder._isTextApiCalling.value = false
+                    stateHolder._currentTextStreamingAiMessageId.value = null
+                }
             }
         }
     }

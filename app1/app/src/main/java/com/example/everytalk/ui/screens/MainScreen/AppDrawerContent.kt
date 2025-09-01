@@ -57,6 +57,7 @@ fun AppDrawerContent(
     onSearchActiveChange: (Boolean) -> Unit,
     onSearchQueryChange: (String) -> Unit,
     onConversationClick: (Int) -> Unit,
+    onImageGenerationConversationClick: (Int) -> Unit, // 新增：图像模式历史点击回调
     onNewChatClick: () -> Unit,
     onRenameRequest: (index: Int, newName: String) -> Unit,
     onDeleteRequest: (index: Int) -> Unit,
@@ -499,7 +500,7 @@ fun AppDrawerContent(
                         ) {
                             items(
                                 items = filteredItems,
-                                key = { item -> "conversation_${item.originalIndex}" }, // 优化key生成
+                                key = { item -> if (isImageGenerationMode) "image_conversation_${item.originalIndex}" else "text_conversation_${item.originalIndex}" }, // 跨模式唯一key，避免复用
                                 contentType = { "conversation_item" } // 添加内容类型以优化回收
                             ) { itemData ->
                                 // --- 用 Box 包裹并设置最小高度 ---
@@ -516,7 +517,12 @@ fun AppDrawerContent(
                                         getPreviewForIndex = getPreviewForIndex,
                                         onConversationClick = { index ->
                                             selectedSet.clear() // 清空之前的选择
-                                            onConversationClick(index)
+                                            // 关键修复：根据当前模式调用正确的加载方法
+                                            if (isImageGenerationMode) {
+                                                onImageGenerationConversationClick(index)
+                                            } else {
+                                                onConversationClick(index)
+                                            }
                                         },
                                         onRenameRequest = { index ->
                                             renamingIndex = index

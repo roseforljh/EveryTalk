@@ -97,7 +97,7 @@ fun SettingsScreen(
                 try {
                     context.contentResolver.openInputStream(it)?.use { inputStream ->
                         val jsonContent = inputStream.bufferedReader().use { reader -> reader.readText() }
-                        viewModel.importSettings(jsonContent)
+                        viewModel.importSettings(jsonContent, isImageGen = false)
                     }
                 } catch (e: Exception) {
                     viewModel.showSnackbar("导入失败: ${e.message}")
@@ -324,7 +324,7 @@ fun SettingsScreen(
         ImportExportDialog(
             onDismissRequest = { showImportExportDialog = false },
             onExport = {
-                viewModel.exportSettings()
+                viewModel.exportSettings(isImageGen = false)
                 showImportExportDialog = false
             },
             onImport = {

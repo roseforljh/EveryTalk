@@ -449,7 +449,8 @@ private data class AttachmentProcessingResult(
             )
 
             withContext(Dispatchers.Main.immediate) {
-                stateHolder.messageAnimationStates[newUserMessageForUi.id] = true
+                val animationMap = if (isImageGeneration) stateHolder.imageMessageAnimationStates else stateHolder.textMessageAnimationStates
+                animationMap[newUserMessageForUi.id] = true
                 if (isImageGeneration) {
                     stateHolder.imageGenerationMessages.add(newUserMessageForUi)
                 } else {
@@ -488,7 +489,8 @@ private data class AttachmentProcessingResult(
                 if (apiMessagesForBackend.isEmpty() || apiMessagesForBackend.lastOrNull()?.role != "user") {
                     withContext(Dispatchers.Main.immediate) {
                         stateHolder.messages.remove(newUserMessageForUi)
-                        stateHolder.messageAnimationStates.remove(newUserMessageForUi.id)
+                        val animationMap = if (isImageGeneration) stateHolder.imageMessageAnimationStates else stateHolder.textMessageAnimationStates
+                        animationMap.remove(newUserMessageForUi.id)
                     }
                     return@withContext
                 }

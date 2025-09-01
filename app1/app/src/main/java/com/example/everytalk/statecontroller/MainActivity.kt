@@ -181,17 +181,42 @@ class MainActivity : ComponentActivity() {
                                             query
                                         )
                                     },
-                                    onConversationClick = { index ->
-                                        if (isImageGenerationMode) {
-                                            appViewModel.loadImageGenerationConversationFromHistory(index)
-                                        } else {
-                                            appViewModel.loadConversationFromHistory(index)
+                                    onImageGenerationConversationClick = { index ->
+                                        // 跨模式点击时，先跳转到图像生成页
+                                        if (!isImageGenerationMode) {
+                                            navController.navigate(Screen.IMAGE_GENERATION_SCREEN) {
+                                                popUpTo(navController.graph.startDestinationRoute!!) {
+                                                    saveState = true
+                                                }
+                                                launchSingleTop = true
+                                                restoreState = true
+                                            }
                                         }
+                                        appViewModel.stateHolder._loadedHistoryIndex.value = null
+                                        appViewModel.loadImageGenerationConversationFromHistory(index)
+                                        coroutineScope.launch { appViewModel.drawerState.close() }
+                                    },
+                                    onConversationClick = { index ->
+                                        // 跨模式点击时，先跳转到文本聊天页
+                                        if (isImageGenerationMode) {
+                                            navController.navigate(Screen.CHAT_SCREEN) {
+                                                popUpTo(navController.graph.startDestinationRoute!!) {
+                                                    saveState = true
+                                                }
+                                                launchSingleTop = true
+                                                restoreState = true
+                                            }
+                                        }
+                                        // 文本模式历史点击：重置图像模式索引
+                                        appViewModel.stateHolder._loadedImageGenerationHistoryIndex.value = null
+                                        appViewModel.loadConversationFromHistory(index)
                                         coroutineScope.launch { appViewModel.drawerState.close() }
                                     },
                                     onNewChatClick = {
                                         if (isImageGenerationMode) {
                                             coroutineScope.launch { appViewModel.drawerState.close() }
+                                            // 关键修复：切换到文本模式时强制重置图像模式索引
+                                            appViewModel.stateHolder._loadedImageGenerationHistoryIndex.value = null
                                             navController.navigate(Screen.CHAT_SCREEN) {
                                                 popUpTo(navController.graph.startDestinationRoute!!) {
                                                     saveState = true
@@ -233,6 +258,8 @@ class MainActivity : ComponentActivity() {
                                     onAboutClick = { appViewModel.showAboutDialog() },
                                     onImageGenerationClick = {
                                         coroutineScope.launch { appViewModel.drawerState.close() }
+                                        // 关键修复：切换模式时强制重置文本模式索引
+                                        appViewModel.stateHolder._loadedHistoryIndex.value = null
                                         navController.navigate(Screen.IMAGE_GENERATION_SCREEN) {
                                             popUpTo(navController.graph.startDestinationRoute!!) {
                                                 saveState = true

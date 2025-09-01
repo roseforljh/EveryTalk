@@ -87,8 +87,8 @@ fun ChatScreen(
     val messages: List<Message> = viewModel.messages
     val text by viewModel.text.collectAsState()
     val selectedApiConfig by viewModel.selectedApiConfig.collectAsState()
-    val isApiCalling by viewModel.isApiCalling.collectAsState()
-    val currentStreamingAiMessageId by viewModel.currentStreamingAiMessageId.collectAsState()
+    val isApiCalling by viewModel.isTextApiCalling.collectAsState()
+    val currentStreamingAiMessageId by viewModel.currentTextStreamingAiMessageId.collectAsState()
     val isWebSearchEnabled by viewModel.isWebSearchEnabled.collectAsState()
     val selectedMediaItems = viewModel.selectedMediaItems
     val isLoadingHistory by viewModel.isLoadingHistory.collectAsState()

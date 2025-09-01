@@ -56,10 +56,23 @@ class HistoryManager(
         var historyListModified = false
         var loadedIndexChanged = false
 
-        val loadedHistoryIndex = if (isImageGeneration) stateHolder._loadedImageGenerationHistoryIndex.value else stateHolder._loadedHistoryIndex.value
+        // 关键修复：确保获取正确模式的索引，避免交叉污染
+        val loadedHistoryIndex = if (isImageGeneration) {
+            stateHolder._loadedImageGenerationHistoryIndex.value
+        } else {
+            stateHolder._loadedHistoryIndex.value
+        }
+        
+        // 关键修复：验证当前模式的消息列表是否为空，避免错误的状态判断
+        val currentModeHasMessages = if (isImageGeneration) {
+            stateHolder.imageGenerationMessages.isNotEmpty()
+        } else {
+            stateHolder.messages.isNotEmpty()
+        }
+        
         Log.d(
             TAG_HM,
-            "saveCurrent: Snapshot msgs=${currentMessagesSnapshot.size}, Filtered to save=${messagesToSave.size}, Force=$forceSave, CurrentLoadedIdx=$loadedHistoryIndex, isImageGeneration=$isImageGeneration"
+            "saveCurrent: Mode=${if (isImageGeneration) "IMAGE" else "TEXT"}, Snapshot msgs=${currentMessagesSnapshot.size}, Filtered to save=${messagesToSave.size}, Force=$forceSave, CurrentLoadedIdx=$loadedHistoryIndex, HasMessages=$currentModeHasMessages"
         )
 
         if (messagesToSave.isEmpty() && !forceSave) {
@@ -67,6 +80,15 @@ class HistoryManager(
                 TAG_HM,
                 "No valid messages to save to history, and not forcing save of empty list."
             )
+            // 关键修复：如果当前没有加载任何历史项，直接返回，避免影响模式切换
+            if (loadedHistoryIndex == null) {
+                Log.d(TAG_HM, "Current new conversation is empty, not adding to history.")
+                Log.d(
+                    TAG_HM,
+                    "saveCurrentChatToHistoryIfNeeded completed. HistoryModified: false, LoadedIndexChanged: false"
+                )
+                return false
+            }
         }
 
         var finalNewLoadedIndex: Int? = loadedHistoryIndex
@@ -153,8 +175,10 @@ class HistoryManager(
             Log.d(TAG_HM, "Chat history list persisted.")
         }
 
-        persistenceManager.clearLastOpenChat(isImageGeneration)
-        Log.d(TAG_HM, "\"Last open chat\" record has been cleared in persistence.")
+        if (messagesToSave.isNotEmpty() || forceSave) {
+            persistenceManager.clearLastOpenChat(isImageGeneration)
+            Log.d(TAG_HM, "\"Last open chat\" record has been cleared in persistence.")
+        }
 
         if (historyListModified) {
             onHistoryModified()

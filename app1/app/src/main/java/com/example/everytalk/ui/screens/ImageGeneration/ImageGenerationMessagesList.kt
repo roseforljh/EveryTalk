@@ -199,7 +199,7 @@ fun ImageGenerationMessagesList(
                                         imagePreviewModel = model
                                         isImagePreviewVisible = true
                                     },
-                                    isStreaming = viewModel.currentStreamingAiMessageId.collectAsState().value == message.id,
+                                    isStreaming = viewModel.currentImageStreamingAiMessageId.collectAsState().value == message.id,
                                     onImageLoaded = onImageLoaded,
                                     scrollStateManager = scrollStateManager
                                 )
