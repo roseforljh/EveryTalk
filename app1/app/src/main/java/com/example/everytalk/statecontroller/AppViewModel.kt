@@ -188,6 +188,13 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         get() = stateHolder._currentTextStreamingAiMessageId.asStateFlow()
     val currentImageStreamingAiMessageId: StateFlow<String?>
         get() = stateHolder._currentImageStreamingAiMessageId.asStateFlow()
+    
+    // 图像生成错误处理状态
+    val shouldShowImageGenerationError: StateFlow<Boolean>
+        get() = stateHolder._shouldShowImageGenerationError.asStateFlow()
+    val imageGenerationError: StateFlow<String?>
+        get() = stateHolder._imageGenerationError.asStateFlow()
+    
     val textReasoningCompleteMap: SnapshotStateMap<String, Boolean>
         get() = stateHolder.textReasoningCompleteMap
     val imageReasoningCompleteMap: SnapshotStateMap<String, Boolean>
@@ -1934,6 +1941,16 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             Log.e("AppViewModel", "Failed to encode URI to Base64", e)
             null
         }
+    }
+    
+    // 图像生成错误处理方法
+    fun dismissImageGenerationErrorDialog() {
+        stateHolder.dismissImageGenerationErrorDialog()
+    }
+    
+    fun showImageGenerationError(error: String) {
+        stateHolder.setImageGenerationError(error)
+        stateHolder.showImageGenerationErrorDialog(true)
     }
 
 }

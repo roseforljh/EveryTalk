@@ -26,6 +26,8 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
     val editingMessage by viewModel.editingMessage.collectAsState()
     val selectedMediaItems = viewModel.selectedMediaItems
     val isApiCalling by viewModel.isImageApiCalling.collectAsState()
+    val shouldShowImageGenerationError by viewModel.shouldShowImageGenerationError.collectAsState()
+    val imageGenerationError by viewModel.imageGenerationError.collectAsState()
     val focusRequester = remember { FocusRequester() }
     val imeInsets = WindowInsets.ime
     val density = LocalDensity.current
@@ -38,6 +40,30 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
     val bubbleMaxWidth = remember(screenWidth) { screenWidth.coerceAtMost(600.dp) }
 
     var showModelSelection by remember { mutableStateOf(false) }
+
+    // 图像生成错误提示对话框
+    if (shouldShowImageGenerationError && !imageGenerationError.isNullOrBlank()) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { 
+                viewModel.dismissImageGenerationErrorDialog()
+            },
+            title = { 
+                androidx.compose.material3.Text("图像生成失败") 
+            },
+            text = { 
+                androidx.compose.material3.Text(imageGenerationError.orEmpty()) 
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = { 
+                        viewModel.dismissImageGenerationErrorDialog()
+                    }
+                ) {
+                    androidx.compose.material3.Text("确定")
+                }
+            }
+        )
+    }
 
     if (showModelSelection) {
         val allImageConfigs by viewModel.imageGenApiConfigs.collectAsState()

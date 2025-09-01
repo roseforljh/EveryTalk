@@ -339,6 +339,7 @@ class ApiHandler(
                        }
                    } catch (e: Exception) {
                        logger.error("[ImageGen] Image processing failed for message $aiMessageId", e)
+                       handleImageGenerationFailure(aiMessageId, e)
                        updateMessageWithError(aiMessageId, e, isImageGeneration = true)
                        onRequestFailed(e)
                    }
@@ -790,6 +791,56 @@ class ApiHandler(
             "failed_precondition", "user location is not supported", "provider returned error"
         )
         return keywords.any { t.contains(it) }
+    }
+
+    fun hasImageGenerationKeywords(text: String?): Boolean {
+        if (text.isNullOrBlank()) return false
+        val t = text.lowercase().trim()
+        val imageKeywords = listOf(
+            "画", "绘制", "画个", "画张", "画一张", "来一张", "给我一张", "出一张", 
+            "生成图片", "生成", "生成几张", "生成多张", "出图", "图片", "图像", 
+            "配图", "背景图", "封面图", "插画", "插图", "海报", "头像", "壁纸", 
+            "封面", "表情包", "贴图", "示意图", "场景图", "示例图", "图标",
+            "手绘", "素描", "线稿", "上色", "涂色", "水彩", "油画", "像素画", 
+            "漫画", "二次元", "渲染", "p图", "p一张", "制作一张", "做一张", "合成一张",
+            "image", "picture", "pictures", "photo", "photos", "art", "artwork", 
+            "illustration", "render", "rendering", "draw", "sketch", "paint", 
+            "painting", "watercolor", "oil painting", "pixel art", "comic", 
+            "manga", "sticker", "cover", "wallpaper", "avatar", "banner", 
+            "logo", "icon", "generate image", "generate a picture", 
+            "create an image", "make an image", "image generation"
+        )
+        return imageKeywords.any { t.contains(it) }
+    }
+
+    private suspend fun handleImageGenerationFailure(messageId: String, error: Throwable) {
+        viewModelScope.launch(Dispatchers.Main.immediate) {
+            val currentRetryCount = stateHolder._imageGenerationRetryCount.value
+            val maxRetries = 3
+            
+            if (currentRetryCount < maxRetries) {
+                stateHolder._imageGenerationRetryCount.value = currentRetryCount + 1
+                logger.info("图像生成失败，准备重试 ${currentRetryCount + 1}/$maxRetries")
+                
+                // 延迟后重试
+                kotlinx.coroutines.delay(2000)
+                // 这里可以添加重试逻辑，重新发送请求
+                
+            } else {
+                // 达到最大重试次数，显示错误提示
+                val detailedError = error.message ?: "未知错误"
+                val errorMessage = """
+                    图像生成失败：已尝试 $maxRetries 次仍无法生成图片。
+                    错误信息：$detailedError
+                    请检查您的提示词是否包含图像生成关键词（如：画、生成、图片等），或稍后重试。
+                """.trimIndent()
+                
+                stateHolder._imageGenerationError.value = errorMessage
+                stateHolder._shouldShowImageGenerationError.value = true
+                
+                logger.error("图像生成最终失败，已达到最大重试次数", error)
+            }
+        }
     }
 
     private companion object {

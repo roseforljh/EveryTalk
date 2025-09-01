@@ -497,6 +497,14 @@ private data class AttachmentProcessingResult(
 
                 // 规范化图像尺寸：为空或包含占位符时回退到 1024x1024
                 val sanitizedImageSize = currentConfig.imageSize?.takeIf { it.isNotBlank() && !it.contains("<") } ?: "1024x1024"
+                
+                // 检查是否包含图像生成关键词
+                if (isImageGeneration && apiHandler.hasImageGenerationKeywords(textToActuallySend)) {
+                    // 重置重试计数
+                    stateHolder._imageGenerationRetryCount.value = 0
+                    stateHolder._imageGenerationError.value = null
+                    stateHolder._shouldShowImageGenerationError.value = false
+                }
 
                 val chatRequestForApi = ChatRequest(
                     messages = apiMessagesForBackend,

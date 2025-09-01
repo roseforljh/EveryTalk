@@ -104,6 +104,11 @@ data class ConversationScrollState(
     val _loadedHistoryIndex = MutableStateFlow<Int?>(null)
     val _loadedImageGenerationHistoryIndex = MutableStateFlow<Int?>(null)
     val _isLoadingHistory = MutableStateFlow(false)
+    
+    // 图像生成错误处理状态
+    val _imageGenerationRetryCount = MutableStateFlow(0)
+    val _imageGenerationError = MutableStateFlow<String?>(null)
+    val _shouldShowImageGenerationError = MutableStateFlow(false)
     val _isLoadingHistoryData = MutableStateFlow(false)
     val _currentConversationId = MutableStateFlow<String>("new_chat_${System.currentTimeMillis()}")
     val _currentImageGenerationConversationId = MutableStateFlow<String>("new_image_generation_${System.currentTimeMillis()}")
@@ -179,5 +184,27 @@ fun addMessage(message: Message, isImageGeneration: Boolean = false) {
             )
             messageList[index] = updatedMessage
         }
+    }
+    
+    // 图像生成错误处理方法
+    fun incrementImageGenerationRetryCount() {
+        _imageGenerationRetryCount.value = _imageGenerationRetryCount.value + 1
+    }
+    
+    fun resetImageGenerationRetryCount() {
+        _imageGenerationRetryCount.value = 0
+    }
+    
+    fun setImageGenerationError(error: String) {
+        _imageGenerationError.value = error
+    }
+    
+    fun showImageGenerationErrorDialog(show: Boolean) {
+        _shouldShowImageGenerationError.value = show
+    }
+    
+    fun dismissImageGenerationErrorDialog() {
+        _shouldShowImageGenerationError.value = false
+        _imageGenerationError.value = null
     }
 }
