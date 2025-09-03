@@ -29,6 +29,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.consumeAsFlow
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.flow.conflate
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -199,7 +200,7 @@ class ApiHandler(
 
         viewModelScope.launch(Dispatchers.Default) {
             newEventChannel.consumeAsFlow()
-                .conflate()
+                .sample(100)
                 .collect {
                     val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
                     val currentChunkIndex = messageList.indexOfFirst { it.id == aiMessageId }

@@ -1,5 +1,7 @@
-﻿package com.example.everytalk.ui.components
+package com.example.everytalk.ui.components
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -13,21 +15,22 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.jeziellago.compose.markdowntext.MarkdownText
+import kotlinx.coroutines.delay
 
 /**
- * 仅负责将 Markdown 文本切分为：代码块、表格、普通文本（含行内/块级数学公式由 KaTeX 处理）
- * - 代码块：使用 CodePreview 渲染
- * - 表格：识别 Markdown 表格，使用 ComposeTable 渲染
- * - 普通文本：
- *   - 如果包含数学分隔符（$、$$、\(\)、\[\]），使用 RichMathTextView（KaTeX auto-render）
- *   - 否则使用 MarkdownText 渲染（保留加粗、列表等样式）
+ * 增强版 Markdown 渲染器，支持轻渲染模式和渐变淡入效果
+ * - 流式阶段：完全跳过 KaTeX/表格/HTML/CodePreview 的初始化，使用轻量级文本渲染
+ * - 结束后：一次性渲染重组件，进一步降抖
+ * - 渐变效果：每块文本段输出时淡入，淡入时间刚好为下个块输出的时间
  */
 @Composable
 fun EnhancedMarkdownText(
@@ -46,78 +49,175 @@ fun EnhancedMarkdownText(
         else -> if (systemDark) Color(0xFFFFFFFF) else Color(0xFF000000)
     }
 
-    val parts = remember(markdown, inTableContext) {
-        parseMarkdownParts(markdown, inTableContext)
+    // 轻渲染模式：流式阶段只解析文本，结束后才解析重组件
+    val parts = remember(markdown, inTableContext, isStreaming) {
+        if (isStreaming) {
+            // 流式阶段：只返回纯文本，跳过重组件解析
+            splitTextIntoBlocks(markdown)
+        } else {
+            // 非流式或流式结束：完整解析
+            parseMarkdownParts(markdown, inTableContext)
+        }
     }
 
     Column(modifier = modifier.wrapContentWidth()) {
         parts.forEachIndexed { index, part ->
-            when (part) {
-                is MarkdownPart.Text -> {
-                    val hasMath = containsMath(part.content)
-                    if (hasMath) {
-                        // 自适应气泡：使用 wrapContentWidth 让宽度随内容变化
-                        RichMathTextView(
-                            textWithLatex = part.content,
-                            textColor = textColor,
-                            textSize = style.fontSize,
-                            modifier = Modifier.wrapContentWidth(),
-                            delayMs = if (isStreaming) 120L else 0L,
-                            backgroundColor = MaterialTheme.colorScheme.surface
-                        )
-                    } else {
-                        // 普通 Markdown 文本（自定义行内代码样式）
-                        RenderTextWithInlineCode(
-                            text = part.content,
-                            style = style,
-                            textColor = textColor
-                        )
+            // 渐变淡入效果
+            FadeInTextBlock(
+                index = index,
+                isStreaming = isStreaming,
+                fadeInDuration = 300L // 淡入时间
+            ) {
+                when (part) {
+                    is MarkdownPart.Text -> {
+                        if (isStreaming) {
+                            // 流式阶段：使用轻量级文本渲染
+                            LightweightTextRenderer(
+                                text = part.content,
+                                style = style,
+                                textColor = textColor
+                            )
+                        } else {
+                            // 非流式：完整渲染
+                            val hasMath = containsMath(part.content)
+                            if (hasMath) {
+                                RichMathTextView(
+                                    textWithLatex = part.content,
+                                    textColor = textColor,
+                                    textSize = style.fontSize,
+                                    modifier = Modifier.wrapContentWidth(),
+                                    delayMs = 0L,
+                                    backgroundColor = MaterialTheme.colorScheme.surface
+                                )
+                            } else {
+                                RenderTextWithInlineCode(
+                                    text = part.content,
+                                    style = style,
+                                    textColor = textColor
+                                )
+                            }
+                        }
                     }
-                }
-                is MarkdownPart.CodeBlock -> {
-                    CodePreview(
-                        code = part.content.trimEnd('\n'),
-                        language = part.language.ifBlank { null },
-                        modifier = Modifier.wrapContentWidth(),
-                    )
-                }
-                is MarkdownPart.MathBlock -> {
-                    MathView(
-                        latex = part.latex,
-                        isDisplay = part.isDisplay,
-                        textColor = textColor,
-                        modifier = Modifier.wrapContentWidth(),
-                        textSize = style.fontSize,
-                        delayMs = if (isStreaming) 120L else 0L
-                    )
-                }
-                is MarkdownPart.InlineMath -> {
-                    // 兜底：基本不会走到这里（普通文本统一由 RichMathTextView 处理）
-                    MathView(
-                        latex = part.latex,
-                        isDisplay = false,
-                        textColor = textColor,
-                        modifier = Modifier.wrapContentWidth(),
-                        textSize = style.fontSize,
-                        delayMs = if (isStreaming) 80L else 0L
-                    )
-                }
-                is MarkdownPart.HtmlContent -> {
-                    HtmlView(
-                        htmlContent = part.html,
-                        modifier = Modifier.wrapContentWidth()
-                    )
-                }
-                is MarkdownPart.Table -> {
-                    ComposeTable(
-                        tableData = part.tableData,
-                        modifier = Modifier.wrapContentWidth(),
-                        delayMs = if (isStreaming) 200L else 0L
-                    )
+                    is MarkdownPart.CodeBlock -> {
+                        // 流式阶段不渲染重组件
+                        if (!isStreaming) {
+                            CodePreview(
+                                code = part.content.trimEnd('\n'),
+                                language = part.language.ifBlank { null },
+                                modifier = Modifier.wrapContentWidth(),
+                            )
+                        }
+                    }
+                    is MarkdownPart.MathBlock -> {
+                        if (!isStreaming) {
+                            MathView(
+                                latex = part.latex,
+                                isDisplay = part.isDisplay,
+                                textColor = textColor,
+                                modifier = Modifier.wrapContentWidth(),
+                                textSize = style.fontSize,
+                                delayMs = 0L
+                            )
+                        }
+                    }
+                    is MarkdownPart.InlineMath -> {
+                        if (!isStreaming) {
+                            MathView(
+                                latex = part.latex,
+                                isDisplay = false,
+                                textColor = textColor,
+                                modifier = Modifier.wrapContentWidth(),
+                                textSize = style.fontSize,
+                                delayMs = 0L
+                            )
+                        }
+                    }
+                    is MarkdownPart.HtmlContent -> {
+                        if (!isStreaming) {
+                            HtmlView(
+                                htmlContent = part.html,
+                                modifier = Modifier.wrapContentWidth()
+                            )
+                        }
+                    }
+                    is MarkdownPart.Table -> {
+                        if (!isStreaming) {
+                            ComposeTable(
+                                tableData = part.tableData,
+                                modifier = Modifier.wrapContentWidth(),
+                                delayMs = 0L
+                            )
+                        }
+                    }
                 }
             }
             if (index < parts.lastIndex) Spacer(Modifier.height(6.dp))
         }
+    }
+}
+
+/**
+ * 渐变淡入文本块组件
+ */
+@Composable
+private fun FadeInTextBlock(
+    index: Int,
+    isStreaming: Boolean,
+    fadeInDuration: Long,
+    content: @Composable () -> Unit
+) {
+    val alpha = remember { Animatable(if (isStreaming) 0f else 1f) }
+    
+    LaunchedEffect(index, isStreaming) {
+        if (isStreaming) {
+            // 根据索引延迟淡入，模拟逐块输出
+            delay(index * fadeInDuration)
+            alpha.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(durationMillis = fadeInDuration.toInt())
+            )
+        } else {
+            // 非流式直接显示
+            alpha.snapTo(1f)
+        }
+    }
+    
+    Column(
+        modifier = Modifier.alpha(alpha.value)
+    ) {
+        content()
+    }
+}
+
+/**
+ * 轻量级文本渲染器 - 流式阶段使用
+ */
+@Composable
+private fun LightweightTextRenderer(
+    text: String,
+    style: TextStyle,
+    textColor: Color
+) {
+    // 流式阶段使用最简单的文本渲染，避免复杂解析
+    Text(
+        text = text,
+        style = style.copy(color = textColor),
+        modifier = Modifier.wrapContentWidth()
+    )
+}
+
+/**
+ * 将文本分割为块，用于流式渲染的渐变效果
+ */
+private fun splitTextIntoBlocks(text: String): List<MarkdownPart.Text> {
+    if (text.isBlank()) return listOf(MarkdownPart.Text(""))
+    
+    // 按段落分割，每个段落作为一个渐变块
+    val paragraphs = text.split("\n\n").filter { it.isNotBlank() }
+    return if (paragraphs.isEmpty()) {
+        listOf(MarkdownPart.Text(text))
+    } else {
+        paragraphs.map { MarkdownPart.Text(it.trim()) }
     }
 }
 
