@@ -1,4 +1,4 @@
-package com.example.everytalk.ui.components
+﻿package com.example.everytalk.ui.components
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
@@ -17,6 +17,13 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.key
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
@@ -35,6 +42,7 @@ import kotlinx.coroutines.delay
 @Composable
 fun EnhancedMarkdownText(
     markdown: String,
+    messageId: String? = null,
     modifier: Modifier = Modifier,
     style: TextStyle = MaterialTheme.typography.bodyMedium,
     color: Color = Color.Unspecified,
@@ -60,93 +68,124 @@ fun EnhancedMarkdownText(
         }
     }
 
+    // 段级串行淡入控制：使用 revealedCount + AnimatedVisibility
+    val stableKeyBase = remember(markdown, messageId) {
+        messageId ?: markdown.hashCode().toString()
+    }
+    var revealedCount by rememberSaveable(stableKeyBase, isStreaming) {
+        mutableStateOf(if (isStreaming) 0 else parts.size)
+    }
+
+    LaunchedEffect(parts.size, isStreaming, stableKeyBase) {
+        if (!isStreaming) {
+            revealedCount = parts.size
+        } else {
+            // 串行揭示，避免并发索引造成闪现
+            while (revealedCount < parts.size) {
+                // 基础间隔，可按块类型或长度调节
+                val delayMs = 33L
+                delay(delayMs)
+                revealedCount += 1
+            }
+        }
+    }
+
     Column(modifier = modifier.wrapContentWidth()) {
         parts.forEachIndexed { index, part ->
-            // 渐变淡入效果
-            FadeInTextBlock(
-                index = index,
-                isStreaming = isStreaming,
-                fadeInDuration = 300L // 淡入时间
-            ) {
-                when (part) {
-                    is MarkdownPart.Text -> {
-                        if (isStreaming) {
-                            // 流式阶段：使用轻量级文本渲染
-                            LightweightTextRenderer(
-                                text = part.content,
-                                style = style,
-                                textColor = textColor
-                            )
-                        } else {
-                            // 非流式：完整渲染
-                            val hasMath = containsMath(part.content)
-                            if (hasMath) {
-                                RichMathTextView(
-                                    textWithLatex = part.content,
-                                    textColor = textColor,
-                                    textSize = style.fontSize,
-                                    modifier = Modifier.wrapContentWidth(),
-                                    delayMs = 0L,
-                                    backgroundColor = MaterialTheme.colorScheme.surface
-                                )
-                            } else {
-                                RenderTextWithInlineCode(
+            val contentHash = when (part) {
+                is MarkdownPart.Text -> part.content.hashCode()
+                is MarkdownPart.CodeBlock -> (part.language + "|" + part.content).hashCode()
+                is MarkdownPart.MathBlock -> (part.latex + "|" + part.isDisplay).hashCode()
+                is MarkdownPart.InlineMath -> part.latex.hashCode()
+                is MarkdownPart.HtmlContent -> part.html.hashCode()
+                is MarkdownPart.Table -> part.tableData.hashCode()
+            }
+            key("${stableKeyBase}_${index}_$contentHash") {
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = index < revealedCount,
+                    enter = androidx.compose.animation.fadeIn(animationSpec = tween(durationMillis = 180, easing = LinearOutSlowInEasing)),
+                    exit = ExitTransition.None
+                ) {
+                    when (part) {
+                        is MarkdownPart.Text -> {
+                            if (isStreaming) {
+                                // 流式阶段：使用轻量级文本渲染
+                                LightweightTextRenderer(
                                     text = part.content,
                                     style = style,
                                     textColor = textColor
                                 )
+                            } else {
+                                // 非流式：完整渲染
+                                val hasMath = containsMath(part.content)
+                                if (hasMath) {
+                                    RichMathTextView(
+                                        textWithLatex = part.content,
+                                        textColor = textColor,
+                                        textSize = style.fontSize,
+                                        modifier = Modifier.wrapContentWidth(),
+                                        delayMs = 0L,
+                                        backgroundColor = MaterialTheme.colorScheme.surface
+                                    )
+                                } else {
+                                    RenderTextWithInlineCode(
+                                        text = part.content,
+                                        style = style,
+                                        textColor = textColor
+                                    )
+                                }
                             }
                         }
-                    }
-                    is MarkdownPart.CodeBlock -> {
-                        // 流式阶段不渲染重组件
-                        if (!isStreaming) {
-                            CodePreview(
-                                code = part.content.trimEnd('\n'),
-                                language = part.language.ifBlank { null },
-                                modifier = Modifier.wrapContentWidth(),
-                            )
+                        is MarkdownPart.CodeBlock -> {
+                            // 流式阶段不渲染重组件
+                            if (!isStreaming) {
+                                CodePreview(
+                                    code = part.content.trimEnd('\n'),
+                                    language = part.language.ifBlank { null },
+                                    modifier = Modifier.wrapContentWidth(),
+                                )
+                            }
                         }
-                    }
-                    is MarkdownPart.MathBlock -> {
-                        if (!isStreaming) {
-                            MathView(
-                                latex = part.latex,
-                                isDisplay = part.isDisplay,
-                                textColor = textColor,
-                                modifier = Modifier.wrapContentWidth(),
-                                textSize = style.fontSize,
-                                delayMs = 0L
-                            )
+                        is MarkdownPart.MathBlock -> {
+                            if (!isStreaming) {
+                                MathView(
+                                    latex = part.latex,
+                                    isDisplay = part.isDisplay,
+                                    textColor = textColor,
+                                    modifier = Modifier.wrapContentWidth(),
+                                    textSize = style.fontSize,
+                                    delayMs = 0L
+                                )
+                            }
                         }
-                    }
-                    is MarkdownPart.InlineMath -> {
-                        if (!isStreaming) {
-                            MathView(
-                                latex = part.latex,
-                                isDisplay = false,
-                                textColor = textColor,
-                                modifier = Modifier.wrapContentWidth(),
-                                textSize = style.fontSize,
-                                delayMs = 0L
-                            )
+                        is MarkdownPart.InlineMath -> {
+                            if (!isStreaming) {
+                                MathView(
+                                    latex = part.latex,
+                                    isDisplay = false,
+                                    textColor = textColor,
+                                    modifier = Modifier.wrapContentWidth(),
+                                    textSize = style.fontSize,
+                                    delayMs = 0L
+                                )
+                            }
                         }
-                    }
-                    is MarkdownPart.HtmlContent -> {
-                        if (!isStreaming) {
-                            HtmlView(
-                                htmlContent = part.html,
-                                modifier = Modifier.wrapContentWidth()
-                            )
+                        is MarkdownPart.HtmlContent -> {
+                            if (!isStreaming) {
+                                HtmlView(
+                                    htmlContent = part.html,
+                                    modifier = Modifier.wrapContentWidth()
+                                )
+                            }
                         }
-                    }
-                    is MarkdownPart.Table -> {
-                        if (!isStreaming) {
-                            ComposeTable(
-                                tableData = part.tableData,
-                                modifier = Modifier.wrapContentWidth(),
-                                delayMs = 0L
-                            )
+                        is MarkdownPart.Table -> {
+                            if (!isStreaming) {
+                                ComposeTable(
+                                    tableData = part.tableData,
+                                    modifier = Modifier.wrapContentWidth(),
+                                    delayMs = 0L
+                                )
+                            }
                         }
                     }
                 }
@@ -156,38 +195,6 @@ fun EnhancedMarkdownText(
     }
 }
 
-/**
- * 渐变淡入文本块组件
- */
-@Composable
-private fun FadeInTextBlock(
-    index: Int,
-    isStreaming: Boolean,
-    fadeInDuration: Long,
-    content: @Composable () -> Unit
-) {
-    val alpha = remember { Animatable(if (isStreaming) 0f else 1f) }
-    
-    LaunchedEffect(index, isStreaming) {
-        if (isStreaming) {
-            // 根据索引延迟淡入，模拟逐块输出
-            delay(index * fadeInDuration)
-            alpha.animateTo(
-                targetValue = 1f,
-                animationSpec = tween(durationMillis = fadeInDuration.toInt())
-            )
-        } else {
-            // 非流式直接显示
-            alpha.snapTo(1f)
-        }
-    }
-    
-    Column(
-        modifier = Modifier.alpha(alpha.value)
-    ) {
-        content()
-    }
-}
 
 /**
  * 轻量级文本渲染器 - 流式阶段使用

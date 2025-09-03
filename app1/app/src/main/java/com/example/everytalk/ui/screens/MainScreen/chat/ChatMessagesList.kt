@@ -90,20 +90,15 @@ fun ChatMessagesList(
             contentType = { _, item -> item::class.java.simpleName }
         ) { index, item ->
             val alpha = remember { Animatable(0f) }
-            val translationY = remember { Animatable(50f) }
 
             LaunchedEffect(item.stableId) {
                 if (animatedItems[item.stableId] != true) {
                     launch {
-                        alpha.animateTo(1f, animationSpec = tween(durationMillis = 300))
-                    }
-                    launch {
-                        translationY.animateTo(0f, animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing))
+                        alpha.animateTo(1f, animationSpec = tween(durationMillis = 180))
                     }
                     animatedItems[item.stableId] = true
                 } else {
                     alpha.snapTo(1f)
-                    translationY.snapTo(0f)
                 }
             }
 
@@ -111,7 +106,6 @@ fun ChatMessagesList(
                 modifier = Modifier
                     .graphicsLayer {
                         this.alpha = alpha.value
-                        this.translationY = translationY.value
                     }
             ) {
                 when (item) {
@@ -382,6 +376,7 @@ private fun AiMessageItem(
                 // 只有在消息正在流式传输时才延迟渲染数学公式和表格
                 EnhancedMarkdownText(
                     markdown = text,
+                    messageId = message.id,
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurface,
                     isStreaming = isStreaming,
