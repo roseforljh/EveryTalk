@@ -8,6 +8,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -88,6 +89,7 @@ fun CodePreview(
             Column {
                 // 代码文本 - 支持水平滚动，带有视觉指示器
                 val scrollState = rememberScrollState()
+                val verticalScrollState = rememberScrollState()
                 val isDarkTheme = isSystemInDarkTheme()
                 val scrollIndicatorColor = if (isDarkTheme) Color.White.copy(alpha = 0.3f) else Color.Black.copy(alpha = 0.2f)
                 
@@ -100,14 +102,20 @@ fun CodePreview(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .heightIn(max = 320.dp)
+                            .verticalScroll(verticalScrollState)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
                             .background(
                                 color = if (isDarkTheme) Color.Black.copy(alpha = 0.2f) else Color.Gray.copy(alpha = 0.1f),
-                                shape = RoundedCornerShape(6.dp)
+                                shape = RoundedCornerShape(8.dp)
                             )
                             .border(
                                 width = 1.dp,
                                 color = if (isDarkTheme) Color.White.copy(alpha = 0.1f) else Color.Gray.copy(alpha = 0.3f),
-                                shape = RoundedCornerShape(6.dp)
+                                shape = RoundedCornerShape(8.dp)
                             )
                             .horizontalScroll(scrollState)
                             .padding(12.dp)
@@ -124,6 +132,7 @@ fun CodePreview(
                             softWrap = false, // 禁用自动换行，保持代码格式
                             maxLines = Int.MAX_VALUE // 允许多行显示
                         )
+                    }
                     }
                     
                     // 右侧滚动指示器（当内容可滚动时显示）
@@ -163,6 +172,7 @@ fun CodePreview(
                 // 按钮行
                 Row(
                     modifier = Modifier
+                        .zIndex(1f)
                         .fillMaxWidth()
                         .padding(horizontal = 8.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(0.dp)
@@ -572,7 +582,7 @@ private fun generateMarkdownPreview(code: String, colors: ThemeColors): String {
             border: 1px solid ${colors.borderColor};
         }
         h1, h2, h3 { color: ${colors.textColor}; }
-        code { background: ${colors.codeBackgroundColor}; color: ${colors.textColor}; padding: 2px 4px; border-radius: 3px; }
+        code { background: ${colors.backgroundColor}; color: #000000; font-weight: 700; padding: 2px 4px; border-radius: 3px; }
         pre { background: ${colors.codeBackgroundColor}; color: ${colors.textColor}; padding: 15px; border-radius: 5px; overflow-x: auto; border: 1px solid ${colors.borderColor}; }
         blockquote { border-left: 4px solid ${colors.borderColor}; margin: 0; padding-left: 20px; color: ${colors.textColor}; opacity: 0.8; }
         """.trimIndent()

@@ -139,10 +139,12 @@ private fun createHtmlContent(
                     margin: 4px 0;
                 }
                 code {
-                    background-color: ${if (backgroundColor == "#1a1a1a") "#2a2a2a" else "#f0f0f0"};
+                    background-color: $backgroundColor;
                     padding: 2px 4px;
                     border-radius: 3px;
                     font-family: 'Courier New', Courier, monospace;
+                    color: #000000 !important;
+                    font-weight: 700;
                 }
             </style>
         </head>

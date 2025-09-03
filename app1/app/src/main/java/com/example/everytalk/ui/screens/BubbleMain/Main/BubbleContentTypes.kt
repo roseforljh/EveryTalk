@@ -97,7 +97,8 @@ internal fun UserOrErrorMessageContent(
 
     Box(
         modifier = modifier
-            .widthIn(max = maxWidth)
+            .widthIn(min = 48.dp, max = maxWidth * 0.85f)
+            .wrapContentWidth()
             .padding(vertical = 2.dp)
     ) {
         Surface(

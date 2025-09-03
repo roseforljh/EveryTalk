@@ -87,13 +87,13 @@ class ErrorCorrector(
         var fixed = text
 
         // 修复JSON中缺失的引号
-        fixed = fixed.replace(Regex("(\\{|,)\\s*([a-zA-Z_][a-zA-Z0-9_]*)\\s*:"), "$1\"$2\":")
+        fixed = fixed.replace(Regex("(\\{|,)\\s*([a-zA-Z_][a-zA-Z0-9_]*)\\s*:"), "${'$'}1\"${'$'}2\":")
 
         // 修复JSON中缺失的逗号
         fixed = fixed.replace(Regex("\"\\s*\n\\s*\""), "\",\n\"")
 
         // 修复JSON中多余的逗号
-        fixed = fixed.replace(Regex(",\\s*(\\}|\\])"), "$1")
+        fixed = fixed.replace(Regex(",\\s*(\\}|\\])"), "${'$'}1")
 
         return fixed
     }
@@ -121,45 +121,121 @@ class ErrorCorrector(
 
         // 添加缺失的闭合标签
         openTags.reversed().forEach { tagName ->
-            fixed += "</$tagName>"
+            fixed += "</${'$'}tagName>"
         }
 
         return fixed
     }
 
     /**
-     * 修复数学公式格式
+     * 修复数学公式格式（保守策略）
+     * - 保护代码块与行内代码
+     * - 不再进行激进的自动包裹，只做最小化的 $ / $$ 平衡
      */
     private fun fixMathFormat(text: String): String {
-        var fixed = text
+        var working = text
+        return try {
+            val placeholders = mutableListOf<String>()
+            // 保护代码块（```...```）
+            working = protectSegments(working, Regex("(?s)```.*?```"), placeholders, "CODE_BLOCK")
+            // 保护行内代码（`...`）
+            working = protectSegments(working, Regex("`[^`\n]+`"), placeholders, "INLINE_CODE")
 
-        try {
-            // 首先自动识别并包装常见的数学表达式
-            fixed = autoWrapMathExpressions(fixed)
+            // 先平衡块级数学 $$ ... $$
+            working = balanceBlockMath(working)
+            // 再平衡行内数学 $ ... $
+            working = balanceInlineMath(working)
 
-            // 修复未闭合的单美元符号
-            val singleDollarRegex = Regex("(?<!\\\\)\\\$([^$\\n]+?)(?!\\\$)")
-            if (fixed.count { it == '$' } % 2 != 0) {
-                fixed = singleDollarRegex.replace(fixed) { matchResult ->
-                    val content = matchResult.groupValues[1].trim()
-                    "$$content$"
-                }
-            }
-
-            // 修复未闭合的双美元符号
-            val doubleDollarRegex = Regex("(?<!\\\\)\\\$\\\$([^\\n]+?)(?!\\$\\$)")
-            if (fixed.count { it == '$' } > 1 && fixed.split("$$").size % 2 == 0) {
-                fixed = doubleDollarRegex.replace(fixed) { matchResult ->
-                    val content = matchResult.groupValues[1].trim()
-                    "$$$$content$$$$"
-                }
-            }
+            // 恢复被保护的片段
+            working = restoreSegments(working, placeholders)
+            working
         } catch (e: Exception) {
-            logger.warn("Error in math format correction: ${e.message}, returning original text")
-            return text
+            logger.warn("Error in math format correction: ${'$'}{e.message}, returning original text")
+            text
         }
+    }
 
-        return fixed
+    // 保护匹配到的片段，替换为占位符
+    private fun protectSegments(input: String, pattern: Regex, store: MutableList<String>, tag: String): String {
+        var result = input
+        val matches = pattern.findAll(result).toList()
+        matches.asReversed().forEach { m ->
+            val token = "<<PROTECTED_${'$'}{store.size}_${'$'}tag>>"
+            store.add(m.value)
+            result = result.replaceRange(m.range, token)
+        }
+        return result
+    }
+
+    // 根据索引还原占位符
+    private fun restoreSegments(input: String, store: MutableList<String>): String {
+        var result = input
+        store.forEachIndexed { idx, original ->
+            val tokenRegex = Regex("<<PROTECTED_${'$'}idx_[A-Z_]+>>")
+            result = result.replace(tokenRegex, original)
+        }
+        return result
+    }
+
+    // 平衡 $$ 块级数学。如果 $$ 出现次数为奇数，则在末尾补一个 $$
+    private fun balanceBlockMath(text: String): String {
+        var result = text
+        val dollarDollar = Regex("(?<!\\\\)\\$\\$")
+        val count = dollarDollar.findAll(result).count()
+        if (count % 2 != 0) {
+            // 在文本末尾补齐，避免破坏中间内容
+            result += "\n$$"
+        }
+        return result
+    }
+
+    // 平衡单美元 $ 的行内数学。仅在检测到数学指示符时才补齐，避免把 $100 之类当作数学
+    private fun balanceInlineMath(text: String): String {
+        val lines = text.split("\n")
+        val out = StringBuilder()
+        var inBlockMath = false
+        val dollarDollar = Regex("(?<!\\\\)\\$\\$")
+        val singleDollar = Regex("(?<!\\\\)\\$")
+
+        lines.forEachIndexed { idx, rawLine ->
+            var line = rawLine
+
+            // 统计本行出现的未转义 $$，用于块级数学状态切换
+            val ddCount = dollarDollar.findAll(line).count()
+            if (!inBlockMath) {
+                // 在不处于块级数学时，才尝试平衡行内 $
+                // 去掉 $$ 后再统计单 $
+                val lineWithoutDD = dollarDollar.replace(line, "")
+                val singleCount = singleDollar.findAll(lineWithoutDD).count()
+                if (singleCount % 2 != 0) {
+                    // 有奇数个单 $，尝试判断是否是数学
+                    val lastDollarIndex = lineWithoutDD.lastIndexOf('$')
+                    val tail = if (lastDollarIndex >= 0 && lastDollarIndex < lineWithoutDD.length - 1) {
+                        lineWithoutDD.substring(lastDollarIndex + 1)
+                    } else ""
+                    if (hasMathIndicators(tail)) {
+                        line += "$"
+                    }
+                }
+            }
+            // 输出本行
+            out.append(line)
+            if (idx < lines.size - 1) out.append('\n')
+
+            // 依据本行 $$ 数量奇偶切换块级状态
+            if (ddCount % 2 == 1) {
+                inBlockMath = !inBlockMath
+            }
+        }
+        return out.toString()
+    }
+
+    // 粗略判断是否可能是数学内容，避免把货币/环境变量误当数学
+    private fun hasMathIndicators(text: String): Boolean {
+        if (text.isBlank()) return false
+        // 使用原始字符串，避免跨行与转义问题
+        val pattern = Regex("""(\\\\|\^|_|=|[+\u2212\-*/])|(\b(sin|cos|tan|log|ln|exp|sqrt)\b)|(\d+\s*[+\-*/=]\s*\d+)""")
+        return pattern.containsMatchIn(text)
     }
 
     /**
@@ -180,8 +256,8 @@ class ErrorCorrector(
                 // 数值计算：3^2 + 4^2 = 9 + 16 = 25
                 Regex("\\b(\\d+)\\^2\\s*\\+\\s*(\\d+)\\^2\\s*=\\s*(\\d+)\\s*\\+\\s*(\\d+)\\s*=\\s*(\\d+)\\b"),
                 // 开方表达式：√{25} = 5, \\sqrt{25}
-                Regex("\\\\sqrt\\{([^}]+)\\}\\s*=\\s*([\\d]+)"),
-                Regex("√\\{([^}]+)\\}\\s*=\\s*([\\d]+)"),
+                Regex("\\\\sqrt\\{([^}]*)\\}\\s*=\\s*([\\d]+)"),
+                Regex("√\\{([^}]*)\\}\\s*=\\s*([\\d]+)"),
                 // 更通用的开方：√25 = 5
                 Regex("√([\\d]+)\\s*=\\s*([\\d]+)"),
                 // 数学等式（更严格的模式，避免匹配普通文本）
@@ -201,7 +277,7 @@ class ErrorCorrector(
 
                     if (!isInExistingMath) {
                         val matchedText = match.value
-                        val wrappedText = "$${matchedText}$"
+                        val wrappedText = "${'$'}${'$'}matchedText${'$'}"
                         result = result.replaceRange(match.range, wrappedText)
                     }
                 }
@@ -209,7 +285,7 @@ class ErrorCorrector(
 
             // 其他数学表达式模式
             val mathPatterns = listOf(
-                // LaTeX命令: \boxed{...}, \frac{...}{...}, \sqrt{...}
+                // LaTeX命令: \\boxed{...}, \\frac{...}{...}, \\sqrt{...}
                 Regex("\\\\boxed\\{([^}]*)\\}"),
                 Regex("\\\\frac\\{([^}]*)\\}\\{([^}]*)\\}"),
                 Regex("\\\\sqrt\\{([^}]*)\\}"),
@@ -247,14 +323,14 @@ class ErrorCorrector(
 
                     if (!isInExistingMath) {
                         val matchedText = match.value
-                        val wrappedText = "$${matchedText}$"
+                        val wrappedText = "${'$'}${'$'}matchedText${'$'}"
                         result = result.replaceRange(match.range, wrappedText)
                     }
                 }
             }
 
         } catch (e: Exception) {
-            logger.warn("Error in auto math wrapping: ${e.message}, returning original text")
+            logger.warn("Error in auto math wrapping: ${'$'}{e.message}, returning original text")
             return text
         }
 
@@ -365,12 +441,12 @@ class ErrorCorrector(
 
             // 如果处理时间超过阈值，记录警告
             if (processingTime > formatConfig.maxProcessingTimeMs) {
-                logger.warn("$operation took ${processingTime}ms, exceeding threshold of ${formatConfig.maxProcessingTimeMs}ms for text length: ${text.length}")
+                logger.warn("${'$'}operation took ${'$'}{processingTime}ms, exceeding threshold of ${'$'}{formatConfig.maxProcessingTimeMs}ms for text length: ${'$'}{text.length}")
             }
 
             return result
         } catch (e: Exception) {
-            logger.error("Error in $operation", e)
+            logger.error("Error in ${'$'}operation", e)
             throw e
         }
     }

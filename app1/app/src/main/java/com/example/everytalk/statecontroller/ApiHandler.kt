@@ -206,7 +206,7 @@ class ApiHandler(
                     if (currentChunkIndex != -1) {
                         updateMessageInState(currentChunkIndex, isImageGeneration)
                         if (stateHolder.shouldAutoScroll()) {
-                            triggerScrollToBottom()
+                            viewModelScope.launch(Dispatchers.Main.immediate) { triggerScrollToBottom() }
                         }
                     }
                 }
@@ -433,8 +433,11 @@ class ApiHandler(
                                             NEW_STREAM_CANCEL_PREFIX
                                         ) == true
 
+                            val finalTextSnapshot = messageProcessor.getCurrentText()
+                            val finalReasoningSnapshot = messageProcessor.getCurrentReasoning()
+
                             if (!wasCancelledByApiHandler) {
-                                val finalFullText = messageProcessor.getCurrentText().trim()
+                                val finalFullText = finalTextSnapshot.trim()
                                 if (finalFullText.isNotBlank()) {
                                     onAiMessageFullTextChanged(targetMsgId, finalFullText)
                                 }
@@ -451,8 +454,8 @@ class ApiHandler(
                                 if (finalIdx != -1) {
                                     val msg = messageList[finalIdx]
                                     if (cause == null && !msg.isError) {
-                                        val latestText = messageProcessor.getCurrentText()
-                                        val latestReasoning = messageProcessor.getCurrentReasoning()
+                                        val latestText = finalTextSnapshot
+                                        val latestReasoning = finalReasoningSnapshot
                                         val updatedMsg = msg.copy(
                                             text = if (latestText.isNotBlank()) latestText else msg.text,
                                             reasoning = latestReasoning ?: msg.reasoning,
@@ -632,30 +635,33 @@ class ApiHandler(
     }
 
     private fun updateMessageInState(index: Int, isImageGeneration: Boolean = false) {
-        val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
-        val originalMessage = messageList.getOrNull(index) ?: return
-         
-        // 从MessageProcessor获取当前文本和推理内容
-        val accumulatedFullText = messageProcessor.getCurrentText()
-        val accumulatedFullReasoning = messageProcessor.getCurrentReasoning()
-        val outputType = messageProcessor.getCurrentOutputType()
-         
-        // 只有当内容有变化时才更新消息
-        if (accumulatedFullText != originalMessage.text ||
-            accumulatedFullReasoning != originalMessage.reasoning ||
-            outputType != originalMessage.outputType) {
-            val updatedMessage = originalMessage.copy(
-                text = accumulatedFullText,
-                reasoning = accumulatedFullReasoning,
-                outputType = outputType,
-                contentStarted = originalMessage.contentStarted || accumulatedFullText.isNotBlank()
-            )
-             
-            messageList[index] = updatedMessage
-             
-            // 通知文本变化
-            if (accumulatedFullText.isNotEmpty()) {
-                onAiMessageFullTextChanged(originalMessage.id, accumulatedFullText)
+        // 将读取与UI状态更新都切换到主线程，避免跨线程修改Compose状态/MessageProcessor并发读写
+        viewModelScope.launch(Dispatchers.Main.immediate) {
+            val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
+            val originalMessage = messageList.getOrNull(index) ?: return@launch
+
+            // 从MessageProcessor获取当前文本和推理内容（主线程，避免与写入竞争）
+            val accumulatedFullText = messageProcessor.getCurrentText()
+            val accumulatedFullReasoning = messageProcessor.getCurrentReasoning()
+            val outputType = messageProcessor.getCurrentOutputType()
+
+            // 只有当内容有变化时才更新消息
+            if (accumulatedFullText != originalMessage.text ||
+                accumulatedFullReasoning != originalMessage.reasoning ||
+                outputType != originalMessage.outputType) {
+                val updatedMessage = originalMessage.copy(
+                    text = accumulatedFullText,
+                    reasoning = accumulatedFullReasoning,
+                    outputType = outputType,
+                    contentStarted = originalMessage.contentStarted || accumulatedFullText.isNotBlank()
+                )
+
+                messageList[index] = updatedMessage
+
+                // 通知文本变化
+                if (accumulatedFullText.isNotEmpty()) {
+                    onAiMessageFullTextChanged(originalMessage.id, accumulatedFullText)
+                }
             }
         }
     }

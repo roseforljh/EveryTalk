@@ -70,6 +70,14 @@ class RealtimePreprocessor(
     fun shouldSkipProcessing(text: String, operation: String): Boolean {
         if (!formatConfig.enablePerformanceOptimization) return false
         
+        // 如果处于未闭合的代码围栏中，跳过处理避免破坏代码块
+        val fenceCount = "```".toRegex().findAll(text).count()
+        val insideFence = fenceCount % 2 == 1
+        if (insideFence) {
+            performanceMetrics.skippedProcessing++
+            return true
+        }
+        
         // 检查文本长度阈值 - 提高阈值，避免跳过正常长度的文本
         if (text.length > formatConfig.maxProcessingTimeMs * 50) { // 提高阈值
             logger.debug("Skipping $operation for text length: ${text.length}")
@@ -195,9 +203,13 @@ class RealtimePreprocessor(
      * 预处理代码块标记
      */
     private fun preprocessCodeBlocks(text: String): String {
+        // 如果处于未闭合的代码围栏中，直接返回原文，避免在流式过程中破坏代码块
+        val fenceCount = "```".toRegex().findAll(text).count()
+        if (fenceCount % 2 == 1) return text
+        
         var processed = text
         
-        // 确保代码块标记前后有换行
+        // 确保代码块标记前后有换行（在完整围栏外才做）
         processed = processed.replace(Regex("([^\\n])```"), "$1\n```")
         processed = processed.replace(Regex("```([^\\n])"), "```\n$1")
         
@@ -211,13 +223,29 @@ class RealtimePreprocessor(
      * 预处理Markdown标记 - 简化版本，只处理基本格式
      */
     private fun preprocessMarkdown(text: String): String {
-        var processed = text
-
-        // 确保标题标记格式正确
-        processed = processed.replace(Regex("^(#{1,6})([^\\s#])"), "$1 $2")
-        processed = processed.replace(Regex("\n(#{1,6})([^\\s#])"), "\n$1 $2")
-
-        return processed
+        if (text.isBlank()) return text
+        
+        // 逐行处理，遇到代码围栏时切换状态，围栏内不做任何修改
+        val lines = text.split("\n").toMutableList()
+        var insideFence = false
+        for (i in lines.indices) {
+            val line = lines[i]
+            if (line.contains("```")) {
+                // 如果当前行出现```，切换一次状态（支持单行开合或多行块）
+                val count = "```".toRegex().findAll(line).count()
+                // 奇数次出现视为切换
+                if (count % 2 == 1) {
+                    insideFence = !insideFence
+                }
+                // 仍然对围栏标记本身不进行修改
+                continue
+            }
+            if (!insideFence) {
+                // 确保标题标记格式正确（只在围栏外处理）
+                lines[i] = line.replace(Regex("^(#{1,6})([^\\s#])"), "$1 $2")
+            }
+        }
+        return lines.joinToString("\n")
     }
     
     /**
