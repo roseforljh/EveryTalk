@@ -1,31 +1,29 @@
 ﻿package com.example.everytalk.ui.components
 
-import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.wrapContentWidth
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.key
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.animation.ExitTransition
-import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -33,12 +31,6 @@ import androidx.compose.ui.unit.dp
 import dev.jeziellago.compose.markdowntext.MarkdownText
 import kotlinx.coroutines.delay
 
-/**
- * 增强版 Markdown 渲染器，支持轻渲染模式和渐变淡入效果
- * - 流式阶段：完全跳过 KaTeX/表格/HTML/CodePreview 的初始化，使用轻量级文本渲染
- * - 结束后：一次性渲染重组件，进一步降抖
- * - 渐变效果：每块文本段输出时淡入，淡入时间刚好为下个块输出的时间
- */
 @Composable
 fun EnhancedMarkdownText(
     markdown: String,
@@ -57,34 +49,24 @@ fun EnhancedMarkdownText(
         else -> if (systemDark) Color(0xFFFFFFFF) else Color(0xFF000000)
     }
 
-    // 轻渲染模式：流式阶段只解析文本，结束后才解析重组件
-    val parts = remember(markdown, inTableContext, isStreaming) {
+    // 流式阶段：只切纯文本块；结束后再解析表格/代码/数学等重组件
+    val parts: List<MarkdownPart> = remember(markdown, inTableContext, isStreaming) {
         if (isStreaming) {
-            // 流式阶段：只返回纯文本，跳过重组件解析
-            splitTextIntoBlocks(markdown)
+            splitTextIntoBlocks(markdown).map { it as MarkdownPart }
         } else {
-            // 非流式或流式结束：完整解析
             parseMarkdownParts(markdown, inTableContext)
         }
     }
 
-    // 段级串行淡入控制：使用 revealedCount + AnimatedVisibility
-    val stableKeyBase = remember(markdown, messageId) {
-        messageId ?: markdown.hashCode().toString()
-    }
-    var revealedCount by rememberSaveable(stableKeyBase, isStreaming) {
-        mutableStateOf(if (isStreaming) 0 else parts.size)
-    }
-
+    // 串行淡入
+    val stableKeyBase = remember(markdown, messageId) { messageId ?: markdown.hashCode().toString() }
+    var revealedCount by rememberSaveable(stableKeyBase, isStreaming) { mutableStateOf(if (isStreaming) 0 else parts.size) }
     LaunchedEffect(parts.size, isStreaming, stableKeyBase) {
         if (!isStreaming) {
             revealedCount = parts.size
         } else {
-            // 串行揭示，避免并发索引造成闪现
             while (revealedCount < parts.size) {
-                // 基础间隔，可按块类型或长度调节
-                val delayMs = 33L
-                delay(delayMs)
+                delay(33L)
                 revealedCount += 1
             }
         }
@@ -109,14 +91,13 @@ fun EnhancedMarkdownText(
                     when (part) {
                         is MarkdownPart.Text -> {
                             if (isStreaming) {
-                                // 流式阶段：使用轻量级文本渲染
-                                LightweightTextRenderer(
-                                    text = part.content,
-                                    style = style,
-                                    textColor = textColor
+                                // 流式阶段：普通文本实时 Markdown 渲染（保留标题等），重组件仍延后
+                                MarkdownText(
+                                    markdown = normalizeHeadingSpacing(part.content),
+                                    style = style.copy(color = textColor),
+                                    modifier = Modifier.wrapContentWidth()
                                 )
                             } else {
-                                // 非流式：完整渲染
                                 val hasMath = containsMath(part.content)
                                 if (hasMath) {
                                     RichMathTextView(
@@ -137,7 +118,6 @@ fun EnhancedMarkdownText(
                             }
                         }
                         is MarkdownPart.CodeBlock -> {
-                            // 流式阶段不渲染重组件
                             if (!isStreaming) {
                                 CodePreview(
                                     code = part.content.trimEnd('\n'),
@@ -195,37 +175,13 @@ fun EnhancedMarkdownText(
     }
 }
 
-
 /**
- * 轻量级文本渲染器 - 流式阶段使用
- */
-@Composable
-private fun LightweightTextRenderer(
-    text: String,
-    style: TextStyle,
-    textColor: Color
-) {
-    // 流式阶段使用最简单的文本渲染，避免复杂解析
-    Text(
-        text = text,
-        style = style.copy(color = textColor),
-        modifier = Modifier.wrapContentWidth()
-    )
-}
-
-/**
- * 将文本分割为块，用于流式渲染的渐变效果
+ * 将文本分割为块，用于流式渲染的渐变效果（按空行拆段）
  */
 private fun splitTextIntoBlocks(text: String): List<MarkdownPart.Text> {
     if (text.isBlank()) return listOf(MarkdownPart.Text(""))
-    
-    // 按段落分割，每个段落作为一个渐变块
     val paragraphs = text.split("\n\n").filter { it.isNotBlank() }
-    return if (paragraphs.isEmpty()) {
-        listOf(MarkdownPart.Text(text))
-    } else {
-        paragraphs.map { MarkdownPart.Text(it.trim()) }
-    }
+    return if (paragraphs.isEmpty()) listOf(MarkdownPart.Text(text)) else paragraphs.map { MarkdownPart.Text(it.trim()) }
 }
 
 @Composable
@@ -234,11 +190,7 @@ fun StableMarkdownText(
     style: TextStyle,
     modifier: Modifier = Modifier
 ) {
-    MarkdownText(
-        markdown = markdown,
-        style = style,
-        modifier = modifier
-    )
+    MarkdownText(markdown = markdown, style = style, modifier = modifier)
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -252,13 +204,10 @@ private fun RenderTextWithInlineCode(
     FlowRow(modifier = Modifier.wrapContentWidth()) {
         segments.forEach { seg ->
             if (seg.isCode) {
-                InlineCodeChip(
-                    code = seg.text,
-                    baseStyle = style.copy(color = textColor)
-                )
+                InlineCodeChip(code = seg.text, baseStyle = style.copy(color = textColor))
             } else {
                 MarkdownText(
-                    markdown = seg.text,
+                    markdown = normalizeHeadingSpacing(seg.text),
                     style = style.copy(color = textColor),
                     modifier = Modifier.wrapContentWidth()
                 )
@@ -277,10 +226,7 @@ private fun InlineCodeChip(
         style = baseStyle.copy(fontWeight = FontWeight.Medium),
         modifier = Modifier
             .padding(horizontal = 2.dp, vertical = 1.dp)
-            .background(
-                color = MaterialTheme.colorScheme.surface,
-                shape = RoundedCornerShape(6.dp)
-            )
+            .background(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(6.dp))
             .padding(horizontal = 6.dp, vertical = 2.dp)
     )
 }
@@ -312,7 +258,7 @@ private fun splitInlineCodeSegments(text: String): List<InlineSegment> {
         i++
     }
     if (sb.isNotEmpty()) res += InlineSegment(sb.toString(), inCode)
-    // 若以未闭合的反引号结束，则回退为普通文本，避免半截被当作代码
+    // 若以未闭合的反引号结束，则回退为普通文本
     if (res.isNotEmpty() && res.last().isCode) {
         val merged = buildString {
             res.forEach { seg ->
@@ -325,6 +271,23 @@ private fun splitInlineCodeSegments(text: String): List<InlineSegment> {
     return res
 }
 
+/**
+ * 标题容错：
+ * 1) 行内出现的 ##... -> 强制换行到行首
+ * 2) 行首 #{1..6} 后若未跟空格则补空格（###标题 -> ### 标题）
+ */
+private fun normalizeHeadingSpacing(md: String): String {
+    if (md.isEmpty()) return md
+    var text = md
+    // 将“行内标题”移到新的一行（避免被当作普通文本）
+    val newlineBefore = Regex("(?m)([^\\n])\\s*(#{1,6})(?=\\S)")
+    text = text.replace(newlineBefore, "$1\n$2")
+    // 标题后补空格（行首 #... 与后续字符之间补空格）
+    val spaceAfter = Regex("(?m)^(#{1,6})([^#\\s])")
+    text = text.replace(spaceAfter, "$1 $2")
+    return text
+}
+
 // 数据结构
 sealed class MarkdownPart {
     data class Text(val content: String) : MarkdownPart()
@@ -335,18 +298,16 @@ sealed class MarkdownPart {
     data class Table(val tableData: TableData) : MarkdownPart()
 }
 
-// 主解析：按顺序切分 代码块 -> 表格 -> 其它文本
+// 主解析：先切代码块，再在非代码区域提取表格
 private fun parseMarkdownParts(markdown: String, inTableContext: Boolean = false): List<MarkdownPart> {
     if (markdown.isBlank()) return listOf(MarkdownPart.Text(""))
 
-    // 1) 先切分代码块，确保内部内容不被后续规则误伤
     val codeRegex = "```\\s*([a-zA-Z0-9+#-]*)`?\\s*\\n?([\\s\\S]*?)\\n?```".toRegex()
     val result = mutableListOf<MarkdownPart>()
 
     var lastIndex = 0
     val matches = codeRegex.findAll(markdown).toList()
     if (matches.isEmpty()) {
-        // 无代码块，直接处理表格/文本
         result += extractTablesAsParts(markdown, inTableContext)
         return result
     }
@@ -358,7 +319,33 @@ private fun parseMarkdownParts(markdown: String, inTableContext: Boolean = false
         }
         val language = m.groups[1]?.value.orEmpty()
         val code = m.groups[2]?.value.orEmpty()
-        result += MarkdownPart.CodeBlock(code, language)
+        val langLower = language.lowercase()
+
+        when {
+            // 误包裹为 ```markdown/md：解围栏递归解析
+            langLower == "markdown" || langLower == "md" -> {
+                result += parseMarkdownParts(code, inTableContext)
+            }
+            // 明确要求 Markdown 预览：保留为代码块
+            langLower == "mdpreview" || langLower == "markdown_preview" -> {
+                result += MarkdownPart.CodeBlock(code, "markdown")
+            }
+            // 空语言或 text 且像表格：解围栏为表格渲染
+            langLower.isBlank() || langLower == "text" -> {
+                val linesForCheck = code.trim().split("\n")
+                val looksLikeTable = linesForCheck.size >= 2 &&
+                    looksLikeTableHeader(linesForCheck[0]) &&
+                    isAlignmentRow(linesForCheck[1])
+                if (looksLikeTable) {
+                    result += extractTablesAsParts(code, inTableContext)
+                } else {
+                    result += MarkdownPart.CodeBlock(code, language)
+                }
+            }
+            else -> {
+                result += MarkdownPart.CodeBlock(code, language)
+            }
+        }
         lastIndex = m.range.last + 1
     }
     if (lastIndex < markdown.length) {
@@ -382,14 +369,29 @@ private fun extractTablesAsParts(text: String, inTableContext: Boolean): List<Ma
         val next = if (i + 1 < lines.size) lines[i + 1] else null
         val maybeStart = looksLikeTableHeader(line) && next?.let { isAlignmentRow(it) } == true
         if (maybeStart) {
-            // flush buffer
             if (buffer.isNotEmpty()) {
                 parts += MarkdownPart.Text(buffer.toString().trimEnd('\n'))
                 buffer.clear()
             }
-            // collect table block
+            // 处理可能出现在表头行前的说明性前缀（如“……：”），避免被当成第一列
+            var headerLine = line
+            val firstPipeIdx = line.indexOf('|')
+            if (firstPipeIdx > 0) {
+                val prefix = line.substring(0, firstPipeIdx)
+                val prefixTrim = prefix.trim()
+                val prefixLooksLikeIntro =
+                    prefixTrim.endsWith(":") || prefixTrim.endsWith("：") ||
+                    prefixTrim.endsWith("。") || prefixTrim.endsWith("！") || prefixTrim.endsWith("？") ||
+                    prefixTrim.length >= 12
+                if (prefixLooksLikeIntro) {
+                    if (prefixTrim.isNotEmpty()) {
+                        parts += MarkdownPart.Text(prefixTrim)
+                    }
+                    headerLine = line.substring(firstPipeIdx)
+                }
+            }
             val tableLines = mutableListOf<String>()
-            tableLines += line
+            tableLines += headerLine
             tableLines += next!!
             i += 2
             while (i < lines.size) {
@@ -404,7 +406,6 @@ private fun extractTablesAsParts(text: String, inTableContext: Boolean): List<Ma
             if (tableData != null) {
                 parts += MarkdownPart.Table(tableData)
             } else {
-                // 回退为纯文本
                 buffer.append(tableMd).append('\n')
             }
             continue
@@ -422,14 +423,12 @@ private fun extractTablesAsParts(text: String, inTableContext: Boolean): List<Ma
 private fun looksLikeTableHeader(line: String): Boolean {
     val t = line.trim()
     if (!t.contains("|")) return false
-    // 至少两列
     val cells = t.trim('|').split("|")
     return cells.size >= 2
 }
 
 private fun isAlignmentRow(line: String): Boolean {
     val t = line.trim()
-    // e.g. | :--- | ---: | :---: |
     val cellRegex = ":?-{3,}:?".toRegex()
     if (!t.contains("|")) return false
     val cells = t.trim('|').split("|").map { it.trim() }
@@ -438,12 +437,10 @@ private fun isAlignmentRow(line: String): Boolean {
 }
 
 private fun containsMath(text: String): Boolean {
-    // 1) 显式分隔符优先
     if (text.contains("$$")) return true
     if (text.contains("\\(") && text.contains("\\)")) return true
     if (text.contains("\\[") && text.contains("\\]")) return true
 
-    // 成对的单个 $（排除 $$ 与转义 \$）
     run {
         var i = 0
         var open = false
@@ -461,24 +458,20 @@ private fun containsMath(text: String): Boolean {
         }
     }
 
-    // 2) 常见 LaTeX 命令/环境（在不含分隔符时兜底检测）
     val commonCommands = listOf(
         "frac", "sqrt", "sum", "int", "lim", "prod", "binom",
         "left", "right", "overline", "underline", "hat", "bar", "vec",
         "mathbb", "mathrm", "mathbf", "operatorname", "text",
-        // 常见函数与希腊字母，避免过多误判：仅当以反斜杠开头
         "sin", "cos", "tan", "log", "ln",
         "alpha", "beta", "gamma", "delta", "epsilon", "theta",
         "lambda", "mu", "pi", "sigma", "phi", "omega"
     )
-    val commandRegex = Regex("\\\\(" + commonCommands.joinToString("|") + ")\\b")
+    val commandRegex = Regex("""\\(${commonCommands.joinToString("|")})\b""")
     if (commandRegex.containsMatchIn(text)) return true
 
-    // \\begin{...} / \\end{...}
-    val envRegex = Regex("\\\\(begin|end)\\s*\\{[a-zA-Z*]+\\}")
+    val envRegex = Regex("""\\(begin|end)\s*\{[a-zA-Z*]+\}""")
     if (envRegex.containsMatchIn(text)) return true
 
-    // 若同时存在反斜杠与花括号，也大概率是 LaTeX 片段
     if (text.contains('\\') && text.contains('{') && text.contains('}')) return true
 
     return false

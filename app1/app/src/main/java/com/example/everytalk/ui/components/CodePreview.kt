@@ -440,7 +440,7 @@ private fun generatePreviewHtml(code: String, language: String?, isDarkTheme: Bo
     return when (language?.lowercase()) {
         "html" -> generateHtmlPreview(processedCode, colors)
         "svg", "xml" -> generateSvgPreview(processedCode, language, code, colors)
-        "markdown", "md" -> generateMarkdownPreview(processedCode, colors)
+        "markdown", "md", "mdpreview", "markdown_preview" -> generateMarkdownPreview(processedCode, colors)
         "mermaid" -> generateMermaidPreview(code, colors, isDarkTheme)
         "css" -> generateCssPreview(code, colors)
         "javascript", "js" -> generateJavaScriptPreview(code, colors)
@@ -710,7 +710,7 @@ private fun isCodePreviewable(language: String?, code: String): Boolean {
         "html", "svg", "css", "javascript", "js" -> return true
 
         // 标记语言
-        "markdown", "md" -> return true
+        "markdown", "md", "mdpreview", "markdown_preview" -> return true
 
         // 图表
         "mermaid" -> return true

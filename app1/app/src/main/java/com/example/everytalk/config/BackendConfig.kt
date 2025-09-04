@@ -17,7 +17,8 @@ object BackendConfig {
      */
     val backendUrls: List<String> by lazy {
         val configUrls = BuildConfig.BACKEND_URLS
-        android.util.Log.d("BackendConfig", "原始配置URLs: '$configUrls'")
+        // 避免日志泄露完整后端地址，仅记录数量
+        // android.util.Log.d("BackendConfig", "原始配置URLs: '$configUrls'")
         
         if (configUrls.isBlank()) {
             android.util.Log.e("BackendConfig", "BuildConfig.BACKEND_URLS 为空或空白!")
@@ -28,7 +29,7 @@ object BackendConfig {
                 .map { it.trim() }
                 .filter { it.isNotEmpty() }
             
-            android.util.Log.d("BackendConfig", "解析后的URL列表: $urlList")
+            android.util.Log.d("BackendConfig", "解析出的后端URL数量: ${urlList.size}")
             urlList
         }
     }
