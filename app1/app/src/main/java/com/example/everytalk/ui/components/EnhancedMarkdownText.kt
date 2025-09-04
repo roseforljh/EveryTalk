@@ -40,7 +40,8 @@ fun EnhancedMarkdownText(
     color: Color = Color.Unspecified,
     isStreaming: Boolean = false,
     messageOutputType: String = "",
-    inTableContext: Boolean = false
+    inTableContext: Boolean = false,
+    onLongPress: (() -> Unit)? = null
 ) {
     val systemDark = isSystemInDarkTheme()
     val textColor = when {
@@ -50,11 +51,12 @@ fun EnhancedMarkdownText(
     }
 
     // 流式阶段：只切纯文本块；结束后再解析表格/代码/数学等重组件
-    val parts: List<MarkdownPart> = remember(markdown, inTableContext, isStreaming) {
+    val normalizedMd = remember(markdown) { normalizeMarkdownGlyphs(markdown) }
+    val parts: List<MarkdownPart> = remember(normalizedMd, inTableContext, isStreaming) {
         if (isStreaming) {
-            splitTextIntoBlocks(markdown).map { it as MarkdownPart }
+            splitTextIntoBlocks(normalizedMd).map { it as MarkdownPart }
         } else {
-            parseMarkdownParts(markdown, inTableContext)
+            parseMarkdownParts(normalizedMd, inTableContext)
         }
     }
 
@@ -91,22 +93,38 @@ fun EnhancedMarkdownText(
                     when (part) {
                         is MarkdownPart.Text -> {
                             if (isStreaming) {
-                                // 流式阶段：普通文本实时 Markdown 渲染（保留标题等），重组件仍延后
-                                MarkdownText(
-                                    markdown = normalizeHeadingSpacing(part.content),
-                                    style = style.copy(color = textColor),
-                                    modifier = Modifier.wrapContentWidth()
-                                )
-                            } else {
-                                val hasMath = containsMath(part.content)
-                                if (hasMath) {
+                                // 流式阶段：若包含强调标记（**bold** / ＊＊bold＊＊），优先用 RichMathTextView 以保证正确加粗；其余仍走轻量渲染
+                                val hasEmphasisNow = containsBoldOrItalic(part.content)
+                                if (hasEmphasisNow) {
                                     RichMathTextView(
                                         textWithLatex = part.content,
                                         textColor = textColor,
                                         textSize = style.fontSize,
                                         modifier = Modifier.wrapContentWidth(),
                                         delayMs = 0L,
-                                        backgroundColor = MaterialTheme.colorScheme.surface
+                                        backgroundColor = MaterialTheme.colorScheme.surface,
+                                        onLongPress = onLongPress
+                                    )
+                                } else {
+                                    MarkdownText(
+                                        markdown = normalizeHeadingSpacing(part.content),
+                                        style = style.copy(color = textColor),
+                                        modifier = Modifier.wrapContentWidth()
+                                    )
+                                }
+                            } else {
+                                val hasMath = containsMath(part.content)
+                                val hasEmphasis = containsBoldOrItalic(part.content)
+                                if (hasMath || hasEmphasis) {
+                                    // 使用我们更鲁棒的 HTML 渲染器，确保 **中文** / ＊＊中文＊＊ 能正确加粗
+                                    RichMathTextView(
+                                        textWithLatex = part.content,
+                                        textColor = textColor,
+                                        textSize = style.fontSize,
+                                        modifier = Modifier.wrapContentWidth(),
+                                        delayMs = 0L,
+                                        backgroundColor = MaterialTheme.colorScheme.surface,
+                                        onLongPress = onLongPress
                                     )
                                 } else {
                                     RenderTextWithInlineCode(
@@ -134,7 +152,8 @@ fun EnhancedMarkdownText(
                                     textColor = textColor,
                                     modifier = Modifier.wrapContentWidth(),
                                     textSize = style.fontSize,
-                                    delayMs = 0L
+                                    delayMs = 0L,
+                                    onLongPress = onLongPress
                                 )
                             }
                         }
@@ -146,7 +165,8 @@ fun EnhancedMarkdownText(
                                     textColor = textColor,
                                     modifier = Modifier.wrapContentWidth(),
                                     textSize = style.fontSize,
-                                    delayMs = 0L
+                                    delayMs = 0L,
+                                    onLongPress = onLongPress
                                 )
                             }
                         }
@@ -200,11 +220,17 @@ private fun RenderTextWithInlineCode(
     style: TextStyle,
     textColor: Color
 ) {
-    val segments = remember(text) { splitInlineCodeSegments(text) }
+    // 在表格上下文中，解包反引号包裹的“扩展名”，并规范化全角星号，避免被当作代码突出显示
+    val normalized = normalizeMarkdownGlyphs(unwrapFileExtensionsInBackticks(text))
+    val segments = remember(normalized) { splitInlineCodeSegments(normalized) }
     FlowRow(modifier = Modifier.wrapContentWidth()) {
         segments.forEach { seg ->
             if (seg.isCode) {
-                InlineCodeChip(code = seg.text, baseStyle = style.copy(color = textColor))
+                // 行内 code 与正文统一样式：无背景、不加粗、继承颜色
+                Text(
+                    text = seg.text,
+                    style = style.copy(color = textColor, fontWeight = FontWeight.Normal)
+                )
             } else {
                 MarkdownText(
                     markdown = normalizeHeadingSpacing(seg.text),
@@ -221,13 +247,11 @@ private fun InlineCodeChip(
     code: String,
     baseStyle: TextStyle
 ) {
+    // 不再使用 Chip 风格，保持与正文一致（保留函数供兼容，实际不再被调用）
     Text(
         text = code,
-        style = baseStyle.copy(fontWeight = FontWeight.Medium),
+        style = baseStyle.copy(fontWeight = FontWeight.Normal),
         modifier = Modifier
-            .padding(horizontal = 2.dp, vertical = 1.dp)
-            .background(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(6.dp))
-            .padding(horizontal = 6.dp, vertical = 2.dp)
     )
 }
 
@@ -475,4 +499,50 @@ private fun containsMath(text: String): Boolean {
     if (text.contains('\\') && text.contains('{') && text.contains('}')) return true
 
     return false
+}
+
+/**
+ * 检测是否包含强调标记（加粗/斜体），用于决定是否走 HTML 渲染以保证效果一致
+ */
+private fun containsBoldOrItalic(text: String): Boolean {
+    if (text.isEmpty()) return false
+    // 加粗：**text** 或 ＊＊text＊＊ 或 __text__
+    if (text.contains("**") || text.contains("＊＊")) return true
+    if (text.contains("__") && Regex("""__[^_
+]+__""").containsMatchIn(text)) return true
+    // 斜体：*text* / ＊text＊ / _text_
+    if (Regex("""(^|[^*＊])[\*＊]([^*＊
+]+)[\*＊](?![*＊])""").containsMatchIn(text)) return true
+    if (Regex("""(^|[^_])_([^_
+]+)_(${'$'}|[^_])""").containsMatchIn(text)) return true
+    return false
+}
+
+/**
+ * 仅在表格相关语境中使用：将 `.<ext>` 这种纯扩展名从反引号解包为普通文本，
+ * 例如 `\.rtf`、`\.docx`、`\.txt`、`\.html` 等，避免被识别为代码。
+ * 规则谨慎：仅匹配以点开头、后接 2-10 位字母数字的片段；不影响其他代码片段。
+ */
+private fun unwrapFileExtensionsInBackticks(text: String): String {
+    val regex = Regex("`\\.(?:[a-zA-Z0-9]{2,10})`")
+    if (!regex.containsMatchIn(text)) return text
+    return text.replace(regex) { mr -> mr.value.removePrefix("`").removeSuffix("`") }
+}
+
+/**
+ * 规范化常见 Markdown 符号（最小化处理）：将全角星号替换为半角，
+ * 以便 **加粗** / *斜体* 在 Compose MarkdownText 中正确识别。
+ * 不处理反引号与代码块围栏。
+ */
+private fun normalizeMarkdownGlyphs(text: String): String {
+    if (text.isEmpty()) return text
+    return text
+        // 去除常见不可见字符，避免打断 **bold** / *italic*
+        .replace("\u200B", "") // ZERO WIDTH SPACE
+        .replace("\u200C", "") // ZERO WIDTH NON-JOINER
+        .replace("\u200D", "") // ZERO WIDTH JOINER
+        .replace("\uFEFF", "") // ZERO WIDTH NO-BREAK SPACE (BOM)
+        // 统一星号
+        .replace('＊', '*')  // 全角星号 -> 半角
+        .replace('﹡', '*')  // 小型星号 -> 半角
 }

@@ -380,7 +380,8 @@ private fun AiMessageItem(
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurface,
                     isStreaming = isStreaming,
-                    messageOutputType = messageOutputType
+                    messageOutputType = messageOutputType,
+                    onLongPress = onLongPress
                 )
             }
         }

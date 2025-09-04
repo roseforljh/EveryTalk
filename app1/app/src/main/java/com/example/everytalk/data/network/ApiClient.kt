@@ -33,6 +33,7 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.*
 import kotlinx.serialization.modules.SerializersModule
@@ -248,7 +249,7 @@ object ApiClient {
 
         try {
             val chatRequestJsonString =
-                jsonParser.encodeToString(ChatRequest.serializer(), chatRequest)
+                jsonParser.encodeToString(chatRequest)
 
             val multiPartData = MultiPartFormDataContent(
                 formData {
@@ -535,22 +536,50 @@ object ApiClient {
         val raceTimeoutMs = BackendConfig.RACE_TIMEOUT_MS
         
         if (!isConcurrentEnabled || backendProxyUrls.size == 1) {
-            // 顺序请求模式：逐个尝试URL直到成功
+            // 顺序请求模式：逐个尝试URL；每个URL等待首个事件/数据不超过 FIRST_RESPONSE_TIMEOUT_MS（默认17秒）
             var lastException: Exception? = null
             for (url in backendProxyUrls) {
-                try {
-                    android.util.Log.d("ApiClient", "尝试连接到: $url")
-                    streamChatResponseInternal(url, request, attachments, applicationContext)
-                        .collect { event -> send(event) }
-                    return@channelFlow // 成功则退出
-                } catch (e: Exception) {
-                    android.util.Log.w("ApiClient", "URL $url 连接失败: ${e.message}")
-                    lastException = e
+                android.util.Log.d("ApiClient", "尝试连接到: $url")
+                val firstEventSignal = CompletableDeferred<Unit>()
+                val job = launch {
+                    try {
+                        streamChatResponseInternal(url, request, attachments, applicationContext)
+                            .collect { event ->
+                                if (!firstEventSignal.isCompleted) {
+                                    firstEventSignal.complete(Unit)
+                                }
+                                send(event)
+                            }
+                    } catch (e: Exception) {
+                        if (!firstEventSignal.isCompleted) {
+                            firstEventSignal.completeExceptionally(e)
+                        }
+                        throw e
+                    }
+                }
+                val reacted = withTimeoutOrNull(BackendConfig.FIRST_RESPONSE_TIMEOUT_MS) {
+                    try {
+                        firstEventSignal.await()
+                        true
+                    } catch (e: Exception) {
+                        lastException = e as? Exception ?: IOException(e.message ?: "未知错误", e)
+                        false
+                    }
+                } ?: false
+
+                if (reacted) {
+                    // 成功拿到首个事件，等待该流结束并退出
+                    job.join()
+                    return@channelFlow
+                } else {
+                    android.util.Log.w("ApiClient", "URL $url 在 ${BackendConfig.FIRST_RESPONSE_TIMEOUT_MS}ms 内无响应，切换下一个")
+                    lastException = lastException ?: IOException("后端 $url 在 ${BackendConfig.FIRST_RESPONSE_TIMEOUT_MS}ms 内无响应")
+                    job.cancel(CoroutineCancellationException("No first event within ${BackendConfig.FIRST_RESPONSE_TIMEOUT_MS}ms"))
                     // 继续尝试下一个URL
                 }
             }
-            // 所有URL都失败了
-            throw lastException ?: IOException("所有后端服务器都无法连接")
+            // 所有URL均无首响应或失败
+            throw lastException ?: IOException("所有后端在 ${BackendConfig.FIRST_RESPONSE_TIMEOUT_MS}ms 内均无响应或连接失败")
         } else {
             // 并发竞速模式：同时请求所有URL，谁先响应就用谁
             android.util.Log.d("ApiClient", "启动并发请求模式，竞速超时: ${raceTimeoutMs}ms")
@@ -831,7 +860,7 @@ object ApiClient {
             val bodyText = response.bodyAsText()
             // 先尝试直接解析；若失败，记录原文方便排障
             try {
-                jsonParser.decodeFromString(ImageGenerationResponse.serializer(), bodyText)
+                jsonParser.decodeFromString<ImageGenerationResponse>(bodyText)
             } catch (e: SerializationException) {
                 android.util.Log.e("ApiClient", "ImageGenerationResponse 解析失败，原始响应: ${bodyText.take(500)}", e)
                 throw IOException("响应解析失败: ${e.message}")

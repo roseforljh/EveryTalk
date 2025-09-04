@@ -14,7 +14,8 @@
     #content { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; width: 100%; line-height: 1.55; padding: 16px; }
     #content, .katex-display { overflow-x: auto; -webkit-overflow-scrolling: touch; }
     .katex-display { margin: 0.8em 0; }
-    code { background: transparent; color: #000000 !important; font-weight: 700; padding: 0 .25em; border-radius: 3px; }
+    /* 行内 code 与正文统一外观：透明背景、继承颜色、正常字重、去额外内边距 */
+    code { background: transparent !important; color: inherit !important; font-weight: 400; padding: 0; border-radius: 0; }
     a { color: #7aa2f7; text-decoration: underline; }
     ul, ol { margin: .25em 0; padding-left: 1.25em; }
     blockquote { border-left: 3px solid rgba(127,127,127,.35); margin: .5em 0; padding: .25em .75em; opacity: .95; }
@@ -54,8 +55,9 @@
       let s = escapeHtml(protectedObj.text);
       s = s.replace(/`([^`]+?)`/g,'<code>$1</code>');
       s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g,'<a href=\"$2\" target=\"_blank\" rel=\"noopener noreferrer\">$1</a>');
-      s = s.replace(/\*\*([\s\S]+?)\*\*/g,'<strong>$1</strong>');
-      s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g,'$1<em>$2</em>');
+      // 支持 ASCII 与全角星号的加粗/斜体
+      s = s.replace(/(?:\*{2}|＊{2})([\s\S]+?)(?:\*{2}|＊{2})/g,'<strong>$1</strong>');
+      s = s.replace(/(^|[^*＊])(?:\*|＊)([^*＊\n]+)(?:\*|＊)(?![*＊])/g,'$1<em>$2</em>');
       const lines = s.split(/\n/);
       let out = '';
       let inUl = false, inOl = false, inQuote = false;

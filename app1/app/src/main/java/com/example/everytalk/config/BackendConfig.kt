@@ -46,6 +46,7 @@ object BackendConfig {
     // These can be moved to BuildConfig fields as well if they need to vary by build type.
     const val TIMEOUT_MS: Long = 30000
     const val RACE_TIMEOUT_MS: Long = 10000
+    const val FIRST_RESPONSE_TIMEOUT_MS: Long = 17_000
     const val IS_FALLBACK_ENABLED: Boolean = true
 
 

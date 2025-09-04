@@ -32,7 +32,8 @@ fun MathView(
     textColor: Color,
     modifier: Modifier = Modifier,
     textSize: TextUnit = 16.sp,
-    delayMs: Long = 0L
+    delayMs: Long = 0L,
+    onLongPress: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val isDarkTheme = isSystemInDarkTheme()
@@ -98,8 +99,12 @@ fun MathView(
                     }, "AndroidResize")
                      isHorizontalScrollBarEnabled = true
                      isVerticalScrollBarEnabled = false
-                    setOnLongClickListener { true }
-                    isLongClickable = false
+                    setOnLongClickListener {
+                        onLongPress?.invoke()
+                        true
+                    }
+                    isLongClickable = true
+                    // 允许父级拦截，避免与外层Compose冲突
                     requestDisallowInterceptTouchEvent(false)
                     setBackgroundColor(android.graphics.Color.TRANSPARENT)
                     alpha = 0f
@@ -160,17 +165,18 @@ private fun createMathHtmlContent(
                     max-width: 100%;
                     overflow-x: auto; /* 复杂公式可横向滚动，避免溢出 */
                     -webkit-overflow-scrolling: touch;
-                    padding: 4px 0; /* 轻量留白 */
+                    padding: 10px 0; /* 适度增大垂直留白 */
                 }
                 .katex {
                     color: $mathTextColor !important;
                     background: transparent !important;
                     display: inline-block;
                     max-width: 100%;
+                    line-height: 1.26;
                 }
                 .katex * { background: transparent !important; color: inherit !important; }
                 .katex-display {
-                    margin: 0;
+                    margin: 1.2em 0;
                     text-align: left;
                     background: transparent;
                     padding: 0;
@@ -189,6 +195,10 @@ private fun createMathHtmlContent(
                 ::-webkit-scrollbar-track { background: transparent; }
                 ::-webkit-scrollbar-thumb { background: rgba(128, 128, 128, 0.3); border-radius: 2px; }
                 ::-webkit-scrollbar-thumb:hover { background: rgba(128, 128, 128, 0.5); }
+                /* Improve vertical breathing for fractions and display math */
+                .katex .mfrac .frac-line { border-top-width: 0.09em; }
+                .katex .mfrac .numerator { padding-bottom: 0.18em; }
+                .katex .mfrac .denominator { padding-top: 0.18em; }
             </style>
         </head>
         <body>
@@ -204,6 +214,7 @@ private fun createMathHtmlContent(
                         errorColor: '$mathTextColor',
                         output: 'htmlAndMathml',
                         strict: 'ignore',
+                        minRuleThickness: 0.09,
                         macros: {
                             "\\RR": "\\mathbb{R}",
                             "\\NN": "\\mathbb{N}",
@@ -259,15 +270,19 @@ private fun createMathHtmlShell(
                     box-sizing: border-box;
                     overflow-x: hidden;
                 }
-                #math-outer { display:block; width:100%; max-width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; padding:4px 0; }
-                .katex { color:$mathTextColor !important; background:transparent !important; display:inline-block; max-width:100%; }
+                #math-outer { display:block; width:100%; max-width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; padding:10px 0; }
+                .katex { color:$mathTextColor !important; background:transparent !important; display:inline-block; max-width:100%; line-height: 1.28; }
                 .katex * { background: transparent !important; color: inherit !important; }
-                .katex-display { margin:0; text-align:left; background:transparent; padding:0; border-radius:0; display:block; max-width:100%; overflow-x:auto; white-space:normal; word-wrap:normal; overflow-wrap:normal; }
+                .katex-display { margin:1.2em 0; text-align:left; background:transparent; padding:0; border-radius:0; display:block; max-width:100%; overflow-x:auto; white-space:normal; word-wrap:normal; overflow-wrap:normal; }
                 html, body { width: 100%; max-width: 100%; overflow-x: hidden; }
                 ::-webkit-scrollbar { height: 4px; }
                 ::-webkit-scrollbar-track { background: transparent; }
                 ::-webkit-scrollbar-thumb { background: rgba(128, 128, 128, 0.3); border-radius: 2px; }
                 ::-webkit-scrollbar-thumb:hover { background: rgba(128, 128, 128, 0.5); }
+                /* Improve vertical breathing for fractions and display math */
+                .katex .mfrac .frac-line { border-top-width: 0.09em; }
+                .katex .mfrac .numerator { padding-bottom: 0.18em; }
+                .katex .mfrac .denominator { padding-top: 0.18em; }
             </style>
             <script>
                 window.renderLatex = function(encoded) {
@@ -281,6 +296,7 @@ private fun createMathHtmlShell(
                             errorColor: '$mathTextColor',
                             output: 'htmlAndMathml',
                             strict: 'ignore',
+                            minRuleThickness: 0.09,
                             macros: {"\\RR":"\\mathbb{R}","\\NN":"\\mathbb{N}","\\ZZ":"\\mathbb{Z}","\\QQ":"\\mathbb{Q}","\\CC":"\\mathbb{C}"}
                         });
                         var allMathElements = target.querySelectorAll('*');
@@ -422,7 +438,8 @@ fun RichMathTextView(
     modifier: Modifier = Modifier,
     textSize: TextUnit = 16.sp,
     delayMs: Long = 0L,
-    backgroundColor: Color = MaterialTheme.colorScheme.surface
+    backgroundColor: Color = MaterialTheme.colorScheme.surface,
+    onLongPress: (() -> Unit)? = null
 ) {
     val colorHex = String.format("#%06X", 0xFFFFFF and textColor.toArgb())
     val backgroundColorHex = String.format("#%06X", 0xFFFFFF and backgroundColor.toArgb())
@@ -474,8 +491,11 @@ fun RichMathTextView(
                     }, "AndroidResize")
                      isHorizontalScrollBarEnabled = true
                      isVerticalScrollBarEnabled = false
-                    setOnLongClickListener { true }
-                    isLongClickable = false
+                    setOnLongClickListener {
+                        onLongPress?.invoke()
+                        true
+                    }
+                    isLongClickable = true
                     requestDisallowInterceptTouchEvent(false)
                     setBackgroundColor(android.graphics.Color.TRANSPARENT)
                     alpha = 0f
@@ -519,8 +539,9 @@ private fun createRichMathHtmlContent(
                 }
                 #content, .katex-display { overflow-x: auto; -webkit-overflow-scrolling: touch; }
                 .katex, .katex .base { color: $textColor !important; }
-                .katex-display { margin: 0.9em 0; }
-                code { background: rgba(128, 128, 128, 0.2); color: $textColor !important; font-weight: bold; padding: 0 .25em; border-radius: 3px; }
+                .katex-display { margin: 1.2em 0; }
+                /* 行内 code 与正文统一外观 */
+                code { background: transparent !important; color: $textColor !important; font-weight: 400; padding: 0; border-radius: 0; }
                 a { color: inherit; text-decoration: underline; }
                 ul { margin: .25em 0; padding-left: 1.25em; }
                 ol { margin: .25em 0; padding-left: 1.25em; }
@@ -529,10 +550,10 @@ private fun createRichMathHtmlContent(
                 h1{ font-size: 1.6em; } h2{ font-size: 1.4em; } h3{ font-size: 1.25em; }
                 h4{ font-size: 1.15em; } h5{ font-size: 1.05em; } h6{ font-size: 1em; opacity:.95; }
                 /* Fine-tune KaTeX internals to reduce vertical crowding inside formulas */
-                .katex { line-height: 1.2; }
-                .katex .mfrac .frac-line { border-top-width: 0.06em; }
-                .katex .mfrac .numerator { padding-bottom: 0.08em; }
-                .katex .mfrac .denominator { padding-top: 0.08em; }
+                .katex { line-height: 1.28; }
+                .katex .mfrac .frac-line { border-top-width: 0.09em; }
+                .katex .mfrac .numerator { padding-bottom: 0.18em; }
+                .katex .mfrac .denominator { padding-top: 0.18em; }
             </style>
         </head>
         <body>
@@ -585,8 +606,10 @@ private fun createRichMathHtmlContent(
 
                     s = s.replace(/`([^`]+?)`/g,'<code>$1</code>');
                     s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g,'<a href=\"$2\" target=\"_blank\" rel=\"noopener noreferrer\">$1</a>');
-                    s = s.replace(/\*\*([\s\S]+?)\*\*/g,'<strong>$1</strong>');
-                    s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g,'$1<em>$2</em>');
+                    // 支持 ASCII 与全角星号的加粗
+                    s = s.replace(/(?:\*{2}|＊{2})([\s\S]+?)(?:\*{2}|＊{2})/g,'<strong>$1</strong>');
+                    // 支持 ASCII 与全角星号的斜体（避免与加粗冲突）
+                    s = s.replace(/(^|[^*＊])(?:\*|＊)([^*＊\n]+)(?:\*|＊)(?![*＊])/g,'$1<em>$2</em>');
 
                     const lines = s.split(/\n/);
                     let out = '';
@@ -641,7 +664,7 @@ private fun createRichMathHtmlContent(
                             {left: '\\[', right: '\\]', display: true}
                         ],
                         throwOnError: false,
-                        minRuleThickness: 0.06
+                        minRuleThickness: 0.09
                     });
                 } catch (error) {
                     const el = document.getElementById('content');

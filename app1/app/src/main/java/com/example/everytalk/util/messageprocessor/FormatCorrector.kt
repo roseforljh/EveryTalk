@@ -379,14 +379,24 @@ class FormatCorrector(
     private fun fixListFormat(text: String): String {
         var fixed = text
         
+        // 增强：将常见伪列表符号与全角星号统一为标准 Markdown 列表
+        fixed = fixed.replace(Regex("(?m)^(\\s*)[•●◦▪▫·–—−]+\\s*(\\S)"), "$1- $2")
+        fixed = fixed.replace(Regex("＊"), "*")
+        
         // 修复无序列表：确保-、*、+后面有空格
         fixed = fixed.replace(Regex("^(\\s*)([\\-\\*\\+])([^\\s])"), "$1$2 $3")
         fixed = fixed.replace(Regex("\n(\\s*)([\\-\\*\\+])([^\\s])"), "\n$1$2 $3")
+        
+        // 中文有序列表：将 1、/1．/1. 统一为 1. 且补空格
+        fixed = fixed.replace(Regex("(?m)^(\\s*)(\\d+)[、．.]+\\s*(\\S)"), "$1$2. $3")
         
         // 修复有序列表：确保数字.后面有空格
         fixed = fixed.replace(Regex("^(\\s*)(\\d+\\.)([^\\s])"), "$1$2 $3")
         fixed = fixed.replace(Regex("\n(\\s*)(\\d+\\.)([^\\s])"), "\n$1$2 $3")
         
+        // 列表块前补空行（上一行不是空行且下一行是列表项）
+        fixed = fixed.replace(Regex("(?m)([^\\n])\\n(\\s*(?:[\\-\\*\\+]|\\d+\\.)\\s)"), "$1\n\n$2")
+
         // 修复列表项之间的换行
         fixed = fixed.replace(Regex("(\\s*[\\-\\*\\+] .+)\n([^\\s\\-\\*\\+\\n])"), "$1\n\n$2")
         fixed = fixed.replace(Regex("(\\s*\\d+\\. .+)\n([^\\s\\d\\n])"), "$1\n\n$2")
