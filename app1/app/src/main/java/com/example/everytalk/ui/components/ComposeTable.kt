@@ -66,8 +66,10 @@ fun ComposeTable(
         ) {
             tableData.headers.forEachIndexed { index, header ->
                 val align = tableData.aligns.getOrNull(index) ?: TextAlign.Left
+                val parts = remember(header) { parseMarkdownParts(normalizeMarkdownGlyphs(header), true) }
                 EnhancedMarkdownText(
-                    markdown = header,
+                    parts = parts,
+                    rawMarkdown = header,
                     modifier = Modifier
                         .weight(1f)
                         .padding(horizontal = 8.dp),
@@ -101,8 +103,10 @@ fun ComposeTable(
             ) {
                 row.forEachIndexed { cellIndex, cell ->
                     val align = tableData.aligns.getOrNull(cellIndex) ?: TextAlign.Left
+                    val parts = remember(cell) { parseMarkdownParts(normalizeMarkdownGlyphs(cell), true) }
                     EnhancedMarkdownText(
-                        markdown = cell,
+                        parts = parts,
+                        rawMarkdown = cell,
                         modifier = Modifier
                             .weight(1f)
                             .padding(horizontal = 8.dp),
@@ -135,8 +139,10 @@ fun ComposeTable(
     }
 }
 
-private fun splitMarkdownTableRow(line: String): List<String> {
-    val trimmed = line.trim()
+internal fun splitMarkdownTableRow(line: String): List<String> {
+    // 兼容全角/半角竖线与常见表格字符
+    val normalizedLine = line.replace('｜','|').replace('│','|').replace('┃','|')
+    val trimmed = normalizedLine.trim()
     val hasLeading = trimmed.startsWith("|")
     val hasTrailing = trimmed.endsWith("|")
 
@@ -184,10 +190,12 @@ private fun splitMarkdownTableRow(line: String): List<String> {
 }
 
 private fun parseAlignmentRow(separatorLine: String, colCount: Int): List<TextAlign> {
-    // 分隔符形如 | :--- | :---: | ---: |
-    val tokens = splitMarkdownTableRow(separatorLine)
+    // 分隔符形如 | :--- | :---: | ---: |，并兼容全角冒号/破折号
+    val tokens = splitMarkdownTableRow(
+        separatorLine.replace('：', ':').replace('—','-').replace('－','-')
+    )
     val aligns = tokens.map { token ->
-        val t = token.trim()
+        val t = token.replace('：', ':').trim()
         val left = t.startsWith(":")
         val right = t.endsWith(":")
         when {
@@ -205,7 +213,15 @@ private fun parseAlignmentRow(separatorLine: String, colCount: Int): List<TextAl
 }
 
 fun parseMarkdownTable(markdownTable: String): TableData? {
-    val lines = markdownTable.trim().split("\n").filter { it.isNotBlank() }
+    // 全局标准化：兼容全角竖线、中文冒号、破折号等
+    val normalizedTable = markdownTable
+        .replace('｜','|')
+        .replace('│','|')
+        .replace('┃','|')
+        .replace('—','-')
+        .replace('－','-')
+        .replace('：', ':')
+    val lines = normalizedTable.trim().split("\n").filter { it.isNotBlank() }
     if (lines.size < 3) return null
 
     val headerCells = splitMarkdownTableRow(lines[0])

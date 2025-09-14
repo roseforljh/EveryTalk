@@ -39,44 +39,44 @@ fun HtmlView(
         createHtmlContent(htmlContent, finalTextColor, backgroundColor)
     }
     
+    // 记忆单例 WebView，防止重组导致实例重建与内容重复加载
+    val webView = remember(context.applicationContext) {
+        WebView(context.applicationContext).apply {
+            webViewClient = object : WebViewClient() {
+                override fun onPageFinished(view: WebView?, url: String?) {
+                    super.onPageFinished(view, url)
+                    // 页面加载完成后设置透明度，减少闪白
+                    view?.alpha = 1f
+                }
+            }
+            settings.apply {
+                javaScriptEnabled = true
+                domStorageEnabled = true
+                loadWithOverviewMode = true
+                useWideViewPort = true
+                textZoom = 100 // 禁用文本缩放
+                setSupportZoom(false)
+                builtInZoomControls = false
+                displayZoomControls = false
+            }
+            // 禁用长按和文本选择，但不消费长按事件，让其传递到父级
+            setOnLongClickListener { false }
+            isLongClickable = false
+            // 初始设置透明度为0，减少闪白
+            alpha = 0f
+        }
+    }
+
     AndroidView(
         modifier = modifier,
-        factory = { ctx ->
-            WebView(ctx).apply {
-                webViewClient = object : WebViewClient() {
-                    override fun onPageFinished(view: WebView?, url: String?) {
-                        super.onPageFinished(view, url)
-                        // 页面加载完成后设置透明度，减少闪白
-                        view?.alpha = 1f
-                    }
-                }
-                settings.apply {
-                    javaScriptEnabled = true
-                    domStorageEnabled = true
-                    loadWithOverviewMode = true
-                    useWideViewPort = true
-                    textZoom = 100 // 禁用文本缩放
-                    setSupportZoom(false)
-                    builtInZoomControls = false
-                    displayZoomControls = false
-                }
-                
-                // 禁用长按和文本选择，但不消费长按事件，让其传递到父级
-                setOnLongClickListener { false } // 不消费长按事件，让父级处理
-                isLongClickable = false
-                
-                // 初始设置透明度为0，减少闪白
-                alpha = 0f
-                
-                loadDataWithBaseURL("file:///android_asset/", fullHtmlContent, "text/html", "UTF-8", null)
-            }
-        },
-        update = { webView ->
+        factory = { webView },
+        update = { vw ->
             // 只有当内容真正改变时才重新加载
-            if (webView.tag != fullHtmlContent.hashCode()) {
-                webView.tag = fullHtmlContent.hashCode()
-                webView.alpha = 0f
-                webView.loadDataWithBaseURL("file:///android_asset/", fullHtmlContent, "text/html", "UTF-8", null)
+            val hash = fullHtmlContent.hashCode()
+            if (vw.tag != hash) {
+                vw.tag = hash
+                vw.alpha = 0f
+                vw.loadDataWithBaseURL("file:///android_asset/", fullHtmlContent, "text/html", "UTF-8", null)
             }
         }
     )

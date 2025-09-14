@@ -1,4 +1,4 @@
-﻿package com.example.everytalk.ui.components
+package com.example.everytalk.ui.components
 
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.LinearOutSlowInEasing
@@ -33,7 +33,8 @@ import kotlinx.coroutines.delay
 
 @Composable
 fun EnhancedMarkdownText(
-    markdown: String,
+    parts: List<MarkdownPart>,
+    rawMarkdown: String,
     messageId: String? = null,
     modifier: Modifier = Modifier,
     style: TextStyle = MaterialTheme.typography.bodyMedium,
@@ -41,7 +42,8 @@ fun EnhancedMarkdownText(
     isStreaming: Boolean = false,
     messageOutputType: String = "",
     inTableContext: Boolean = false,
-    onLongPress: (() -> Unit)? = null
+    onLongPress: (() -> Unit)? = null,
+    inSelectionDialog: Boolean = false
 ) {
     val systemDark = isSystemInDarkTheme()
     val textColor = when {
@@ -50,18 +52,8 @@ fun EnhancedMarkdownText(
         else -> if (systemDark) Color(0xFFFFFFFF) else Color(0xFF000000)
     }
 
-    // 流式阶段：只切纯文本块；结束后再解析表格/代码/数学等重组件
-    val normalizedMd = remember(markdown) { normalizeMarkdownGlyphs(markdown) }
-    val parts: List<MarkdownPart> = remember(normalizedMd, inTableContext, isStreaming) {
-        if (isStreaming) {
-            splitTextIntoBlocks(normalizedMd).map { it as MarkdownPart }
-        } else {
-            parseMarkdownParts(normalizedMd, inTableContext)
-        }
-    }
-
     // 串行淡入
-    val stableKeyBase = remember(markdown, messageId) { messageId ?: markdown.hashCode().toString() }
+    val stableKeyBase = remember(rawMarkdown, messageId) { messageId ?: rawMarkdown.hashCode().toString() }
     var revealedCount by rememberSaveable(stableKeyBase, isStreaming) { mutableStateOf(if (isStreaming) 0 else parts.size) }
     LaunchedEffect(parts.size, isStreaming, stableKeyBase) {
         if (!isStreaming) {
@@ -74,78 +66,80 @@ fun EnhancedMarkdownText(
         }
     }
 
-    Column(modifier = modifier.wrapContentWidth()) {
-        parts.forEachIndexed { index, part ->
-            val contentHash = when (part) {
-                is MarkdownPart.Text -> part.content.hashCode()
-                is MarkdownPart.CodeBlock -> (part.language + "|" + part.content).hashCode()
-                is MarkdownPart.MathBlock -> (part.latex + "|" + part.isDisplay).hashCode()
-                is MarkdownPart.InlineMath -> part.latex.hashCode()
-                is MarkdownPart.HtmlContent -> part.html.hashCode()
-                is MarkdownPart.Table -> part.tableData.hashCode()
-            }
-            key("${stableKeyBase}_${index}_$contentHash") {
-                androidx.compose.animation.AnimatedVisibility(
-                    visible = index < revealedCount,
-                    enter = androidx.compose.animation.fadeIn(animationSpec = tween(durationMillis = 180, easing = LinearOutSlowInEasing)),
-                    exit = ExitTransition.None
-                ) {
-                    when (part) {
-                        is MarkdownPart.Text -> {
-                            if (isStreaming) {
-                                // 流式阶段：若包含强调标记（**bold** / ＊＊bold＊＊），优先用 RichMathTextView 以保证正确加粗；其余仍走轻量渲染
-                                val hasEmphasisNow = containsBoldOrItalic(part.content)
-                                if (hasEmphasisNow) {
-                                    RichMathTextView(
-                                        textWithLatex = part.content,
-                                        textColor = textColor,
-                                        textSize = style.fontSize,
-                                        modifier = Modifier.wrapContentWidth(),
-                                        delayMs = 0L,
-                                        backgroundColor = MaterialTheme.colorScheme.surface,
-                                        onLongPress = onLongPress
-                                    )
+    if (inSelectionDialog) {
+        // 在选择对话框中，始终使用原生 Text 以保证可选
+        Text(
+            text = rawMarkdown,
+            style = style,
+            color = color,
+            modifier = modifier
+        )
+    } else {
+        Column(modifier = modifier.wrapContentWidth()) {
+            parts.forEachIndexed { index, part ->
+                val contentHash = when (part) {
+                    is MarkdownPart.Text -> part.content.hashCode()
+                    is MarkdownPart.CodeBlock -> (part.language + "|" + part.content).hashCode()
+                    is MarkdownPart.MathBlock -> (part.latex + "|" + part.isDisplay).hashCode()
+                    is MarkdownPart.InlineMath -> part.latex.hashCode()
+                    is MarkdownPart.HtmlContent -> part.html.hashCode()
+                    is MarkdownPart.Table -> part.tableData.hashCode()
+                }
+                // 流式时保持基于索引的稳定 key，避免内容变化触发视图重建导致闪白
+                val itemKey = "${stableKeyBase}_${index}_${part::class.java.simpleName}"
+                key(itemKey) {
+                    val contentComposable: @Composable () -> Unit = {
+                        when (part) {
+                            is MarkdownPart.Text -> {
+                                if (isStreaming) {
+                                    val hasEmphasisNow = containsBoldOrItalic(part.content)
+                                    if (hasEmphasisNow) {
+                                        RichMathTextView(
+                                            textWithLatex = part.content,
+                                            textColor = textColor,
+                                            textSize = style.fontSize,
+                                            modifier = Modifier.wrapContentWidth(),
+                                            delayMs = 0L,
+                                            backgroundColor = MaterialTheme.colorScheme.surface,
+                                            onLongPress = onLongPress
+                                        )
+                                    } else {
+                                        MarkdownText(
+                                            markdown = normalizeBasicMarkdown(part.content),
+                                            style = style.copy(color = textColor),
+                                            modifier = Modifier.wrapContentWidth()
+                                        )
+                                    }
                                 } else {
-                                    MarkdownText(
-                                        markdown = normalizeHeadingSpacing(part.content),
-                                        style = style.copy(color = textColor),
-                                        modifier = Modifier.wrapContentWidth()
-                                    )
-                                }
-                            } else {
-                                val hasMath = containsMath(part.content)
-                                val hasEmphasis = containsBoldOrItalic(part.content)
-                                if (hasMath || hasEmphasis) {
-                                    // 使用我们更鲁棒的 HTML 渲染器，确保 **中文** / ＊＊中文＊＊ 能正确加粗
-                                    RichMathTextView(
-                                        textWithLatex = part.content,
-                                        textColor = textColor,
-                                        textSize = style.fontSize,
-                                        modifier = Modifier.wrapContentWidth(),
-                                        delayMs = 0L,
-                                        backgroundColor = MaterialTheme.colorScheme.surface,
-                                        onLongPress = onLongPress
-                                    )
-                                } else {
-                                    RenderTextWithInlineCode(
-                                        text = part.content,
-                                        style = style,
-                                        textColor = textColor
-                                    )
+                                    val hasMath = containsMath(part.content)
+                                    val hasEmphasis = containsBoldOrItalic(part.content)
+                                    if (hasMath || hasEmphasis) {
+                                        RichMathTextView(
+                                            textWithLatex = part.content,
+                                            textColor = textColor,
+                                            textSize = style.fontSize,
+                                            modifier = Modifier.wrapContentWidth(),
+                                            delayMs = 0L,
+                                            backgroundColor = MaterialTheme.colorScheme.surface,
+                                            onLongPress = onLongPress
+                                        )
+                                    } else {
+                                        RenderTextWithInlineCode(
+                                            text = part.content,
+                                            style = style,
+                                            textColor = textColor
+                                        )
+                                    }
                                 }
                             }
-                        }
-                        is MarkdownPart.CodeBlock -> {
-                            if (!isStreaming) {
+                            is MarkdownPart.CodeBlock -> {
                                 CodePreview(
                                     code = part.content.trimEnd('\n'),
                                     language = part.language.ifBlank { null },
                                     modifier = Modifier.wrapContentWidth(),
                                 )
                             }
-                        }
-                        is MarkdownPart.MathBlock -> {
-                            if (!isStreaming) {
+                            is MarkdownPart.MathBlock -> {
                                 MathView(
                                     latex = part.latex,
                                     isDisplay = part.isDisplay,
@@ -156,9 +150,7 @@ fun EnhancedMarkdownText(
                                     onLongPress = onLongPress
                                 )
                             }
-                        }
-                        is MarkdownPart.InlineMath -> {
-                            if (!isStreaming) {
+                            is MarkdownPart.InlineMath -> {
                                 MathView(
                                     latex = part.latex,
                                     isDisplay = false,
@@ -169,17 +161,13 @@ fun EnhancedMarkdownText(
                                     onLongPress = onLongPress
                                 )
                             }
-                        }
-                        is MarkdownPart.HtmlContent -> {
-                            if (!isStreaming) {
+                            is MarkdownPart.HtmlContent -> {
                                 HtmlView(
                                     htmlContent = part.html,
                                     modifier = Modifier.wrapContentWidth()
                                 )
                             }
-                        }
-                        is MarkdownPart.Table -> {
-                            if (!isStreaming) {
+                            is MarkdownPart.Table -> {
                                 ComposeTable(
                                     tableData = part.tableData,
                                     modifier = Modifier.wrapContentWidth(),
@@ -188,9 +176,21 @@ fun EnhancedMarkdownText(
                             }
                         }
                     }
+
+                    if (isStreaming) {
+                        contentComposable()
+                    } else {
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = index < revealedCount,
+                            enter = androidx.compose.animation.fadeIn(animationSpec = tween(durationMillis = 180, easing = LinearOutSlowInEasing)),
+                            exit = ExitTransition.None
+                        ) {
+                            contentComposable()
+                        }
+                    }
                 }
+                if (index < parts.lastIndex) Spacer(Modifier.height(6.dp))
             }
-            if (index < parts.lastIndex) Spacer(Modifier.height(6.dp))
         }
     }
 }
@@ -233,7 +233,7 @@ private fun RenderTextWithInlineCode(
                 )
             } else {
                 MarkdownText(
-                    markdown = normalizeHeadingSpacing(seg.text),
+                    markdown = normalizeBasicMarkdown(seg.text),
                     style = style.copy(color = textColor),
                     modifier = Modifier.wrapContentWidth()
                 )
@@ -295,22 +295,6 @@ private fun splitInlineCodeSegments(text: String): List<InlineSegment> {
     return res
 }
 
-/**
- * 标题容错：
- * 1) 行内出现的 ##... -> 强制换行到行首
- * 2) 行首 #{1..6} 后若未跟空格则补空格（###标题 -> ### 标题）
- */
-private fun normalizeHeadingSpacing(md: String): String {
-    if (md.isEmpty()) return md
-    var text = md
-    // 将“行内标题”移到新的一行（避免被当作普通文本）
-    val newlineBefore = Regex("(?m)([^\\n])\\s*(#{1,6})(?=\\S)")
-    text = text.replace(newlineBefore, "$1\n$2")
-    // 标题后补空格（行首 #... 与后续字符之间补空格）
-    val spaceAfter = Regex("(?m)^(#{1,6})([^#\\s])")
-    text = text.replace(spaceAfter, "$1 $2")
-    return text
-}
 
 // 数据结构
 sealed class MarkdownPart {
@@ -323,10 +307,10 @@ sealed class MarkdownPart {
 }
 
 // 主解析：先切代码块，再在非代码区域提取表格
-private fun parseMarkdownParts(markdown: String, inTableContext: Boolean = false): List<MarkdownPart> {
+internal fun parseMarkdownParts(markdown: String, inTableContext: Boolean = false): List<MarkdownPart> {
     if (markdown.isBlank()) return listOf(MarkdownPart.Text(""))
 
-    val codeRegex = "```\\s*([a-zA-Z0-9+#-]*)`?\\s*\\n?([\\s\\S]*?)\\n?```".toRegex()
+    val codeRegex = "```\\s*([a-zA-Z0-9_+#\\-]*)`?\\s*\\r?\\n?([\\s\\S]*?)\\r?\\n?```".toRegex()
     val result = mutableListOf<MarkdownPart>()
 
     var lastIndex = 0
@@ -389,54 +373,117 @@ private fun extractTablesAsParts(text: String, inTableContext: Boolean): List<Ma
 
     var i = 0
     while (i < lines.size) {
-        val line = lines[i]
+        val rawLine = lines[i]
         val next = if (i + 1 < lines.size) lines[i + 1] else null
-        val maybeStart = looksLikeTableHeader(line) && next?.let { isAlignmentRow(it) } == true
-        if (maybeStart) {
+
+        // 预处理：尝试剥离表头行前的说明性前缀或列表标记（如 “- ”、“* ”、“1. ”、“说明：” 等）
+        var headerLine = rawLine
+        var leadingIntroText: String? = null
+        run {
+            val firstPipeIdx = rawLine.indexOf('|')
+            if (firstPipeIdx > 0) {
+                val prefix = rawLine.substring(0, firstPipeIdx)
+                val prefixTrim = prefix.trim()
+                val isListMarker = prefixTrim.matches(Regex("[-*+]\\s+.*")) ||
+                    prefixTrim.matches(Regex("\\d+[.)]\\s+.*"))
+                val looksIntro = prefixTrim.endsWith(":") || prefixTrim.endsWith("：") ||
+                    prefixTrim.endsWith("。") || prefixTrim.endsWith("！") || prefixTrim.endsWith("？") ||
+                    prefixTrim.length >= 12 || isListMarker
+                if (looksIntro) {
+                    leadingIntroText = prefixTrim
+                    headerLine = rawLine.substring(firstPipeIdx)
+                }
+            }
+        }
+
+        val hasAlignmentNext = next?.let { isAlignmentRow(it) } == true
+        val headerLooksLike = looksLikeTableHeader(headerLine)
+
+        // 头部列数
+        val colCountHeader = splitMarkdownTableRow(headerLine).size
+
+        // 情况A：标准表格（第二行是对齐分隔行）
+        val isStandardTableStart = headerLooksLike && hasAlignmentNext
+
+        // 情况B：宽松表格（缺失对齐分隔行，但下一行看起来就是数据行，且列数一致）
+        val isImplicitTableStart = headerLooksLike && !hasAlignmentNext && next != null &&
+            next.contains('|') && colCountHeader >= 2 &&
+            colCountHeader == splitMarkdownTableRow(next).size
+
+        // 情况C：对齐分隔行与首条数据行被误写在同一行，如：
+        // "| :--- | :--- | :--- || cell1 | cell2 | cell3 |"
+        val combinedPair = if (headerLooksLike && !hasAlignmentNext && next != null) {
+            splitCombinedAlignmentAndFirstRow(next, colCountHeader)
+        } else null
+        val isCombinedAlignmentAndFirstRow = combinedPair != null
+
+        if (isStandardTableStart || isImplicitTableStart || isCombinedAlignmentAndFirstRow) {
+            // 先把缓冲的普通文本刷出
             if (buffer.isNotEmpty()) {
                 parts += MarkdownPart.Text(buffer.toString().trimEnd('\n'))
                 buffer.clear()
             }
-            // 处理可能出现在表头行前的说明性前缀（如“……：”），避免被当成第一列
-            var headerLine = line
-            val firstPipeIdx = line.indexOf('|')
-            if (firstPipeIdx > 0) {
-                val prefix = line.substring(0, firstPipeIdx)
-                val prefixTrim = prefix.trim()
-                val prefixLooksLikeIntro =
-                    prefixTrim.endsWith(":") || prefixTrim.endsWith("：") ||
-                    prefixTrim.endsWith("。") || prefixTrim.endsWith("！") || prefixTrim.endsWith("？") ||
-                    prefixTrim.length >= 12
-                if (prefixLooksLikeIntro) {
-                    if (prefixTrim.isNotEmpty()) {
-                        parts += MarkdownPart.Text(prefixTrim)
-                    }
-                    headerLine = line.substring(firstPipeIdx)
-                }
+            // 如有说明性前缀，单独作为文本输出（避免被当作第一列）
+            if (!leadingIntroText.isNullOrBlank()) {
+                parts += MarkdownPart.Text(leadingIntroText!!.trim())
             }
+
             val tableLines = mutableListOf<String>()
             tableLines += headerLine
-            tableLines += next!!
-            i += 2
-            while (i < lines.size) {
-                val row = lines[i]
+            var j = i + 1
+
+            when {
+                isCombinedAlignmentAndFirstRow -> {
+                    val (alignmentRow, firstDataRow) = combinedPair!!
+                    tableLines += alignmentRow
+                    tableLines += firstDataRow
+                    j = i + 2
+                }
+                isImplicitTableStart -> {
+                    // 自动补一行对齐分隔行
+                    val alignmentRow = buildString {
+                        append("| ")
+                        append(List(colCountHeader) { "---" }.joinToString(" | "))
+                        append(" |")
+                    }
+                    tableLines += alignmentRow
+                    // 把 next 作为第一行数据
+                    tableLines += next!!
+                    j = i + 2
+                }
+                else -> {
+                    // 标准表格：第二行已是分隔行
+                    tableLines += next!!
+                    j = i + 2
+                }
+            }
+
+            // 收集后续数据行（直到空行或不再包含竖线）
+            while (j < lines.size) {
+                val row = lines[j]
                 if (row.trim().isEmpty()) break
                 if (!row.contains("|")) break
                 tableLines += row
-                i += 1
+                j += 1
             }
+
             val tableMd = tableLines.joinToString("\n")
             val tableData = parseMarkdownTable(tableMd)
             if (tableData != null) {
                 parts += MarkdownPart.Table(tableData)
+                i = j
+                continue
             } else {
+                // 解析失败则退回为普通文本
                 buffer.append(tableMd).append('\n')
+                i = j
+                continue
             }
-            continue
-        } else {
-            buffer.append(line).append('\n')
-            i += 1
         }
+
+        // 非表格起始，累积到缓冲
+        buffer.append(rawLine).append('\n')
+        i += 1
     }
     if (buffer.isNotEmpty()) {
         parts += MarkdownPart.Text(buffer.toString().trimEnd('\n'))
@@ -445,19 +492,53 @@ private fun extractTablesAsParts(text: String, inTableContext: Boolean): List<Ma
 }
 
 private fun looksLikeTableHeader(line: String): Boolean {
-    val t = line.trim()
+    val t = line.replace('｜','|').replace('│','|').trim()
     if (!t.contains("|")) return false
     val cells = t.trim('|').split("|")
     return cells.size >= 2
 }
 
 private fun isAlignmentRow(line: String): Boolean {
-    val t = line.trim()
-    val cellRegex = ":?-{3,}:?".toRegex()
+    val t = line.replace('｜','|').replace('│','|').replace('—','-').replace('－','-').replace('：', ':').trim()
     if (!t.contains("|")) return false
     val cells = t.trim('|').split("|").map { it.trim() }
     if (cells.size < 2) return false
+    val cellRegex = Regex("[:：]?[-—－]{3,}[:：]?")
     return cells.all { it.matches(cellRegex) }
+}
+
+/**
+ * 处理把对齐行与首条数据行写在同一行的情况：
+ * 形如："| :--- | :--- | :--- || cell1 | cell2 | cell3 |"
+ * 返回 Pair(标准化的对齐行, 标准化的首条数据行)；否则返回 null
+ */
+private fun splitCombinedAlignmentAndFirstRow(line: String, expectedCols: Int): Pair<String, String>? {
+    val normalized = line
+        .replace('｜','|')
+        .replace('│','|')
+        .replace('：', ':')
+        .replace('—','-')
+        .replace('－','-')
+        .trim()
+
+    val cellPat = "[:：]?[-—－]{3,}[:：]?"
+    val regexStr = "^\\|?\\s*((?:$cellPat\\s*\\|\\s*){${expectedCols - 1}}$cellPat)\\s*\\|\\|\\s*(.*)$"
+    val regex = Regex(regexStr)
+    val m = regex.find(normalized) ?: return null
+
+    val alignPart = m.groupValues[1].trim()
+    val rowPartRaw = m.groupValues[2].trim()
+
+    // 规范化对齐行
+    val alignLineWithBars = if (alignPart.startsWith("|")) alignPart else "| $alignPart |"
+    val cells = splitMarkdownTableRow(alignLineWithBars)
+    if (cells.size != expectedCols) return null
+    val alignmentRow = "| " + cells.joinToString(" | ") + " |"
+
+    // 规范化首条数据行
+    val firstRow = if (rowPartRaw.startsWith("|")) rowPartRaw else "| $rowPartRaw |"
+
+    return alignmentRow to firstRow
 }
 
 private fun containsMath(text: String): Boolean {
@@ -527,22 +608,4 @@ private fun unwrapFileExtensionsInBackticks(text: String): String {
     val regex = Regex("`\\.(?:[a-zA-Z0-9]{2,10})`")
     if (!regex.containsMatchIn(text)) return text
     return text.replace(regex) { mr -> mr.value.removePrefix("`").removeSuffix("`") }
-}
-
-/**
- * 规范化常见 Markdown 符号（最小化处理）：将全角星号替换为半角，
- * 以便 **加粗** / *斜体* 在 Compose MarkdownText 中正确识别。
- * 不处理反引号与代码块围栏。
- */
-private fun normalizeMarkdownGlyphs(text: String): String {
-    if (text.isEmpty()) return text
-    return text
-        // 去除常见不可见字符，避免打断 **bold** / *italic*
-        .replace("\u200B", "") // ZERO WIDTH SPACE
-        .replace("\u200C", "") // ZERO WIDTH NON-JOINER
-        .replace("\u200D", "") // ZERO WIDTH JOINER
-        .replace("\uFEFF", "") // ZERO WIDTH NO-BREAK SPACE (BOM)
-        // 统一星号
-        .replace('＊', '*')  // 全角星号 -> 半角
-        .replace('﹡', '*')  // 小型星号 -> 半角
 }

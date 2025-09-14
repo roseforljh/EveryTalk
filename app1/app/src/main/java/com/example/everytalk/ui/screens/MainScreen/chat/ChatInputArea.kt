@@ -442,24 +442,26 @@ fun ChatInputArea(
     var tempCameraImageUri by remember { mutableStateOf<Uri?>(null) }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickVisualMedia()
-    ) { uri ->
-        if (uri != null) {
+        ActivityResultContracts.PickMultipleVisualMedia()
+    ) { uris ->
+        if (uris.isNotEmpty()) {
             coroutineScope.launch {
                 try {
-                    val mimeType = context.contentResolver.getType(uri) ?: "image/*"
-                    val fileName = context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-                        if (cursor.moveToFirst()) {
-                            val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                            if (nameIndex != -1) cursor.getString(nameIndex) else null
-                        } else null
-                    } ?: "图片"
-                    
-                    // 检查文件大小
-                    val isFileSizeValid = checkFileSizeAndShowError(context, uri, fileName, onShowSnackbar)
-                    if (isFileSizeValid) {
-                        withContext(Dispatchers.Main) {
-                            onAddMediaItem(SelectedMediaItem.ImageFromUri(uri, UUID.randomUUID().toString(), mimeType))
+                    uris.forEach { uri ->
+                        val mimeType = context.contentResolver.getType(uri) ?: "image/*"
+                        val fileName = context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                            if (cursor.moveToFirst()) {
+                                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                                if (nameIndex != -1) cursor.getString(nameIndex) else null
+                            } else null
+                        } ?: "图片"
+
+                        // 检查文件大小
+                        val isFileSizeValid = checkFileSizeAndShowError(context, uri, fileName, onShowSnackbar)
+                        if (isFileSizeValid) {
+                            withContext(Dispatchers.Main) {
+                                onAddMediaItem(SelectedMediaItem.ImageFromUri(uri, UUID.randomUUID().toString(), mimeType))
+                            }
                         }
                     }
                 } catch (e: Exception) {
@@ -793,7 +795,7 @@ fun ChatInputArea(
                         showImageSelectionPanel = false
                         when (selectedOption) {
                             ImageSourceOption.ALBUM -> photoPickerLauncher.launch(
-                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
                             )
                             ImageSourceOption.CAMERA -> cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
                         }

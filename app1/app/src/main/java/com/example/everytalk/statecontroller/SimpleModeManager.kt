@@ -4,18 +4,65 @@ import android.util.Log
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.ui.screens.viewmodel.DataPersistenceManager
 import com.example.everytalk.ui.screens.viewmodel.HistoryManager
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * 简化的模式管理器 - 专门解决模式切换问题
  */
 class SimpleModeManager(
     private val stateHolder: ViewModelStateHolder,
-    private val historyManager: HistoryManager
+    private val historyManager: HistoryManager,
+    private val scope: CoroutineScope
 ) {
     private val TAG = "SimpleModeManager"
+    
+    // 增加明确的模式状态跟踪 - 解决forceNew导致的状态清空问题
+    private var _currentMode: ModeType = ModeType.NONE
+    private var _lastModeSwitch: Long = 0L
+
+    // 新增：用于UI即时感知的“意图模式”（优先于内容态）
+    private val _uiMode: MutableStateFlow<ModeType> = MutableStateFlow(ModeType.NONE)
+    val uiModeFlow: StateFlow<ModeType> = _uiMode.asStateFlow()
+
+    init {
+        // 初始化时根据现有内容态估算一次，避免初次进入时为 NONE
+        _uiMode.value = getCurrentMode()
+    }
+    
+    /**
+     * 获取当前模式（考虑最近的模式切换）
+     */
+    fun getCurrentMode(): ModeType {
+        val hasTextContent = stateHolder.messages.isNotEmpty() || stateHolder._loadedHistoryIndex.value != null
+        val hasImageContent = stateHolder.imageGenerationMessages.isNotEmpty() || stateHolder._loadedImageGenerationHistoryIndex.value != null
+        
+        return when {
+            hasImageContent && !hasTextContent -> ModeType.IMAGE
+            hasTextContent && !hasImageContent -> ModeType.TEXT
+            !hasTextContent && !hasImageContent -> {
+                // 如果没有内容，但有最近的模式切换记录，使用记录的模式
+                val timeSinceLastSwitch = System.currentTimeMillis() - _lastModeSwitch
+                if (timeSinceLastSwitch < 5000L && _currentMode != ModeType.NONE) {
+                    Log.d(TAG, "Using tracked mode: $_currentMode (${timeSinceLastSwitch}ms ago)")
+                    _currentMode
+                } else {
+                    ModeType.NONE
+                }
+            }
+            else -> {
+                // 异常情况：同时有两种模式的内容，记录警告并默认返回文本模式
+                Log.w(TAG, "Warning: Both text and image content detected. Defaulting to TEXT mode.")
+                ModeType.TEXT
+            }
+        }
+    }
     
     /**
      * 安全的模式切换到文本模式
@@ -23,7 +70,12 @@ class SimpleModeManager(
     suspend fun switchToTextMode(forceNew: Boolean = false) {
         Log.d(TAG, "Switching to TEXT mode (forceNew: $forceNew)")
         
-        // 1. 保存图像模式的当前状态
+        // 跟踪模式切换（立即更新意图模式，供UI使用）
+        _currentMode = ModeType.TEXT
+        _lastModeSwitch = System.currentTimeMillis()
+        _uiMode.value = ModeType.TEXT
+        
+        // 1. 同步保存图像模式的当前状态 - 确保状态切换的原子性
         withContext(Dispatchers.IO) {
             historyManager.saveCurrentChatToHistoryIfNeeded(
                 isImageGeneration = true,
@@ -49,6 +101,10 @@ class SimpleModeManager(
         // 5. 重置输入框
         stateHolder._text.value = ""
         
+        // 6. 验证状态切换完成 - 确保模式切换的原子性
+        val currentMode = getCurrentMode()
+        Log.d(TAG, "State validation - currentMode: $currentMode, isInTextMode: ${isInTextMode()}, isInImageMode: ${isInImageMode()}")
+        
         Log.d(TAG, "Switched to TEXT mode successfully")
     }
     
@@ -58,7 +114,12 @@ class SimpleModeManager(
     suspend fun switchToImageMode(forceNew: Boolean = false) {
         Log.d(TAG, "Switching to IMAGE mode (forceNew: $forceNew)")
         
-        // 1. 保存文本模式的当前状态
+        // 跟踪模式切换（立即更新意图模式，供UI使用）
+        _currentMode = ModeType.IMAGE
+        _lastModeSwitch = System.currentTimeMillis()
+        _uiMode.value = ModeType.IMAGE
+        
+        // 1. 同步保存文本模式的当前状态 - 确保状态切换的原子性
         withContext(Dispatchers.IO) {
             historyManager.saveCurrentChatToHistoryIfNeeded(
                 isImageGeneration = false,
@@ -66,7 +127,7 @@ class SimpleModeManager(
             )
         }
         
-        // 2. 清理文本模式状态  
+        // 2. 清理文本模式状态
         clearTextApiState()
         
         // 3. 强制清除文本模式的历史记录索引，确保完全独立
@@ -83,6 +144,10 @@ class SimpleModeManager(
         // 5. 重置输入框
         stateHolder._text.value = ""
         
+        // 6. 验证状态切换完成 - 确保模式切换的原子性
+        val currentMode = getCurrentMode()
+        Log.d(TAG, "State validation - currentMode: $currentMode, isInTextMode: ${isInTextMode()}, isInImageMode: ${isInImageMode()}")
+        
         Log.d(TAG, "Switched to IMAGE mode successfully")
     }
     
@@ -92,6 +157,7 @@ class SimpleModeManager(
     suspend fun loadTextHistory(index: Int) {
         Log.d(TAG, "🔥 [START] Loading TEXT history at index: $index")
         
+        // 同步保存当前状态 - 确保状态切换的一致性
         withContext(Dispatchers.IO) {
             historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = false, forceSave = true)
             historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true, forceSave = true)
@@ -202,6 +268,11 @@ class SimpleModeManager(
     suspend fun loadImageHistory(index: Int) {
         Log.d(TAG, "Loading IMAGE history at index: $index")
         
+        // 同步保存当前状态 - 确保状态切换的一致性
+        withContext(Dispatchers.IO) {
+            historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = false, forceSave = true)
+            historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true, forceSave = true)
+        }
         
         // 2. 验证索引
         val conversationList = stateHolder._imageGenerationHistoricalConversations.value
@@ -288,6 +359,10 @@ class SimpleModeManager(
      */
     fun isInImageMode(): Boolean {
         return stateHolder.imageGenerationMessages.isNotEmpty() || stateHolder._loadedImageGenerationHistoryIndex.value != null
+    }
+    
+    enum class ModeType {
+        TEXT, IMAGE, NONE
     }
     
     /**

@@ -20,7 +20,9 @@ data class ImageGenRequest(
    @SerialName("apiAddress")
    val apiAddress: String,
    @SerialName("apiKey")
-   val apiKey: String
+   val apiKey: String,
+   @SerialName("provider")
+   val provider: String? = null
 )
 
 @Serializable

@@ -71,6 +71,8 @@ import com.example.everytalk.ui.screens.MainScreen.chat.EmptyChatView
 import com.example.everytalk.ui.screens.MainScreen.chat.ModelSelectionBottomSheet
 import com.example.everytalk.ui.screens.MainScreen.chat.rememberChatScrollStateManager
 import com.example.everytalk.ui.components.EnhancedMarkdownText
+import com.example.everytalk.ui.components.normalizeMarkdownGlyphs
+import com.example.everytalk.ui.components.parseMarkdownParts
 import com.example.everytalk.ui.theme.chatColors
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -642,10 +644,13 @@ private fun UpdateAvailableDialog(
                             .padding(vertical = scrimHeight)
                     ) {
                         // 直接使用EnhancedMarkdownText渲染整个文本
+                        val parts = remember(textToDisplay) { parseMarkdownParts(normalizeMarkdownGlyphs(textToDisplay)) }
                         EnhancedMarkdownText(
-                            markdown = textToDisplay,
+                            parts = parts,
+                            rawMarkdown = textToDisplay,
                             style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurface
+                            color = MaterialTheme.colorScheme.onSurface,
+                            inSelectionDialog = true
                         )
                     }
                 }

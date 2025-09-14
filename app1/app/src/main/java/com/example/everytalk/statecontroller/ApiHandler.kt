@@ -354,48 +354,21 @@ class ApiHandler(
                 if (audioBase64 != null) {
                     finalAttachments.add(Audio(id = UUID.randomUUID().toString(), mimeType = mimeType ?: "audio/3gpp", data = audioBase64))
                 }
-                if (requestBody.channel == "Gemini") {
-                    try {
-                        val geminiRequest = com.example.everytalk.data.DataClass.GeminiApiRequest(
-                            contents = requestBody.messages.map {
-                                com.example.everytalk.data.DataClass.Content(
-                                    role = if (it.role == "assistant") "model" else it.role,
-                                    parts = when (it) {
-                                        is com.example.everytalk.data.DataClass.SimpleTextApiMessage -> listOf(com.example.everytalk.data.DataClass.Part.Text(it.content))
-                                        is com.example.everytalk.data.DataClass.PartsApiMessage -> it.parts.mapNotNull { part ->
-                                            when (part) {
-                                                is ApiContentPart.Text -> com.example.everytalk.data.DataClass.Part.Text(part.text)
-                                                is ApiContentPart.InlineData -> com.example.everytalk.data.DataClass.Part.InlineData(part.mimeType, part.base64Data)
-                                                is ApiContentPart.FileUri -> null
-                                            }
-                                        }
-                                        else -> emptyList()
-                                    }
-                                )
-                            }
-                        )
-                        // This feature is disabled as it's not using the proxy
-                        val text = "Audio processing via direct Gemini API is currently disabled."
-                        processStreamEvent(AppStreamEvent.ContentFinal(text), aiMessageId)
-                        processStreamEvent(AppStreamEvent.StreamEnd(aiMessageId), aiMessageId)
-                    } catch (e: Exception) {
-                        updateMessageWithError(aiMessageId, e, isImageGeneration)
-                        onRequestFailed(e)
-                    }
-                } else {
-                    ApiClient.streamChatResponse(
-                        requestBody,
-                        finalAttachments,
-                        applicationContextForApiClient
-                    )
-                        .onStart { logger.debug("Stream started for message $aiMessageId") }
-                        .catch { e ->
-                            if (e !is CancellationException) {
-                                logger.error("Stream error", e)
-                                updateMessageWithError(aiMessageId, e, isImageGeneration)
-                                onRequestFailed(e)
-                            }
+                // 修复：所有文本请求（包括Gemini渠道）都统一使用后端代理
+                // 移除了对Gemini渠道的特殊处理，确保所有请求都通过配置的后端代理进行
+                ApiClient.streamChatResponse(
+                    requestBody,
+                    finalAttachments,
+                    applicationContextForApiClient
+                )
+                    .onStart { logger.debug("Stream started for message $aiMessageId") }
+                    .catch { e ->
+                        if (e !is CancellationException) {
+                            logger.error("Stream error", e)
+                            updateMessageWithError(aiMessageId, e, isImageGeneration)
+                            onRequestFailed(e)
                         }
+                    }
                         .onCompletion { cause ->
                             logger.debug("Stream completed for message $aiMessageId, cause: ${cause?.message}")
                             newEventChannel.close()
@@ -495,7 +468,6 @@ class ApiHandler(
                             processStreamEvent(appEvent, aiMessageId, isImageGeneration)
                             newEventChannel.trySend(appEvent)
                         }
-                }
                }
             } catch (e: Exception) {
                 messageProcessor.reset()

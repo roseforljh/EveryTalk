@@ -44,6 +44,8 @@ import com.example.everytalk.ui.screens.BubbleMain.Main.ThreeDotsWaveAnimation
 import com.example.everytalk.ui.theme.ChatDimensions
 import com.example.everytalk.ui.theme.chatColors
 import com.example.everytalk.ui.components.EnhancedMarkdownText
+import com.example.everytalk.ui.components.normalizeMarkdownGlyphs
+import com.example.everytalk.ui.components.parseMarkdownParts
 import kotlinx.coroutines.launch
 
 @Composable
@@ -400,8 +402,10 @@ private fun AiMessageItem(
             ) {
                 Column {
                     if (text.isNotBlank()) {
+                        val parts = remember(text) { parseMarkdownParts(normalizeMarkdownGlyphs(text)) }
                         EnhancedMarkdownText(
-                            markdown = text,
+                            parts = parts,
+                            rawMarkdown = text,
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurface,
                             isStreaming = isStreaming,

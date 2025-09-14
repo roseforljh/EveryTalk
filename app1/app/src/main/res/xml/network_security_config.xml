@@ -16,40 +16,4 @@
         </trust-anchors>
     </debug-overrides>
     
-    <!-- 特定域名配置，支持所有常见的局域网地址 -->
-    <domain-config cleartextTrafficPermitted="true">
-        <!-- 本地地址 -->
-        <domain includeSubdomains="true">localhost</domain>
-        <domain includeSubdomains="true">127.0.0.1</domain>
-        <domain includeSubdomains="true">10.0.2.2</domain>
-        
-        <!-- 192.168.0.x 网段 -->
-        <domain includeSubdomains="true">192.168.0.1</domain>
-        <domain includeSubdomains="true">192.168.0.100</domain>
-        <domain includeSubdomains="true">192.168.0.101</domain>
-        <domain includeSubdomains="true">192.168.0.102</domain>
-        <domain includeSubdomains="true">192.168.0.103</domain>
-        <domain includeSubdomains="true">192.168.0.104</domain>
-        <domain includeSubdomains="true">192.168.0.105</domain>
-        
-        <!-- 192.168.1.x 网段 -->
-        <domain includeSubdomains="true">192.168.1.1</domain>
-        <domain includeSubdomains="true">192.168.1.100</domain>
-        <domain includeSubdomains="true">192.168.1.101</domain>
-        <domain includeSubdomains="true">192.168.1.102</domain>
-        <domain includeSubdomains="true">192.168.1.103</domain>
-        
-        <!-- 10.x.x.x 网段 -->
-        <domain includeSubdomains="true">10.0.0.1</domain>
-        <domain includeSubdomains="true">10.0.0.2</domain>
-        <domain includeSubdomains="true">10.0.0.3</domain>
-        
-        <!-- 172.16.x.x 网段 -->
-        <domain includeSubdomains="true">172.16.0.1</domain>
-        
-        <!-- CDN 域名配置，允许数学公式渲染所需的资源 -->
-        <domain includeSubdomains="true">cdn.jsdelivr.net</domain>
-        <domain includeSubdomains="true">unpkg.com</domain>
-        <domain includeSubdomains="true">cdnjs.cloudflare.com</domain>
-    </domain-config>
 </network-security-config>

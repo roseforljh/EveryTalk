@@ -169,6 +169,16 @@ object ApiClient {
     private lateinit var client: HttpClient
     private var isInitialized = false
 
+    // 将 localhost/127.0.0.1 识别为本机地址（在真机上通常不可达），用于回退排序
+    private fun isLocalHostUrl(raw: String): Boolean {
+        return try {
+            val host = java.net.URI(raw).host?.lowercase() ?: return false
+            host == "127.0.0.1" || host == "localhost"
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     fun initialize(context: Context) {
         if (isInitialized) return
         synchronized(this) {
@@ -526,149 +536,50 @@ object ApiClient {
         attachments: List<SelectedMediaItem>,
         applicationContext: Context
     ): Flow<AppStreamEvent> = channelFlow {
-        val backendProxyUrls = BackendConfig.backendUrls
-        if (backendProxyUrls.isEmpty()) {
-            throw IOException("未配置后端服务器URL。请检查项目根目录的 'local.properties' 文件是否已根据 'local.properties.example' 模板正确配置。")
+        // 尝试按顺序连接所有已配置的后端URL，首个成功即使用，失败则自动回退到下一个
+        val backendUrls = BackendConfig.backendUrls
+        if (backendUrls.isEmpty()) {
+            throw IOException("未配置后端代理服务器URL（BackendConfig.backendUrls 为空）。")
         }
 
-        // 检查是否启用并发请求
-        val isConcurrentEnabled = BackendConfig.isConcurrentRequestEnabled
-        val raceTimeoutMs = BackendConfig.RACE_TIMEOUT_MS
-        
-        if (!isConcurrentEnabled || backendProxyUrls.size == 1) {
-            // 顺序请求模式：逐个尝试URL；每个URL等待首个事件/数据不超过 FIRST_RESPONSE_TIMEOUT_MS（默认17秒）
-            var lastException: Exception? = null
-            for (url in backendProxyUrls) {
-                android.util.Log.d("ApiClient", "尝试连接到: $url")
-                val firstEventSignal = CompletableDeferred<Unit>()
-                val job = launch {
-                    try {
-                        streamChatResponseInternal(url, request, attachments, applicationContext)
-                            .collect { event ->
-                                if (!firstEventSignal.isCompleted) {
-                                    firstEventSignal.complete(Unit)
-                                }
-                                send(event)
-                            }
-                    } catch (e: Exception) {
-                        if (!firstEventSignal.isCompleted) {
-                            firstEventSignal.completeExceptionally(e)
-                        }
-                        throw e
-                    }
-                }
-                val reacted = withTimeoutOrNull(BackendConfig.FIRST_RESPONSE_TIMEOUT_MS) {
-                    try {
-                        firstEventSignal.await()
-                        true
-                    } catch (e: Exception) {
-                        lastException = e as? Exception ?: IOException(e.message ?: "未知错误", e)
-                        false
-                    }
-                } ?: false
+        // 优先尝试非本机地址，最后再尝试 127.0.0.1/localhost，提升真机可连接性
+        val sortedBackends = backendUrls.sortedBy { isLocalHostUrl(it) }
+        android.util.Log.d("ApiClient", "后端地址尝试顺序: $sortedBackends")
 
-                if (reacted) {
-                    // 成功拿到首个事件，等待该流结束并退出
-                    job.join()
-                    return@channelFlow
-                } else {
-                    android.util.Log.w("ApiClient", "URL $url 在 ${BackendConfig.FIRST_RESPONSE_TIMEOUT_MS}ms 内无响应，切换下一个")
-                    lastException = lastException ?: IOException("后端 $url 在 ${BackendConfig.FIRST_RESPONSE_TIMEOUT_MS}ms 内无响应")
-                    job.cancel(CoroutineCancellationException("No first event within ${BackendConfig.FIRST_RESPONSE_TIMEOUT_MS}ms"))
-                    // 继续尝试下一个URL
-                }
-            }
-            // 所有URL均无首响应或失败
-            throw lastException ?: IOException("所有后端在 ${BackendConfig.FIRST_RESPONSE_TIMEOUT_MS}ms 内均无响应或连接失败")
-        } else {
-            // 并发竞速模式：同时请求所有URL，谁先响应就用谁
-            android.util.Log.d("ApiClient", "启动并发请求模式，竞速超时: ${raceTimeoutMs}ms")
-            
-            val errors = mutableListOf<Throwable>()
-            val jobs = mutableListOf<Job>()
-            val winnerFound = AtomicBoolean(false)
-            val firstResponseReceived = AtomicBoolean(false)
+        var lastError: Exception? = null
+        var connected = false
 
-            supervisorScope {
-                // 为每个URL启动一个协程
-                for (url in backendProxyUrls) {
-                    val job = launch {
-                        try {
-                            android.util.Log.d("ApiClient", "并发请求启动: $url")
-                            streamChatResponseInternal(url, request, attachments, applicationContext)
-                                .collect { event ->
-                                    // 第一个响应的获胜
-                                    if (firstResponseReceived.compareAndSet(false, true)) {
-                                        android.util.Log.d("ApiClient", "获胜者: $url")
-                                        winnerFound.set(true)
-                                        // 取消其他所有请求
-                                        jobs.forEach { otherJob ->
-                                            if (otherJob != coroutineContext[Job]) {
-                                                otherJob.cancel(CoroutineCancellationException("另一个服务器响应更快"))
-                                            }
-                                        }
-                                        // 清空错误列表，因为已经有成功的响应
-                                        synchronized(errors) { errors.clear() }
-                                    }
-                                    
-                                    // 只有获胜者才能发送事件
-                                    if (winnerFound.get()) {
-                                        send(event)
-                                    }
-                                }
-                        } catch (e: Exception) {
-                            if (e !is CoroutineCancellationException) {
-                                android.util.Log.w("ApiClient", "URL $url 请求失败: ${e.javaClass.simpleName}: ${e.message}")
-                                synchronized(errors) {
-                                    if (!winnerFound.get()) {
-                                        errors.add(e)
-                                    }
-                                }
-                            } else {
-                                android.util.Log.d("ApiClient", "URL $url 请求被取消: ${e.message}")
-                                // 检查取消的原因
-                                val cause = e.cause
-                                if (cause != null && cause !is CoroutineCancellationException) {
-                                    synchronized(errors) {
-                                        if (!winnerFound.get()) {
-                                            errors.add(cause)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    jobs.add(job)
-                }
-                
-                // 等待竞速超时或所有任务完成
-                try {
-                    withTimeout(raceTimeoutMs) {
-                        jobs.joinAll()
-                    }
-                } catch (e: TimeoutCancellationException) {
-                    android.util.Log.w("ApiClient", "竞速超时 (${raceTimeoutMs}ms)，取消所有请求")
-                    jobs.forEach { it.cancel() }
-                }
+        for (raw in sortedBackends) {
+            var base = raw.trimEnd('/')
+            // 兼容错误/混淆配置：统一剥离尾部后再拼接 /chat
+            if (base.endsWith("/chat")) {
+                base = base.removeSuffix("/chat").trimEnd('/')
             }
+            if (base.endsWith("/v1/images/generations")) {
+                base = base.removeSuffix("/v1/images/generations").trimEnd('/')
+            }
+            if (base.endsWith("/chat/v1/images/generations")) {
+                base = base.removeSuffix("/chat/v1/images/generations").trimEnd('/')
+            }
+            val backendProxyUrl = "$base/chat"
 
-            // 如果没有获胜者，抛出错误
-            if (!winnerFound.get()) {
-                synchronized(errors) {
-                    android.util.Log.e("ApiClient", "所有并发请求都失败了，错误数量: ${errors.size}")
-                    errors.forEachIndexed { index, error ->
-                        android.util.Log.e("ApiClient", "错误 $index: ${error.javaClass.simpleName}: ${error.message}")
+            try {
+                android.util.Log.d("ApiClient", "尝试连接后端: $backendProxyUrl")
+                streamChatResponseInternal(backendProxyUrl, request, attachments, applicationContext)
+                    .collect { event ->
+                        send(event)
                     }
-                    
-                    if (errors.isNotEmpty()) {
-                        // 抛出最后一个错误
-                        val lastError = errors.last()
-                        throw lastError
-                    } else {
-                        throw IOException("无法连接到任何后端服务器 (${backendProxyUrls.size} 个URL都失败了)")
-                    }
-                }
+                connected = true
+                break
+            } catch (e: Exception) {
+                lastError = if (e is Exception) e else Exception(e)
+                android.util.Log.w("ApiClient", "连接后端失败，尝试下一个: $backendProxyUrl, 错误: ${e.message}")
+                // 继续尝试下一个地址
             }
+        }
+
+        if (!connected) {
+            throw IOException("所有后端均连接失败。最后错误: ${lastError?.message}", lastError)
         }
     }.buffer(Channel.BUFFERED).flowOn(Dispatchers.IO)
 
@@ -779,18 +690,31 @@ object ApiClient {
         if (!isInitialized) {
             throw IllegalStateException("ApiClient not initialized. Call initialize() first.")
         }
-        val backendUrlRaw = BackendConfig.backendUrls.firstOrNull()
-            ?: throw IOException("No backend URL configured.")
-
-        // 规范化基础URL：剥离尾部的 "/" 与可选的 "/chat"
-        var base = backendUrlRaw.trimEnd('/')
-        if (base.endsWith("/chat")) {
-            base = base.removeSuffix("/chat").trimEnd('/')
-        }
-        val url = "$base/v1/images/generations"
-
         val imgReq = chatRequest.imageGenRequest
             ?: throw IOException("缺少 imageGenRequest 配置，无法发起图像生成。")
+
+        val backendUrls = BackendConfig.backendUrls
+            if (backendUrls.isEmpty()) {
+                throw IOException("No backend URL configured.")
+            }
+        android.util.Log.d("ApiClient", "All backend URLs: ${backendUrls}")
+        // 为图像生成构建候选URL列表（剥离错误尾巴后统一为 /v1/images/generations）
+        val sortedBackends = backendUrls.sortedBy { isLocalHostUrl(it) }
+        val candidateImageUrls = mutableListOf<String>()
+        sortedBackends.forEach { raw ->
+            var base = raw.trimEnd('/')
+            if (base.endsWith("/chat")) {
+                base = base.removeSuffix("/chat").trimEnd('/')
+            }
+            if (base.endsWith("/v1/images/generations")) {
+                base = base.removeSuffix("/v1/images/generations").trimEnd('/')
+            }
+            if (base.endsWith("/chat/v1/images/generations")) {
+                base = base.removeSuffix("/chat/v1/images/generations").trimEnd('/')
+            }
+            candidateImageUrls.add("$base/v1/images/generations")
+        }
+        android.util.Log.d("ApiClient", "Image generation candidate URLs: $candidateImageUrls")
 
         val promptFromMsg = try {
             chatRequest.messages.lastOrNull { it.role == "user" }?.let { msg ->
@@ -843,31 +767,44 @@ object ApiClient {
             imgReq.batchSize?.let { put("batch_size", it) }
             imgReq.numInferenceSteps?.let { put("num_inference_steps", it) }
             imgReq.guidanceScale?.let { put("guidance_scale", it) }
+            // 将上游地址与密钥交由后端代理转发与规范化
             put("apiAddress", imgReq.apiAddress)
             put("apiKey", imgReq.apiKey)
+            imgReq.provider?.let { put("provider", it) }
         }
 
-        return try {
-            val response = client.post(url) {
-                contentType(ContentType.Application.Json)
-                setBody(payload)
-            }
-            if (!response.status.isSuccess()) {
-                val errTxt = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
-                android.util.Log.e("ApiClient", "Image generation HTTP ${response.status.value}: $errTxt")
-                throw IOException("上游错误 ${response.status.value}: ${errTxt.take(300)}")
-            }
-            val bodyText = response.bodyAsText()
-            // 先尝试直接解析；若失败，记录原文方便排障
+        // 逐个候选地址尝试，首个成功即返回
+        var lastError: Exception? = null
+        for (url in candidateImageUrls) {
             try {
-                jsonParser.decodeFromString<ImageGenerationResponse>(bodyText)
-            } catch (e: SerializationException) {
-                android.util.Log.e("ApiClient", "ImageGenerationResponse 解析失败，原始响应: ${bodyText.take(500)}", e)
-                throw IOException("响应解析失败: ${e.message}")
+                android.util.Log.d("ApiClient", "Image generation request - URL: $url")
+                android.util.Log.d("ApiClient", "Image generation request - Model: ${imgReq.model}")
+                android.util.Log.d("ApiClient", "Image generation request - API Key: ${imgReq.apiKey.take(10)}...")
+                android.util.Log.d("ApiClient", "Image generation request - Payload: ${payload.toString().take(200)}...")
+                val response = client.post(url) {
+                    contentType(ContentType.Application.Json)
+                    header(HttpHeaders.Authorization, "Bearer ${imgReq.apiKey}")
+                    header(HttpHeaders.Accept, "application/json")
+                    setBody(payload)
+                }
+                if (!response.status.isSuccess()) {
+                    val errTxt = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
+                    android.util.Log.e("ApiClient", "Image generation HTTP ${response.status.value}: $errTxt")
+                    throw IOException("上游错误 ${response.status.value}: ${errTxt.take(300)}")
+                }
+                val bodyText = response.bodyAsText()
+                try {
+                    return jsonParser.decodeFromString<ImageGenerationResponse>(bodyText)
+                } catch (e: SerializationException) {
+                    android.util.Log.e("ApiClient", "ImageGenerationResponse 解析失败，原始响应: ${bodyText.take(500)}", e)
+                    throw IOException("响应解析失败: ${e.message}")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("ApiClient", "Image generation attempt failed for $url", e)
+                lastError = if (e is Exception) e else Exception(e)
+                // 尝试下一个候选
             }
-        } catch (e: Exception) {
-            android.util.Log.e("ApiClient", "Image generation failed", e)
-            throw IOException("Image generation failed: ${e.message}", e)
         }
+        throw IOException("Image generation failed on all backends: ${lastError?.message}", lastError)
     }
 }

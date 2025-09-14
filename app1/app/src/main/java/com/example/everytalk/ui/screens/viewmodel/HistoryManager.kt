@@ -244,6 +244,7 @@ class HistoryManager(
                persistenceManager.clearLastOpenChat(isImageGeneration)
            }
             Log.d(TAG_HM, "Chat history list persisted after deletion. \"Last open chat\" cleared.")
+           onHistoryModified()
         }
     }
 

@@ -1,0 +1,16 @@
+## This file must *NOT* be checked into Version Control Systems,
+# as it contains information specific to your local configuration.
+#
+# Location of the SDK. This is only used by Gradle.
+# For customization when using a Version Control System, please read the
+# header note.
+#Mon Aug 25 13:18:00 CST 2025
+# BACKEND_URLS_DEBUG调试阶段可以修改这个(可以注释掉本地，测试新接�?
+# BACKEND_URLS_DEBUG=http\://192.168.0.100\:7860/chat
+
+# Debug 模式接口（开发测试用，支持动态IP�?
+
+# Release 模式接口集合（生产环境，支持多个备用接口�?
+BACKEND_URLS_RELEASE=https://wyninhalmgca.ap-southeast-1.clawcloudrun.com/chat,http://172.245.22.42:7860/chat,https://backdaitalk.onrender.com/chat,https://kunzzz003-my-backend-code.hf.space/chat
+sdk.dir=C\:\\Users\\33039\\AppData\\Local\\Android\\Sdk
+BACKEND_URLS_DEBUG=http\://192.168.0.103\:7861/chat

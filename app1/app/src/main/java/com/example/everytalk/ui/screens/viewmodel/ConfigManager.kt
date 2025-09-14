@@ -200,7 +200,18 @@ class ConfigManager(
                 apiHandler.cancelCurrentApiJob("Switching selected config to '${config.model}'")
             }
             selectedConfigFlow.value = config
-            Log.d(TAG_CM, "Selected config in memory: ${config.model} (${config.provider}).")
+            
+            if (isImageGen) {
+                Log.d(TAG_CM, "=== IMAGE GEN CONFIG SELECTED ===")
+                Log.d(TAG_CM, "Config ID: ${config.id}")
+                Log.d(TAG_CM, "Model: ${config.model}")
+                Log.d(TAG_CM, "Provider: ${config.provider}")
+                Log.d(TAG_CM, "Channel: ${config.channel}")
+                Log.d(TAG_CM, "Address: ${config.address}")
+                Log.d(TAG_CM, "ModalityType: ${config.modalityType}")
+            } else {
+                Log.d(TAG_CM, "Selected config in memory: ${config.model} (${config.provider}).")
+            }
 
             viewModelScope.launch {
                 persistenceManager.saveSelectedConfigIdentifier(config.id, isImageGen)

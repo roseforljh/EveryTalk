@@ -16,6 +16,7 @@ import androidx.navigation.NavController
 import com.example.everytalk.data.DataClass.ApiConfig
 import com.example.everytalk.data.DataClass.ModalityType
 import com.example.everytalk.statecontroller.AppViewModel
+import com.example.everytalk.statecontroller.SimpleModeManager
 import com.example.everytalk.ui.screens.settings.AddNewFullConfigDialog
 import com.example.everytalk.ui.screens.settings.AddProviderDialog
 import com.example.everytalk.ui.screens.settings.ConfirmDeleteDialog
@@ -33,6 +34,10 @@ fun ImageGenerationSettingsScreen(
     modifier: Modifier = Modifier
 ) {
     Log.i("ScreenComposition", "ImageGenerationSettingsScreen Composing/Recomposing.")
+    
+    // 图像设置界面固定为图像模式，不依赖应用状态，因为这是专用的图像配置界面
+    Log.d("ImageGenerationSettings", "Fixed to IMAGE mode - this is the dedicated image configuration screen")
+    
     val savedConfigs by viewModel.imageGenApiConfigs.collectAsState()
     val selectedConfigForApp by viewModel.selectedImageGenApiConfig.collectAsState()
     val allProviders by viewModel.allProviders.collectAsState()
@@ -40,6 +45,7 @@ fun ImageGenerationSettingsScreen(
     val fetchedModels by viewModel.fetchedModels.collectAsState()
     val isRefreshingModels by viewModel.isRefreshingModels.collectAsState()
 
+    // 固定为图像模式的配置分组
     val apiConfigsByApiKeyAndModality = remember(savedConfigs) {
         savedConfigs.filter { it.modalityType == ModalityType.IMAGE }
             .groupBy { it.key }
@@ -124,14 +130,15 @@ fun ImageGenerationSettingsScreen(
     }
 
     LaunchedEffect(savedConfigs, selectedConfigForApp) {
+        // 固定使用图像配置选择逻辑
         val currentSelected = selectedConfigForApp
         val imageConfigs = savedConfigs.filter { it.modalityType == ModalityType.IMAGE }
         if (currentSelected != null && imageConfigs.none { it.id == currentSelected.id }) {
             imageConfigs.firstOrNull()?.let {
-                viewModel.selectConfig(it)
-            } ?: viewModel.clearSelectedConfig()
+                viewModel.selectConfig(it, isImageGen = true)  // 固定传入 isImageGen = true
+            } ?: viewModel.clearSelectedConfig(true)  // 固定传入 isImageGen = true
         } else if (currentSelected == null && imageConfigs.isNotEmpty()) {
-            viewModel.selectConfig(imageConfigs.first())
+            viewModel.selectConfig(imageConfigs.first(), isImageGen = true)  // 固定传入 isImageGen = true
         }
     }
 
@@ -140,7 +147,10 @@ fun ImageGenerationSettingsScreen(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text("图像模型配置", color = MaterialTheme.colorScheme.onSurface) },
+                title = { 
+                    // 图像设置界面固定显示图像配置标题
+                    Text("图像生成配置", color = MaterialTheme.colorScheme.onSurface) 
+                },
                 navigationIcon = {
                     IconButton(onClick = {
                         if (backButtonEnabled) {
@@ -324,12 +334,14 @@ fun ImageGenerationSettingsScreen(
     if (showEditConfigDialog && configToEdit != null) {
         EditConfigDialog(
             representativeConfig = configToEdit!!,
+            allProviders = allProviders,
             onDismissRequest = {
                 showEditConfigDialog = false
                 configToEdit = null
             },
-            onConfirm = { newAddress, newKey ->
-                viewModel.updateConfigGroup(configToEdit!!, newAddress, newKey)
+            onConfirm = { newAddress, newKey, newChannel ->
+                // 固定传入 isImageGen = true，确保更新图像配置
+                viewModel.updateConfigGroup(configToEdit!!, newAddress, newKey, configToEdit!!.provider, newChannel, true)
                 showEditConfigDialog = false
                 configToEdit = null
             }

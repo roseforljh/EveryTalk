@@ -44,6 +44,10 @@ import com.example.everytalk.ui.theme.chatColors
 import com.example.everytalk.ui.components.MathView
 import com.example.everytalk.ui.components.EnhancedMarkdownText
 import com.example.everytalk.ui.components.CodePreview
+import com.example.everytalk.ui.components.normalizeMarkdownGlyphs
+import com.example.everytalk.ui.components.parseMarkdownParts
+import com.example.everytalk.ui.components.normalizeBasicMarkdown
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
@@ -371,11 +375,18 @@ private fun AiMessageItem(
                         vertical = ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL
                     )
             ) {
-                // 直接使用EnhancedMarkdownText渲染整个文本
-                // 对于缓存的完整消息，立即渲染所有内容
-                // 只有在消息正在流式传输时才延迟渲染数学公式和表格
+                var parts by remember { mutableStateOf<List<com.example.everytalk.ui.components.MarkdownPart>>(emptyList()) }
+
+                LaunchedEffect(text, isStreaming) {
+                    if (isStreaming) {
+                        delay(100L) // 流式输出时节流，每100ms解析一次
+                    }
+                    parts = parseMarkdownParts(normalizeBasicMarkdown(text))
+                }
+
                 EnhancedMarkdownText(
-                    markdown = text,
+                    parts = parts,
+                    rawMarkdown = text,
                     messageId = message.id,
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurface,

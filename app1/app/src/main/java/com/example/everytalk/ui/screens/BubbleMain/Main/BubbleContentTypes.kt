@@ -67,6 +67,8 @@ import com.example.everytalk.ui.theme.chatColors
 import com.example.everytalk.ui.components.MathView
 import com.example.everytalk.ui.components.EnhancedMarkdownText
 import com.example.everytalk.ui.components.CodePreview
+import com.example.everytalk.ui.components.normalizeMarkdownGlyphs
+import com.example.everytalk.ui.components.parseMarkdownParts
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -145,8 +147,10 @@ internal fun UserOrErrorMessageContent(
                         )
                     } else if (displayedText.isNotBlank() || isError) {
                         // 直接使用EnhancedMarkdownText渲染整个文本
+                        val parts = remember(message.text) { parseMarkdownParts(normalizeMarkdownGlyphs(message.text)) }
                         EnhancedMarkdownText(
-                            markdown = message.text,
+                            parts = parts,
+                            rawMarkdown = message.text,
                             color = contentColor
                         )
                     }

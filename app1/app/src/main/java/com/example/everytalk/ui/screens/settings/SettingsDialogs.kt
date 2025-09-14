@@ -15,6 +15,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowDropUp
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -585,12 +587,17 @@ internal fun AddNewFullConfigDialog(
 @Composable
 internal fun EditConfigDialog(
     representativeConfig: com.example.everytalk.data.DataClass.ApiConfig,
+    allProviders: List<String>,
     onDismissRequest: () -> Unit,
-    onConfirm: (newAddress: String, newKey: String) -> Unit
+    onConfirm: (newAddress: String, newKey: String, newChannel: String) -> Unit
 ) {
     var apiAddress by remember { mutableStateOf(representativeConfig.address) }
     var apiKey by remember { mutableStateOf(representativeConfig.key) }
+    var selectedChannel by remember { mutableStateOf(representativeConfig.channel) }
     val focusRequester = remember { FocusRequester() }
+    
+    // 固定的渠道类型选项
+    val channelTypes = listOf("OpenAI兼容", "Gemini")
 
     AlertDialog(
         onDismissRequest = onDismissRequest,
@@ -638,16 +645,53 @@ internal fun EditConfigDialog(
                         .padding(bottom = 12.dp)
                         .focusRequester(focusRequester),
                     singleLine = true,
-                    keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(onDone = { if (apiKey.isNotBlank() && apiAddress.isNotBlank()) onConfirm(apiAddress, apiKey) }),
+                    keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Next),
                     shape = DialogShape,
                     colors = DialogTextFieldColors
                 )
+                
+                // 渠道类型选择下拉框
+                var expanded by remember { mutableStateOf(false) }
+                ExposedDropdownMenuBox(
+                    expanded = expanded,
+                    onExpandedChange = { expanded = !expanded },
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
+                ) {
+                    OutlinedTextField(
+                        value = selectedChannel,
+                        onValueChange = { },
+                        label = { Text("渠道类型") },
+                        readOnly = true,
+                        trailingIcon = {
+                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor(),
+                        shape = DialogShape,
+                        colors = DialogTextFieldColors
+                    )
+                    
+                    ExposedDropdownMenu(
+                        expanded = expanded,
+                        onDismissRequest = { expanded = false }
+                    ) {
+                        channelTypes.forEach { channelType ->
+                            DropdownMenuItem(
+                                text = { Text(channelType) },
+                                onClick = {
+                                    selectedChannel = channelType
+                                    expanded = false
+                                }
+                            )
+                        }
+                    }
+                }
             }
         },
         confirmButton = {
             Button(
-                onClick = { onConfirm(apiAddress, apiKey) },
+                onClick = { onConfirm(apiAddress, apiKey, selectedChannel) },
                 enabled = apiKey.isNotBlank() && apiAddress.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary,

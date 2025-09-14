@@ -8,6 +8,7 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Base64
+import android.util.Log
 import androidx.core.content.FileProvider
 import com.example.everytalk.models.SelectedMediaItem
 import com.example.everytalk.data.DataClass.AbstractApiMessage
@@ -398,6 +399,22 @@ private data class AttachmentProcessingResult(
             }
             processedAttachmentsForUi.add(processedItemForUi)
 
+            // 为处理后的图片（现在拥有一个持久化的 URI）创建 API 内容部分
+            if (shouldUsePartsApiMessage && (processedItemForUi is SelectedMediaItem.ImageFromUri || processedItemForUi is SelectedMediaItem.ImageFromBitmap)) {
+                val imageUri = (processedItemForUi as? SelectedMediaItem.ImageFromUri)?.uri
+                    ?: (processedItemForUi as? SelectedMediaItem.ImageFromBitmap)?.let {
+                        // 对于 Bitmap，我们需要一个 URI 来编码
+                        persistentFileProviderUri
+                    }
+
+                if (imageUri != null) {
+                    val base64Data = uriToBase64Encoder(imageUri)
+                    val mimeType = application.contentResolver.getType(imageUri) ?: "image/jpeg"
+                    if (base64Data != null) {
+                        apiContentParts.add(ApiContentPart.InlineData(mimeType = mimeType, base64Data = base64Data))
+                    }
+                }
+            }
         }
         AttachmentProcessingResult(true, processedAttachmentsForUi, imageUriStringsForUi, apiContentParts)
     }
@@ -424,6 +441,18 @@ private data class AttachmentProcessingResult(
         val currentConfig = (if (isImageGeneration) stateHolder._selectedImageGenApiConfig.value else stateHolder._selectedApiConfig.value) ?: run {
             viewModelScope.launch { showSnackbar(if (isImageGeneration) "请先选择 图像生成 的API配置" else "请先选择 API 配置") }
             return
+        }
+        
+        // 详细调试配置信息
+        if (isImageGeneration) {
+            Log.d("MessageSender", "=== IMAGE GEN CONFIG DEBUG ===")
+            Log.d("MessageSender", "Selected config ID: ${currentConfig.id}")
+            Log.d("MessageSender", "Model: ${currentConfig.model}")
+            Log.d("MessageSender", "Provider: ${currentConfig.provider}")
+            Log.d("MessageSender", "Channel: ${currentConfig.channel}")
+            Log.d("MessageSender", "Address: ${currentConfig.address}")
+            Log.d("MessageSender", "Key: ${currentConfig.key.take(10)}...")
+            Log.d("MessageSender", "ModalityType: ${currentConfig.modalityType}")
         }
 
         viewModelScope.launch {
@@ -539,6 +568,9 @@ private data class AttachmentProcessingResult(
                         mapOf("reasoning_effort" to reasoningEffort)
                     } else null,
                     imageGenRequest = if (isImageGeneration) {
+                        // 调试信息：检查发送的配置
+                        Log.d("MessageSender", "Image generation config - model: ${currentConfig.model}, channel: ${currentConfig.channel}, provider: ${currentConfig.provider}")
+                        
                         // 计算上游完整图片生成端点
                         val upstreamBase = currentConfig.address.trim().trimEnd('/')
                         val upstreamApiForImageGen = if (upstreamBase.endsWith("/v1/images/generations")) {
@@ -554,7 +586,8 @@ private data class AttachmentProcessingResult(
                             numInferenceSteps = currentConfig.numInferenceSteps,
                             guidanceScale = currentConfig.guidanceScale,
                             apiAddress = upstreamApiForImageGen,
-                            apiKey = currentConfig.key
+                            apiKey = currentConfig.key,
+                            provider = currentConfig.channel
                         )
                     } else null
                 )

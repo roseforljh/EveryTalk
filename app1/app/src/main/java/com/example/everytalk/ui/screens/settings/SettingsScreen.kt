@@ -16,6 +16,7 @@ import androidx.navigation.NavController
 import com.example.everytalk.data.DataClass.ApiConfig
 import com.example.everytalk.data.DataClass.ModalityType
 import com.example.everytalk.statecontroller.AppViewModel
+import com.example.everytalk.statecontroller.SimpleModeManager
 import java.util.UUID
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -27,14 +28,31 @@ fun SettingsScreen(
 ) {
     Log.i("ScreenComposition", "SettingsScreen Composing/Recomposing.")
     val savedConfigs by viewModel.apiConfigs.collectAsState()
-    val selectedConfigForApp by viewModel.selectedApiConfig.collectAsState()
+    // 使用UI意图模式，避免基于内容态推断造成的短暂不一致
+    val intendedMode by viewModel.uiModeFlow.collectAsState()
+    val isInImageMode = intendedMode == SimpleModeManager.ModeType.IMAGE
+    
+    val selectedConfigForApp by if (isInImageMode) {
+        viewModel.selectedImageGenApiConfig.collectAsState()
+    } else {
+        viewModel.selectedApiConfig.collectAsState()
+    }
     val allProviders by viewModel.allProviders.collectAsState()
     val isFetchingModels by viewModel.isFetchingModels.collectAsState()
     val fetchedModels by viewModel.fetchedModels.collectAsState()
     val isRefreshingModels by viewModel.isRefreshingModels.collectAsState()
 
-    val apiConfigsByApiKeyAndModality = remember(savedConfigs) {
-        savedConfigs.groupBy { it.key }
+    val apiConfigsByApiKeyAndModality = remember(savedConfigs, isInImageMode) {
+        val configsToShow = if (isInImageMode) {
+            // 图像模式显示图像生成配置
+            viewModel.imageGenApiConfigs.value.filter { it.modalityType == ModalityType.IMAGE }
+        } else {
+            // 文本模式显示文本配置
+            savedConfigs.filter { it.modalityType == ModalityType.TEXT }
+        }
+        
+        configsToShow
+            .groupBy { it.key }
             .mapValues { entry ->
                 entry.value.groupBy { it.modalityType }
             }
@@ -113,14 +131,20 @@ fun SettingsScreen(
         }
     }
 
-    LaunchedEffect(savedConfigs, selectedConfigForApp) {
+    LaunchedEffect(savedConfigs, selectedConfigForApp, isInImageMode) {
         val currentSelected = selectedConfigForApp
-        if (currentSelected != null && savedConfigs.none { it.id == currentSelected.id }) {
-            savedConfigs.firstOrNull()?.let {
-                viewModel.selectConfig(it)
-            } ?: viewModel.clearSelectedConfig()
-        } else if (currentSelected == null && savedConfigs.isNotEmpty()) {
-            viewModel.selectConfig(savedConfigs.first())
+        val configsToCheck = if (isInImageMode) {
+            viewModel.imageGenApiConfigs.value
+        } else {
+            savedConfigs
+        }
+        
+        if (currentSelected != null && configsToCheck.none { it.id == currentSelected.id }) {
+            configsToCheck.firstOrNull()?.let {
+                viewModel.selectConfig(it, isInImageMode)
+            } ?: viewModel.clearSelectedConfig(isInImageMode)
+        } else if (currentSelected == null && configsToCheck.isNotEmpty()) {
+            viewModel.selectConfig(configsToCheck.first(), isInImageMode)
         }
     }
 
@@ -130,7 +154,10 @@ fun SettingsScreen(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text("API 配置", color = MaterialTheme.colorScheme.onSurface) },
+                title = { 
+                    val titleText = if (isInImageMode) "图像生成配置" else "文本模型配置"
+                    Text(titleText, color = MaterialTheme.colorScheme.onSurface) 
+                },
                 navigationIcon = {
                     IconButton(onClick = {
                         if (backButtonEnabled) {
@@ -173,7 +200,7 @@ fun SettingsScreen(
                 showAddFullConfigDialog = true
             },
             onSelectConfig = { configToSelect ->
-                viewModel.selectConfig(configToSelect)
+                viewModel.selectConfig(configToSelect, isInImageMode)
             },
             selectedConfigIdInApp = selectedConfigForApp?.id,
             onAddModelForApiKeyClick = { apiKey, existingProvider, existingAddress, existingModality ->
@@ -185,14 +212,14 @@ fun SettingsScreen(
                 showAddModelToKeyDialog = true
             },
             onDeleteModelForApiKey = { configToDelete ->
-                viewModel.deleteConfig(configToDelete)
+                viewModel.deleteConfig(configToDelete, isInImageMode)
             },
             onEditConfigClick = { config ->
                 configToEdit = config
                 showEditConfigDialog = true
             },
             onDeleteConfigGroup = { apiKey, modalityType ->
-                viewModel.deleteConfigGroup(apiKey, modalityType)
+                viewModel.deleteConfigGroup(apiKey, modalityType, isInImageMode)
             },
             onRefreshModelsClick = { config ->
                 viewModel.refreshModelsForConfig(config)
@@ -226,7 +253,7 @@ fun SettingsScreen(
             },
             onConfirm = { provider, address, key, channel, _, _, _ ->
                 if (key.isNotBlank() && provider.isNotBlank() && address.isNotBlank()) {
-                    viewModel.createConfigAndFetchModels(provider, address, key, channel)
+                    viewModel.createConfigAndFetchModels(provider, address, key, channel, isInImageMode)
                     showAddFullConfigDialog = false
                     viewModel.clearFetchedModels()
                 }
@@ -249,7 +276,8 @@ fun SettingsScreen(
                         apiKey = addModelToKeyTargetApiKey,
                         provider = addModelToKeyTargetProvider,
                         address = addModelToKeyTargetAddress,
-                        modelName = newModelName
+                        modelName = newModelName,
+                        isImageGen = isInImageMode
                     )
                     showAddModelToKeyDialog = false
                 }
@@ -286,12 +314,13 @@ fun SettingsScreen(
     if (showEditConfigDialog && configToEdit != null) {
         EditConfigDialog(
             representativeConfig = configToEdit!!,
+            allProviders = allProviders,
             onDismissRequest = {
                 showEditConfigDialog = false
                 configToEdit = null
             },
-            onConfirm = { newAddress, newKey ->
-                viewModel.updateConfigGroup(configToEdit!!, newAddress, newKey)
+            onConfirm = { newAddress, newKey, newChannel ->
+                viewModel.updateConfigGroup(configToEdit!!, newAddress, newKey, configToEdit!!.provider, newChannel, isInImageMode)
                 showEditConfigDialog = false
                 configToEdit = null
             }

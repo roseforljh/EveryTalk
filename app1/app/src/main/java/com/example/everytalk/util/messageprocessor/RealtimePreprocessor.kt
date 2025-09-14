@@ -229,8 +229,8 @@ class RealtimePreprocessor(
         val lines = text.split("\n").toMutableList()
         var insideFence = false
         for (i in lines.indices) {
-            val line = lines[i]
-            if (line.contains("```")) {
+            var line = lines[i]
+            if (line.contains("```") ){
                 // 如果当前行出现```，切换一次状态（支持单行开合或多行块）
                 val count = "```".toRegex().findAll(line).count()
                 // 奇数次出现视为切换
@@ -242,7 +242,13 @@ class RealtimePreprocessor(
             }
             if (!insideFence) {
                 // 确保标题标记格式正确（只在围栏外处理）
-                lines[i] = line.replace(Regex("^(#{1,6})([^\\s#])"), "$1 $2")
+                line = line.replace(Regex("^(#{1,6})([^\\s#])"), "$1 $2")
+                // 统一列表符号与空格：将全角星号/圆点替换，补空格
+                line = line.replace(Regex("^(\\s*)[＊﹡]([^\\s])"), "$1* $2")
+                line = line.replace(Regex("^(\\s*)[•·・﹒∙]([^\\s])"), "$1- $2")
+                line = line.replace(Regex("^(\\s*)([*+\\-])(?![ *+\\-])(\\S)"), "$1$2 $3")
+                line = line.replace(Regex("^(\\s*)(\\d+)([.)])(\\S)"), "$1$2$3 $4")
+                lines[i] = line
             }
         }
         return lines.joinToString("\n")
