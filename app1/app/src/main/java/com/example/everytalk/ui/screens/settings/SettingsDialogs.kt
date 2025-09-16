@@ -490,7 +490,7 @@ internal fun AddNewFullConfigDialog(
                     colors = DialogTextFieldColors
                 )
                 // 实时预览 + 固定使用说明
-                run {
+                if (selectedChannel != "Gemini") {
                     val fullUrlPreview = remember(apiAddress, provider, selectedChannel) {
                         buildFullEndpointPreview(apiAddress, provider, selectedChannel)
                     }
@@ -619,7 +619,7 @@ internal fun EditConfigDialog(
                     colors = DialogTextFieldColors
                 )
                 // 实时预览 + 固定使用说明
-                run {
+                if (selectedChannel != "Gemini") {
                     val fullUrlPreview = remember(apiAddress) {
                         buildFullEndpointPreview(apiAddress, representativeConfig.provider, null)
                     }

@@ -680,72 +680,69 @@ class MessageProcessor {
         android.util.Log.d("MessageProcessor", "Message parts count: ${message.parts.size}")
         android.util.Log.d("MessageProcessor", "Parts empty: ${message.parts.isEmpty()}")
         
-        // 🎯 修复条件判断：确保所有AI消息都能被正确处理
-        val shouldProcess = when {
-            // 非AI消息不处理
-            message.sender != Sender.AI -> false
-            // 空文本不处理
-            message.text.isBlank() -> false
-            // 🎯 关键修复：Parts为空的消息一律需要处理
-            message.parts.isEmpty() -> true
-            // 🎯 流式过程中的消息也要处理以保证实时更新
-            !isStreamCompleted() -> true
-            // Parts非空但内容无效的消息需要重新处理
-            else -> {
-                !message.parts.any { part ->
-                    when (part) {
-                        is MarkdownPart.Text -> part.content.isNotBlank()
-                        is MarkdownPart.CodeBlock -> part.content.isNotBlank()
-                        // is MarkdownPart.Table -> part.tableData.headers.isNotEmpty()
-                        else -> false
-                    }
-                }
-            }
+        // 🎯 强制修复：所有AI消息都必须进行数学公式解析，无条件处理
+        if (message.sender != Sender.AI) {
+            android.util.Log.d("MessageProcessor", "Non-AI message, skipping processing")
+            android.util.Log.d("MessageProcessor", "=== finalizeMessageProcessing END (non-AI) ===")
+            return message
         }
         
-        android.util.Log.d("MessageProcessor", "Should process: $shouldProcess")
-        
-        if (shouldProcess) {
-            android.util.Log.d("MessageProcessor", "Condition met - parsing markdown")
-            try {
-                val parsedParts = parseMarkdownParts(message.text)
-                android.util.Log.d("MessageProcessor", "Parsed parts count: ${parsedParts.size}")
-                parsedParts.forEachIndexed { index, part ->
-                    android.util.Log.d("MessageProcessor", "Part $index: ${part::class.simpleName} - ${part.toString().take(50)}...")
-                }
-                
-                // 🎯 安全检查：确保解析结果有效
-                val validParts = parsedParts.filter { part ->
-                    when (part) {
-                        is MarkdownPart.Text -> part.content.isNotBlank()
-                        is MarkdownPart.CodeBlock -> part.content.isNotBlank()
-                        // is MarkdownPart.Table -> part.tableData.headers.isNotEmpty()
-                        else -> true
-                    }
-                }
-                
-                // 如果没有有效的parts，创建一个默认的Text part
-                val finalParts = if (validParts.isEmpty() && message.text.isNotBlank()) {
-                    listOf(MarkdownPart.Text(id = "text_${java.util.UUID.randomUUID()}", content = message.text))
-                } else {
-                    validParts
-                }
-                
-                val result = message.copy(parts = finalParts)
-                android.util.Log.d("MessageProcessor", "=== finalizeMessageProcessing END (processed) ===")
-                return result
-            } catch (e: Exception) {
-                android.util.Log.w("MessageProcessor", "Failed to parse markdown parts: ${e.message}")
-                // 解析失败时，创建一个默认的Text part
-                val fallbackParts = listOf(MarkdownPart.Text(id = "text_${java.util.UUID.randomUUID()}", content = message.text))
-                val result = message.copy(parts = fallbackParts)
-                android.util.Log.d("MessageProcessor", "=== finalizeMessageProcessing END (fallback) ===")
-                return result
-            }
-        } else {
-            android.util.Log.d("MessageProcessor", "Condition not met - returning original message")
-            android.util.Log.d("MessageProcessor", "=== finalizeMessageProcessing END (skipped) ===")
+        if (message.text.isBlank()) {
+            android.util.Log.d("MessageProcessor", "Empty text, skipping processing")
+            android.util.Log.d("MessageProcessor", "=== finalizeMessageProcessing END (empty) ===")
+            return message
         }
-        return message
+        
+        // 🎯 关键修复：无条件重新解析所有AI消息以确保数学公式正确渲染
+        android.util.Log.d("MessageProcessor", "🎯 FORCE processing AI message for math formula support")
+        try {
+            val parsedParts = parseMarkdownParts(message.text)
+            android.util.Log.d("MessageProcessor", "🎯 FORCE parsed parts count: ${parsedParts.size}")
+            parsedParts.forEachIndexed { index, part ->
+                android.util.Log.d("MessageProcessor", "🎯 FORCE Part $index: ${part::class.simpleName} - ${part.toString().take(50)}...")
+            }
+            
+            // 🎯 保留所有解析出的parts，包括MathBlock
+            val validParts = parsedParts.filter { part ->
+                when (part) {
+                    is MarkdownPart.Text -> part.content.isNotBlank()
+                    is MarkdownPart.CodeBlock -> part.content.isNotBlank()
+                    is MarkdownPart.MathBlock -> part.latex.isNotBlank() // 🎯 关键：保留数学公式部分
+                    else -> true
+                }
+            }
+            
+            android.util.Log.d("MessageProcessor", "🎯 FORCE valid parts count after filter: ${validParts.size}")
+            validParts.forEachIndexed { index, part ->
+                android.util.Log.d("MessageProcessor", "🎯 FORCE Valid Part $index: ${part::class.simpleName}")
+            }
+            
+            // 🎯 如果解析出了有效的parts（特别是MathBlock），直接使用
+            val finalParts = if (validParts.isNotEmpty()) {
+                android.util.Log.d("MessageProcessor", "🎯 Using parsed parts (including MathBlocks)")
+                validParts
+            } else if (message.text.isNotBlank()) {
+                android.util.Log.d("MessageProcessor", "🎯 Fallback to single text part")
+                listOf(MarkdownPart.Text(id = "text_${java.util.UUID.randomUUID()}", content = message.text))
+            } else {
+                android.util.Log.d("MessageProcessor", "🎯 Empty fallback")
+                emptyList()
+            }
+            
+            val result = message.copy(parts = finalParts)
+            android.util.Log.d("MessageProcessor", "🎯 FINAL result parts count: ${result.parts.size}")
+            result.parts.forEachIndexed { index, part ->
+                android.util.Log.d("MessageProcessor", "🎯 FINAL Result Part $index: ${part::class.simpleName}")
+            }
+            android.util.Log.d("MessageProcessor", "=== finalizeMessageProcessing END (FORCE processed) ===")
+            return result
+        } catch (e: Exception) {
+            android.util.Log.e("MessageProcessor", "🎯 FORCE processing failed: ${e.message}", e)
+            // 解析失败时，创建一个默认的Text part
+            val fallbackParts = listOf(MarkdownPart.Text(id = "text_${java.util.UUID.randomUUID()}", content = message.text))
+            val result = message.copy(parts = fallbackParts)
+            android.util.Log.d("MessageProcessor", "=== finalizeMessageProcessing END (FORCE fallback) ===")
+            return result
+        }
     }
 }

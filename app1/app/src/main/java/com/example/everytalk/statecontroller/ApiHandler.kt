@@ -577,6 +577,16 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                 is AppStreamEvent.Finish, is AppStreamEvent.StreamEnd -> {
                     val reasoningMap = if (isImageGeneration) stateHolder.imageReasoningCompleteMap else stateHolder.textReasoningCompleteMap
                     reasoningMap[aiMessageId] = true
+                    
+                    // 🎯 强制最终解析：确保parts字段被正确填充
+                    logger.debug("Stream finished for message $aiMessageId, forcing final message processing")
+                    val currentMessageProcessor = messageProcessorMap[aiMessageId] ?: MessageProcessor()
+                    val finalizedMessage = currentMessageProcessor.finalizeMessageProcessing(currentMessage)
+                    logger.debug("Final parts count after stream end: ${finalizedMessage.parts.size}")
+                    finalizedMessage.parts.forEachIndexed { index, part ->
+                        logger.debug("Final Part $index: ${part::class.simpleName} - ${part.toString().take(50)}...")
+                    }
+                    updatedMessage = finalizedMessage
                 }
                 is AppStreamEvent.Error -> {
                     updateMessageWithError(aiMessageId, IOException(appEvent.message), isImageGeneration)

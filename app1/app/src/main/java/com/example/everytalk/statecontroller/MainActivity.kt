@@ -18,6 +18,7 @@ import androidx.core.view.WindowCompat
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.ui.draw.scale
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -207,10 +208,20 @@ class MainActivity : ComponentActivity() {
                                                 launchSingleTop = true
                                                 restoreState = true
                                             }
+                                            // 等待页面过渡完成后再加载历史会话
+                                            coroutineScope.launch {
+                                                // 等待导航和动画完成 - 400ms确保300ms过渡动画完全结束 + 额外缓冲时间
+                                                kotlinx.coroutines.delay(400) // 稍微超过动画时间，确保过渡流畅
+                                                appViewModel.stateHolder._loadedHistoryIndex.value = null
+                                                appViewModel.loadImageGenerationConversationFromHistory(index)
+                                                appViewModel.drawerState.close()
+                                            }
+                                        } else {
+                                            // 同模式内点击，直接加载
+                                            appViewModel.stateHolder._loadedHistoryIndex.value = null
+                                            appViewModel.loadImageGenerationConversationFromHistory(index)
+                                            coroutineScope.launch { appViewModel.drawerState.close() }
                                         }
-                                        appViewModel.stateHolder._loadedHistoryIndex.value = null
-                                        appViewModel.loadImageGenerationConversationFromHistory(index)
-                                        coroutineScope.launch { appViewModel.drawerState.close() }
                                     },
                                     onConversationClick = { index ->
                                         // 跨模式点击时，先跳转到文本聊天页
@@ -222,11 +233,21 @@ class MainActivity : ComponentActivity() {
                                                 launchSingleTop = true
                                                 restoreState = true
                                             }
+                                            // 等待页面过渡完成后再加载历史会话
+                                            coroutineScope.launch {
+                                                // 等待导航和动画完成 - 400ms确保300ms过渡动画完全结束 + 额外缓冲时间
+                                                kotlinx.coroutines.delay(400) // 稍微超过动画时间，确保过渡流畅
+                                                // 文本模式历史点击：重置图像模式索引
+                                                appViewModel.stateHolder._loadedImageGenerationHistoryIndex.value = null
+                                                appViewModel.loadConversationFromHistory(index)
+                                                appViewModel.drawerState.close()
+                                            }
+                                        } else {
+                                            // 同模式内点击，直接加载
+                                            appViewModel.stateHolder._loadedImageGenerationHistoryIndex.value = null
+                                            appViewModel.loadConversationFromHistory(index)
+                                            coroutineScope.launch { appViewModel.drawerState.close() }
                                         }
-                                        // 文本模式历史点击：重置图像模式索引
-                                        appViewModel.stateHolder._loadedImageGenerationHistoryIndex.value = null
-                                        appViewModel.loadConversationFromHistory(index)
-                                        coroutineScope.launch { appViewModel.drawerState.close() }
                                     },
                                     onNewChatClick = {
                                         if (isImageGenerationMode) {
@@ -296,10 +317,102 @@ class MainActivity : ComponentActivity() {
                                 modifier = Modifier
                                     .fillMaxSize()
                             ) {
-                                composable(Screen.CHAT_SCREEN) {
+                                composable(
+                                    route = Screen.CHAT_SCREEN,
+                                    enterTransition = { 
+                                        androidx.compose.animation.slideInHorizontally(
+                                            initialOffsetX = { it },
+                                            animationSpec = tween(
+                                                durationMillis = 300,
+                                                easing = FastOutSlowInEasing
+                                            )
+                                        ) + androidx.compose.animation.fadeIn(
+                                            animationSpec = tween(durationMillis = 300)
+                                        )
+                                    },
+                                    exitTransition = { 
+                                        androidx.compose.animation.slideOutHorizontally(
+                                            targetOffsetX = { -it },
+                                            animationSpec = tween(
+                                                durationMillis = 300,
+                                                easing = FastOutSlowInEasing
+                                            )
+                                        ) + androidx.compose.animation.fadeOut(
+                                            animationSpec = tween(durationMillis = 300)
+                                        )
+                                    },
+                                    popEnterTransition = { 
+                                        androidx.compose.animation.slideInHorizontally(
+                                            initialOffsetX = { -it },
+                                            animationSpec = tween(
+                                                durationMillis = 300,
+                                                easing = FastOutSlowInEasing
+                                            )
+                                        ) + androidx.compose.animation.fadeIn(
+                                            animationSpec = tween(durationMillis = 300)
+                                        )
+                                    },
+                                    popExitTransition = { 
+                                        androidx.compose.animation.slideOutHorizontally(
+                                            targetOffsetX = { it },
+                                            animationSpec = tween(
+                                                durationMillis = 300,
+                                                easing = FastOutSlowInEasing
+                                            )
+                                        ) + androidx.compose.animation.fadeOut(
+                                            animationSpec = tween(durationMillis = 300)
+                                        )
+                                    }
+                                ) {
                                     ChatScreen(viewModel = appViewModel, navController = navController)
                                 }
-                               composable(Screen.IMAGE_GENERATION_SCREEN) {
+                               composable(
+                                   route = Screen.IMAGE_GENERATION_SCREEN,
+                                   enterTransition = { 
+                                       androidx.compose.animation.slideInHorizontally(
+                                           initialOffsetX = { it },
+                                           animationSpec = tween(
+                                               durationMillis = 300,
+                                               easing = FastOutSlowInEasing
+                                           )
+                                       ) + androidx.compose.animation.fadeIn(
+                                           animationSpec = tween(durationMillis = 300)
+                                       )
+                                   },
+                                   exitTransition = { 
+                                       androidx.compose.animation.slideOutHorizontally(
+                                           targetOffsetX = { -it },
+                                           animationSpec = tween(
+                                               durationMillis = 300,
+                                               easing = FastOutSlowInEasing
+                                           )
+                                       ) + androidx.compose.animation.fadeOut(
+                                           animationSpec = tween(durationMillis = 300)
+                                       )
+                                   },
+                                   popEnterTransition = { 
+                                       androidx.compose.animation.slideInHorizontally(
+                                           initialOffsetX = { -it },
+                                           animationSpec = tween(
+                                               durationMillis = 300,
+                                               easing = FastOutSlowInEasing
+                                           )
+                                       ) + androidx.compose.animation.fadeIn(
+                                           animationSpec = tween(durationMillis = 300)
+                                       )
+                                   },
+                                   popExitTransition = { 
+                                       androidx.compose.animation.slideOutHorizontally(
+                                           targetOffsetX = { it },
+                                           animationSpec = tween(
+                                               durationMillis = 300,
+                                               easing = FastOutSlowInEasing
+                                           )
+                                       ) + androidx.compose.animation.fadeOut(
+                                           animationSpec = tween(durationMillis = 300)
+                                       )
+                                   }
+                               ) {
                                     ImageGenerationScreen(viewModel = appViewModel, navController = navController)
                                }
                                 composable(

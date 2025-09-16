@@ -10,6 +10,8 @@ import androidx.compose.material3.DrawerState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.snapshots.SnapshotStateMap
+import com.example.everytalk.ui.components.MathRenderingManager
+import com.example.everytalk.ui.components.ConversationLoadManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import coil3.ImageLoader
@@ -626,7 +628,9 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 stateHolder._text.value = message.text
             } else {
                 _editingMessageId.value = message.id
-                stateHolder._editDialogInputText.value = message.text
+                // Get the current version of the message to ensure we have the latest edited text
+                val currentMessage = getMessageById(message.id)
+                stateHolder._editDialogInputText.value = currentMessage?.text ?: message.text
                 _showEditDialog.value = true
             }
         }
@@ -991,15 +995,53 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             stateHolder._isLoadingTextHistory.value = true
             
             try {
-                // 完全委托给 SimpleModeManager，使用独立的文本模式逻辑
-                Log.d("AppViewModel", "🚀 [TEXT] Delegating to SimpleModeManager...")
-                simpleModeManager.loadTextHistory(index)
-
-                // Step 2: 主动处理和修复AI消息的parts - 解决表格渲染问题
-                val processedMessages = processLoadedMessages(stateHolder.messages.toList())
-                val repairedMessages = repairHistoryMessageParts(processedMessages)
-                stateHolder.messages.clear()
-                stateHolder.messages.addAll(repairedMessages)
+                // Step 1: 预检查会话是否包含数学公式（优化性能）
+                val historyMessages = stateHolder._historicalConversations.value.getOrNull(index) ?: emptyList()
+                val hasMath = ConversationLoadManager.preCheckConversationMath(historyMessages)
+                
+                Log.d("AppViewModel", "🚀 [TEXT] 预检会话包含数学公式: $hasMath")
+                
+                if (hasMath) {
+                    // Step 2: 使用优化的异步加载模式
+                    Log.d("AppViewModel", "🚀 [TEXT] 使用优化异步加载模式")
+                    
+                    // 重置渲染状态
+                    MathRenderingManager.resetAllStates()
+                    
+                    ConversationLoadManager.loadConversationAsyncOptimized(
+                        messages = historyMessages,
+                        hasMathPreChecked = hasMath,
+                        onConversationReady = {
+                            // 立即进入会话，显示基础内容
+                            viewModelScope.launch {
+                                Log.d("AppViewModel", "🚀 [TEXT] 会话基础内容准备就绪，开始加载")
+                                simpleModeManager.loadTextHistory(index)
+                                
+                                val processedMessages = processLoadedMessages(stateHolder.messages.toList())
+                                val repairedMessages = repairHistoryMessageParts(processedMessages)
+                                stateHolder.messages.clear()
+                                stateHolder.messages.addAll(repairedMessages)
+                                
+                                Log.d("AppViewModel", "🚀 [TEXT] 基础内容加载完成")
+                            }
+                        },
+                        onPageTransitionComplete = {
+                            Log.d("AppViewModel", "🚀 [TEXT] 页面过渡完成，准备渲染数学公式")
+                        },
+                        onMathRenderingStart = {
+                            Log.d("AppViewModel", "🚀 [TEXT] 开始优化数学公式渲染")
+                        }
+                    )
+                } else {
+                    // Step 3: 普通加载（无数学公式）
+                    Log.d("AppViewModel", "🚀 [TEXT] 使用普通加载模式")
+                    simpleModeManager.loadTextHistory(index)
+                    
+                    val processedMessages = processLoadedMessages(stateHolder.messages.toList())
+                    val repairedMessages = repairHistoryMessageParts(processedMessages)
+                    stateHolder.messages.clear()
+                    stateHolder.messages.addAll(repairedMessages)
+                }
 
                 Log.d("AppViewModel", "🚀 [TEXT] SimpleModeManager completed successfully")
 
