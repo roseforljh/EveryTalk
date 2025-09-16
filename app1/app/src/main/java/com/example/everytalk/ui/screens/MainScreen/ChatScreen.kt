@@ -72,8 +72,10 @@ import com.example.everytalk.ui.screens.MainScreen.chat.EmptyChatView
 import com.example.everytalk.ui.screens.MainScreen.chat.ModelSelectionBottomSheet
 import com.example.everytalk.ui.screens.MainScreen.chat.rememberChatScrollStateManager
 import com.example.everytalk.ui.components.EnhancedMarkdownText
+import com.example.everytalk.ui.components.normalizeBasicMarkdown
 import com.example.everytalk.ui.components.normalizeMarkdownGlyphs
 import com.example.everytalk.util.messageprocessor.parseMarkdownParts
+import dev.jeziellago.compose.markdowntext.MarkdownText
 import com.example.everytalk.ui.theme.chatColors
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -652,17 +654,14 @@ private fun UpdateAvailableDialog(
                             .verticalScroll(scrollState)
                             .padding(vertical = scrimHeight)
                     ) {
-                        // 直接使用EnhancedMarkdownText渲染整个文本
-                        val tempMessage = com.example.everytalk.data.DataClass.Message(
+                        // 🎯 显示原始Markdown文本，保持原始样式且支持文本选择
+                        Text(
                             text = textToDisplay,
-                            sender = com.example.everytalk.data.DataClass.Sender.AI,
-                            parts = parseMarkdownParts(normalizeMarkdownGlyphs(textToDisplay))
-                        )
-                        EnhancedMarkdownText(
-                            message = tempMessage,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            inSelectionDialog = true
+                            style = MaterialTheme.typography.bodyLarge.copy(
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                            ),
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
                 }

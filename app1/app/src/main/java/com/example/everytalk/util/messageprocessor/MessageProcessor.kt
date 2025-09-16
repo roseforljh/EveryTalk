@@ -179,47 +179,20 @@ class MessageProcessor {
      */
     private enum class ContentType {
         MARKDOWN_HEADER,
-        MATH_FORMULA,
         CODE_BLOCK,
         IMPORTANT_TEXT,
         REGULAR_TEXT
     }
     
-    /**
-     * 检测数学内容
-     */
-    private fun detectMathContent(text: String): Boolean {
-        return text.contains("\\") || text.contains("$") ||
-                listOf(
-                    "frac", "sqrt", "sum", "int", "lim", "alpha", "beta", "gamma", "delta",
-                    "计算", "第一步", "第二步", "公式", "解", "=", "^", "_", "±", "∑", "∫",
-                    "\\begin", "\\end", "\\left", "\\right"
-                ).any { text.contains(it) }
-    }
-    
-    /**
-     * 保护数学格式
-     */
-    private fun protectMathFormatting(text: String): String {
-        // 对数学内容只做最基本的处理，保护重要的数学符号和格式
-        return text.trim().let { trimmed ->
-            // 确保数学公式前后的空格得到保护
-            if (trimmed.contains("$") || trimmed.contains("\\")) {
-                trimmed
-            } else {
-                trimmed
-            }
-        }
-    }
+
     
     /**
      * 检查是否包含受保护的Markdown内容
      */
     private fun hasProtectedMarkdownContent(text: String): Boolean {
-        return text.contains("\\") || text.contains("$") ||
-                listOf(
+        return listOf(
                     "#", "**", "*", "`", "```", ">", "[", "]", "(", ")",
-                    "公式解释", "：", ":", "解释", "说明", "步骤", "计算"
+                    "公式解释", "：", ":", "解释", "说明", "步骤"
                 ).any { text.contains(it) }
     }
     
@@ -230,7 +203,7 @@ class MessageProcessor {
         val trimmed = text.trim()
         return trimmed.startsWith("#") || trimmed.startsWith("```") || 
                trimmed.startsWith("*") || trimmed.startsWith(">") ||
-               trimmed.endsWith("```") || trimmed.contains("$")
+               trimmed.endsWith("```")
     }
     
     /**
@@ -241,8 +214,6 @@ class MessageProcessor {
         
         return when {
             trimmed.startsWith("#") -> ContentType.MARKDOWN_HEADER
-            trimmed.contains("$") || trimmed.contains("\\") || 
-            listOf("frac", "sqrt", "公式", "计算", "=").any { trimmed.contains(it) } -> ContentType.MATH_FORMULA
             trimmed.startsWith("```") || trimmed.contains("`") -> ContentType.CODE_BLOCK
             listOf("公式解释", "解释", "说明", "步骤", "：", ":").any { trimmed.contains(it) } -> ContentType.IMPORTANT_TEXT
             else -> ContentType.REGULAR_TEXT
@@ -259,16 +230,6 @@ class MessageProcessor {
             val existingHeader = line.trim()
             existingHeader == newHeader && existingHeader.startsWith("#")
         }
-    }
-    
-    /**
-     * 检查是否为完全相同的数学公式
-     */
-    private fun isExactDuplicateFormula(newText: String, existingText: String): Boolean {
-        val newFormula = newText.trim()
-        // 对于数学公式，要求完全匹配才认为是重复
-        return existingText.contains(newFormula) && newFormula.length > 10 &&
-               (newFormula.contains("$") || newFormula.contains("\\"))
     }
     
     /**
@@ -362,16 +323,8 @@ class MessageProcessor {
                                     if (alreadyProcessed) {
                                         logger.debug("Skipping already processed chunk: ${normalizedText.take(30)}...")
                                     } else if (!skipChunk) { // 只有在不跳过且未处理过的情况下才处理
-                                        // 增强的数学内容检测，包括更多数学符号和模式
-                                        val isMathContent = detectMathContent(eventText)
-                                        
                                         val preprocessedText = try {
-                                            if (isMathContent || realtimePreprocessor.shouldSkipProcessing(eventText, "realtimePreprocessing")) {
-                                                // 对数学内容只做最基本的处理，保护格式
-                                                protectMathFormatting(eventText)
-                                            } else {
-                                                realtimePreprocessor.realtimeFormatPreprocessing(eventText)
-                                            }
+                                            realtimePreprocessor.realtimeFormatPreprocessing(eventText)
                                         } catch (e: Exception) {
                                             logger.warn("Realtime preprocessing failed, using original text: ${e.message}")
                                             eventText
@@ -432,10 +385,6 @@ class MessageProcessor {
                                                             ContentType.MARKDOWN_HEADER -> {
                                                                 // 标题内容：检查是否为完全相同的标题
                                                                 isExactDuplicateHeader(textToAppend, existing)
-                                                            }
-                                                            ContentType.MATH_FORMULA -> {
-                                                                // 数学公式：更严格的重复检测
-                                                                isExactDuplicateFormula(textToAppend, existing)
                                                             }
                                                             ContentType.CODE_BLOCK -> {
                                                                 // 代码块：保护代码格式
@@ -747,8 +696,7 @@ class MessageProcessor {
                     when (part) {
                         is MarkdownPart.Text -> part.content.isNotBlank()
                         is MarkdownPart.CodeBlock -> part.content.isNotBlank()
-                        is MarkdownPart.MathBlock -> part.latex.isNotBlank()
-                        is MarkdownPart.Table -> part.tableData.headers.isNotEmpty()
+                        // is MarkdownPart.Table -> part.tableData.headers.isNotEmpty()
                         else -> false
                     }
                 }
@@ -771,8 +719,7 @@ class MessageProcessor {
                     when (part) {
                         is MarkdownPart.Text -> part.content.isNotBlank()
                         is MarkdownPart.CodeBlock -> part.content.isNotBlank()
-                        is MarkdownPart.MathBlock -> part.latex.isNotBlank()
-                        is MarkdownPart.Table -> part.tableData.headers.isNotEmpty()
+                        // is MarkdownPart.Table -> part.tableData.headers.isNotEmpty()
                         else -> true
                     }
                 }

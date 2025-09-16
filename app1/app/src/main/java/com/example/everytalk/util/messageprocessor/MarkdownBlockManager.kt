@@ -3,8 +3,8 @@ package com.example.everytalk.util.messageprocessor
 import androidx.compose.runtime.mutableStateListOf
 import com.example.everytalk.data.network.AppStreamEvent
 import com.example.everytalk.ui.components.MarkdownPart
-import com.example.everytalk.ui.components.TableData
-import com.example.everytalk.ui.components.parseMarkdownTable
+// import com.example.everytalk.ui.components.TableData
+// import com.example.everytalk.ui.components.parseMarkdownTable
 import java.util.UUID
 
 /**
@@ -68,16 +68,9 @@ class MarkdownBlockManager {
                 val (lang, code) = parseCodeBlock(content)
                 MarkdownPart.CodeBlock(id = id, content = code, language = lang)
             }
-            "table" -> {
-                val tableData = if (isFinal) {
-                    parseMarkdownTable(content) ?: TableData(headers = listOf("..."), rows = listOf(listOf("Parsing error")), alignsString = listOf("Left"))
-                } else {
-                    // For streaming, we create a placeholder table structure
-                    TableData(headers = listOf("Streaming Table..."), rows = listOf(listOf(content.replace("\n", " | "))), alignsString = listOf("Left"))
-                }
-                MarkdownPart.Table(id = id, tableData = tableData)
-            }
-            "math_block" -> MarkdownPart.MathBlock(id = id, latex = content.trim())
+            // "table" case removed
+            // Math blocks removed - return as text
+            "math_block" -> MarkdownPart.Text(id = id, content = content.trim())
             else -> {
                 // For text, we can do a more refined parsing even during streaming
                 // This part could be enhanced to split text into smaller MarkdownParts (e.g., with inline math)

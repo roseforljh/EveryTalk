@@ -7,6 +7,7 @@ fun normalizeBasicMarkdown(text: String): String {
     t = normalizeHeadingSpacing(t)
     t = normalizeListSpacing(t)
     t = normalizeTableSpacing(t) // 🎯 新增：表格格式化
+    t = normalizeDetachedBulletPoints(t) // 🔧 新增：处理分离式列表项目符号
     return t
 }
 
@@ -59,6 +60,8 @@ private fun normalizeListSpacing(md: String): String {
             line = line.replace(Regex("^(\\s*)[＊﹡]([^\\s])"), "$1* $2")
             // • · ・ ﹒ ∙ 作为项目符号
             line = line.replace(Regex("^(\\s*)[•·・﹒∙]([^\\s])"), "$1- $2")
+            // 🔧 修复：处理单独的星号作为列表项目符号
+            line = line.replace(Regex("^(\\s*)\\*\\s*$"), "$1- ")
             // 无序列表符号后补空格（避免 ** 触发）
             line = line.replace(Regex("^(\\s*)([*+\\-])(?![ *+\\-])(\\S)"), "$1$2 $3")
             // 有序列表（1. 或 1)）后补空格
@@ -130,4 +133,46 @@ internal fun normalizeMarkdownGlyphs(text: String): String {
         // 统一星号
         .replace('＊', '*')  // 全角星号 -> 半角
         .replace('﹡', '*')  // 小型星号 -> 半角
+}
+
+/**
+ * 🔧 新增：处理分离式列表项目符号
+ * 将单独一行的 * 与下一行的内容合并成标准的Markdown列表项
+ */
+private fun normalizeDetachedBulletPoints(md: String): String {
+    if (md.isEmpty()) return md
+    
+    val lines = md.split("\n").toMutableList()
+    val result = mutableListOf<String>()
+    var i = 0
+    
+    while (i < lines.size) {
+        val currentLine = lines[i].trim()
+        
+        // 检查是否为单独的项目符号
+        if (currentLine == "*" || currentLine == "-" || currentLine == "+") {
+            // 查找下一个非空行作为列表内容
+            var nextContentIndex = i + 1
+            while (nextContentIndex < lines.size && lines[nextContentIndex].trim().isEmpty()) {
+                nextContentIndex++
+            }
+            
+            if (nextContentIndex < lines.size) {
+                val nextContent = lines[nextContentIndex].trim()
+                if (nextContent.isNotEmpty()) {
+                    // 合并为标准的Markdown列表项
+                    result.add("- $nextContent")
+                    // 跳过已处理的行
+                    i = nextContentIndex + 1
+                    continue
+                }
+            }
+        }
+        
+        // 不是项目符号或找不到对应内容，保持原样
+        result.add(lines[i])
+        i++
+    }
+    
+    return result.joinToString("\n")
 }

@@ -995,10 +995,11 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 Log.d("AppViewModel", "🚀 [TEXT] Delegating to SimpleModeManager...")
                 simpleModeManager.loadTextHistory(index)
 
-                // Step 2: Proactive processing
+                // Step 2: 主动处理和修复AI消息的parts - 解决表格渲染问题
                 val processedMessages = processLoadedMessages(stateHolder.messages.toList())
+                val repairedMessages = repairHistoryMessageParts(processedMessages)
                 stateHolder.messages.clear()
-                stateHolder.messages.addAll(processedMessages)
+                stateHolder.messages.addAll(repairedMessages)
 
                 Log.d("AppViewModel", "🚀 [TEXT] SimpleModeManager completed successfully")
 
@@ -1028,10 +1029,11 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 Log.d("AppViewModel", "🖼️ [IMAGE] Delegating to SimpleModeManager...")
                 simpleModeManager.loadImageHistory(index)
 
-                // Step 2: Proactive processing for images
+                // Step 2: 主动处理和修复AI消息的parts - 解决表格渲染问题
                 val processedMessages = processLoadedMessages(stateHolder.imageGenerationMessages.toList())
+                val repairedMessages = repairHistoryMessageParts(processedMessages)
                 stateHolder.imageGenerationMessages.clear()
-                stateHolder.imageGenerationMessages.addAll(processedMessages)
+                stateHolder.imageGenerationMessages.addAll(repairedMessages)
 
                 Log.d("AppViewModel", "🖼️ [IMAGE] SimpleModeManager completed successfully")
 
@@ -2029,6 +2031,51 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 message.copy(contentStarted = true)
             } else {
                 message
+            }
+        }
+    }
+    
+    /**
+     * 🎯 修复历史消息的 parts 属性 - 解决表格渲染问题
+     * 主要解决：切换历史记录时，表格从正常显示变成原始 AI 输出样式的问题
+     */
+    private fun repairHistoryMessageParts(messages: List<Message>): List<Message> {
+        return messages.map { message ->
+            if (message.sender == Sender.AI && 
+                message.text.isNotBlank() && 
+                (message.parts.isEmpty() || !hasValidParts(message.parts))) {
+                
+                Log.d("AppViewModel", "🔧 Repairing message parts for messageId=${message.id}")
+                
+                try {
+                    // 使用 MessageProcessor 重新解析消息
+                    val sessionId = stateHolder._currentConversationId.value
+                    val tempProcessor = com.example.everytalk.util.messageprocessor.MessageProcessor().apply {
+                        initialize(sessionId, message.id)
+                    }
+                    val repairedMessage = tempProcessor.finalizeMessageProcessing(message)
+                    
+                    Log.d("AppViewModel", "🚀 Successfully repaired message parts: ${repairedMessage.parts.size} parts")
+                    repairedMessage
+                } catch (e: Exception) {
+                    Log.w("AppViewModel", "Failed to repair message parts for ${message.id}: ${e.message}")
+                    message
+                }
+            } else {
+                message
+            }
+        }
+    }
+    
+    /**
+     * 检查消息是否具有有效的 parts
+     */
+    private fun hasValidParts(parts: List<com.example.everytalk.ui.components.MarkdownPart>): Boolean {
+        return parts.any { part ->
+            when (part) {
+                is com.example.everytalk.ui.components.MarkdownPart.Text -> part.content.isNotBlank()
+                is com.example.everytalk.ui.components.MarkdownPart.CodeBlock -> part.content.isNotBlank()
+                else -> true
             }
         }
     }

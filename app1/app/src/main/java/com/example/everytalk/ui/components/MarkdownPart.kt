@@ -17,22 +17,14 @@ sealed class MarkdownPart {
         val language: String = ""
     ) : MarkdownPart()
 
+    // 新增：数学块（LaTeX 公式），displayMode 用于区分行内/块级
     @Serializable
     data class MathBlock(
         override val id: String,
         val latex: String,
-        val isDisplay: Boolean = true
+        val displayMode: Boolean = true
     ) : MarkdownPart()
-
-    @Serializable
-    data class InlineMath(override val id: String, val latex: String) : MarkdownPart()
 
     @Serializable
     data class HtmlContent(override val id: String, val html: String) : MarkdownPart()
-
-    @Serializable
-    data class Table(
-        override val id: String,
-        val tableData: TableData
-    ) : MarkdownPart()
 }

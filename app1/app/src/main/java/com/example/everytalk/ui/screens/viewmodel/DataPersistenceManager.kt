@@ -126,8 +126,8 @@ class DataPersistenceManager(
                                          when (part) {
                                              is com.example.everytalk.ui.components.MarkdownPart.Text -> part.content.isNotBlank()
                                              is com.example.everytalk.ui.components.MarkdownPart.CodeBlock -> part.content.isNotBlank()
-                                             is com.example.everytalk.ui.components.MarkdownPart.MathBlock -> part.latex.isNotBlank()
-                                             is com.example.everytalk.ui.components.MarkdownPart.Table -> part.tableData.headers.isNotEmpty()
+                                             // Math blocks removed
+                                             // is com.example.everytalk.ui.components.MarkdownPart.Table -> part.tableData.headers.isNotEmpty()
                                              else -> false
                                          }
                                      })) {

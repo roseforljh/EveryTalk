@@ -225,8 +225,11 @@ class RealtimePreprocessor(
     private fun preprocessMarkdown(text: String): String {
         if (text.isBlank()) return text
         
+        // 先修复表格格式
+        var processedText = fixTableFormat(text)
+        
         // 逐行处理，遇到代码围栏时切换状态，围栏内不做任何修改
-        val lines = text.split("\n").toMutableList()
+        val lines = processedText.split("\n").toMutableList()
         var insideFence = false
         for (i in lines.indices) {
             var line = lines[i]
@@ -243,6 +246,18 @@ class RealtimePreprocessor(
             if (!insideFence) {
                 // 确保标题标记格式正确（只在围栏外处理）
                 line = line.replace(Regex("^(#{1,6})([^\\s#])"), "$1 $2")
+                // AI输出预处理：将开头的 * 转换为 · (确保后续md格式转换顺利)
+                // 专门处理开头多个星号的情况，如 ***LXC** -> ·**LXC**
+                if (line.trimStart().startsWith("***")) {
+                    val leadingSpaces = line.takeWhile { it.isWhitespace() }
+                    val content = line.trimStart().removePrefix("*")
+                    line = "$leadingSpaces·$content"
+                } else if (line.trimStart().startsWith("*")) {
+                    // 处理单个星号开头的情况
+                    val leadingSpaces = line.takeWhile { it.isWhitespace() }
+                    val content = line.trimStart().removePrefix("*")
+                    line = "$leadingSpaces·$content"
+                }
                 // 统一列表符号与空格：将全角星号/圆点替换，补空格
                 line = line.replace(Regex("^(\\s*)[＊﹡]([^\\s])"), "$1* $2")
                 line = line.replace(Regex("^(\\s*)[•·・﹒∙]([^\\s])"), "$1- $2")
@@ -252,6 +267,74 @@ class RealtimePreprocessor(
             }
         }
         return lines.joinToString("\n")
+    }
+    
+    /**
+     * 修复表格格式 - 处理AI输出的表格被错误分行的问题
+     */
+    private fun fixTableFormat(text: String): String {
+        val lines = text.split("\n").toMutableList()
+        val fixedLines = mutableListOf<String>()
+        var i = 0
+        
+        while (i < lines.size) {
+            val line = lines[i]
+            
+            // 检测表格行（包含 | 符号）
+            if (line.trim().startsWith("|") && line.trim().endsWith("|")) {
+                var tableRow = line
+                var j = i + 1
+                
+                // 检查下一行是否是被错误分割的表格内容
+                while (j < lines.size) {
+                    val nextLine = lines[j].trim()
+                    
+                    // 如果下一行不是表格行，但包含内容，可能是被分割的表格内容
+                    if (!nextLine.startsWith("|") && !nextLine.contains("---") && nextLine.isNotEmpty()) {
+                        // 检查是否应该合并到当前表格行
+                        if (shouldMergeToTableRow(tableRow, nextLine)) {
+                            // 找到最后一个 | 之前的位置，插入内容
+                            val lastPipeIndex = tableRow.lastIndexOf("|")
+                            if (lastPipeIndex > 0) {
+                                tableRow = tableRow.substring(0, lastPipeIndex) + " " + nextLine + " " + tableRow.substring(lastPipeIndex)
+                            }
+                            j++
+                        } else {
+                            break
+                        }
+                    } else {
+                        break
+                    }
+                }
+                
+                fixedLines.add(tableRow)
+                i = j
+            } else {
+                fixedLines.add(line)
+                i++
+            }
+        }
+        
+        return fixedLines.joinToString("\n")
+    }
+    
+    /**
+     * 判断是否应该将内容合并到表格行
+     */
+    private fun shouldMergeToTableRow(tableRow: String, content: String): Boolean {
+        // 如果表格行的最后一个单元格看起来不完整，且内容不是新的段落开始
+        val lastCell = tableRow.substringAfterLast("|").substringBeforeLast("|").trim()
+        
+        // 简单的启发式规则：
+        // 1. 内容不是以标点符号结尾
+        // 2. 内容不是新的列表项或标题
+        // 3. 表格行包含足够的 | 符号
+        return !content.startsWith("#") && 
+               !content.startsWith("-") && 
+               !content.startsWith("*") && 
+               !content.startsWith("·") &&
+               tableRow.count { it == '|' } >= 2 &&
+               content.length < 200 // 避免合并过长的内容
     }
     
     /**

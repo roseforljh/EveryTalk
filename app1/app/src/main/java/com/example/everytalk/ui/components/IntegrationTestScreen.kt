@@ -12,7 +12,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.DataClass.Sender
-import com.example.everytalk.ui.components.TableData
+// import com.example.everytalk.ui.components.TableData
 
 /**
  * 完整解决方案集成测试组件
@@ -103,7 +103,7 @@ fun IntegrationTestScreen() {
         // 测试内容渲染
         when (currentTest) {
             1 -> TableRenderingTest()
-            2 -> MathFormulaTest()
+            2 -> TextRenderingTest()
             3 -> MixedContentTest()
             4 -> StressTest()
             else -> {
@@ -210,17 +210,7 @@ fun TableRenderingTest() {
             sender = Sender.AI,
             parts = listOf(
                 MarkdownPart.Text(id = "table_desc", content = "以下是复杂表格渲染测试："),
-                MarkdownPart.Table(
-                    id = "complex_table",
-                    tableData = TableData(
-                        headers = listOf("协议", "安全性", "性能", "数学公式", "复杂度"),
-                        rows = listOf(
-                            listOf("TCP", "高", "中等", "\$E = mc^2\$", "\$\$\\sum_{i=1}^n x_i\$\$"),
-                            listOf("UDP", "低", "高", "\$a^2 + b^2 = c^2\$", "\$\$\\int_0^\\infty e^{-x} dx\$\$"),
-                            listOf("HTTP/3", "很高", "很高", "\$\\frac{dy}{dx}\$", "\$\$\\lim_{n \\to \\infty} \\frac{1}{n}\$\$")
-                        )
-                    )
-                ),
+                // MarkdownPart.Table(...) removed
                 MarkdownPart.Text(id = "table_complete", content = "表格渲染完成测试。")
             ),
             timestamp = System.currentTimeMillis()
@@ -249,19 +239,20 @@ fun TableRenderingTest() {
  * 数学公式测试
  */
 @Composable
-fun MathFormulaTest() {
-    val mathMessage = remember {
+fun TextRenderingTest() {
+    val complexTextMessage = remember {
         Message(
-            id = "math_test",
-            text = "数学公式测试",
+            id = "text_test",
+            text = "文本渲染测试",
             sender = Sender.AI,
             parts = listOf(
-                MarkdownPart.Text(id = "math_desc", content = "复杂数学公式渲染测试："),
-                MarkdownPart.MathBlock(id = "maxwell_eq", latex = "\\begin{align} \\nabla \\times \\vec{E} &= -\\frac{\\partial \\vec{B}}{\\partial t} \\\\ \\nabla \\times \\vec{B} &= \\mu_0\\vec{J} + \\mu_0\\epsilon_0\\frac{\\partial \\vec{E}}{\\partial t} \\end{align}"),
-                MarkdownPart.Text(id = "inline_test", content = "行内公式：$\\alpha + \\beta = \\gamma$ 测试"),
-                MarkdownPart.MathBlock(id = "gauss_integral", latex = "\\int_{-\\infty}^{\\infty} e^{-x^2} dx = \\sqrt{\\pi}"),
-                MarkdownPart.Text(id = "matrix_desc", content = "矩阵运算："),
-                MarkdownPart.MathBlock(id = "matrix_mult", latex = "\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix} \\begin{pmatrix} x \\\\ y \\end{pmatrix} = \\begin{pmatrix} ax + by \\\\ cx + dy \\end{pmatrix}")
+                MarkdownPart.Text(id = "text_desc", content = "以下是数学公式渲染测试："),
+                MarkdownPart.Text(id = "text_content_intro", content = "这是一个行内公式示例："),
+                MarkdownPart.MathBlock(id = "math_inline", latex = "E = mc^2", displayMode = false),
+                MarkdownPart.Text(id = "text_block_intro", content = "下面是块级公式："),
+                MarkdownPart.MathBlock(id = "math_block", latex = "\\int_{-\\infty}^{\\infty} e^{-x^2} \\, dx = \\sqrt{\\pi}", displayMode = true),
+                MarkdownPart.Text(id = "text_error_intro", content = "错误/未闭合公式兜底展示："),
+                MarkdownPart.MathBlock(id = "math_error", latex = "\\frac{a+b", displayMode = true)
             ),
             timestamp = System.currentTimeMillis()
         )
@@ -270,16 +261,16 @@ fun MathFormulaTest() {
     Card {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = "数学公式乱闪测试",
+                text = "数学公式渲染测试",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
             
             Spacer(modifier = Modifier.height(8.dp))
             
-            OptimizedUnifiedRenderer(
-                message = mathMessage,
-                textColor = MaterialTheme.colorScheme.onSurface
+            EnhancedMarkdownText(
+                message = complexTextMessage,
+                color = MaterialTheme.colorScheme.onSurface
             )
         }
     }
@@ -299,19 +290,9 @@ fun MixedContentTest() {
                 MarkdownPart.Text(id = "mixed_intro", content = "这是一个复杂的**混合内容**测试，包含："),
                 MarkdownPart.Text(id = "text_styles", content = "1. 普通文本和**粗体**、*斜体*"),
                 MarkdownPart.CodeBlock(id = "code_sample", content = "fun test() {\n    println(\"Hello World\")\n}", language = "kotlin"),
-                MarkdownPart.Text(id = "inline_math", content = "2. 行内数学公式：\$f(x) = x^2 + 2x + 1\$"),
-                MarkdownPart.MathBlock(id = "sum_formula", latex = "\\sum_{k=1}^{n} k^2 = \\frac{n(n+1)(2n+1)}{6}"),
-                MarkdownPart.Table(
-                    id = "math_table",
-                    tableData = TableData(
-                        headers = listOf("函数", "导数", "积分"),
-                        rows = listOf(
-                            listOf("\$x^n\$", "\$nx^{n-1}\$", "\$\\frac{x^{n+1}}{n+1}\$"),
-                            listOf("\$e^x\$", "\$e^x\$", "\$e^x\$"),
-                            listOf("\$\\ln x\$", "\$\\frac{1}{x}\$", "\$x\\ln x - x\$")
-                        )
-                    )
-                ),
+                MarkdownPart.Text(id = "plain_text", content = "2. 这是普通文本，包含原始格式：f(x) = x^2 + 2x + 1"),
+                MarkdownPart.MathBlock(id = "mixed_math", latex = "\\sum_{k=1}^{n} k = \\frac{n(n+1)}{2}", displayMode = true),
+                // MarkdownPart.Table(...) removed
                 MarkdownPart.Text(id = "test_complete", content = "3. 测试完成，观察是否有乱闪或卡死现象。")
             ),
             timestamp = System.currentTimeMillis()
@@ -366,17 +347,7 @@ fun StressTest() {
                         sender = Sender.AI,
                         parts = listOf(
                             MarkdownPart.Text(id = "stress_text_$testCount$index", content = "压力测试 #$testCount-$index"),
-                            MarkdownPart.MathBlock(id = "stress_math_$testCount$index", latex = "x_{$index} = \\frac{$testCount + $index}{\\sqrt{2\\pi}}"),
-                            MarkdownPart.Table(
-                                id = "stress_table_$testCount$index",
-                                tableData = TableData(
-                                    headers = listOf("测试$index", "结果"),
-                                    rows = listOf(
-                                        listOf("轮次$testCount", "进行中"),
-                                        listOf("内存", "监控中")
-                                    )
-                                )
-                            )
+                            // MarkdownPart.Table(...) removed
                         ),
                         timestamp = System.currentTimeMillis()
                     )

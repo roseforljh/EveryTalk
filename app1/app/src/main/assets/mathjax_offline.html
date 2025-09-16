@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { 
+            margin: 0; 
+            padding: 2px; 
+            background: transparent; 
+            font-family: 'Times New Roman', serif;
+            line-height: 1.0;
+            font-size: FONT_SIZE;
+            color: inherit; /* 继承父元素颜色 */
+        }
+        .math-inline { 
+            display: inline-block; 
+            vertical-align: middle;
+            margin: 0;
+            padding: 0;
+        }
+        .math-display { 
+            display: block; 
+            text-align: center; 
+            margin: 2px 0;
+            padding: 0;
+        }
+        /* 基础数学符号样式 */
+        .fraction { display: inline-block; vertical-align: middle; }
+        .numerator { display: block; text-align: center; border-bottom: 1px solid; }
+        .denominator { display: block; text-align: center; }
+        .superscript { vertical-align: super; font-size: 0.8em; }
+        .subscript { vertical-align: sub; font-size: 0.8em; }
+        .sqrt { border-top: 1px solid; padding-top: 2px; }
+        .integral { font-size: 1.5em; }
+        .sum { font-size: 1.3em; }
+    </style>
+</head>
+<body>
+    <div id="math-content" class="MATH_TYPE">MATH_CONTENT</div>
+    
+    <script>
+        // 简单的LaTeX渲染器
+        function renderBasicLatex(latex) {
+            let result = latex;
+            
+            // 处理上标 ^{...} 和 ^x
+            result = result.replace(/\^{([^}]*)}/g, '<span class="superscript">$1</span>');
+            result = result.replace(/\^([a-zA-Z0-9])/g, '<span class="superscript">$1</span>');
+            
+            // 处理下标 _{...} 和 _x
+            result = result.replace(/_{([^}]*)}/g, '<span class="subscript">$1</span>');
+            result = result.replace(/_([a-zA-Z0-9])/g, '<span class="subscript">$1</span>');
+            
+            // 处理分数 \frac{a}{b}
+            result = result.replace(/\\frac{([^}]*)}{([^}]*)}/g, 
+                '<span class="fraction"><span class="numerator">$1</span><span class="denominator">$2</span></span>');
+            
+            // 处理平方根 \sqrt{...}
+            result = result.replace(/\\sqrt{([^}]*)}/g, '<span class="sqrt">√$1</span>');
+            
+            // 处理积分 \int
+            result = result.replace(/\\int/g, '<span class="integral">∫</span>');
+            
+            // 处理求和 \sum
+            result = result.replace(/\\sum/g, '<span class="sum">Σ</span>');
+            
+            // 处理无穷大 \infty
+            result = result.replace(/\\infty/g, '∞');
+            
+            // 处理希腊字母
+            result = result.replace(/\\theta/g, 'θ');
+            result = result.replace(/\\pi/g, 'π');
+            result = result.replace(/\\alpha/g, 'α');
+            result = result.replace(/\\beta/g, 'β');
+            result = result.replace(/\\gamma/g, 'γ');
+            result = result.replace(/\\delta/g, 'δ');
+            result = result.replace(/\\lambda/g, 'λ');
+            result = result.replace(/\\mu/g, 'μ');
+            result = result.replace(/\\sigma/g, 'σ');
+            result = result.replace(/\\phi/g, 'φ');
+            
+            // 处理三角函数
+            result = result.replace(/\\cos/g, 'cos');
+            result = result.replace(/\\sin/g, 'sin');
+            result = result.replace(/\\tan/g, 'tan');
+            
+            // 处理对数
+            result = result.replace(/\\log/g, 'log');
+            result = result.replace(/\\ln/g, 'ln');
+            
+            // 处理大括号 \left( \right)
+            result = result.replace(/\\left\(/g, '(');
+            result = result.replace(/\\right\)/g, ')');
+            result = result.replace(/\\left\[/g, '[');
+            result = result.replace(/\\right\]/g, ']');
+            
+            // 处理换行和空格
+            result = result.replace(/\\\\/g, '<br>');
+            result = result.replace(/\\,/g, ' ');
+            result = result.replace(/\\ /g, ' ');
+            
+            return result;
+        }
+        
+        // 在页面加载完成后渲染数学公式
+        document.addEventListener('DOMContentLoaded', function() {
+            const content = document.getElementById('math-content');
+            if (content) {
+                const latex = content.textContent;
+                content.innerHTML = renderBasicLatex(latex);
+            }
+        });
+        
+        // 提供给Android调用的接口
+        function updateMath(latex, isInline) {
+            const content = document.getElementById('math-content');
+            if (content) {
+                content.className = isInline ? 'math-inline' : 'math-display';
+                content.innerHTML = renderBasicLatex(latex);
+            }
+        }
+    </script>
+</body>
+</html>

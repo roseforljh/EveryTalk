@@ -337,37 +337,17 @@ fun ChatMessagesList(
 }
 
 enum class ContentType {
-    MATH_HEAVY,    // 数学公式密集，需要特殊内边距处理
     SIMPLE         // 普通内容，使用正常内边距
 }
 
 fun detectContentTypeForPadding(text: String): ContentType {
-    if (text.isEmpty()) return ContentType.SIMPLE
-    
-    // 🎯 关键修改：只有数学公式需要特殊内边距，其他全部使用正常内边距
-    if (hasMathContent(text)) {
-        return ContentType.MATH_HEAVY
-    }
-    
-    // 默认使用正常内边距
+    // 所有内容都使用正常内边距
     return ContentType.SIMPLE
 }
 
 private fun hasMathContent(text: String): Boolean {
-    return text.contains("$$") || // LaTeX块级公式
-            text.contains("$") && text.count { it == '$' } >= 2 || // LaTeX行内公式
-            text.contains("\\begin{") || // LaTeX环境
-            text.contains("\\frac") || // 分数
-            text.contains("\\sum") || // 求和
-            text.contains("\\int") || // 积分
-            text.contains("\\sqrt") || // 根号
-            text.contains("\\alpha") || // 希腊字母
-            text.contains("\\beta") ||
-            text.contains("\\gamma") ||
-            text.contains("\\delta") ||
-            text.contains("\\pi") ||
-            text.contains("\\theta") ||
-            text.contains("\\lambda")
+    // 不再检测数学内容
+    return false
 }
 
 
@@ -407,11 +387,9 @@ fun AiMessageItem(
             contentColor = MaterialTheme.colorScheme.onSurface,
             shadowElevation = 0.dp
         ) {
-            // 🎯 智能动态内边距：根据内容类型决定内边距
-            val contentType = remember(message.text) {
-                detectContentTypeForPadding(message.text)
-            }
-            val needsZeroPadding = contentType == ContentType.MATH_HEAVY
+            // 所有消息都使用正常内边距
+            val contentType = ContentType.SIMPLE
+            val needsZeroPadding = false
             
             Box(
                 modifier = Modifier

@@ -23,6 +23,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.channels.Channel
@@ -36,7 +37,6 @@ import kotlinx.serialization.json.Json
 import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.CancellationException
-import java.util.concurrent.atomic.AtomicReference
 
 @Serializable
 private data class BackendErrorContent(val message: String? = null, val code: Int? = null)
@@ -50,63 +50,12 @@ class ApiHandler(
 ) {
     private val logger = AppLogger.forComponent("ApiHandler")
     private val jsonParserForError = Json { ignoreUnknownKeys = true }
-    
-    // 🎯 会话级别的资源管理：为每个会话维护独立的处理器映射
-    private val sessionProcessorMaps = mutableMapOf<String, MutableMap<String, MessageProcessor>>()
-    private val sessionBlockManagerMaps = mutableMapOf<String, MutableMap<String, MarkdownBlockManager>>()
-    
-    // 为了兼容性，保留旧的全局映射，但加入会话隔离逻辑
+    // 为每个消息创建独立的MarkdownBlockManager，确保完全隔离
     private val blockManagerMap = mutableMapOf<String, MarkdownBlockManager>()
+    // 为每个会话创建独立的MessageProcessor实例，确保会话隔离
     private val messageProcessorMap = mutableMapOf<String, MessageProcessor>()
-    
-    // 会话状态跟踪
-    private val currentTextSessionId = AtomicReference<String?>(null)
-    private val currentImageSessionId = AtomicReference<String?>(null)
-    
     private var eventChannel: Channel<AppStreamEvent>? = null
 
-    // 🎯 增强的会话级别资源管理
-    private fun getSessionProcessorMap(sessionId: String): MutableMap<String, MessageProcessor> {
-        return sessionProcessorMaps.getOrPut(sessionId) { mutableMapOf() }
-    }
-    
-    private fun getSessionBlockManagerMap(sessionId: String): MutableMap<String, MarkdownBlockManager> {
-        return sessionBlockManagerMaps.getOrPut(sessionId) { mutableMapOf() }
-    }
-    
-    /**
-     * 🎯 为每条消息提供独立的处理器与块管理器，增强会话隔离
-     */
-    private fun getMessageProcessor(messageId: String, sessionId: String? = null): MessageProcessor {
-        // 优先使用会话级别的管理
-        if (sessionId != null) {
-            val sessionMap = getSessionProcessorMap(sessionId)
-            return sessionMap.getOrPut(messageId) { 
-                MessageProcessor().apply {
-                    initialize(sessionId, messageId)
-                    logger.debug("🎯 Created MessageProcessor for session=$sessionId, message=$messageId")
-                }
-            }
-        }
-        
-        // 兼容性支持：使用全局映射
-        return messageProcessorMap.getOrPut(messageId) { MessageProcessor() }
-    }
-
-    private fun getBlockManager(messageId: String, sessionId: String? = null): MarkdownBlockManager {
-        // 优先使用会话级别的管理
-        if (sessionId != null) {
-            val sessionMap = getSessionBlockManagerMap(sessionId)
-            return sessionMap.getOrPut(messageId) { 
-                MarkdownBlockManager().apply {
-                    logger.debug("🎯 Created MarkdownBlockManager for session=$sessionId, message=$messageId")
-                }
-            }
-        }
-        
-        // 兼容性支持：使用全局映射
-        return blockManagerMap.getOrPut(messageId) { MarkdownBlockManager() }
-    }
     private val USER_CANCEL_PREFIX = "USER_CANCELLED:"
     private val NEW_STREAM_CANCEL_PREFIX = "NEW_STREAM_INITIATED:"
     private val ERROR_VISUAL_PREFIX = "⚠️ "
@@ -123,29 +72,22 @@ class ApiHandler(
             if (isNewMessageSend) "$NEW_STREAM_CANCEL_PREFIX [$modeInfo] $reason" else "$USER_CANCEL_PREFIX [$modeInfo] $reason"
 
         if (jobToCancel?.isActive == true) {
-            // 在取消前尝试刷写当前流对应的未完成块，仅在有 messageId 时执行
-            var partialText = ""
-            var partialReasoning: String? = null
-            var hasBlocks = false
-            if (messageIdBeingCancelled != null) {
-                val currentMessageProcessor = getMessageProcessor(messageIdBeingCancelled)
-                val currentBlockManager = getBlockManager(messageIdBeingCancelled)
-                currentBlockManager.finalizeCurrentBlock()
-                partialText = currentMessageProcessor.getCurrentText().trim()
-                partialReasoning = currentMessageProcessor.getCurrentReasoning()
-                hasBlocks = currentBlockManager.blocks.isNotEmpty()
-            } else {
-                logger.debug("No current streaming messageId to finalize during cancel; skipping flush")
-            }
+            // 获取当前会话的消息处理器和块管理器
+            val currentMessageProcessor = messageProcessorMap[messageIdBeingCancelled] ?: MessageProcessor()
+            val currentBlockManager = messageIdBeingCancelled?.let { blockManagerMap.getOrPut(it) { MarkdownBlockManager() } } ?: MarkdownBlockManager()
+            // 在取消前先刷写未完成的块，避免丢失末尾内容
+            currentBlockManager.finalizeCurrentBlock()
+            val partialText = currentMessageProcessor.getCurrentText().trim()
+            val partialReasoning = currentMessageProcessor.getCurrentReasoning()
+            val hasBlocks = currentBlockManager.blocks.isNotEmpty()
 
             if (partialText.isNotBlank() || partialReasoning != null || hasBlocks) {
                 viewModelScope.launch(Dispatchers.Main.immediate) {
-                    if (messageIdBeingCancelled == null) return@launch
                     val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
-                    val index = messageList.indexOfFirst { it.id == messageIdBeingCancelled }
+                    val index =
+                        messageList.indexOfFirst { it.id == messageIdBeingCancelled }
                     if (index != -1) {
                         val currentMessage = messageList[index]
-                        val currentBlockManager = getBlockManager(messageIdBeingCancelled)
                         val updatedMessage = currentMessage.copy(
                             parts = currentBlockManager.blocks.toList(),
                             contentStarted = currentMessage.contentStarted || partialText.isNotBlank() || hasBlocks,
@@ -153,7 +95,8 @@ class ApiHandler(
                         )
                         messageList[index] = updatedMessage
 
-                        if ((partialText.isNotBlank() || hasBlocks)) {
+                        if ((partialText.isNotBlank() || hasBlocks) && messageIdBeingCancelled != null) {
+                            // Use text from blocks if available, otherwise fall back to messageProcessor
                             val textForCallback = if (hasBlocks) {
                                 currentBlockManager.blocks.filterIsInstance<com.example.everytalk.ui.components.MarkdownPart.Text>()
                                     .joinToString("") { it.content }
@@ -247,19 +190,6 @@ class ApiHandler(
         logger.debug("Starting new stream chat response with context: '$contextForLog'")
         cancelCurrentApiJob("开始新的流式传输，上下文: '$contextForLog'", isNewMessageSend = true, isImageGeneration = isImageGeneration)
 
-        // 🎯 会话级别的资源管理：获取当前会话ID
-        val currentSessionId = if (isImageGeneration) {
-            stateHolder._currentImageGenerationConversationId.value.also {
-                currentImageSessionId.set(it)
-            }
-        } else {
-            stateHolder._currentConversationId.value.also {
-                currentTextSessionId.set(it)
-            }
-        }
-        
-        logger.debug("🎯 Using session ID: $currentSessionId for ${if (isImageGeneration) "image" else "text"} generation")
-
         // 使用MessageProcessor创建新的AI消息
         val newAiMessage = Message(
             id = UUID.randomUUID().toString(),
@@ -269,11 +199,9 @@ class ApiHandler(
         )
         val aiMessageId = newAiMessage.id
 
-        // 🎯 为新消息创建独立的消息处理器和块管理器，增强会话隔离
-        val newMessageProcessor = getMessageProcessor(aiMessageId, currentSessionId)
-        val newBlockManager = getBlockManager(aiMessageId, currentSessionId)
-        
-        // 同时保持兼容性：添加到全局映射
+        // 为新消息创建独立的消息处理器和块管理器
+        val newMessageProcessor = MessageProcessor()
+        val newBlockManager = MarkdownBlockManager()
         messageProcessorMap[aiMessageId] = newMessageProcessor
         blockManagerMap[aiMessageId] = newBlockManager
         
@@ -508,12 +436,8 @@ class ApiHandler(
                                 logger.debug("Current message contentStarted: ${currentMessage.contentStarted}")
                                 
                                 // 立即进行Markdown解析，生成parts字段
-                                // 🎯 使用当前消息ID对应的处理器，增强会话隔离
-                                val currentMessageProcessor = getMessageProcessor(aiMessageId, currentSessionId)
-                                
-                                // 🎯 标记流为已完成，确保最终处理
-                                currentMessageProcessor.completeStream()
-                                
+                                // 使用当前消息ID对应的处理器
+                                val currentMessageProcessor = messageProcessorMap[aiMessageId] ?: MessageProcessor()
                                 val finalizedMessage = currentMessageProcessor.finalizeMessageProcessing(currentMessage)
                                 logger.debug("After finalization - parts count: ${finalizedMessage.parts.size}")
                                 finalizedMessage.parts.forEachIndexed { index, part ->
@@ -541,12 +465,7 @@ class ApiHandler(
                             }
                             logger.debug("=== STREAM COMPLETION END ===")
                             
-                            // 🎯 会话级别资源清理：清理对应的消息处理器和块管理器
-                            if (currentSessionId != null) {
-                                getSessionProcessorMap(currentSessionId).remove(aiMessageId)
-                                getSessionBlockManagerMap(currentSessionId).remove(aiMessageId)
-                            }
-                            // 兼容性清理
+                            // 清理对应的消息处理器和块管理器
                             messageProcessorMap.remove(aiMessageId)
                             blockManagerMap.remove(aiMessageId)
                         }
@@ -566,7 +485,7 @@ class ApiHandler(
                }
             } catch (e: Exception) {
                 // Handle stream cancellation/error - 获取对应的消息处理器进行重置
-                val currentMessageProcessor = getMessageProcessor(aiMessageId)
+                val currentMessageProcessor = messageProcessorMap[aiMessageId] ?: MessageProcessor()
                 currentMessageProcessor.reset()
                 if (e !is CancellationException) {
                     logger.error("Stream exception", e)
@@ -577,10 +496,6 @@ class ApiHandler(
                 }
             } finally {
                 // 🎯 关键修复：在finally块中也要清理资源，防止资源泄漏
-                if (currentSessionId != null) {
-                    getSessionProcessorMap(currentSessionId).remove(aiMessageId)
-                    getSessionBlockManagerMap(currentSessionId).remove(aiMessageId)
-                }
                 messageProcessorMap.remove(aiMessageId)
                 blockManagerMap.remove(aiMessageId)
                 
@@ -603,17 +518,10 @@ class ApiHandler(
             }
         }
     }
-    private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: String, isImageGeneration: Boolean = false) {
-        // 🎯 获取当前消息ID对应的处理器和块管理器，增强会话隔离
-        val currentSessionId = if (isImageGeneration) {
-            currentImageSessionId.get()
-        } else {
-            currentTextSessionId.get()
-        }
-        
-        val currentMessageProcessor = getMessageProcessor(aiMessageId, currentSessionId)
-        val currentBlockManager = getBlockManager(aiMessageId, currentSessionId)
-        
+private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: String, isImageGeneration: Boolean = false) {
+        // 获取当前消息ID对应的处理器和块管理器
+        val currentMessageProcessor = messageProcessorMap[aiMessageId] ?: MessageProcessor()
+        val currentBlockManager = blockManagerMap[aiMessageId] ?: MarkdownBlockManager()
         // 首先，让MessageProcessor处理事件并获取返回结果
         val processedResult = currentMessageProcessor.processStreamEvent(appEvent, aiMessageId)
 
@@ -633,7 +541,7 @@ class ApiHandler(
             when (appEvent) {
                 is AppStreamEvent.Content -> {
                     // 使用每条消息独立的 BlockManager，避免跨会话/跨消息互相污染
-                    val currentBlockManager = getBlockManager(aiMessageId)
+                    val currentBlockManager = blockManagerMap.getOrPut(aiMessageId) { MarkdownBlockManager() }
                     currentBlockManager.processEvent(appEvent)
                     if (processedResult is com.example.everytalk.util.messageprocessor.ProcessedEventResult.ContentUpdated) {
                         updatedMessage = updatedMessage.copy(
@@ -643,21 +551,10 @@ class ApiHandler(
                         )
                     }
                 }
-                is AppStreamEvent.Text -> {
+                is AppStreamEvent.Text, is AppStreamEvent.ContentFinal -> {
                     if (processedResult is com.example.everytalk.util.messageprocessor.ProcessedEventResult.ContentUpdated) {
                         updatedMessage = updatedMessage.copy(
                             text = processedResult.content,
-                            contentStarted = true
-                        )
-                    }
-                }
-                is AppStreamEvent.ContentFinal -> {
-                     if (processedResult is com.example.everytalk.util.messageprocessor.ProcessedEventResult.ContentUpdated) {
-                        val currentBlockManager = getBlockManager(aiMessageId, currentSessionId)
-                        currentBlockManager.processEvent(AppStreamEvent.Content(appEvent.text, appEvent.output_type, appEvent.block_type))
-                        updatedMessage = updatedMessage.copy(
-                            text = processedResult.content,
-                            parts = currentBlockManager.blocks.toList(),
                             contentStarted = true
                         )
                     }
@@ -668,7 +565,7 @@ class ApiHandler(
                     }
                 }
                 is AppStreamEvent.OutputType -> {
-                    getMessageProcessor(aiMessageId).setCurrentOutputType(appEvent.type)
+                    currentMessageProcessor.setCurrentOutputType(appEvent.type)
                     updatedMessage = updatedMessage.copy(outputType = appEvent.type)
                 }
                 is AppStreamEvent.WebSearchStatus -> {
@@ -704,7 +601,7 @@ class ApiHandler(
     private suspend fun updateMessageWithError(messageId: String, error: Throwable, isImageGeneration: Boolean = false) {
         logger.error("Updating message with error", error)
         // 获取当前消息ID对应的处理器并重置
-        val currentMessageProcessor = getMessageProcessor(messageId)
+        val currentMessageProcessor = messageProcessorMap[messageId] ?: MessageProcessor()
         currentMessageProcessor.reset()
         // 同时清理对应的块管理器
         blockManagerMap.remove(messageId)
@@ -900,86 +797,48 @@ class ApiHandler(
     }
     
     /**
-     * 🎯 清理文本聊天相关的资源，确保会话间完全隔离
+     * 清理文本聊天相关的资源，确保会话间完全隔离
      */
-    fun clearTextChatResources(sessionId: String? = null) {
-        logger.debug("🎯 Clearing text chat resources for session isolation, sessionId=$sessionId")
-        
-        if (sessionId != null) {
-            // 清理指定会话的资源
-            val sessionProcessors = sessionProcessorMaps.remove(sessionId)
-            val sessionBlockManagers = sessionBlockManagerMaps.remove(sessionId)
-            
-            sessionProcessors?.values?.forEach { processor ->
-                processor.cancel()
-            }
-            
-            logger.debug("🎯 Cleared session $sessionId: ${sessionProcessors?.size ?: 0} processors, ${sessionBlockManagers?.size ?: 0} block managers")
-            
-            // 更新当前会话ID
-            if (currentTextSessionId.get() == sessionId) {
-                currentTextSessionId.set(null)
-            }
-        } else {
-            // 清理所有文本聊天相关的消息处理器和块管理器（兼容模式）
-            val textMessageIds = messageProcessorMap.keys.toList()
-            textMessageIds.forEach { messageId ->
-                messageProcessorMap.remove(messageId)?.cancel()
-                blockManagerMap.remove(messageId)
-            }
-            
-            // 清理所有会话级别的资源
-            sessionProcessorMaps.values.forEach { sessionMap ->
-                sessionMap.values.forEach { it.cancel() }
-            }
-            sessionProcessorMaps.clear()
-            sessionBlockManagerMaps.clear()
-            
-            currentTextSessionId.set(null)
-            
-            logger.debug("🎯 Cleared all text chat resources: ${textMessageIds.size} processors")
+    fun clearTextChatResources() {
+        logger.debug("Clearing text chat resources for session isolation")
+        // 清理所有文本聊天相关的消息处理器和块管理器
+        val textMessageIds = messageProcessorMap.keys.filter { id ->
+            // 这里可以根据实际业务逻辑判断哪些是文本聊天的消息
+            // 暂时清理所有，如果需要更精确的判断可以添加标识
+            true
         }
+        textMessageIds.forEach { messageId ->
+            messageProcessorMap.remove(messageId)
+            blockManagerMap.remove(messageId)
+        }
+        logger.debug("Cleared ${textMessageIds.size} text chat message processors")
+    }
+
+    // 为兼容调用方，提供带 sessionId 的重载，内部忽略参数
+    fun clearTextChatResources(@Suppress("UNUSED_PARAMETER") sessionId: String?) {
+        clearTextChatResources()
     }
     
     /**
-     * 🎯 清理图像聊天相关的资源，确保会话间完全隔离
+     * 清理图像聊天相关的资源，确保会话间完全隔离
      */
-    fun clearImageChatResources(sessionId: String? = null) {
-        logger.debug("🎯 Clearing image chat resources for session isolation, sessionId=$sessionId")
-        
-        if (sessionId != null) {
-            // 清理指定会话的资源
-            val sessionProcessors = sessionProcessorMaps.remove(sessionId)
-            val sessionBlockManagers = sessionBlockManagerMaps.remove(sessionId)
-            
-            sessionProcessors?.values?.forEach { processor ->
-                processor.cancel()
-            }
-            
-            logger.debug("🎯 Cleared image session $sessionId: ${sessionProcessors?.size ?: 0} processors, ${sessionBlockManagers?.size ?: 0} block managers")
-            
-            // 更新当前会话ID
-            if (currentImageSessionId.get() == sessionId) {
-                currentImageSessionId.set(null)
-            }
-        } else {
-            // 清理所有图像聊天相关的消息处理器和块管理器
-            val imageMessageIds = messageProcessorMap.keys.toList() // 兼容性处理
-            imageMessageIds.forEach { messageId ->
-                messageProcessorMap.remove(messageId)?.cancel()
-                blockManagerMap.remove(messageId)
-            }
-            
-            // 清理所有会话级别的资源
-            sessionProcessorMaps.values.forEach { sessionMap ->
-                sessionMap.values.forEach { it.cancel() }
-            }
-            sessionProcessorMaps.clear()
-            sessionBlockManagerMaps.clear()
-            
-            currentImageSessionId.set(null)
-            
-            logger.debug("🎯 Cleared all image chat resources: ${imageMessageIds.size} processors")
+    fun clearImageChatResources() {
+        logger.debug("Clearing image chat resources for session isolation")
+        // 清理所有图像聊天相关的消息处理器和块管理器
+        val imageMessageIds = messageProcessorMap.keys.filter { id ->
+            // 这里可以根据实际业务逻辑判断哪些是图像聊天的消息
+            // 暂时清理所有，如果需要更精确的判断可以添加标识
+            true
         }
+        imageMessageIds.forEach { messageId ->
+            messageProcessorMap.remove(messageId)
+            blockManagerMap.remove(messageId)
+        }
+        logger.debug("Cleared ${imageMessageIds.size} image chat message processors")
+    }
+
+    // 为兼容调用方，提供带 sessionId 的重载，内部忽略参数
+    fun clearImageChatResources(@Suppress("UNUSED_PARAMETER") sessionId: String?) {
+        clearImageChatResources()
     }
 }

@@ -289,7 +289,7 @@ class FormatCorrector(
                     !codeContent.contains("！") && // 避免包含中文感叹号的普通文本
                     codeContent.lines().size <= 20 && // 更严格的行数限制
                     codeContent.length <= 500) { // 添加长度限制
-                    "```$language\n$codeContent\n```"
+                    "``$language\n$codeContent\n```"
                 } else {
                     matchResult.value
                 }
@@ -553,22 +553,11 @@ class FormatCorrector(
     
     /**
      * 清理文本中的多余空白段落，特别针对OpenAI兼容接口的输出
-     * 保护数学公式和LaTeX语法，避免强制换行
      */
     fun cleanExcessiveWhitespace(text: String): String {
         if (text.isBlank()) return ""
         
         var cleaned = text
-        
-        // 检查是否包含数学公式，如果包含则使用更保守的清理策略
-        val hasMathContent = text.contains("$") || text.contains("\\") ||
-                           listOf("frac", "sqrt", "sum", "int", "lim").any { text.contains("\\$it") }
-        
-        if (hasMathContent) {
-            // 对于包含数学公式的文本，采用智能清理策略
-            cleaned = smartMathContentCleaning(cleaned)
-            return cleaned
-        }
         
         // 1. 移除行尾的空白字符，但保留换行符
         cleaned = cleaned.replace(Regex("[ \t]+\n"), "\n")
@@ -610,24 +599,15 @@ class FormatCorrector(
     }
     
     /**
-     * 智能数学内容清理 - 避免破坏数学公式的行内显示，修复重复文本问题
+     * 智能内容清理 - 修复重复文本问题和格式化
      */
     private fun smartMathContentCleaning(text: String): String {
         var cleaned = text
         
-        // 1. 移除行尾空白，但保护数学公式
+        // 1. 移除行尾空白
         cleaned = cleaned.replace(Regex("[ \t]+\n"), "\n")
         
-        // 2. 处理数学公式周围的空白 - 关键修复
-        // 只处理被错误分离到单独行的短数学公式，保持原本应该行内显示的公式
-        // 修复：只有当数学公式前后都是换行符且公式较短时才合并为行内显示
-        cleaned = cleaned.replace(Regex("\n\\s*(\\\$[^$\n]{1,20}\\\$)\\s*\n(?=[\u4e00-\u9fa5a-zA-Z])"), " $1 ")
-        
-        // 3. 处理块级数学公式的合理间距
-        cleaned = cleaned.replace(Regex("\\s*\n{3,}\\s*(\\\$\\\$[^$]+\\\$\\\$)\\s*\n{3,}\\s*"), "\n\n$1\n\n")
-        
-        // 4. 修复被错误分离的中文文本，但要避免重复合并
-        // 改进：检查是否已经是连续的中文文本，避免重复处理
+        // 2. 修复被错误分离的中文文本，但要避免重复合并
         cleaned = safeRegexReplace(cleaned, Regex("([\u4e00-\u9fa5])\\s*\n+\\s*([\u4e00-\u9fa5])")) { matchResult ->
             val char1 = matchResult.groupValues[1]
             val char2 = matchResult.groupValues[2]
@@ -643,7 +623,7 @@ class FormatCorrector(
             }
         }
         
-        // 5. 处理中文标点符号后的不当换行，避免重复
+        // 3. 处理中文标点符号后的不当换行，避免重复
         cleaned = safeRegexReplace(cleaned, Regex("([，。！？；：])\\s*\n+\\s*([\u4e00-\u9fa5])")) { matchResult ->
             val punctuation = matchResult.groupValues[1]
             val nextChar = matchResult.groupValues[2]
@@ -659,16 +639,13 @@ class FormatCorrector(
             }
         }
         
-        // 6. 只处理过多的空行（超过4行的情况）
+        // 4. 只处理过多的空行（超过4行的情况）
         cleaned = cleaned.replace(Regex("\n{5,}"), "\n\n\n")
         
-        // 7. 保护LaTeX命令周围的格式
-        cleaned = cleaned.replace(Regex("\\s*\n+\\s*(\\\\[a-zA-Z]+)\\s*\n+\\s*"), " $1 ")
-        
-        // 8. 检查重复段落并移除
+        // 5. 检查重复段落并移除
         cleaned = removeDuplicateSegments(cleaned)
         
-        // 9. 最终清理
+        // 6. 最终清理
         cleaned = cleaned.trim()
         
         return cleaned

@@ -58,7 +58,7 @@ fun OptimizedUnifiedRenderer(
     // 检测是否包含表格（用于优化渲染）
     val containsTables = remember(message.parts, message.text) {
         // 已显式解析为表格的情况
-        if (message.parts.any { it is MarkdownPart.Table }) return@remember true
+        // if (message.parts.any { it is MarkdownPart.Table }) return@remember true
         
         val candidateLines: List<String> = if (message.parts.isNotEmpty()) {
             message.parts.filterIsInstance<MarkdownPart.Text>()
@@ -81,41 +81,41 @@ fun OptimizedUnifiedRenderer(
                 when (part) {
                     is MarkdownPart.Text -> part.content
                     is MarkdownPart.CodeBlock -> "```" + part.language + "\n" + part.content + "\n```"
-                    is MarkdownPart.MathBlock -> "$$" + part.latex + "$$"
-                    is MarkdownPart.Table -> buildTableMarkdown(part.tableData)
+                    // is MarkdownPart.Table -> buildTableMarkdown(part.tableData)
                     else -> ""
                 }
             }.trim()
             
             // 🎯 关键修复：验证parts重建的内容是否有效，如果为空则回退到message.text
-            if (reconstructedContent.isNotEmpty()) {
+            if (reconstructedContent.isNotEmpty() && reconstructedContent.length > message.text.length * 0.8) {
+                // 内容重建成功且长度合理
                 reconstructedContent
             } else {
-                android.util.Log.w("OptimizedUnifiedRenderer", "Parts重建内容为空，回退到message.text: messageId=${message.id}")
+                android.util.Log.w("OptimizedUnifiedRenderer", "🔄 Parts内容不完整，回退到message.text: messageId=${message.id}, partsLength=${reconstructedContent.length}, textLength=${message.text.length}")
                 message.text
             }
         } else {
             // 🎯 关键回退：当 parts 未持久化（进程被杀或App重启）时，退回使用 message.text
+            android.util.Log.d("OptimizedUnifiedRenderer", "🔄 Parts为空，使用message.text: messageId=${message.id}")
             message.text
         }
         
-        KaTeXOptimizer.createOptimizedMathHtml(
+        createSimpleHtml(
             content = fullContent,
             textColor = String.format("#%06X", 0xFFFFFF and textColor.toArgb()),
             backgroundColor = String.format("#%06X", 0xFFFFFF and aiBubbleColor.toArgb()),
-            fontSize = style.fontSize.value,
-            containsTables = containsTables
+            fontSize = style.fontSize.value
         )
     }
     
-    // 🎯 永久化：使用message.id保证WebView实例永久稳定
+    // 🎯 永久化：使用 content 的 hashcode 作为 key，确保相同内容复用 WebView
     val webViewKey = remember(stableKey ?: message.id) { "permanent_webview_${stableKey ?: message.id}" }
     val webView = rememberManagedWebView(webViewKey)
     
     // 🎯 永久化：使用rememberSaveable确保跨app重启的内容持久化
-    var lastRenderedHash by rememberSaveable(message.id) { mutableIntStateOf(0) }
-    var isContentReady by rememberSaveable(message.id) { mutableStateOf(false) }
-    var lastRenderedContent by rememberSaveable(message.id) { mutableStateOf("") }
+    var lastRenderedHash by rememberSaveable(key = webViewKey) { mutableIntStateOf(0) }
+    var isContentReady by rememberSaveable(key = webViewKey) { mutableStateOf(false) }
+    var lastRenderedContent by rememberSaveable(key = webViewKey) { mutableStateOf("") }
     
     // 🎯 修复：内容持久化逻辑增强 - 跨app重启恢复
     val shouldUpdateContent = remember(contentHash, lastRenderedHash, lastRenderedContent) {
@@ -192,32 +192,55 @@ fun OptimizedUnifiedRenderer(
 /**
  * 构建表格Markdown内容
  */
-private fun buildTableMarkdown(tableData: TableData): String {
-    if (tableData.headers.isEmpty()) return ""
+// private fun buildTableMarkdown(tableData: TableData): String { ... } // Removed
 
-    val result = StringBuilder()
-
-    // 表格头
-    result.append("| ${tableData.headers.joinToString(" | ")} |\n")
-
-    // 分隔线 - 修复对齐
-    val separatorLine = tableData.alignsString.zip(tableData.headers).joinToString(" | ") { (align, _) ->
-        when (align) {
-            "Center" -> ":---:"
-            "Right" -> "---:"
-            else -> "---"
-        }
-    }
-    result.append("| $separatorLine |\n")
-
-    // 表格行
-    tableData.rows.forEach { row ->
-        val paddedRow = row.toMutableList()
-        while (paddedRow.size < tableData.headers.size) {
-            paddedRow.add("")
-        }
-        result.append("| ${paddedRow.joinToString(" | ")} |\n")
-    }
-
-    return result.toString()
+/**
+ * 创建简单的HTML内容（不带数学公式渲染）
+ */
+private fun createSimpleHtml(
+    content: String,
+    textColor: String,
+    backgroundColor: String,
+    fontSize: Float
+): String {
+    val escapedContent = content
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\n", "<br>")
+    
+    return """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <style>
+                body {
+                    margin: 0;
+                    padding: 6px;
+                    font-family: -apple-system, sans-serif;
+                    font-size: ${fontSize}px;
+                    line-height: 1.4;
+                    color: $textColor;
+                    background-color: $backgroundColor;
+                    word-wrap: break-word;
+                    overflow-wrap: break-word;
+                    word-break: keep-all;
+                    hyphens: auto;
+                    text-align: justify;
+                }
+                pre {
+                    background: rgba(127, 127, 127, 0.1);
+                    padding: 8px;
+                    border-radius: 4px;
+                    overflow-x: auto;
+                }
+            </style>
+        </head>
+        <body>
+            $escapedContent
+        </body>
+        </html>
+    """.trimIndent()
 }

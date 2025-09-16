@@ -14,11 +14,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * 🎯 优化的HtmlRenderer - 使用统一架构解决表格卡死和公式乱闪
+ * 🎯 简化的HtmlRenderer - 用于渲染基本HTML内容
  * 
- * 替代原有的双重渲染系统：
+ * 主要功能：
  * - 集成UnifiedWebViewManager统一管理
- * - 使用KaTeXOptimizer避免双重JavaScript执行  
  * - 集成MemoryLeakGuard内存防护
  * - Compose重组优化避免不必要更新
  */

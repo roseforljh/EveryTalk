@@ -186,8 +186,10 @@ android {
         // 网络 - OkHttp（用于稳定下载图片字节）
         implementation("com.squareup.okhttp3:okhttp:4.12.0")
         
-        // 数学公式渲染库 - 使用WebView + KaTeX
-    // 数学公式渲染支持
+    // 基础协程支持
      implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
+
+        // ===== LaTeX 数学公式渲染 =====
+        implementation("ru.noties:jlatexmath-android:0.2.0")
     }
 

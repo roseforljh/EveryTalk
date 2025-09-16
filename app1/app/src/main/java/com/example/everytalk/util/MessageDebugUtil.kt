@@ -50,12 +50,10 @@ object MessageDebugUtil {
                     is MarkdownPart.CodeBlock -> {
                         android.util.Log.d(TAG, "  Part $index: CodeBlock (${part.language}) - ${part.content.length} chars")
                     }
-                    is MarkdownPart.MathBlock -> {
-                        android.util.Log.d(TAG, "  Part $index: MathBlock (display=${part.isDisplay}) - '${part.latex}'")
-                    }
-                    is MarkdownPart.Table -> {
-                        android.util.Log.d(TAG, "  Part $index: Table (${part.tableData.headers.size} cols, ${part.tableData.rows.size} rows)")
-                    }
+                    // Math blocks removed
+                    // is MarkdownPart.Table -> {
+                    //     android.util.Log.d(TAG, "  Part $index: Table (${part.tableData.headers.size} cols, ${part.tableData.rows.size} rows)")
+                    // }
                     else -> {
                         android.util.Log.d(TAG, "  Part $index: ${part::class.simpleName}")
                     }
@@ -67,8 +65,8 @@ object MessageDebugUtil {
                 when (part) {
                     is MarkdownPart.Text -> part.content.length
                     is MarkdownPart.CodeBlock -> part.content.length + part.language.length + 6 // ```language\n...\n```
-                    is MarkdownPart.MathBlock -> part.latex.length + if (part.isDisplay) 4 else 2 // $$ or $
-                    is MarkdownPart.Table -> part.tableData.headers.size * 10 + part.tableData.rows.size * 20 // 估算
+                    // Math blocks removed
+                    // is MarkdownPart.Table -> part.tableData.headers.size * 10 + part.tableData.rows.size * 20 // 估算
                     else -> 0
                 }
             }

@@ -5,7 +5,9 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -56,28 +58,30 @@ fun EditMessageDialog(
         },
         title = { Text("编辑消息", color = MaterialTheme.colorScheme.onSurface) },
         text = {
-            OutlinedTextField(
-                value = editDialogInputText,
-                onValueChange = onEditDialogTextChanged,
-                modifier = Modifier.fillMaxWidth(),
-                label = {
-                    Text(
-                        text = "消息内容",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                },
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = MaterialTheme.colorScheme.primary,
-                    unfocusedBorderColor = MaterialTheme.colorScheme.outline,
-                    focusedLabelColor = MaterialTheme.colorScheme.primary,
-                    unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    cursorColor = MaterialTheme.colorScheme.primary,
-                    focusedTextColor = MaterialTheme.colorScheme.onSurface,
-                    unfocusedTextColor = MaterialTheme.colorScheme.onSurface
-                ),
-                singleLine = false, maxLines = 5,
-                shape = RoundedCornerShape(8.dp)
-            )
+            SelectionContainer {
+                OutlinedTextField(
+                    value = editDialogInputText,
+                    onValueChange = onEditDialogTextChanged,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = {
+                        Text(
+                            text = "消息内容",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                        focusedLabelColor = MaterialTheme.colorScheme.primary,
+                        unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        cursorColor = MaterialTheme.colorScheme.primary,
+                        focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                        unfocusedTextColor = MaterialTheme.colorScheme.onSurface
+                    ),
+                    singleLine = false, maxLines = 5,
+                    shape = RoundedCornerShape(8.dp)
+                )
+            }
         },
         confirmButton = {
             TextButton(
@@ -106,13 +110,17 @@ fun SystemPromptDialog(
         onDismissRequest = onDismissRequest,
         title = { Text("自定义提示") },
         text = {
-            OutlinedTextField(
-                value = prompt,
-                onValueChange = onPromptChange,
-                modifier = Modifier.fillMaxWidth().height(200.dp),
-                label = { Text("设置系统提示") },
-                shape = RoundedCornerShape(16.dp)
-            )
+            SelectionContainer {
+                OutlinedTextField(
+                    value = prompt,
+                    onValueChange = onPromptChange,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp),
+                    label = { Text("设置系统提示") },
+                    shape = RoundedCornerShape(16.dp)
+                )
+            }
         },
         confirmButton = {
             TextButton(onClick = onConfirm) {

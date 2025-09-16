@@ -35,11 +35,14 @@ class MessageDisplayTest {
             2. 第二点内容
             3. 第三点内容
 
-            ### 数学公式示例
-            对于二次方程 $ax^2 + bx + c = 0$，解为：
-            $$x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}$$
-
             ### 代码示例
+            ```kotlin
+            fun hello() {
+                println("Hello World")
+            }
+            ```
+            
+            测试完成。
             ```kotlin
             fun main() {
                 println("Hello, World!")
@@ -68,7 +71,6 @@ class MessageDisplayTest {
         // 验证parts内容
         val textParts = processedMessage.parts.filterIsInstance<MarkdownPart.Text>()
         val codeParts = processedMessage.parts.filterIsInstance<MarkdownPart.CodeBlock>()
-        val mathParts = processedMessage.parts.filterIsInstance<MarkdownPart.MathBlock>()
 
         assertTrue("应该包含文本部分", textParts.isNotEmpty())
         assertTrue("应该包含代码块", codeParts.isNotEmpty())
@@ -78,7 +80,6 @@ class MessageDisplayTest {
             when (part) {
                 is MarkdownPart.Text -> part.content
                 is MarkdownPart.CodeBlock -> "```${part.language}\n${part.content}\n```"
-                is MarkdownPart.MathBlock -> if (part.isDisplay) "$$${part.latex}$$" else "$${part.latex}$"
                 else -> ""
             }
         }.trim()
