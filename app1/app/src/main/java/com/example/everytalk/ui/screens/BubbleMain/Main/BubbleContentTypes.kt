@@ -64,11 +64,10 @@ import com.example.everytalk.models.SelectedMediaItem
 import com.example.everytalk.ui.theme.ChatDimensions
 import com.example.everytalk.ui.theme.chatColors
 
-import com.example.everytalk.ui.components.MathView
 import com.example.everytalk.ui.components.EnhancedMarkdownText
 import com.example.everytalk.ui.components.CodePreview
 import com.example.everytalk.ui.components.normalizeMarkdownGlyphs
-import com.example.everytalk.ui.components.parseMarkdownParts
+import com.example.everytalk.util.messageprocessor.parseMarkdownParts
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -99,7 +98,6 @@ internal fun UserOrErrorMessageContent(
 
     Box(
         modifier = modifier
-            .widthIn(min = 48.dp, max = maxWidth * 0.85f)
             .wrapContentWidth()
             .padding(vertical = 2.dp)
     ) {
@@ -114,6 +112,8 @@ internal fun UserOrErrorMessageContent(
             ),
             tonalElevation = if (isError) 0.dp else 1.dp,
             modifier = Modifier
+                .wrapContentWidth()                 // 以内容宽度为准
+                .widthIn(max = maxWidth)            // 同时限制最大宽度
                 .onGloballyPositioned { coordinates ->
                     // 存储组件在屏幕中的全局位置
                     globalPosition = coordinates.localToRoot(Offset.Zero)
@@ -147,10 +147,9 @@ internal fun UserOrErrorMessageContent(
                         )
                     } else if (displayedText.isNotBlank() || isError) {
                         // 直接使用EnhancedMarkdownText渲染整个文本
-                        val parts = remember(message.text) { parseMarkdownParts(normalizeMarkdownGlyphs(message.text)) }
                         EnhancedMarkdownText(
-                            parts = parts,
-                            rawMarkdown = message.text,
+                            message = message,
+                            modifier = Modifier.widthIn(max = maxWidth).wrapContentWidth(),
                             color = contentColor
                         )
                     }

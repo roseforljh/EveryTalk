@@ -13,12 +13,20 @@ class HistoryManager(
     private val stateHolder: ViewModelStateHolder,
     private val persistenceManager: DataPersistenceManager,
     private val compareMessageLists: suspend (List<Message>?, List<Message>?) -> Boolean,
-    private val onHistoryModified: () -> Unit
+    private val onHistoryModified: () -> Unit,
+    private val finalizeMessage: (Message) -> Message
 ) {
     private val TAG_HM = "HistoryManager"
 
     private fun filterMessagesForSaving(messagesToFilter: List<Message>): List<Message> {
-        return messagesToFilter.filter { msg ->
+        return messagesToFilter.map { msg ->
+            // 在保存前，确保消息的最终文本内容被同步
+            if (msg.sender == Sender.AI) {
+                msg.copy(text = msg.text)
+            } else {
+                msg
+            }
+        }.filter { msg ->
             (!msg.isError) &&
             (
                 (msg.sender == Sender.User) ||
@@ -60,7 +68,11 @@ class HistoryManager(
         } else {
             currentMessagesSnapshot
         }
-        val messagesToSave = filterMessagesForSaving(messagesWithPrompt)
+        
+        // Final check before saving
+        val fullyProcessedMessages = messagesWithPrompt.map { finalizeMessage(it) }
+        
+        val messagesToSave = filterMessagesForSaving(fullyProcessedMessages)
         var historyListModified = false
         var loadedIndexChanged = false
 

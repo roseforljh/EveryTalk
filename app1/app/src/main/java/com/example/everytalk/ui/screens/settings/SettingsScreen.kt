@@ -27,7 +27,8 @@ fun SettingsScreen(
     modifier: Modifier = Modifier
 ) {
     Log.i("ScreenComposition", "SettingsScreen Composing/Recomposing.")
-    val savedConfigs by viewModel.apiConfigs.collectAsState()
+    val textConfigs by viewModel.apiConfigs.collectAsState()
+    val imageConfigs by viewModel.imageGenApiConfigs.collectAsState()
     // 使用UI意图模式，避免基于内容态推断造成的短暂不一致
     val intendedMode by viewModel.uiModeFlow.collectAsState()
     val isInImageMode = intendedMode == SimpleModeManager.ModeType.IMAGE
@@ -42,13 +43,13 @@ fun SettingsScreen(
     val fetchedModels by viewModel.fetchedModels.collectAsState()
     val isRefreshingModels by viewModel.isRefreshingModels.collectAsState()
 
-    val apiConfigsByApiKeyAndModality = remember(savedConfigs, isInImageMode) {
+    val apiConfigsByApiKeyAndModality = remember(textConfigs, imageConfigs, isInImageMode) {
         val configsToShow = if (isInImageMode) {
-            // 图像模式显示图像生成配置
-            viewModel.imageGenApiConfigs.value.filter { it.modalityType == ModalityType.IMAGE }
+            // 图像模式显示图像生成配置 - 现在使用响应式状态
+            imageConfigs.filter { it.modalityType == ModalityType.IMAGE }
         } else {
             // 文本模式显示文本配置
-            savedConfigs.filter { it.modalityType == ModalityType.TEXT }
+            textConfigs.filter { it.modalityType == ModalityType.TEXT }
         }
         
         configsToShow
@@ -115,7 +116,7 @@ fun SettingsScreen(
                 try {
                     context.contentResolver.openInputStream(it)?.use { inputStream ->
                         val jsonContent = inputStream.bufferedReader().use { reader -> reader.readText() }
-                        viewModel.importSettings(jsonContent, isImageGen = false)
+                        viewModel.importSettings(jsonContent, isImageGen = isInImageMode)
                     }
                 } catch (e: Exception) {
                     viewModel.showSnackbar("导入失败: ${e.message}")
@@ -131,12 +132,12 @@ fun SettingsScreen(
         }
     }
 
-    LaunchedEffect(savedConfigs, selectedConfigForApp, isInImageMode) {
+    LaunchedEffect(textConfigs, imageConfigs, selectedConfigForApp, isInImageMode) {
         val currentSelected = selectedConfigForApp
         val configsToCheck = if (isInImageMode) {
-            viewModel.imageGenApiConfigs.value
+            imageConfigs
         } else {
-            savedConfigs
+            textConfigs
         }
         
         if (currentSelected != null && configsToCheck.none { it.id == currentSelected.id }) {
@@ -353,14 +354,14 @@ fun SettingsScreen(
         ImportExportDialog(
             onDismissRequest = { showImportExportDialog = false },
             onExport = {
-                viewModel.exportSettings(isImageGen = false)
+                viewModel.exportSettings(isImageGen = isInImageMode)
                 showImportExportDialog = false
             },
             onImport = {
                 importSettingsLauncher.launch("application/json")
                 showImportExportDialog = false
             },
-            isExportEnabled = savedConfigs.isNotEmpty()
+            isExportEnabled = if (isInImageMode) imageConfigs.isNotEmpty() else textConfigs.isNotEmpty()
         )
     }
 }

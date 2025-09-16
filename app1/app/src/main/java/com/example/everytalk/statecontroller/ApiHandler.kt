@@ -14,8 +14,8 @@ import com.example.everytalk.models.SelectedMediaItem.Audio
 import com.example.everytalk.ui.screens.viewmodel.HistoryManager
 import com.example.everytalk.util.AppLogger
 import com.example.everytalk.util.FileManager
+import com.example.everytalk.util.messageprocessor.MarkdownBlockManager
 import com.example.everytalk.util.messageprocessor.MessageProcessor
-import com.example.everytalk.util.messageprocessor.ProcessedEventResult
 import io.ktor.client.statement.HttpResponse
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,6 +36,10 @@ import kotlinx.serialization.json.Json
 import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.CancellationException
+import java.util.concurrent.atomic.AtomicReference
+
+@Serializable
+private data class BackendErrorContent(val message: String? = null, val code: Int? = null)
 
 class ApiHandler(
     private val stateHolder: ViewModelStateHolder,
@@ -46,14 +50,66 @@ class ApiHandler(
 ) {
     private val logger = AppLogger.forComponent("ApiHandler")
     private val jsonParserForError = Json { ignoreUnknownKeys = true }
-    private val messageProcessor = MessageProcessor()
+    
+    // 🎯 会话级别的资源管理：为每个会话维护独立的处理器映射
+    private val sessionProcessorMaps = mutableMapOf<String, MutableMap<String, MessageProcessor>>()
+    private val sessionBlockManagerMaps = mutableMapOf<String, MutableMap<String, MarkdownBlockManager>>()
+    
+    // 为了兼容性，保留旧的全局映射，但加入会话隔离逻辑
+    private val blockManagerMap = mutableMapOf<String, MarkdownBlockManager>()
+    private val messageProcessorMap = mutableMapOf<String, MessageProcessor>()
+    
+    // 会话状态跟踪
+    private val currentTextSessionId = AtomicReference<String?>(null)
+    private val currentImageSessionId = AtomicReference<String?>(null)
+    
     private var eventChannel: Channel<AppStreamEvent>? = null
 
-    @Serializable
-    private data class BackendErrorContent(val message: String? = null, val code: Int? = null)
+    // 🎯 增强的会话级别资源管理
+    private fun getSessionProcessorMap(sessionId: String): MutableMap<String, MessageProcessor> {
+        return sessionProcessorMaps.getOrPut(sessionId) { mutableMapOf() }
+    }
+    
+    private fun getSessionBlockManagerMap(sessionId: String): MutableMap<String, MarkdownBlockManager> {
+        return sessionBlockManagerMaps.getOrPut(sessionId) { mutableMapOf() }
+    }
+    
+    /**
+     * 🎯 为每条消息提供独立的处理器与块管理器，增强会话隔离
+     */
+    private fun getMessageProcessor(messageId: String, sessionId: String? = null): MessageProcessor {
+        // 优先使用会话级别的管理
+        if (sessionId != null) {
+            val sessionMap = getSessionProcessorMap(sessionId)
+            return sessionMap.getOrPut(messageId) { 
+                MessageProcessor().apply {
+                    initialize(sessionId, messageId)
+                    logger.debug("🎯 Created MessageProcessor for session=$sessionId, message=$messageId")
+                }
+            }
+        }
+        
+        // 兼容性支持：使用全局映射
+        return messageProcessorMap.getOrPut(messageId) { MessageProcessor() }
+    }
 
+    private fun getBlockManager(messageId: String, sessionId: String? = null): MarkdownBlockManager {
+        // 优先使用会话级别的管理
+        if (sessionId != null) {
+            val sessionMap = getSessionBlockManagerMap(sessionId)
+            return sessionMap.getOrPut(messageId) { 
+                MarkdownBlockManager().apply {
+                    logger.debug("🎯 Created MarkdownBlockManager for session=$sessionId, message=$messageId")
+                }
+            }
+        }
+        
+        // 兼容性支持：使用全局映射
+        return blockManagerMap.getOrPut(messageId) { MarkdownBlockManager() }
+    }
     private val USER_CANCEL_PREFIX = "USER_CANCELLED:"
     private val NEW_STREAM_CANCEL_PREFIX = "NEW_STREAM_INITIATED:"
+    private val ERROR_VISUAL_PREFIX = "⚠️ "
 
 
     fun cancelCurrentApiJob(reason: String, isNewMessageSend: Boolean = false, isImageGeneration: Boolean = false) {
@@ -67,26 +123,46 @@ class ApiHandler(
             if (isNewMessageSend) "$NEW_STREAM_CANCEL_PREFIX [$modeInfo] $reason" else "$USER_CANCEL_PREFIX [$modeInfo] $reason"
 
         if (jobToCancel?.isActive == true) {
-            val partialText = messageProcessor.getCurrentText().trim()
-            val partialReasoning = messageProcessor.getCurrentReasoning()
+            // 在取消前尝试刷写当前流对应的未完成块，仅在有 messageId 时执行
+            var partialText = ""
+            var partialReasoning: String? = null
+            var hasBlocks = false
+            if (messageIdBeingCancelled != null) {
+                val currentMessageProcessor = getMessageProcessor(messageIdBeingCancelled)
+                val currentBlockManager = getBlockManager(messageIdBeingCancelled)
+                currentBlockManager.finalizeCurrentBlock()
+                partialText = currentMessageProcessor.getCurrentText().trim()
+                partialReasoning = currentMessageProcessor.getCurrentReasoning()
+                hasBlocks = currentBlockManager.blocks.isNotEmpty()
+            } else {
+                logger.debug("No current streaming messageId to finalize during cancel; skipping flush")
+            }
 
-            if (partialText.isNotBlank() || partialReasoning != null) {
+            if (partialText.isNotBlank() || partialReasoning != null || hasBlocks) {
                 viewModelScope.launch(Dispatchers.Main.immediate) {
+                    if (messageIdBeingCancelled == null) return@launch
                     val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
-                    val index =
-                        messageList.indexOfFirst { it.id == messageIdBeingCancelled }
+                    val index = messageList.indexOfFirst { it.id == messageIdBeingCancelled }
                     if (index != -1) {
                         val currentMessage = messageList[index]
+                        val currentBlockManager = getBlockManager(messageIdBeingCancelled)
                         val updatedMessage = currentMessage.copy(
-                            text = partialText,
-                            reasoning = partialReasoning,
-                            contentStarted = currentMessage.contentStarted || partialText.isNotBlank(),
+                            parts = currentBlockManager.blocks.toList(),
+                            contentStarted = currentMessage.contentStarted || partialText.isNotBlank() || hasBlocks,
                             isError = false
                         )
                         messageList[index] = updatedMessage
 
-                        if (partialText.isNotBlank() && messageIdBeingCancelled != null) {
-                            onAiMessageFullTextChanged(messageIdBeingCancelled, partialText)
+                        if ((partialText.isNotBlank() || hasBlocks)) {
+                            val textForCallback = if (hasBlocks) {
+                                currentBlockManager.blocks.filterIsInstance<com.example.everytalk.ui.components.MarkdownPart.Text>()
+                                    .joinToString("") { it.content }
+                            } else {
+                                partialText
+                            }
+                            if (textForCallback.isNotBlank()) {
+                                onAiMessageFullTextChanged(messageIdBeingCancelled, textForCallback)
+                            }
                         }
                         historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration)
                     }
@@ -105,7 +181,12 @@ class ApiHandler(
                 stateHolder._currentTextStreamingAiMessageId.value = null
             }
         }
-        messageProcessor.reset()
+        
+        // 清理对应的消息处理器和块管理器
+        if (messageIdBeingCancelled != null) {
+            messageProcessorMap.remove(messageIdBeingCancelled)
+            blockManagerMap.remove(messageIdBeingCancelled)
+        }
 
         if (messageIdBeingCancelled != null) {
             if (isImageGeneration) {
@@ -166,6 +247,19 @@ class ApiHandler(
         logger.debug("Starting new stream chat response with context: '$contextForLog'")
         cancelCurrentApiJob("开始新的流式传输，上下文: '$contextForLog'", isNewMessageSend = true, isImageGeneration = isImageGeneration)
 
+        // 🎯 会话级别的资源管理：获取当前会话ID
+        val currentSessionId = if (isImageGeneration) {
+            stateHolder._currentImageGenerationConversationId.value.also {
+                currentImageSessionId.set(it)
+            }
+        } else {
+            stateHolder._currentConversationId.value.also {
+                currentTextSessionId.set(it)
+            }
+        }
+        
+        logger.debug("🎯 Using session ID: $currentSessionId for ${if (isImageGeneration) "image" else "text"} generation")
+
         // 使用MessageProcessor创建新的AI消息
         val newAiMessage = Message(
             id = UUID.randomUUID().toString(),
@@ -175,8 +269,16 @@ class ApiHandler(
         )
         val aiMessageId = newAiMessage.id
 
-        // 重置消息处理器
-        messageProcessor.reset()
+        // 🎯 为新消息创建独立的消息处理器和块管理器，增强会话隔离
+        val newMessageProcessor = getMessageProcessor(aiMessageId, currentSessionId)
+        val newBlockManager = getBlockManager(aiMessageId, currentSessionId)
+        
+        // 同时保持兼容性：添加到全局映射
+        messageProcessorMap[aiMessageId] = newMessageProcessor
+        blockManagerMap[aiMessageId] = newBlockManager
+        
+        // 重置块管理器（这里应该是新创建的，重置是多余的，但保持一致性）
+        newBlockManager.reset()
 
         viewModelScope.launch(Dispatchers.Main.immediate) {
             val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
@@ -203,13 +305,7 @@ class ApiHandler(
                 .sample(100)
                 .collect {
                     val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
-                    val currentChunkIndex = messageList.indexOfFirst { it.id == aiMessageId }
-                    if (currentChunkIndex != -1) {
-                        updateMessageInState(currentChunkIndex, isImageGeneration)
-                        if (stateHolder.shouldAutoScroll()) {
-                            viewModelScope.launch(Dispatchers.Main.immediate) { triggerScrollToBottom() }
-                        }
-                    }
+                    // No-op in the new model, updates are driven by block list changes
                 }
         }
 
@@ -372,88 +468,87 @@ class ApiHandler(
                         .onCompletion { cause ->
                             logger.debug("Stream completed for message $aiMessageId, cause: ${cause?.message}")
                             newEventChannel.close()
-                            val targetMsgId = aiMessageId
                             val currentJob = if (isImageGeneration) stateHolder.imageApiJob else stateHolder.textApiJob
                             val isThisJobStillTheCurrentOne = currentJob == thisJob
 
                             if (isThisJobStillTheCurrentOne) {
                                 if (isImageGeneration) {
                                     stateHolder._isImageApiCalling.value = false
+                                    stateHolder._currentImageStreamingAiMessageId.value = null
                                 } else {
                                     stateHolder._isTextApiCalling.value = false
-                                }
-                                val currentStreamingId = if (isImageGeneration)
-                                    stateHolder._currentImageStreamingAiMessageId.value
-                                else
-                                    stateHolder._currentTextStreamingAiMessageId.value
-                                if (currentStreamingId == targetMsgId) {
-                                    if (isImageGeneration) {
-                                        stateHolder._currentImageStreamingAiMessageId.value = null
-                                    } else {
-                                        stateHolder._currentTextStreamingAiMessageId.value = null
-                                    }
+                                    stateHolder._currentTextStreamingAiMessageId.value = null
                                 }
                             }
-                                val reasoningMap = if (isImageGeneration) stateHolder.imageReasoningCompleteMap else stateHolder.textReasoningCompleteMap
-                                if (reasoningMap[targetMsgId] != true) {
-                                    reasoningMap[targetMsgId] = true
-                                }
-
-                            val cancellationMessageFromCause =
-                                (cause as? CancellationException)?.message
-                            val wasCancelledByApiHandler =
-                                cancellationMessageFromCause?.startsWith(USER_CANCEL_PREFIX) == true ||
-                                        cancellationMessageFromCause?.startsWith(
-                                            NEW_STREAM_CANCEL_PREFIX
-                                        ) == true
-
-                            val finalTextSnapshot = messageProcessor.getCurrentText()
-                            val finalReasoningSnapshot = messageProcessor.getCurrentReasoning()
-
-                            if (!wasCancelledByApiHandler) {
-                                val finalFullText = finalTextSnapshot.trim()
-                                if (finalFullText.isNotBlank()) {
-                                    onAiMessageFullTextChanged(targetMsgId, finalFullText)
-                                }
-                                if (cause == null || (cause !is CancellationException)) {
-                                    historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = cause != null, isImageGeneration = isImageGeneration)
-                                }
+                        }
+                        .catch { e: Throwable ->
+                            if (e !is CancellationException) {
+                                logger.error("Stream catch block", e)
                             }
-
-                            messageProcessor.reset()
-
-                            withContext(Dispatchers.Main.immediate) {
-                                val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
-                                val finalIdx = messageList.indexOfFirst { it.id == targetMsgId }
-                                if (finalIdx != -1) {
-                                    val msg = messageList[finalIdx]
-                                    if (cause == null && !msg.isError) {
-                                        val latestText = finalTextSnapshot
-                                        val latestReasoning = finalReasoningSnapshot
-                                        val updatedMsg = msg.copy(
-                                            text = if (latestText.isNotBlank()) latestText else msg.text,
-                                            reasoning = latestReasoning ?: msg.reasoning,
-                                            contentStarted = msg.contentStarted || latestText.isNotBlank() || !(latestReasoning.isNullOrBlank())
-                                        )
-                                        if (updatedMsg != msg) {
-                                            messageList[finalIdx] = updatedMsg
-                                        }
-                                        val animationMap = if (isImageGeneration) stateHolder.imageMessageAnimationStates else stateHolder.textMessageAnimationStates
-                                        if (animationMap[targetMsgId] != true) {
-                                            animationMap[targetMsgId] = true
-                                        }
-                                    } else if (cause is CancellationException) {
-                                        if (!wasCancelledByApiHandler) {
-                                            val hasMeaningfulContent = msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank()
-                                            if (hasMeaningfulContent) {
-                                                historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration)
-                                            } else if (msg.sender == Sender.AI && !msg.isError) {
-                                                messageList.removeAt(finalIdx)
-                                            }
-                                        }
-                                    }
+                        }
+                        .onCompletion { cause ->
+                            logger.debug("=== STREAM COMPLETION START ===")
+                            logger.debug("Stream completion for messageId: $aiMessageId, cause: $cause, isImageGeneration: $isImageGeneration")
+                            
+                            // Finalize the block manager to ensure any incomplete block is processed
+                            val currentBlockManager = blockManagerMap[aiMessageId]
+                            currentBlockManager?.finalizeCurrentBlock()
+                            logger.debug("BlockManager finalized, blocks count: ${currentBlockManager?.blocks?.size ?: 0}")
+                            
+                            // 🎯 关键修复：流结束时立即进行完整的Markdown解析和同步
+                            val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
+                            val messageIndex = messageList.indexOfFirst { it.id == aiMessageId }
+                            logger.debug("Message index found: $messageIndex")
+                            
+                            if (messageIndex != -1) {
+                                val currentMessage = messageList[messageIndex]
+                                logger.debug("Current message text length: ${currentMessage.text.length}")
+                                logger.debug("Current message text preview: ${currentMessage.text.take(100)}...")
+                                logger.debug("Current message parts count: ${currentMessage.parts.size}")
+                                logger.debug("Current message contentStarted: ${currentMessage.contentStarted}")
+                                
+                                // 立即进行Markdown解析，生成parts字段
+                                // 🎯 使用当前消息ID对应的处理器，增强会话隔离
+                                val currentMessageProcessor = getMessageProcessor(aiMessageId, currentSessionId)
+                                
+                                // 🎯 标记流为已完成，确保最终处理
+                                currentMessageProcessor.completeStream()
+                                
+                                val finalizedMessage = currentMessageProcessor.finalizeMessageProcessing(currentMessage)
+                                logger.debug("After finalization - parts count: ${finalizedMessage.parts.size}")
+                                finalizedMessage.parts.forEachIndexed { index, part ->
+                                    logger.debug("Part $index: ${part::class.simpleName} - ${part.toString().take(50)}...")
                                 }
+                                
+                                // 🎯 最终修复：流结束时，用 finalizeMessageProcessing 的结果覆盖 blockManager 的临时结果
+                                val fullyUpdatedMessage = finalizedMessage.copy(
+                                    parts = finalizedMessage.parts, // 明确使用最终解析的 parts
+                                    contentStarted = true
+                                )
+                                logger.debug("Final message parts count: ${fullyUpdatedMessage.parts.size}")
+                                messageList[messageIndex] = fullyUpdatedMessage
+                                logger.debug("Message updated in list")
+                            } else {
+                                logger.error("Message with id $aiMessageId not found in messageList!")
                             }
+                            
+                            // 🎯 强制保存：确保AI输出的文字不会丢失，无论流如何结束
+                            logger.debug("Triggering force save...")
+                            // 🎯 关键修复：强制同步到主线程保存，确保数据完整性
+                            viewModelScope.launch(Dispatchers.Main.immediate) {
+                                historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration)
+                                logger.debug("Force save completed on main thread")
+                            }
+                            logger.debug("=== STREAM COMPLETION END ===")
+                            
+                            // 🎯 会话级别资源清理：清理对应的消息处理器和块管理器
+                            if (currentSessionId != null) {
+                                getSessionProcessorMap(currentSessionId).remove(aiMessageId)
+                                getSessionBlockManagerMap(currentSessionId).remove(aiMessageId)
+                            }
+                            // 兼容性清理
+                            messageProcessorMap.remove(aiMessageId)
+                            blockManagerMap.remove(aiMessageId)
                         }
                         .collect { appEvent ->
                             val currentJob = if (isImageGeneration) stateHolder.imageApiJob else stateHolder.textApiJob
@@ -470,18 +565,25 @@ class ApiHandler(
                         }
                }
             } catch (e: Exception) {
-                messageProcessor.reset()
-                when (e) {
-                    is CancellationException -> {
-                        logger.debug("Stream cancelled: ${e.message}")
-                    }
-                    else -> {
-                        logger.error("Stream exception", e)
-                        updateMessageWithError(aiMessageId, e, isImageGeneration)
-                        onRequestFailed(e)
-                    }
+                // Handle stream cancellation/error - 获取对应的消息处理器进行重置
+                val currentMessageProcessor = getMessageProcessor(aiMessageId)
+                currentMessageProcessor.reset()
+                if (e !is CancellationException) {
+                    logger.error("Stream exception", e)
+                    updateMessageWithError(aiMessageId, e, isImageGeneration)
+                    onRequestFailed(e)
+                } else {
+                    logger.debug("Stream cancelled: ${e.message}")
                 }
             } finally {
+                // 🎯 关键修复：在finally块中也要清理资源，防止资源泄漏
+                if (currentSessionId != null) {
+                    getSessionProcessorMap(currentSessionId).remove(aiMessageId)
+                    getSessionBlockManagerMap(currentSessionId).remove(aiMessageId)
+                }
+                messageProcessorMap.remove(aiMessageId)
+                blockManagerMap.remove(aiMessageId)
+                
                 val currentJob = if (isImageGeneration) stateHolder.imageApiJob else stateHolder.textApiJob
                 if (currentJob == thisJob) {
                     if (isImageGeneration) {
@@ -502,146 +604,110 @@ class ApiHandler(
         }
     }
     private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: String, isImageGeneration: Boolean = false) {
-        val result = messageProcessor.processStreamEvent(appEvent, aiMessageId)
-
-        // 根据MessageProcessor的处理结果来更新消息状态
-        when (result) {
-            is ProcessedEventResult.ContentUpdated, is ProcessedEventResult.ReasoningUpdated -> {
-                // 这些事件由 updateMessageInState 处理，这里不需要操作
-            }
-            is ProcessedEventResult.ReasoningComplete -> {
-                val reasoningMap = if (isImageGeneration) stateHolder.imageReasoningCompleteMap else stateHolder.textReasoningCompleteMap
-                reasoningMap[aiMessageId] = true
-            }
-            is ProcessedEventResult.Error -> {
-                logger.warn("MessageProcessor reported error: ${result.message}")
-                updateMessageWithError(aiMessageId, IOException(result.message), isImageGeneration)
-                // 不要return，继续处理其他事件，因为这可能只是格式处理的警告
-                // return
-            }
-            else -> {
-                // 对于其他类型的结果，继续处理原始事件
-            }
+        // 🎯 获取当前消息ID对应的处理器和块管理器，增强会话隔离
+        val currentSessionId = if (isImageGeneration) {
+            currentImageSessionId.get()
+        } else {
+            currentTextSessionId.get()
         }
+        
+        val currentMessageProcessor = getMessageProcessor(aiMessageId, currentSessionId)
+        val currentBlockManager = getBlockManager(aiMessageId, currentSessionId)
+        
+        // 首先，让MessageProcessor处理事件并获取返回结果
+        val processedResult = currentMessageProcessor.processStreamEvent(appEvent, aiMessageId)
 
-        // 继续处理一些不由MessageProcessor处理的事件类型
-        when (appEvent) {
-            is AppStreamEvent.Content -> {
-                if (!appEvent.output_type.isNullOrBlank()) {
-                    val messageId = if (isImageGeneration) 
-                        stateHolder._currentImageStreamingAiMessageId.value 
-                    else 
-                        stateHolder._currentTextStreamingAiMessageId.value
-                    messageId ?: return
-                    val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
-                    val index = messageList.indexOfFirst { it.id == messageId }
-                    if (index != -1) {
-                        val originalMessage = messageList[index]
-                        if (originalMessage.outputType != appEvent.output_type) {
-                            messageList[index] = originalMessage.copy(outputType = appEvent.output_type)
-                        }
+        // 然后，根据处理结果和事件类型更新UI状态
+        withContext(Dispatchers.Main.immediate) {
+            val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
+            val messageIndex = messageList.indexOfFirst { it.id == aiMessageId }
+
+            if (messageIndex == -1) {
+                logger.warn("Message with id $aiMessageId not found in the list for event $appEvent")
+                return@withContext
+            }
+
+            val currentMessage = messageList[messageIndex]
+            var updatedMessage = currentMessage
+
+            when (appEvent) {
+                is AppStreamEvent.Content -> {
+                    // 使用每条消息独立的 BlockManager，避免跨会话/跨消息互相污染
+                    val currentBlockManager = getBlockManager(aiMessageId)
+                    currentBlockManager.processEvent(appEvent)
+                    if (processedResult is com.example.everytalk.util.messageprocessor.ProcessedEventResult.ContentUpdated) {
+                        updatedMessage = updatedMessage.copy(
+                            text = processedResult.content,
+                            parts = currentBlockManager.blocks.toList(),
+                            contentStarted = true
+                        )
                     }
                 }
-            }
-            is AppStreamEvent.WebSearchStatus -> {
-                val messageId = if (isImageGeneration) stateHolder._currentImageStreamingAiMessageId.value else stateHolder._currentTextStreamingAiMessageId.value
-                messageId ?: return
-                val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
-                val index = messageList.indexOfFirst { it.id == messageId }
-                if (index != -1) {
-                    val originalMessage = messageList[index]
-                    messageList[index] = originalMessage.copy(
-                        currentWebSearchStage = appEvent.stage
-                    )
+                is AppStreamEvent.Text -> {
+                    if (processedResult is com.example.everytalk.util.messageprocessor.ProcessedEventResult.ContentUpdated) {
+                        updatedMessage = updatedMessage.copy(
+                            text = processedResult.content,
+                            contentStarted = true
+                        )
+                    }
+                }
+                is AppStreamEvent.ContentFinal -> {
+                     if (processedResult is com.example.everytalk.util.messageprocessor.ProcessedEventResult.ContentUpdated) {
+                        val currentBlockManager = getBlockManager(aiMessageId, currentSessionId)
+                        currentBlockManager.processEvent(AppStreamEvent.Content(appEvent.text, appEvent.output_type, appEvent.block_type))
+                        updatedMessage = updatedMessage.copy(
+                            text = processedResult.content,
+                            parts = currentBlockManager.blocks.toList(),
+                            contentStarted = true
+                        )
+                    }
+                }
+                is AppStreamEvent.Reasoning -> {
+                    if (processedResult is com.example.everytalk.util.messageprocessor.ProcessedEventResult.ReasoningUpdated) {
+                        updatedMessage = updatedMessage.copy(reasoning = processedResult.reasoning)
+                    }
+                }
+                is AppStreamEvent.OutputType -> {
+                    getMessageProcessor(aiMessageId).setCurrentOutputType(appEvent.type)
+                    updatedMessage = updatedMessage.copy(outputType = appEvent.type)
+                }
+                is AppStreamEvent.WebSearchStatus -> {
+                    updatedMessage = updatedMessage.copy(currentWebSearchStage = appEvent.stage)
+                }
+                is AppStreamEvent.WebSearchResults -> {
+                    updatedMessage = updatedMessage.copy(webSearchResults = appEvent.results)
+                }
+                is AppStreamEvent.Finish, is AppStreamEvent.StreamEnd -> {
+                    val reasoningMap = if (isImageGeneration) stateHolder.imageReasoningCompleteMap else stateHolder.textReasoningCompleteMap
+                    reasoningMap[aiMessageId] = true
+                }
+                is AppStreamEvent.Error -> {
+                    updateMessageWithError(aiMessageId, IOException(appEvent.message), isImageGeneration)
+                }
+                // 其他事件类型（如ToolCall, ImageGeneration）暂时不直接更新消息UI，由特定逻辑处理
+                else -> {
+                    logger.debug("Handling other event type: ${appEvent::class.simpleName}")
                 }
             }
-            is AppStreamEvent.WebSearchResults -> {
-                val messageId = if (isImageGeneration) stateHolder._currentImageStreamingAiMessageId.value else stateHolder._currentTextStreamingAiMessageId.value
-                messageId ?: return
-                val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
-                val index = messageList.indexOfFirst { it.id == messageId }
-                if (index != -1) {
-                    val originalMessage = messageList[index]
-                    messageList[index] = originalMessage.copy(
-                        webSearchResults = appEvent.results
-                    )
-                }
-            }
-            is AppStreamEvent.Error -> {
-                val messageId = if (isImageGeneration) stateHolder._currentImageStreamingAiMessageId.value else stateHolder._currentTextStreamingAiMessageId.value
-                messageId ?: return
-                viewModelScope.launch {
-                    updateMessageWithError(
-                        messageId,
-                        IOException(appEvent.message),
-                        isImageGeneration
-                    )
-                }
-            }
-            is AppStreamEvent.OutputType -> {
-                messageProcessor.setCurrentOutputType(appEvent.type)
-            }
-            is AppStreamEvent.ImageGeneration -> {
-                val messageId = if (isImageGeneration) stateHolder._currentImageStreamingAiMessageId.value else stateHolder._currentTextStreamingAiMessageId.value
-                messageId ?: return
-                val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
-                val index = messageList.indexOfFirst { it.id == messageId }
-                if (index != -1) {
-                    val originalMessage = messageList[index]
-                    val updatedImageUrls = (originalMessage.imageUrls ?: emptyList()) + appEvent.imageUrl
-                    val updatedMessage = originalMessage.copy(
-                        imageUrls = updatedImageUrls,
-                        contentStarted = true
-                    )
-                    messageList[index] = updatedMessage
-                }
-            }
-            else -> {
-                // 其他事件类型
+
+            if (updatedMessage != currentMessage) {
+                messageList[messageIndex] = updatedMessage
             }
         }
 
-        // 触发滚动（如果需要）
         if (stateHolder.shouldAutoScroll()) {
             triggerScrollToBottom()
         }
     }
 
-    private fun updateMessageInState(index: Int, isImageGeneration: Boolean = false) {
-        // 将读取与UI状态更新都切换到主线程，避免跨线程修改Compose状态/MessageProcessor并发读写
-        viewModelScope.launch(Dispatchers.Main.immediate) {
-            val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
-            val originalMessage = messageList.getOrNull(index) ?: return@launch
-
-            // 从MessageProcessor获取当前文本和推理内容（主线程，避免与写入竞争）
-            val accumulatedFullText = messageProcessor.getCurrentText()
-            val accumulatedFullReasoning = messageProcessor.getCurrentReasoning()
-            val outputType = messageProcessor.getCurrentOutputType()
-
-            // 只有当内容有变化时才更新消息
-            if (accumulatedFullText != originalMessage.text ||
-                accumulatedFullReasoning != originalMessage.reasoning ||
-                outputType != originalMessage.outputType) {
-                val updatedMessage = originalMessage.copy(
-                    text = accumulatedFullText,
-                    reasoning = accumulatedFullReasoning,
-                    outputType = outputType,
-                    contentStarted = originalMessage.contentStarted || accumulatedFullText.isNotBlank()
-                )
-
-                messageList[index] = updatedMessage
-
-                // 通知文本变化
-                if (accumulatedFullText.isNotEmpty()) {
-                    onAiMessageFullTextChanged(originalMessage.id, accumulatedFullText)
-                }
-            }
-        }
-    }
 
     private suspend fun updateMessageWithError(messageId: String, error: Throwable, isImageGeneration: Boolean = false) {
         logger.error("Updating message with error", error)
-        messageProcessor.reset()
+        // 获取当前消息ID对应的处理器并重置
+        val currentMessageProcessor = getMessageProcessor(messageId)
+        currentMessageProcessor.reset()
+        // 同时清理对应的块管理器
+        blockManagerMap.remove(messageId)
         
         withContext(Dispatchers.Main.immediate) {
             val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
@@ -831,5 +897,89 @@ class ApiHandler(
 
     private companion object {
         private const val ERROR_VISUAL_PREFIX = "⚠️ "
+    }
+    
+    /**
+     * 🎯 清理文本聊天相关的资源，确保会话间完全隔离
+     */
+    fun clearTextChatResources(sessionId: String? = null) {
+        logger.debug("🎯 Clearing text chat resources for session isolation, sessionId=$sessionId")
+        
+        if (sessionId != null) {
+            // 清理指定会话的资源
+            val sessionProcessors = sessionProcessorMaps.remove(sessionId)
+            val sessionBlockManagers = sessionBlockManagerMaps.remove(sessionId)
+            
+            sessionProcessors?.values?.forEach { processor ->
+                processor.cancel()
+            }
+            
+            logger.debug("🎯 Cleared session $sessionId: ${sessionProcessors?.size ?: 0} processors, ${sessionBlockManagers?.size ?: 0} block managers")
+            
+            // 更新当前会话ID
+            if (currentTextSessionId.get() == sessionId) {
+                currentTextSessionId.set(null)
+            }
+        } else {
+            // 清理所有文本聊天相关的消息处理器和块管理器（兼容模式）
+            val textMessageIds = messageProcessorMap.keys.toList()
+            textMessageIds.forEach { messageId ->
+                messageProcessorMap.remove(messageId)?.cancel()
+                blockManagerMap.remove(messageId)
+            }
+            
+            // 清理所有会话级别的资源
+            sessionProcessorMaps.values.forEach { sessionMap ->
+                sessionMap.values.forEach { it.cancel() }
+            }
+            sessionProcessorMaps.clear()
+            sessionBlockManagerMaps.clear()
+            
+            currentTextSessionId.set(null)
+            
+            logger.debug("🎯 Cleared all text chat resources: ${textMessageIds.size} processors")
+        }
+    }
+    
+    /**
+     * 🎯 清理图像聊天相关的资源，确保会话间完全隔离
+     */
+    fun clearImageChatResources(sessionId: String? = null) {
+        logger.debug("🎯 Clearing image chat resources for session isolation, sessionId=$sessionId")
+        
+        if (sessionId != null) {
+            // 清理指定会话的资源
+            val sessionProcessors = sessionProcessorMaps.remove(sessionId)
+            val sessionBlockManagers = sessionBlockManagerMaps.remove(sessionId)
+            
+            sessionProcessors?.values?.forEach { processor ->
+                processor.cancel()
+            }
+            
+            logger.debug("🎯 Cleared image session $sessionId: ${sessionProcessors?.size ?: 0} processors, ${sessionBlockManagers?.size ?: 0} block managers")
+            
+            // 更新当前会话ID
+            if (currentImageSessionId.get() == sessionId) {
+                currentImageSessionId.set(null)
+            }
+        } else {
+            // 清理所有图像聊天相关的消息处理器和块管理器
+            val imageMessageIds = messageProcessorMap.keys.toList() // 兼容性处理
+            imageMessageIds.forEach { messageId ->
+                messageProcessorMap.remove(messageId)?.cancel()
+                blockManagerMap.remove(messageId)
+            }
+            
+            // 清理所有会话级别的资源
+            sessionProcessorMaps.values.forEach { sessionMap ->
+                sessionMap.values.forEach { it.cancel() }
+            }
+            sessionProcessorMaps.clear()
+            sessionBlockManagerMaps.clear()
+            
+            currentImageSessionId.set(null)
+            
+            logger.debug("🎯 Cleared all image chat resources: ${imageMessageIds.size} processors")
+        }
     }
 }

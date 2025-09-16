@@ -19,6 +19,7 @@ object BackendConfig {
         val configUrls = BuildConfig.BACKEND_URLS
         // 避免日志泄露完整后端地址，仅记录数量
         // android.util.Log.d("BackendConfig", "原始配置URLs: '$configUrls'")
+        android.util.Log.d("BackendConfig", "从 BuildConfig 读取的原始 URLs: '$configUrls'")
         
         if (configUrls.isBlank()) {
             android.util.Log.e("BackendConfig", "BuildConfig.BACKEND_URLS 为空或空白!")

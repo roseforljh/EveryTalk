@@ -41,7 +41,9 @@ object SelectedMediaItemSerializer : KSerializer<SelectedMediaItem> {
                 // Use the BitmapSerializer for the bitmap field
                 val bitmapSerializer = BitmapSerializer
                 encoder.encodeStructure(buildClassSerialDescriptor(TYPE_IMAGE_FROM_BITMAP)) {
-                    encodeSerializableElement(buildClassSerialDescriptor("bitmap"), 0, bitmapSerializer, value.bitmap)
+                    value.bitmap?.let { bitmap ->
+                        encodeSerializableElement(buildClassSerialDescriptor("bitmap"), 0, bitmapSerializer, bitmap)
+                    }
                     encodeStringElement(buildClassSerialDescriptor("id"), 1, value.id)
                 }
             }

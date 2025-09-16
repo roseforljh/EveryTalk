@@ -10,6 +10,7 @@ import com.example.everytalk.data.DataClass.Sender
 import com.example.everytalk.data.DataClass.SimpleTextApiMessage
 import com.example.everytalk.data.DataClass.WebSearchResult
 import com.example.everytalk.data.DataClass.toRole
+import com.example.everytalk.ui.components.MarkdownPart
 import com.example.everytalk.util.AppLogger
 import com.example.everytalk.util.PerformanceMonitor
 import kotlinx.coroutines.sync.Mutex
@@ -25,9 +26,15 @@ import java.util.concurrent.atomic.AtomicBoolean
  * 统一的消息处理类，用于解决消息处理冲突
  * 提供线程安全的消息处理机制
  * 增强版本：包含强大的AI输出格式矫正功能和性能优化
+ * 🎯 会话隔离修复：每个MessageProcessor实例绑定特定的会话和消息
  */
 class MessageProcessor {
     private val logger = AppLogger.forComponent("MessageProcessor")
+    
+    // 🎯 会话隔离：绑定会话ID和消息ID，确保处理器不会跨会话污染
+    private val sessionId = AtomicReference<String?>(null)
+    private val messageId = AtomicReference<String?>(null)
+    private val creationTime = System.currentTimeMillis()
     
     // 格式矫正配置
     private var formatConfig = FormatCorrectionConfig()
@@ -42,6 +49,7 @@ class MessageProcessor {
     // 线程安全的消息处理状态
     private val messagesMutex = Mutex()
     private val isCancelled = AtomicBoolean(false)
+    private val isCompleted = AtomicBoolean(false) // 🎯 新增：标记流是否已完成
     private val currentTextBuilder = AtomicReference(StringBuilder())
     private val currentReasoningBuilder = AtomicReference(StringBuilder())
     private val processedChunks = ConcurrentHashMap<String, String>()
@@ -63,6 +71,46 @@ class MessageProcessor {
     
     // 思考内容处理器
     private val thinkingProcessor = ThinkingContentProcessor(thinkingBuffer, isInsideThinkTag, hasFoundThinkTag)
+    
+    /**
+     * 🎯 初始化处理器，绑定会话和消息
+     * @param sessionId 会话ID，用于隔离不同会话
+     * @param messageId 消息ID，用于标识具体消息
+     */
+    fun initialize(sessionId: String, messageId: String) {
+        this.sessionId.set(sessionId)
+        this.messageId.set(messageId)
+        logger.debug("🎯 MessageProcessor initialized for session=$sessionId, message=$messageId")
+    }
+    
+    /**
+     * 🎯 获取当前绑定的会话ID
+     */
+    fun getSessionId(): String? = sessionId.get()
+    
+    /**
+     * 🎯 获取当前绑定的消息ID
+     */
+    fun getMessageId(): String? = messageId.get()
+    
+    /**
+     * 🎯 检查处理器是否属于指定会话
+     */
+    fun belongsToSession(sessionId: String): Boolean {
+        return this.sessionId.get() == sessionId
+    }
+    
+    /**
+     * 🎯 检查处理器是否处理指定消息
+     */
+    fun isProcessingMessage(messageId: String): Boolean {
+        return this.messageId.get() == messageId
+    }
+    
+    /**
+     * 🎯 检查流是否已完成
+     */
+    fun isStreamCompleted(): Boolean = isCompleted.get()
     
     /**
      * 更新格式矫正配置
@@ -234,80 +282,12 @@ class MessageProcessor {
     }
 
     private fun shouldSkipTextChunk(newText: String, existingText: String): Boolean {
-        // 如果新文本完全为空，跳过
+        // 🎯 紧急修复：暂时禁用所有过滤机制，确保内容不丢失
+        // 只有在新文本完全为空或纯空白且超长时才跳过
         if (newText.isEmpty()) return true
-
-        // 如果新文本只包含空白字符，但要更加保守
-        if (newText.isBlank()) {
-            // 只有当新文本非常长且只包含空白字符时才跳过
-            return newText.length > 50
-        }
-
-        // 检查是否只包含换行符和空格，但要更加保守
-        val whitespaceOnly = newText.replace(Regex("[^\n \t]"), "")
-        if (whitespaceOnly == newText) {
-            // 只有当空白字符非常多时才跳过，并且要确保不是有意义的格式化
-            return newText.length > 20 && !newText.contains("\n\n")
-        }
-
-        // 检查是否是完全重复的内容
-        if (existingText.isNotEmpty() && newText == existingText) {
-            return true
-        }
-
-        // 改进的重复检测逻辑 - 更精确地检测重复内容
-        if (existingText.isNotEmpty() && existingText.length > newText.length) {
-            val normalizedNew = normalizeText(newText)
-            val normalizedExisting = normalizeText(existingText)
-            
-            // 检查是否为完全相同的子串
-            if (normalizedExisting.contains(normalizedNew) && normalizedNew.length > 10) {
-                // 但是要排除一些特殊情况
-                
-                // 1. 如果新内容包含重要的标点符号或格式标记，不跳过
-                val hasImportantContent = listOf("：", ":", "公式", "解释", "**", "*", "$", "\\", "=").any { normalizedNew.contains(it) }
-                if (hasImportantContent) {
-                    logger.debug("Not skipping content with important formatting: ${normalizedNew.take(30)}...")
-                    return false
-                }
-                
-                // 2. 检查是否为句子的不同部分（如标题和内容）
-                val newTrimmed = normalizedNew.trim()
-                val existingTrimmed = normalizedExisting.trim()
-                
-                // 如果新内容是现有内容的精确子串且位置合理，可能是重复
-                val indexInExisting = existingTrimmed.indexOf(newTrimmed)
-                if (indexInExisting >= 0) {
-                    // 检查前后文本，如果是自然的文本流，不跳过
-                    val beforeSubstring = existingTrimmed.substring(0, indexInExisting).trim()
-                    val afterSubstring = existingTrimmed.substring(indexInExisting + newTrimmed.length).trim()
-                    
-                    // 如果子串前后都有实质内容，可能是合理的重复（如标题重复），允许
-                    if (beforeSubstring.isNotEmpty() && afterSubstring.isNotEmpty()) {
-                        logger.debug("Allowing potential title/content repetition: ${newTrimmed.take(30)}...")
-                        return false
-                    }
-                    
-                    logger.debug("Skipping duplicate content found in existing text: ${normalizedNew.take(50)}...")
-                    return true
-                }
-            }
-            
-            // 检查行级重复，但更保守
-            val lines = normalizedNew.split("\n").filter { it.trim().isNotEmpty() }
-            if (lines.isNotEmpty() && lines.size > 2) { // 只对多行内容进行行级重复检查
-                val duplicateLineCount = lines.count { line ->
-                    val trimmedLine = line.trim()
-                    normalizedExisting.contains(trimmedLine) && trimmedLine.length > 10 // 提高阈值
-                }
-                // 提高重复阈值到80%，且至少要有3行重复
-                if (duplicateLineCount >= 3 && duplicateLineCount.toDouble() / lines.size > 0.8) {
-                    logger.debug("Skipping chunk with ${duplicateLineCount}/${lines.size} duplicate lines")
-                    return true
-                }
-            }
-        }
-
+        if (newText.isBlank() && newText.length > 10000) return true // 极端情况
+        
+        // 其他情况一律不跳过，确保内容完整性
         return false
     }
     
@@ -320,9 +300,20 @@ class MessageProcessor {
         event: AppStreamEvent,
         currentMessageId: String
     ): ProcessedEventResult {
-        if (isCancelled.get()) {
-            logger.debug("Event processing cancelled for message $currentMessageId")
+        // 🎯 会话隔离检查：确保只处理属于自己的消息
+        if (messageId.get() != null && messageId.get() != currentMessageId) {
+            logger.warn("🎯 Ignoring event for different message: expected=${messageId.get()}, got=$currentMessageId")
             return ProcessedEventResult.Cancelled
+        }
+        
+        if (isCancelled.get()) {
+            logger.debug("🎯 Event processing cancelled for message $currentMessageId")
+            return ProcessedEventResult.Cancelled
+        }
+        
+        if (isCompleted.get()) {
+            logger.debug("🎯 Stream already completed for message $currentMessageId, ignoring event")
+            return ProcessedEventResult.NoChange
         }
         
         return PerformanceMonitor.measure("MessageProcessor.processStreamEvent") {
@@ -530,6 +521,8 @@ class MessageProcessor {
                             ProcessedEventResult.ReasoningUpdated(finalReasoning)
                         }
                         is AppStreamEvent.StreamEnd, is AppStreamEvent.ToolCall, is AppStreamEvent.Finish -> {
+                            // 🎯 流结束事件：标记为已完成状态
+                            completeStream()
                             // 清理缓存
                             if (formatConfig.enableCaching) {
                                 cleanupCache()
@@ -581,7 +574,7 @@ class MessageProcessor {
      */
     fun cancel() {
         isCancelled.set(true)
-        logger.debug("Message processing cancelled")
+        logger.debug("🎯 Message processing cancelled for session=${sessionId.get()}, message=${messageId.get()}")
     }
     
     /**
@@ -589,6 +582,7 @@ class MessageProcessor {
      */
     fun reset() {
         isCancelled.set(false)
+        isCompleted.set(false)
         currentTextBuilder.set(StringBuilder())
         currentReasoningBuilder.set(StringBuilder())
         processedChunks.clear()
@@ -599,7 +593,15 @@ class MessageProcessor {
         isInsideThinkTag.set(false)
         hasFoundThinkTag.set(false)
 
-        logger.debug("Message processor reset")
+        logger.debug("🎯 Message processor reset for session=${sessionId.get()}, message=${messageId.get()}")
+    }
+    
+    /**
+     * 🎯 完成流处理，标记为已完成状态
+     */
+    fun completeStream() {
+        isCompleted.set(true)
+        logger.debug("🎯 Stream completed for session=${sessionId.get()}, message=${messageId.get()}")
     }
     
     /**
@@ -714,5 +716,89 @@ class MessageProcessor {
             imageUrls = imageUrls?.ifEmpty { null },
             attachments = attachments ?: emptyList()
         )
+    }
+    /**
+     * 对最终的完整消息文本进行Markdown解析
+     * @param message 待处理的消息
+     * @return 解析后的消息
+     */
+    fun finalizeMessageProcessing(message: Message): Message {
+        android.util.Log.d("MessageProcessor", "=== finalizeMessageProcessing START ===")
+        android.util.Log.d("MessageProcessor", "Message ID: ${message.id}")
+        android.util.Log.d("MessageProcessor", "Message sender: ${message.sender}")
+        android.util.Log.d("MessageProcessor", "Message text length: ${message.text.length}")
+        android.util.Log.d("MessageProcessor", "Message text preview: ${message.text.take(100)}...")
+        android.util.Log.d("MessageProcessor", "Message parts count: ${message.parts.size}")
+        android.util.Log.d("MessageProcessor", "Parts empty: ${message.parts.isEmpty()}")
+        
+        // 🎯 修复条件判断：确保所有AI消息都能被正确处理
+        val shouldProcess = when {
+            // 非AI消息不处理
+            message.sender != Sender.AI -> false
+            // 空文本不处理
+            message.text.isBlank() -> false
+            // 🎯 关键修复：Parts为空的消息一律需要处理
+            message.parts.isEmpty() -> true
+            // 🎯 流式过程中的消息也要处理以保证实时更新
+            !isStreamCompleted() -> true
+            // Parts非空但内容无效的消息需要重新处理
+            else -> {
+                !message.parts.any { part ->
+                    when (part) {
+                        is MarkdownPart.Text -> part.content.isNotBlank()
+                        is MarkdownPart.CodeBlock -> part.content.isNotBlank()
+                        is MarkdownPart.MathBlock -> part.latex.isNotBlank()
+                        is MarkdownPart.Table -> part.tableData.headers.isNotEmpty()
+                        else -> false
+                    }
+                }
+            }
+        }
+        
+        android.util.Log.d("MessageProcessor", "Should process: $shouldProcess")
+        
+        if (shouldProcess) {
+            android.util.Log.d("MessageProcessor", "Condition met - parsing markdown")
+            try {
+                val parsedParts = parseMarkdownParts(message.text)
+                android.util.Log.d("MessageProcessor", "Parsed parts count: ${parsedParts.size}")
+                parsedParts.forEachIndexed { index, part ->
+                    android.util.Log.d("MessageProcessor", "Part $index: ${part::class.simpleName} - ${part.toString().take(50)}...")
+                }
+                
+                // 🎯 安全检查：确保解析结果有效
+                val validParts = parsedParts.filter { part ->
+                    when (part) {
+                        is MarkdownPart.Text -> part.content.isNotBlank()
+                        is MarkdownPart.CodeBlock -> part.content.isNotBlank()
+                        is MarkdownPart.MathBlock -> part.latex.isNotBlank()
+                        is MarkdownPart.Table -> part.tableData.headers.isNotEmpty()
+                        else -> true
+                    }
+                }
+                
+                // 如果没有有效的parts，创建一个默认的Text part
+                val finalParts = if (validParts.isEmpty() && message.text.isNotBlank()) {
+                    listOf(MarkdownPart.Text(id = "text_${java.util.UUID.randomUUID()}", content = message.text))
+                } else {
+                    validParts
+                }
+                
+                val result = message.copy(parts = finalParts)
+                android.util.Log.d("MessageProcessor", "=== finalizeMessageProcessing END (processed) ===")
+                return result
+            } catch (e: Exception) {
+                android.util.Log.w("MessageProcessor", "Failed to parse markdown parts: ${e.message}")
+                // 解析失败时，创建一个默认的Text part
+                val fallbackParts = listOf(MarkdownPart.Text(id = "text_${java.util.UUID.randomUUID()}", content = message.text))
+                val result = message.copy(parts = fallbackParts)
+                android.util.Log.d("MessageProcessor", "=== finalizeMessageProcessing END (fallback) ===")
+                return result
+            }
+        } else {
+            android.util.Log.d("MessageProcessor", "Condition not met - returning original message")
+            android.util.Log.d("MessageProcessor", "=== finalizeMessageProcessing END (skipped) ===")
+        }
+        return message
     }
 }

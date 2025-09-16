@@ -11,133 +11,33 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.everytalk.data.DataClass.Message
+import com.example.everytalk.data.DataClass.Sender
+import com.example.everytalk.util.messageprocessor.parseMarkdownParts
 import kotlinx.coroutines.delay
 
 // 为表格提供列对齐信息
+import kotlinx.serialization.Serializable
+
+@Serializable 
 data class TableData(
     val headers: List<String>,
     val rows: List<List<String>>,
-    val aligns: List<TextAlign> = List(headers.size) { TextAlign.Left }
-)
-
-@Composable
-fun ComposeTable(
-    tableData: TableData,
-    modifier: Modifier = Modifier,
-    delayMs: Long = 0L
+    // TextAlign 无法序列化，改用字符串表示
+    val alignsString: List<String> = List(headers.size) { "Left" }
 ) {
-    val borderColor = MaterialTheme.colorScheme.outline
-    val headerBackgroundColor = MaterialTheme.colorScheme.surfaceVariant
-    val evenRowColor = MaterialTheme.colorScheme.surface
-    val oddRowColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
-    
-    var shouldRender by remember { mutableStateOf(delayMs == 0L) }
-    
-    LaunchedEffect(tableData, delayMs) {
-        if (delayMs > 0L) {
-            shouldRender = false
-            delay(delayMs)
-            shouldRender = true
-        } else {
-            shouldRender = true
-        }
-    }
-    
-    if (!shouldRender) {
-        Box(
-            modifier = modifier
-                .fillMaxWidth()
-                .height(100.dp)
-                .background(MaterialTheme.colorScheme.surface)
-        )
-        return
-    }
-    
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .border(1.dp, borderColor)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(headerBackgroundColor)
-                .padding(8.dp)
-        ) {
-            tableData.headers.forEachIndexed { index, header ->
-                val align = tableData.aligns.getOrNull(index) ?: TextAlign.Left
-                val parts = remember(header) { parseMarkdownParts(normalizeMarkdownGlyphs(header), true) }
-                EnhancedMarkdownText(
-                    parts = parts,
-                    rawMarkdown = header,
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 8.dp),
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = align
-                    ),
-                    inTableContext = true
-                )
-                if (index < tableData.headers.size - 1) {
-                    Box(
-                        modifier = Modifier
-                            .width(1.dp)
-                            .fillMaxHeight()
-                            .background(borderColor)
-                    )
-                }
+    // 兼容性属性：转换字符串回 TextAlign
+    val aligns: List<TextAlign>
+        get() = alignsString.map { alignStr ->
+            when (alignStr) {
+                "Center" -> TextAlign.Center
+                "Right" -> TextAlign.Right
+                else -> TextAlign.Left
             }
         }
-        
-        tableData.rows.forEachIndexed { rowIndex, row ->
-            val backgroundColor = if (rowIndex % 2 == 0) evenRowColor else oddRowColor
-            
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(backgroundColor)
-                    .padding(8.dp)
-            ) {
-                row.forEachIndexed { cellIndex, cell ->
-                    val align = tableData.aligns.getOrNull(cellIndex) ?: TextAlign.Left
-                    val parts = remember(cell) { parseMarkdownParts(normalizeMarkdownGlyphs(cell), true) }
-                    EnhancedMarkdownText(
-                        parts = parts,
-                        rawMarkdown = cell,
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(horizontal = 8.dp),
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            fontSize = 14.sp,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            textAlign = align
-                        ),
-                        inTableContext = true
-                    )
-                    if (cellIndex < row.size - 1) {
-                        Box(
-                            modifier = Modifier
-                                .width(1.dp)
-                                .fillMaxHeight()
-                                .background(borderColor)
-                        )
-                    }
-                }
-            }
-            if (rowIndex < tableData.rows.size - 1) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(1.dp)
-                        .background(borderColor)
-                )
-            }
-        }
-    }
 }
+
+// 此文件中的功能已由HtmlRenderer接管。保留文件结构用于未来可能的原生Compose表格实现。
 
 internal fun splitMarkdownTableRow(line: String): List<String> {
     // 兼容全角/半角竖线与常见表格字符
@@ -244,5 +144,15 @@ fun parseMarkdownTable(markdownTable: String): TableData? {
         dataRows.add(cells)
     }
 
-    return TableData(headerCells, dataRows, aligns)
+    return TableData(
+        headers = headerCells, 
+        rows = dataRows, 
+        alignsString = aligns.map { align ->
+            when (align) {
+                TextAlign.Center -> "Center"
+                TextAlign.Right -> "Right"
+                else -> "Left"
+            }
+        }
+    )
 }

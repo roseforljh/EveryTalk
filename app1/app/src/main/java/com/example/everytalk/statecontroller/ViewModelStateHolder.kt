@@ -5,6 +5,7 @@ import androidx.compose.material3.DrawerState
 import androidx.compose.material3.DrawerValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
+import com.example.everytalk.statecontroller.ApiHandler
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.foundation.lazy.LazyListState
@@ -64,7 +65,7 @@ data class ConversationScrollState(
     val systemPrompts = mutableStateMapOf<String, String>()
 
 
-    // 清理文本模式状态的方法
+    // 清理文本模式状态的方法 - 增强版本，确保完全隔离
     fun clearForNewTextChat() {
         _text.value = ""
         messages.clear()
@@ -80,9 +81,14 @@ data class ConversationScrollState(
         _sourcesForDialog.value = emptyList()
         _loadedHistoryIndex.value = null
         _currentConversationId.value = "new_chat_${System.currentTimeMillis()}"
+        
+        // 🎯 关键修复：确保ApiHandler中的会话状态完全清理
+        if (::_apiHandler.isInitialized) {
+            _apiHandler.clearTextChatResources()
+        }
     }
 
-    // 清理图像模式状态的方法
+    // 清理图像模式状态的方法 - 增强版本，确保完全隔离
     fun clearForNewImageChat() {
         imageGenerationMessages.clear()
         _isImageApiCalling.value = false
@@ -94,6 +100,11 @@ data class ConversationScrollState(
         imageMessageAnimationStates.clear()
         _loadedImageGenerationHistoryIndex.value = null
         _currentImageGenerationConversationId.value = "new_image_generation_${System.currentTimeMillis()}"
+        
+        // 🎯 关键修复：确保ApiHandler中的会话状态完全清理
+        if (::_apiHandler.isInitialized) {
+            _apiHandler.clearImageChatResources()
+        }
     }
 
     val selectedMediaItems: SnapshotStateList<SelectedMediaItem> =
@@ -206,5 +217,16 @@ fun addMessage(message: Message, isImageGeneration: Boolean = false) {
     fun dismissImageGenerationErrorDialog() {
         _shouldShowImageGenerationError.value = false
         _imageGenerationError.value = null
+    }
+    private lateinit var _apiHandler: ApiHandler
+    fun setApiHandler(handler: ApiHandler) {
+        _apiHandler = handler
+    }
+
+    fun getApiHandler(): ApiHandler {
+        if (!::_apiHandler.isInitialized) {
+            throw IllegalStateException("ApiHandler not initialized")
+        }
+        return _apiHandler
     }
 }

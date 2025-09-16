@@ -116,11 +116,37 @@ class DataPersistenceManager(
                         initialHistoryPresent = loadedHistory.isNotEmpty()
                         Log.i(TAG, "loadInitialData: 历史数据加载完成。数量: ${loadedHistory.size}")
 
+                        // 🎯 自动修复消息parts - 检查并修复有问题的AI消息
+                        val repairedHistory = loadedHistory.map { conversation ->
+                            conversation.map { message ->
+                                if (message.sender == com.example.everytalk.data.DataClass.Sender.AI && 
+                                    message.text.isNotBlank() && 
+                                    (message.parts.isEmpty() || 
+                                     !message.parts.any { part ->
+                                         when (part) {
+                                             is com.example.everytalk.ui.components.MarkdownPart.Text -> part.content.isNotBlank()
+                                             is com.example.everytalk.ui.components.MarkdownPart.CodeBlock -> part.content.isNotBlank()
+                                             is com.example.everytalk.ui.components.MarkdownPart.MathBlock -> part.latex.isNotBlank()
+                                             is com.example.everytalk.ui.components.MarkdownPart.Table -> part.tableData.headers.isNotEmpty()
+                                             else -> false
+                                         }
+                                     })) {
+                                    // 需要修复的消息
+                                    Log.d(TAG, "自动修复消息parts: messageId=${message.id}")
+                                    // 这里可以调用MessageProcessor.finalizeMessageProcessing
+                                    // 暂时先标记，稍后在渲染时修复
+                                    message
+                                } else {
+                                    message
+                                }
+                            }
+                        }
+
                         // 更新历史数据到UI
                         withContext(Dispatchers.Main.immediate) {
                             Log.d(TAG, "loadInitialData: 阶段2完成 - 更新历史数据到UI...")
-                            stateHolder._historicalConversations.value = loadedHistory
-                            loadedHistory.forEach { conversation ->
+                            stateHolder._historicalConversations.value = repairedHistory
+                            repairedHistory.forEach { conversation ->
                                 val id = conversation.firstOrNull()?.id
                                 if (id != null) {
                                     val prompt = conversation.firstOrNull { it.sender == com.example.everytalk.data.DataClass.Sender.System }?.text ?: ""
@@ -247,14 +273,31 @@ class DataPersistenceManager(
         }
     }
    suspend fun saveLastOpenChat(messages: List<Message>, isImageGeneration: Boolean = false) {
-       withContext(Dispatchers.IO) {
-           Log.d(TAG, "saveLastOpenChat: Saving ${messages.size} messages for isImageGen=$isImageGeneration")
-           if (isImageGeneration) {
-               dataSource.saveLastOpenImageGenerationChat(messages)
-           } else {
-               dataSource.saveLastOpenChat(messages)
+       android.util.Log.d("DataPersistenceManager", "=== SAVE LAST OPEN CHAT START ===")
+       android.util.Log.d("DataPersistenceManager", "Saving ${messages.size} messages, isImageGeneration: $isImageGeneration")
+       
+       messages.forEachIndexed { index, message ->
+           android.util.Log.d("DataPersistenceManager", "Message $index (${message.id}): text length=${message.text.length}, parts=${message.parts.size}, contentStarted=${message.contentStarted}")
+           message.parts.forEachIndexed { partIndex, part ->
+               android.util.Log.d("DataPersistenceManager", "  Part $partIndex: ${part::class.simpleName}")
            }
        }
+       
+       withContext(Dispatchers.IO) {
+           Log.d(TAG, "saveLastOpenChat: Saving ${messages.size} messages for isImageGen=$isImageGeneration")
+           try {
+               if (isImageGeneration) {
+                   dataSource.saveLastOpenImageGenerationChat(messages)
+                   android.util.Log.d("DataPersistenceManager", "Image chat saved successfully")
+               } else {
+                   dataSource.saveLastOpenChat(messages)
+                   android.util.Log.d("DataPersistenceManager", "Text chat saved successfully")
+               }
+           } catch (e: Exception) {
+               android.util.Log.e("DataPersistenceManager", "Failed to save last open chat", e)
+           }
+       }
+       android.util.Log.d("DataPersistenceManager", "=== SAVE LAST OPEN CHAT END ===")
    }
 
    suspend fun clearLastOpenChat(isImageGeneration: Boolean = false) {

@@ -60,6 +60,7 @@ import com.example.everytalk.data.DataClass.Sender
 import com.example.everytalk.navigation.Screen
 import com.example.everytalk.statecontroller.AppViewModel
 import com.example.everytalk.statecontroller.ConversationScrollState
+import com.example.everytalk.statecontroller.SimpleModeManager
 import com.example.everytalk.ui.components.AppTopBar
 import com.example.everytalk.ui.components.ScrollToBottomButton
 import com.example.everytalk.ui.components.WebSourcesDialog
@@ -72,7 +73,7 @@ import com.example.everytalk.ui.screens.MainScreen.chat.ModelSelectionBottomShee
 import com.example.everytalk.ui.screens.MainScreen.chat.rememberChatScrollStateManager
 import com.example.everytalk.ui.components.EnhancedMarkdownText
 import com.example.everytalk.ui.components.normalizeMarkdownGlyphs
-import com.example.everytalk.ui.components.parseMarkdownParts
+import com.example.everytalk.util.messageprocessor.parseMarkdownParts
 import com.example.everytalk.ui.theme.chatColors
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -249,7 +250,15 @@ fun ChatScreen(
                     ?: selectedApiConfig?.model ?: "选择配置",
                 onMenuClick = { coroutineScope.launch { viewModel.drawerState.open() } },
                 onSettingsClick = {
-                    navController.navigate(Screen.SETTINGS_SCREEN) {
+                    // 根据应用的当前模式状态决定跳转到哪个设置页面
+                    // 使用更可靠的模式检测，基于uiModeFlow而不是消息内容
+                    val currentMode = viewModel.getCurrentMode()
+                    val targetScreen = if (currentMode == SimpleModeManager.ModeType.IMAGE) {
+                        Screen.IMAGE_GENERATION_SETTINGS_SCREEN
+                    } else {
+                        Screen.SETTINGS_SCREEN
+                    }
+                    navController.navigate(targetScreen) {
                         popUpTo(navController.graph.findStartDestination().id) {
                             saveState = true
                         }
@@ -644,10 +653,13 @@ private fun UpdateAvailableDialog(
                             .padding(vertical = scrimHeight)
                     ) {
                         // 直接使用EnhancedMarkdownText渲染整个文本
-                        val parts = remember(textToDisplay) { parseMarkdownParts(normalizeMarkdownGlyphs(textToDisplay)) }
+                        val tempMessage = com.example.everytalk.data.DataClass.Message(
+                            text = textToDisplay,
+                            sender = com.example.everytalk.data.DataClass.Sender.AI,
+                            parts = parseMarkdownParts(normalizeMarkdownGlyphs(textToDisplay))
+                        )
                         EnhancedMarkdownText(
-                            parts = parts,
-                            rawMarkdown = textToDisplay,
+                            message = tempMessage,
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurface,
                             inSelectionDialog = true

@@ -344,7 +344,9 @@ private data class AttachmentProcessingResult(
                     }
                 }
                 is SelectedMediaItem.ImageFromBitmap -> {
-                    saveBitmapToAppInternalStorage(application, originalMediaItem.bitmap, tempMessageIdForNaming, index, originalFileNameForHint)
+                    originalMediaItem.bitmap?.let { bitmap ->
+                        saveBitmapToAppInternalStorage(application, bitmap, tempMessageIdForNaming, index, originalFileNameForHint)
+                    }
                 }
                 is SelectedMediaItem.GenericFile -> {
                     copyUriToAppInternalStorage(application, originalMediaItem.uri, tempMessageIdForNaming, index, originalMediaItem.displayName)
@@ -375,11 +377,13 @@ private data class AttachmentProcessingResult(
                 }
                 is SelectedMediaItem.ImageFromBitmap -> {
                     imageUriStringsForUi.add(persistentFileProviderUri.toString())
-                    SelectedMediaItem.ImageFromBitmap(
-                        bitmap = originalMediaItem.bitmap,
-                        id = originalMediaItem.id,
-                        filePath = persistentFilePath
-                    )
+                    originalMediaItem.bitmap?.let { bitmap ->
+                        SelectedMediaItem.ImageFromBitmap.fromBitmap(
+                            bitmap = bitmap,
+                            id = originalMediaItem.id,
+                            filePath = persistentFilePath
+                        )
+                    } ?: originalMediaItem // 如果 bitmap 为 null，返回原始对象
                 }
                 is SelectedMediaItem.GenericFile -> {
                     // The ApiClient now handles streaming, so we don't need to read the bytes here.
@@ -528,7 +532,7 @@ private data class AttachmentProcessingResult(
                 val sanitizedImageSize = currentConfig.imageSize?.takeIf { it.isNotBlank() && !it.contains("<") } ?: "1024x1024"
                 
                 // 检查是否包含图像生成关键词
-                if (isImageGeneration && apiHandler.hasImageGenerationKeywords(textToActuallySend)) {
+                if (isImageGeneration && hasImageGenerationKeywords(textToActuallySend)) {
                     // 重置重试计数
                     stateHolder._imageGenerationRetryCount.value = 0
                     stateHolder._imageGenerationError.value = null
@@ -653,5 +657,24 @@ private suspend fun readTextFromUri(context: Context, uri: Uri): String? {
             fileName = uri.lastPathSegment
         }
         return fileName ?: "file_${System.currentTimeMillis()}"
+    }
+    
+    private fun hasImageGenerationKeywords(text: String?): Boolean {
+        if (text.isNullOrBlank()) return false
+        val t = text.lowercase().trim()
+        val imageKeywords = listOf(
+            "画", "绘制", "画个", "画张", "画一张", "来一张", "给我一张", "出一张", 
+            "生成图片", "生成", "生成几张", "生成多张", "出图", "图片", "图像", 
+            "配图", "背景图", "封面图", "插画", "插图", "海报", "头像", "壁纸", 
+            "封面", "表情包", "贴图", "示意图", "场景图", "示例图", "图标",
+            "手绘", "素描", "线稿", "上色", "涂色", "水彩", "油画", "像素画", 
+            "漫画", "二次元", "渲染", "p图", "p一张", "制作一张", "做一张", "合成一张",
+            "image", "picture", "pictures", "photo", "photos", "art", "artwork", 
+            "illustration", "render", "rendering", "draw", "sketch", "paint", 
+            "painting", "watercolor", "oil painting", "pixel art", "comic", 
+            "manga", "sticker", "cover", "wallpaper", "avatar", "banner", 
+            "logo", "icon", "generate image", "generate a picture"
+        )
+        return imageKeywords.any { keyword -> t.contains(keyword) }
     }
 }

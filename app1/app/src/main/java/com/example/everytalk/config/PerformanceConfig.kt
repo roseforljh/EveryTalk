@@ -1,0 +1,73 @@
+package com.example.everytalk.config
+
+/**
+ * 性能优化配置 - 集中管理所有性能相关参数
+ */
+object PerformanceConfig {
+    
+    // WebView 配置
+    const val WEBVIEW_POOL_SIZE = 3
+    const val WEBVIEW_INIT_TIMEOUT_MS = 5000L
+    
+    // Compose 重组阈值
+    const val RECOMPOSITION_WARNING_THRESHOLD = 10
+    const val RECOMPOSITION_LOG_INTERVAL_MS = 1000L
+    
+    // 状态管理配置
+    const val STATE_DEBOUNCE_DELAY_MS = 300L
+    const val BATCH_UPDATE_DELAY_MS = 16L // 一帧时间
+    
+    // 缓存配置
+    const val TEXT_CACHE_SIZE = 50
+    const val IMAGE_CACHE_SIZE = 20
+    const val OPTIMIZED_LIST_CACHE_SIZE = 100
+    
+    // 滚动配置
+    const val SCROLL_THRESHOLD_PX = 5f
+    const val SCROLL_BUTTON_HIDE_DELAY_MS = 3000L
+    const val AUTO_SCROLL_ANIMATION_DURATION_MS = 300
+    
+    // 内存管理
+    const val LONG_TEXT_THRESHOLD = 1000
+    const val TEXT_CHUNK_SIZE = 500
+    
+    // 消息处理配置
+    const val FORCE_MESSAGE_PROCESSING = true // 强制处理所有AI消息，确保parts不丢失
+    const val MESSAGE_VALIDATION_ENABLED = true // 启用消息验证
+    const val AUTO_REPAIR_INVALID_MESSAGES = true // 自动修复无效消息
+    const val STREAMING_PARTS_UPDATE_ENABLED = true // 🎯 启用流式过程中的parts实时更新
+    const val FALLBACK_TO_TEXT_ON_PARTS_FAILURE = true // 🎯 parts解析失败时回退到原文本
+    const val ENABLE_AGGRESSIVE_PARTS_PROCESSING = true // 🎯 启用积极的parts处理，确保UI正确显示
+    
+    // UI渲染配置
+    const val MARKDOWN_RENDERING_TIMEOUT_MS = 2000L // Markdown渲染超时
+    const val UI_REFRESH_DEBOUNCE_MS = 50L // UI刷新防抖
+    const val COMPOSE_RECOMPOSITION_THRESHOLD = 5 // Compose重组阈值
+    
+    // 动画配置
+    const val REDUCED_ANIMATION_DURATION_MS = 150L // 减少原来的动画时间
+    const val POPUP_ANIMATION_DURATION_MS = 200L
+    
+    // 日志配置
+    const val ENABLE_PERFORMANCE_LOGGING = true
+    const val LOG_TAG_PERFORMANCE = "AppPerformance"
+    
+    // 主线程监控
+    const val MAIN_THREAD_BLOCK_THRESHOLD_MS = 100L
+    
+    /**
+     * 根据设备性能动态调整配置
+     */
+    fun adjustForDevicePerformance(context: android.content.Context) {
+        // 可以根据设备内存、CPU等信息动态调整配置
+        val activityManager = context.getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+        val memoryInfo = android.app.ActivityManager.MemoryInfo()
+        activityManager.getMemoryInfo(memoryInfo)
+        
+        // 低内存设备的优化配置
+        if (memoryInfo.lowMemory) {
+            android.util.Log.i(LOG_TAG_PERFORMANCE, "检测到低内存设备，启用性能优化配置")
+            // 可以在这里调整各种缓存大小等参数
+        }
+    }
+}

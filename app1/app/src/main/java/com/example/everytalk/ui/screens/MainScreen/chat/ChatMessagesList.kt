@@ -11,9 +11,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -21,6 +22,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -41,16 +43,16 @@ import com.example.everytalk.ui.screens.BubbleMain.Main.MessageContextMenu
 import com.example.everytalk.ui.theme.ChatDimensions
 import com.example.everytalk.ui.theme.chatColors
 
-import com.example.everytalk.ui.components.MathView
 import com.example.everytalk.ui.components.EnhancedMarkdownText
 import com.example.everytalk.ui.components.CodePreview
 import com.example.everytalk.ui.components.normalizeMarkdownGlyphs
-import com.example.everytalk.ui.components.parseMarkdownParts
+import com.example.everytalk.util.messageprocessor.parseMarkdownParts
 import com.example.everytalk.ui.components.normalizeBasicMarkdown
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
 
 @Composable
 fun ChatMessagesList(
@@ -64,7 +66,7 @@ fun ChatMessagesList(
 ) {
     val haptic = LocalHapticFeedback.current
     val coroutineScope = rememberCoroutineScope()
-    val animatedItems = remember { mutableStateMapOf<String, Boolean>() }
+    // 🎯 永久化：移除animatedItems，不再需要追踪动画状态
 
     var isContextMenuVisible by remember { mutableStateOf(false) }
     var contextMenuMessage by remember { mutableStateOf<Message?>(null) }
@@ -93,63 +95,170 @@ fun ChatMessagesList(
             key = { _, item -> item.stableId },
             contentType = { _, item -> item::class.java.simpleName }
         ) { index, item ->
-            val alpha = remember { Animatable(0f) }
+            // 🎯 重组优化：直接渲染，移除CompositionLocalProvider
+            key(item.stableId) {
+                Box(
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .wrapContentWidth()
+                            .align(
+                                when (item) {
+                                    is ChatListItem.UserMessage -> Alignment.CenterEnd
+                                    is ChatListItem.ErrorMessage -> {
+                                        val message = viewModel.getMessageById(item.messageId)
+                                        if (message?.sender == com.example.everytalk.data.DataClass.Sender.User) {
+                                            Alignment.CenterEnd
+                                        } else {
+                                            Alignment.CenterStart
+                                        }
+                                    }
+                                    else -> Alignment.CenterStart
+                                }
+                            )
+                    ) {
+                        when (item) {
+                            is ChatListItem.UserMessage -> {
+                                val message = viewModel.getMessageById(item.messageId)
+                                if (message != null) {
+                                    Column(
+                                        modifier = Modifier.wrapContentWidth(),
+                                        horizontalAlignment = Alignment.End
+                                    ) {
+                                        if (!item.attachments.isNullOrEmpty()) {
+                                            AttachmentsContent(
+                                                attachments = item.attachments,
+                                                onAttachmentClick = { },
+                                                maxWidth = bubbleMaxWidth * ChatDimensions.BUBBLE_WIDTH_RATIO,
+                                                message = message,
+                                                onEditRequest = { viewModel.requestEditMessage(it) },
+                                                onRegenerateRequest = {
+                                                    viewModel.regenerateAiResponse(it, isImageGeneration = false)
+                                                    scrollStateManager.jumpToBottom()
+                                                },
+                                                onLongPress = { message, offset ->
+                                                    contextMenuMessage = message
+                                                    contextMenuPressOffset = offset
+                                                    isContextMenuVisible = true
+                                                },
+                                                scrollStateManager = scrollStateManager,
+                                                onImageLoaded = onImageLoaded,
+                                                bubbleColor = MaterialTheme.chatColors.userBubble
+                                            )
+                                        }
+                                        if (item.text.isNotBlank()) {
+                                            UserOrErrorMessageContent(
+                                                message = message,
+                                                displayedText = item.text,
+                                                showLoadingDots = false,
+                                                bubbleColor = MaterialTheme.chatColors.userBubble,
+                                                contentColor = MaterialTheme.colorScheme.onSurface,
+                                                isError = false,
+                                                maxWidth = bubbleMaxWidth * ChatDimensions.BUBBLE_WIDTH_RATIO,
+                                                onLongPress = { message, offset ->
+                                                    contextMenuMessage = message
+                                                    contextMenuPressOffset = offset
+                                                    isContextMenuVisible = true
+                                                },
+                                                scrollStateManager = scrollStateManager
+                                            )
+                                        }
+                                    }
+                                }
+                            }
 
-            LaunchedEffect(item.stableId) {
-                if (animatedItems[item.stableId] != true) {
-                    launch {
-                        alpha.animateTo(1f, animationSpec = tween(durationMillis = 180))
-                    }
-                    animatedItems[item.stableId] = true
-                } else {
-                    alpha.snapTo(1f)
-                }
-            }
+                            is ChatListItem.AiMessageReasoning -> {
+                                val reasoningCompleteMap = viewModel.textReasoningCompleteMap
+                                val isReasoningStreaming = remember(isApiCalling, item.message.reasoning, reasoningCompleteMap[item.message.id]) {
+                                    isApiCalling && item.message.reasoning != null && reasoningCompleteMap[item.message.id] != true
+                                }
+                                val isReasoningComplete = reasoningCompleteMap[item.message.id] ?: false
 
-            Box(
-                modifier = Modifier
-                    .graphicsLayer {
-                        this.alpha = alpha.value
-                    }
-            ) {
-                when (item) {
-                    is ChatListItem.UserMessage -> {
-                        val message = viewModel.getMessageById(item.messageId)
-                        if (message != null) {
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalAlignment = Alignment.End
-                            ) {
-                                if (!item.attachments.isNullOrEmpty()) {
-                                    AttachmentsContent(
-                                        attachments = item.attachments,
-                                        onAttachmentClick = { },
-                                        maxWidth = bubbleMaxWidth * ChatDimensions.BUBBLE_WIDTH_RATIO,
+                                ReasoningToggleAndContent(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    currentMessageId = item.message.id,
+                                    displayedReasoningText = item.message.reasoning ?: "",
+                                    isReasoningStreaming = isReasoningStreaming,
+                                    isReasoningComplete = isReasoningComplete,
+                                    messageIsError = item.message.isError,
+                                    mainContentHasStarted = item.message.contentStarted,
+                                    reasoningTextColor = MaterialTheme.chatColors.reasoningText,
+                                    reasoningToggleDotColor = MaterialTheme.colorScheme.onSurface,
+                                    onVisibilityChanged = { }
+                                )
+                            }
+
+                            is ChatListItem.AiMessage -> {
+                                val message = viewModel.getMessageById(item.messageId)
+                                if (message != null) {
+                                    AiMessageItem(
                                         message = message,
-                                        onEditRequest = { viewModel.requestEditMessage(it) },
-                                        onRegenerateRequest = {
-                                            viewModel.regenerateAiResponse(it, isImageGeneration = false)
-                                            scrollStateManager.jumpToBottom()
+                                        text = item.text,
+                                        maxWidth = bubbleMaxWidth,
+                                        hasReasoning = item.hasReasoning,
+                                        onLongPress = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onShowAiMessageOptions(message)
                                         },
-                                       onLongPress = { message, offset ->
-                                            contextMenuMessage = message
-                                            contextMenuPressOffset = offset
-                                            isContextMenuVisible = true
-                                        },
-                                        scrollStateManager = scrollStateManager,
-                                        onImageLoaded = onImageLoaded,
-                                        bubbleColor = MaterialTheme.chatColors.userBubble
+                                        isStreaming = viewModel.currentTextStreamingAiMessageId.collectAsState().value == message.id,
+                                        messageOutputType = message.outputType
                                     )
                                 }
-                                if (item.text.isNotBlank()) {
+                            }
+                            is ChatListItem.AiMessageMath -> {
+                                val message = viewModel.getMessageById(item.messageId)
+                                if (message != null) {
+                                    AiMessageItem(
+                                        message = message,
+                                        text = item.text,
+                                        maxWidth = bubbleMaxWidth,
+                                        hasReasoning = item.hasReasoning,
+                                        onLongPress = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onShowAiMessageOptions(message)
+                                        },
+                                        isStreaming = viewModel.currentTextStreamingAiMessageId.collectAsState().value == message.id,
+                                        messageOutputType = message.outputType
+                                    )
+                                }
+                            }
+                            is ChatListItem.AiMessageCode -> {
+                                val message = viewModel.getMessageById(item.messageId)
+                                if (message != null) {
+                                    AiMessageItem(
+                                        message = message,
+                                        text = "```${(message.outputType)}\n${item.text}\n```",
+                                        maxWidth = bubbleMaxWidth,
+                                        hasReasoning = item.hasReasoning,
+                                        onLongPress = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onShowAiMessageOptions(message)
+                                        },
+                                        isStreaming = viewModel.currentTextStreamingAiMessageId.collectAsState().value == message.id,
+                                        messageOutputType = message.outputType
+                                    )
+                                }
+                            }
+
+                            is ChatListItem.AiMessageFooter -> {
+                                AiMessageFooterItem(
+                                    message = item.message,
+                                    viewModel = viewModel,
+                                )
+                            }
+
+                            is ChatListItem.ErrorMessage -> {
+                                val message = viewModel.getMessageById(item.messageId)
+                                if (message != null) {
                                     UserOrErrorMessageContent(
                                         message = message,
                                         displayedText = item.text,
                                         showLoadingDots = false,
-                                        bubbleColor = MaterialTheme.chatColors.userBubble,
-                                        contentColor = MaterialTheme.colorScheme.onSurface,
-                                        isError = false,
-                                        maxWidth = bubbleMaxWidth * ChatDimensions.BUBBLE_WIDTH_RATIO,
+                                        bubbleColor = MaterialTheme.chatColors.aiBubble,
+                                        contentColor = MaterialTheme.chatColors.errorContent,
+                                        isError = true,
+                                        maxWidth = bubbleMaxWidth,
                                         onLongPress = { message, offset ->
                                             contextMenuMessage = message
                                             contextMenuPressOffset = offset
@@ -159,132 +268,31 @@ fun ChatMessagesList(
                                     )
                                 }
                             }
-                        }
-                    }
 
-                    is ChatListItem.AiMessageReasoning -> {
-                        val reasoningCompleteMap = viewModel.textReasoningCompleteMap
-                        val isReasoningStreaming = remember(isApiCalling, item.message.reasoning, reasoningCompleteMap[item.message.id]) {
-                            isApiCalling && item.message.reasoning != null && reasoningCompleteMap[item.message.id] != true
-                        }
-                        val isReasoningComplete = reasoningCompleteMap[item.message.id] ?: false
-
-                        ReasoningToggleAndContent(
-                            modifier = Modifier.fillMaxWidth(),
-                            currentMessageId = item.message.id,
-                            displayedReasoningText = item.message.reasoning ?: "",
-                            isReasoningStreaming = isReasoningStreaming,
-                            isReasoningComplete = isReasoningComplete,
-                            messageIsError = item.message.isError,
-                            mainContentHasStarted = item.message.contentStarted,
-                            reasoningTextColor = MaterialTheme.chatColors.reasoningText,
-                            reasoningToggleDotColor = MaterialTheme.colorScheme.onSurface,
-                            onVisibilityChanged = { }
-                        )
-                    }
-
-                    is ChatListItem.AiMessage -> {
-                        val message = viewModel.getMessageById(item.messageId)
-                        if (message != null) {
-                            AiMessageItem(
-                                message = message,
-                                text = item.text,
-                                maxWidth = bubbleMaxWidth,
-                                hasReasoning = item.hasReasoning,
-                                onLongPress = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    onShowAiMessageOptions(message)
-                                },
-                                isStreaming = viewModel.currentTextStreamingAiMessageId.collectAsState().value == message.id,
-                                messageOutputType = message.outputType
-                            )
-                        }
-                    }
-                    is ChatListItem.AiMessageMath -> {
-                        val message = viewModel.getMessageById(item.messageId)
-                        if (message != null) {
-                            AiMessageItem(
-                                message = message,
-                                text = item.text,
-                                maxWidth = bubbleMaxWidth,
-                                hasReasoning = item.hasReasoning,
-                                onLongPress = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    onShowAiMessageOptions(message)
-                                },
-                                isStreaming = viewModel.currentTextStreamingAiMessageId.collectAsState().value == message.id,
-                                messageOutputType = message.outputType
-                            )
-                        }
-                    }
-                    is ChatListItem.AiMessageCode -> {
-                        val message = viewModel.getMessageById(item.messageId)
-                        if (message != null) {
-                            AiMessageItem(
-                                message = message,
-                                text = "```${(message.outputType)}\n${item.text}\n```",
-                                maxWidth = bubbleMaxWidth,
-                                hasReasoning = item.hasReasoning,
-                                onLongPress = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    onShowAiMessageOptions(message)
-                                },
-                                isStreaming = viewModel.currentTextStreamingAiMessageId.collectAsState().value == message.id,
-                                messageOutputType = message.outputType
-                            )
-                        }
-                    }
-
-                    is ChatListItem.AiMessageFooter -> {
-                        AiMessageFooterItem(
-                            message = item.message,
-                            viewModel = viewModel,
-                        )
-                    }
-
-                    is ChatListItem.ErrorMessage -> {
-                        val message = viewModel.getMessageById(item.messageId)
-                        if (message != null) {
-                            UserOrErrorMessageContent(
-                                message = message,
-                                displayedText = item.text,
-                                showLoadingDots = false,
-                                bubbleColor = MaterialTheme.chatColors.aiBubble,
-                                contentColor = MaterialTheme.chatColors.errorContent,
-                                isError = true,
-                                maxWidth = bubbleMaxWidth,
-                                onLongPress = { message, offset ->
-                                    contextMenuMessage = message
-                                    contextMenuPressOffset = offset
-                                    isContextMenuVisible = true
-                                },
-                                scrollStateManager = scrollStateManager
-                            )
-                        }
-                    }
-
-                    is ChatListItem.LoadingIndicator -> {
-                        Row(
-                            modifier = Modifier
-                                .padding(
-                                    start = ChatDimensions.HORIZONTAL_PADDING,
-                                    top = ChatDimensions.VERTICAL_PADDING,
-                                    bottom = ChatDimensions.VERTICAL_PADDING
-                                ),
-                            verticalAlignment = Alignment.Bottom,
-                            horizontalArrangement = Arrangement.Start
-                        ) {
-                            Text(
-                                text = stringResource(id = R.string.connecting_to_model),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Spacer(Modifier.width(ChatDimensions.LOADING_SPACER_WIDTH))
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(ChatDimensions.LOADING_INDICATOR_SIZE),
-                                color = MaterialTheme.chatColors.loadingIndicator,
-                                strokeWidth = ChatDimensions.LOADING_INDICATOR_STROKE_WIDTH
-                            )
+                            is ChatListItem.LoadingIndicator -> {
+                                Row(
+                                    modifier = Modifier
+                                        .padding(
+                                            start = ChatDimensions.HORIZONTAL_PADDING,
+                                            top = ChatDimensions.VERTICAL_PADDING,
+                                            bottom = ChatDimensions.VERTICAL_PADDING
+                                        ),
+                                    verticalAlignment = Alignment.Bottom,
+                                    horizontalArrangement = Arrangement.Start
+                                ) {
+                                    Text(
+                                        text = stringResource(id = R.string.connecting_to_model),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Spacer(Modifier.width(ChatDimensions.LOADING_SPACER_WIDTH))
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(ChatDimensions.LOADING_INDICATOR_SIZE),
+                                        color = MaterialTheme.chatColors.loadingIndicator,
+                                        strokeWidth = ChatDimensions.LOADING_INDICATOR_STROKE_WIDTH
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -328,8 +336,43 @@ fun ChatMessagesList(
     }
 }
 
+enum class ContentType {
+    MATH_HEAVY,    // 数学公式密集，需要特殊内边距处理
+    SIMPLE         // 普通内容，使用正常内边距
+}
+
+fun detectContentTypeForPadding(text: String): ContentType {
+    if (text.isEmpty()) return ContentType.SIMPLE
+    
+    // 🎯 关键修改：只有数学公式需要特殊内边距，其他全部使用正常内边距
+    if (hasMathContent(text)) {
+        return ContentType.MATH_HEAVY
+    }
+    
+    // 默认使用正常内边距
+    return ContentType.SIMPLE
+}
+
+private fun hasMathContent(text: String): Boolean {
+    return text.contains("$$") || // LaTeX块级公式
+            text.contains("$") && text.count { it == '$' } >= 2 || // LaTeX行内公式
+            text.contains("\\begin{") || // LaTeX环境
+            text.contains("\\frac") || // 分数
+            text.contains("\\sum") || // 求和
+            text.contains("\\int") || // 积分
+            text.contains("\\sqrt") || // 根号
+            text.contains("\\alpha") || // 希腊字母
+            text.contains("\\beta") ||
+            text.contains("\\gamma") ||
+            text.contains("\\delta") ||
+            text.contains("\\pi") ||
+            text.contains("\\theta") ||
+            text.contains("\\lambda")
+}
+
+
 @Composable
-private fun AiMessageItem(
+fun AiMessageItem(
     message: Message,
     text: String,
     maxWidth: Dp,
@@ -339,12 +382,7 @@ private fun AiMessageItem(
     isStreaming: Boolean,
     messageOutputType: String
 ) {
-    val shape = RoundedCornerShape(
-        topStart = if (!hasReasoning) ChatDimensions.CORNER_RADIUS_LARGE else ChatDimensions.CORNER_RADIUS_SMALL,
-        topEnd = ChatDimensions.CORNER_RADIUS_LARGE,
-        bottomStart = ChatDimensions.CORNER_RADIUS_LARGE,
-        bottomEnd = ChatDimensions.CORNER_RADIUS_LARGE
-    )
+    val shape = RectangleShape
     val aiReplyMessageDescription = stringResource(id = R.string.ai_reply_message)
 
     Row(
@@ -359,7 +397,8 @@ private fun AiMessageItem(
     ) {
         Surface(
             modifier = Modifier
-                .fillMaxWidth()
+                .wrapContentWidth()
+                .widthIn(max = maxWidth) // 🎯 AI气泡最大宽度设置为100%
                 .semantics {
                     contentDescription = aiReplyMessageDescription
                 },
@@ -368,26 +407,21 @@ private fun AiMessageItem(
             contentColor = MaterialTheme.colorScheme.onSurface,
             shadowElevation = 0.dp
         ) {
+            // 🎯 智能动态内边距：根据内容类型决定内边距
+            val contentType = remember(message.text) {
+                detectContentTypeForPadding(message.text)
+            }
+            val needsZeroPadding = contentType == ContentType.MATH_HEAVY
+            
             Box(
                 modifier = Modifier
                     .padding(
-                        horizontal = ChatDimensions.BUBBLE_INNER_PADDING_HORIZONTAL,
-                        vertical = ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL
+                        horizontal = if (needsZeroPadding) 0.dp else ChatDimensions.BUBBLE_INNER_PADDING_HORIZONTAL,
+                        vertical = if (needsZeroPadding) 0.dp else ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL
                     )
             ) {
-                var parts by remember { mutableStateOf<List<com.example.everytalk.ui.components.MarkdownPart>>(emptyList()) }
-
-                LaunchedEffect(text, isStreaming) {
-                    if (isStreaming) {
-                        delay(100L) // 流式输出时节流，每100ms解析一次
-                    }
-                    parts = parseMarkdownParts(normalizeBasicMarkdown(text))
-                }
-
                 EnhancedMarkdownText(
-                    parts = parts,
-                    rawMarkdown = text,
-                    messageId = message.id,
+                    message = message,
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurface,
                     isStreaming = isStreaming,
@@ -400,7 +434,7 @@ private fun AiMessageItem(
 }
 
 @Composable
-private fun AiMessageFooterItem(
+fun AiMessageFooterItem(
     message: Message,
     viewModel: AppViewModel,
 ) {

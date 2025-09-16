@@ -12,11 +12,11 @@ sealed class AppStreamEvent {
 
     @Serializable
     @SerialName("content")
-    data class Content(val text: String, val output_type: String? = null) : AppStreamEvent()
+    data class Content(val text: String, val output_type: String? = null, val block_type: String? = null) : AppStreamEvent()
     
     @Serializable
     @SerialName("content_final")
-    data class ContentFinal(val text: String) : AppStreamEvent()
+    data class ContentFinal(val text: String, val output_type: String? = null, val block_type: String? = null) : AppStreamEvent()
 
     @Serializable
     @SerialName("reasoning")

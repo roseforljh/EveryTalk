@@ -65,11 +65,19 @@ object ApiClient {
             return when (type) {
                 "content" -> {
                     val text = jsonObject["text"]?.jsonPrimitive?.content ?: ""
-                    AppStreamEvent.Content(text)
+                    val outputType = jsonObject["output_type"]?.jsonPrimitive?.content
+                    val blockType = jsonObject["block_type"]?.jsonPrimitive?.content
+                    AppStreamEvent.Content(text, outputType, blockType)
                 }
                 "text" -> {
                     val text = jsonObject["text"]?.jsonPrimitive?.content ?: ""
                     AppStreamEvent.Text(text)
+                }
+                "content_final" -> {
+                    val text = jsonObject["text"]?.jsonPrimitive?.content ?: ""
+                    val outputType = jsonObject["output_type"]?.jsonPrimitive?.content
+                    val blockType = jsonObject["block_type"]?.jsonPrimitive?.content
+                    AppStreamEvent.ContentFinal(text, outputType, blockType)
                 }
                 "reasoning" -> {
                     val text = jsonObject["text"]?.jsonPrimitive?.content ?: ""
@@ -153,6 +161,7 @@ object ApiClient {
                 polymorphic(AppStreamEvent::class) {
                     subclass(AppStreamEvent.Text::class)
                     subclass(AppStreamEvent.Content::class)
+                    subclass(AppStreamEvent.ContentFinal::class)
                     subclass(AppStreamEvent.Reasoning::class)
                     subclass(AppStreamEvent.StreamEnd::class)
                     subclass(AppStreamEvent.WebSearchStatus::class)
@@ -222,6 +231,15 @@ object ApiClient {
 
 
 
+
+    private fun buildFinalUrl(baseAddress: String, defaultPath: String): String {
+        val trimmedAddress = baseAddress.trim()
+        return when {
+            trimmedAddress.endsWith("#") -> trimmedAddress.removeSuffix("#")
+            trimmedAddress.endsWith("/") -> trimmedAddress.removeSuffix("/")
+            else -> trimmedAddress.removeSuffix("/") + defaultPath
+        }
+    }
 
     private fun getFileNameFromUri(context: Context, uri: Uri): String {
         var fileName: String? = null
@@ -298,10 +316,11 @@ object ApiClient {
 
                             is SelectedMediaItem.ImageFromBitmap -> {
                                 fileUri = null
+                                val bitmap = mediaItem.bitmap
                                 originalFileNameFromMediaItem =
-                                    "bitmap_image_$index.${if (mediaItem.bitmap.hasAlpha()) "png" else "jpeg"}"
+                                    "bitmap_image_$index.${if (bitmap?.hasAlpha() == true) "png" else "jpeg"}"
                                 mimeTypeFromMediaItem =
-                                    if (mediaItem.bitmap.hasAlpha()) ContentType.Image.PNG.toString() else ContentType.Image.JPEG.toString()
+                                    if (bitmap?.hasAlpha() == true) ContentType.Image.PNG.toString() else ContentType.Image.JPEG.toString()
                             }
                             is SelectedMediaItem.Audio -> {
                                 fileUri = null
@@ -561,10 +580,10 @@ object ApiClient {
             if (base.endsWith("/chat/v1/images/generations")) {
                 base = base.removeSuffix("/chat/v1/images/generations").trimEnd('/')
             }
-            val backendProxyUrl = "$base/chat"
+            val backendProxyUrl = buildFinalUrl(base, "/chat")
 
             try {
-                android.util.Log.d("ApiClient", "尝试连接后端: $backendProxyUrl")
+                android.util.Log.d("ApiClient", "尝试连接后端: $backendProxyUrl (原始地址: $raw)")
                 streamChatResponseInternal(backendProxyUrl, request, attachments, applicationContext)
                     .collect { event ->
                         send(event)
@@ -656,7 +675,8 @@ object ApiClient {
             throw IllegalStateException("ApiClient not initialized. Call initialize() first.")
         }
 
-        val url = apiUrl.removeSuffix("/") + "/v1/models"
+        val url = buildFinalUrl(apiUrl, "/v1/models")
+        android.util.Log.d("ApiClient", "获取模型列表 - 原始URL: '$apiUrl', 处理后URL: '$url'")
 
         return try {
             val response = client.get {

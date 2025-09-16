@@ -2,6 +2,7 @@ package com.example.everytalk.statecontroller
 
 import android.util.Log
 import com.example.everytalk.data.DataClass.Message
+import com.example.everytalk.data.DataClass.Sender
 import com.example.everytalk.ui.screens.viewmodel.DataPersistenceManager
 import com.example.everytalk.ui.screens.viewmodel.HistoryManager
 import kotlinx.coroutines.CoroutineScope
@@ -86,6 +87,10 @@ class SimpleModeManager(
         // 2. 清理图像模式状态
         clearImageApiState()
         
+        // 🎯 增强会话隔离：清理图像模式的所有资源
+        val currentImageSessionId = stateHolder._currentImageGenerationConversationId.value
+        stateHolder.getApiHandler().clearImageChatResources(currentImageSessionId)
+        
         // 3. 强制清除图像模式的历史记录索引，确保完全独立
         stateHolder._loadedImageGenerationHistoryIndex.value = null
         stateHolder.imageGenerationMessages.clear()
@@ -129,6 +134,10 @@ class SimpleModeManager(
         
         // 2. 清理文本模式状态
         clearTextApiState()
+        
+        // 🎯 增强会话隔离：清理文本模式的所有资源
+        val currentTextSessionId = stateHolder._currentConversationId.value
+        stateHolder.getApiHandler().clearTextChatResources(currentTextSessionId)
         
         // 3. 强制清除文本模式的历史记录索引，确保完全独立
         stateHolder._loadedHistoryIndex.value = null
@@ -218,9 +227,20 @@ class SimpleModeManager(
         Log.d(TAG, "🔥 [STEP 6] After clear - messages.size: ${stateHolder.messages.size}")
         
         // 处理消息：设置 contentStarted 状态并添加到列表
+        // 🎯 强制对加载的历史消息进行最终处理，确保parts被填充
         val processedMessages = conversationToLoad.map { msg ->
-            val updatedContentStarted = msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || msg.isError
-            msg.copy(contentStarted = updatedContentStarted)
+            if (msg.sender == Sender.AI && msg.parts.isEmpty() && msg.text.isNotBlank()) {
+                // 🎯 使用新的MessageProcessor创建方式，增强会话隔离
+                val sessionId = stateHolder._currentConversationId.value
+                val tempProcessor = com.example.everytalk.util.messageprocessor.MessageProcessor()
+                tempProcessor.initialize(sessionId, msg.id)
+                tempProcessor.finalizeMessageProcessing(msg)
+            } else {
+                msg
+            }
+        }.map { msg ->
+             val updatedContentStarted = msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || msg.isError
+             msg.copy(contentStarted = updatedContentStarted)
         }
         
         // 添加处理后的消息

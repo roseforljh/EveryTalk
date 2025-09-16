@@ -1,8 +1,11 @@
 package com.example.everytalk.data.DataClass
 import android.net.Uri
 import com.example.everytalk.models.SelectedMediaItem
+import com.example.everytalk.ui.components.MarkdownPart
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import java.util.UUID
+import com.example.everytalk.ui.components.MarkdownPartSerializer
 
 @Serializable
 enum class Sender {
@@ -35,7 +38,9 @@ data class Message(
     val currentWebSearchStage: String? = null,
     val imageUrls: List<String>? = null,
     val attachments: List<SelectedMediaItem> = emptyList(),
-    val outputType: String = "general"
+    val outputType: String = "general",
+    @Serializable(with = MarkdownPartSerializer::class)
+    val parts: List<MarkdownPart> = emptyList()
 ) : IMessage {
     // 实现IMessage接口的role属性
     override val role: String

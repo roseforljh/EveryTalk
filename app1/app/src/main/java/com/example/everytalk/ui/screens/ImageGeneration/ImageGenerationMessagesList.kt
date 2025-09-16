@@ -45,7 +45,7 @@ import com.example.everytalk.ui.theme.ChatDimensions
 import com.example.everytalk.ui.theme.chatColors
 import com.example.everytalk.ui.components.EnhancedMarkdownText
 import com.example.everytalk.ui.components.normalizeMarkdownGlyphs
-import com.example.everytalk.ui.components.parseMarkdownParts
+import com.example.everytalk.util.messageprocessor.parseMarkdownParts
 import kotlinx.coroutines.launch
 
 @Composable
@@ -402,10 +402,8 @@ private fun AiMessageItem(
             ) {
                 Column {
                     if (text.isNotBlank()) {
-                        val parts = remember(text) { parseMarkdownParts(normalizeMarkdownGlyphs(text)) }
                         EnhancedMarkdownText(
-                            parts = parts,
-                            rawMarkdown = text,
+                            message = message,
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurface,
                             isStreaming = isStreaming,
@@ -422,7 +420,7 @@ private fun AiMessageItem(
                             onAttachmentClick = { att ->
                                 when (att) {
                                     is SelectedMediaItem.ImageFromUri -> onOpenPreview(att.uri)
-                                    is SelectedMediaItem.ImageFromBitmap -> onOpenPreview(att.bitmap)
+                                    is SelectedMediaItem.ImageFromBitmap -> att.bitmap?.let { onOpenPreview(it) }
                                     else -> { /* ignore */ }
                                 }
                             },

@@ -502,12 +502,14 @@ internal fun AddNewFullConfigDialog(
                             modifier = Modifier.padding(start = 12.dp, bottom = 4.dp)
                         )
                     }
-                    Text(
-                        text = "用法: 末尾#：直连 ； 末尾/：不加v1 ； 仅域名自动加v1",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(start = 12.dp, bottom = 12.dp)
-                    )
+                    if (selectedChannel == "OpenAI兼容") {
+                        Text(
+                            text = "用法: 末尾#：直连 ； 末尾/：不加v1 ； 仅域名自动加v1",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 12.dp, bottom = 12.dp)
+                        )
+                    }
                 }
                 OutlinedTextField(
                     value = apiKey,
@@ -629,12 +631,14 @@ internal fun EditConfigDialog(
                             modifier = Modifier.padding(start = 12.dp, bottom = 4.dp)
                         )
                     }
-                    Text(
-                        text = "用法: 末尾#：直连 ； 末尾/：不加v1 ； 仅域名自动加v1",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(start = 12.dp, bottom = 12.dp)
-                    )
+                    if (selectedChannel == "OpenAI兼容") {
+                        Text(
+                            text = "用法: 末尾#：直连 ； 末尾/：不加v1 ； 仅域名自动加v1",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 12.dp, bottom = 12.dp)
+                        )
+                    }
                 }
                 OutlinedTextField(
                     value = apiKey,
