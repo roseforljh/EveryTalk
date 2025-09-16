@@ -213,10 +213,47 @@ internal fun parseMarkdownParts(markdown: String, inTableContext: Boolean = fals
 private fun preprocessMarkdownForAndroid(markdown: String): String {
     if (markdown.isEmpty()) return markdown
     
-    return markdown
+    // 🎯 第一步：标准化换行，保护LaTeX公式
+    var processed = markdown
+        .replace("\r\n", "\n")  // 统一换行符
+        .replace("\r", "\n")   // 处理旧Mac换行
+    
+    // 🎯 第二步：保护LaTeX公式不被换行影响
+    // 临时替换LaTeX公式为占位符，避免换行干扰
+    val latexPlaceholders = mutableMapOf<String, String>()
+    var placeholderIndex = 0
+    
+    // 保护 $$...$$
+    processed = processed.replace(Regex("\\$\\$([\\s\\S]*?)\\$\\$")) { match ->
+        val placeholder = "__LATEX_DISPLAY_${placeholderIndex++}__"
+        latexPlaceholders[placeholder] = match.value
+        placeholder
+    }
+    
+    // 保护 $...$
+    processed = processed.replace(Regex("\\$([^\\$\\n]+?)\\$")) { match ->
+        val placeholder = "__LATEX_INLINE_${placeholderIndex++}__"
+        latexPlaceholders[placeholder] = match.value
+        placeholder
+    }
+    
+    // 保护 \[...\]
+    processed = processed.replace(Regex("\\\\\\[([\\s\\S]*?)\\\\\\]")) { match ->
+        val placeholder = "__LATEX_BRACKET_${placeholderIndex++}__"
+        latexPlaceholders[placeholder] = match.value
+        placeholder
+    }
+    
+    // 保护 \(...\)
+    processed = processed.replace(Regex("\\\\\\(([^\\)]+?)\\\\\\)")) { match ->
+        val placeholder = "__LATEX_PAREN_${placeholderIndex++}__"
+        latexPlaceholders[placeholder] = match.value
+        placeholder
+    }
+    
+    // 🎯 第三步：处理Markdown格式规范化
+    processed = processed
         .replace(Regex("(?m)^(#{1,6})([^#\\s])")) { "${it.groupValues[1]} ${it.groupValues[2]}" }
-        .replace(Regex("([^\\n])\\$\\$")) { "${it.groupValues[1]}\n$$" }
-        .replace(Regex("\\$\\$([^\\n])")) { "$$\n${it.groupValues[1]}" }
         .replace('＊', '*')
         .replace('﹡', '*')
         .replace('｜', '|')
@@ -239,4 +276,11 @@ private fun preprocessMarkdownForAndroid(markdown: String): String {
         .replace("\u200C", "")
         .replace("\u200D", "")
         .replace("\uFEFF", "")
+    
+    // 🎯 第四步：恢复LaTeX公式
+    latexPlaceholders.forEach { (placeholder, original) ->
+        processed = processed.replace(placeholder, original)
+    }
+    
+    return processed
 }

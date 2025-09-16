@@ -106,7 +106,7 @@ fun EnhancedMarkdownText(
                                 inline = !part.displayMode,
                                 color = textColor,
                                 style = style,
-                                modifier = if (part.displayMode) Modifier.fillMaxWidth().padding(vertical = 6.dp) else Modifier.wrapContentWidth()
+                                modifier = if (part.displayMode) Modifier.fillMaxWidth().padding(vertical = 2.dp) else Modifier.wrapContentWidth().padding(vertical = 0.dp)
                             )
                         }
                         else -> {
@@ -170,14 +170,15 @@ private fun LatexMath(
                         <style>
                             body { 
                                 margin: 0; 
-                                padding: 4px; 
+                                padding: 2px; 
                                 background: transparent; 
                                 font-family: 'Times New Roman', serif;
                                 font-size: ${fontSize}px;
                                 color: $colorHex;
+                                line-height: 1.0;
                             }
-                            .math-inline { display: inline-block; vertical-align: middle; }
-                            .math-display { display: block; text-align: center; margin: 8px 0; }
+                            .math-inline { display: inline-block; vertical-align: middle; margin: 0; padding: 0; }
+                            .math-display { display: block; text-align: center; margin: 2px 0; padding: 0; }
                             .superscript { vertical-align: super; font-size: 0.8em; }
                             .subscript { vertical-align: sub; font-size: 0.8em; }
                             .fraction { display: inline-block; vertical-align: middle; }
@@ -210,6 +211,9 @@ private fun LatexMath(
                                 result = result.replace(/\\\\infty/g, '∞');
                                 result = result.replace(/\\\\int/g, '∫');
                                 result = result.replace(/\\\\sum/g, 'Σ');
+                                result = result.replace(/\\\\dots/g, '…');
+                                result = result.replace(/\\\\ldots/g, '…');
+                                result = result.replace(/\\\\cdots/g, '⋯');
                                 return result;
                             }
                             document.addEventListener('DOMContentLoaded', function() {
@@ -302,8 +306,8 @@ private fun LatexMath(
             }
         },
         modifier = modifier.then(
-            if (inline) Modifier.wrapContentHeight()
-            else Modifier.fillMaxWidth().padding(vertical = 4.dp)
+            if (inline) Modifier.wrapContentHeight().padding(vertical = 0.dp)
+            else Modifier.fillMaxWidth().padding(vertical = 2.dp)
         )
     )
 }

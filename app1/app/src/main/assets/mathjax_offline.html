@@ -68,6 +68,13 @@
             // 处理无穷大 \infty
             result = result.replace(/\\infty/g, '∞');
             
+            // 处理省略号 \dots, \ldots, \cdots
+            result = result.replace(/\\dots/g, '…');
+            result = result.replace(/\\ldots/g, '…');
+            result = result.replace(/\\cdots/g, '⋯');
+            result = result.replace(/\\vdots/g, '⋮');
+            result = result.replace(/\\ddots/g, '⋱');
+            
             // 处理希腊字母
             result = result.replace(/\\theta/g, 'θ');
             result = result.replace(/\\pi/g, 'π');
