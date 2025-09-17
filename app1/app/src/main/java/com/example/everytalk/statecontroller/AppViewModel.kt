@@ -15,6 +15,10 @@ import com.example.everytalk.ui.components.ConversationLoadManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import coil3.ImageLoader
+import coil3.memory.MemoryCache
+import coil3.disk.DiskCache
+import coil3.util.DebugLogger
+import okio.Path.Companion.toPath
 import com.example.everytalk.data.DataClass.ApiConfig
 import com.example.everytalk.data.DataClass.GithubRelease
 import com.example.everytalk.data.DataClass.Message
@@ -28,6 +32,7 @@ import com.example.everytalk.ui.screens.MainScreen.chat.ChatListItem
 import com.example.everytalk.ui.screens.viewmodel.ConfigManager
 import com.example.everytalk.ui.screens.viewmodel.DataPersistenceManager
 import com.example.everytalk.ui.screens.viewmodel.HistoryManager
+import com.example.everytalk.util.CacheManager
 import com.example.everytalk.util.VersionChecker
 import java.util.UUID
 import android.content.ContentValues
@@ -86,12 +91,17 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         ignoreUnknownKeys = true
     }
 
+    // 高级缓存管理器
+    private val cacheManager by lazy { CacheManager.getInstance(application.applicationContext) }
+    
     private val messagesMutex = Mutex()
     private val historyMutex = Mutex()
     private val textConversationPreviewCache = LruCache<Int, String>(100)
     private val imageConversationPreviewCache = LruCache<Int, String>(100)
     internal val stateHolder = ViewModelStateHolder()
-    private val imageLoader = ImageLoader.Builder(application.applicationContext).build()
+    private val imageLoader = ImageLoader.Builder(application.applicationContext)
+        .logger(DebugLogger())
+        .build()
     private val persistenceManager =
             DataPersistenceManager(
                     application.applicationContext,
@@ -371,6 +381,12 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             // 历史数据加载完成后的处理
             if (initialHistoryPresent) {
                 Log.d("AppViewModel", "历史数据已加载，共 ${stateHolder._historicalConversations.value.size} 条对话")
+                
+                // 预热缓存系统
+                viewModelScope.launch(Dispatchers.Default) {
+                    delay(1000) // 延迟预热，避免影响启动性能
+                    initializeCacheWarmup()
+                }
             }
         }
 
@@ -382,6 +398,14 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             configManager
             messageSender
             stateHolder.setApiHandler(apiHandler)
+        }
+        
+        // 启动缓存维护任务
+        viewModelScope.launch {
+            while (true) {
+                delay(60_000) // 每分钟检查一次
+                cacheManager.smartCleanup()
+            }
         }
 
         // 清理任务
@@ -1531,25 +1555,34 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     }
 
     fun getConversationPreviewText(index: Int, isImageGeneration: Boolean = false): String {
-        val cache = if (isImageGeneration) imageConversationPreviewCache else textConversationPreviewCache
-        val cachedPreview = cache.get(index)
-        if (cachedPreview != null) return cachedPreview
-
+        // 使用高级缓存管理器
         val conversationList = if (isImageGeneration) {
             stateHolder._imageGenerationHistoricalConversations.value
         } else {
             stateHolder._historicalConversations.value
         }
-
-        val conversation = conversationList.getOrNull(index)
-            ?: return "对话 ${index + 1}".also {
-                cache.put(index, it)
-            }
-
-        val newPreview = conversation.firstOrNull { it.text.isNotBlank() }?.text?.trim() ?: "对话 ${index + 1}"
-
-        cache.put(index, newPreview)
-        return newPreview
+        
+        val conversation = conversationList.getOrNull(index) ?: return "对话 ${index + 1}"
+        
+        // 异步生成和缓存预览
+        viewModelScope.launch {
+            val conversationId = "${if (isImageGeneration) "img" else "txt"}_$index"
+            val preview = cacheManager.getConversationPreview(conversationId, conversation, isImageGeneration)
+            
+            // 更新原有缓存以保持兼容性
+            val cache = if (isImageGeneration) imageConversationPreviewCache else textConversationPreviewCache
+            cache.put(index, preview)
+        }
+        
+        // 立即返回缓存的预览或默认值
+        val cache = if (isImageGeneration) imageConversationPreviewCache else textConversationPreviewCache
+        return cache.get(index) ?: run {
+            // 快速生成临时预览
+            val quickPreview = conversation.firstOrNull { it.text.isNotBlank() }?.text?.trim()?.take(30) 
+                ?: "对话 ${index + 1}"
+            cache.put(index, quickPreview)
+            quickPreview
+        }
     }
 
     fun renameConversation(index: Int, newName: String, isImageGeneration: Boolean = false) {
@@ -2055,7 +2088,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             val inputStream = getApplication<Application>().contentResolver.openInputStream(uri)
             inputStream?.use { stream ->
                 val bytes = stream.readBytes()
-                android.util.Base64.encodeToString(bytes, android.util.Base64.DEFAULT)
+                android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
             }
         } catch (e: Exception) {
             Log.e("AppViewModel", "Failed to encode URI to Base64: $uri", e)
@@ -2120,5 +2153,63 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 else -> true
             }
         }
+    }
+    
+    /**
+     * 初始化缓存预热
+     */
+    private suspend fun initializeCacheWarmup() {
+        try {
+            val textHistory = stateHolder._historicalConversations.value
+            val imageHistory = stateHolder._imageGenerationHistoricalConversations.value
+            
+            // 预热会话预览缓存
+            cacheManager.warmupCache(textHistory + imageHistory)
+            
+            Log.d("AppViewModel", "缓存预热完成 - 文本会话: ${textHistory.size}, 图像会话: ${imageHistory.size}")
+        } catch (e: Exception) {
+            Log.w("AppViewModel", "缓存预热失败", e)
+        }
+    }
+    
+    /**
+     * 获取缓存统计信息（用于调试）
+     */
+    fun getCacheStats(): String {
+        val stats = cacheManager.getCacheStats()
+        val textStats = com.example.everytalk.ui.performance.OptimizedTextProcessor.getCacheStats()
+        
+        return """
+            |总体缓存命中率: ${"%.1f".format(stats.overallHitRate * 100)}%
+            |会话预览缓存: ${stats.conversationPreviewHits}/${stats.conversationPreviewHits + stats.conversationPreviewMisses}
+            |消息内容缓存: ${stats.messageContentHits}/${stats.messageContentHits + stats.messageContentMisses}
+            |Markdown缓存: ${stats.markdownHits}/${stats.markdownHits + stats.markdownMisses}
+            |API响应缓存: ${stats.apiResponseSize}
+            |文本处理缓存: ${textStats.textCacheSize} (命中率: ${"%.1f".format(textStats.textCacheHitRate * 100)}%)
+            |总缓存条目: ${stats.totalCacheSize}
+        """.trimMargin()
+    }
+    
+    /**
+     * 清理所有缓存
+     */
+    fun clearAllCaches() {
+        viewModelScope.launch {
+            cacheManager.clearAllCaches()
+            com.example.everytalk.ui.performance.OptimizedTextProcessor.clearCache()
+            
+            // 清理原有的预览缓存
+            textConversationPreviewCache.evictAll()
+            imageConversationPreviewCache.evictAll()
+            
+            Log.d("AppViewModel", "所有缓存已清理")
+        }
+    }
+    
+    override fun onCleared() {
+        super.onCleared()
+        // 清理缓存管理器
+        cacheManager.cleanup()
+        Log.d("AppViewModel", "ViewModel cleared, cache manager cleaned up")
     }
 }

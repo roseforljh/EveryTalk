@@ -260,17 +260,111 @@ private fun preprocessMarkdownForAndroid(markdown: String): String {
         .replace('│', '|')
         .replace('┃', '|')
         .let { content ->
-            content.lines().joinToString("\n") { line ->
-                when {
-                    line.contains("|") && !line.trim().startsWith("|") && !line.trim().startsWith("```") -> {
-                        if (line.trim().endsWith("|")) "| ${line.trim()}" else "| ${line.trim()} |"
+            val lines = content.lines()
+            val processedLines = mutableListOf<String>()
+            var inTable = false
+            var tableStartIndex = -1
+            
+            // 预处理：检测所有可能的表格行
+            val tableLines = mutableSetOf<Int>()
+            for (i in lines.indices) {
+                val line = lines[i].trim()
+                val containsPipe = line.contains("|")
+                val isCodeBlock = line.startsWith("```")
+                
+                if (containsPipe && !isCodeBlock) {
+                    val nextLineIndex = i + 1
+                    if (nextLineIndex < lines.size) {
+                        val nextLine = lines[nextLineIndex].trim()
+                        if (nextLine.matches(Regex("^\\|?\\s*:?[-]{3,}:?\\s*(\\|\\s*:?[-]{3,}:?\\s*)+\\|?$"))) {
+                            // 这是表格开始，标记从这里开始的所有相关行
+                            var j = i
+                            while (j < lines.size) {
+                                val currentLine = lines[j].trim()
+                                if (currentLine.startsWith("```") || 
+                                    (currentLine.isEmpty() && j < lines.size - 1 && 
+                                     !lines[j + 1].trim().contains("|"))) {
+                                    break
+                                }
+                                if (currentLine.isNotEmpty()) {
+                                    tableLines.add(j)
+                                }
+                                j++
+                            }
+                        }
                     }
-                    line.contains("|") && line.trim().startsWith("|") && !line.trim().endsWith("|") -> {
-                        "${line.trim()} |"
-                    }
-                    else -> line
                 }
             }
+            
+            for (i in lines.indices) {
+                val line = lines[i].trim()
+                val containsPipe = line.contains("|")
+                val isCodeBlock = line.startsWith("```")
+                val isTableLine = tableLines.contains(i)
+                
+                // Detect table start/end based on pre-analysis
+                if (isTableLine && !inTable) {
+                    inTable = true
+                    tableStartIndex = i
+                } else if (inTable && !isTableLine && !line.isEmpty()) {
+                    inTable = false
+                }
+                
+                // Process line based on context
+                when {
+                    isCodeBlock -> processedLines.add(lines[i])
+                    isTableLine || inTable -> {
+                        // In table context - ensure proper pipe formatting
+                        if (containsPipe) {
+                            val trimmed = line
+                            when {
+                                !trimmed.startsWith("|") && !trimmed.endsWith("|") -> {
+                                    processedLines.add("| $trimmed |")
+                                }
+                                !trimmed.startsWith("|") && trimmed.endsWith("|") -> {
+                                    processedLines.add("| $trimmed")
+                                }
+                                trimmed.startsWith("|") && !trimmed.endsWith("|") -> {
+                                    processedLines.add("$trimmed |")
+                                }
+                                else -> processedLines.add(trimmed)
+                            }
+                        } else if (line.isNotEmpty()) {
+                            // Non-pipe line in table context - add it as a table row
+                            processedLines.add("| $line |")
+                        } else {
+                            processedLines.add(lines[i])
+                        }
+                    }
+                    containsPipe && !isCodeBlock -> {
+                        // Standalone line with pipes (not in detected table)
+                        val trimmed = line
+                        when {
+                            !trimmed.startsWith("|") && !trimmed.endsWith("|") -> {
+                                processedLines.add("| $trimmed |")
+                            }
+                            !trimmed.startsWith("|") && trimmed.endsWith("|") -> {
+                                processedLines.add("| $trimmed")
+                            }
+                            trimmed.startsWith("|") && !trimmed.endsWith("|") -> {
+                                processedLines.add("$trimmed |")
+                            }
+                            else -> processedLines.add(trimmed)
+                        }
+                    }
+                    else -> processedLines.add(lines[i])
+                }
+            }
+            
+            // 将行合并为文本，并在表格出现在文末时补一个换行，防止最后单元格内容被挤出表格
+            val joined = processedLines.joinToString("\n")
+            val needsNewlineAtEOF = run {
+                val sepRegex = Regex("^\\|?\\s*:?[-]{3,}:?\\s*(\\|\\s*:?[-]{3,}:?\\s*)+\\|?$")
+                val hadSeparator = processedLines.any { sepRegex.containsMatchIn(it.trim()) }
+                val last = processedLines.lastOrNull()?.trim() ?: ""
+                hadSeparator && (last.contains('|') || tableLines.contains(lines.size - 1)) && !last.startsWith("```")
+            }
+            if (needsNewlineAtEOF) "$joined\n" else joined
         }
         .replace("\u200B", "")
         .replace("\u200C", "")

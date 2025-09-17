@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(C:\\Users\\33039\\Desktop\\anyaitotalked\\backdAiTalk\\eztalk_proxy\\api/**)",
+      "Read(C:\\Users\\33039\\Desktop\\anyaitotalked\\backdAiTalk\\eztalk_proxy\\services/**)",
+      "Read(C:\\Users\\33039\\Desktop\\anyaitotalked\\backdAiTalk\\eztalk_proxy\\models/**)",
+      "Read(C:\\Users\\33039\\Desktop\\anyaitotalked\\backdAiTalk/**)",
+      "Read(C:\\Users\\33039\\Desktop\\anyaitotalked\\backdAiTalk\\eztalk_proxy\\models/**)",
+      "Read(C:\\Users\\33039\\Desktop\\anyaitotalked\\backdAiTalk\\eztalk_proxy\\models/**)",
+      "Read(C:\\Users\\33039\\Desktop\\anyaitotalked\\backdAiTalk\\eztalk_proxy/**)",
+      "Read(C:\\Users\\33039\\Desktop\\anyaitotalked\\backdAiTalk\\eztalk_proxy/**)",
+      "Read(C:\\Users\\33039\\Desktop\\anyaitotalked\\backdAiTalk\\eztalk_proxy\\models/**)",
+      "Read(C:\\Users\\33039\\Desktop\\anyaitotalked\\backdAiTalk\\eztalk_proxy\\models/**)",
+      "Bash(./gradlew:*)",
+      "Bash(git restore:*)",
+      "Bash(git log:*)",
+      "Bash(python:*)",
+      "Bash(pip install:*)"
+    ],
+    "deny": [],
+    "ask": [],
+    "additionalDirectories": [
+      "C:\\Users\\33039\\Desktop\\anyaitotalked\\backdAiTalk"
+    ]
+  }
+}

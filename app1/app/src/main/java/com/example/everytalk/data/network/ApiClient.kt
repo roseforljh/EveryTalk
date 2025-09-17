@@ -213,7 +213,9 @@ object ApiClient {
                     socketTimeoutMillis = 300_000
                 }
                 install(HttpCache) {
+                    // 更积极的缓存策略
                     publicStorage(FileStorage(cacheFile))
+                    privateStorage(FileStorage(File(context.cacheDir, "ktor_private_cache")))
                 }
                 // 添加更详细的日志记录
                 install(io.ktor.client.plugins.logging.Logging) {

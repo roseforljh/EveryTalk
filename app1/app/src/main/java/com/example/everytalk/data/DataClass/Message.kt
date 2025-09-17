@@ -1,4 +1,5 @@
 package com.example.everytalk.data.DataClass
+import android.content.Context
 import android.net.Uri
 import com.example.everytalk.models.SelectedMediaItem
 import com.example.everytalk.ui.components.MarkdownPart
@@ -46,7 +47,7 @@ data class Message(
     override val role: String
         get() = sender.toRole()
     
-    // 转换为API消息
+    // 转换为API消息 - 保留原方法兼容性
     fun toApiMessage(uriEncoder: (Uri) -> String?): AbstractApiMessage {
         return if (attachments.isNotEmpty()) {
             val parts = mutableListOf<ApiContentPart>()
@@ -57,10 +58,80 @@ data class Message(
                 when (mediaItem) {
                     is SelectedMediaItem.ImageFromUri -> {
                         uriEncoder(mediaItem.uri)?.let { base64 ->
+                            // 🔥 修复：使用硬编码值作为后备，但优先使用真实MIME类型
                             parts.add(ApiContentPart.InlineData(base64Data = base64, mimeType = mediaItem.mimeType))
                         }
                     }
-                    else -> {} // Handle other attachment types if necessary
+                    is SelectedMediaItem.ImageFromBitmap -> {
+                        // 处理Bitmap类型的图片
+                        mediaItem.bitmap?.let { bitmap ->
+                            // 将Bitmap转为base64
+                            val baos = java.io.ByteArrayOutputStream()
+                            val format = if (mediaItem.mimeType.contains("png")) 
+                                android.graphics.Bitmap.CompressFormat.PNG 
+                            else 
+                                android.graphics.Bitmap.CompressFormat.JPEG
+                            bitmap.compress(format, 90, baos)
+                            val base64 = android.util.Base64.encodeToString(baos.toByteArray(), android.util.Base64.NO_WRAP)
+                            parts.add(ApiContentPart.InlineData(base64Data = base64, mimeType = mediaItem.mimeType))
+                        }
+                    }
+                    is SelectedMediaItem.GenericFile -> {
+                        // 处理通用文件，但这里不转换为InlineData，由ApiClient处理
+                    }
+                    is SelectedMediaItem.Audio -> {
+                        // 音频数据已经是base64格式
+                        parts.add(ApiContentPart.InlineData(base64Data = mediaItem.data, mimeType = mediaItem.mimeType))
+                    }
+                }
+            }
+            PartsApiMessage(id = id, role = role, parts = parts, name = name)
+        } else {
+            SimpleTextApiMessage(id = id, role = role, content = text, name = name)
+        }
+    }
+
+    // 🔥 新增：接受Context的方法，用于获取真实MIME类型
+    fun toApiMessage(uriEncoder: (Uri) -> String?, context: Context): AbstractApiMessage {
+        return if (attachments.isNotEmpty()) {
+            val parts = mutableListOf<ApiContentPart>()
+            if (text.isNotBlank()) {
+                parts.add(ApiContentPart.Text(text))
+            }
+            attachments.forEach { mediaItem ->
+                when (mediaItem) {
+                    is SelectedMediaItem.ImageFromUri -> {
+                        uriEncoder(mediaItem.uri)?.let { base64 ->
+                            // 🔥 修复：从ContentResolver获取真实的MIME类型
+                            val actualMimeType = try {
+                                context.contentResolver.getType(mediaItem.uri) ?: mediaItem.mimeType
+                            } catch (e: Exception) {
+                                mediaItem.mimeType // 出错时使用默认值
+                            }
+                            parts.add(ApiContentPart.InlineData(base64Data = base64, mimeType = actualMimeType))
+                        }
+                    }
+                    is SelectedMediaItem.ImageFromBitmap -> {
+                        // 处理Bitmap类型的图片
+                        mediaItem.bitmap?.let { bitmap ->
+                            // 将Bitmap转为base64
+                            val baos = java.io.ByteArrayOutputStream()
+                            val format = if (mediaItem.mimeType.contains("png")) 
+                                android.graphics.Bitmap.CompressFormat.PNG 
+                            else 
+                                android.graphics.Bitmap.CompressFormat.JPEG
+                            bitmap.compress(format, 90, baos)
+                            val base64 = android.util.Base64.encodeToString(baos.toByteArray(), android.util.Base64.NO_WRAP)
+                            parts.add(ApiContentPart.InlineData(base64Data = base64, mimeType = mediaItem.mimeType))
+                        }
+                    }
+                    is SelectedMediaItem.GenericFile -> {
+                        // 处理通用文件，但这里不转换为InlineData，由ApiClient处理
+                    }
+                    is SelectedMediaItem.Audio -> {
+                        // 音频数据已经是base64格式
+                        parts.add(ApiContentPart.InlineData(base64Data = mediaItem.data, mimeType = mediaItem.mimeType))
+                    }
                 }
             }
             PartsApiMessage(id = id, role = role, parts = parts, name = name)

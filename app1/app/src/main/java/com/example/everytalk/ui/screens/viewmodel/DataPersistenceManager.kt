@@ -331,6 +331,7 @@ class DataPersistenceManager(
                        }
                    }
 
+                   // 处理消息中的图片URL
                    message.imageUrls?.forEach { urlString ->
                        try {
                            val uri = Uri.parse(urlString)
@@ -350,9 +351,22 @@ class DataPersistenceManager(
                            }
                        }
                    }
+                   
+                   // 增强：处理消息中可能包含的其他媒体文件路径
+                   // 检查消息文本中是否包含本地文件路径
+                   val localFilePattern = Regex("file://[^\\s]+|/data/data/[^\\s]+|/storage/[^\\s]+")
+                   localFilePattern.findAll(message.text).forEach { match ->
+                       val filePath = match.value.removePrefix("file://")
+                       val file = File(filePath)
+                       if (file.exists() && (file.name.contains("chat_attachments") || 
+                           filePath.contains(context.filesDir.absolutePath))) {
+                           allFilePathsToDelete.add(filePath)
+                       }
+                   }
                }
            }
 
+           // 删除文件
            allFilePathsToDelete.forEach { path ->
                try {
                    val file = File(path)
@@ -373,7 +387,7 @@ class DataPersistenceManager(
                }
            }
 
-           // Also clear Coil disk cache for local file paths
+           // 清理图片缓存
            allFilePathsToDelete.forEach { path ->
                imageLoader.diskCache?.remove(path)
                imageLoader.diskCache?.remove("file://$path")
@@ -384,6 +398,63 @@ class DataPersistenceManager(
            }
 
            Log.d(TAG, "Finished media file deletion. Total files deleted: $deletedFilesCount")
+       }
+   }
+
+   /**
+    * 清理孤立的附件文件（已删除会话但文件仍存在的情况）
+    */
+   suspend fun cleanupOrphanedAttachments() {
+       withContext(Dispatchers.IO) {
+           try {
+               val chatAttachmentsDir = File(context.filesDir, "chat_attachments")
+               if (!chatAttachmentsDir.exists()) return@withContext
+
+               val allActiveFilePaths = mutableSetOf<String>()
+               
+               // 收集当前活跃会话中的所有文件路径
+               val textHistory = stateHolder._historicalConversations.value
+               val imageHistory = stateHolder._imageGenerationHistoricalConversations.value
+               val currentTextMessages = stateHolder.messages.toList()
+               val currentImageMessages = stateHolder.imageGenerationMessages.toList()
+               
+               listOf(textHistory, imageHistory, listOf(currentTextMessages), listOf(currentImageMessages))
+                   .flatten()
+                   .forEach { conversation ->
+                       conversation.forEach { message ->
+                           message.attachments.forEach { attachment ->
+                               val path = when (attachment) {
+                                   is SelectedMediaItem.ImageFromUri -> attachment.filePath
+                                   is SelectedMediaItem.GenericFile -> attachment.filePath
+                                   is SelectedMediaItem.Audio -> attachment.data
+                                   is SelectedMediaItem.ImageFromBitmap -> attachment.filePath
+                               }
+                               if (!path.isNullOrBlank()) {
+                                   allActiveFilePaths.add(path)
+                               }
+                           }
+                       }
+                   }
+
+               // 扫描附件目录，删除不在活跃文件列表中的文件
+               var orphanedCount = 0
+               chatAttachmentsDir.listFiles()?.forEach { file ->
+                   if (file.isFile && !allActiveFilePaths.contains(file.absolutePath)) {
+                       try {
+                           if (file.delete()) {
+                               Log.d(TAG, "Deleted orphaned file: ${file.absolutePath}")
+                               orphanedCount++
+                           }
+                       } catch (e: Exception) {
+                           Log.w(TAG, "Failed to delete orphaned file: ${file.absolutePath}", e)
+                       }
+                   }
+               }
+               
+               Log.i(TAG, "Cleanup completed. Deleted $orphanedCount orphaned files.")
+           } catch (e: Exception) {
+               Log.e(TAG, "Error during orphaned file cleanup", e)
+           }
        }
    }
 }

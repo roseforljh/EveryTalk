@@ -142,7 +142,9 @@ object ComposePerformanceMonitor {
  * 优化的文本处理工具
  */
 object OptimizedTextProcessor {
-    private val textCache = androidx.collection.LruCache<String, String>(50)
+    private val textCache = androidx.collection.LruCache<String, String>(200) // 增加缓存容量
+    private val markdownCache = androidx.collection.LruCache<String, String>(150)
+    private val codeBlockCache = androidx.collection.LruCache<String, String>(100)
     
     /**
      * 缓存文本处理结果，避免重复计算
@@ -154,6 +156,33 @@ object OptimizedTextProcessor {
         val cacheKey = "${text.hashCode()}_${processor.hashCode()}"
         return textCache.get(cacheKey) ?: processor(text).also {
             textCache.put(cacheKey, it)
+        }
+    }
+    
+    /**
+     * 缓存Markdown处理结果
+     */
+    fun processMarkdownWithCache(
+        content: String,
+        processor: (String) -> String
+    ): String {
+        val cacheKey = content.hashCode().toString()
+        return markdownCache.get(cacheKey) ?: processor(content).also {
+            markdownCache.put(cacheKey, it)
+        }
+    }
+    
+    /**
+     * 缓存代码块处理结果
+     */
+    fun processCodeBlockWithCache(
+        code: String,
+        language: String,
+        processor: (String, String) -> String
+    ): String {
+        val cacheKey = "${code.hashCode()}_$language"
+        return codeBlockCache.get(cacheKey) ?: processor(code, language).also {
+            codeBlockCache.put(cacheKey, it)
         }
     }
     
@@ -177,8 +206,31 @@ object OptimizedTextProcessor {
         }
     }
     
+    /**
+     * 获取缓存统计信息
+     */
+    fun getCacheStats(): CacheStats {
+        return CacheStats(
+            textCacheSize = textCache.size(),
+            markdownCacheSize = markdownCache.size(),
+            codeBlockCacheSize = codeBlockCache.size(),
+            textCacheHitRate = if (textCache.putCount() > 0) {
+                textCache.hitCount().toDouble() / (textCache.hitCount() + textCache.missCount()).toDouble()
+            } else 0.0
+        )
+    }
+    
+    data class CacheStats(
+        val textCacheSize: Int,
+        val markdownCacheSize: Int,
+        val codeBlockCacheSize: Int,
+        val textCacheHitRate: Double
+    )
+    
     fun clearCache() {
         textCache.evictAll()
+        markdownCache.evictAll()
+        codeBlockCache.evictAll()
     }
 }
 

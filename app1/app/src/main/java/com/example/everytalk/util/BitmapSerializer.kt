@@ -26,7 +26,7 @@ object BitmapSerializer : KSerializer<Bitmap> {
             val byteArrayOutputStream = ByteArrayOutputStream()
             value.compress(Bitmap.CompressFormat.PNG, 100, byteArrayOutputStream)
             val byteArray = byteArrayOutputStream.toByteArray()
-            val base64String = Base64.encodeToString(byteArray, Base64.DEFAULT)
+            val base64String = Base64.encodeToString(byteArray, Base64.NO_WRAP)
             encoder.encodeString(base64String)
         } catch (e: Exception) {
             throw SerializationException("Failed to serialize Bitmap", e)
@@ -36,7 +36,7 @@ object BitmapSerializer : KSerializer<Bitmap> {
     override fun deserialize(decoder: Decoder): Bitmap {
         try {
             val base64String = decoder.decodeString()
-            val byteArray = Base64.decode(base64String, Base64.DEFAULT)
+            val byteArray = Base64.decode(base64String, Base64.NO_WRAP)
             return BitmapFactory.decodeByteArray(byteArray, 0, byteArray.size)
                 ?: throw SerializationException("Failed to deserialize Bitmap")
         } catch (e: Exception) {

@@ -56,7 +56,7 @@ class AudioRecorderHelper(private val context: Context) {
         return try {
             val file = File(filePath)
             val bytes = file.readBytes()
-            Base64.encodeToString(bytes, Base64.DEFAULT)
+            Base64.encodeToString(bytes, Base64.NO_WRAP)
         } catch (e: IOException) {
             Log.e("AudioRecorderHelper", "Failed to encode audio file", e)
             null

@@ -241,8 +241,8 @@ class HistoryManager(
         }
 
         if (successfullyDeleted) {
-           conversationToDelete?.let {
-               persistenceManager.deleteMediaFilesForMessages(listOf(it))
+           conversationToDelete?.let { conversation ->
+               persistenceManager.deleteMediaFilesForMessages(listOf(conversation))
            }
             if (loadedHistoryIndex.value != finalLoadedIndexAfterDelete) {
                 loadedHistoryIndex.value = finalLoadedIndexAfterDelete
@@ -278,6 +278,10 @@ class HistoryManager(
 
             persistenceManager.saveChatHistory(emptyList(), isImageGeneration)
             persistenceManager.clearLastOpenChat(isImageGeneration)
+            
+            // 清理所有孤立文件
+            persistenceManager.cleanupOrphanedAttachments()
+            
             Log.d(TAG_HM, "Persisted history list cleared. \"Last open chat\" cleared.")
         } else {
             Log.d(TAG_HM, "No history to clear.")

@@ -79,6 +79,9 @@ private fun normalizeTableSpacing(md: String): String {
     if (md.isEmpty()) return md
     val lines = md.split("\n").toMutableList()
     var insideFence = false
+    val separatorRegex = Regex("^\\|?\\s*:?[-]{3,}:?\\s*(\\|\\s*:?[-]{3,}:?\\s*)+\\|?$")
+    var sawSeparator = false
+    var lastPipeLineIndex = -1
     
     for (i in lines.indices) {
         var line = lines[i]
@@ -96,25 +99,32 @@ private fun normalizeTableSpacing(md: String): String {
                       .replace("│", "|") // 框线字符
                       .replace("┃", "|") // 粗框线字符
             
+            val trimmed = line.trim()
+            if (separatorRegex.containsMatchIn(trimmed)) {
+                sawSeparator = true
+            }
+            
             // 确保表格行前后有适当的空格
-            if (line.trim().startsWith("|") && line.trim().endsWith("|")) {
+            if (trimmed.startsWith("|") && trimmed.endsWith("|")) {
                 // 这是一个标准的表格行
                 lines[i] = line
-            } else if (line.contains("|")) {
-                // 包含竖线但格式不标准，尝试修复
-                val trimmed = line.trim()
+            } else {
+                var fixed = trimmed
                 if (!trimmed.startsWith("|")) {
-                    line = "| $trimmed"
+                    fixed = "| $fixed"
                 }
                 if (!trimmed.endsWith("|")) {
-                    line = "$line |"
+                    fixed = "$fixed |"
                 }
-                lines[i] = line
+                lines[i] = fixed
             }
+            lastPipeLineIndex = i
         }
     }
     
-    return lines.joinToString("\n")
+    val joined = lines.joinToString("\n")
+    // 关键修复：若表格出现在文末，补一个换行，避免最后一格内容被断开
+    return if (sawSeparator && lastPipeLineIndex == lines.lastIndex) "$joined\n" else joined
 }
 
 /**

@@ -22,11 +22,22 @@ sealed class Part {
     @Serializable
     data class InlineData(
         val mimeType: String,
-        val data: String // Base64-encoded audio data
+        val data: String, // Base64-encoded media data
+        val videoMetadata: VideoMetadata? = null
     ) : Part()
     @Serializable
-    data class FileUri(val fileUri: String) : Part()
+    data class FileUri(
+        val fileUri: String,
+        val videoMetadata: VideoMetadata? = null
+    ) : Part()
 }
+
+@Serializable
+data class VideoMetadata(
+    val startOffset: String? = null,
+    val endOffset: String? = null,
+    val fps: Double? = null
+)
 
 
 @Serializable

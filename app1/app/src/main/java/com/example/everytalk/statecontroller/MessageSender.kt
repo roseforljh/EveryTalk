@@ -502,10 +502,12 @@ private data class AttachmentProcessingResult(
                 val historyEndIndex = messagesInChatUiSnapshot.indexOfFirst { it.id == newUserMessageForUi.id }
                 val historyUiMessages = if (historyEndIndex != -1) messagesInChatUiSnapshot.subList(0, historyEndIndex) else messagesInChatUiSnapshot
 
-                val apiMessagesForBackend = historyUiMessages.map { it.toApiMessage(uriToBase64Encoder) }.toMutableList()
+                // 🔥 修复：使用带Context的toApiMessage方法获取真实MIME类型
+                val apiMessagesForBackend = historyUiMessages.map { it.toApiMessage(uriToBase64Encoder, application) }.toMutableList()
 
                 // Add the current user message with attachments
-                apiMessagesForBackend.add(newUserMessageForUi.toApiMessage(uriToBase64Encoder))
+                // 🔥 修复：使用带Context的toApiMessage方法获取真实MIME类型
+                apiMessagesForBackend.add(newUserMessageForUi.toApiMessage(uriToBase64Encoder, application))
 
 
                 if (!systemPrompt.isNullOrBlank()) {
@@ -539,6 +541,13 @@ private data class AttachmentProcessingResult(
                     stateHolder._shouldShowImageGenerationError.value = false
                 }
 
+                // 检查是否为Gemini渠道且开启了联网搜索
+                val isGeminiChannel = currentConfig.channel.lowercase().contains("gemini")
+                val shouldEnableGoogleSearch = isGeminiChannel && stateHolder._isWebSearchEnabled.value
+                
+                // 添加调试日志
+                Log.d("MessageSender", "Channel: ${currentConfig.channel}, isGeminiChannel: $isGeminiChannel, webSearchEnabled: ${stateHolder._isWebSearchEnabled.value}, shouldEnableGoogleSearch: $shouldEnableGoogleSearch")
+
                 val chatRequestForApi = ChatRequest(
                     messages = apiMessagesForBackend,
                     provider = providerForRequestBackend,
@@ -570,6 +579,11 @@ private data class AttachmentProcessingResult(
                             else -> "high" // 对应24576个令牌
                         }
                         mapOf("reasoning_effort" to reasoningEffort)
+                    } else null,
+                    // 新功能：Gemini渠道下开启联网搜索时启用google_search工具
+                    tools = if (shouldEnableGoogleSearch) {
+                        Log.d("MessageSender", "启用Google搜索工具用于Gemini渠道")
+                        listOf(mapOf("google_search" to emptyMap<String, Any>()))
                     } else null,
                     imageGenRequest = if (isImageGeneration) {
                         // 调试信息：检查发送的配置
