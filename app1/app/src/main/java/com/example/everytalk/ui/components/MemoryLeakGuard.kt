@@ -110,10 +110,8 @@ object MemoryLeakGuard {
      */
     private suspend fun handleMemoryWarning() {
         withContext(Dispatchers.Main) {
-            // 清理无效的WebView引用
-            UnifiedWebViewManager.cleanupDeadReferences()
-            
-            android.util.Log.i("MemoryLeakGuard", "内存警告 - 已清理无效引用")
+            // 内存警告时不清理缓存，只记录日志
+            android.util.Log.i("MemoryLeakGuard", "内存警告 - 但保留渲染缓存避免界面闪烁")
         }
     }
     
@@ -122,17 +120,10 @@ object MemoryLeakGuard {
      */
     private suspend fun handleCriticalMemoryPressure() {
         withContext(Dispatchers.Main) {
-            // 强制垃圾回收
+            // 严重内存压力时也先不清理缓存
             System.gc()
             
-            // 清理WebView缓存
-            val activeCount = UnifiedWebViewManager.getActiveViewCount()
-            if (activeCount > 2) {
-                // 如果活跃WebView过多，清理一些
-                UnifiedWebViewManager.cleanupDeadReferences()
-            }
-            
-            android.util.Log.w("MemoryLeakGuard", "严重内存压力 - 已触发清理，活跃WebView: $activeCount")
+            android.util.Log.w("MemoryLeakGuard", "严重内存压力 - 已触发GC但保留渲染缓存")
         }
     }
     
@@ -141,8 +132,8 @@ object MemoryLeakGuard {
      */
     private suspend fun handleEmergencyMemoryPressure() {
         withContext(Dispatchers.Main) {
-            // 紧急清理所有WebView
-            UnifiedWebViewManager.clearAll()
+            // 只有在真正紧急的情况下才清理缓存
+            NativeMathRenderer.clearCache()
             
             // 强制多次垃圾回收
             repeat(3) {
@@ -151,7 +142,7 @@ object MemoryLeakGuard {
                 delay(100)
             }
             
-            android.util.Log.e("MemoryLeakGuard", "紧急内存压力 - 已清理所有WebView")
+            android.util.Log.e("MemoryLeakGuard", "紧急内存压力 - 已清理渲染缓存")
         }
     }
     
@@ -215,27 +206,21 @@ private class LeakDetector {
     private val suspiciousGrowthThreshold = 5 // 连续5次检查都在增长
     private var consecutiveGrowth = 0
     
+    private var lastMemory = 0L
+    
     fun checkForLeaks() {
-        val currentCount = UnifiedWebViewManager.getActiveViewCount().toLong()
-        val now = System.currentTimeMillis()
-        
-        if (currentCount > webViewCount.get()) {
-            consecutiveGrowth++
+        // 简化处理，原生渲染器内存管理更简单
+        val currentMemory = Runtime.getRuntime().let { it.totalMemory() - it.freeMemory() }
+        if (lastMemory > 0 && currentMemory > lastMemory * 1.5) {
+            android.util.Log.w("MemoryLeakGuard", 
+                "检测到内存使用增长：当前 ${currentMemory / 1024 / 1024}MB")
             
-            if (consecutiveGrowth >= suspiciousGrowthThreshold) {
-                android.util.Log.w("MemoryLeakGuard", 
-                    "检测到可疑的WebView增长模式：连续${consecutiveGrowth}次增长，当前数量：$currentCount")
-                
-                // 触发清理
-                UnifiedWebViewManager.cleanupDeadReferences()
-                consecutiveGrowth = 0
-            }
-        } else {
-            consecutiveGrowth = 0
+            // 触发清理
+            NativeMathRenderer.clearCache()
         }
         
-        webViewCount.set(currentCount)
-        lastCheck = now
+        lastMemory = currentMemory
+        lastCheck = System.currentTimeMillis()
     }
 }
 

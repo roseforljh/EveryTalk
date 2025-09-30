@@ -1555,34 +1555,83 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     }
 
     fun getConversationPreviewText(index: Int, isImageGeneration: Boolean = false): String {
-        // 使用高级缓存管理器
         val conversationList = if (isImageGeneration) {
             stateHolder._imageGenerationHistoricalConversations.value
         } else {
             stateHolder._historicalConversations.value
         }
         
-        val conversation = conversationList.getOrNull(index) ?: return "对话 ${index + 1}"
+        val conversation = conversationList.getOrNull(index) ?: return getDefaultConversationName(index, isImageGeneration)
         
-        // 异步生成和缓存预览
-        viewModelScope.launch {
-            val conversationId = "${if (isImageGeneration) "img" else "txt"}_$index"
-            val preview = cacheManager.getConversationPreview(conversationId, conversation, isImageGeneration)
-            
-            // 更新原有缓存以保持兼容性
-            val cache = if (isImageGeneration) imageConversationPreviewCache else textConversationPreviewCache
-            cache.put(index, preview)
-        }
-        
-        // 立即返回缓存的预览或默认值
+        // 生成唯一的缓存键
+        val cacheKey = "${if (isImageGeneration) "img" else "txt"}_$index"
         val cache = if (isImageGeneration) imageConversationPreviewCache else textConversationPreviewCache
-        return cache.get(index) ?: run {
-            // 快速生成临时预览
-            val quickPreview = conversation.firstOrNull { it.text.isNotBlank() }?.text?.trim()?.take(30) 
-                ?: "对话 ${index + 1}"
-            cache.put(index, quickPreview)
-            quickPreview
+        
+        // 先检查缓存
+        cache.get(index)?.let { cachedPreview ->
+            return cachedPreview
         }
+        
+        // 同步生成预览文本（避免异步导致的显示延迟）
+        val preview = generateQuickPreview(conversation, isImageGeneration, index)
+        cache.put(index, preview)
+        
+        // 异步更新高质量预览
+        viewModelScope.launch {
+            try {
+                val conversationId = cacheKey
+                val highQualityPreview = cacheManager.getConversationPreview(conversationId, conversation, isImageGeneration)
+                if (highQualityPreview != preview) {
+                    cache.put(index, highQualityPreview)
+                }
+            } catch (e: Exception) {
+                // 静默处理异常，避免影响UI
+            }
+        }
+        
+        return preview
+    }
+    
+    private fun generateQuickPreview(conversation: List<Message>, isImageGeneration: Boolean, index: Int): String {
+        val firstUserMessage = conversation.firstOrNull { 
+            it.sender == com.example.everytalk.data.DataClass.Sender.User && 
+            it.text.isNotBlank() 
+        }
+        
+        val rawText = firstUserMessage?.text?.trim()
+        if (rawText.isNullOrBlank()) {
+            return getDefaultConversationName(index, isImageGeneration)
+        }
+        
+        // 使用工具类进行快速清理和截断
+        return com.example.everytalk.util.ConversationNameHelper.cleanAndTruncateText(rawText, 40)
+    }
+    
+    private fun getDefaultConversationName(index: Int, isImageGeneration: Boolean): String {
+        return com.example.everytalk.util.ConversationNameHelper.getDefaultConversationName(index, isImageGeneration)
+    }
+
+    fun getConversationFullText(index: Int, isImageGeneration: Boolean = false): String {
+        val conversationList = if (isImageGeneration) {
+            stateHolder._imageGenerationHistoricalConversations.value
+        } else {
+            stateHolder._historicalConversations.value
+        }
+        
+        val conversation = conversationList.getOrNull(index) ?: return getDefaultConversationName(index, isImageGeneration)
+        
+        val firstUserMessage = conversation.firstOrNull { 
+            it.sender == com.example.everytalk.data.DataClass.Sender.User && 
+            it.text.isNotBlank() 
+        }
+        
+        val rawText = firstUserMessage?.text?.trim()
+        if (rawText.isNullOrBlank()) {
+            return getDefaultConversationName(index, isImageGeneration)
+        }
+        
+        // 返回清理后的完整文本（用于重命名对话框）
+        return com.example.everytalk.util.ConversationNameHelper.cleanAndTruncateText(rawText, 100)
     }
 
     fun renameConversation(index: Int, newName: String, isImageGeneration: Boolean = false) {

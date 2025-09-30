@@ -8,8 +8,8 @@ import kotlinx.coroutines.channels.BufferOverflow
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * 数学公式渲染状态管理器
- * 负责协调WebView数学公式的异步渲染，避免同时创建多个WebView导致性能问题
+ * 高性能原生数学公式渲染状态管理器
+ * 使用原生JLatexMath + Unicode转换，替代低性能的WebView方案
  */
 object MathRenderingManager {
     private const val TAG = "MathRenderingManager"
@@ -36,7 +36,7 @@ object MathRenderingManager {
     
     // 渲染队列
     private val renderQueue = MutableSharedFlow<RenderTask>(
-        extraBufferCapacity = 100,
+        extraBufferCapacity = 500, // 增加队列容量，原生渲染速度更快
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
     
@@ -44,8 +44,8 @@ object MathRenderingManager {
     private val _activeRenderCount = MutableStateFlow(0)
     val activeRenderCount = _activeRenderCount.asStateFlow()
     
-    // 最大并发渲染数量
-    private const val MAX_CONCURRENT_RENDERS = 1
+    // 最大并发渲染数量 - 原生渲染可以支持更高并发
+    private const val MAX_CONCURRENT_RENDERS = 5
     
     // 渲染作用域
     private val renderingScope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
@@ -158,45 +158,82 @@ object MathRenderingManager {
     }
     
     /**
-     * 启动渲染队列处理器
+     * 启动原生渲染队列处理器
+     * 使用高性能原生渲染器替代WebView
      */
     private fun startRenderingProcessor() {
         renderingScope.launch {
             renderQueue
-                .buffer(capacity = 100)
+                .buffer(capacity = 500) // 增加缓冲区容量
                 .collect { task ->
                     // 等待直到有空闲的渲染槽位
                     while (_activeRenderCount.value >= MAX_CONCURRENT_RENDERS) {
-                        delay(50)
+                        delay(10) // 减少等待时间，原生渲染更快
                     }
                     
-                    Log.d(TAG, "🚀 开始处理渲染任务: ${task.mathId}")
+                    Log.d(TAG, "🚀 开始原生渲染任务: ${task.mathId}, latex: ${task.latex}")
                     
-                    // 标记开始渲染
-                    markRenderingStarted(task.mathId)
-                    
-                    try {
-                        // 模拟渲染延迟（实际渲染会在LatexMath组件中进行）
-                        delay(100)
-                        
-                        // 这里不直接执行渲染，而是由LatexMath组件监听状态变化后执行
-                        // 渲染完成的标记会由LatexMath组件调用
-                        
-                    } catch (e: Exception) {
-                        Log.e(TAG, "渲染任务异常: ${task.mathId}", e)
-                        markRenderingFailed(task.mathId)
+                    // 异步执行渲染，不阻塞队列
+                    renderingScope.launch {
+                        try {
+                            // 标记开始渲染
+                            markRenderingStarted(task.mathId)
+                            
+                            // 使用原生渲染器进行预渲染（预热缓存）
+                            val success = preRenderMath(task.latex, !task.inline)
+                            
+                            if (success) {
+                                markRenderingCompleted(task.mathId)
+                            } else {
+                                markRenderingFailed(task.mathId)
+                            }
+                            
+                        } catch (e: Exception) {
+                            Log.e(TAG, "原生渲染任务异常: ${task.mathId}", e)
+                            markRenderingFailed(task.mathId)
+                        }
                     }
                 }
         }
     }
     
     /**
+     * 使用原生渲染器预渲染数学公式（预热缓存）
+     */
+    private suspend fun preRenderMath(latex: String, displayMode: Boolean): Boolean {
+        return try {
+            // 预设参数进行渲染，填充缓存
+            val bitmap = NativeMathRenderer.renderMath(
+                latex = latex,
+                textColor = android.graphics.Color.BLACK, // 默认颜色
+                textSize = if (displayMode) 40f else 32f,
+                isInline = !displayMode
+            )
+            bitmap != null
+        } catch (e: Exception) {
+            Log.e(TAG, "预渲染失败: $latex", e)
+            false
+        }
+    }
+    
+    /**
      * 重置所有状态（用于切换会话时）
+     * 同时清理原生渲染器缓存
      */
     fun resetAllStates() {
-        Log.d(TAG, "🔄 重置所有渲染状态")
+        Log.d(TAG, "🔄 重置所有渲染状态并清理缓存")
         renderStates.clear()
         _activeRenderCount.value = 0
+        // 清理原生渲染器缓存
+        NativeMathRenderer.clearCache()
+    }
+    
+    /**
+     * 手动清理渲染缓存
+     */
+    fun clearRenderCache() {
+        Log.d(TAG, "🧹 手动清理渲染缓存")
+        NativeMathRenderer.clearCache()
     }
 }
 

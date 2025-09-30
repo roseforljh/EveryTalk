@@ -104,9 +104,10 @@ class MainActivity : ComponentActivity() {
         // 🎯 使用新的统一WebView管理器
         lifecycleScope.launch(Dispatchers.Main) {
             try {
-                com.example.everytalk.ui.components.UnifiedWebViewManager.getWebView(this@MainActivity, "main_init")
+                // WebView预热已移除，使用原生数学渲染器
+                android.util.Log.d("MainActivity", "✅ 使用原生数学渲染器，无需WebView预热")
             } catch (e: Exception) {
-                android.util.Log.w("MainActivity", "WebView预初始化失败", e)
+                android.util.Log.w("MainActivity", "初始化失败", e)
             }
         }
         
@@ -288,6 +289,12 @@ class MainActivity : ComponentActivity() {
                                    onDismissClearImageHistoryDialog = appViewModel::dismissClearImageHistoryDialog,
                                     getPreviewForIndex = { index ->
                                         appViewModel.getConversationPreviewText(
+                                            index,
+                                            isImageGenerationMode
+                                        )
+                                    },
+                                    getFullTextForIndex = { index ->
+                                        appViewModel.getConversationFullText(
                                             index,
                                             isImageGenerationMode
                                         )

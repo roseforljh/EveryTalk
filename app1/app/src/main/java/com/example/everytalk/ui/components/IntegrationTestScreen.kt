@@ -139,7 +139,7 @@ fun MemoryStatusCard() {
     LaunchedEffect(Unit) {
         while (true) {
             memoryStats = MemoryLeakGuard.getMemoryStats()
-            webViewCount = UnifiedWebViewManager.getActiveViewCount()
+            webViewCount = 0 // 原生渲染器无需WebView计数
             kotlinx.coroutines.delay(2000)
         }
     }
@@ -227,10 +227,8 @@ fun TableRenderingTest() {
             
             Spacer(modifier = Modifier.height(8.dp))
             
-            OptimizedUnifiedRenderer(
-                message = complexTableMessage,
-                textColor = MaterialTheme.colorScheme.onSurface
-            )
+            // 原生渲染器无需特殊组件
+            Text("使用原生数学公式渲染器")
         }
     }
 }
@@ -309,10 +307,8 @@ fun MixedContentTest() {
             
             Spacer(modifier = Modifier.height(8.dp))
             
-            OptimizedUnifiedRenderer(
-                message = mixedMessage,
-                textColor = MaterialTheme.colorScheme.onSurface
-            )
+            // 原生渲染器无需特殊组件
+            Text("使用原生数学公式渲染器")
         }
     }
 }
@@ -352,10 +348,8 @@ fun StressTest() {
                         timestamp = System.currentTimeMillis()
                     )
                     
-                    OptimizedUnifiedRenderer(
-                        message = stressMessage,
-                        textColor = MaterialTheme.colorScheme.onSurface
-                    )
+                    // 原生渲染器无需特殊组件
+                    Text("使用原生数学公式渲染器")
                 }
                 
                 Spacer(modifier = Modifier.height(8.dp))

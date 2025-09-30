@@ -57,7 +57,7 @@ class CacheManager private constructor(private val context: Context) {
         messages: List<Message>,
         isImageGeneration: Boolean = false
     ): String = withContext(Dispatchers.Default) {
-        val cacheKey = "${conversationId}_${messages.size}_${isImageGeneration}"
+        val cacheKey = "${if (isImageGeneration) "img" else "txt"}_${conversationId}_${messages.size}_${messages.hashCode()}"
         
         conversationPreviewCache.get(cacheKey)?.let { cached ->
             logger.debug("Cache hit for conversation preview: $conversationId")
@@ -251,15 +251,21 @@ class CacheManager private constructor(private val context: Context) {
     }
     
     private fun generatePreviewText(messages: List<Message>, isImageGeneration: Boolean): String {
-        if (messages.isEmpty()) return if (isImageGeneration) "图像生成对话" else "新对话"
+        if (messages.isEmpty()) {
+            return ConversationNameHelper.getEmptyConversationName(isImageGeneration)
+        }
         
         val firstUserMessage = messages.firstOrNull { 
             it.sender == com.example.everytalk.data.DataClass.Sender.User && 
             it.text.isNotBlank() 
         }
         
-        return firstUserMessage?.text?.trim()?.take(50) ?: 
-               if (isImageGeneration) "图像生成对话" else "对话"
+        val rawText = firstUserMessage?.text?.trim()
+        if (rawText.isNullOrBlank()) {
+            return ConversationNameHelper.getNoContentConversationName(isImageGeneration)
+        }
+        
+        return ConversationNameHelper.cleanAndTruncateText(rawText, 50)
     }
     
     data class CacheStats(

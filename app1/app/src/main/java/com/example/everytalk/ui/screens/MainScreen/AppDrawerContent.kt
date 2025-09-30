@@ -67,6 +67,7 @@ fun AppDrawerContent(
    onShowClearImageHistoryDialog: () -> Unit,
    onDismissClearImageHistoryDialog: () -> Unit,
     getPreviewForIndex: (Int) -> String,
+    getFullTextForIndex: (Int) -> String,
     onAboutClick: () -> Unit,
     onImageGenerationClick: () -> Unit,
     isLoadingHistoryData: Boolean = false, // 新增：历史数据加载状态
@@ -651,7 +652,7 @@ fun AppDrawerContent(
            )
 
             renamingIndex?.let { index ->
-                var newName by remember(index) { mutableStateOf(getPreviewForIndex(index)) }
+                var newName by remember(index) { mutableStateOf(getFullTextForIndex(index)) }
                 AlertDialog(
                     onDismissRequest = { renamingIndex = null },
                     title = { Text("重命名会话") },

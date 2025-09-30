@@ -3,22 +3,16 @@ package com.example.everytalk.ui.components
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -26,12 +20,7 @@ import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.ui.theme.chatColors
 import dev.jeziellago.compose.markdowntext.MarkdownText
 import com.example.everytalk.util.messageprocessor.parseMarkdownParts
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.Contextual
 import java.util.UUID
-import androidx.compose.ui.viewinterop.AndroidView
-import android.widget.TextView
-import ru.noties.jlatexmath.JLatexMathView
 
 // 🎯 新的合并内容数据类
 private sealed class ConsolidatedContent {
@@ -158,27 +147,62 @@ private fun InlineContentRenderer(
     textColor: Color,
     style: TextStyle
 ) {
-    // 🎯 新策略：使用FlowRow但消除间距，让内容紧密相连
+    // 回滚到工作的FlowRow布局，但减少间距
     FlowRow(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.Start,
-        verticalArrangement = Arrangement.Center
+        horizontalArrangement = Arrangement.spacedBy(1.dp),
+        verticalArrangement = Arrangement.Center,
+        maxItemsInEachRow = Int.MAX_VALUE
     ) {
-        parts.forEach { part ->
+        var i = 0
+        fun String.endsWithoutSpace(): Boolean {
+            val t = this.trimEnd()
+            return t.isNotEmpty() && !t.last().isWhitespace()
+        }
+        while (i < parts.size) {
+            val part = parts[i]
+            val next = if (i + 1 < parts.size) parts[i + 1] else null
+            // 检测 "文本(无尾空格) + 行内公式" 组合，作为一个不可换行单元渲染
+            if (part is MarkdownPart.Text &&
+                next is MarkdownPart.MathBlock &&
+                !next.displayMode
+            ) {
+                // 将前一段文本拆成“可换行前缀 + 不可换行的结尾词”，
+                // 用结尾词与数学公式粘连，避免公式单独跑到下一行
+                val (prefix, glue) = splitForNoWrapTail(part.content)
+                if (prefix.isNotBlank()) {
+                    SmartTextRenderer(
+                        text = prefix,
+                        textColor = textColor,
+                        style = style,
+                        modifier = Modifier.wrapContentWidth()
+                    )
+                }
+                val glueText = glue.trimEnd() // 去掉尾部空格，避免“为 ”+ 公式之间出现断行/间隙
+                if (glueText.isNotBlank()) {
+                    NoWrapTextAndMath(
+                        text = glueText,
+                        latex = next.latex,
+                        textColor = textColor,
+                        style = style
+                    )
+                    i += 2
+                    continue
+                }
+                // 若无法有效拆分，则走默认流程
+            }
+
             when (part) {
                 is MarkdownPart.Text -> {
                     if (part.content.isNotBlank()) {
-                        // 处理文本中可能包含的行内数学公式
                         val processedText = part.content
                         if (processedText.contains("$")) {
-                            // 如果文本包含$符号，可能有行内数学公式，使用自定义处理
                             RenderTextWithInlineMath(
                                 text = processedText,
                                 textColor = textColor,
                                 style = style
                             )
                         } else {
-                            // 纯文本，使用智能渲染器处理可能的内联代码和Markdown格式
                             SmartTextRenderer(
                                 text = processedText,
                                 textColor = textColor,
@@ -190,7 +214,6 @@ private fun InlineContentRenderer(
                 }
                 is MarkdownPart.MathBlock -> {
                     if (!part.displayMode) {
-                        // 行内数学公式，紧密连接
                         LatexMath(
                             latex = part.latex,
                             inline = true,
@@ -201,10 +224,9 @@ private fun InlineContentRenderer(
                         )
                     }
                 }
-                else -> {
-                    // 其他类型暂时忽略
-                }
+                else -> { /* 忽略其他类型 */ }
             }
+            i += 1
         }
     }
 }
@@ -257,8 +279,9 @@ private fun RenderTextWithInlineCodeAndMath(
     
     FlowRow(
         modifier = modifier.wrapContentWidth(),
-        horizontalArrangement = Arrangement.Start,
-        verticalArrangement = Arrangement.Center
+        horizontalArrangement = Arrangement.spacedBy(0.dp), // 紧密排列
+        verticalArrangement = Arrangement.Center,
+        maxItemsInEachRow = Int.MAX_VALUE // 避免不必要的换行
     ) {
         codeSegments.forEach { segment ->
             if (segment.isCode) {
@@ -290,15 +313,49 @@ private fun RenderTextWithInlineMath(
     // 简单的$...$分割处理
     val segments = splitMathSegments(text)
     
+    // 回滚到FlowRow布局
     FlowRow(
         modifier = Modifier.wrapContentWidth(),
-        horizontalArrangement = Arrangement.Start,
-        verticalArrangement = Arrangement.Center
+        horizontalArrangement = Arrangement.spacedBy(1.dp),
+        verticalArrangement = Arrangement.Center,
+        maxItemsInEachRow = Int.MAX_VALUE
     ) {
-        segments.forEach { segment ->
-            if (segment.isMath) {
+        fun String.endsWithoutSpace(): Boolean {
+            val t = this.trimEnd()
+            return t.isNotEmpty() && !t.last().isWhitespace()
+        }
+        var i = 0
+        while (i < segments.size) {
+            val seg = segments[i]
+            val next = if (i + 1 < segments.size) segments[i + 1] else null
+            // 将 "文本(无尾空格) + 数学" 合并为不可换行单元
+            if (!seg.isMath && next != null && next.isMath) {
+                // 将分段文本的尾部词与接下来的数学段粘连，形成不可换行单元
+                val (prefix, glue) = splitForNoWrapTail(seg.content)
+                if (prefix.isNotBlank()) {
+                    MarkdownText(
+                        markdown = normalizeBasicMarkdown(prefix),
+                        style = style.copy(color = textColor),
+                        modifier = Modifier.wrapContentWidth()
+                    )
+                }
+                val glueText = glue.trimEnd()
+                if (glueText.isNotBlank()) {
+                    NoWrapTextAndMath(
+                        text = glueText,
+                        latex = next.content,
+                        textColor = textColor,
+                        style = style
+                    )
+                    i += 2
+                    continue
+                }
+                // 拆分失败则走默认流程
+            }
+
+            if (seg.isMath) {
                 LatexMath(
-                    latex = segment.content,
+                    latex = seg.content,
                     inline = true,
                     color = textColor,
                     style = style,
@@ -306,19 +363,65 @@ private fun RenderTextWithInlineMath(
                     messageId = "math_segment"
                 )
             } else {
-                // 对于非数学的文本段，检查是否有内联代码
-                if (segment.content.contains('`')) {
-                    RenderTextWithInlineCode(segment.content, style, textColor)
+                if (seg.content.contains('`')) {
+                    RenderTextWithInlineCode(seg.content, style, textColor)
                 } else {
                     MarkdownText(
-                        markdown = normalizeBasicMarkdown(segment.content),
+                        markdown = normalizeBasicMarkdown(seg.content),
                         style = style.copy(color = textColor),
                         modifier = Modifier.wrapContentWidth()
                     )
                 }
             }
+            i += 1
         }
     }
+}
+
+// 将"文本+行内数学"渲染为不可换行单元，避免被拆行
+@Composable
+private fun NoWrapTextAndMath(
+    text: String,
+    latex: String,
+    textColor: Color,
+    style: TextStyle
+) {
+    Row(
+        modifier = Modifier.wrapContentWidth(),
+        horizontalArrangement = Arrangement.Start,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        MarkdownText(
+            markdown = normalizeBasicMarkdown(text),
+            style = style.copy(color = textColor),
+            modifier = Modifier.wrapContentWidth()
+        )
+        LatexMath(
+            latex = latex,
+            inline = true,
+            color = textColor,
+            style = style,
+            modifier = Modifier.wrapContentWidth(),
+            messageId = "nowrap_pair"
+        )
+    }
+}
+
+// 将文本分割为可换行前缀和不可换行尾部
+private fun splitForNoWrapTail(text: String): Pair<String, String> {
+    if (text.isBlank()) return Pair("", "")
+    
+    // 找到最后一个空格或标点符号的位置
+    val words = text.split(Regex("\\s+"))
+    if (words.size <= 1) {
+        return Pair("", text) // 只有一个词，全部作为尾部
+    }
+    
+    // 取最后一个词作为不可换行部分
+    val prefix = words.dropLast(1).joinToString(" ")
+    val tail = words.last()
+    
+    return Pair(prefix, tail)
 }
 
 // 🎯 简单的数学公式分割器
@@ -605,235 +708,18 @@ private fun LatexMath(
     messageId: String = "",
     mathId: String = "${messageId}_${latex.hashCode()}"
 ) {
-    android.util.Log.d("LatexMath", "🎯 开始渲染LaTeX: '$latex' (inline=$inline, mathId=$mathId)")
+    android.util.Log.d("LatexMath", "🎯 开始原生渲染LaTeX: '$latex' (inline=$inline, mathId=$mathId)")
     
-    // 获取渲染状态
-    val renderState by MathRenderingManager.getRenderState(mathId)
-    
-    // 当状态为PENDING时，标记为开始渲染
-    LaunchedEffect(mathId) {
-        if (renderState == MathRenderingManager.RenderState.PENDING) {
-            MathRenderingManager.markRenderingStarted(mathId)
-        }
-    }
-    
-    when (renderState) {
-        MathRenderingManager.RenderState.PENDING -> {
-            // 显示占位符
-            Box(
-                modifier = modifier.then(
-                    if (inline) Modifier.size(50.dp, 20.dp) else Modifier.size(100.dp, 40.dp)
-                ),
-                contentAlignment = Alignment.Center
-            ) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(if (inline) 12.dp else 16.dp),
-                    strokeWidth = 1.dp,
-                    color = color.copy(alpha = 0.6f)
-                )
-            }
-        }
-        
-        MathRenderingManager.RenderState.RENDERING,
-        MathRenderingManager.RenderState.COMPLETED -> {
-            // 渲染WebView
-            AndroidView(
-                factory = { context ->
-                    android.util.Log.d("LatexMath", "🎯 创建离线WebView LaTeX渲染器 for $mathId")
-                    try {
-                        val webView = android.webkit.WebView(context).apply {
-                            settings.javaScriptEnabled = true
-                            settings.loadWithOverviewMode = true
-                            settings.useWideViewPort = false
-                            setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                            settings.domStorageEnabled = true
-                            settings.allowFileAccess = true
-                            settings.allowContentAccess = true
-                            
-                            // 设置WebView回调，标记渲染完成
-                            webViewClient = object : android.webkit.WebViewClient() {
-                                override fun onPageFinished(view: android.webkit.WebView?, url: String?) {
-                                    super.onPageFinished(view, url)
-                                    android.util.Log.d("LatexMath", "✅ WebView页面加载完成: $mathId")
-                                    MathRenderingManager.markRenderingCompleted(mathId)
-                                }
-                                
-                                override fun onReceivedError(
-                                    view: android.webkit.WebView?,
-                                    errorCode: Int,
-                                    description: String?,
-                                    failingUrl: String?
-                                ) {
-                                    super.onReceivedError(view, errorCode, description, failingUrl)
-                                    android.util.Log.e("LatexMath", "❌ WebView加载失败: $mathId, $description")
-                                    MathRenderingManager.markRenderingFailed(mathId)
-                                }
-                            }
-                        }
-                        
-                        val cleanLatex = latex.trim()
-                        val fontSize = style.fontSize.value * if (inline) 0.9f else 1.1f
-                        val colorHex = String.format("#%06X", 0xFFFFFF and color.toArgb())
-                        val mathType = if (inline) "math-inline" else "math-display"
-                        
-                        android.util.Log.d("LatexMath", "🎨 颜色信息: color=${color}, colorHex=$colorHex, fontSize=${fontSize}px")
-                        
-                        val offlineHtml = try {
-                            context.assets.open("mathjax_offline.html").bufferedReader().use { it.readText() }
-                                .replace("MATH_CONTENT", cleanLatex)
-                                .replace("MATH_TYPE", mathType)
-                                .replace("FONT_SIZE", "${fontSize}px")
-                                .replace("color: inherit;", "color: $colorHex;")
-                        } catch (e: Exception) {
-                            android.util.Log.e("LatexMath", "❌ 读取离线HTML模板失败: ${e.message}")
-                            generateFallbackHtml(cleanLatex, mathType, fontSize, colorHex)
-                        }
-                        
-                        webView.loadDataWithBaseURL("file:///android_asset/", offlineHtml, "text/html", "UTF-8", null)
-                        android.util.Log.d("LatexMath", "✅ 离线WebView LaTeX加载成功: $mathId")
-                        webView
-                        
-                    } catch (t: Throwable) {
-                        android.util.Log.e("LatexMath", "❌ 离线WebView LaTeX创建失败: ${t.message}", t)
-                        MathRenderingManager.markRenderingFailed(mathId)
-                        
-                        // 最终备用方案：显示带样式的文本
-                        TextView(context).apply {
-                            text = if (inline) latex else "\n$latex\n"
-                            setTextColor(android.graphics.Color.BLUE)
-                            textSize = style.fontSize.value * if (inline) 0.95f else 1.1f
-                            typeface = android.graphics.Typeface.MONOSPACE
-                            android.util.Log.d("LatexMath", "⚠️ 使用文本备用方案显示: $latex")
-                        }
-                    }
-                },
-                update = { view ->
-                    // 更新逻辑保持不变，但添加状态标记
-                    android.util.Log.d("LatexMath", "🎯 更新LaTeX渲染: '$latex' for $mathId")
-                    when (view) {
-                        is android.webkit.WebView -> {
-                            val cleanLatex = latex.trim()
-                            val fontSize = style.fontSize.value * if (inline) 0.9f else 1.1f
-                            val colorHex = String.format("#%06X", 0xFFFFFF and color.toArgb())
-                            val mathType = if (inline) "math-inline" else "math-display"
-                            
-                            try {
-                                val context = view.context
-                                val offlineHtml = context.assets.open("mathjax_offline.html").bufferedReader().use { it.readText() }
-                                    .replace("MATH_CONTENT", cleanLatex)
-                                    .replace("MATH_TYPE", mathType)
-                                    .replace("FONT_SIZE", "${fontSize}px")
-                                    .replace("color: inherit;", "color: $colorHex;")
-                                
-                                view.loadDataWithBaseURL("file:///android_asset/", offlineHtml, "text/html", "UTF-8", null)
-                            } catch (e: Exception) {
-                                android.util.Log.e("LatexMath", "❌ 更新离线HTML失败: ${e.message}")
-                                view.evaluateJavascript("updateMath('$cleanLatex', $inline);", null)
-                            }
-                        }
-                        is TextView -> {
-                            view.text = if (inline) latex else "\n$latex\n"
-                            view.setTextColor(android.graphics.Color.BLUE)
-                            view.textSize = style.fontSize.value * if (inline) 0.95f else 1.1f
-                        }
-                    }
-                },
-                modifier = modifier.then(
-                    if (inline) Modifier.wrapContentHeight().padding(vertical = 0.dp)
-                    else Modifier.fillMaxWidth().padding(vertical = 2.dp)
-                )
-            )
-        }
-        
-        MathRenderingManager.RenderState.FAILED -> {
-            // 显示错误状态
-            Text(
-                text = if (inline) latex else "\n$latex\n",
-                style = style.copy(
-                    color = color,
-                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                    fontSize = style.fontSize * if (inline) 0.95f else 1.1f
-                ),
-                modifier = modifier.then(
-                    if (inline) Modifier.wrapContentHeight().padding(vertical = 0.dp)
-                    else Modifier.fillMaxWidth().padding(vertical = 2.dp)
-                )
-            )
-        }
-    }
+    // 直接使用新的原生渲染器，无需复杂的状态管理
+    NativeMathText(
+        latex = latex,
+        isInline = inline,
+        modifier = modifier.then(
+            if (inline) Modifier.wrapContentHeight().padding(vertical = 0.dp)
+            else Modifier.fillMaxWidth().padding(vertical = 2.dp)
+        )
+    )
 }
-
-/**
- * 生成备用HTML内容
- */
-private fun generateFallbackHtml(cleanLatex: String, mathType: String, fontSize: Float, colorHex: String): String {
-    return """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="UTF-8">
-        <style>
-            body { 
-                margin: 0; 
-                padding: 2px; 
-                background: transparent; 
-                font-family: 'Times New Roman', serif;
-                font-size: ${fontSize}px;
-                color: $colorHex;
-                line-height: 1.0;
-            }
-            .math-inline { display: inline-block; vertical-align: middle; margin: 0; padding: 0; }
-            .math-display { display: block; text-align: center; margin: 2px 0; padding: 0; }
-            .superscript { vertical-align: super; font-size: 0.8em; }
-            .subscript { vertical-align: sub; font-size: 0.8em; }
-            .fraction { display: inline-block; vertical-align: middle; }
-            .numerator { display: block; text-align: center; border-bottom: 1px solid; }
-            .denominator { display: block; text-align: center; }
-        </style>
-    </head>
-    <body>
-        <div id="math-content" class="$mathType">$cleanLatex</div>
-        <script>
-            function renderBasicLatex(latex) {
-                let result = latex;
-                result = result.replace(/\^{([^}]*)}/g, '<span class="superscript">$1</span>');
-                result = result.replace(/\^([a-zA-Z0-9])/g, '<span class="superscript">$1</span>');
-                result = result.replace(/_{([^}]*)}/g, '<span class="subscript">$1</span>');
-                result = result.replace(/_([a-zA-Z0-9])/g, '<span class="subscript">$1</span>');
-                result = result.replace(/\\\\frac{([^}]*)}{([^}]*)}/g, 
-                    '<span class="fraction"><span class="numerator">$1</span><span class="denominator">$2</span></span>');
-                result = result.replace(/\\\\sqrt{([^}]*)}/g, '<span>√$1</span>');
-                result = result.replace(/\\\\pi/g, 'π');
-                result = result.replace(/\\\\theta/g, 'θ');
-                result = result.replace(/\\\\alpha/g, 'α');
-                result = result.replace(/\\\\beta/g, 'β');
-                result = result.replace(/\\\\gamma/g, 'γ');
-                result = result.replace(/\\\\delta/g, 'δ');
-                result = result.replace(/\\\\lambda/g, 'λ');
-                result = result.replace(/\\\\mu/g, 'μ');
-                result = result.replace(/\\\\sigma/g, 'σ');
-                result = result.replace(/\\\\phi/g, 'φ');
-                result = result.replace(/\\\\infty/g, '∞');
-                result = result.replace(/\\\\int/g, '∫');
-                result = result.replace(/\\\\sum/g, 'Σ');
-                result = result.replace(/\\\\dots/g, '…');
-                result = result.replace(/\\\\ldots/g, '…');
-                result = result.replace(/\\\\cdots/g, '⋯');
-                return result;
-            }
-            document.addEventListener('DOMContentLoaded', function() {
-                const content = document.getElementById('math-content');
-                if (content) {
-                    const latex = content.textContent;
-                    content.innerHTML = renderBasicLatex(latex);
-                }
-            });
-        </script>
-    </body>
-    </html>
-    """.trimIndent()
-}
-
 private fun splitTextIntoBlocks(text: String): List<MarkdownPart.Text> {
     if (text.isBlank()) return listOf(MarkdownPart.Text(id = "text_${UUID.randomUUID()}", content = ""))
     val paragraphs = text.split("\n\n").filter { it.isNotBlank() }
@@ -862,7 +748,13 @@ private fun RenderTextWithInlineCode(
 ) {
     val normalized = normalizeMarkdownGlyphs(unwrapFileExtensionsInBackticks(text))
     val segments = remember(normalized) { splitInlineCodeSegments(normalized) }
-    FlowRow(modifier = Modifier.wrapContentWidth()) {
+    // 回滚到FlowRow布局
+    FlowRow(
+        modifier = Modifier.wrapContentWidth(),
+        horizontalArrangement = Arrangement.spacedBy(1.dp), // 极小间距
+        verticalArrangement = Arrangement.Center,
+        maxItemsInEachRow = Int.MAX_VALUE
+    ) {
         segments.forEach { seg ->
             if (seg.isCode) {
                 InlineCodeChip(
