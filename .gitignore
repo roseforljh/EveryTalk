@@ -1,0 +1,139 @@
+# ===== 严格的 .gitignore - 白名单策略 =====
+# 默认忽略所有文件,只显式允许必要的文件
+
+# 忽略所有文件
+*
+*/
+
+# ===== 允许必要的配置文件 =====
+!.gitignore
+!README.md
+!LICENSE
+!*.md
+
+# ===== 允许 Gradle 相关文件 =====
+!gradle/
+!gradle/**
+!gradlew
+!gradlew.bat
+!build.gradle.kts
+!settings.gradle.kts
+!gradle.properties.example
+!libs.versions.toml
+
+# ===== 允许 Android 项目结构 =====
+# 允许 app1 目录
+!app1/
+!app1/**
+
+# app1 子目录中忽略的内容
+app1/.gradle/
+app1/build/
+app1/*/build/
+app1/local.properties
+app1/*.iml
+app1/.idea/
+app1/.vscode/
+app1/.claude/
+app1/captures/
+app1/.externalNativeBuild/
+app1/.cxx/
+
+# ===== 允许的 Android 源代码和资源 =====
+# 源代码
+!app1/app/src/
+!app1/app/src/**/*.kt
+!app1/app/src/**/*.java
+!app1/app/src/**/*.xml
+
+# 资源文件
+!app1/app/src/main/res/
+!app1/app/src/main/res/**
+!app1/app/src/main/assets/
+!app1/app/src/main/assets/**
+
+# Gradle 构建脚本
+!app1/app/build.gradle.kts
+!app1/app/proguard-rules.pro
+
+# ===== 允许 Gradle Wrapper =====
+!app1/gradle/
+!app1/gradle/wrapper/
+!app1/gradle/wrapper/gradle-wrapper.jar
+!app1/gradle/wrapper/gradle-wrapper.properties
+!app1/gradle/libs.versions.toml
+
+# ===== 允许文档文件 =====
+!app1/*.md
+!app1/preview/
+!app1/preview/**
+
+# ===== 显式忽略的文件类型(安全第一) =====
+# 构建产物
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+
+# IDE 配置(完全忽略)
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+.claude/
+.DS_Store
+
+# 本地配置和密钥
+local.properties
+*.jks
+*.keystore
+google-services.json
+release.properties
+signing.properties
+
+# 日志和临时文件
+*.log
+*.tmp
+*.swp
+*.bak
+*~
+
+# 构建目录
+build/
+.gradle/
+.externalNativeBuild/
+.cxx/
+captures/
+out/
+
+# 系统文件
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# 其他二进制文件
+*.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+*.so
+*.dylib
+*.dll
+
+# ===== GitHub 和 CI/CD (可选) =====
+# 如果不需要 GitHub Actions,取消注释
+# .github/
+
+# ===== 备注说明 =====
+# 此 .gitignore 采用白名单策略:
+# 1. 默认忽略所有文件(*)
+# 2. 通过 ! 显式允许必要文件
+# 3. 再次显式忽略敏感文件(如 *.apk)
+# 
+# 这样可以最大程度保护隐私和减小仓库大小
+# 只提交源代码、配置和文档,不提交构建产物和 IDE 配置

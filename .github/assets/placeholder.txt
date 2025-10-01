@@ -1,1 +1,0 @@
-This folder is for storing images and other assets for the README.md file. Please place your screenshots here.
