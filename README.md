@@ -63,11 +63,11 @@ KunTalk 不仅仅是一个简单的聊天应用,它是一个集成了前沿技�
 
 |                                 主聊天界面                                 |                                 侧边栏/模型切换                                 |                                 设置界面                                 |
 | :------------------------------------------------------------------------: | :-----------------------------------------------------------------------------: | :------------------------------------------------------------------------: |
-| <img src="https://qone.kuz7.com/uploads/images/2025/10/02/e901a896-323a-4f27-9ee2-1c2919d2ef7a.png" alt="主聊天界面" width="280"/> | <img src="https://qone.kuz7.com/uploads/images/2025/10/01/284aecfe-dba9-49f6-9abb-10a73c889155.png" alt="侧边栏/模型切换" width="280"/> | <img src="https://qone.kuz7.com/uploads/images/2025/10/01/60ae505e-d524-45f4-a547-3fec0c84dfa3.png" alt="设置界面" width="280"/> |
+| <img src="https://qone.kuz7.com/uploads/images/2025/10/02/e901a896-323a-4f27-9ee2-1c2919d2ef7a.png" alt="主聊天界面" width="280"/> | <img src="https://qone.kuz7.com/uploads/images/2025/10/01/7c4a347f-7104-40a5-8c49-e321b03ca447.png" alt="侧边栏/模型切换" width="280"/> | <img src="https://qone.kuz7.com/uploads/images/2025/10/01/284aecfe-dba9-49f6-9abb-10a73c889155.png" alt="设置界面" width="280"/> |
 
 |                                 图像生成界面                                 |                                 多模态对话                                 |
 | :------------------------------------------------------------------------: | :-----------------------------------------------------------------------------: |
-| <img src="https://qone.kuz7.com/uploads/images/2025/10/01/7f1327b6-2242-4cda-8ee7-7ecf4ea06212.png" alt="图像生成界面" width="280"/> | <img src="https://qone.kuz7.com/uploads/images/2025/10/01/7c4a347f-7104-40a5-8c49-e321b03ca447.png" alt="多模态对话" width="280"/> |
+| <img src="https://qone.kuz7.com/uploads/images/2025/10/01/7f1327b6-2242-4cda-8ee7-7ecf4ea06212.png" alt="图像生成界面" width="280"/> | <img src="" alt="多模态对话" width="280"/> |
 
 ### 浅色模式 (Light Mode)
 
