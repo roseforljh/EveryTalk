@@ -68,6 +68,11 @@ app1/.cxx/
 !app1/preview/
 !app1/preview/**
 
+# ===== 显式忽略图片目录和临时文件 =====
+# 忽略 imgs 目录(包含临时截图和示例图片)
+imgs/
+/imgs/
+
 # ===== 显式忽略的文件类型(安全第一) =====
 # 构建产物
 *.apk
@@ -84,6 +89,7 @@ app1/.cxx/
 .vscode/
 .claude/
 .DS_Store
+.github/
 
 # 本地配置和密钥
 local.properties
@@ -125,15 +131,16 @@ Desktop.ini
 *.dylib
 *.dll
 
-# ===== GitHub 和 CI/CD (可选) =====
-# 如果不需要 GitHub Actions,取消注释
-# .github/
-
 # ===== 备注说明 =====
 # 此 .gitignore 采用白名单策略:
 # 1. 默认忽略所有文件(*)
 # 2. 通过 ! 显式允许必要文件
-# 3. 再次显式忽略敏感文件(如 *.apk)
+# 3. 再次显式忽略敏感文件和临时文件
+# 
+# 忽略的额外内容:
+# - imgs/ 目录(包含截图和示例图片)
+# - .github/ 目录(GitHub 配置)
+# - .idea/, .vscode/, .claude/ (IDE 配置)
 # 
 # 这样可以最大程度保护隐私和减小仓库大小
-# 只提交源代码、配置和文档,不提交构建产物和 IDE 配置
+# 只提交源代码、配置和文档,不提交构建产物、IDE 配置和临时文件
