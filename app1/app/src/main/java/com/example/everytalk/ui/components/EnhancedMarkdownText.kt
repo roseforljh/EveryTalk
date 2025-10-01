@@ -133,6 +133,16 @@ private fun consolidateInlineContent(parts: List<MarkdownPart>): List<Consolidat
                 flushInlineGroup()
                 result.add(ConsolidatedContent.BlockContent(part))
             }
+            is MarkdownPart.Table -> {
+                // 表格：先输出当前组，然后独立处理
+                flushInlineGroup()
+                result.add(ConsolidatedContent.BlockContent(part))
+            }
+            is MarkdownPart.MixedContent -> {
+                // 混合内容：先输出当前组，然后独立处理
+                flushInlineGroup()
+                result.add(ConsolidatedContent.BlockContent(part))
+            }
         }
     }
     
@@ -606,8 +616,10 @@ fun EnhancedMarkdownText(
                 when (part) {
                     is MarkdownPart.Text -> part.content.isNotBlank()
                     is MarkdownPart.CodeBlock -> part.content.isNotBlank()
-                    is MarkdownPart.MathBlock -> part.latex.isNotBlank()
-                    else -> true
+                    is MarkdownPart.MathBlock -> part.latex.isNotBlank() || part.content.isNotBlank()
+                    is MarkdownPart.HtmlContent -> part.html.isNotBlank()
+                    is MarkdownPart.Table -> part.content.isNotBlank()
+                    is MarkdownPart.MixedContent -> part.content.isNotBlank()
                 }
             }
             
@@ -619,6 +631,8 @@ fun EnhancedMarkdownText(
                     is MarkdownPart.MathBlock -> android.util.Log.d("EnhancedMarkdownText", "  MathBlock: '${part.latex}' (displayMode=${part.displayMode})")
                     is MarkdownPart.CodeBlock -> android.util.Log.d("EnhancedMarkdownText", "  CodeBlock: '${part.content.take(30)}...'")
                     is MarkdownPart.HtmlContent -> android.util.Log.d("EnhancedMarkdownText", "  HtmlContent: '${part.html.take(30)}...'")
+                    is MarkdownPart.Table -> android.util.Log.d("EnhancedMarkdownText", "  Table: '${part.content.take(30)}...'")
+                    is MarkdownPart.MixedContent -> android.util.Log.d("EnhancedMarkdownText", "  MixedContent: '${part.content.take(30)}...'")
                 }
             }
             

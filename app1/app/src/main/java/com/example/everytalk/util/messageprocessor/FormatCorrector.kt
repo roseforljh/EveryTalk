@@ -159,6 +159,34 @@ class FormatCorrector(
     }
     
     /**
+     * 修复数学表达式中的符号
+     */
+    private fun fixMathSymbols(text: String): String {
+        var fixed = text
+        
+        // 保护代码块不被修改
+        val codeBlockRegex = "```[\\s\\S]*?```".toRegex()
+        val hasCodeBlocks = codeBlockRegex.containsMatchIn(fixed)
+        
+        // 只在非代码块区域处理数学符号
+        if (!hasCodeBlocks && (text.contains("*") || text.contains("="))) {
+            // 将数学表达式中的 * 转换为 ×
+            fixed = fixed.replace(Regex("(\\d+)\\s*\\*\\s*(\\d+)"), "$1×$2")
+            fixed = fixed.replace(Regex("([a-zA-Z])\\s*\\*\\s*(\\d+)"), "$1×$2")
+            fixed = fixed.replace(Regex("(\\d+)\\s*\\*\\s*([a-zA-Z])"), "$1×$2")
+            
+            // 将 ** 转换为上标（如果后面跟着2或3）
+            fixed = fixed.replace(Regex("([a-zA-Z])(\\*\\*|\\^)2\\b"), "$1²")
+            fixed = fixed.replace(Regex("([a-zA-Z])(\\*\\*|\\^)3\\b"), "$1³")
+            
+            // 清理孤立的 ** 符号
+            fixed = fixed.replace(Regex("(?<![a-zA-Z0-9])\\*\\*+(?![a-zA-Z0-9])"), "")
+        }
+        
+        return fixed
+    }
+    
+    /**
      * 应用格式矫正 - 改进版：优化处理顺序，避免格式冲突
      */
     private fun applyFormatCorrections(text: String): String {
@@ -172,6 +200,11 @@ class FormatCorrector(
         // 第二阶段：处理结构化格式
         if (formatConfig.enableMarkdownCorrection) {
             corrected = fixMarkdownHeaders(corrected)
+        }
+        
+        // 🎯 新增：在处理列表之前先处理数学符号
+        if (text.contains("*") || text.contains("=")) {
+            corrected = fixMathSymbols(corrected)
         }
         
         if (formatConfig.enableListCorrection) {
@@ -366,9 +399,16 @@ class FormatCorrector(
         fixed = fixed.replace(Regex("^(#{1,6})([^#\\s])"), "$1 $2")
         fixed = fixed.replace(Regex("\n(#{1,6})([^#\\s])"), "\n$1 $2")
         
+        // 🎯 新增：清理标题后的孤立星号
+        // 匹配标题行末尾的单个或多个星号（不是markdown加粗语法）
+        fixed = fixed.replace(Regex("^(#{1,6}\\s+[^*\\n]+?)\\s*\\*+\\s*$", RegexOption.MULTILINE), "$1")
+        
+        // 清理标题行内的孤立星号（标题中间出现的单个星号）
+        fixed = fixed.replace(Regex("^(#{1,6}\\s+)([^*\\n]*?)\\s+\\*\\s+([^*\\n]*?)$", RegexOption.MULTILINE), "$1$2 $3")
+        
         // 修复标题前后的换行
-        fixed = fixed.replace(Regex("([^\n])\n(#{1,6} .+)"), "$1\n\n$2")
-        fixed = fixed.replace(Regex("(#{1,6} .+)\n([^\n#])"), "$1\n\n$2")
+        fixed = fixed.replace(Regex("([^\\n])\\n(#{1,6} .+)"), "$1\\n\\n$2")
+        fixed = fixed.replace(Regex("(#{1,6} .+)\\n([^\\n#])"), "$1\\n\\n$2")
         
         return fixed
     }
@@ -400,6 +440,10 @@ class FormatCorrector(
         // 修复列表项之间的换行
         fixed = fixed.replace(Regex("(\\s*[\\-\\*\\+] .+)\n([^\\s\\-\\*\\+\\n])"), "$1\n\n$2")
         fixed = fixed.replace(Regex("(\\s*\\d+\\. .+)\n([^\\s\\d\\n])"), "$1\n\n$2")
+        
+        // 🎯 新增：清理非列表上下文中的孤立星号
+        // 清理段落末尾的单个星号（不在列表开头，且不是markdown加粗）
+        fixed = fixed.replace(Regex("([^*\\n])\\s+\\*\\s*$", RegexOption.MULTILINE), "$1")
         
         return fixed
     }

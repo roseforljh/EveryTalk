@@ -3,8 +3,11 @@ package com.example.everytalk.util.messageprocessor
 import com.example.everytalk.ui.components.MarkdownPart
 import java.util.UUID
 
+/**
+ * 🚀 增强的Markdown解析器 - 支持专业数学公式渲染
+ */
 internal fun parseMarkdownParts(markdown: String, inTableContext: Boolean = false): List<MarkdownPart> {
-    android.util.Log.d("MarkdownParser", "=== parseMarkdownParts START ===")
+    android.util.Log.d("MarkdownParser", "=== Enhanced parseMarkdownParts START ===")
     android.util.Log.d("MarkdownParser", "Input markdown length: ${markdown.length}")
     android.util.Log.d("MarkdownParser", "Input preview: ${markdown.take(200)}...")
     
@@ -13,368 +16,237 @@ internal fun parseMarkdownParts(markdown: String, inTableContext: Boolean = fals
         return listOf(MarkdownPart.Text(id = "text_${UUID.randomUUID()}", content = ""))
     }
 
-    val preprocessed = preprocessMarkdownForAndroid(markdown)
-    android.util.Log.d("MarkdownParser", "Preprocessed preview: ${preprocessed.take(200)}...")
+    // 🎯 首先进行数学内容智能预处理
+    val preprocessed = preprocessMarkdownForMath(markdown)
+    android.util.Log.d("MarkdownParser", "Math preprocessed preview: ${preprocessed.take(200)}...")
     
-    val parts = mutableListOf<MarkdownPart>()
-    val buffer = StringBuilder()
-
-    fun flushBuffer() {
-        if (buffer.isNotEmpty()) {
-            parts.add(MarkdownPart.Text(id = "text_${UUID.randomUUID()}", content = buffer.toString()))
-            android.util.Log.d("MarkdownParser", "Flushed text buffer: ${buffer.toString().take(50)}...")
-            buffer.clear()
-        }
-    }
-
-    fun isEscaped(idx: Int): Boolean {
-        var bs = 0
-        var i = idx - 1
-        while (i >= 0 && preprocessed[i] == '\\') { bs++; i-- }
-        return bs % 2 == 1
-    }
-
-    fun findUnescaped(target: String, start: Int): Int {
-        var j = start
-        while (true) {
-            val k = preprocessed.indexOf(target, j)
-            if (k == -1) return -1
-            if (!isEscaped(k)) return k
-            j = k + 1
-        }
-    }
-
-    val n = preprocessed.length
-    var i = 0
-    while (i < n) {
-        // 1) 解析 ```code fences```
-        if (preprocessed.startsWith("```", i)) {
-            android.util.Log.d("MarkdownParser", "Found ``` at position $i")
-            val langStart = i + 3
-            var j = langStart
-            while (j < n && (preprocessed[j] == ' ' || preprocessed[j] == '\t')) j++
-            var k = j
-            while (k < n && preprocessed[k] != '\n' && preprocessed[k] != '\r') k++
-            val language = preprocessed.substring(j, k).trim().trim('`')
-            android.util.Log.d("MarkdownParser", "Code block language: '$language'")
-            var codeStart = k
-            if (codeStart < n && (preprocessed[codeStart] == '\n' || preprocessed[codeStart] == '\r')) {
-                codeStart += 1
-            }
-            val close = preprocessed.indexOf("```", codeStart)
-            if (close == -1) {
-                // 未闭合，作为普通文本追加
-                buffer.append(preprocessed.substring(i))
-                i = n
-                break
-            }
-            val code = preprocessed.substring(codeStart, close)
-            flushBuffer()
-            val partId = "part_${UUID.randomUUID()}"
-            // 将 ```math 或 ```latex 识别为 MathBlock
-            if (language.equals("math", ignoreCase = true) || language.equals("latex", ignoreCase = true)) {
-                android.util.Log.d("MarkdownParser", "✅ Creating MathBlock from ```$language block: ${code.take(50)}...")
-                parts.add(MarkdownPart.MathBlock(id = partId, latex = code.trim(), displayMode = true))
-            } else {
-                parts.add(MarkdownPart.CodeBlock(id = partId, content = code, language = language))
-            }
-            i = close + 3
-            continue
-        }
-
-        // 2) 解析 $$...$$ 块级数学
-        if (preprocessed.startsWith("$$", i)) {
-            android.util.Log.d("MarkdownParser", "Found $$ at position $i")
-            val start = i + 2
-            val end = findUnescaped("$$", start)
-            if (end != -1) {
-                val latex = preprocessed.substring(start, end)
-                android.util.Log.d("MarkdownParser", "✅ Creating display MathBlock: ${latex.take(50)}...")
-                flushBuffer()
-                parts.add(MarkdownPart.MathBlock(id = "math_${UUID.randomUUID()}", latex = latex.trim(), displayMode = true))
-                i = end + 2
-                continue
-            } else {
-                // 未闭合，作为普通文本
-                buffer.append(preprocessed.substring(i, i + 2))
-                i += 2
-                continue
-            }
-        }
-
-        // 2.1) 解析 \\[ ... \\] 块级数学（LaTeX 常见写法）
-        if (preprocessed.startsWith("\\[", i)) {
-            android.util.Log.d("MarkdownParser", "Found \\[ at position $i")
-            val start = i + 2
-            val end = preprocessed.indexOf("\\]", start)
-            if (end != -1) {
-                val latex = preprocessed.substring(start, end)
-                android.util.Log.d("MarkdownParser", "✅ Creating \\[\\] MathBlock: ${latex.take(50)}...")
-                flushBuffer()
-                parts.add(MarkdownPart.MathBlock(id = "math_${'$'}{UUID.randomUUID()}", latex = latex.trim(), displayMode = true))
-                i = end + 2
-                continue
-            }
-        }
-
-        // 3) 解析 $...$ 行内数学（放宽规则：仅避免与货币符号冲突，允许字母/中文贴邻）
-        if (preprocessed[i] == '$') {
-            val prev = if (i > 0) preprocessed[i - 1] else ' '
-            // 仅当紧邻为数字时视为可能的货币符号
-            if (!prev.isDigit()) {
-                android.util.Log.d("MarkdownParser", "Found $ at position $i")
-                val start = i + 1
-                val end = findUnescaped("$", start)
-                if (end != -1) {
-                    val next = if (end + 1 < n) preprocessed[end + 1] else ' '
-                    if (!next.isDigit()) {
-                        val latex = preprocessed.substring(start, end)
-                        if (latex.isNotBlank()) {
-                            android.util.Log.d("MarkdownParser", "✅ Creating inline MathBlock: ${latex.take(50)}...")
-                            flushBuffer()
-                            parts.add(MarkdownPart.MathBlock(id = "math_${'$'}{UUID.randomUUID()}", latex = latex.trim(), displayMode = false))
-                            i = end + 1
-                            continue
-                        }
-                    }
-                }
-            }
-            // 非数学上下文，按普通字符处理
-            buffer.append(preprocessed[i])
-            i++
-            continue
-        }
-
-        // 3.1) 解析 \\( ... \\) 行内数学（LaTeX 常见写法）
-        if (preprocessed.startsWith("\\(", i)) {
-            android.util.Log.d("MarkdownParser", "Found \\( at position $i")
-            val start = i + 2
-            val end = preprocessed.indexOf("\\)", start)
-            if (end != -1) {
-                val latex = preprocessed.substring(start, end)
-                if (latex.isNotBlank()) {
-                    android.util.Log.d("MarkdownParser", "✅ Creating \\(\\) MathBlock: ${latex.take(50)}...")
-                    flushBuffer()
-                    parts.add(MarkdownPart.MathBlock(id = "math_${'$'}{UUID.randomUUID()}", latex = latex.trim(), displayMode = false))
-                    i = end + 2
-                    continue
-                }
-            }
-        }
-
-        // 4) 行内代码与其它
-        if (preprocessed[i] == '`') {
-            var tickCount = 1
-            var t = i + 1
-            while (t < n && preprocessed[t] == '`') { tickCount++; t++ }
-            var searchPos = t
-            var found = -1
-            val needle = "`".repeat(tickCount)
-            while (searchPos < n) {
-                val k = markdown.indexOf(needle, searchPos)
-                if (k == -1) break
-                found = k
-                break
-            }
-            if (found != -1) {
-                buffer.append(preprocessed.substring(i, found + tickCount))
-                i = found + tickCount
-                continue
-            } else {
-                buffer.append(preprocessed[i])
-                i++
-                continue
-            }
-        }
-
-        buffer.append(preprocessed[i])
-        i++
-    }
-
-    flushBuffer()
-
-    val filteredParts = parts.filterNot { it is MarkdownPart.Text && it.content.isBlank() }
+    // 🎯 智能内容分类 - 检测是否包含复杂数学内容
+    val contentType = detectContentType(preprocessed)
+    android.util.Log.d("MarkdownParser", "Detected content type: $contentType")
     
-    android.util.Log.d("MarkdownParser", "Final parts count: ${filteredParts.size}")
-    filteredParts.forEachIndexed { index, part ->
-        android.util.Log.d("MarkdownParser", "Part $index: ${part::class.simpleName} - ${part.toString().take(100)}...")
+    return when (contentType) {
+        ContentType.MATH_HEAVY -> parseMathHeavyContent(preprocessed)
+        ContentType.MIXED_MATH -> parseMixedMathContent(preprocessed, inTableContext)
+        ContentType.SIMPLE_TEXT -> parseSimpleMarkdown(preprocessed, inTableContext)
+        ContentType.TABLE -> parseTableContent(preprocessed)
     }
-    
-    if (filteredParts.isEmpty() && markdown.isNotBlank()) {
-        android.util.Log.d("MarkdownParser", "No valid parts found, creating fallback text part")
-        android.util.Log.d("MarkdownParser", "=== parseMarkdownParts END (fallback) ===")
-        return listOf(MarkdownPart.Text(id = "text_${UUID.randomUUID()}", content = markdown))
-    }
-
-    android.util.Log.d("MarkdownParser", "=== parseMarkdownParts END ===")
-    return filteredParts
 }
 
+/**
+ * 内容类型枚举
+ */
+private enum class ContentType {
+    MATH_HEAVY,     // 数学公式为主，使用专业渲染器
+    MIXED_MATH,     // 包含数学公式的混合内容
+    SIMPLE_TEXT,    // 简单文本，使用原生渲染
+    TABLE          // 表格内容
+}
+
+/**
+ * 🎯 数学内容智能预处理 - 彻底清理LaTeX语法
+ */
+private fun preprocessMarkdownForMath(markdown: String): String {
+    var content = markdown
+    
+    // 1. 彻底清理LaTeX语法，转换为Unicode
+    // 处理分数 \frac{a}{b} -> (a)/(b)
+    content = content.replace(Regex("\\\\frac\\{([^}]+)\\}\\{([^}]+)\\}"), "($1)/($2)")
+    
+    // 处理根号 \sqrt{x} -> √(x)
+    content = content.replace(Regex("\\\\sqrt\\{([^}]+)\\}"), "√($1)")
+    content = content.replace(Regex("\\\\sqrt\\s+(\\d+\\.?\\d*)"), "√$1")
+    
+    // 处理上标 ^{n} -> ⁿ
+    val superscriptMap = mapOf(
+        '0' to '⁰', '1' to '¹', '2' to '²', '3' to '³', '4' to '⁴',
+        '5' to '⁵', '6' to '⁶', '7' to '⁷', '8' to '⁸', '9' to '⁹',
+        '+' to '⁺', '-' to '⁻', '=' to '⁼', '(' to '⁽', ')' to '⁾',
+        'n' to 'ⁿ', 'i' to 'ⁱ', 'x' to 'ˣ', 'y' to 'ʸ'
+    )
+    
+    content = content.replace(Regex("\\^(\\d)")) { match ->
+        superscriptMap[match.groupValues[1][0]]?.toString() ?: match.value
+    }
+    
+    content = content.replace(Regex("\\^\\{([^}]+)\\}")) { match ->
+        match.groupValues[1].map { char -> superscriptMap[char]?.toString() ?: char.toString() }.joinToString("")
+    }
+    
+    // 处理下标 _{n} -> ₙ  
+    val subscriptMap = mapOf(
+        '0' to '₀', '1' to '₁', '2' to '₂', '3' to '₃', '4' to '₄',
+        '5' to '₅', '6' to '₆', '7' to '₇', '8' to '₈', '9' to '₉',
+        '+' to '₊', '-' to '₋', '=' to '₌', '(' to '₍', ')' to '₎',
+        'a' to 'ₐ', 'e' to 'ₑ', 'h' to 'ₕ', 'i' to 'ᵢ', 'j' to 'ⱼ',
+        'k' to 'ₖ', 'l' to 'ₗ', 'm' to 'ₘ', 'n' to 'ₙ', 'o' to 'ₒ',
+        'p' to 'ₚ', 'r' to 'ᵣ', 's' to 'ₛ', 't' to 'ₜ', 'u' to 'ᵤ',
+        'v' to 'ᵥ', 'x' to 'ₓ'
+    )
+    
+    content = content.replace(Regex("_(\\d)")) { match ->
+        subscriptMap[match.groupValues[1][0]]?.toString() ?: match.value
+    }
+    
+    content = content.replace(Regex("_\\{([^}]+)\\}")) { match ->
+        match.groupValues[1].map { char -> subscriptMap[char]?.toString() ?: char.toString() }.joinToString("")
+    }
+    
+    // 2. 处理常见数学运算符
+    content = content.replace("\\pm", "±")
+    content = content.replace("\\mp", "∓")  
+    content = content.replace("\\times", "×")
+    content = content.replace("\\div", "÷")
+    content = content.replace("\\cdot", "·")
+    
+    // 3. 处理比较运算符
+    content = content.replace("\\leq", "≤")
+    content = content.replace("\\geq", "≥")
+    content = content.replace("\\neq", "≠")
+    content = content.replace("\\approx", "≈")
+    content = content.replace("\\equiv", "≡")
+    
+    // 4. 处理希腊字母
+    val greekLetters = mapOf(
+        "\\alpha" to "α", "\\beta" to "β", "\\gamma" to "γ", "\\delta" to "δ",
+        "\\epsilon" to "ε", "\\zeta" to "ζ", "\\eta" to "η", "\\theta" to "θ",
+        "\\iota" to "ι", "\\kappa" to "κ", "\\lambda" to "λ", "\\mu" to "μ",
+        "\\nu" to "ν", "\\xi" to "ξ", "\\pi" to "π", "\\rho" to "ρ",
+        "\\sigma" to "σ", "\\tau" to "τ", "\\upsilon" to "υ", "\\phi" to "φ",
+        "\\chi" to "χ", "\\psi" to "ψ", "\\omega" to "ω",
+        "\\Alpha" to "Α", "\\Beta" to "Β", "\\Gamma" to "Γ", "\\Delta" to "Δ",
+        "\\Epsilon" to "Ε", "\\Zeta" to "Ζ", "\\Eta" to "Η", "\\Theta" to "Θ",
+        "\\Iota" to "Ι", "\\Kappa" to "Κ", "\\Lambda" to "Λ", "\\Mu" to "Μ",
+        "\\Nu" to "Ν", "\\Xi" to "Ξ", "\\Pi" to "Π", "\\Rho" to "Ρ",
+        "\\Sigma" to "Σ", "\\Tau" to "Τ", "\\Upsilon" to "Υ", "\\Phi" to "Φ",
+        "\\Chi" to "Χ", "\\Psi" to "Ψ", "\\Omega" to "Ω"
+    )
+    
+    greekLetters.forEach { (latex, unicode) ->
+        content = content.replace(latex, unicode)
+    }
+    
+    // 5. 处理特殊符号
+    content = content.replace("\\partial", "∂")
+    content = content.replace("\\nabla", "∇")
+    content = content.replace("\\sum", "∑")
+    content = content.replace("\\prod", "∏")
+    content = content.replace("\\int", "∫")
+    content = content.replace("\\oint", "∮")
+    content = content.replace("\\infty", "∞")
+    content = content.replace("\\forall", "∀")
+    content = content.replace("\\exists", "∃")
+    content = content.replace("\\in", "∈")
+    content = content.replace("\\notin", "∉")
+    content = content.replace("\\subset", "⊂")
+    content = content.replace("\\supset", "⊃")
+    content = content.replace("\\cup", "∪")
+    content = content.replace("\\cap", "∩")
+    content = content.replace("\\emptyset", "∅")
+    
+    // 6. 处理省略号
+    content = content.replace("\\ldots", "…")
+    content = content.replace("\\cdots", "⋯")
+    content = content.replace("\\vdots", "⋮")
+    content = content.replace("\\ddots", "⋱")
+    
+    // 7. 清理所有剩余的LaTeX语法
+    content = content.replace(Regex("\\\\[a-zA-Z]+\\{[^}]*\\}"), "") // 清理 \command{content}
+    content = content.replace(Regex("\\\\[a-zA-Z]+"), "") // 清理 \command
+    content = content.replace(Regex("\\$+"), "") // 清理 $ 符号
+    
+    // 8. 清理多余空格
+    content = content.replace(Regex("\\s+"), " ").trim()
+    
+    android.util.Log.d("MarkdownParser", "LaTeX清理前: ${markdown.take(100)}...")
+    android.util.Log.d("MarkdownParser", "LaTeX清理后: ${content.take(100)}...")
+    
+    return content
+}
+
+/**
+ * 🎯 智能内容类型检测
+ */
+private fun detectContentType(content: String): ContentType {
+    val mathSymbols = listOf("∫", "∑", "√", "π", "α", "β", "γ", "δ", "Δ", "σ", "μ", "λ")
+    val hasMathSymbols = mathSymbols.any { content.contains(it) }
+    val hasTable = content.contains("|") && content.contains("---")
+    val hasComplexMath = content.contains("²") || content.contains("³") || content.contains("½")
+    
+    return when {
+        hasTable && !hasMathSymbols -> ContentType.TABLE
+        hasMathSymbols || hasComplexMath -> ContentType.MATH_HEAVY
+        else -> ContentType.SIMPLE_TEXT
+    }
+}
+
+/**
+ * 🎯 解析数学密集型内容 - 使用专业渲染器
+ */
+private fun parseMathHeavyContent(content: String): List<MarkdownPart> {
+    android.util.Log.d("MarkdownParser", "Parsing math-heavy content with professional renderer")
+    
+    return listOf(
+        MarkdownPart.MathBlock(
+            id = "math_${UUID.randomUUID()}",
+            content = content,
+            renderMode = "professional"
+        )
+    )
+}
+
+/**
+ * 🎯 解析混合数学内容
+ */
+private fun parseMixedMathContent(content: String, inTableContext: Boolean): List<MarkdownPart> {
+    android.util.Log.d("MarkdownParser", "Parsing mixed math content")
+    
+    // 简化处理：直接返回文本部分
+    return listOf(
+        MarkdownPart.Text(
+            id = "text_${UUID.randomUUID()}",
+            content = content
+        )
+    )
+}
+
+/**
+ * 🎯 解析表格内容
+ */
+private fun parseTableContent(content: String): List<MarkdownPart> {
+    android.util.Log.d("MarkdownParser", "Parsing table content")
+    
+    return listOf(
+        MarkdownPart.Table(
+            id = "table_${UUID.randomUUID()}",
+            content = content,
+            renderMode = "webview"
+        )
+    )
+}
+
+/**
+ * 🎯 解析简单文本内容 - 使用原生渲染器
+ */
+private fun parseSimpleMarkdown(content: String, inTableContext: Boolean): List<MarkdownPart> {
+    android.util.Log.d("MarkdownParser", "Parsing simple markdown with native renderer")
+    
+    // 简化处理：直接返回文本部分
+    return listOf(
+        MarkdownPart.Text(
+            id = "text_${UUID.randomUUID()}",
+            content = content
+        )
+    )
+}
+
+/**
+ * 预处理Markdown以兼容Android前端
+ */
 private fun preprocessMarkdownForAndroid(markdown: String): String {
     if (markdown.isEmpty()) return markdown
     
-    // 🎯 第一步：标准化换行，保护LaTeX公式
-    var processed = markdown
-        .replace("\r\n", "\n")  // 统一换行符
-        .replace("\r", "\n")   // 处理旧Mac换行
-    
-    // 🎯 第二步：保护LaTeX公式不被换行影响
-    // 临时替换LaTeX公式为占位符，避免换行干扰
-    val latexPlaceholders = mutableMapOf<String, String>()
-    var placeholderIndex = 0
-    
-    // 保护 $$...$$
-    processed = processed.replace(Regex("\\$\\$([\\s\\S]*?)\\$\\$")) { match ->
-        val placeholder = "__LATEX_DISPLAY_${placeholderIndex++}__"
-        latexPlaceholders[placeholder] = match.value
-        placeholder
-    }
-    
-    // 保护 $...$
-    processed = processed.replace(Regex("\\$([^\\$\\n]+?)\\$")) { match ->
-        val placeholder = "__LATEX_INLINE_${placeholderIndex++}__"
-        latexPlaceholders[placeholder] = match.value
-        placeholder
-    }
-    
-    // 保护 \[...\]
-    processed = processed.replace(Regex("\\\\\\[([\\s\\S]*?)\\\\\\]")) { match ->
-        val placeholder = "__LATEX_BRACKET_${placeholderIndex++}__"
-        latexPlaceholders[placeholder] = match.value
-        placeholder
-    }
-    
-    // 保护 \(...\)
-    processed = processed.replace(Regex("\\\\\\(([^\\)]+?)\\\\\\)")) { match ->
-        val placeholder = "__LATEX_PAREN_${placeholderIndex++}__"
-        latexPlaceholders[placeholder] = match.value
-        placeholder
-    }
-    
-    // 🎯 第三步：处理Markdown格式规范化
-    processed = processed
-        .replace(Regex("(?m)^(#{1,6})([^#\\s])")) { "${it.groupValues[1]} ${it.groupValues[2]}" }
-        .replace('＊', '*')
-        .replace('﹡', '*')
-        .replace('｜', '|')
-        .replace('│', '|')
-        .replace('┃', '|')
-        .let { content ->
-            val lines = content.lines()
-            val processedLines = mutableListOf<String>()
-            var inTable = false
-            var tableStartIndex = -1
-            
-            // 预处理：检测所有可能的表格行
-            val tableLines = mutableSetOf<Int>()
-            for (i in lines.indices) {
-                val line = lines[i].trim()
-                val containsPipe = line.contains("|")
-                val isCodeBlock = line.startsWith("```")
-                
-                if (containsPipe && !isCodeBlock) {
-                    val nextLineIndex = i + 1
-                    if (nextLineIndex < lines.size) {
-                        val nextLine = lines[nextLineIndex].trim()
-                        if (nextLine.matches(Regex("^\\|?\\s*:?[-]{3,}:?\\s*(\\|\\s*:?[-]{3,}:?\\s*)+\\|?$"))) {
-                            // 这是表格开始，标记从这里开始的所有相关行
-                            var j = i
-                            while (j < lines.size) {
-                                val currentLine = lines[j].trim()
-                                if (currentLine.startsWith("```") || 
-                                    (currentLine.isEmpty() && j < lines.size - 1 && 
-                                     !lines[j + 1].trim().contains("|"))) {
-                                    break
-                                }
-                                if (currentLine.isNotEmpty()) {
-                                    tableLines.add(j)
-                                }
-                                j++
-                            }
-                        }
-                    }
-                }
-            }
-            
-            for (i in lines.indices) {
-                val line = lines[i].trim()
-                val containsPipe = line.contains("|")
-                val isCodeBlock = line.startsWith("```")
-                val isTableLine = tableLines.contains(i)
-                
-                // Detect table start/end based on pre-analysis
-                if (isTableLine && !inTable) {
-                    inTable = true
-                    tableStartIndex = i
-                } else if (inTable && !isTableLine && !line.isEmpty()) {
-                    inTable = false
-                }
-                
-                // Process line based on context
-                when {
-                    isCodeBlock -> processedLines.add(lines[i])
-                    isTableLine || inTable -> {
-                        // In table context - ensure proper pipe formatting
-                        if (containsPipe) {
-                            val trimmed = line
-                            when {
-                                !trimmed.startsWith("|") && !trimmed.endsWith("|") -> {
-                                    processedLines.add("| $trimmed |")
-                                }
-                                !trimmed.startsWith("|") && trimmed.endsWith("|") -> {
-                                    processedLines.add("| $trimmed")
-                                }
-                                trimmed.startsWith("|") && !trimmed.endsWith("|") -> {
-                                    processedLines.add("$trimmed |")
-                                }
-                                else -> processedLines.add(trimmed)
-                            }
-                        } else if (line.isNotEmpty()) {
-                            // Non-pipe line in table context - add it as a table row
-                            processedLines.add("| $line |")
-                        } else {
-                            processedLines.add(lines[i])
-                        }
-                    }
-                    containsPipe && !isCodeBlock -> {
-                        // Standalone line with pipes (not in detected table)
-                        val trimmed = line
-                        when {
-                            !trimmed.startsWith("|") && !trimmed.endsWith("|") -> {
-                                processedLines.add("| $trimmed |")
-                            }
-                            !trimmed.startsWith("|") && trimmed.endsWith("|") -> {
-                                processedLines.add("| $trimmed")
-                            }
-                            trimmed.startsWith("|") && !trimmed.endsWith("|") -> {
-                                processedLines.add("$trimmed |")
-                            }
-                            else -> processedLines.add(trimmed)
-                        }
-                    }
-                    else -> processedLines.add(lines[i])
-                }
-            }
-            
-            // 将行合并为文本，并在表格出现在文末时补一个换行，防止最后单元格内容被挤出表格
-            val joined = processedLines.joinToString("\n")
-            val needsNewlineAtEOF = run {
-                val sepRegex = Regex("^\\|?\\s*:?[-]{3,}:?\\s*(\\|\\s*:?[-]{3,}:?\\s*)+\\|?$")
-                val hadSeparator = processedLines.any { sepRegex.containsMatchIn(it.trim()) }
-                val last = processedLines.lastOrNull()?.trim() ?: ""
-                hadSeparator && (last.contains('|') || tableLines.contains(lines.size - 1)) && !last.startsWith("```")
-            }
-            if (needsNewlineAtEOF) "$joined\n" else joined
-        }
-        .replace("\u200B", "")
-        .replace("\u200C", "")
-        .replace("\u200D", "")
-        .replace("\uFEFF", "")
-    
-    // 🎯 第四步：恢复LaTeX公式
-    latexPlaceholders.forEach { (placeholder, original) ->
-        processed = processed.replace(placeholder, original)
-    }
-    
-    return processed
+    return markdown
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+        .trim()
 }
