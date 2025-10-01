@@ -17,6 +17,11 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.navigationBarsIgnoringVisibility
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
@@ -241,7 +246,7 @@ fun SelectedItemPreview(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ImageGenerationInputArea(
     text: String,
@@ -338,7 +343,12 @@ fun ImageGenerationInputArea(
     var chatInputContentHeightPx by remember { mutableIntStateOf(0) }
 
     val onToggleImagePanel = {
-        showImageSelectionPanel = !showImageSelectionPanel
+        val willOpen = !showImageSelectionPanel
+        showImageSelectionPanel = willOpen
+        if (willOpen) {
+            // 打开面板时收起键盘，保持与文本模式一致
+            keyboardController?.hide()
+        }
     }
 
     val onClearContent = remember {
@@ -376,21 +386,33 @@ fun ImageGenerationInputArea(
             }
         }
 
-    Box(modifier = Modifier.fillMaxWidth()) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            // 与文本模式一致：外层统一消费 IME 与系统栏 Insets，避免跳动
+            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBarsIgnoringVisibility))
+    ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxWidth(1f)
                 .align(Alignment.BottomCenter)
+                .padding(start = 6.dp, end = 6.dp, bottom = 10.dp)
                 .shadow(
                     elevation = 6.dp,
-                    shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+                    shape = RoundedCornerShape(24.dp),
                     clip = false
                 )
-                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
-                .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                .background(
+                    MaterialTheme.colorScheme.surface,
+                    RoundedCornerShape(24.dp)
+                )
+                .clip(RoundedCornerShape(24.dp))
                 .onSizeChanged { intSize -> chatInputContentHeightPx = intSize.height }
         ) {
-            Column(modifier = Modifier.padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 16.dp)) {
+            Column(
+                modifier = Modifier
+                    .padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 4.dp)
+            ) {
                 if (editingMessage != null) {
                     Row(
                         modifier = Modifier
@@ -444,7 +466,7 @@ fun ImageGenerationInputArea(
                             }
                         }
                         .padding(bottom = 4.dp),
-                    placeholder = { Text("Enter a prompt...") },
+                    placeholder = { Text("输入消息…") },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
                         unfocusedTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
@@ -501,6 +523,8 @@ fun ImageGenerationInputArea(
                     }
                 }
             }
+            
+            // 已由外层 windowInsetsPadding 统一处理底部系统栏，无需额外 spacer
         }
 
         val yOffsetPx = -chatInputContentHeightPx.toFloat() - with(density) { 8.dp.toPx() }

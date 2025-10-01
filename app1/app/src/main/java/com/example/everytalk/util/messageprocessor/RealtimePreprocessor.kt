@@ -225,8 +225,12 @@ class RealtimePreprocessor(
     private fun preprocessMarkdown(text: String): String {
         if (text.isBlank()) return text
         
-        // 先修复表格格式
-        var processedText = fixTableFormat(text)
+        // 🎯 智能表格修复：只对明显的表格内容进行修复
+        val processedText = if (text.contains("|") && text.count { it == '|' } >= 4) {
+            fixTableFormat(text)
+        } else {
+            text
+        }
         
         // 逐行处理，遇到代码围栏时切换状态，围栏内不做任何修改
         val lines = processedText.split("\n").toMutableList()

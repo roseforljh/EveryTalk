@@ -135,6 +135,8 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
     }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
         topBar = {
             ImageGenerationTopBar(
                 selectedConfigName = selectedApiConfig?.name?.takeIf { it.isNotBlank() }
@@ -177,36 +179,34 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                     },
                 )
             }
-            Box(modifier = Modifier.imePadding()) {
-                ImageGenerationInputArea(
-                    text = text,
-                    onTextChange = { viewModel.onTextChange(it) },
-                    onSendMessageRequest = { messageText, attachments ->
-                        viewModel.onSendMessage(
-                            messageText = messageText,
-                            attachments = attachments,
-                            isImageGeneration = true
-                        )
-                    },
-                    selectedMediaItems = selectedMediaItems,
-                    onAddMediaItem = { viewModel.addMediaItem(it) },
-                    onRemoveMediaItemAtIndex = { viewModel.removeMediaItemAtIndex(it) },
-                    onClearMediaItems = { viewModel.clearMediaItems() },
-                    isApiCalling = isApiCalling,
-                    onStopApiCall = { viewModel.onCancelAPICall() },
-                    focusRequester = focusRequester,
-                    selectedApiConfig = selectedApiConfig,
-                    onShowSnackbar = { viewModel.showSnackbar(it) },
-                    imeInsets = imeInsets,
-                    density = density,
-                    keyboardController = keyboardController,
-                    onFocusChange = {
-                        scrollStateManager.jumpToBottom()
-                    },
-                    editingMessage = editingMessage,
-                    onCancelEdit = { viewModel.cancelEditing() }
-                )
-            }
+            ImageGenerationInputArea(
+                text = text,
+                onTextChange = { viewModel.onTextChange(it) },
+                onSendMessageRequest = { messageText, attachments ->
+                    viewModel.onSendMessage(
+                        messageText = messageText,
+                        attachments = attachments,
+                        isImageGeneration = true
+                    )
+                },
+                selectedMediaItems = selectedMediaItems,
+                onAddMediaItem = { viewModel.addMediaItem(it) },
+                onRemoveMediaItemAtIndex = { viewModel.removeMediaItemAtIndex(it) },
+                onClearMediaItems = { viewModel.clearMediaItems() },
+                isApiCalling = isApiCalling,
+                onStopApiCall = { viewModel.onCancelAPICall() },
+                focusRequester = focusRequester,
+                selectedApiConfig = selectedApiConfig,
+                onShowSnackbar = { viewModel.showSnackbar(it) },
+                imeInsets = imeInsets,
+                density = density,
+                keyboardController = keyboardController,
+                onFocusChange = {
+                    scrollStateManager.jumpToBottom()
+                },
+                editingMessage = editingMessage,
+                onCancelEdit = { viewModel.cancelEditing() }
+            )
         }
     }
 }

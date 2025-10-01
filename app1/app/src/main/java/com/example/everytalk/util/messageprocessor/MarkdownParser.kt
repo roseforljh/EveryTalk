@@ -4,7 +4,7 @@ import com.example.everytalk.ui.components.MarkdownPart
 import java.util.UUID
 
 /**
- * 🚀 增强的Markdown解析器 - 支持专业数学公式渲染
+ * 🚀 增强的Markdown解析器 - 支持专业数学公式渲染和表格识别
  */
 internal fun parseMarkdownParts(markdown: String, inTableContext: Boolean = false): List<MarkdownPart> {
     android.util.Log.d("MarkdownParser", "=== Enhanced parseMarkdownParts START ===")
@@ -12,11 +12,17 @@ internal fun parseMarkdownParts(markdown: String, inTableContext: Boolean = fals
     android.util.Log.d("MarkdownParser", "Input preview: ${markdown.take(200)}...")
     
     if (markdown.isBlank()) {
-        android.util.Log.d("MarkdownParser", "Markdown为空，返回空文本part")
+        android.util.Log.d("MarkdownParser", "Markdown为空,返回空文本part")
         return listOf(MarkdownPart.Text(id = "text_${UUID.randomUUID()}", content = ""))
     }
 
-    // 🎯 首先进行数学内容智能预处理
+    // 🎯 优先检测表格 - 表格检测应该在数学预处理之前
+    if (isTableContent(markdown)) {
+        android.util.Log.d("MarkdownParser", "检测到表格内容,直接解析为表格")
+        return parseTableContent(markdown)
+    }
+
+    // 🎯 然后进行数学内容智能预处理
     val preprocessed = preprocessMarkdownForMath(markdown)
     android.util.Log.d("MarkdownParser", "Math preprocessed preview: ${preprocessed.take(200)}...")
     
@@ -36,10 +42,38 @@ internal fun parseMarkdownParts(markdown: String, inTableContext: Boolean = fals
  * 内容类型枚举
  */
 private enum class ContentType {
-    MATH_HEAVY,     // 数学公式为主，使用专业渲染器
+    MATH_HEAVY,     // 数学公式为主,使用专业渲染器
     MIXED_MATH,     // 包含数学公式的混合内容
-    SIMPLE_TEXT,    // 简单文本，使用原生渲染
+    SIMPLE_TEXT,    // 简单文本,使用原生渲染
     TABLE          // 表格内容
+}
+
+/**
+ * 🎯 改进的表格内容检测
+ */
+private fun isTableContent(content: String): Boolean {
+    val lines = content.trim().lines()
+    if (lines.size < 2) return false
+    
+    // 检查是否有足够的管道符
+    val pipeCount = content.count { it == '|' }
+    if (pipeCount < 3) return false
+    
+    // 查找表格分隔符行(必须包含至少2个 --- 分隔的单元格)
+    val separatorRegex = Regex("^\\s*\\|?\\s*:?[-]{2,}:?\\s*(\\|\\s*:?[-]{2,}:?\\s*)+\\|?\\s*$")
+    val hasSeparator = lines.any { line -> 
+        val trimmed = line.trim()
+        separatorRegex.matches(trimmed)
+    }
+    
+    if (!hasSeparator) return false
+    
+    // 验证是否有表头和数据行
+    val tableLines = lines.filter { it.contains("|") }
+    if (tableLines.size < 3) return false // 至少需要:表头、分隔符、数据行
+    
+    android.util.Log.d("MarkdownParser", "✅ 检测到有效表格: ${tableLines.size}行, ${pipeCount}个管道符")
+    return true
 }
 
 /**
@@ -48,7 +82,7 @@ private enum class ContentType {
 private fun preprocessMarkdownForMath(markdown: String): String {
     var content = markdown
     
-    // 1. 彻底清理LaTeX语法，转换为Unicode
+    // 1. 彻底清理LaTeX语法,转换为Unicode
     // 处理分数 \frac{a}{b} -> (a)/(b)
     content = content.replace(Regex("\\\\frac\\{([^}]+)\\}\\{([^}]+)\\}"), "($1)/($2)")
     
@@ -167,13 +201,16 @@ private fun preprocessMarkdownForMath(markdown: String): String {
  * 🎯 智能内容类型检测
  */
 private fun detectContentType(content: String): ContentType {
+    // 🎯 修复:排除表格中的●等符号,避免误判为数学内容
     val mathSymbols = listOf("∫", "∑", "√", "π", "α", "β", "γ", "δ", "Δ", "σ", "μ", "λ")
     val hasMathSymbols = mathSymbols.any { content.contains(it) }
-    val hasTable = content.contains("|") && content.contains("---")
     val hasComplexMath = content.contains("²") || content.contains("³") || content.contains("½")
     
+    // 🎯 改进的表格检测
+    val hasTable = isTableContent(content)
+    
     return when {
-        hasTable && !hasMathSymbols -> ContentType.TABLE
+        hasTable -> ContentType.TABLE
         hasMathSymbols || hasComplexMath -> ContentType.MATH_HEAVY
         else -> ContentType.SIMPLE_TEXT
     }
@@ -200,7 +237,7 @@ private fun parseMathHeavyContent(content: String): List<MarkdownPart> {
 private fun parseMixedMathContent(content: String, inTableContext: Boolean): List<MarkdownPart> {
     android.util.Log.d("MarkdownParser", "Parsing mixed math content")
     
-    // 简化处理：直接返回文本部分
+    // 简化处理:直接返回文本部分
     return listOf(
         MarkdownPart.Text(
             id = "text_${UUID.randomUUID()}",
@@ -210,16 +247,18 @@ private fun parseMixedMathContent(content: String, inTableContext: Boolean): Lis
 }
 
 /**
- * 🎯 解析表格内容
+ * 🎯 解析表格内容 - 完全重写
  */
 private fun parseTableContent(content: String): List<MarkdownPart> {
-    android.util.Log.d("MarkdownParser", "Parsing table content")
+    android.util.Log.d("MarkdownParser", "🎯 Parsing table content")
+    android.util.Log.d("MarkdownParser", "Table content: ${content.take(200)}...")
     
+    // 直接返回Text类型,让前端的MarkdownText库来渲染表格
+    // 因为dev.jeziellago.compose.markdowntext.MarkdownText已经支持表格渲染
     return listOf(
-        MarkdownPart.Table(
+        MarkdownPart.Text(
             id = "table_${UUID.randomUUID()}",
-            content = content,
-            renderMode = "webview"
+            content = content
         )
     )
 }
@@ -230,7 +269,7 @@ private fun parseTableContent(content: String): List<MarkdownPart> {
 private fun parseSimpleMarkdown(content: String, inTableContext: Boolean): List<MarkdownPart> {
     android.util.Log.d("MarkdownParser", "Parsing simple markdown with native renderer")
     
-    // 简化处理：直接返回文本部分
+    // 简化处理:直接返回文本部分
     return listOf(
         MarkdownPart.Text(
             id = "text_${UUID.randomUUID()}",

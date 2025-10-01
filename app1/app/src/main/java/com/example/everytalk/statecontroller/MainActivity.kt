@@ -16,6 +16,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -25,6 +26,9 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
@@ -115,8 +119,20 @@ class MainActivity : ComponentActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         ApiClient.initialize(this)
         enableEdgeToEdge()
+        
+        // 设置透明的状态栏和导航栏
         window.statusBarColor = android.graphics.Color.TRANSPARENT
         window.navigationBarColor = android.graphics.Color.TRANSPARENT
+        
+        // 强制设置导航栏完全透明
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            window.isNavigationBarContrastEnforced = false
+        }
+        
+        // 配置系统UI可见性以实现沉浸式底部导航条
+        val windowInsetsController = WindowInsetsControllerCompat(window, window.decorView)
+        windowInsetsController.isAppearanceLightNavigationBars = false
+        windowInsetsController.isAppearanceLightStatusBars = false
         setContent {
             App1Theme(dynamicColor = false) {
                 var showSplash by remember { mutableStateOf(true) }
@@ -158,10 +174,13 @@ class MainActivity : ComponentActivity() {
                     Scaffold(
                         modifier = Modifier.fillMaxSize(),
                         containerColor = MaterialTheme.colorScheme.background,
+                        contentWindowInsets = WindowInsets(0, 0, 0, 0), // 允许内容延伸到系统栏区域
                         snackbarHost = {
                             SnackbarHost(
                                 hostState = snackbarHostState,
-                                modifier = Modifier.padding(bottom = 16.dp)
+                                modifier = Modifier
+                                    .padding(bottom = 16.dp)
+                                    .windowInsetsPadding(WindowInsets.navigationBars) // 确保Snackbar在导航栏上方
                             ) { snackbarData ->
                                 Snackbar(snackbarData = snackbarData)
                             }

@@ -18,6 +18,10 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
@@ -191,7 +195,7 @@ private fun safeDeleteTempFile(context: Context, uri: Uri?) {
 
 
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ChatInputArea(
     text: String,
@@ -368,11 +372,21 @@ fun ChatInputArea(
 
     val onToggleImagePanel = {
         if (showMoreOptionsPanel) showMoreOptionsPanel = false
-        showImageSelectionPanel = !showImageSelectionPanel
+        val willOpen = !showImageSelectionPanel
+        showImageSelectionPanel = willOpen
+        if (willOpen) {
+            // 打开面板时收起键盘，避免遮挡与布局跳动
+            keyboardController?.hide()
+        }
     }
     val onToggleMoreOptionsPanel = {
         if (showImageSelectionPanel) showImageSelectionPanel = false
-        showMoreOptionsPanel = !showMoreOptionsPanel
+        val willOpen = !showMoreOptionsPanel
+        showMoreOptionsPanel = willOpen
+        if (willOpen) {
+            // 打开面板时收起键盘
+            keyboardController?.hide()
+        }
     }
 
     val onClearContent = remember {
@@ -414,21 +428,35 @@ fun ChatInputArea(
             }
         }
 
-    Box(modifier = Modifier.fillMaxWidth()) {
+    Box(modifier = Modifier
+        .fillMaxWidth()
+        // 统一按 ime ∪ navigationBarsIgnoringVisibility 平滑上移，避免收起时回弹
+        .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBarsIgnoringVisibility))
+    ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxWidth(1f) // 稍微加宽
                 .align(Alignment.BottomCenter)
+                // 与底部留更大空间（使用 start/end/bottom 以匹配重载）
+                .padding(start = 6.dp, end = 6.dp, bottom = 10.dp)
                 .shadow(
                     elevation = 6.dp,
-                    shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+                    shape = RoundedCornerShape(24.dp),
                     clip = false
                 )
-                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
-                .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                .background(
+                    MaterialTheme.colorScheme.surface,
+                    RoundedCornerShape(24.dp)
+                )
+                .clip(RoundedCornerShape(24.dp))
+                // 外层已统一处理 ime 与导航栏内边距
                 .onSizeChanged { intSize -> chatInputContentHeightPx = intSize.height }
         ) {
-            Column(modifier = Modifier.padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 16.dp)) {
+            Column(
+                modifier = Modifier
+                    // 略减整体高度：上下内边距更紧凑
+                    .padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 4.dp)
+            ) {
 // 使用优化的组件
                 OptimizedMediaItemsList(
                     selectedMediaItems = selectedMediaItems,
@@ -442,9 +470,11 @@ fun ChatInputArea(
                         .fillMaxWidth()
                         .focusRequester(focusRequester)
                         .onFocusChanged { focusState ->
-                            // 只有当输入框获得焦点时才滚动到底部，失去焦点时不滚动
+                            // 获得焦点时滚动至底部，失去焦点时通知外层
                             if (focusState.isFocused) {
                                 onFocusChange(true)
+                            } else {
+                                onFocusChange(false)
                             }
                         }
                         .padding(bottom = 4.dp),
@@ -478,6 +508,8 @@ fun ChatInputArea(
                     isApiCalling = isApiCalling
                 )
             }
+            
+            // 已由 Column 自身处理 navigationBars + ime 内边距，移除额外 spacer
         }
 
         val yOffsetPx = -chatInputContentHeightPx.toFloat() - with(density) { 8.dp.toPx() }
