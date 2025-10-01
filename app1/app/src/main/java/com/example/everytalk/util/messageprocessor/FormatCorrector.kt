@@ -314,7 +314,7 @@ class FormatCorrector(
                 val codeContent = matchResult.groupValues[2].trim()
                 
                 // 严格条件：只修复真正的代码内容
-                if (codeContent.isNotEmpty() && 
+                if (codeContent.isNotEmpty() &&
                     !matchResult.value.endsWith("```") &&
                     !codeContent.contains("。") && // 避免包含中文句号的普通文本
                     !codeContent.contains("，") && // 避免包含中文逗号的普通文本
@@ -322,7 +322,7 @@ class FormatCorrector(
                     !codeContent.contains("！") && // 避免包含中文感叹号的普通文本
                     codeContent.lines().size <= 20 && // 更严格的行数限制
                     codeContent.length <= 500) { // 添加长度限制
-                    "``$language\n$codeContent\n```"
+                    "```$language\n$codeContent\n```"
                 } else {
                     matchResult.value
                 }

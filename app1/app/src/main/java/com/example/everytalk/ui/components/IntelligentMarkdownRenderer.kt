@@ -1,5 +1,7 @@
 package com.example.everytalk.ui.components
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
@@ -7,6 +9,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import android.util.Log
+import dev.jeziellago.compose.markdowntext.MarkdownText
 
 /**
  * 🚀 智能Markdown渲染管理器 - 根据内容自动选择最优渲染策略
@@ -56,21 +59,11 @@ fun IntelligentMarkdownRenderer(
                 }
                 
                 is MarkdownPart.Table -> {
-                    if (part.renderMode == "webview") {
-                        OptimizedTableRenderer(
-                            content = part.content,
-                            modifier = Modifier.fillMaxWidth(),
-                            onRenderComplete = { success ->
-                                onRenderComplete?.invoke(part.id, success)
-                            }
-                        )
-                    } else {
-                        // 简单表格渲染
-                        SimpleTableRenderer(
-                            content = part.content,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
+                    // 统一走原生Compose表格渲染（不使用WebView/HTML）
+                    SimpleTableRenderer(
+                        content = part.content,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
                 
                 is MarkdownPart.MixedContent -> {
@@ -93,9 +86,10 @@ fun IntelligentMarkdownRenderer(
                 }
                 
                 is MarkdownPart.Text -> {
-                    // 使用简化的文本显示，避免参数不匹配
-                    androidx.compose.material3.Text(
-                        text = part.content,
+                    // 使用标准 Markdown 渲染，保持一致的显示效果
+                    MarkdownText(
+                        markdown = normalizeBasicMarkdown(part.content),
+                        style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
@@ -161,55 +155,106 @@ private fun HybridContentRenderer(
 /**
  * 🎯 优化的表格渲染器
  */
-@Composable
-private fun OptimizedTableRenderer(
-    content: String,
-    modifier: Modifier = Modifier,
-    onRenderComplete: ((Boolean) -> Unit)? = null
-) {
-    // 使用WebView渲染表格以获得最佳效果
-    val tableHtml = createOptimizedTableHtml(content)
-    
-    HtmlContentRenderer(
-        html = tableHtml,
-        modifier = modifier,
-        onRenderComplete = onRenderComplete
-    )
-}
 
 /**
  * 🎯 简单表格渲染器
  */
 @Composable
-private fun SimpleTableRenderer(
+fun SimpleTableRenderer(
     content: String,
     modifier: Modifier = Modifier
 ) {
-    // 使用简化的文本显示表格
-    androidx.compose.material3.Text(
-        text = content,
-        modifier = modifier
-    )
+    // 原生Compose表格渲染（不依赖WebView/HTML）
+    val lines = content.trim().lines().filter { it.isNotBlank() }
+    if (lines.size < 2) {
+        // 非表格，直接按原文渲染
+        MarkdownText(markdown = content, style = MaterialTheme.typography.bodyMedium, modifier = modifier)
+        return
+    }
+
+    // 解析表头/分隔/数据
+    val headerLine = lines.first()
+    val dataLines = if (lines.size > 2) lines.drop(2) else emptyList()
+
+    // 解析单元格（保留空字符串用于对齐）
+    fun parseRow(line: String): List<String> =
+        line.split('|').map { it.trim() }.filterIndexed { idx, cell ->
+            // 允许首尾为空格管道，但过滤掉纯空且为首尾导致的空列
+            !(idx == 0 && cell.isEmpty()) && !(idx == line.split('|').lastIndex && cell.isEmpty())
+        }
+
+    val headers = parseRow(headerLine)
+    val rows = dataLines.map { parseRow(it) }
+    val colCount = headers.size.coerceAtLeast(rows.maxOfOrNull { it.size } ?: headers.size)
+
+    // 样式与布局策略（垂直等分布局，如你原先的视觉）— 强化对比度和边框
+    val headerBg = MaterialTheme.colorScheme.primaryContainer
+    val headerFg = MaterialTheme.colorScheme.onPrimaryContainer
+    val cellFg = MaterialTheme.colorScheme.onSurface
+    val rowAltBg = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.18f)
+    val gridLine = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+    val cellPadding = 10.dp
+    val rowVPad = 8.dp
+
+    Column(modifier = modifier) {
+        // Header
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(headerBg)
+        ) {
+            for (i in 0 until colCount) {
+                val h = headers.getOrNull(i) ?: ""
+                MarkdownText(
+                    markdown = normalizeBasicMarkdown(h),
+                    style = MaterialTheme.typography.bodyMedium.copy(color = headerFg),
+                    modifier = Modifier
+                        .weight(1f)
+                        .border(1.dp, gridLine)
+                        .padding(horizontal = cellPadding, vertical = rowVPad)
+                )
+            }
+        }
+
+        // Body rows（斑马条 + 网格线 + 单元格 Markdown）
+        rows.forEachIndexed { index, cells ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(if (index % 2 == 0) rowAltBg else MaterialTheme.colorScheme.surface)
+            ) {
+                for (i in 0 until colCount) {
+                    val raw = cells.getOrNull(i) ?: ""
+                    val md = normalizeBasicMarkdown(raw).replace("<br>", "  \n")
+                    MarkdownText(
+                        markdown = md,
+                        style = MaterialTheme.typography.bodyMedium.copy(color = cellFg),
+                        modifier = Modifier
+                            .weight(1f)
+                            .border(1.dp, gridLine)
+                            .padding(horizontal = cellPadding, vertical = rowVPad)
+                    )
+                }
+            }
+        }
+    }
 }
 
 /**
  * 🎯 HTML内容渲染器
  */
 @Composable
-private fun HtmlContentRenderer(
+fun HtmlContentRenderer(
     html: String,
     modifier: Modifier = Modifier,
     onRenderComplete: ((Boolean) -> Unit)? = null
 ) {
-    // 简化HTML渲染，使用文本显示
+    // 原生路径：不做HTML渲染，直接以纯文本显示
     androidx.compose.material3.Text(
         text = html,
         modifier = modifier
     )
-    
-    LaunchedEffect(html) {
-        onRenderComplete?.invoke(true)
-    }
+    LaunchedEffect(html) { onRenderComplete?.invoke(true) }
 }
 
 /**
@@ -231,93 +276,7 @@ private fun LegacyMathRenderer(
 /**
  * 创建优化的表格HTML
  */
-private fun createOptimizedTableHtml(content: String): String {
-    val isDarkTheme = false // 需要从主题获取
-    
-    return """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <style>
-            body {
-                margin: 0;
-                padding: 16px;
-                font-family: system-ui, -apple-system, sans-serif;
-                background-color: ${if (isDarkTheme) "#1a1a1a" else "#ffffff"};
-                color: ${if (isDarkTheme) "#ffffff" else "#000000"};
-            }
-            
-            table {
-                width: 100%;
-                border-collapse: collapse;
-                margin: 8px 0;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-                border-radius: 8px;
-                overflow: hidden;
-            }
-            
-            th, td {
-                padding: 12px 16px;
-                text-align: left;
-                border-bottom: 1px solid ${if (isDarkTheme) "#333" else "#eee"};
-            }
-            
-            th {
-                background-color: ${if (isDarkTheme) "#2a2a2a" else "#f8f9fa"};
-                font-weight: 600;
-            }
-            
-            tr:hover {
-                background-color: ${if (isDarkTheme) "#2a2a2a" else "#f8f9fa"};
-            }
-        </style>
-    </head>
-    <body>
-        ${convertMarkdownTableToHtml(content)}
-    </body>
-    </html>
-    """.trimIndent()
-}
 
 /**
  * 将Markdown表格转换为HTML
  */
-private fun convertMarkdownTableToHtml(markdown: String): String {
-    val lines = markdown.trim().split('\n')
-    if (lines.size < 2) return markdown
-    
-    val headerLine = lines[0]
-    val separatorLine = lines.getOrNull(1) ?: return markdown
-    
-    if (!separatorLine.contains("---")) return markdown
-    
-    val headers = headerLine.split('|').map { it.trim() }.filter { it.isNotEmpty() }
-    val dataLines = lines.drop(2)
-    
-    val html = StringBuilder()
-    html.append("<table>\n")
-    
-    // 表头
-    html.append("<thead><tr>\n")
-    headers.forEach { header ->
-        html.append("<th>$header</th>\n")
-    }
-    html.append("</tr></thead>\n")
-    
-    // 表体
-    html.append("<tbody>\n")
-    dataLines.forEach { line ->
-        val cells = line.split('|').map { it.trim() }.filter { it.isNotEmpty() }
-        html.append("<tr>\n")
-        cells.forEach { cell ->
-            html.append("<td>$cell</td>\n")
-        }
-        html.append("</tr>\n")
-    }
-    html.append("</tbody>\n")
-    
-    html.append("</table>")
-    return html.toString()
-}

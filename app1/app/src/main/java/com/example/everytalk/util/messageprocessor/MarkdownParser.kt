@@ -253,10 +253,9 @@ private fun parseTableContent(content: String): List<MarkdownPart> {
     android.util.Log.d("MarkdownParser", "🎯 Parsing table content")
     android.util.Log.d("MarkdownParser", "Table content: ${content.take(200)}...")
     
-    // 直接返回Text类型,让前端的MarkdownText库来渲染表格
-    // 因为dev.jeziellago.compose.markdowntext.MarkdownText已经支持表格渲染
+    // 返回专用的 Table 分片，交由表格渲染器处理
     return listOf(
-        MarkdownPart.Text(
+        MarkdownPart.Table(
             id = "table_${UUID.randomUUID()}",
             content = content
         )
@@ -264,12 +263,61 @@ private fun parseTableContent(content: String): List<MarkdownPart> {
 }
 
 /**
- * 🎯 解析简单文本内容 - 使用原生渲染器
+ * 轻量围栏代码解析：将 ```lang\n...\n``` 提取为 CodeBlock，其余为 Text
+ */
+private fun parseFencedCodeBlocks(content: String): List<MarkdownPart> {
+    val parts = mutableListOf<MarkdownPart>()
+    // 更宽松的围栏匹配：允许结尾无换行；兼容 \r\n / \n；语言可空
+    // 形态示例：
+    // ```lang\nCODE\n```
+    // ```\nCODE\n```
+    // ```lang\r\nCODE\r\n```
+    // ```lang CODE ``` （极端少见，也能匹配）
+    val regex = Regex("(?s)```\\s*([a-zA-Z0-9_+\\-#.]*)[ \\t]*\\r?\\n?([\\s\\S]*?)\\r?\\n?```")
+    var lastIndex = 0
+    val textId = { "text_${UUID.randomUUID()}" }
+    val codeId = { "code_${UUID.randomUUID()}" }
+
+    regex.findAll(content).forEach { mr ->
+        val range = mr.range
+        // 前置普通文本
+        if (range.first > lastIndex) {
+            val before = content.substring(lastIndex, range.first)
+            if (before.isNotBlank()) {
+                parts += MarkdownPart.Text(id = textId(), content = before)
+            }
+        }
+        val lang = mr.groups[1]?.value?.trim().orEmpty()
+        val code = mr.groups[2]?.value ?: ""
+        parts += MarkdownPart.CodeBlock(id = codeId(), content = code, language = if (lang.isBlank()) "" else lang)
+        lastIndex = range.last + 1
+    }
+
+    // 末尾剩余文本
+    if (lastIndex < content.length) {
+        val tail = content.substring(lastIndex)
+        if (tail.isNotBlank()) {
+            parts += MarkdownPart.Text(id = textId(), content = tail)
+        }
+    }
+
+    // 若无匹配则返回空列表，调用方兜底
+    return parts
+}
+
+/**
+ * 🎯 解析简单文本内容 - 优先识别 Markdown 围栏代码，使前端走自定义 CodePreview 渲染
  */
 private fun parseSimpleMarkdown(content: String, inTableContext: Boolean): List<MarkdownPart> {
-    android.util.Log.d("MarkdownParser", "Parsing simple markdown with native renderer")
-    
-    // 简化处理:直接返回文本部分
+    android.util.Log.d("MarkdownParser", "Parsing simple markdown with fenced code support")
+
+    // 先尝试提取围栏代码块
+    val fenced = parseFencedCodeBlocks(content)
+    if (fenced.isNotEmpty()) {
+        return fenced
+    }
+
+    // 兜底：无围栏时作为纯文本
     return listOf(
         MarkdownPart.Text(
             id = "text_${UUID.randomUUID()}",
