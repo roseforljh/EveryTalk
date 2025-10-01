@@ -1,14 +1,22 @@
 package com.example.everytalk.ui.screens.ImageGeneration
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Scaffold
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.ClickableText
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.example.everytalk.navigation.Screen
@@ -42,6 +50,29 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
 
     var showModelSelection by remember { mutableStateOf(false) }
 
+    // 获取抽屉和搜索相关状态
+    val isDrawerOpen = !viewModel.drawerState.isClosed
+    val isSearchActiveInDrawer by viewModel.isSearchActiveInDrawer.collectAsState()
+    val expandedDrawerItemIndex by viewModel.expandedDrawerItemIndex.collectAsState()
+    
+    // 处理返回键逻辑 - 优先处理抽屉相关操作，再处理页面导航
+    BackHandler(enabled = isDrawerOpen && expandedDrawerItemIndex != null) {
+        // 最高优先级：收起展开的历史项
+        viewModel.setExpandedDrawerItemIndex(null)
+    }
+    
+    BackHandler(enabled = isDrawerOpen && isSearchActiveInDrawer) {
+        // 中等优先级：退出搜索模式
+        viewModel.setSearchActiveInDrawer(false)
+    }
+    
+    BackHandler(enabled = isDrawerOpen && expandedDrawerItemIndex == null && !isSearchActiveInDrawer) {
+        // 低优先级：关闭抽屉
+        coroutineScope.launch {
+            viewModel.drawerState.close()
+        }
+    }
+
     // 图像生成错误提示对话框
     if (shouldShowImageGenerationError && !imageGenerationError.isNullOrBlank()) {
         androidx.compose.material3.AlertDialog(
@@ -63,6 +94,16 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                     androidx.compose.material3.Text("确定")
                 }
             }
+        )
+    }
+
+    // 关于对话框 - 修复图像模式下的显示bug
+    val showAboutDialog by viewModel.showAboutDialog.collectAsState()
+
+    if (showAboutDialog) {
+        AboutDialog(
+            viewModel = viewModel,
+            onDismiss = { viewModel.dismissAboutDialog() }
         )
     }
 
@@ -168,4 +209,70 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
             }
         }
     }
+}
+
+@Composable
+private fun AboutDialog(
+    viewModel: AppViewModel,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val packageInfo = remember { context.packageManager.getPackageInfo(context.packageName, 0) }
+    val versionName = packageInfo.versionName
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("关于 EveryTalk") },
+        text = {
+            val uriHandler = LocalUriHandler.current
+            val annotatedString = buildAnnotatedString {
+                append("版本: $versionName\n\n一个开源的、可高度定制的 AI 聊天客户端。\n\nGitHub: ")
+                pushStringAnnotation(tag = "URL", annotation = "https://github.com/roseforljh/KunTalkwithAi")
+                withStyle(style = SpanStyle(color = Color(0xFF007eff))) {
+                    append("EveryTalk")
+                }
+                pop()
+            }
+
+            ClickableText(
+                text = annotatedString,
+                style = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                onClick = { offset ->
+                    annotatedString.getStringAnnotations(tag = "URL", start = offset, end = offset)
+                        .firstOrNull()?.let { annotation ->
+                            uriHandler.openUri(annotation.item)
+                        }
+                }
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    viewModel.checkForUpdates()
+                    onDismiss() // Immediately close the about dialog
+                },
+                shape = RoundedCornerShape(20.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
+                )
+            ) {
+                Text("检查更新")
+            }
+        },
+        dismissButton = {
+            Button(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(20.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.secondary,
+                    contentColor = MaterialTheme.colorScheme.onSecondary
+                )
+            ) {
+                Text("关闭")
+            }
+        },
+        shape = RoundedCornerShape(28.dp),
+        containerColor = MaterialTheme.colorScheme.surface
+    )
 }

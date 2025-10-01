@@ -7,19 +7,21 @@ import com.example.everytalk.data.DataClass.WebSearchResult
  */
 data class FormatCorrectionConfig(
     val enableRealtimePreprocessing: Boolean = true,
-    val enableCodeBlockCorrection: Boolean = true,
-    val enableMarkdownCorrection: Boolean = true,
-    val enableListCorrection: Boolean = true,
-    val enableLinkCorrection: Boolean = true,
-    val enableTableCorrection: Boolean = true,
-    val enableQuoteCorrection: Boolean = true,
-    val enableTextStyleCorrection: Boolean = true,
-    val enableParagraphCorrection: Boolean = true,
+    // 将实时阶段降为最小影响：默认关闭结构改写，仅保留空白清理
+    val enableCodeBlockCorrection: Boolean = false,
+    val enableMarkdownCorrection: Boolean = false,
+    val enableListCorrection: Boolean = false,
+    val enableLinkCorrection: Boolean = false,
+    val enableTableCorrection: Boolean = false,
+    val enableQuoteCorrection: Boolean = false,
+    val enableTextStyleCorrection: Boolean = false,
+    val enableParagraphCorrection: Boolean = false,
     val enableJsonCorrection: Boolean = true,
     val enableXmlHtmlCorrection: Boolean = true,
     val enableMathCorrection: Boolean = true,
     val enableProgrammingSyntaxCorrection: Boolean = true,
-    val correctionIntensity: CorrectionIntensity = CorrectionIntensity.MODERATE,
+    // 将强度默认改为 LIGHT，实时仅做无害清理
+    val correctionIntensity: CorrectionIntensity = CorrectionIntensity.LIGHT,
     // 性能优化配置
     val enablePerformanceOptimization: Boolean = true,
     val maxProcessingTimeMs: Long = 5, // 最大处理时间5毫秒

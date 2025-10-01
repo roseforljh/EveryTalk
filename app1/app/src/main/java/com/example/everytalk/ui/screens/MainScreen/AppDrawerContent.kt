@@ -72,9 +72,10 @@ fun AppDrawerContent(
     onImageGenerationClick: () -> Unit,
     isLoadingHistoryData: Boolean = false, // 新增：历史数据加载状态
     isImageGenerationMode: Boolean,
+    expandedItemIndex: Int?, // 新增：展开项状态
+    onExpandItem: (index: Int?) -> Unit, // 新增：展开项回调
     modifier: Modifier = Modifier
 ) {
-    var expandedItemIndex by remember { mutableStateOf<Int?>(null) }
     val selectedSet = remember { mutableStateListOf<Int>() }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showClearAllConfirm by remember { mutableStateOf(false) }
@@ -90,7 +91,7 @@ fun AppDrawerContent(
     LaunchedEffect(loadedHistoryIndex) {
         if (loadedHistoryIndex == null) {
             selectedSet.clear()
-            expandedItemIndex = null
+            onExpandItem(null)
         }
     }
 
@@ -147,6 +148,11 @@ fun AppDrawerContent(
 
     BackHandler(enabled = isSearchActive) {
         onSearchActiveChange(false)
+    }
+
+    // Bug修复：当有条目展开时，优先处理返回事件为收起条目
+    BackHandler(enabled = expandedItemIndex != null) {
+        onExpandItem(null)
     }
 
     ModalDrawerSheet(
@@ -537,14 +543,14 @@ fun AppDrawerContent(
                                         },
                                         expandedItemIndex = expandedItemIndex,
                                         onExpandItem = { index, position ->
-                                            expandedItemIndex =
-                                                if (expandedItemIndex == index) null else index
-                                            if (expandedItemIndex != null) { // 只有当要展开时才记录位置
+                                            val newIndex = if (expandedItemIndex == index) null else index
+                                            onExpandItem(newIndex)
+                                            if (newIndex != null) { // 只有当要展开时才记录位置
                                                 longPressPosition = position
                                             }
                                         },
                                         onCollapseMenu = {
-                                            expandedItemIndex = null
+                                            onExpandItem(null)
                                         },
                                         longPressPositionForMenu = longPressPosition
                                     )
@@ -625,7 +631,7 @@ fun AppDrawerContent(
                     val indicesToDelete = selectedSet.toList()
                     showDeleteConfirm = false // 关闭对话框
                     selectedSet.clear()
-                    expandedItemIndex = null // 如果有菜单打开，也关闭它
+                    onExpandItem(null) // 如果有菜单打开，也关闭它
                     // 从后往前删除，避免索引错位
                     indicesToDelete.sortedDescending().forEach(onDeleteRequest)
                 }
@@ -638,7 +644,7 @@ fun AppDrawerContent(
                     showClearAllConfirm = false // 关闭对话框
                     onClearAllConversationsRequest()
                     selectedSet.clear()
-                    expandedItemIndex = null
+                    onExpandItem(null)
                 }
             )
 

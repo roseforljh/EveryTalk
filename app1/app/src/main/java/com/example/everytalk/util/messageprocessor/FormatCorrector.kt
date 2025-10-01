@@ -577,22 +577,13 @@ class FormatCorrector(
     }
     
     /**
-     * 修复段落格式
+     * 修复段落格式 - 🔧 已简化以避免过度换行
      */
     private fun fixParagraphFormat(text: String): String {
-        var fixed = text
-        
-        // 只修复明显的段落间距问题，不强制合并换行
-        // 修复段落之间的间距（句号后跟大写字母）
-        fixed = fixed.replace(Regex("([.!?])\\s*\n([A-Z])"), "$1\n\n$2")
-        
-        // 修复中文段落格式（中文标点后跟中文字符）
-        fixed = fixed.replace(Regex("([。！？])\\s*\n([\\u4e00-\\u9fa5])"), "$1\n\n$2")
-        
-        // 移除过度的换行合并逻辑，保持原有的换行结构
-        // 不再强制将句子内部的换行替换为空格
-        
-        return fixed
+        // 移除了主动添加换行的逻辑，以解决文本堆积问题。
+        // 保留此函数结构以兼容现有调用，但不再执行实质性操作。
+        // 主要的换行清理现在由后端的 format_repair.py 和客户端的 cleanExcessiveWhitespace 函数处理。
+        return text
     }
     
     /**

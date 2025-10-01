@@ -1,6 +1,7 @@
 package com.example.everytalk.ui.screens.MainScreen
 
 import android.Manifest
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Animatable
@@ -109,6 +110,29 @@ fun ChatScreen(
  
      val coroutineScope = rememberCoroutineScope()
      val loadedHistoryIndex by viewModel.loadedHistoryIndex.collectAsState()
+
+    // 获取抽屉和搜索相关状态
+    val isDrawerOpen = !viewModel.drawerState.isClosed
+    val isSearchActiveInDrawer by viewModel.isSearchActiveInDrawer.collectAsState()
+    val expandedDrawerItemIndex by viewModel.expandedDrawerItemIndex.collectAsState()
+    
+    // 处理返回键逻辑 - 优先处理抽屉相关操作，再处理页面导航
+    BackHandler(enabled = isDrawerOpen && expandedDrawerItemIndex != null) {
+        // 最高优先级：收起展开的历史项
+        viewModel.setExpandedDrawerItemIndex(null)
+    }
+    
+    BackHandler(enabled = isDrawerOpen && isSearchActiveInDrawer) {
+        // 中等优先级：退出搜索模式
+        viewModel.setSearchActiveInDrawer(false)
+    }
+    
+    BackHandler(enabled = isDrawerOpen && expandedDrawerItemIndex == null && !isSearchActiveInDrawer) {
+        // 低优先级：关闭抽屉
+        coroutineScope.launch {
+            viewModel.drawerState.close()
+        }
+    }
 
 
     val listState = remember(conversationId) {

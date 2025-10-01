@@ -10,6 +10,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleObserver
 import androidx.lifecycle.OnLifecycleEvent
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import com.example.everytalk.ui.components.MemoryLeakGuard
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -136,6 +137,7 @@ class MainActivity : ComponentActivity() {
 
                     val isSearchActiveInDrawer by appViewModel.isSearchActiveInDrawer.collectAsState()
                     val searchQueryInDrawer by appViewModel.searchQueryInDrawer.collectAsState()
+                    val expandedDrawerItemIndex by appViewModel.expandedDrawerItemIndex.collectAsState()
                     val isLoadingHistoryData by appViewModel.isLoadingHistoryData.collectAsState()
 
                     LaunchedEffect(appViewModel.snackbarMessage, snackbarHostState) {
@@ -172,6 +174,13 @@ class MainActivity : ComponentActivity() {
                         LaunchedEffect(appViewModel.drawerState.isClosed, isSearchActiveInDrawer) {
                             if (appViewModel.drawerState.isClosed && isSearchActiveInDrawer) {
                                 appViewModel.setSearchActiveInDrawer(false)
+                            }
+                        }
+
+                        // 处理抽屉的返回键逻辑 - 最低优先级，只在抽屉打开时有效
+                        BackHandler(enabled = !appViewModel.drawerState.isClosed) {
+                            coroutineScope.launch {
+                                appViewModel.drawerState.close()
                             }
                         }
 
@@ -314,7 +323,9 @@ class MainActivity : ComponentActivity() {
                                         appViewModel.startNewImageGeneration()
                                     },
                                     isLoadingHistoryData = isLoadingHistoryData,
-                                    isImageGenerationMode = isImageGenerationMode
+                                    isImageGenerationMode = isImageGenerationMode,
+                                    expandedItemIndex = expandedDrawerItemIndex,
+                                    onExpandItem = { index -> appViewModel.setExpandedDrawerItemIndex(index) }
                                 )
                             }
                         ) {

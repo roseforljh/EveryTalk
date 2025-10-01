@@ -252,6 +252,10 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         get() = stateHolder._editDialogInputText.asStateFlow()
     private val _isSearchActiveInDrawer = MutableStateFlow(false)
     val isSearchActiveInDrawer: StateFlow<Boolean> = _isSearchActiveInDrawer.asStateFlow()
+    
+    private val _expandedDrawerItemIndex = MutableStateFlow<Int?>(null)
+    val expandedDrawerItemIndex: StateFlow<Int?> = _expandedDrawerItemIndex.asStateFlow()
+    
     private val _searchQueryInDrawer = MutableStateFlow("")
     val searchQueryInDrawer: StateFlow<String> = _searchQueryInDrawer.asStateFlow()
 
@@ -594,6 +598,10 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     fun setSearchActiveInDrawer(isActive: Boolean) {
         _isSearchActiveInDrawer.value = isActive
         if (!isActive) _searchQueryInDrawer.value = ""
+    }
+
+    fun setExpandedDrawerItemIndex(index: Int?) {
+        _expandedDrawerItemIndex.value = index
     }
 
     fun onDrawerSearchQueryChange(query: String) {
