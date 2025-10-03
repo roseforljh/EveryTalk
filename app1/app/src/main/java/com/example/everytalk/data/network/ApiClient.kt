@@ -236,11 +236,19 @@ object ApiClient {
 
     private fun buildFinalUrl(baseAddress: String, defaultPath: String): String {
         val trimmedAddress = baseAddress.trim()
-        return when {
+        var finalAddress = when {
             trimmedAddress.endsWith("#") -> trimmedAddress.removeSuffix("#")
             trimmedAddress.endsWith("/") -> trimmedAddress.removeSuffix("/")
-            else -> trimmedAddress.removeSuffix("/") + defaultPath
+            else -> trimmedAddress
         }
+
+        // 强制将 http 转换为 https
+        if (finalAddress.startsWith("http://")) {
+            finalAddress = "https://" + finalAddress.substring(7)
+            android.util.Log.w("ApiClient", "URL was forced to HTTPS: $finalAddress")
+        }
+        
+        return finalAddress + defaultPath
     }
 
     private fun getFileNameFromUri(context: Context, uri: Uri): String {
@@ -789,6 +797,29 @@ object ApiClient {
             imgReq.batchSize?.let { put("batch_size", it) }
             imgReq.numInferenceSteps?.let { put("num_inference_steps", it) }
             imgReq.guidanceScale?.let { put("guidance_scale", it) }
+            // 新增：可选配置，适配 Google Gemini 文档 + 与后端模型字段对齐（顶层也传）
+            imgReq.responseModalities?.let { list ->
+                if (list.isNotEmpty()) {
+                    // 顶层字段（供后端 Pydantic 直接解析）
+                    put("response_modalities", buildJsonArray { list.forEach { add(it) } })
+                    // 同时在 generationConfig 中重复一份（供直连上游）
+                    put("generationConfig", buildJsonObject {
+                        put("responseModalities", buildJsonArray { list.forEach { add(it) } })
+                        imgReq.aspectRatio?.let { ar ->
+                            put("imageConfig", buildJsonObject { put("aspectRatio", ar) })
+                        }
+                    })
+                }
+            } ?: run {
+                // 未设置 response_modalities 时，若仅有宽高比也写入 generationConfig
+                imgReq.aspectRatio?.let { ar ->
+                    put("generationConfig", buildJsonObject {
+                        put("imageConfig", buildJsonObject { put("aspectRatio", ar) })
+                    })
+                }
+            }
+            // 顶层也传递 aspect_ratio，便于后端直接取用
+            imgReq.aspectRatio?.let { ar -> put("aspect_ratio", ar) }
             // 将上游地址与密钥交由后端代理转发与规范化
             put("apiAddress", imgReq.apiAddress)
             put("apiKey", imgReq.apiKey)

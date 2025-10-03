@@ -63,6 +63,7 @@ import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.models.SelectedMediaItem
 import com.example.everytalk.ui.theme.ChatDimensions
 import com.example.everytalk.ui.theme.chatColors
+import com.example.everytalk.ui.components.ProportionalAsyncImage
 
 import com.example.everytalk.ui.components.EnhancedMarkdownText
 import com.example.everytalk.ui.components.CodePreview
@@ -171,7 +172,8 @@ fun AttachmentsContent(
     onLongPress: (Message, Offset) -> Unit,
     onImageLoaded: () -> Unit,
     scrollStateManager: com.example.everytalk.ui.screens.MainScreen.chat.ChatScrollStateManager,
-    bubbleColor: Color = MaterialTheme.colorScheme.surfaceVariant
+    bubbleColor: Color = MaterialTheme.colorScheme.surfaceVariant,
+    isAiGenerated: Boolean = false  // 新增参数标识是否为AI生成
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
@@ -185,12 +187,13 @@ fun AttachmentsContent(
                 when (attachment) {
                     is SelectedMediaItem.ImageFromUri -> {
                         var imageGlobalPosition by remember { mutableStateOf(Offset.Zero) }
-                        AsyncImage(
+                        ProportionalAsyncImage(
                             model = attachment.uri,
                             contentDescription = "Image attachment",
+                            maxWidth = maxWidth * 0.8f,
+                            isAiGenerated = isAiGenerated,
                             onSuccess = { _ -> onImageLoaded() },
                             modifier = Modifier
-                                .widthIn(max = maxWidth * 0.8f)
                                 .padding(vertical = 4.dp)
                                 .clip(RoundedCornerShape(16.dp))
                                 .onGloballyPositioned {
@@ -212,12 +215,13 @@ fun AttachmentsContent(
                     }
                     is SelectedMediaItem.ImageFromBitmap -> {
                         var imageGlobalPosition by remember { mutableStateOf(Offset.Zero) }
-                        AsyncImage(
+                        ProportionalAsyncImage(
                             model = attachment.bitmap,
                             contentDescription = "Image attachment",
+                            maxWidth = maxWidth * 0.8f,
+                            isAiGenerated = isAiGenerated,
                             onSuccess = { _ -> onImageLoaded() },
                             modifier = Modifier
-                                .widthIn(max = maxWidth * 0.8f)
                                 .padding(vertical = 4.dp)
                                 .clip(RoundedCornerShape(16.dp))
                                 .onGloballyPositioned {

@@ -128,6 +128,8 @@ data class ConversationScrollState(
      val _selectedApiConfig = MutableStateFlow<ApiConfig?>(null)
     val _imageGenApiConfigs = MutableStateFlow<List<ApiConfig>>(emptyList())
     val _selectedImageGenApiConfig = MutableStateFlow<ApiConfig?>(null)
+    // 图像输出宽高比（默认 AUTO）
+    val _selectedImageRatio = MutableStateFlow(com.example.everytalk.data.DataClass.ImageRatio.DEFAULT_SELECTED)
  
  
      val _snackbarMessage =

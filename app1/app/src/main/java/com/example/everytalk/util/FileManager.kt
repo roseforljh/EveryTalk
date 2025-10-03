@@ -26,13 +26,20 @@ import java.util.UUID
  */
 class FileManager(private val context: Context) {
     private val logger = AppLogger.forComponent("FileManager")
+    private val compressionPrefs = com.example.everytalk.config.ImageCompressionPreferences(context)
     
     companion object {
         private const val CHAT_ATTACHMENTS_DIR = "chat_attachments"
-        private const val MAX_IMAGE_SIZE_BYTES = 4 * 1024 * 1024
         private const val MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024 // 50MB 最大文件大小
+        
+        // 保留兼容性的常量，但标记为过时
+        @Deprecated("Use ImageScaleConfig instead", ReplaceWith("ImageScaleConfig.CHAT_MODE.maxFileSize"))
+        private const val MAX_IMAGE_SIZE_BYTES = 4 * 1024 * 1024
+        @Deprecated("Use ImageScaleConfig instead", ReplaceWith("ImageScaleConfig.CHAT_MODE.maxDimension"))
         private const val TARGET_IMAGE_WIDTH = 1024
+        @Deprecated("Use ImageScaleConfig instead", ReplaceWith("ImageScaleConfig.CHAT_MODE.maxDimension"))
         private const val TARGET_IMAGE_HEIGHT = 1024
+        @Deprecated("Use ImageScaleConfig instead", ReplaceWith("ImageScaleConfig.CHAT_MODE.compressionQuality"))
         private const val JPEG_COMPRESSION_QUALITY = 80
     }
 
@@ -46,6 +53,19 @@ class FileManager(private val context: Context) {
             logger.error("Failed to create chat attachments directory")
         }
         return dir
+    }
+    
+    /**
+     * 根据使用场景获取图片缩放配置
+     * @param isImageGeneration 是否为图像生成模式
+     * @return 对应的图片缩放配置
+     */
+    private fun getImageConfigForMode(isImageGeneration: Boolean): ImageScaleConfig {
+        return if (isImageGeneration) {
+            compressionPrefs.getImageGenerationModeConfig()
+        } else {
+            compressionPrefs.getChatModeConfig()
+        }
     }
     
     /**
@@ -113,14 +133,21 @@ class FileManager(private val context: Context) {
     }
     
     /**
-     * 从Uri加载并压缩位图
+     * 从Uri加载并压缩位图 - 新版本支持等比缩放
      * @param uri 图片Uri
+     * @param isImageGeneration 是否为图像生成模式，将使用对应的配置
      * @return 压缩后的位图，如果加载失败则返回null
      */
-    suspend fun loadAndCompressBitmapFromUri(uri: Uri): Bitmap? = withContext(Dispatchers.IO) {
+    suspend fun loadAndCompressBitmapFromUri(
+        uri: Uri, 
+        isImageGeneration: Boolean = false
+    ): Bitmap? = withContext(Dispatchers.IO) {
         var bitmap: Bitmap? = null
         try {
             if (uri == Uri.EMPTY) return@withContext null
+            
+            // 获取适当的配置
+            val config = getImageConfigForMode(isImageGeneration)
             
             // 首先检查文件大小
             val sizePair = checkFileSize(uri)
@@ -138,8 +165,18 @@ class FileManager(private val context: Context) {
                 BitmapFactory.decodeStream(it, null, options)
             }
             
+            val originalWidth = options.outWidth
+            val originalHeight = options.outHeight
+            
+            // 使用新的等比缩放算法计算目标尺寸
+            val (targetWidth, targetHeight) = ImageScaleCalculator.calculateProportionalScale(
+                originalWidth, originalHeight, config
+            )
+            
             // 计算合适的采样率以避免内存问题
-            options.inSampleSize = calculateInSampleSize(options, TARGET_IMAGE_WIDTH, TARGET_IMAGE_HEIGHT)
+            options.inSampleSize = ImageScaleCalculator.calculateInSampleSize(
+                originalWidth, originalHeight, targetWidth, targetHeight
+            )
             options.inJustDecodeBounds = false
             options.inMutable = true
             options.inPreferredConfig = Bitmap.Config.RGB_565 // 使用更少内存的配置
@@ -148,29 +185,28 @@ class FileManager(private val context: Context) {
                 BitmapFactory.decodeStream(it, null, options)
             }
             
-            if (bitmap != null && (bitmap.width > TARGET_IMAGE_WIDTH || bitmap.height > TARGET_IMAGE_HEIGHT)) {
-                val aspectRatio = bitmap.width.toFloat() / bitmap.height.toFloat()
-                val newWidth: Int
-                val newHeight: Int
+            // 如果需要进一步缩放到精确尺寸
+            if (bitmap != null) {
+                val currentWidth = bitmap.width
+                val currentHeight = bitmap.height
                 
-                if (bitmap.width > bitmap.height) {
-                    newWidth = TARGET_IMAGE_WIDTH
-                    newHeight = (newWidth / aspectRatio).toInt()
-                } else {
-                    newHeight = TARGET_IMAGE_HEIGHT
-                    newWidth = (newHeight * aspectRatio).toInt()
-                }
+                // 重新计算精确的目标尺寸（基于采样后的实际尺寸）
+                val (finalWidth, finalHeight) = ImageScaleCalculator.calculateProportionalScale(
+                    currentWidth, currentHeight, config
+                )
                 
-                if (newWidth > 0 && newHeight > 0) {
+                // 只有当目标尺寸与当前尺寸不同时才进行缩放
+                if (finalWidth != currentWidth || finalHeight != currentHeight) {
                     try {
-                        val scaledBitmap = Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)
+                        val scaledBitmap = Bitmap.createScaledBitmap(bitmap, finalWidth, finalHeight, true)
                         if (scaledBitmap != bitmap) {
                             bitmap.recycle()
                         }
                         bitmap = scaledBitmap
+                        logger.debug("Image scaled from ${currentWidth}x${currentHeight} to ${finalWidth}x${finalHeight}")
                     } catch (e: OutOfMemoryError) {
                         // 如果缩放失败，使用原图但记录警告
-                        logger.warn("Failed to scale bitmap due to memory constraints, using original size")
+                        logger.warn("Failed to scale bitmap due to memory constraints, using sampled size")
                         System.gc()
                     }
                 }
@@ -190,10 +226,19 @@ class FileManager(private val context: Context) {
     }
     
     /**
-     * 直接从网络URL下载并压缩位图
+     * 直接从网络URL下载并压缩位图 - 新版本支持等比缩放
+     * @param urlStr 图片URL
+     * @param isImageGeneration 是否为图像生成模式，将使用对应的配置
+     * @return 压缩后的位图，如果加载失败则返回null
      */
-    suspend fun loadAndCompressBitmapFromUrl(urlStr: String): Bitmap? = withContext(Dispatchers.IO) {
+    suspend fun loadAndCompressBitmapFromUrl(
+        urlStr: String,
+        isImageGeneration: Boolean = false
+    ): Bitmap? = withContext(Dispatchers.IO) {
         if (urlStr.isBlank()) return@withContext null
+        
+        // 获取适当的配置
+        val config = getImageConfigForMode(isImageGeneration)
         var conn: HttpURLConnection? = null
         try {
             val url = URL(urlStr)
@@ -229,28 +274,41 @@ class FileManager(private val context: Context) {
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
 
+            val originalWidth = bounds.outWidth
+            val originalHeight = bounds.outHeight
+            
+            // 使用新的等比缩放算法计算目标尺寸
+            val (targetWidth, targetHeight) = ImageScaleCalculator.calculateProportionalScale(
+                originalWidth, originalHeight, config
+            )
+
             // 实际解码并压缩
             val opts = BitmapFactory.Options().apply {
-                inSampleSize = calculateInSampleSize(bounds, TARGET_IMAGE_WIDTH, TARGET_IMAGE_HEIGHT)
+                inSampleSize = ImageScaleCalculator.calculateInSampleSize(
+                    originalWidth, originalHeight, targetWidth, targetHeight
+                )
                 inJustDecodeBounds = false
                 inMutable = true
                 inPreferredConfig = Bitmap.Config.RGB_565
             }
             var bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
 
-            // 如有必要，再缩放一遍
-            if (bitmap != null && (bitmap.width > TARGET_IMAGE_WIDTH || bitmap.height > TARGET_IMAGE_HEIGHT)) {
-                val aspect = bitmap.width.toFloat() / bitmap.height.toFloat()
-                val (newW, newH) = if (bitmap.width > bitmap.height) {
-                    TARGET_IMAGE_WIDTH to (TARGET_IMAGE_WIDTH / aspect).toInt()
-                } else {
-                    (TARGET_IMAGE_HEIGHT * aspect).toInt() to TARGET_IMAGE_HEIGHT
-                }
-                if (newW > 0 && newH > 0) {
+            // 如有必要，再缩放一遍到精确尺寸
+            if (bitmap != null) {
+                val currentWidth = bitmap.width
+                val currentHeight = bitmap.height
+                
+                // 重新计算精确的目标尺寸
+                val (finalWidth, finalHeight) = ImageScaleCalculator.calculateProportionalScale(
+                    currentWidth, currentHeight, config
+                )
+                
+                if (finalWidth != currentWidth || finalHeight != currentHeight && finalWidth > 0 && finalHeight > 0) {
                     try {
-                        val scaled = Bitmap.createScaledBitmap(bitmap, newW, newH, true)
+                        val scaled = Bitmap.createScaledBitmap(bitmap, finalWidth, finalHeight, true)
                         if (scaled != bitmap) bitmap.recycle()
                         bitmap = scaled
+                        logger.debug("URL image scaled from ${currentWidth}x${currentHeight} to ${finalWidth}x${finalHeight}")
                     } catch (_: OutOfMemoryError) {
                         logger.warn("OOM when scaling downloaded bitmap; using decoded size")
                         System.gc()
@@ -267,23 +325,67 @@ class FileManager(private val context: Context) {
     }
 
     /**
-     * 从 data:image/(any);base64,XXX 字符串解码位图
+     * 从 data:image/(any);base64,XXX 字符串解码位图 - 新版本支持等比缩放
+     * @param dataUrl Data URL字符串
+     * @param isImageGeneration 是否为图像生成模式，将使用对应的配置
+     * @return 解码后的位图，如果解码失败则返回null
      */
-    suspend fun loadBitmapFromDataUrl(dataUrl: String): Bitmap? = withContext(Dispatchers.IO) {
+    suspend fun loadBitmapFromDataUrl(
+        dataUrl: String,
+        isImageGeneration: Boolean = false
+    ): Bitmap? = withContext(Dispatchers.IO) {
         try {
+            // 获取适当的配置
+            val config = getImageConfigForMode(isImageGeneration)
             val comma = dataUrl.indexOf(',')
             if (comma <= 0) return@withContext null
             val base64Part = dataUrl.substring(comma + 1)
             val bytes = Base64.decode(base64Part, Base64.DEFAULT)
+            
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            
+            val originalWidth = bounds.outWidth
+            val originalHeight = bounds.outHeight
+            
+            // 使用新的等比缩放算法计算目标尺寸
+            val (targetWidth, targetHeight) = ImageScaleCalculator.calculateProportionalScale(
+                originalWidth, originalHeight, config
+            )
+            
             val opts = BitmapFactory.Options().apply {
-                inSampleSize = calculateInSampleSize(bounds, TARGET_IMAGE_WIDTH, TARGET_IMAGE_HEIGHT)
+                inSampleSize = ImageScaleCalculator.calculateInSampleSize(
+                    originalWidth, originalHeight, targetWidth, targetHeight
+                )
                 inJustDecodeBounds = false
                 inPreferredConfig = Bitmap.Config.RGB_565
                 inMutable = true
             }
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+            var bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+            
+            // 如果需要精确缩放
+            if (bitmap != null) {
+                val currentWidth = bitmap.width
+                val currentHeight = bitmap.height
+                
+                val (finalWidth, finalHeight) = ImageScaleCalculator.calculateProportionalScale(
+                    currentWidth, currentHeight, config
+                )
+                
+                if (finalWidth != currentWidth || finalHeight != currentHeight && finalWidth > 0 && finalHeight > 0) {
+                    try {
+                        val scaled = Bitmap.createScaledBitmap(bitmap, finalWidth, finalHeight, true)
+                        if (scaled != bitmap) bitmap.recycle()
+                        bitmap = scaled
+                        logger.debug("Data URL image scaled from ${currentWidth}x${currentHeight} to ${finalWidth}x${finalHeight}")
+                    } catch (_: OutOfMemoryError) {
+                        logger.warn("OOM when scaling data URL bitmap; using decoded size")
+                        System.gc()
+                    }
+                }
+            }
+            
+            bitmap
         } catch (e: Exception) {
             logger.error("Failed to decode bitmap from data URL", e)
             null
@@ -371,24 +473,29 @@ class FileManager(private val context: Context) {
     }
     
     /**
-     * 将位图保存到应用内部存储
+     * 将位图保存到应用内部存储 - 新版本支持智能压缩
      * @param bitmapToSave 要保存的位图
      * @param messageIdHint 消息ID提示
      * @param attachmentIndex 附件索引
      * @param originalFileNameHint 原始文件名提示
+     * @param isImageGeneration 是否为图像生成模式，将使用对应的配置
      * @return 保存后的文件路径，如果保存失败则返回null
      */
     suspend fun saveBitmapToAppInternalStorage(
         bitmapToSave: Bitmap,
         messageIdHint: String,
         attachmentIndex: Int,
-        originalFileNameHint: String? = null
+        originalFileNameHint: String? = null,
+        isImageGeneration: Boolean = false
     ): String? = withContext(Dispatchers.IO) {
         try {
             if (bitmapToSave.isRecycled) {
                 logger.error("Cannot save recycled bitmap")
                 return@withContext null
             }
+            
+            // 获取适当的配置
+            val config = getImageConfigForMode(isImageGeneration)
             
             val outputStream = ByteArrayOutputStream()
             val fileExtension: String
@@ -398,7 +505,15 @@ class FileManager(private val context: Context) {
                 fileExtension = "jpg"; Bitmap.CompressFormat.JPEG
             }
             
-            bitmapToSave.compress(compressFormat, JPEG_COMPRESSION_QUALITY, outputStream)
+            // 使用智能压缩质量
+            val compressionQuality = ImageScaleCalculator.calculateSmartCompressionQuality(
+                bitmapToSave.width,
+                bitmapToSave.height,
+                config.compressionQuality,
+                config.enableSmartCompression
+            )
+            
+            bitmapToSave.compress(compressFormat, compressionQuality, outputStream)
             val bytes = outputStream.toByteArray()
             
             if (!bitmapToSave.isRecycled) {
@@ -423,7 +538,7 @@ class FileManager(private val context: Context) {
                 return@withContext null
             }
             
-            logger.debug("Bitmap saved successfully: ${destinationFile.absolutePath}")
+            logger.debug("Bitmap saved successfully: ${destinationFile.absolutePath} (quality: $compressionQuality)")
             destinationFile.absolutePath
         } catch (e: Exception) {
             logger.error("Failed to save bitmap to internal storage", e)

@@ -52,19 +52,43 @@ private data class AttachmentProcessingResult(
 ) {
 
     companion object {
-        private const val MAX_IMAGE_SIZE_BYTES = 4 * 1024 * 1024
         private const val MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024 // 50MB 最大文件大小
-        private const val TARGET_IMAGE_WIDTH = 1024
-        private const val TARGET_IMAGE_HEIGHT = 1024
-        private const val JPEG_COMPRESSION_QUALITY = 80
         private const val CHAT_ATTACHMENTS_SUBDIR = "chat_attachments"
+        
+        // 保留兼容性的常量，但标记为过时
+        @Deprecated("Use ImageScaleConfig instead", ReplaceWith("ImageScaleConfig.CHAT_MODE.maxFileSize"))
+        private const val MAX_IMAGE_SIZE_BYTES = 4 * 1024 * 1024
+        @Deprecated("Use ImageScaleConfig instead", ReplaceWith("ImageScaleConfig.CHAT_MODE.maxDimension"))
+        private const val TARGET_IMAGE_WIDTH = 1024
+        @Deprecated("Use ImageScaleConfig instead", ReplaceWith("ImageScaleConfig.CHAT_MODE.maxDimension"))
+        private const val TARGET_IMAGE_HEIGHT = 1024
+        @Deprecated("Use ImageScaleConfig instead", ReplaceWith("ImageScaleConfig.CHAT_MODE.compressionQuality"))
+        private const val JPEG_COMPRESSION_QUALITY = 80
     }
 
-    private suspend fun loadAndCompressBitmapFromUri(context: Context, uri: Uri): Bitmap? {
+    /**
+     * 从Uri加载并压缩位图 - 新版本支持等比缩放
+     * @param context 上下文
+     * @param uri 图片Uri
+     * @param isImageGeneration 是否为图像生成模式
+     * @return 压缩后的位图，如果加载失败则返回null
+     */
+    private suspend fun loadAndCompressBitmapFromUri(
+        context: Context, 
+        uri: Uri,
+        isImageGeneration: Boolean = false
+    ): Bitmap? {
         return withContext(Dispatchers.IO) {
             var bitmap: Bitmap? = null
             try {
                 if (uri == Uri.EMPTY) return@withContext null
+
+                // 根据模式选择缩放配置
+                val config = if (isImageGeneration) {
+                    com.example.everytalk.util.ImageScaleConfig.IMAGE_GENERATION_MODE
+                } else {
+                    com.example.everytalk.util.ImageScaleConfig.CHAT_MODE
+                }
 
                 // 首先检查文件大小
                 var fileSize = 0L
@@ -82,6 +106,7 @@ private data class AttachmentProcessingResult(
                 }
 
                 if (fileSize > MAX_FILE_SIZE_BYTES) {
+                    Log.w("MessageSender", "File size $fileSize exceeds limit $MAX_FILE_SIZE_BYTES")
                     return@withContext null
                 }
 
@@ -92,8 +117,18 @@ private data class AttachmentProcessingResult(
                     BitmapFactory.decodeStream(it, null, options)
                 }
 
+                val originalWidth = options.outWidth
+                val originalHeight = options.outHeight
+                
+                // 使用新的等比缩放算法计算目标尺寸
+                val (targetWidth, targetHeight) = com.example.everytalk.util.ImageScaleCalculator.calculateProportionalScale(
+                    originalWidth, originalHeight, config
+                )
+
                 // 计算合适的采样率以避免内存问题
-                options.inSampleSize = calculateInSampleSize(options, TARGET_IMAGE_WIDTH, TARGET_IMAGE_HEIGHT)
+                options.inSampleSize = com.example.everytalk.util.ImageScaleCalculator.calculateInSampleSize(
+                    originalWidth, originalHeight, targetWidth, targetHeight
+                )
 
                 options.inJustDecodeBounds = false
                 options.inMutable = true
@@ -103,37 +138,42 @@ private data class AttachmentProcessingResult(
                     BitmapFactory.decodeStream(it, null, options)
                 }
 
-                if (bitmap != null && (bitmap!!.width > TARGET_IMAGE_WIDTH || bitmap!!.height > TARGET_IMAGE_HEIGHT)) {
-                    val aspectRatio = bitmap!!.width.toFloat() / bitmap!!.height.toFloat()
-                    val newWidth: Int
-                    val newHeight: Int
-                    if (bitmap!!.width > bitmap!!.height) {
-                        newWidth = TARGET_IMAGE_WIDTH
-                        newHeight = (newWidth / aspectRatio).toInt()
-                    } else {
-                        newHeight = TARGET_IMAGE_HEIGHT
-                        newWidth = (newHeight * aspectRatio).toInt()
-                    }
-                    if (newWidth > 0 && newHeight > 0) {
+                // 如果需要进一步缩放到精确尺寸
+                if (bitmap != null) {
+                    val currentWidth = bitmap.width
+                    val currentHeight = bitmap.height
+                    
+                    // 重新计算精确的目标尺寸（基于采样后的实际尺寸）
+                    val (finalWidth, finalHeight) = com.example.everytalk.util.ImageScaleCalculator.calculateProportionalScale(
+                        currentWidth, currentHeight, config
+                    )
+                    
+                    // 只有当目标尺寸与当前尺寸不同时才进行缩放
+                    if (finalWidth != currentWidth || finalHeight != currentHeight) {
                         try {
-                            val scaledBitmap = Bitmap.createScaledBitmap(bitmap!!, newWidth, newHeight, true)
+                            val scaledBitmap = Bitmap.createScaledBitmap(bitmap, finalWidth, finalHeight, true)
                             if (scaledBitmap != bitmap) {
-                                bitmap?.recycle()
+                                bitmap.recycle()
                             }
                             bitmap = scaledBitmap
+                            Log.d("MessageSender", "Image scaled from ${currentWidth}x${currentHeight} to ${finalWidth}x${finalHeight} (mode: ${if(isImageGeneration) "generation" else "chat"})")
                         } catch (e: OutOfMemoryError) {
                             // 如果缩放失败，使用原图但记录警告
+                            Log.w("MessageSender", "Failed to scale bitmap due to memory constraints, using sampled size")
                             System.gc()
                         }
                     }
                 }
+                
                 bitmap
             } catch (e: OutOfMemoryError) {
                 bitmap?.recycle()
                 System.gc() // 建议垃圾回收
+                Log.e("MessageSender", "Out of memory while loading bitmap", e)
                 null
             } catch (e: Exception) {
                 bitmap?.recycle()
+                Log.e("MessageSender", "Failed to load and compress bitmap", e)
                 null
             }
         }
@@ -301,7 +341,8 @@ private data class AttachmentProcessingResult(
     private suspend fun processAttachments(
         attachments: List<SelectedMediaItem>,
         shouldUsePartsApiMessage: Boolean,
-        textToActuallySend: String
+        textToActuallySend: String,
+        isImageGeneration: Boolean = false
     ): AttachmentProcessingResult = withContext(Dispatchers.IO) {
         if (attachments.isEmpty()) {
             return@withContext AttachmentProcessingResult(
@@ -335,7 +376,7 @@ private data class AttachmentProcessingResult(
 
             val persistentFilePath: String? = when (originalMediaItem) {
                 is SelectedMediaItem.ImageFromUri -> {
-                    val bitmap = loadAndCompressBitmapFromUri(application, originalMediaItem.uri)
+                    val bitmap = loadAndCompressBitmapFromUri(application, originalMediaItem.uri, isImageGeneration)
                     if (bitmap != null) {
                         saveBitmapToAppInternalStorage(application, bitmap, tempMessageIdForNaming, index, originalFileNameForHint)
                     } else {
@@ -464,7 +505,7 @@ private data class AttachmentProcessingResult(
             val shouldUsePartsApiMessage = modelIsGeminiType
             val providerForRequestBackend = currentConfig.provider
 
-            val attachmentResult = processAttachments(allAttachments, shouldUsePartsApiMessage, textToActuallySend)
+            val attachmentResult = processAttachments(allAttachments, shouldUsePartsApiMessage, textToActuallySend, isImageGeneration)
             if (!attachmentResult.success) {
                 return@launch
             }
@@ -596,16 +637,21 @@ private data class AttachmentProcessingResult(
                         } else {
                             "$upstreamBase/v1/images/generations"
                         }
+                        // 依据文档：通过 config.response_modalities 与 image_config.aspect_ratio 控制输出
                         ImageGenRequest(
                             model = currentConfig.model,
                             prompt = textToActuallySend,
-                            imageSize = sanitizedImageSize,
+                            imageSize = sanitizedImageSize, // 兼容旧后端字段
                             batchSize = 1,
                             numInferenceSteps = currentConfig.numInferenceSteps,
                             guidanceScale = currentConfig.guidanceScale,
                             apiAddress = upstreamApiForImageGen,
                             apiKey = currentConfig.key,
-                            provider = currentConfig.channel
+                            provider = currentConfig.channel,
+                            responseModalities = listOf("Image"),
+                            aspectRatio = stateHolder._selectedImageRatio.value.let { r ->
+                                if (r.isAuto) null else r.displayName
+                            }
                         )
                     } else null
                 )

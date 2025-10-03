@@ -59,8 +59,10 @@ import androidx.core.content.FileProvider
 import coil3.compose.AsyncImage
 import com.example.everytalk.data.DataClass.ApiConfig
 import com.example.everytalk.data.DataClass.Message
+import com.example.everytalk.data.DataClass.ImageRatio
 import com.example.everytalk.models.ImageSourceOption
 import com.example.everytalk.models.SelectedMediaItem
+import com.example.everytalk.ui.components.ImageRatioSelector
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
@@ -266,7 +268,9 @@ fun ImageGenerationInputArea(
     keyboardController: SoftwareKeyboardController?,
     onFocusChange: (isFocused: Boolean) -> Unit,
     editingMessage: Message?,
-    onCancelEdit: () -> Unit
+    onCancelEdit: () -> Unit,
+    selectedImageRatio: ImageRatio = ImageRatio.DEFAULT_SELECTED,
+    onImageRatioChanged: (ImageRatio) -> Unit = {}
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -494,6 +498,13 @@ fun ImageGenerationInputArea(
                                 tint = MaterialTheme.colorScheme.primary
                             )
                         }
+                        
+                        // 比例选择按钮
+                        ImageRatioSelector(
+                            selectedRatio = selectedImageRatio,
+                            onRatioChanged = onImageRatioChanged,
+                            modifier = Modifier.padding(start = 4.dp)
+                        )
                     }
 
                     Row(verticalAlignment = Alignment.CenterVertically) {

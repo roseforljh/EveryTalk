@@ -9,20 +9,28 @@ data class ImageGenRequest(
    val model: String,
    @SerialName("prompt")
    val prompt: String,
+   // 兼容旧的尺寸字段（部分后端仍使用）
    @SerialName("image_size")
-   val imageSize: String?,
+   val imageSize: String? = null,
    @SerialName("batch_size")
-   val batchSize: Int?,
+   val batchSize: Int? = null,
    @SerialName("num_inference_steps")
-   val numInferenceSteps: Int?,
+   val numInferenceSteps: Int? = null,
    @SerialName("guidance_scale")
-   val guidanceScale: Float?,
+   val guidanceScale: Float? = null,
    @SerialName("apiAddress")
    val apiAddress: String,
    @SerialName("apiKey")
    val apiKey: String,
    @SerialName("provider")
-   val provider: String? = null
+   val provider: String? = null,
+   // 新增：Gemini generate_content 可选配置
+   // 指定仅输出图片
+   @SerialName("response_modalities")
+   val responseModalities: List<String>? = null,
+   // 指定宽高比，示例："16:9"
+   @SerialName("aspect_ratio")
+   val aspectRatio: String? = null
 )
 
 @Serializable

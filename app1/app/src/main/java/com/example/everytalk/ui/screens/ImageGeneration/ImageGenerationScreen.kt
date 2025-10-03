@@ -22,6 +22,7 @@ import androidx.navigation.NavController
 import com.example.everytalk.navigation.Screen
 import com.example.everytalk.statecontroller.AppViewModel
 import com.example.everytalk.statecontroller.SimpleModeManager
+import com.example.everytalk.data.DataClass.ImageRatio
 import com.example.everytalk.ui.screens.MainScreen.chat.ModelSelectionBottomSheet
 import com.example.everytalk.ui.screens.MainScreen.chat.rememberChatScrollStateManager
 import kotlinx.coroutines.launch
@@ -49,6 +50,9 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
     val bubbleMaxWidth = remember(screenWidth) { screenWidth.coerceAtMost(600.dp) }
 
     var showModelSelection by remember { mutableStateOf(false) }
+    
+    // 图像比例状态（使用全局StateHolder，便于下游请求读取）
+    val selectedImageRatio by viewModel.stateHolder._selectedImageRatio.collectAsState()
 
     // 获取抽屉和搜索相关状态
     val isDrawerOpen = !viewModel.drawerState.isClosed
@@ -205,7 +209,9 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                     scrollStateManager.jumpToBottom()
                 },
                 editingMessage = editingMessage,
-                onCancelEdit = { viewModel.cancelEditing() }
+                onCancelEdit = { viewModel.cancelEditing() },
+                selectedImageRatio = selectedImageRatio,
+                onImageRatioChanged = { viewModel.stateHolder._selectedImageRatio.value = it }
             )
         }
     }

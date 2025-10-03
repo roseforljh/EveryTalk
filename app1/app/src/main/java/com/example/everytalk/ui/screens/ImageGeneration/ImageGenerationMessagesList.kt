@@ -431,7 +431,8 @@ private fun AiMessageItem(
                             onLongPress = { msg, offset -> onLongPress(msg, offset) },
                             onImageLoaded = onImageLoaded,
                             bubbleColor = MaterialTheme.chatColors.aiBubble,
-                            scrollStateManager = scrollStateManager
+                            scrollStateManager = scrollStateManager,
+                            isAiGenerated = true  // 标识为AI生成的图片
                         )
                     }
                 }

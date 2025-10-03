@@ -144,7 +144,8 @@ fun ChatMessagesList(
                                                 },
                                                 scrollStateManager = scrollStateManager,
                                                 onImageLoaded = onImageLoaded,
-                                                bubbleColor = MaterialTheme.chatColors.userBubble
+                                                bubbleColor = MaterialTheme.chatColors.userBubble,
+                                                isAiGenerated = false  // 用户上传的图片，非AI生成
                                             )
                                         }
                                         if (item.text.isNotBlank()) {
