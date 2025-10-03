@@ -246,133 +246,43 @@ class ApiHandler(
             }
             try {
                if (isImageGeneration) {
-                   try {
-                       val lastUserText = when (val lastUserMsg = requestBody.messages.lastOrNull { it.role == "user" }) {
-                            is com.example.everytalk.data.DataClass.SimpleTextApiMessage -> lastUserMsg.content
-                            is com.example.everytalk.data.DataClass.PartsApiMessage -> lastUserMsg.parts.filterIsInstance<ApiContentPart.Text>().joinToString(" ") { it.text }
-                            else -> null
+                    try {
+                        val response = ApiClient.generateImage(requestBody)
+                        logger.debug("[ImageGen] Response received: $response")
+
+                        val imageUrls = response.images.mapNotNull { it.url.takeIf(String::isNotBlank) }
+                        val responseText = response.text
+
+                        if (imageUrls.isNotEmpty()) {
+                            // 成功获取图片
+                            withContext(Dispatchers.Main.immediate) {
+                                val messageList = stateHolder.imageGenerationMessages
+                                val index = messageList.indexOfFirst { it.id == aiMessageId }
+                                if (index != -1) {
+                                    val currentMessage = messageList[index]
+                                    val updatedMessage = currentMessage.copy(
+                                        imageUrls = imageUrls,
+                                        text = responseText ?: currentMessage.text,
+                                        contentStarted = true,
+                                        isError = false
+                                    )
+                                    messageList[index] = updatedMessage
+                                }
+                            }
+                            viewModelScope.launch(Dispatchers.IO) {
+                                historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true)
+                            }
+                        } else {
+                            // 后端已完成所有重试但仍无图片，将返回的文本作为错误消息处理
+                            val error = IOException(responseText ?: "图像生成失败，且未返回明确错误信息。")
+                            updateMessageWithError(aiMessageId, error, isImageGeneration = true)
                         }
-                        val textOnly = isTextOnlyIntent(lastUserText)
-                        val maxAttempts = if (textOnly) 1 else 3
-                        var attempt = 1
-                        var finalText: String? = null
-                        while (attempt <= maxAttempts) {
-                           val response = ApiClient.generateImage(requestBody)
-                           logger.debug("[ImageGen] Attempt $attempt/$maxAttempts, response: $response")
-                           
-                           val imageUrlsFromResponse = response.images.mapNotNull { it.url.takeIf { url -> url.isNotBlank() } }
-                           val responseText = response.text ?: ""
-                           
-                           // 内容过滤：提示并终止
-                           if (responseText.startsWith("[CONTENT_FILTER]")) {
-                               withContext(Dispatchers.Main.immediate) {
-                                   val userFriendlyMessage = responseText.removePrefix("[CONTENT_FILTER]").trim()
-                                   stateHolder.showSnackbar(userFriendlyMessage)
-                                   val messageList = stateHolder.imageGenerationMessages
-                                   val index = messageList.indexOfFirst { it.id == aiMessageId }
-                                   if (index != -1) {
-                                       messageList.removeAt(index)
-                                   }
-                               }
-                               break
-                           }
-                           
-                           // 若先返回文本：先展示文本（模型可能后续才给图）
-                           if (finalText.isNullOrBlank() && responseText.isNotBlank()) {
-                               finalText = responseText
-                               withContext(Dispatchers.Main.immediate) {
-                                   val messageList = stateHolder.imageGenerationMessages
-                                   val index = messageList.indexOfFirst { it.id == aiMessageId }
-                                   if (index != -1) {
-                                       val currentMessage = messageList[index]
-                                       val updatedMessage = currentMessage.copy(
-                                           text = responseText,
-                                           contentStarted = true
-                                       )
-                                       messageList[index] = updatedMessage
-                                   }
-                               }
-                           }
-                           
-                           // 如果后端返回明确的错误提示（如区域限制/上游错误/网络异常等），不再重试，直接以文本结束
-                           if (imageUrlsFromResponse.isEmpty() && isBackendErrorResponseText(responseText)) {
-                               withContext(Dispatchers.Main.immediate) {
-                                   val messageList = stateHolder.imageGenerationMessages
-                                   val index = messageList.indexOfFirst { it.id == aiMessageId }
-                                   if (index != -1) {
-                                       val currentMessage = messageList[index]
-                                       val updatedMessage = currentMessage.copy(
-                                           text = finalText ?: responseText,
-                                           contentStarted = true
-                                       )
-                                       messageList[index] = updatedMessage
-                                   }
-                               }
-                               viewModelScope.launch(Dispatchers.IO) {
-                                   historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true)
-                               }
-                               break
-                           }
-                           if (imageUrlsFromResponse.isNotEmpty()) {
-                               // 获得图片：合并文本与图片并结束
-                               withContext(Dispatchers.Main.immediate) {
-                                   val messageList = stateHolder.imageGenerationMessages
-                                   val index = messageList.indexOfFirst { it.id == aiMessageId }
-                                   if (index != -1) {
-                                       val currentMessage = messageList[index]
-                                       val updatedMessage = currentMessage.copy(
-                                           imageUrls = imageUrlsFromResponse,
-                                           text = finalText ?: responseText,
-                                           contentStarted = true
-                                       )
-                                       logger.debug("[ImageGen] Updating message ${updatedMessage.id} with ${updatedMessage.imageUrls?.size ?: 0} images.")
-                                       messageList[index] = updatedMessage
-                                   }
-                               }
-                               viewModelScope.launch(Dispatchers.IO) {
-                                   historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true)
-                               }
-                               break
-                           } else {
-                               // 无图片：自动重试（保持 isImageApiCalling=true）
-                               if (attempt < maxAttempts) {
-                                   // 若任务已切换/取消则退出
-                                   val stillThisJob = stateHolder.imageApiJob == thisJob
-                                   if (!stillThisJob) break
-                                   withContext(Dispatchers.Main.immediate) {
-                                       // 提示重试进度（不强制修改 isImageApiCalling，用户可随时取消）
-                                       stateHolder.showSnackbar("图像生成失败，正在重试 (${attempt + 1}/$maxAttempts)...")
-                                   }
-                                   kotlinx.coroutines.delay(600)
-                                   attempt++
-                               } else {
-                                   // 最终仍无图：保留已有文本并提示
-                                   withContext(Dispatchers.Main.immediate) {
-                                       val messageList = stateHolder.imageGenerationMessages
-                                       val index = messageList.indexOfFirst { it.id == aiMessageId }
-                                       if (index != -1) {
-                                           val currentMessage = messageList[index]
-                                           val updatedMessage = currentMessage.copy(
-                                               text = finalText ?: currentMessage.text,
-                                               contentStarted = true
-                                           )
-                                           messageList[index] = updatedMessage
-                                       }
-                                       if (!textOnly) {  }
-                                   }
-                                   viewModelScope.launch(Dispatchers.IO) {
-                                       historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true)
-                                   }
-                                   break
-                               }
-                           }
-                       }
-                   } catch (e: Exception) {
-                       logger.error("[ImageGen] Image processing failed for message $aiMessageId", e)
-                       handleImageGenerationFailure(aiMessageId, e)
-                       updateMessageWithError(aiMessageId, e, isImageGeneration = true)
-                       onRequestFailed(e)
-                   }
+                    } catch (e: Exception) {
+                        // 网络请求失败或任何其他异常
+                        logger.error("[ImageGen] Exception during image generation for message $aiMessageId", e)
+                        updateMessageWithError(aiMessageId, e, isImageGeneration = true)
+                        // 不再调用 onRequestFailed，避免 Snackbar 弹出
+                    }
                } else {
                 val finalAttachments = attachmentsToPassToApiClient.toMutableList()
                 if (audioBase64 != null) {

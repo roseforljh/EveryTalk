@@ -824,6 +824,7 @@ object ApiClient {
             put("apiAddress", imgReq.apiAddress)
             put("apiKey", imgReq.apiKey)
             imgReq.provider?.let { put("provider", it) }
+            imgReq.conversationId?.let { put("conversationId", it) }
         }
 
         // 逐个候选地址尝试，首个成功即返回

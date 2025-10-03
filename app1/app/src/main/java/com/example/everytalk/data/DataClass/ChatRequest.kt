@@ -30,7 +30,10 @@ data class ImageGenRequest(
    val responseModalities: List<String>? = null,
    // 指定宽高比，示例："16:9"
    @SerialName("aspect_ratio")
-   val aspectRatio: String? = null
+   val aspectRatio: String? = null,
+   // 新增：严格会话隔离所需的会话ID（前端历史项ID）
+   @SerialName("conversationId")
+   val conversationId: String? = null
 )
 
 @Serializable

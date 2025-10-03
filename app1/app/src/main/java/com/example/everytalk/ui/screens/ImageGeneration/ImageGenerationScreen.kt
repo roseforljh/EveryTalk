@@ -1,6 +1,9 @@
 package com.example.everytalk.ui.screens.ImageGeneration
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.ClickableText
@@ -36,8 +39,6 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
     val editingMessage by viewModel.editingMessage.collectAsState()
     val selectedMediaItems = viewModel.selectedMediaItems
     val isApiCalling by viewModel.isImageApiCalling.collectAsState()
-    val shouldShowImageGenerationError by viewModel.shouldShowImageGenerationError.collectAsState()
-    val imageGenerationError by viewModel.imageGenerationError.collectAsState()
     val focusRequester = remember { FocusRequester() }
     val imeInsets = WindowInsets.ime
     val density = LocalDensity.current
@@ -45,6 +46,8 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
     val listState = remember { androidx.compose.foundation.lazy.LazyListState() }
     val scrollStateManager = rememberChatScrollStateManager(listState, coroutineScope)
     val imageGenerationChatListItems by viewModel.imageGenerationChatListItems.collectAsState()
+    // 当前图像会话ID：用于切换历史项时的过渡动画 key
+    val currentImageConvId by viewModel.currentImageGenerationConversationId.collectAsState()
     val configuration = LocalConfiguration.current
     val screenWidth = configuration.screenWidthDp.dp
     val bubbleMaxWidth = remember(screenWidth) { screenWidth.coerceAtMost(600.dp) }
@@ -77,29 +80,6 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
         }
     }
 
-    // 图像生成错误提示对话框
-    if (shouldShowImageGenerationError && !imageGenerationError.isNullOrBlank()) {
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { 
-                // viewModel.dismissImageGenerationErrorDialog() // 临时注释，避免编译错误
-            },
-            title = { 
-                androidx.compose.material3.Text("图像生成失败") 
-            },
-            text = { 
-                androidx.compose.material3.Text(imageGenerationError.orEmpty()) 
-            },
-            confirmButton = {
-                androidx.compose.material3.TextButton(
-                    onClick = { 
-                        // viewModel.dismissImageGenerationErrorDialog() // 临时注释，避免编译错误
-                    }
-                ) {
-                    androidx.compose.material3.Text("确定")
-                }
-            }
-        )
-    }
 
     // 关于对话框 - 修复图像模式下的显示bug
     val showAboutDialog by viewModel.showAboutDialog.collectAsState()
@@ -169,19 +149,28 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                 .padding(paddingValues)
         ) {
             Box(modifier = Modifier.weight(1f)) {
-                ImageGenerationMessagesList(
-                    chatItems = imageGenerationChatListItems,
-                    viewModel = viewModel,
-                    listState = listState,
-                    scrollStateManager = scrollStateManager,
-                    bubbleMaxWidth = bubbleMaxWidth,
-                    onShowAiMessageOptions = { /*TODO*/ },
-                    onImageLoaded = {
-                        if (!scrollStateManager.userInteracted) {
-                            scrollStateManager.jumpToBottom()
-                        }
-                    },
-                )
+                // 使用 Crossfade 在不同历史项之间平滑过渡（以会话ID为 key）
+                Crossfade(
+                    targetState = currentImageConvId,
+                    animationSpec = tween(durationMillis = 250, easing = FastOutSlowInEasing),
+                    label = "ImageHistoryCrossfade"
+                ) {
+                    // 注意：列表数据仍从 imageGenerationChatListItems 读取；
+                    // Crossfade 仅用会话ID作为切换触发点，避免闪烁与硬切换
+                    ImageGenerationMessagesList(
+                        chatItems = imageGenerationChatListItems,
+                        viewModel = viewModel,
+                        listState = listState,
+                        scrollStateManager = scrollStateManager,
+                        bubbleMaxWidth = bubbleMaxWidth,
+                        onShowAiMessageOptions = { /*TODO*/ },
+                        onImageLoaded = {
+                            if (!scrollStateManager.userInteracted) {
+                                scrollStateManager.jumpToBottom()
+                            }
+                        },
+                    )
+                }
             }
             ImageGenerationInputArea(
                 text = text,

@@ -12,10 +12,26 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import coil3.compose.AsyncImagePainter
+import coil3.request.ImageRequest
+import coil3.request.crossfade
 import com.example.everytalk.config.ImageCompressionPreferences
 import com.example.everytalk.util.AppLogger
 import com.example.everytalk.util.ImageScaleCalculator
 import com.example.everytalk.util.ImageScaleConfig
+import java.util.concurrent.ConcurrentHashMap
+
+/**
+ * 轻量级全局尺寸缓存：避免滑出视口后重建导致的布局跳动
+ * key 使用图片模型 toString()（对 URL/data:URI 均有效）
+ */
+private object ImageSizeCache {
+    private val map = ConcurrentHashMap<String, Pair<Int, Int>>() // width to height
+    fun get(key: String?): Pair<Int, Int>? = key?.let { map[it] }
+    fun put(key: String?, w: Int, h: Int) {
+        if (key == null || w <= 0 || h <= 0) return
+        map[key] = w to h
+    }
+}
 
 /**
  * 等比例异步图片组件
@@ -53,9 +69,27 @@ fun ProportionalAsyncImage(
     // 动态计算的显示修饰符
     var calculatedModifier by remember { mutableStateOf(modifier) }
     var hasCalculatedSize by remember { mutableStateOf(false) }
-    
+
+    // 读取全局尺寸缓存（首帧即占位，防止版式跳动）
+    val cacheKey = remember(model) { model?.toString() }
+    val cachedSize = remember(cacheKey) { ImageSizeCache.get(cacheKey) }
+    if (preserveAspectRatio && cachedSize != null && !hasCalculatedSize) {
+        val (cw, ch) = cachedSize
+        if (cw > 0 && ch > 0) {
+            val aspect = cw.toFloat() / ch.toFloat()
+            val targetWidthDp = with(density) { cw.toDp() }
+            calculatedModifier = modifier
+                .width(minOf(targetWidthDp, maxWidth))
+                .aspectRatio(aspect)
+            hasCalculatedSize = true
+        }
+    }
+
     AsyncImage(
-        model = model,
+        model = ImageRequest.Builder(context)
+            .data(model)
+            .crossfade(true) // 短暂淡入，避免突兀
+            .build(),
         contentDescription = contentDescription,
         onSuccess = { state ->
             try {
@@ -85,6 +119,8 @@ fun ProportionalAsyncImage(
                         .aspectRatio(aspectRatio)
                     
                     hasCalculatedSize = true
+                    // 写入全局尺寸缓存（下次直接占位）
+                    ImageSizeCache.put(cacheKey, originalWidth, originalHeight)
                     
                     logger.debug("Image scaled from ${originalWidth}x${originalHeight} to ${targetWidth}x${targetHeight} (AI: $isAiGenerated)")
                     onImageSizeCalculated?.invoke(targetWidth, targetHeight)

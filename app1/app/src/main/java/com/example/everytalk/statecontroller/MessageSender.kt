@@ -651,7 +651,9 @@ private data class AttachmentProcessingResult(
                             responseModalities = listOf("Image"),
                             aspectRatio = stateHolder._selectedImageRatio.value.let { r ->
                                 if (r.isAuto) null else r.displayName
-                            }
+                            },
+                            // 严格会话隔离：把当前图像历史项ID透传到后端
+                            conversationId = stateHolder._currentImageGenerationConversationId.value
                         )
                     } else null
                 )
