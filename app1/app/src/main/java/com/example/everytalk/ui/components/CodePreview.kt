@@ -396,6 +396,20 @@ private fun CodePreviewWebView(
                     displayZoomControls = false
                 }
 
+                // 关闭 WebView 深色策略（无需依赖 androidx.webkit；通过反射调用 Android Q+ 的原生 API）
+                try {
+                    val webSettingsClass = android.webkit.WebSettings::class.java
+                    val forceDarkField = webSettingsClass.getField("FORCE_DARK_OFF")
+                    val forceDarkOff = forceDarkField.getInt(null)
+                    val setForceDark = webSettingsClass.getMethod("setForceDark", Int::class.javaPrimitiveType)
+                    setForceDark.invoke(settings, forceDarkOff)
+                } catch (_: Throwable) {
+                    // 设备不支持或低版本，无需处理
+                }
+
+                // WebView 背景透明，避免深色主题下容器发黑
+                setBackgroundColor(android.graphics.Color.TRANSPARENT)
+
                 // 禁用文本选择，但不消费长按事件，让其传递到父级
                 setOnLongClickListener { false } // 不消费长按事件，让父级处理
                 isLongClickable = false
@@ -437,14 +451,14 @@ private fun generatePreviewHtml(code: String, language: String?, isDarkTheme: Bo
     val processedCode = preprocessCodeForRendering(code, language)
     val colors = getThemeColors(isDarkTheme)
 
-    return when (language?.lowercase()) {
-        "html" -> generateHtmlPreview(processedCode, colors)
-        "svg", "xml" -> generateSvgPreview(processedCode, language, code, colors)
-        "markdown", "md", "mdpreview", "markdown_preview" -> generateMarkdownPreview(processedCode, colors)
-        "mermaid" -> generateMermaidPreview(code, colors, isDarkTheme)
-        "css" -> generateCssPreview(code, colors)
-        "javascript", "js" -> generateJavaScriptPreview(code, colors)
-        else -> generateGenericPreview(code, language, colors)
+    return when (resolvePreviewKind(language, code)) {
+        PreviewKind.HTML -> generateHtmlPreview(processedCode, colors)
+        PreviewKind.SVG -> generateSvgPreview(processedCode, language, code, colors)
+        PreviewKind.MARKDOWN -> generateMarkdownPreview(processedCode, colors)
+        PreviewKind.MERMAID -> generateMermaidPreview(code, colors, isDarkTheme)
+        PreviewKind.CSS -> generateCssPreview(code, colors)
+        PreviewKind.JAVASCRIPT -> generateJavaScriptPreview(code, colors)
+        PreviewKind.GENERIC -> generateGenericPreview(code, language, colors)
     }
 }
 
@@ -460,12 +474,13 @@ private data class ThemeColors(
     val disableSelectionCSS: String
 )
 
-private fun getThemeColors(isDarkTheme: Boolean): ThemeColors {
-    val backgroundColor = if (isDarkTheme) "#0D1117" else "#FFFFFF"
-    val textColor = if (isDarkTheme) "#E6EDF3" else "#24292F"
-    val surfaceColor = if (isDarkTheme) "#161B22" else "#F6F8FA"
-    val borderColor = if (isDarkTheme) "#30363D" else "#D0D7DE"
-    val codeBackgroundColor = if (isDarkTheme) "#0D1117" else "#F6F8FA"
+private fun getThemeColors(@Suppress("UNUSED_PARAMETER") isDarkTheme: Boolean): ThemeColors {
+    // 统一采用“固定浅色”方案，确保夜间模式下也可读
+    val backgroundColor = "#FFFFFF"
+    val textColor = "#111111"
+    val surfaceColor = "#F6F8FA"
+    val borderColor = "#D0D7DE"
+    val codeBackgroundColor = "#F6F8FA"
 
     val disableSelectionCSS = """
         * {
@@ -480,6 +495,109 @@ private fun getThemeColors(isDarkTheme: Boolean): ThemeColors {
 
     return ThemeColors(backgroundColor, textColor, surfaceColor, borderColor, codeBackgroundColor, disableSelectionCSS)
 }
+/**
+ * 渲染类型统一枚举
+ */
+private enum class PreviewKind {
+    SVG, HTML, MARKDOWN, MERMAID, CSS, JAVASCRIPT, GENERIC
+}
+
+/**
+ * 语言标识归一化（大小写/空白/MIME/别名）
+ */
+private fun normalizeLanguage(lang: String?): String? {
+    val raw = lang?.trim() ?: return null
+    val l = raw.lowercase()
+        .replace(Regex("\\s+"), " ")
+        .replace(Regex(";.*$"), "") // 去掉分号后面的mime参数
+        .trim()
+
+    // 优先处理常见MIME或组合写法
+    if (l.contains("svg")) return "svg"
+    if (l == "htm") return "html"
+
+    return when (l) {
+        "html" -> "html"
+        "xml" -> "xml"
+        "css" -> "css"
+        "js", "javascript" -> "javascript"
+        "markdown", "md", "mdown", "mdpreview", "markdown_preview" -> "markdown"
+        else -> l
+    }
+}
+
+/**
+ * 内容检测：是否为内联SVG
+ */
+private fun detectSvgByContent(code: String): Boolean {
+    if (code.isBlank()) return false
+    // 匹配 <svg ...>，忽略大小写与空白
+    return Regex("(?is)<\\s*svg(\\s|>)").containsMatchIn(code)
+}
+
+/**
+ * 内容检测：是否为 SVG 片段（只有子元素，没有根 <svg>）
+ */
+private fun detectSvgFragmentByContent(code: String): Boolean {
+    if (code.isBlank()) return false
+    // 已经包含根 <svg> 则不是片段
+    if (Regex("(?is)<\\s*svg(\\s|>)").containsMatchIn(code)) return false
+    // 常见 SVG 子标签集合
+    val svgChildTags = "g|path|circle|rect|line|polyline|polygon|ellipse|text|defs|use|clipPath|mask|linearGradient|radialGradient|pattern|filter|animate|animateTransform|animateMotion|foreignObject"
+    // 只要命中任意 SVG 子元素，即认定为片段
+    return Regex("(?is)<\\s*(?:$svgChildTags)\\b").containsMatchIn(code)
+}
+
+/**
+ * 内容检测：是否为HTML文档/片段
+ */
+private fun detectHtmlByContent(code: String): Boolean {
+    if (code.isBlank()) return false
+    return code.contains("<html", ignoreCase = true) ||
+           code.contains("<!doctype", ignoreCase = true)
+}
+
+/**
+ * 统一的“语言+内容”决策器，供按钮判定与渲染分派共用
+ * 优先级策略：
+ * - 明确语言优先；但对于 svg/xml 需判定“完整 vs 片段”
+ * - 无语言时，先判定 SVG（含根或片段），再判定 HTML
+ */
+private fun resolvePreviewKind(language: String?, code: String): PreviewKind {
+    val lang = normalizeLanguage(language)
+
+    when (lang) {
+        "html" -> return PreviewKind.HTML
+        "svg" -> {
+            // 仅当确为 SVG（根或片段）才进入 SVG 预览，否则回落
+            return if (detectSvgByContent(code) || detectSvgFragmentByContent(code)) {
+                PreviewKind.SVG
+            } else {
+                PreviewKind.GENERIC
+            }
+        }
+        "xml" -> {
+            // xml 中若包含 SVG 根或片段，则按 SVG 渲染，否则走通用
+            return if (detectSvgByContent(code) || detectSvgFragmentByContent(code)) {
+                PreviewKind.SVG
+            } else {
+                PreviewKind.GENERIC
+            }
+        }
+        "markdown" -> return PreviewKind.MARKDOWN
+        "mermaid" -> return PreviewKind.MERMAID
+        "css" -> return PreviewKind.CSS
+        "javascript" -> return PreviewKind.JAVASCRIPT
+    }
+
+    // 语言未知/不标准时，依据内容兜底
+    if (detectSvgByContent(code) || detectSvgFragmentByContent(code)) return PreviewKind.SVG
+    if (detectHtmlByContent(code)) return PreviewKind.HTML
+
+    // 其它保持通用
+    return PreviewKind.GENERIC
+}
+
 /**
  * 生成基础HTML模板
  */
@@ -496,15 +614,19 @@ private fun generateBaseHtml(
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <!-- 防止 WebView 夜间反色；声明仅用浅色方案 -->
+        <meta name="color-scheme" content="light only">
         <title>$title</title>
         $additionalHead
         <style>
             ${colors.disableSelectionCSS}
+            html { color-scheme: light; }
             body {
                 margin: 16px;
                 font-family: system-ui, -apple-system, sans-serif;
                 background: ${colors.backgroundColor};
                 color: ${colors.textColor};
+                -webkit-text-size-adjust: 100%;
             }
             $additionalStyles
         </style>
@@ -516,9 +638,43 @@ private fun generateBaseHtml(
     """.trimIndent()
 }
 
+/**
+ * 向完整 HTML 文档中注入“浅色可读”样式与 meta，防止系统夜间反色导致对比度过低
+ * - 不改变用户内容结构，仅在 head/body 关键位置插入最小覆盖样式
+ * - 若无 head 则尝试插到 <html> 或 <body> 后；都没有则前置注入
+ */
+private fun injectLightModeShim(html: String): String {
+    val meta = """<meta name="color-scheme" content="light only">"""
+    val style = """
+        <style id="__preview_light_shim__">
+            html { color-scheme: light; }
+            body {
+                background: #FFFFFF !important;
+                color: #111111 !important;
+                -webkit-text-size-adjust: 100%;
+            }
+            h1,h2,h3,h4,h5,h6 { color: #0F172A !important; }
+        </style>
+    """.trimIndent()
+
+    val hasHeadClose = Regex("(?is)</\\s*head\\s*>").containsMatchIn(html)
+    return when {
+        hasHeadClose -> html.replace(Regex("(?is)</\\s*head\\s*>"), "$meta$style</head>")
+        Regex("(?is)<\\s*head\\b[^>]*>").containsMatchIn(html) ->
+            html.replace(Regex("(?is)<\\s*head\\b[^>]*>"), "$0$meta$style")
+        Regex("(?is)<\\s*html\\b[^>]*>").containsMatchIn(html) ->
+            html.replace(Regex("(?is)<\\s*html\\b[^>]*>"), "$0$meta$style")
+        Regex("(?is)<\\s*body\\b[^>]*>").containsMatchIn(html) ->
+            html.replace(Regex("(?is)<\\s*body\\b[^>]*>"), "$0$meta$style")
+        else -> "$meta$style$html"
+    }
+}
+
+
 private fun generateHtmlPreview(code: String, colors: ThemeColors): String {
+    // 对“完整 HTML 文档”注入浅色可读的强制样式与元信息；片段则包裹到我们统一模板
     return if (code.contains("<html", ignoreCase = true) || code.contains("<!doctype", ignoreCase = true)) {
-        code
+        injectLightModeShim(code)
     } else {
         generateBaseHtml("HTML Preview", code, colors)
     }
@@ -551,7 +707,8 @@ private fun generateSvgPreview(processedCode: String, language: String?, code: S
             svg {
                 max-width: 100%;
                 max-height: 80vh;
-                background: ${colors.surfaceColor};
+                /* 强制白底，避免深色主题或 WebView 深色策略导致发黑 */
+                background: #FFFFFF;
                 border-radius: 8px;
                 border: 1px solid ${colors.borderColor};
             }
@@ -625,25 +782,61 @@ private fun generateMermaidPreview(code: String, colors: ThemeColors, isDarkThem
 }
 
 private fun generateCssPreview(code: String, colors: ThemeColors): String {
+    // 固定为浅色阅读方案，避免夜间模式下黑字叠深底导致对比度过低
     return """
     <!DOCTYPE html>
     <html>
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta name="color-scheme" content="light only">
         <title>CSS Preview</title>
         <style>
+            html { color-scheme: light; }
+            body {
+                margin: 0;
+                padding: 20px;
+                background: #FFFFFF;         /* 固定白底 */
+                color: #111111;              /* 固定深色文字 */
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+                -webkit-text-size-adjust: 100%;
+                line-height: 1.6;
+            }
+            .preview-card {
+                max-width: 860px;
+                margin: 0 auto;
+                background: #FFFFFF;
+                border: 1px solid #E2E8F0;
+                border-radius: 12px;
+                padding: 24px;
+                box-shadow: 0 1px 2px rgba(0,0,0,.06);
+            }
+            h1,h2,h3,h4,h5,h6 { color: #0F172A; }
+            p,li,button { color: #111111; }
+            .demo-box {
+                width: 200px; height: 100px;
+                background: #E3F2FD;
+                border: 1px solid #2196F3;
+                margin: 16px 0; padding: 16px;
+                color: #0F172A;             /* 盒内文字保持深色 */
+            }
+            .btn {
+                padding: 8px 16px; margin: 4px;
+                background: #F1F5F9;
+                border: 1px solid #CBD5E1;
+                color: #0F172A;
+                border-radius: 8px;
+            }
+            /* 用户CSS放在最后，依然可以覆盖上面的固定浅色方案 */
             $code
         </style>
     </head>
     <body>
-        <div style="padding: 16px;">
+        <div class="preview-card">
             <h1>CSS样式预览</h1>
             <p>这是一个段落文本，用于展示CSS样式效果。</p>
-            <div class="demo-box" style="width: 200px; height: 100px; background: #e3f2fd; border: 1px solid #2196f3; margin: 16px 0; padding: 16px;">
-                演示容器
-            </div>
-            <button style="padding: 8px 16px; margin: 4px;">按钮示例</button>
+            <div class="demo-box">演示容器</div>
+            <button class="btn">按钮示例</button>
             <ul>
                 <li>列表项 1</li>
                 <li>列表项 2</li>
@@ -701,39 +894,65 @@ private fun generateGenericPreview(code: String, language: String?, colors: Them
  */
 private fun isCodePreviewable(language: String?, code: String): Boolean {
     if (language == null && code.isBlank()) return false
-    
-    val lang = language?.lowercase()
-    
-    // 直接支持的语言
-    when (lang) {
-        // Web技术
-        "html", "svg", "css", "javascript", "js" -> return true
-
-        // 标记语言
-        "markdown", "md", "mdpreview", "markdown_preview" -> return true
-
-        // 图表
-        "mermaid" -> return true
-
-        "xml" -> {
-            // 对于XML，检查是否是SVG
-            if (code.contains("<svg", ignoreCase = true)) {
-                return true
-            }
-        }
-    }
-    
-    // 基于内容的检测
-    return code.contains("<html", ignoreCase = true) ||
-           code.contains("<svg", ignoreCase = true) ||
-           code.contains("<!doctype", ignoreCase = true) ||
-           code.contains("graph", ignoreCase = true) && code.contains("-->", ignoreCase = true) // Mermaid
+    return resolvePreviewKind(language, code) != PreviewKind.GENERIC
 }
 
 /**
  * 预处理代码内容
+ * 目标：对常见的“AI 生成但不完全合法的 SVG”做温和修复，以提升 Android WebView 的容错性
+ *
+ * 注意：仅在判定为 SVG（语言为 svg，或内容中包含 <svg）时执行；其它语言原样返回
  */
 private fun preprocessCodeForRendering(code: String, language: String?): String {
-    // 直接返回原始代码，不需要额外处理
-    return code
+    val lang = normalizeLanguage(language)
+    val looksLikeSvg = (lang == "svg") || detectSvgByContent(code)
+
+    if (!looksLikeSvg) return code
+
+    var fixed = code
+
+    // 1) 修复把命名空间片段误拼在 viewBox 后的常见错误：
+    //    形如：viewBox="0 0 300 300".org/2000/svg">
+    //    处理：把 .org/2000/svg 挪正为 xmlns="http://www.w3.org/2000/svg"
+    fixed = Regex("(?is)(<\\s*svg\\b[^>]*viewBox=\"[^\"]*\")\\s*\\.org/2000/svg\"?")
+        .replace(fixed) { mr ->
+            mr.groupValues[1] + "\" xmlns=\"http://www.w3.org/2000/svg\""
+        }
+
+    // 2) 若 <svg> 上缺少 xmlns，则自动补上
+    if (!Regex("(?is)<\\s*svg\\b[^>]*\\sxmlns=").containsMatchIn(fixed)) {
+        fixed = fixed.replace(Regex("(?is)<\\s*svg\\b"), "<svg xmlns=\"http://www.w3.org/2000/svg\"")
+    }
+
+    // 3) 修复 <stop> 把颜色写进 offset 的情况：offset="[#hex]" -> offset="0%" stop-color="#hex"
+    fixed = Regex("(?is)<\\s*stop\\b([^>]*?)offset\\s*=\\s*\"(#[0-9a-fA-F]{3,8})\"([^>]*)/?>")
+        .replace(fixed) { mr ->
+            val before = mr.groupValues[1]
+            val color = mr.groupValues[2]
+            val after = mr.groupValues[3]
+            val hasStopColor = Regex("(?is)stop-color\\s*=").containsMatchIn(before + after)
+            val rebuilt = StringBuilder()
+                .append(before)
+                .append("offset=\"0%\"")
+                .append(after)
+            if (!hasStopColor) rebuilt.append(" stop-color=\"").append(color).append("\"")
+            "<stop$rebuilt />"
+        }
+
+    // 4) 明显被截断的 <circle ... 行（没有 >），直接丢弃该行，避免破坏后续解析
+    run {
+        val repaired = fixed.lines().filter { line ->
+            val t = line.trimStart()
+            !(t.startsWith("<circle") && !t.contains(">"))
+        }
+        fixed = repaired.joinToString("\n")
+    }
+
+    // 5) 清理被注释片段误插入到属性值后的中文/文本："...xxx" 任意文本 -->  => 只保留到引号
+    fixed = Regex("(?s)\"\\s*[^<\"]*?-->").replace(fixed, "\"")
+
+    // 6) 移除明显未闭合的属性（引号未闭合直到 > 或 /> 之前），以免整段失败
+    fixed = Regex("(?is)\\s+[a-zA-Z_:][-a-zA-Z0-9_:.]*=\"[^\"]*(?=\\s*[>/])").replace(fixed, "")
+
+    return fixed
 }
