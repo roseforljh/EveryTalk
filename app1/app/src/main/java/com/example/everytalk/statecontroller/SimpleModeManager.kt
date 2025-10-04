@@ -99,7 +99,9 @@ class SimpleModeManager(
         if (forceNew) {
             stateHolder.messages.clear()
             stateHolder._loadedHistoryIndex.value = null
-            stateHolder._currentConversationId.value = "chat_${UUID.randomUUID()}"
+            // 关键修复：使用带迁移的设置，避免“未发消息就开开关”后参数丢失
+            val newId = "chat_${UUID.randomUUID()}"
+            stateHolder.migrateParamsOnConversationIdChange(newId)
             stateHolder.systemPrompts[stateHolder._currentConversationId.value] = ""
             // 不为新会话自动回填会话参数，保持默认关闭
         }
@@ -214,7 +216,8 @@ class SimpleModeManager(
         // 使用基于历史索引的稳定ID，确保与参数持久化键一一对应
         val stableId = "history_chat_$index"
         Log.d(TAG, "🔥 [STEP 5] StableId: $stableId")
-        stateHolder._currentConversationId.value = stableId
+        // 历史加载也通过迁移设置，保证尚未发消息时参数不丢（有保护：仅空会话迁移）
+        stateHolder.migrateParamsOnConversationIdChange(stableId)
         Log.d(TAG, "🔥 [STEP 5] ConversationId set to: ${stateHolder._currentConversationId.value}")
         
         val systemPrompt = conversationToLoad

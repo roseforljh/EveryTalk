@@ -33,7 +33,11 @@ data class ImageGenRequest(
    val aspectRatio: String? = null,
    // 新增：严格会话隔离所需的会话ID（前端历史项ID）
    @SerialName("conversationId")
-   val conversationId: String? = null
+   val conversationId: String? = null,
+   // 新增：无状态会话种子——把该会话最近若干轮（user/model 文本）一并发送，后端将用其恢复上下文记忆
+   // 结构：[{ "role": "user"|"model", "text": "<纯文本>" }]
+   @SerialName("history")
+   val history: List<Map<String, String>>? = null
 )
 
 @Serializable

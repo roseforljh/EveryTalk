@@ -120,18 +120,25 @@ data class ConversationScrollState(
     val textExpandedReasoningStates: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
     val imageExpandedReasoningStates: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
     
-    // 为当前会话ID在缺省时应用全局默认参数
-    fun applyDefaultParamsForCurrentConversationIdIfMissing() {
-        val currentId = _currentConversationId.value
-        val hasConfig = conversationGenerationConfigs.value.containsKey(currentId)
-        if (!hasConfig) {
-            val global = dataSource?.loadGlobalConversationDefaults()
-            if (global != null) {
-                val newMap = conversationGenerationConfigs.value.toMutableMap()
-                newMap[currentId] = global
-                conversationGenerationConfigs.value = newMap
-                dataSource?.saveConversationParameters(newMap)
-            }
+    // 会话ID切换时参数迁移（仅在“尚未开始对话”的空会话场景执行）
+    // 解决：用户在新会话尚未发消息前开启 maxTokens，而后内部发生会话ID刷新导致参数丢失的问题
+    fun migrateParamsOnConversationIdChange(newId: String) {
+        val oldId = _currentConversationId.value
+        if (oldId == newId) {
+            _currentConversationId.value = newId
+            return
+        }
+        val currentConfigs = conversationGenerationConfigs.value
+        val cfg = currentConfigs[oldId]
+        // 切换ID
+        _currentConversationId.value = newId
+        // 若仍处于空会话（未开始发消息），则迁移用户已设置的参数到新ID
+        if (cfg != null && messages.isEmpty()) {
+            val newMap = currentConfigs.toMutableMap()
+            newMap.remove(oldId)
+            newMap[newId] = cfg
+            conversationGenerationConfigs.value = newMap
+            dataSource?.saveConversationParameters(newMap)
         }
     }
 
@@ -163,7 +170,7 @@ data class ConversationScrollState(
         _showSourcesDialog.value = false
         _sourcesForDialog.value = emptyList()
         _loadedHistoryIndex.value = null
-        _currentConversationId.value = "new_chat_${System.currentTimeMillis()}"
+        migrateParamsOnConversationIdChange("new_chat_${System.currentTimeMillis()}")
         
         // 不为新会话自动继承全局默认，保持默认关闭的期望
         

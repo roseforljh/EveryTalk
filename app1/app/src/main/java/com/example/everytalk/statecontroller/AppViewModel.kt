@@ -376,8 +376,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         }
 
         // 优化：分阶段初始化，优先加载关键配置
-        // 修改：不自动恢复上次会话，启动进入欢迎页
-        persistenceManager.loadInitialData(loadLastChat = false) {
+        // 调整：启用“上次打开会话”的恢复，保证多轮上下文在重启后延续（含图像模式）
+        persistenceManager.loadInitialData(loadLastChat = true) {
                 initialConfigPresent,
                 initialHistoryPresent ->
             if (!initialConfigPresent) {
@@ -1021,8 +1021,9 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         apiHandler.cancelCurrentApiJob("开始新的图像生成")
         viewModelScope.launch {
             try {
-                // 使用新的模式管理器
-                simpleModeManager.switchToImageMode(forceNew = true)
+                // 仅当当前没有已恢复/正在进行的图像会话时才新建会话
+                val shouldForceNew = stateHolder.imageGenerationMessages.isEmpty()
+                simpleModeManager.switchToImageMode(forceNew = shouldForceNew)
                 
                 messagesMutex.withLock {
                     if (stateHolder.shouldAutoScroll()) {

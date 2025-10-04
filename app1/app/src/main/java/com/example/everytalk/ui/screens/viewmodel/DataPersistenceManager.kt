@@ -177,10 +177,19 @@ class DataPersistenceManager(
                     val lastOpenChat = dataSource.loadLastOpenChat()
                     val lastOpenImageGenChat = dataSource.loadLastOpenImageGenerationChat()
                     withContext(Dispatchers.Main.immediate) {
+                        // 恢复消息列表
                         stateHolder.messages.clear()
                         stateHolder.messages.addAll(lastOpenChat)
                         stateHolder.imageGenerationMessages.clear()
                         stateHolder.imageGenerationMessages.addAll(lastOpenImageGenChat)
+
+                        // 为“文本模式/图像模式”恢复稳定的会话ID，保证后端多轮会话可延续
+                        val textConvId = lastOpenChat.firstOrNull()?.id ?: "new_chat_${System.currentTimeMillis()}"
+                        val imageConvId = lastOpenImageGenChat.firstOrNull()?.id ?: "image_resume_${System.currentTimeMillis()}"
+                        stateHolder._currentConversationId.value = textConvId
+                        stateHolder._currentImageGenerationConversationId.value = imageConvId
+
+                        // 清空历史索引（处于“继续未存档会话”的状态）
                         stateHolder._loadedHistoryIndex.value = null
                         stateHolder._loadedImageGenerationHistoryIndex.value = null
                     }

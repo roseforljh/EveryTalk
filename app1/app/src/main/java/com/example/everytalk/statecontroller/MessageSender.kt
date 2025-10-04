@@ -543,6 +543,17 @@ private data class AttachmentProcessingResult(
                 val historyEndIndex = messagesInChatUiSnapshot.indexOfFirst { it.id == newUserMessageForUi.id }
                 val historyUiMessages = if (historyEndIndex != -1) messagesInChatUiSnapshot.subList(0, historyEndIndex) else messagesInChatUiSnapshot
 
+                // 图像会话的稳定会话ID规则：
+                // 第一次消息（historyEndIndex==0 且非从历史加载）时，用“首条用户消息ID”作为 conversationId，
+                // 这样重启后根据第一条消息ID恢复，后端会话可继续（与 SimpleModeManager.loadImageHistory 的写法严格一致）。
+                if (isImageGeneration) {
+                    val isFirstMessageInThisSession = historyEndIndex == 0
+                    val notFromHistory = stateHolder._loadedImageGenerationHistoryIndex.value == null
+                    if (isFirstMessageInThisSession && notFromHistory) {
+                        stateHolder._currentImageGenerationConversationId.value = newUserMessageForUi.id
+                    }
+                }
+
                 // 🔥 修复：使用带Context的toApiMessage方法获取真实MIME类型
                 val apiMessagesForBackend = historyUiMessages.map { it.toApiMessage(uriToBase64Encoder, application) }.toMutableList()
 
@@ -638,6 +649,30 @@ private data class AttachmentProcessingResult(
                         } else {
                             "$upstreamBase/v1/images/generations"
                         }
+
+                        // 构建“无状态历史摘要”，保证每个会话自带记忆（即使后端会话未命中）
+                        // 仅提取纯文本轮次（user/model），避免把图片当作历史内容。
+                        val historyForStatelessMemory: List<Map<String, String>> = run {
+                            val maxTurns = 6 // 最近6轮（user/model合计），可按需调整
+                            val turns = mutableListOf<Map<String, String>>()
+                            historyUiMessages
+                                .asReversed() // 从末尾向前
+                                .asSequence()
+                                .filter { it.text.isNotBlank() }
+                                .map { msg ->
+                                    val role = if (msg.sender == UiSender.User) "user" else "model"
+                                    role to msg.text.trim()
+                                }
+                                .filter { (_, text) -> text.isNotBlank() }
+                                .take(maxTurns)
+                                .toList()
+                                .asReversed() // 恢复正序
+                                .forEach { (role, text) ->
+                                    turns.add(mapOf("role" to role, "text" to text))
+                                }
+                            turns
+                        }
+
                         // 依据文档：通过 config.response_modalities 与 image_config.aspect_ratio 控制输出
                         ImageGenRequest(
                             model = currentConfig.model,
@@ -654,7 +689,9 @@ private data class AttachmentProcessingResult(
                                 if (r.isAuto) null else r.displayName
                             },
                             // 严格会话隔离：把当前图像历史项ID透传到后端
-                            conversationId = stateHolder._currentImageGenerationConversationId.value
+                            conversationId = stateHolder._currentImageGenerationConversationId.value,
+                            // 额外兜底：把最近若干轮文本摘要也发给后端，确保“该会话独立记忆”不依赖服务端状态
+                            history = historyForStatelessMemory.ifEmpty { null }
                         )
                     } else null
                 )
