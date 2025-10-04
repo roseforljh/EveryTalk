@@ -187,12 +187,14 @@ class HistoryManager(
             Log.d(TAG_HM, "Chat history list persisted.")
         }
         
-        // 参数键迁移：将当前会话ID下的参数映射到稳定的历史会话ID
+        // 参数键迁移（根本修复）：用“会话的稳定键 = 首条消息的ID”，而不是“历史索引”
+        // 历史索引会因插入/删除而变化，导致重启后无法按原键取到参数，表现为“回到默认”
         if (!isImageGeneration) {
             val currentId = stateHolder._currentConversationId.value
-            val stableIndex = finalNewLoadedIndex ?: stateHolder._loadedHistoryIndex.value
-            if (stableIndex != null) {
-                val stableId = "history_chat_$stableIndex"
+            // 从“准备保存”的会话内容中取第一条消息ID，作为稳定键
+            val stableKeyFromMessages = messagesToSave.firstOrNull()?.id
+            if (stableKeyFromMessages != null) {
+                val stableId = stableKeyFromMessages
                 val currentConfigs = stateHolder.conversationGenerationConfigs.value
                 val currentConfigForSession = currentConfigs[currentId]
                 if (currentConfigForSession != null) {
@@ -202,10 +204,15 @@ class HistoryManager(
                         newMap.remove(currentId)
                     }
                     stateHolder.conversationGenerationConfigs.value = newMap
-                    // 使用 PersistenceManager 正式持久化映射，避免访问私有 dataSource
+                    // 持久化“稳定键 -> 参数”
                     persistenceManager.saveConversationParameters(newMap)
-                    Log.d(TAG_HM, "Migrated conversation parameters from '$currentId' to stable '$stableId'")
+                    // 切换当前会话ID为稳定键，后续读取与重启后都一致
+                    stateHolder._currentConversationId.value = stableId
+                    Log.d(TAG_HM, "Migrated parameters from '$currentId' to stable key(firstMessageId) '$stableId' and switched currentConversationId")
                 }
+            } else {
+                // 极端情况：没有消息可用，跳过迁移（空会话本就不应落库）
+                Log.d(TAG_HM, "Skip parameter migration: no messages to derive a stable key")
             }
         }
 

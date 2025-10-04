@@ -529,6 +529,8 @@ private data class AttachmentProcessingResult(
                     stateHolder.imageGenerationMessages.add(newUserMessageForUi)
                 } else {
                     stateHolder.messages.add(newUserMessageForUi)
+                    // 首条消息产生后（文本模式），将“待应用参数”落库，满足：空会话不保存；非空会话保存
+                    stateHolder.persistPendingParamsIfNeeded(isImageGeneration = false)
                 }
                 if (!isFromRegeneration) {
                    stateHolder._text.value = ""

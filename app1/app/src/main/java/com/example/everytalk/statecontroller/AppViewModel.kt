@@ -660,7 +660,18 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             topP = topP,
             maxOutputTokens = maxTokens
         )
+        // 1) 立即让本会话生效（UI与请求立刻可见）
         stateHolder.updateCurrentConversationConfig(config)
+        // 2) 若会话非空，强制保存到历史，确保将参数映射迁移/写入稳定的 history_chat_{index} 键，避免重启后丢回默认
+        if (stateHolder.messages.isNotEmpty()) {
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = false)
+                } catch (_: Exception) {
+                    // 避免影响UI流
+                }
+            }
+        }
     }
     
     // 获取当前会话的生成参数

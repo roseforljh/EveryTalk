@@ -76,6 +76,11 @@ class SimpleModeManager(
         _lastModeSwitch = System.currentTimeMillis()
         _uiMode.value = ModeType.TEXT
         
+        // 若当前文本会话为空且仅“应用了参数未发消息”，按要求删除该空会话（丢弃pending）
+        if (stateHolder.messages.isEmpty() && stateHolder.hasPendingConversationParams()) {
+            stateHolder.abandonEmptyPendingConversation()
+        }
+        
         // 1. 同步保存图像模式的当前状态 - 确保状态切换的原子性
         withContext(Dispatchers.IO) {
             historyManager.saveCurrentChatToHistoryIfNeeded(
@@ -99,10 +104,10 @@ class SimpleModeManager(
         if (forceNew) {
             stateHolder.messages.clear()
             stateHolder._loadedHistoryIndex.value = null
-            // 关键修复：使用带迁移的设置，避免“未发消息就开开关”后参数丢失
+            // 新会话是全新的、独立的：禁止任何迁移/继承
             val newId = "chat_${UUID.randomUUID()}"
-            stateHolder.migrateParamsOnConversationIdChange(newId)
-            stateHolder.systemPrompts[stateHolder._currentConversationId.value] = ""
+            stateHolder._currentConversationId.value = newId
+            stateHolder.systemPrompts[newId] = ""
             // 不为新会话自动回填会话参数，保持默认关闭
         }
         
@@ -126,6 +131,11 @@ class SimpleModeManager(
         _currentMode = ModeType.IMAGE
         _lastModeSwitch = System.currentTimeMillis()
         _uiMode.value = ModeType.IMAGE
+        
+        // 若当前文本会话为空且仅“应用了参数未发消息”，按要求删除该空会话（丢弃pending）
+        if (stateHolder.messages.isEmpty() && stateHolder.hasPendingConversationParams()) {
+            stateHolder.abandonEmptyPendingConversation()
+        }
         
         // 1. 同步保存文本模式的当前状态 - 确保状态切换的原子性
         withContext(Dispatchers.IO) {
@@ -168,6 +178,11 @@ class SimpleModeManager(
      */
     suspend fun loadTextHistory(index: Int) {
         Log.d(TAG, "🔥 [START] Loading TEXT history at index: $index")
+        
+        // 若当前文本会话为空且仅“应用了参数未发消息”，按要求删除该空会话（丢弃pending）
+        if (stateHolder.messages.isEmpty() && stateHolder.hasPendingConversationParams()) {
+            stateHolder.abandonEmptyPendingConversation()
+        }
         
         // 同步保存当前状态 - 确保状态切换的一致性
         withContext(Dispatchers.IO) {
@@ -213,11 +228,11 @@ class SimpleModeManager(
         
         // 5. 设置对话ID和系统提示（必须在消息加载前设置）
         Log.d(TAG, "🔥 [STEP 5] Setting conversation ID...")
-        // 使用基于历史索引的稳定ID，确保与参数持久化键一一对应
-        val stableId = "history_chat_$index"
-        Log.d(TAG, "🔥 [STEP 5] StableId: $stableId")
-        // 历史加载也通过迁移设置，保证尚未发消息时参数不丢（有保护：仅空会话迁移）
-        stateHolder.migrateParamsOnConversationIdChange(stableId)
+        // 使用该历史会话“首条消息的ID”作为稳定会话ID，和参数持久化使用的稳定键一致
+        val firstMessageId = conversationToLoad.firstOrNull()?.id
+        val stableId = firstMessageId ?: "history_${UUID.randomUUID()}"
+        Log.d(TAG, "🔥 [STEP 5] StableId (firstMessageId or fallback): $stableId")
+        stateHolder._currentConversationId.value = stableId
         Log.d(TAG, "🔥 [STEP 5] ConversationId set to: ${stateHolder._currentConversationId.value}")
         
         val systemPrompt = conversationToLoad

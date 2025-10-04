@@ -66,21 +66,57 @@ data class ConversationScrollState(
     val conversationGenerationConfigs: MutableStateFlow<Map<String, GenerationConfig>> =
         MutableStateFlow(emptyMap())
     
-    // 获取当前会话的生成配置
+    // 获取当前会话的生成配置（仅按当前会话ID的内存映射读取）
     fun getCurrentConversationConfig(): GenerationConfig? {
-        return conversationGenerationConfigs.value[_currentConversationId.value]
+        val id = _currentConversationId.value
+        return conversationGenerationConfigs.value[id]
+    }
+    
+    // 标记“空会话但已应用过参数（仅在内存映射中）”
+    // 用于离开/切换会话时判定是否需要丢弃该空会话的会话参数
+    fun hasPendingConversationParams(): Boolean {
+        val id = _currentConversationId.value
+        return messages.isEmpty() && conversationGenerationConfigs.value.containsKey(id)
     }
     
     // 更新当前会话的生成配置
+    // 规则：
+    // - 点击“应用”后，本会话立刻生效：总是写入当前会话ID的内存映射（UI 和请求立刻可见）
+    // - 仅当会话内容不为空时才持久化；空会话不落库
     fun updateCurrentConversationConfig(config: GenerationConfig) {
+        val id = _currentConversationId.value
+        // 立即更新内存映射（立刻生效）
         val currentConfigs = conversationGenerationConfigs.value.toMutableMap()
-        currentConfigs[_currentConversationId.value] = config
+        currentConfigs[id] = config
         conversationGenerationConfigs.value = currentConfigs
         
-        // 保存当前会话参数映射
-        dataSource?.saveConversationParameters(currentConfigs)
-        // 同步更新全局默认为“最近一次使用参数”，供新会话继承
-        dataSource?.saveGlobalConversationDefaults(config)
+        // 仅非空会话才持久化
+        if (messages.isNotEmpty()) {
+            dataSource?.saveConversationParameters(currentConfigs)
+        }
+    }
+    
+    // 首条用户消息产生时，若当前会话存在仅内存的参数映射，则补做持久化
+    fun persistPendingParamsIfNeeded(isImageGeneration: Boolean = false) {
+        if (isImageGeneration) return // 当前参数系统仅绑定文本会话
+        val id = _currentConversationId.value
+        val cfg = conversationGenerationConfigs.value[id] ?: return
+        // 写盘（如果之前未写过，也无害）
+        dataSource?.saveConversationParameters(conversationGenerationConfigs.value)
+    }
+    
+    // 放弃一个“仅应用过参数但未发消息”的空会话：
+    // 清除当前会话ID在内存中的参数映射，并同步到持久化（若存在）
+    fun abandonEmptyPendingConversation() {
+        if (messages.isEmpty()) {
+            val id = _currentConversationId.value
+            if (conversationGenerationConfigs.value.containsKey(id)) {
+                val newMap = conversationGenerationConfigs.value.toMutableMap()
+                newMap.remove(id)
+                conversationGenerationConfigs.value = newMap
+                dataSource?.saveConversationParameters(newMap)
+            }
+        }
     }
     
     // 为历史会话设置稳定的ID
@@ -121,7 +157,7 @@ data class ConversationScrollState(
     val imageExpandedReasoningStates: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
     
     // 会话ID切换时参数迁移（仅在“尚未开始对话”的空会话场景执行）
-    // 解决：用户在新会话尚未发消息前开启 maxTokens，而后内部发生会话ID刷新导致参数丢失的问题
+    // 解决：用户在空会话开启参数后，内部刷新/切换会话ID导致参数丢失的问题
     fun migrateParamsOnConversationIdChange(newId: String) {
         val oldId = _currentConversationId.value
         if (oldId == newId) {
@@ -132,7 +168,8 @@ data class ConversationScrollState(
         val cfg = currentConfigs[oldId]
         // 切换ID
         _currentConversationId.value = newId
-        // 若仍处于空会话（未开始发消息），则迁移用户已设置的参数到新ID
+        // 若仍处于空会话（未开始发消息），则迁移已落库的旧ID参数到新ID；
+        // 若参数尚未落库（pending），保持 pending 即可，由首次发消息时写入
         if (cfg != null && messages.isEmpty()) {
             val newMap = currentConfigs.toMutableMap()
             newMap.remove(oldId)
@@ -170,9 +207,16 @@ data class ConversationScrollState(
         _showSourcesDialog.value = false
         _sourcesForDialog.value = emptyList()
         _loadedHistoryIndex.value = null
-        migrateParamsOnConversationIdChange("new_chat_${System.currentTimeMillis()}")
         
-        // 不为新会话自动继承全局默认，保持默认关闭的期望
+        // 若当前会话为空且仅“应用未发”，按要求删除该空会话（丢弃pending、不落库）
+        if (messages.isEmpty() && hasPendingConversationParams()) {
+            abandonEmptyPendingConversation()
+        }
+        
+        // 分配全新会话ID（不迁移任何旧会话参数，保持完全独立）
+        _currentConversationId.value = "new_chat_${System.currentTimeMillis()}"
+        
+        // 新会话默认关闭参数：不做任何继承或默认值注入
         
         // Clean up old parameters periodically
         cleanupOldConversationParameters()
