@@ -424,56 +424,100 @@ class DataPersistenceManager(
    }
 
    /**
-    * 清理孤立的附件文件（已删除会话但文件仍存在的情况）
+    * 清理孤立的附件文件与临时缓存（已删除会话但文件仍存在的情况），并回收图片缓存
+    *
+    * 覆盖范围：
+    * - filesDir/chat_attachments 下不再被任何会话引用的文件
+    * - cacheDir/preview_cache 预览生成的临时文件
+    * - cacheDir/share_images 分享生成的临时文件
+    * - Coil 内存/磁盘缓存（在清空历史或大批删除后统一清理，防止残留占用）
     */
    suspend fun cleanupOrphanedAttachments() {
        withContext(Dispatchers.IO) {
            try {
                val chatAttachmentsDir = File(context.filesDir, "chat_attachments")
-               if (!chatAttachmentsDir.exists()) return@withContext
+               val previewCacheDir = File(context.cacheDir, "preview_cache")
+               val shareImagesDir = File(context.cacheDir, "share_images")
 
+               // 1) 统计当前仍被引用的附件路径（仅 filesDir/chat_attachments 管理的持久附件）
                val allActiveFilePaths = mutableSetOf<String>()
-               
-               // 收集当前活跃会话中的所有文件路径
-               val textHistory = stateHolder._historicalConversations.value
-               val imageHistory = stateHolder._imageGenerationHistoricalConversations.value
-               val currentTextMessages = stateHolder.messages.toList()
-               val currentImageMessages = stateHolder.imageGenerationMessages.toList()
-               
-               listOf(textHistory, imageHistory, listOf(currentTextMessages), listOf(currentImageMessages))
-                   .flatten()
-                   .forEach { conversation ->
-                       conversation.forEach { message ->
-                           message.attachments.forEach { attachment ->
-                               val path = when (attachment) {
-                                   is SelectedMediaItem.ImageFromUri -> attachment.filePath
-                                   is SelectedMediaItem.GenericFile -> attachment.filePath
-                                   is SelectedMediaItem.Audio -> attachment.data
-                                   is SelectedMediaItem.ImageFromBitmap -> attachment.filePath
-                               }
-                               if (!path.isNullOrBlank()) {
-                                   allActiveFilePaths.add(path)
+               runCatching {
+                   val textHistory = stateHolder._historicalConversations.value
+                   val imageHistory = stateHolder._imageGenerationHistoricalConversations.value
+                   val currentTextMessages = stateHolder.messages.toList()
+                   val currentImageMessages = stateHolder.imageGenerationMessages.toList()
+
+                   listOf(textHistory, imageHistory, listOf(currentTextMessages), listOf(currentImageMessages))
+                       .flatten()
+                       .forEach { conversation ->
+                           conversation.forEach { message ->
+                               message.attachments.forEach { attachment ->
+                                   val path = when (attachment) {
+                                       is SelectedMediaItem.ImageFromUri -> attachment.filePath
+                                       is SelectedMediaItem.GenericFile -> attachment.filePath
+                                       is SelectedMediaItem.Audio -> attachment.data
+                                       is SelectedMediaItem.ImageFromBitmap -> attachment.filePath
+                                   }
+                                   if (!path.isNullOrBlank()) {
+                                       allActiveFilePaths.add(path)
+                                   }
                                }
                            }
                        }
-                   }
+               }.onFailure { e ->
+                   Log.w(TAG, "Failed to collect active file paths for orphan cleanup", e)
+               }
 
-               // 扫描附件目录，删除不在活跃文件列表中的文件
+               // 2) 清理 chat_attachments 中的孤立文件
                var orphanedCount = 0
-               chatAttachmentsDir.listFiles()?.forEach { file ->
-                   if (file.isFile && !allActiveFilePaths.contains(file.absolutePath)) {
-                       try {
-                           if (file.delete()) {
-                               Log.d(TAG, "Deleted orphaned file: ${file.absolutePath}")
-                               orphanedCount++
+               if (chatAttachmentsDir.exists()) {
+                   chatAttachmentsDir.listFiles()?.forEach { file ->
+                       if (file.isFile && !allActiveFilePaths.contains(file.absolutePath)) {
+                           try {
+                               if (file.delete()) {
+                                   Log.d(TAG, "Deleted orphaned file: ${file.absolutePath}")
+                                   orphanedCount++
+                               }
+                           } catch (e: Exception) {
+                               Log.w(TAG, "Failed to delete orphaned file: ${file.absolutePath}", e)
                            }
-                       } catch (e: Exception) {
-                           Log.w(TAG, "Failed to delete orphaned file: ${file.absolutePath}", e)
                        }
                    }
                }
-               
-               Log.i(TAG, "Cleanup completed. Deleted $orphanedCount orphaned files.")
+
+               // 3) 清空预览/分享产生的临时缓存（cacheDir），这些文件不持久化引用，直接安全删除
+               fun clearCacheDir(dir: File, label: String): Int {
+                   if (!dir.exists()) return 0
+                   var count = 0
+                   dir.listFiles()?.forEach { f ->
+                       try {
+                           if (f.isFile) {
+                               if (f.delete()) count++
+                           } else {
+                               if (f.deleteRecursively()) count++
+                           }
+                       } catch (e: Exception) {
+                           Log.w(TAG, "Failed to delete cache file in $label: ${f.absolutePath}", e)
+                       }
+                   }
+                   Log.d(TAG, "Cleared $count files from $label")
+                   return count
+               }
+               val clearedPreview = clearCacheDir(previewCacheDir, "preview_cache")
+               val clearedShare = clearCacheDir(shareImagesDir, "share_images")
+
+               // 4) 统一清理 Coil 内存/磁盘缓存，避免 URL/请求键不匹配导致的残留
+               runCatching {
+                   imageLoader.memoryCache?.clear()
+                   Log.d(TAG, "Coil memory cache cleared")
+               }.onFailure { e -> Log.w(TAG, "Failed to clear Coil memory cache", e) }
+
+               runCatching {
+                   imageLoader.diskCache?.clear()
+                   Log.d(TAG, "Coil disk cache cleared")
+               }.onFailure { e -> Log.w(TAG, "Failed to clear Coil disk cache", e) }
+
+               Log.i(TAG, "Cleanup completed. Deleted $orphanedCount orphaned files. Cleared preview=$clearedPreview, share=$clearedShare cache files.")
            } catch (e: Exception) {
                Log.e(TAG, "Error during orphaned file cleanup", e)
            }

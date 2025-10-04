@@ -270,9 +270,9 @@ class HistoryManager(
         }
 
         if (successfullyDeleted) {
-           conversationToDelete?.let { conversation ->
-               persistenceManager.deleteMediaFilesForMessages(listOf(conversation))
-           }
+            conversationToDelete?.let { conversation ->
+                persistenceManager.deleteMediaFilesForMessages(listOf(conversation))
+            }
             if (loadedHistoryIndex.value != finalLoadedIndexAfterDelete) {
                 loadedHistoryIndex.value = finalLoadedIndexAfterDelete
                 Log.d(
@@ -280,12 +280,18 @@ class HistoryManager(
                     "Due to deletion, LoadedHistoryIndex updated to: $finalLoadedIndexAfterDelete"
                 )
             }
-           persistenceManager.saveChatHistory(historicalConversations.value, isImageGeneration)
-           if (finalLoadedIndexAfterDelete == null) {
-               persistenceManager.clearLastOpenChat(isImageGeneration)
-           }
+            persistenceManager.saveChatHistory(historicalConversations.value, isImageGeneration)
+            if (finalLoadedIndexAfterDelete == null) {
+                persistenceManager.clearLastOpenChat(isImageGeneration)
+            }
+            // 增强：单条删除后也做一次孤立/缓存清理，确保预览/分享缓存与Coil缓存及时释放
+            try {
+                persistenceManager.cleanupOrphanedAttachments()
+            } catch (e: Exception) {
+                Log.w(TAG_HM, "cleanupOrphanedAttachments after delete failed", e)
+            }
             Log.d(TAG_HM, "Chat history list persisted after deletion. \"Last open chat\" cleared.")
-           onHistoryModified()
+            onHistoryModified()
         }
     }
 
