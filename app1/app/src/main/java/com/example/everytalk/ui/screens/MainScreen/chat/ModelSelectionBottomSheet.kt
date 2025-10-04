@@ -51,6 +51,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.TextStyle
@@ -249,6 +250,7 @@ fun ModelSelectionBottomSheet(
                         Row(
                             modifier = Modifier
                                 .height(36.dp)
+                                .shadow(8.dp, CircleShape, clip = false)
                                 .background(searchBarColor, CircleShape)
                                 .padding(horizontal = 12.dp),
                             verticalAlignment = Alignment.CenterVertically
@@ -279,6 +281,7 @@ fun ModelSelectionBottomSheet(
                 Box(
                     modifier = Modifier
                         .size(32.dp)
+                        .shadow(6.dp, CircleShape, clip = false)
                         .clip(CircleShape)
                         .background(searchBarColor)
                         .clickable { showPlatformDialog = true },

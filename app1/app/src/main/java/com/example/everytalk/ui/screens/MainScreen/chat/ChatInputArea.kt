@@ -216,7 +216,8 @@ fun ChatInputArea(
     density: Density,
     keyboardController: SoftwareKeyboardController?,
     onFocusChange: (isFocused: Boolean) -> Unit,
-    onSendMessage: (messageText: String, isFromRegeneration: Boolean, attachments: List<SelectedMediaItem>, audioBase64: String?, mimeType: String?) -> Unit
+    onSendMessage: (messageText: String, isFromRegeneration: Boolean, attachments: List<SelectedMediaItem>, audioBase64: String?, mimeType: String?) -> Unit,
+    viewModel: com.example.everytalk.statecontroller.AppViewModel
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -226,6 +227,7 @@ fun ChatInputArea(
     var pendingMessageTextForSend by remember { mutableStateOf<String?>(null) }
     var showImageSelectionPanel by remember { mutableStateOf(false) }
     var showMoreOptionsPanel by remember { mutableStateOf(false) }
+    var showConversationParamsDialog by remember { mutableStateOf(false) }
     var tempCameraImageUri by remember { mutableStateOf<Uri?>(null) }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
@@ -372,21 +374,11 @@ fun ChatInputArea(
 
     val onToggleImagePanel = {
         if (showMoreOptionsPanel) showMoreOptionsPanel = false
-        val willOpen = !showImageSelectionPanel
-        showImageSelectionPanel = willOpen
-        if (willOpen) {
-            // 打开面板时收起键盘，避免遮挡与布局跳动
-            keyboardController?.hide()
-        }
+        showImageSelectionPanel = !showImageSelectionPanel
     }
     val onToggleMoreOptionsPanel = {
         if (showImageSelectionPanel) showImageSelectionPanel = false
-        val willOpen = !showMoreOptionsPanel
-        showMoreOptionsPanel = willOpen
-        if (willOpen) {
-            // 打开面板时收起键盘
-            keyboardController?.hide()
-        }
+        showMoreOptionsPanel = !showMoreOptionsPanel
     }
 
     val onClearContent = remember {
@@ -538,10 +530,10 @@ fun ChatInputArea(
                 LaunchedEffect(showImageSelectionPanel) {
                     if (showImageSelectionPanel) {
                         launch {
-                            alpha.animateTo(1f, animationSpec = tween(durationMillis = 300))
+                            alpha.animateTo(1f, animationSpec = tween(durationMillis = 150))
                         }
                         launch {
-                            scale.animateTo(1f, animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing))
+                            scale.animateTo(1f, animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing))
                         }
                     }
                 }
@@ -591,10 +583,10 @@ fun ChatInputArea(
                 LaunchedEffect(showMoreOptionsPanel) {
                     if (showMoreOptionsPanel) {
                         launch {
-                            alpha.animateTo(1f, animationSpec = tween(durationMillis = 300))
+                            alpha.animateTo(1f, animationSpec = tween(durationMillis = 150))
                         }
                         launch {
-                            scale.animateTo(1f, animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing))
+                            scale.animateTo(1f, animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing))
                         }
                     }
                 }
@@ -607,14 +599,39 @@ fun ChatInputArea(
                 }) {
                     OptimizedMoreOptionsPanel { selectedOption ->
                         showMoreOptionsPanel = false
-                        val mimeTypesArray = Array(selectedOption.mimeTypes.size) { index ->
-                            selectedOption.mimeTypes[index]
+                        when (selectedOption) {
+                            MoreOptionsType.CONVERSATION_PARAMS -> {
+                                showConversationParamsDialog = true
+                            }
+                            else -> {
+                                val mimeTypesArray = Array(selectedOption.mimeTypes.size) { index ->
+                                    selectedOption.mimeTypes[index]
+                                }
+                                filePickerLauncher.launch(mimeTypesArray)
+                            }
                         }
-                        filePickerLauncher.launch(mimeTypesArray)
                     }
                 }
             }
         }
+    }
+
+    // Conversation Parameters Dialog
+    if (showConversationParamsDialog) {
+        // Get current conversation parameters if they exist
+        val currentParams = viewModel.getCurrentConversationParameters()
+        
+        ConversationParametersDialog(
+            onDismissRequest = { showConversationParamsDialog = false },
+            onConfirm = { temperature, topP, maxTokens ->
+                // Save parameters to current conversation
+                viewModel.updateConversationParameters(temperature, topP, maxTokens)
+                showConversationParamsDialog = false
+            },
+            initialTemperature = currentParams?.temperature,
+            initialTopP = currentParams?.topP,
+            initialMaxTokens = currentParams?.maxOutputTokens
+        )
     }
 
     DisposableEffect(Unit) {

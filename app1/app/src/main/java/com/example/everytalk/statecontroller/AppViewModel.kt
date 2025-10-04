@@ -24,6 +24,7 @@ import com.example.everytalk.data.DataClass.GithubRelease
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.DataClass.Sender
 import com.example.everytalk.data.DataClass.WebSearchResult
+import com.example.everytalk.data.DataClass.GenerationConfig
 import com.example.everytalk.ui.components.MarkdownPart
 import com.example.everytalk.data.local.SharedPreferencesDataSource
 import com.example.everytalk.data.network.ApiClient
@@ -98,7 +99,10 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     private val historyMutex = Mutex()
     private val textConversationPreviewCache = LruCache<Int, String>(100)
     private val imageConversationPreviewCache = LruCache<Int, String>(100)
-    internal val stateHolder = ViewModelStateHolder()
+    internal val stateHolder = ViewModelStateHolder().apply {
+        // Initialize with data source for persistent parameter storage
+        initializeDataSource(dataSource)
+    }
     private val imageLoader = ImageLoader.Builder(application.applicationContext)
         .logger(DebugLogger())
         .build()
@@ -648,6 +652,21 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     fun clearMediaItems() {
         stateHolder.clearSelectedMedia()
     }
+    
+    // 更新当前会话的生成参数
+    fun updateConversationParameters(temperature: Float, topP: Float, maxTokens: Int?) {
+        val config = GenerationConfig(
+            temperature = temperature,
+            topP = topP,
+            maxOutputTokens = maxTokens
+        )
+        stateHolder.updateCurrentConversationConfig(config)
+    }
+    
+    // 获取当前会话的生成参数
+    fun getCurrentConversationParameters(): GenerationConfig? {
+        return stateHolder.getCurrentConversationConfig()
+    }
 
     fun onEditDialogTextChanged(newText: String) {
         stateHolder._editDialogInputText.value = newText
@@ -1027,6 +1046,9 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             stateHolder._isLoadingTextHistory.value = true
             
             try {
+                // 为历史会话设置稳定的ID
+                stateHolder.setConversationIdForHistory(index)
+                
                 // Step 1: 预检查会话是否包含数学公式（优化性能）
                 val historyMessages = stateHolder._historicalConversations.value.getOrNull(index) ?: emptyList()
                 val hasMath = ConversationLoadManager.preCheckConversationMath(historyMessages)

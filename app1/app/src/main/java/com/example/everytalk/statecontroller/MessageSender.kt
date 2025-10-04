@@ -597,7 +597,7 @@ private data class AttachmentProcessingResult(
                     apiKey = currentConfig.key,
                     model = currentConfig.model,
                     useWebSearch = stateHolder._isWebSearchEnabled.value,
-                    generationConfig = GenerationConfig(
+                    generationConfig = stateHolder.getCurrentConversationConfig() ?: GenerationConfig(
                         temperature = currentConfig.temperature,
                         topP = currentConfig.topP,
                         maxOutputTokens = currentConfig.maxTokens,

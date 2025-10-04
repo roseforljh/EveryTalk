@@ -404,7 +404,8 @@ fun ChatScreen(
                         audioBase64 = audioBase64,
                         mimeType = mimeType
                     )
-                }
+                },
+                viewModel = viewModel
             )
         }
 

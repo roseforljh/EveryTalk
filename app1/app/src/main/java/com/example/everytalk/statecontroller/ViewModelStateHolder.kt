@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import com.example.everytalk.data.DataClass.ApiConfig
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.DataClass.WebSearchResult
+import com.example.everytalk.data.DataClass.GenerationConfig
 import com.example.everytalk.models.SelectedMediaItem
 import com.example.everytalk.ui.util.ScrollController
 import kotlinx.coroutines.Job
@@ -27,6 +28,18 @@ data class ConversationScrollState(
  class ViewModelStateHolder {
     lateinit var scrollController: ScrollController
      val drawerState: DrawerState = DrawerState(initialValue = DrawerValue.Closed)
+    
+    // DataSource for persistent storage - will be initialized from AppViewModel
+    private var dataSource: com.example.everytalk.data.local.SharedPreferencesDataSource? = null
+    
+    fun initializeDataSource(source: com.example.everytalk.data.local.SharedPreferencesDataSource) {
+        dataSource = source
+        // Load saved parameters when initialized
+        val savedParameters = source.loadConversationParameters()
+        if (savedParameters.isNotEmpty()) {
+            conversationGenerationConfigs.value = savedParameters
+        }
+    }
 
     val _text = MutableStateFlow("")
     val messages: SnapshotStateList<Message> = mutableStateListOf()
@@ -47,6 +60,58 @@ data class ConversationScrollState(
     // 分离的推理完成状态
     val textReasoningCompleteMap: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
     val imageReasoningCompleteMap: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
+    
+    // 每个会话独立的生成配置参数
+    val conversationGenerationConfigs: MutableStateFlow<Map<String, GenerationConfig>> = 
+        MutableStateFlow(emptyMap())
+    
+    // 获取当前会话的生成配置
+    fun getCurrentConversationConfig(): GenerationConfig? {
+        return conversationGenerationConfigs.value[_currentConversationId.value]
+    }
+    
+    // 更新当前会话的生成配置
+    fun updateCurrentConversationConfig(config: GenerationConfig) {
+        val currentConfigs = conversationGenerationConfigs.value.toMutableMap()
+        currentConfigs[_currentConversationId.value] = config
+        conversationGenerationConfigs.value = currentConfigs
+        
+        // Save to persistent storage
+        dataSource?.saveConversationParameters(currentConfigs)
+    }
+    
+    // 为历史会话设置稳定的ID
+    fun setConversationIdForHistory(historyIndex: Int) {
+        // 使用历史索引生成稳定的ID
+        _currentConversationId.value = "history_chat_$historyIndex"
+    }
+    
+    // 清理未使用的会话参数（保留最近50个会话的参数）
+    fun cleanupOldConversationParameters() {
+        val currentConfigs = conversationGenerationConfigs.value
+        if (currentConfigs.size > 50) {
+            // Keep only the 50 most recent conversation parameters
+            // For simplicity, we'll keep all history_chat_* and recent new_chat_* IDs
+            val sortedKeys = currentConfigs.keys.sortedByDescending { key ->
+                when {
+                    key.startsWith("history_chat_") -> {
+                        // Keep all history chats (they have stable IDs)
+                        Long.MAX_VALUE
+                    }
+                    key.startsWith("new_chat_") -> {
+                        // Extract timestamp from new_chat_TIMESTAMP
+                        key.substringAfter("new_chat_").toLongOrNull() ?: 0L
+                    }
+                    else -> 0L
+                }
+            }
+            
+            val keysToKeep = sortedKeys.take(50).toSet()
+            val cleanedConfigs = currentConfigs.filterKeys { it in keysToKeep }
+            conversationGenerationConfigs.value = cleanedConfigs
+            dataSource?.saveConversationParameters(cleanedConfigs)
+        }
+    }
 
     // 分离的展开推理状态
     val textExpandedReasoningStates: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
@@ -81,6 +146,9 @@ data class ConversationScrollState(
         _sourcesForDialog.value = emptyList()
         _loadedHistoryIndex.value = null
         _currentConversationId.value = "new_chat_${System.currentTimeMillis()}"
+        
+        // Clean up old parameters periodically
+        cleanupOldConversationParameters()
         
         // 🎯 关键修复：确保ApiHandler中的会话状态完全清理
         if (::_apiHandler.isInitialized) {

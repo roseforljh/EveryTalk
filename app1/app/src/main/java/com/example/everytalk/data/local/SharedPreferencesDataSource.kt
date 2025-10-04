@@ -4,9 +4,11 @@ import android.content.Context
 import androidx.core.content.edit
 import com.example.everytalk.data.DataClass.ApiConfig
 import com.example.everytalk.data.DataClass.Message
+import com.example.everytalk.data.DataClass.GenerationConfig
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.SetSerializer
+import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerializationException
@@ -22,6 +24,7 @@ private const val KEY_LAST_OPEN_CHAT = "last_open_chat_v1"
 private const val KEY_CUSTOM_PROVIDERS = "custom_providers_v1"
 private const val KEY_SYSTEM_PROMPT = "system_prompt_v1"
 private const val KEY_LAST_OPEN_IMAGE_GENERATION = "last_open_image_generation_v1"
+private const val KEY_CONVERSATION_PARAMETERS = "conversation_parameters_v1"
 
 
 private val json = Json {
@@ -43,6 +46,8 @@ class SharedPreferencesDataSource(context: Context) {
         ListSerializer(Message.serializer())
     private val customProvidersSerializer: KSerializer<Set<String>> =
         SetSerializer(String.serializer())
+    private val conversationParametersSerializer: KSerializer<Map<String, GenerationConfig>> =
+        MapSerializer(String.serializer(), GenerationConfig.serializer())
 
     private fun <T> saveData(key: String, value: T, serializer: KSerializer<T>) {
         try {
@@ -143,4 +148,11 @@ fun clearImageGenerationHistory() = remove(KEY_IMAGE_GENERATION_HISTORY)
         loadData(KEY_LAST_OPEN_IMAGE_GENERATION, singleChatSerializer, emptyList())
    fun loadSystemPrompt(): String = getString(KEY_SYSTEM_PROMPT, "") ?: ""
    fun saveSystemPrompt(prompt: String) = saveString(KEY_SYSTEM_PROMPT, prompt)
+   
+   // 保存和加载会话参数
+   fun saveConversationParameters(parameters: Map<String, GenerationConfig>) =
+       saveData(KEY_CONVERSATION_PARAMETERS, parameters, conversationParametersSerializer)
+   
+   fun loadConversationParameters(): Map<String, GenerationConfig> =
+       loadData(KEY_CONVERSATION_PARAMETERS, conversationParametersSerializer, emptyMap())
 }

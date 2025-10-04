@@ -129,12 +129,14 @@ class MainActivity : ComponentActivity() {
             window.isNavigationBarContrastEnforced = false
         }
         
-        // 配置系统UI可见性以实现沉浸式底部导航条
-        val windowInsetsController = WindowInsetsControllerCompat(window, window.decorView)
-        windowInsetsController.isAppearanceLightNavigationBars = false
-        windowInsetsController.isAppearanceLightStatusBars = false
         setContent {
             App1Theme(dynamicColor = false) {
+                // 根据当前主题动态设置状态栏和导航栏图标颜色
+                val isDarkTheme = isSystemInDarkTheme()
+                val windowInsetsController = WindowInsetsControllerCompat(window, window.decorView)
+                windowInsetsController.isAppearanceLightNavigationBars = !isDarkTheme
+                windowInsetsController.isAppearanceLightStatusBars = !isDarkTheme
+                
                 var showSplash by remember { mutableStateOf(true) }
 
                 if (showSplash) {
@@ -356,48 +358,36 @@ class MainActivity : ComponentActivity() {
                             ) {
                                 composable(
                                     route = Screen.CHAT_SCREEN,
-                                    enterTransition = { 
-                                        androidx.compose.animation.slideInHorizontally(
-                                            initialOffsetX = { it },
+                                    enterTransition = {
+                                        androidx.compose.animation.fadeIn(
                                             animationSpec = tween(
-                                                durationMillis = 300,
+                                                durationMillis = 280,
                                                 easing = FastOutSlowInEasing
                                             )
-                                        ) + androidx.compose.animation.fadeIn(
-                                            animationSpec = tween(durationMillis = 300)
                                         )
                                     },
-                                    exitTransition = { 
-                                        androidx.compose.animation.slideOutHorizontally(
-                                            targetOffsetX = { -it },
+                                    exitTransition = {
+                                        androidx.compose.animation.fadeOut(
                                             animationSpec = tween(
-                                                durationMillis = 300,
+                                                durationMillis = 220,
                                                 easing = FastOutSlowInEasing
                                             )
-                                        ) + androidx.compose.animation.fadeOut(
-                                            animationSpec = tween(durationMillis = 300)
                                         )
                                     },
-                                    popEnterTransition = { 
-                                        androidx.compose.animation.slideInHorizontally(
-                                            initialOffsetX = { -it },
+                                    popEnterTransition = {
+                                        androidx.compose.animation.fadeIn(
                                             animationSpec = tween(
-                                                durationMillis = 300,
+                                                durationMillis = 280,
                                                 easing = FastOutSlowInEasing
                                             )
-                                        ) + androidx.compose.animation.fadeIn(
-                                            animationSpec = tween(durationMillis = 300)
                                         )
                                     },
-                                    popExitTransition = { 
-                                        androidx.compose.animation.slideOutHorizontally(
-                                            targetOffsetX = { it },
+                                    popExitTransition = {
+                                        androidx.compose.animation.fadeOut(
                                             animationSpec = tween(
-                                                durationMillis = 300,
+                                                durationMillis = 220,
                                                 easing = FastOutSlowInEasing
                                             )
-                                        ) + androidx.compose.animation.fadeOut(
-                                            animationSpec = tween(durationMillis = 300)
                                         )
                                     }
                                 ) {
@@ -405,48 +395,36 @@ class MainActivity : ComponentActivity() {
                                 }
                                composable(
                                    route = Screen.IMAGE_GENERATION_SCREEN,
-                                   enterTransition = { 
-                                       androidx.compose.animation.slideInHorizontally(
-                                           initialOffsetX = { it },
+                                   enterTransition = {
+                                       androidx.compose.animation.fadeIn(
                                            animationSpec = tween(
-                                               durationMillis = 300,
+                                               durationMillis = 280,
                                                easing = FastOutSlowInEasing
                                            )
-                                       ) + androidx.compose.animation.fadeIn(
-                                           animationSpec = tween(durationMillis = 300)
                                        )
                                    },
-                                   exitTransition = { 
-                                       androidx.compose.animation.slideOutHorizontally(
-                                           targetOffsetX = { -it },
+                                   exitTransition = {
+                                       androidx.compose.animation.fadeOut(
                                            animationSpec = tween(
-                                               durationMillis = 300,
+                                               durationMillis = 220,
                                                easing = FastOutSlowInEasing
                                            )
-                                       ) + androidx.compose.animation.fadeOut(
-                                           animationSpec = tween(durationMillis = 300)
                                        )
                                    },
-                                   popEnterTransition = { 
-                                       androidx.compose.animation.slideInHorizontally(
-                                           initialOffsetX = { -it },
+                                   popEnterTransition = {
+                                       androidx.compose.animation.fadeIn(
                                            animationSpec = tween(
-                                               durationMillis = 300,
+                                               durationMillis = 280,
                                                easing = FastOutSlowInEasing
                                            )
-                                       ) + androidx.compose.animation.fadeIn(
-                                           animationSpec = tween(durationMillis = 300)
                                        )
                                    },
-                                   popExitTransition = { 
-                                       androidx.compose.animation.slideOutHorizontally(
-                                           targetOffsetX = { it },
+                                   popExitTransition = {
+                                       androidx.compose.animation.fadeOut(
                                            animationSpec = tween(
-                                               durationMillis = 300,
+                                               durationMillis = 220,
                                                easing = FastOutSlowInEasing
                                            )
-                                       ) + androidx.compose.animation.fadeOut(
-                                           animationSpec = tween(durationMillis = 300)
                                        )
                                    }
                                ) {

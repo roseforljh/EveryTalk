@@ -40,7 +40,7 @@ enum class MoreOptionsType(val label: String, val icon: ImageVector, val mimeTyp
     FILE("文档", Icons.Outlined.AttachFile, DocumentMimeTypes.TYPES),
     VIDEO("视频", Icons.Outlined.Videocam, arrayOf("video/*")),
     AUDIO("音频", Icons.Outlined.Audiotrack, arrayOf("audio/*")),
-    ALL_FILES("所有文件", Icons.Outlined.Folder, arrayOf("*/*"))
+    CONVERSATION_PARAMS("会话参数", Icons.Outlined.Settings, arrayOf())
 }
 
 @Serializable
