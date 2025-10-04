@@ -276,6 +276,8 @@ fun ImageGenerationInputArea(
     val coroutineScope = rememberCoroutineScope()
 
     var showImageSelectionPanel by remember { mutableStateOf(false) }
+    // 记录外点关闭的时间戳，用于忽略随后紧邻的按钮抬起点击，避免“先关后又开”
+    var lastImagePanelDismissAt by remember { mutableStateOf(0L) }
     var tempCameraImageUri by remember { mutableStateOf<Uri?>(null) }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
@@ -347,11 +349,12 @@ fun ImageGenerationInputArea(
     var chatInputContentHeightPx by remember { mutableIntStateOf(0) }
 
     val onToggleImagePanel = {
-        val willOpen = !showImageSelectionPanel
-        showImageSelectionPanel = willOpen
-        if (willOpen) {
-            // 打开面板时收起键盘，保持与文本模式一致
-            keyboardController?.hide()
+        // 若刚刚由外点关闭，忽略紧随其后的按钮抬起点击，避免“先关后开”
+        val now = android.os.SystemClock.uptimeMillis()
+        if (!showImageSelectionPanel && now - lastImagePanelDismissAt < 200L) {
+            // ignore reopen right after outside-dismiss
+        } else {
+            showImageSelectionPanel = !showImageSelectionPanel
         }
     }
 
@@ -539,8 +542,26 @@ fun ImageGenerationInputArea(
         }
 
         val yOffsetPx = -chatInputContentHeightPx.toFloat() - with(density) { 8.dp.toPx() }
-
-        if (showImageSelectionPanel) {
+ 
+        // 为相册面板加入退出动画：渲染标志 + 动画控制
+        var renderImageSelectionPanel by remember { mutableStateOf(false) }
+        val imageAlpha = remember { Animatable(0f) }
+        val imageScale = remember { Animatable(0.8f) }
+ 
+        LaunchedEffect(showImageSelectionPanel) {
+            if (showImageSelectionPanel) {
+                renderImageSelectionPanel = true
+                launch { imageAlpha.animateTo(1f, animationSpec = tween(durationMillis = 150)) }
+                launch { imageScale.animateTo(1f, animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) }
+            } else if (renderImageSelectionPanel) {
+                // 退场动画后再移除渲染，避免“瞬间闪掉”
+                launch { imageAlpha.animateTo(0f, animationSpec = tween(durationMillis = 140)) }
+                launch { imageScale.animateTo(0.9f, animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing)) }
+                    .invokeOnCompletion { renderImageSelectionPanel = false }
+            }
+        }
+ 
+        if (renderImageSelectionPanel) {
             val iconButtonApproxWidth = 48.dp
             val columnStartPadding = 8.dp
             val imageButtonCenterX = columnStartPadding + (iconButtonApproxWidth / 2)
@@ -550,35 +571,27 @@ fun ImageGenerationInputArea(
             Popup(
                 alignment = Alignment.BottomStart,
                 offset = IntOffset(xOffsetPx.toInt(), yOffsetPx.toInt()),
-                onDismissRequest = { showImageSelectionPanel = false },
+                onDismissRequest = {
+                    // 记录外点关闭时间，并触发退场动画
+                    lastImagePanelDismissAt = android.os.SystemClock.uptimeMillis()
+                    if (showImageSelectionPanel) showImageSelectionPanel = false
+                },
                 properties = PopupProperties(
+                    // 非可聚焦，避免收起输入法；仍支持外点与返回键关闭
                     focusable = false,
                     dismissOnBackPress = true,
                     dismissOnClickOutside = true
                 )
             ) {
-                val alpha = remember { Animatable(0f) }
-                val scale = remember { Animatable(0.8f) }
-
-                LaunchedEffect(showImageSelectionPanel) {
-                    if (showImageSelectionPanel) {
-                        launch {
-                            alpha.animateTo(1f, animationSpec = tween(durationMillis = 300))
-                        }
-                        launch {
-                            scale.animateTo(1f, animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing))
-                        }
-                    }
-                }
-
                 Box(modifier = Modifier.graphicsLayer {
-                    this.alpha = alpha.value
-                    this.scaleX = scale.value
-                    this.scaleY = scale.value
+                    this.alpha = imageAlpha.value
+                    this.scaleX = imageScale.value
+                    this.scaleY = imageScale.value
                     this.transformOrigin = TransformOrigin(0.5f, 1f)
                 }) {
                     ImageSelectionPanel { selectedOption ->
-                        showImageSelectionPanel = false
+                        // 点击选项后优雅退场，然后发起对应动作
+                        if (showImageSelectionPanel) showImageSelectionPanel = false
                         when (selectedOption) {
                             ImageSourceOption.ALBUM -> photoPickerLauncher.launch(
                                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)

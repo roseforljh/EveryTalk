@@ -85,54 +85,87 @@ private fun normalizeListSpacing(md: String): String {
  */
 private fun normalizeTableSpacing(md: String): String {
     if (md.isEmpty()) return md
-    val lines = md.split("\n").toMutableList()
+    val rawLines = md.split("\n")
+    val result = mutableListOf<String>()
     var insideFence = false
-    val separatorRegex = Regex("^\\|?\\s*:?[-]{3,}:?\\s*(\\|\\s*:?[-]{3,}:?\\s*)+\\|?$")
-    var sawSeparator = false
-    var lastPipeLineIndex = -1
+    var i = 0
     
-    for (i in lines.indices) {
-        var line = lines[i]
+    // 标准Markdown表格的分隔行：| --- | :---: | ---: |
+    val separatorRegex = Regex("^\\|?\\s*:?[-]{3,}:?\\s*(\\|\\s*:?[-]{3,}:?\\s*)+\\|?$")
+    
+    fun hasAtLeastTwoPipes(s: String): Boolean {
+        // 将全角或框线竖线预归一化后再计数
+        val t = s.replace("｜", "|").replace("│", "|").replace("┃", "|")
+        return t.count { it == '|' } >= 2
+    }
+    
+    fun ensureRowPipes(s: String): String {
+        val trimmed = s.trim()
+        var fixed = trimmed
+        if (!trimmed.startsWith("|")) fixed = "| $fixed"
+        if (!trimmed.endsWith("|")) fixed = "$fixed |"
+        return fixed
+    }
+    
+    while (i < rawLines.size) {
+        var line = rawLines[i]
         
-        // 跳过代码围栏内的内容
+        // 围栏代码块切换
         if (line.contains("```")) {
             val count = "```".toRegex().findAll(line).count()
             if (count % 2 == 1) insideFence = !insideFence
+            result.add(line)
+            i++
+            continue
+        }
+        if (insideFence) {
+            result.add(line)
+            i++
             continue
         }
         
-        if (!insideFence && line.contains("|")) {
-            // 规范化表格分隔符
-            line = line.replace("｜", "|") // 全角竖线
-                      .replace("│", "|") // 框线字符
-                      .replace("┃", "|") // 粗框线字符
-            
-            val trimmed = line.trim()
-            if (separatorRegex.containsMatchIn(trimmed)) {
-                sawSeparator = true
-            }
-            
-            // 确保表格行前后有适当的空格
-            if (trimmed.startsWith("|") && trimmed.endsWith("|")) {
-                // 这是一个标准的表格行
-                lines[i] = line
-            } else {
-                var fixed = trimmed
-                if (!trimmed.startsWith("|")) {
-                    fixed = "| $fixed"
+        // 仅在“表头行(至少两个竖线)”后紧跟“分隔行”时，认定为表格块
+        val headerCandidate = line.replace("｜", "|").replace("│", "|").replace("┃", "|")
+        if (hasAtLeastTwoPipes(headerCandidate)) {
+            // 找到下一个非空行
+            var j = i + 1
+            while (j < rawLines.size && rawLines[j].trim().isEmpty()) j++
+            if (j < rawLines.size) {
+                val sepLine = rawLines[j].trim()
+                if (separatorRegex.containsMatchIn(sepLine)) {
+                    // 确认进入表格块：规范化表头与分隔行
+                    result.add(ensureRowPipes(headerCandidate))
+                    result.add(ensureRowPipes(sepLine))
+                    i = j + 1
+                    // 处理随后的数据行，直到遇到空行或无竖线行
+                    while (i < rawLines.size) {
+                        val data = rawLines[i]
+                        if (data.trim().isEmpty()) {
+                            result.add(data)
+                            i++
+                            break
+                        }
+                        val normalized = data.replace("｜", "|").replace("│", "|").replace("┃", "|")
+                        if (!normalized.contains("|")) {
+                            // 非表格行，结束表格块
+                            // 不回退 i，这一行将按普通行处理（循环尾不自增，所以不加到 result）
+                            break
+                        }
+                        result.add(ensureRowPipes(normalized))
+                        i++
+                    }
+                    // 继续下一轮（不要在这里 i++）
+                    continue
                 }
-                if (!trimmed.endsWith("|")) {
-                    fixed = "$fixed |"
-                }
-                lines[i] = fixed
             }
-            lastPipeLineIndex = i
         }
+        
+        // 非表格场景：保持原样，避免把条件概率 P(B|A) 误判为表格
+        result.add(line)
+        i++
     }
     
-    val joined = lines.joinToString("\n")
-    // 关键修复：若表格出现在文末，补一个换行，避免最后一格内容被断开
-    return if (sawSeparator && lastPipeLineIndex == lines.lastIndex) "$joined\n" else joined
+    return result.joinToString("\n")
 }
 
 /**

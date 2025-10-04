@@ -227,6 +227,9 @@ fun ChatInputArea(
     var pendingMessageTextForSend by remember { mutableStateOf<String?>(null) }
     var showImageSelectionPanel by remember { mutableStateOf(false) }
     var showMoreOptionsPanel by remember { mutableStateOf(false) }
+    // 记录由外点关闭触发的时间戳，用于忽略紧随其后的按钮抬起点击，避免“先关后开”
+    var lastImagePanelDismissAt by remember { mutableStateOf(0L) }
+    var lastMorePanelDismissAt by remember { mutableStateOf(0L) }
     var showConversationParamsDialog by remember { mutableStateOf(false) }
     var tempCameraImageUri by remember { mutableStateOf<Uri?>(null) }
 
@@ -374,11 +377,21 @@ fun ChatInputArea(
 
     val onToggleImagePanel = {
         if (showMoreOptionsPanel) showMoreOptionsPanel = false
-        showImageSelectionPanel = !showImageSelectionPanel
+        val now = android.os.SystemClock.uptimeMillis()
+        if (!showImageSelectionPanel && now - lastImagePanelDismissAt < 200L) {
+            // 忽略由外点关闭触发后紧随的按钮抬起 reopen
+        } else {
+            showImageSelectionPanel = !showImageSelectionPanel
+        }
     }
     val onToggleMoreOptionsPanel = {
         if (showImageSelectionPanel) showImageSelectionPanel = false
-        showMoreOptionsPanel = !showMoreOptionsPanel
+        val now = android.os.SystemClock.uptimeMillis()
+        if (!showMoreOptionsPanel && now - lastMorePanelDismissAt < 200L) {
+            // 忽略由外点关闭触发后紧随的按钮抬起 reopen
+        } else {
+            showMoreOptionsPanel = !showMoreOptionsPanel
+        }
     }
 
     val onClearContent = remember {
@@ -506,7 +519,25 @@ fun ChatInputArea(
 
         val yOffsetPx = -chatInputContentHeightPx.toFloat() - with(density) { 8.dp.toPx() }
 
-        if (showImageSelectionPanel) {
+        // 带入场/退场动画的“相册”面板（使用渲染可见标志以支持退出动画）
+        var renderImageSelectionPanel by remember { mutableStateOf(false) }
+        val imageAlpha = remember { Animatable(0f) }
+        val imageScale = remember { Animatable(0.8f) }
+
+        LaunchedEffect(showImageSelectionPanel) {
+            if (showImageSelectionPanel) {
+                renderImageSelectionPanel = true
+                launch { imageAlpha.animateTo(1f, animationSpec = tween(durationMillis = 150)) }
+                launch { imageScale.animateTo(1f, animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) }
+            } else if (renderImageSelectionPanel) {
+                // 退出动画
+                launch { imageAlpha.animateTo(0f, animationSpec = tween(durationMillis = 140)) }
+                launch { imageScale.animateTo(0.9f, animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing)) }
+                    .invokeOnCompletion { renderImageSelectionPanel = false }
+            }
+        }
+
+        if (renderImageSelectionPanel) {
             val iconButtonApproxWidth = 48.dp
             val spacerWidth = 8.dp
             val columnStartPadding = 8.dp
@@ -517,35 +548,27 @@ fun ChatInputArea(
             Popup(
                 alignment = Alignment.BottomStart,
                 offset = IntOffset(xOffsetPx.toInt(), yOffsetPx.toInt()),
-                onDismissRequest = { showImageSelectionPanel = false },
+                onDismissRequest = {
+                    lastImagePanelDismissAt = android.os.SystemClock.uptimeMillis()
+                    // 将“目标状态”置为关闭，触发退场动画，动画结束后再移除渲染
+                    if (showImageSelectionPanel) showImageSelectionPanel = false
+                },
                 properties = PopupProperties(
+                    // 非可聚焦以避免收起输入法
                     focusable = false,
                     dismissOnBackPress = true,
                     dismissOnClickOutside = true
                 )
             ) {
-                val alpha = remember { Animatable(0f) }
-                val scale = remember { Animatable(0.8f) }
-
-                LaunchedEffect(showImageSelectionPanel) {
-                    if (showImageSelectionPanel) {
-                        launch {
-                            alpha.animateTo(1f, animationSpec = tween(durationMillis = 150))
-                        }
-                        launch {
-                            scale.animateTo(1f, animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing))
-                        }
-                    }
-                }
-
                 Box(modifier = Modifier.graphicsLayer {
-                    this.alpha = alpha.value
-                    this.scaleX = scale.value
-                    this.scaleY = scale.value
+                    this.alpha = imageAlpha.value
+                    this.scaleX = imageScale.value
+                    this.scaleY = imageScale.value
                     this.transformOrigin = TransformOrigin(0.5f, 1f)
                 }) {
                     OptimizedImageSelectionPanel { selectedOption ->
-                        showImageSelectionPanel = false
+                        // 点击选项后也触发优雅退场
+                        if (showImageSelectionPanel) showImageSelectionPanel = false
                         when (selectedOption) {
                             ImageSourceOption.ALBUM -> photoPickerLauncher.launch(
                                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
@@ -557,7 +580,24 @@ fun ChatInputArea(
             }
         }
 
-        if (showMoreOptionsPanel) {
+        // 带入场/退场动画的“更多”面板
+        var renderMoreOptionsPanel by remember { mutableStateOf(false) }
+        val moreAlpha = remember { Animatable(0f) }
+        val moreScale = remember { Animatable(0.8f) }
+
+        LaunchedEffect(showMoreOptionsPanel) {
+            if (showMoreOptionsPanel) {
+                renderMoreOptionsPanel = true
+                launch { moreAlpha.animateTo(1f, animationSpec = tween(durationMillis = 150)) }
+                launch { moreScale.animateTo(1f, animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) }
+            } else if (renderMoreOptionsPanel) {
+                launch { moreAlpha.animateTo(0f, animationSpec = tween(durationMillis = 140)) }
+                launch { moreScale.animateTo(0.9f, animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing)) }
+                    .invokeOnCompletion { renderMoreOptionsPanel = false }
+            }
+        }
+
+        if (renderMoreOptionsPanel) {
             val iconButtonApproxWidth = 48.dp
             val spacerWidth = 8.dp
             val columnStartPadding = 8.dp
@@ -570,35 +610,25 @@ fun ChatInputArea(
             Popup(
                 alignment = Alignment.BottomStart,
                 offset = IntOffset(xOffsetForMoreOptionsPanelPx.toInt(), yOffsetPx.toInt()),
-                onDismissRequest = { showMoreOptionsPanel = false },
+                onDismissRequest = {
+                    lastMorePanelDismissAt = android.os.SystemClock.uptimeMillis()
+                    if (showMoreOptionsPanel) showMoreOptionsPanel = false
+                },
                 properties = PopupProperties(
+                    // 非可聚焦以避免收起输入法
                     focusable = false,
                     dismissOnBackPress = true,
                     dismissOnClickOutside = true
                 )
             ) {
-                val alpha = remember { Animatable(0f) }
-                val scale = remember { Animatable(0.8f) }
-
-                LaunchedEffect(showMoreOptionsPanel) {
-                    if (showMoreOptionsPanel) {
-                        launch {
-                            alpha.animateTo(1f, animationSpec = tween(durationMillis = 150))
-                        }
-                        launch {
-                            scale.animateTo(1f, animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing))
-                        }
-                    }
-                }
-
                 Box(modifier = Modifier.graphicsLayer {
-                    this.alpha = alpha.value
-                    this.scaleX = scale.value
-                    this.scaleY = scale.value
+                    this.alpha = moreAlpha.value
+                    this.scaleX = moreScale.value
+                    this.scaleY = moreScale.value
                     this.transformOrigin = TransformOrigin(0.5f, 1f)
                 }) {
                     OptimizedMoreOptionsPanel { selectedOption ->
-                        showMoreOptionsPanel = false
+                        if (showMoreOptionsPanel) showMoreOptionsPanel = false
                         when (selectedOption) {
                             MoreOptionsType.CONVERSATION_PARAMS -> {
                                 showConversationParamsDialog = true
