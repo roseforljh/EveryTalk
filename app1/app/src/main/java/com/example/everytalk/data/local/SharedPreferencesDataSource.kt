@@ -25,6 +25,7 @@ private const val KEY_CUSTOM_PROVIDERS = "custom_providers_v1"
 private const val KEY_SYSTEM_PROMPT = "system_prompt_v1"
 private const val KEY_LAST_OPEN_IMAGE_GENERATION = "last_open_image_generation_v1"
 private const val KEY_CONVERSATION_PARAMETERS = "conversation_parameters_v1"
+private const val KEY_GLOBAL_CONVERSATION_DEFAULTS = "global_conversation_defaults_v1"
 
 
 private val json = Json {
@@ -155,4 +156,30 @@ fun clearImageGenerationHistory() = remove(KEY_IMAGE_GENERATION_HISTORY)
    
    fun loadConversationParameters(): Map<String, GenerationConfig> =
        loadData(KEY_CONVERSATION_PARAMETERS, conversationParametersSerializer, emptyMap())
+
+   // 保存与加载全局的“上次使用”的会话参数（作为新会话的默认回退）
+   fun saveGlobalConversationDefaults(config: GenerationConfig) {
+       try {
+           val jsonString = json.encodeToString(GenerationConfig.serializer(), config)
+           sharedPrefs.edit { putString(KEY_GLOBAL_CONVERSATION_DEFAULTS, jsonString) }
+       } catch (e: SerializationException) {
+           android.util.Log.e("DataSource", "Failed to serialize global conversation defaults", e)
+       } catch (e: Exception) {
+           android.util.Log.e("DataSource", "Unexpected error saving global conversation defaults", e)
+       }
+   }
+
+   fun loadGlobalConversationDefaults(): GenerationConfig? {
+       val jsonString = sharedPrefs.getString(KEY_GLOBAL_CONVERSATION_DEFAULTS, null)
+       if (jsonString.isNullOrEmpty()) return null
+       return try {
+           json.decodeFromString(GenerationConfig.serializer(), jsonString)
+       } catch (e: SerializationException) {
+           android.util.Log.e("DataSource", "Failed to deserialize global conversation defaults", e)
+           null
+       } catch (e: Exception) {
+           android.util.Log.e("DataSource", "Unexpected error loading global conversation defaults", e)
+           null
+       }
+   }
 }

@@ -39,6 +39,7 @@ data class ConversationScrollState(
         if (savedParameters.isNotEmpty()) {
             conversationGenerationConfigs.value = savedParameters
         }
+        // 不在此处为当前会话ID自动回填，避免新建会话默认开启 maxTokens
     }
 
     val _text = MutableStateFlow("")
@@ -62,7 +63,7 @@ data class ConversationScrollState(
     val imageReasoningCompleteMap: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
     
     // 每个会话独立的生成配置参数
-    val conversationGenerationConfigs: MutableStateFlow<Map<String, GenerationConfig>> = 
+    val conversationGenerationConfigs: MutableStateFlow<Map<String, GenerationConfig>> =
         MutableStateFlow(emptyMap())
     
     // 获取当前会话的生成配置
@@ -76,8 +77,10 @@ data class ConversationScrollState(
         currentConfigs[_currentConversationId.value] = config
         conversationGenerationConfigs.value = currentConfigs
         
-        // Save to persistent storage
+        // 保存当前会话参数映射
         dataSource?.saveConversationParameters(currentConfigs)
+        // 同步更新全局默认为“最近一次使用参数”，供新会话继承
+        dataSource?.saveGlobalConversationDefaults(config)
     }
     
     // 为历史会话设置稳定的ID
@@ -116,6 +119,21 @@ data class ConversationScrollState(
     // 分离的展开推理状态
     val textExpandedReasoningStates: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
     val imageExpandedReasoningStates: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
+    
+    // 为当前会话ID在缺省时应用全局默认参数
+    fun applyDefaultParamsForCurrentConversationIdIfMissing() {
+        val currentId = _currentConversationId.value
+        val hasConfig = conversationGenerationConfigs.value.containsKey(currentId)
+        if (!hasConfig) {
+            val global = dataSource?.loadGlobalConversationDefaults()
+            if (global != null) {
+                val newMap = conversationGenerationConfigs.value.toMutableMap()
+                newMap[currentId] = global
+                conversationGenerationConfigs.value = newMap
+                dataSource?.saveConversationParameters(newMap)
+            }
+        }
+    }
 
     // 分离的消息动画状态
     val textMessageAnimationStates: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
@@ -146,6 +164,8 @@ data class ConversationScrollState(
         _sourcesForDialog.value = emptyList()
         _loadedHistoryIndex.value = null
         _currentConversationId.value = "new_chat_${System.currentTimeMillis()}"
+        
+        // 不为新会话自动继承全局默认，保持默认关闭的期望
         
         // Clean up old parameters periodically
         cleanupOldConversationParameters()

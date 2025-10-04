@@ -16,6 +16,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Undo
+import androidx.compose.material.icons.filled.Redo
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Brush
 import androidx.compose.material.icons.outlined.Download
@@ -25,8 +27,18 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.foundation.Image
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -44,13 +56,21 @@ import android.net.Uri
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil3.compose.AsyncImage
+import coil3.imageLoader
+import coil3.request.ImageRequest
+import coil3.request.SuccessResult
+import coil3.request.allowHardware
+import android.graphics.drawable.BitmapDrawable
+import android.content.Context
 import com.example.everytalk.R
 import java.util.UUID
 import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.content.ContentValues
 import android.os.Build
 import android.provider.MediaStore
 import androidx.core.content.FileProvider
+import androidx.core.graphics.drawable.toBitmap
 import java.io.File
 import java.io.FileOutputStream
 import android.content.Intent
@@ -340,13 +360,83 @@ fun ImageGenerationMessagesList(
         if (isImagePreviewVisible && imagePreviewModel != null) {
             val context = LocalContext.current
             val scope = rememberCoroutineScope()
+            // 当前选中的图像生成配置（用于附加鉴权/来源头）
+            val selectedImageConfig by viewModel.selectedImageGenApiConfig.collectAsState()
+            val authToken = remember(selectedImageConfig) { selectedImageConfig?.key?.takeIf { it.isNotBlank() } }
+            val refererHeader = remember(selectedImageConfig) { selectedImageConfig?.address?.takeIf { it.isNotBlank() } }
+
             // 手势缩放/平移状态
             var scale by remember { mutableStateOf(1f) }
             var offsetX by remember { mutableStateOf(0f) }
             var offsetY by remember { mutableStateOf(0f) }
 
+            // 简易画笔编辑器状态
+            var isBrushing by remember { mutableStateOf(false) }
+            var brushBaseBitmap by remember { mutableStateOf<Bitmap?>(null) }
+
             fun resetTransform() {
                 scale = 1f; offsetX = 0f; offsetY = 0f
+            }
+
+            // 解析当前 model 为 Bitmap（切到IO线程；尽量兜底各种来源）
+            // 优先通过 Coil 获取（含缓存或网络），失败再回退手写网络
+            suspend fun loadBitmapWithCache(
+                model: Any,
+                context: Context
+            ): Bitmap? {
+                try {
+                    val imageLoader = context.imageLoader
+                    val request = ImageRequest.Builder(context)
+                        .data(model)
+                        .allowHardware(false) // 禁用硬件位图以便后续写入
+                        .build()
+                    val result = imageLoader.execute(request)
+                    if (result is SuccessResult) {
+                        val drawable = result.image as? android.graphics.drawable.Drawable
+                        if (drawable != null) {
+                            val w = drawable.intrinsicWidth.coerceAtLeast(1)
+                            val h = drawable.intrinsicHeight.coerceAtLeast(1)
+                            // 使用 AndroidX 的 toBitmap，避免手动离屏绘制易错
+                            val bmp = drawable.toBitmap(w, h, Bitmap.Config.ARGB_8888)
+                            android.util.Log.d("ImagePreview", "Bitmap obtained via Coil.")
+                            return bmp
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("ImagePreview", "Coil load failed, will fallback. Error: ${e.message}")
+                }
+                return null
+            }
+
+
+            // 统一的 HTTP 下载（附加鉴权/来源头，含重定向）
+            suspend fun httpGetBitmap(urlStr: String): Bitmap? = withContext(Dispatchers.IO) {
+                try {
+                    val client = OkHttpClient.Builder()
+                        .followRedirects(true)
+                        .followSslRedirects(true)
+                        .build()
+                    val builder = Request.Builder()
+                        .url(urlStr)
+                        .header("User-Agent", "EveryTalk/1.0 (Android)")
+                        .header("Accept", "image/*")
+                    authToken?.let { builder.header("Authorization", "Bearer $it") }
+                    refererHeader?.let { builder.header("Referer", it) }
+                    client.newCall(builder.build()).execute().use { resp ->
+                        if (!resp.isSuccessful) {
+                            android.util.Log.w("ImagePreview", "HTTP code=${resp.code} for $urlStr")
+                            return@use null
+                        }
+                        val bytes = resp.body?.bytes()
+                        if (bytes != null && bytes.isNotEmpty()) {
+                            return@use BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                        }
+                        null
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("ImagePreview", "HTTP load failed: ${e.message}")
+                    null
+                }
             }
 
             // 解析当前 model 为 Bitmap（切到IO线程；尽量兜底各种来源）
@@ -356,44 +446,11 @@ fun ImageGenerationMessagesList(
                     when (model) {
                         is Bitmap -> return@withContext model
                         is Uri -> {
-                            // 根因修复：当 Uri 实际是 http/https 时，不能用 ContentResolver 打开
-                            // 需要与字符串分支一致，走网络下载逻辑；其余 scheme 再分别处理
                             val scheme = model.scheme?.lowercase()
                             return@withContext when (scheme) {
                                 "http", "https" -> {
-                                    // OkHttp（含重定向 + UA） -> URL.openStream 兜底
-                                    val httpBitmap = try {
-                                        val client = OkHttpClient.Builder()
-                                            .followRedirects(true)
-                                            .followSslRedirects(true)
-                                            .build()
-                                        val req = Request.Builder()
-                                            .url(model.toString())
-                                            .header("User-Agent", "EveryTalk/1.0 (Android)")
-                                            .build()
-                                        client.newCall(req).execute().use { resp ->
-                                            if (!resp.isSuccessful) {
-                                                android.util.Log.w("ImagePreview", "HTTP code=${resp.code}")
-                                                null
-                                            } else {
-                                                val bytes = resp.body?.bytes()
-                                                if (bytes != null && bytes.isNotEmpty()) {
-                                                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                                                } else null
-                                            }
-                                        }
-                                    } catch (e: Exception) {
-                                        android.util.Log.w("ImagePreview", "HTTP load failed (uri): ${e.message}")
-                                        null
-                                    }
-                                    if (httpBitmap != null) httpBitmap else try {
-                                        java.net.URL(model.toString()).openStream().use { input ->
-                                            BitmapFactory.decodeStream(input)
-                                        }
-                                    } catch (e2: Exception) {
-                                        android.util.Log.w("ImagePreview", "URL.openStream failed (uri): ${e2.message}")
-                                        null
-                                    }
+                                    // 精简：与“长按-下载”一致，直接使用 OkHttp 获取
+                                    httpGetBitmap(model.toString())
                                 }
                                 "content" -> {
                                     try {
@@ -405,11 +462,8 @@ fun ImageGenerationMessagesList(
                                         null
                                     }
                                 }
-                                "file" -> {
-                                    BitmapFactory.decodeFile(model.path)
-                                }
+                                "file" -> BitmapFactory.decodeFile(model.path)
                                 else -> {
-                                    // 其他未知 scheme：先尝试当作本地路径，再尝试 ContentResolver
                                     val byFile = BitmapFactory.decodeFile(model.path)
                                     if (byFile != null) byFile else try {
                                         context.contentResolver.openInputStream(model)?.use { input ->
@@ -421,7 +475,6 @@ fun ImageGenerationMessagesList(
                         }
                         is String -> {
                             val s = model
-                            // data:image/*
                             if (s.startsWith("data:image", ignoreCase = true)) {
                                 val base64 = s.substringAfter(",", "")
                                 return@withContext if (base64.isNotBlank()) {
@@ -429,46 +482,12 @@ fun ImageGenerationMessagesList(
                                     BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                                 } else null
                             }
-                            // 其它统一走 parse + 分支
                             val uri = try { Uri.parse(s) } catch (_: Exception) { null }
                             val scheme = uri?.scheme?.lowercase()
                             return@withContext when (scheme) {
                                 "http", "https" -> {
-                                    // 改进：OkHttp（含重定向 + UA） -> URL.openStream 兜底
-                                    val httpBitmap = try {
-                                        val client = OkHttpClient.Builder()
-                                            .followRedirects(true)
-                                            .followSslRedirects(true)
-                                            .build()
-                                        val req = Request.Builder()
-                                            .url(s)
-                                            .header("User-Agent", "EveryTalk/1.0 (Android)")
-                                            .build()
-                                        client.newCall(req).execute().use { resp ->
-                                            if (!resp.isSuccessful) {
-                                                android.util.Log.w("ImagePreview", "HTTP code=${resp.code}")
-                                                null
-                                            } else {
-                                                val bytes = resp.body?.bytes()
-                                                if (bytes != null && bytes.isNotEmpty()) {
-                                                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                                                } else null
-                                            }
-                                        }
-                                    } catch (e: Exception) {
-                                        android.util.Log.w("ImagePreview", "HTTP load failed: ${e.message}")
-                                        null
-                                    }
-                                    if (httpBitmap != null) return@withContext httpBitmap
-
-                                    try {
-                                        java.net.URL(s).openStream().use { input ->
-                                            BitmapFactory.decodeStream(input)
-                                        }
-                                    } catch (e2: Exception) {
-                                        android.util.Log.w("ImagePreview", "URL.openStream failed: ${e2.message}")
-                                        null
-                                    }
+                                    // 精简：与“长按-下载”一致，直接使用 OkHttp 获取
+                                    httpGetBitmap(s)
                                 }
                                 "content" -> {
                                     try {
@@ -481,12 +500,8 @@ fun ImageGenerationMessagesList(
                                     }
                                 }
                                 "file" -> BitmapFactory.decodeFile(uri?.path)
-                                null -> {
-                                    // 无 scheme：可能是绝对路径
-                                    BitmapFactory.decodeFile(s)
-                                }
+                                null -> BitmapFactory.decodeFile(s)
                                 else -> {
-                                    // 未知scheme再尝试当作路径；仍为空时记录日志
                                     val bmp = BitmapFactory.decodeFile(s)
                                     if (bmp == null) {
                                         android.util.Log.w("ImagePreview", "Decode by file path failed for: $s (scheme=$scheme)")
@@ -496,38 +511,18 @@ fun ImageGenerationMessagesList(
                             }
                         }
                         else -> {
-                            // 兜底：尝试用 toString 再解一次
                             val s = model.toString()
                             val uri = try { Uri.parse(s) } catch (_: Exception) { null }
                             val scheme = uri?.scheme?.lowercase()
                             return@withContext when (scheme) {
                                 "http", "https" -> {
-                                    val httpBitmap = try {
-                                        val client = OkHttpClient.Builder()
-                                            .followRedirects(true)
-                                            .followSslRedirects(true)
-                                            .build()
-                                        val req = Request.Builder()
-                                            .url(s)
-                                            .header("User-Agent", "EveryTalk/1.0 (Android)")
-                                            .build()
-                                        client.newCall(req).execute().use { resp ->
-                                            if (!resp.isSuccessful) null
-                                            else {
-                                                val bytes = resp.body?.bytes()
-                                                if (bytes != null && bytes.isNotEmpty()) {
-                                                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                                                } else null
+                                    httpGetBitmap(s) ?: run {
+                                        try {
+                                            java.net.URL(s).openStream().use { input ->
+                                                BitmapFactory.decodeStream(input)
                                             }
-                                        }
-                                    } catch (_: Exception) { null }
-                                    if (httpBitmap != null) return@withContext httpBitmap
-
-                                    try {
-                                        java.net.URL(s).openStream().use { input ->
-                                            BitmapFactory.decodeStream(input)
-                                        }
-                                    } catch (_: Exception) { null }
+                                        } catch (_: Exception) { null }
+                                    }
                                 }
                                 "content" -> {
                                     try {
@@ -545,7 +540,6 @@ fun ImageGenerationMessagesList(
                     android.util.Log.e("ImagePreview", "loadBitmapFromModel error: ${e.message}", e)
                     null
                 }?.also {
-                    // 仅记录已成功加载，保持返回类型为 Bitmap?（also 返回接收者本身）
                     android.util.Log.d("ImagePreview", "Bitmap loaded")
                 }
             }
@@ -606,6 +600,19 @@ fun ImageGenerationMessagesList(
                 return FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
             }
 
+            // 打开内置画笔编辑器
+            fun openBrushEditor() {
+                scope.launch {
+                    val bmp = loadBitmapFromModel(imagePreviewModel!!)
+                    if (bmp == null) {
+                        Toast.makeText(context, "无法加载图片", Toast.LENGTH_SHORT).show()
+                        return@launch
+                    }
+                    brushBaseBitmap = bmp
+                    isBrushing = true
+                }
+            }
+
             // 系统分享
             fun shareImage() {
                 scope.launch {
@@ -654,23 +661,24 @@ fun ImageGenerationMessagesList(
                 }
             }
 
-            // 编辑：调用系统编辑器（如相册编辑/标注）
+            // 编辑：改为“现在的选择功能”：加入已选择媒体并关闭预览返回
             fun editCurrentImage() {
                 scope.launch {
-                    try {
-                        val uri = ensureCacheFileUri() ?: return@launch
-                        val intent = Intent(Intent.ACTION_EDIT).apply {
-                            setDataAndType(uri, "image/*")
-                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                            addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-                            // 一些机型需要通过 ClipData 传递并授予权限
-                            clipData = android.content.ClipData.newUri(context.contentResolver, "image", uri)
-                            putExtra(Intent.EXTRA_STREAM, uri)
-                        }
-                        context.startActivity(Intent.createChooser(intent, "编辑图片"))
-                    } catch (e: Exception) {
-                        Toast.makeText(context, "未找到可用的图片编辑应用", Toast.LENGTH_SHORT).show()
+                    val uri = ensureCacheFileUri()
+                    if (uri == null) {
+                        Toast.makeText(context, "无法加载图片", Toast.LENGTH_SHORT).show()
+                        return@launch
                     }
+                    viewModel.addMediaItem(
+                        com.example.everytalk.models.SelectedMediaItem.ImageFromUri(
+                            uri = uri,
+                            id = UUID.randomUUID().toString(),
+                            filePath = null
+                        )
+                    )
+                    Toast.makeText(context, "已加入选择", Toast.LENGTH_SHORT).show()
+                    // 关闭预览对话框，返回图像模式页面
+                    isImagePreviewVisible = false
                 }
             }
 
@@ -714,11 +722,11 @@ fun ImageGenerationMessagesList(
                                 .fillMaxSize()
                                 .padding(vertical = 36.dp) // 给顶部/底部留出空间
                                 .pointerInput(imagePreviewModel) {
-                                    detectTransformGestures { _, pan, zoom, _ ->
+                                    detectTransformGestures { _, _, zoom, _ ->
+                                        // 允许缩放，但不允许平移
                                         scale = (scale * zoom).coerceIn(1f, 6f)
-                                        // 缩放后允许一定平移
-                                        offsetX += pan.x
-                                        offsetY += pan.y
+                                        offsetX = 0f
+                                        offsetY = 0f
                                     }
                                 }
                                 .pointerInput(imagePreviewModel) {
@@ -736,14 +744,14 @@ fun ImageGenerationMessagesList(
                                 contentDescription = "预览图片",
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .fillMaxHeight(0.88f)
                                     .graphicsLayer {
+                                        // 仅缩放，始终居中，不允许平移
                                         scaleX = scale
                                         scaleY = scale
-                                        translationX = offsetX
-                                        translationY = offsetY
+                                        translationX = 0f
+                                        translationY = 0f
                                     },
-                                contentScale = ContentScale.Fit
+                                contentScale = ContentScale.FillWidth
                             )
                         }
 
@@ -764,7 +772,7 @@ fun ImageGenerationMessagesList(
                             BottomActionButton(
                                 icon = Icons.Outlined.Brush,
                                 label = "选择",
-                                onClick = { selectCurrentImage() }
+                                onClick = { openBrushEditor() }
                             )
                             BottomActionButton(
                                 icon = Icons.Outlined.Download,
@@ -776,6 +784,318 @@ fun ImageGenerationMessagesList(
                                 label = "共享",
                                 onClick = { shareImage() }
                             )
+                        }
+                    }
+                }
+            }
+
+            // 内置画笔编辑器覆盖层（使用全屏 Dialog 以保证位于预览之上）
+            if (isBrushing && brushBaseBitmap != null) {
+                Dialog(
+                    onDismissRequest = { isBrushing = false },
+                    properties = DialogProperties(
+                        dismissOnBackPress = true,
+                        dismissOnClickOutside = false,
+                        usePlatformDefaultWidth = false
+                    )
+                ) {
+                    BrushEditorOverlay(
+                        baseBitmap = brushBaseBitmap!!,
+                        onCancel = { isBrushing = false },
+                        onDone = { edited ->
+                            // 将编辑后的图片加入“已选择媒体”，并返回（关闭画笔和预览）
+                            scope.launch {
+                                try {
+                                    val cacheDir = File(context.cacheDir, "preview_cache").apply { mkdirs() }
+                                    val file = File(cacheDir, "edited_${System.currentTimeMillis()}.jpg")
+                                    FileOutputStream(file).use { fos ->
+                                        edited.compress(Bitmap.CompressFormat.JPEG, 95, fos)
+                                    }
+                                    val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
+                                    viewModel.addMediaItem(
+                                        com.example.everytalk.models.SelectedMediaItem.ImageFromUri(
+                                            uri = uri,
+                                            id = UUID.randomUUID().toString(),
+                                            filePath = null
+                                        )
+                                    )
+                                    Toast.makeText(context, "编辑完成，已加入选择", Toast.LENGTH_SHORT).show()
+                                    isBrushing = false
+                                    isImagePreviewVisible = false
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "保存编辑结果失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+// 简易画笔编辑器覆盖层：支持在图片上涂抹，完成后返回合成后的Bitmap
+@Composable
+private fun BrushEditorOverlay(
+    baseBitmap: Bitmap,
+    onCancel: () -> Unit,
+    onDone: (Bitmap) -> Unit
+) {
+    // 数据与状态
+    val imageBitmap = remember(baseBitmap) { baseBitmap.copy(Bitmap.Config.ARGB_8888, true).asImageBitmap() }
+    val strokes = remember { mutableStateListOf<List<Offset>>() }
+    val undoneStrokes = remember { mutableStateListOf<List<Offset>>() }
+    val currentStroke = remember { mutableStateListOf<Offset>() } // 使用可观察列表，支持实时绘制
+    val strokeWidthPx = 24f // 固定画笔粗细（不提供调节控件）
+    val strokeColor = Color(0xFF82A8FF) // 接近示例中的淡蓝色
+
+    Surface(
+        color = Color.Black.copy(alpha = 0.95f),
+        contentColor = Color.White,
+        modifier = Modifier.fillMaxSize()
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            // 计算显示区域尺寸，保持等比
+            BoxWithConstraints(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.Center)
+                    .padding(top = 40.dp, bottom = 64.dp)
+            ) {
+                val maxW = constraints.maxWidth.toFloat()
+                val maxH = constraints.maxHeight.toFloat()
+                val bmpW = imageBitmap.width.toFloat()
+                val bmpH = imageBitmap.height.toFloat()
+                val scale = minOf(maxW / bmpW, maxH / bmpH).coerceAtMost(1f)
+                val drawW = bmpW * scale
+                val drawH = bmpH * scale
+
+                val leftPad = (maxW - drawW) / 2f
+                val topPad = (maxH - drawH) / 2f
+
+                Box(
+                    modifier = Modifier
+                        .width(with(LocalDensity.current) { drawW.toDp() })
+                        .height(with(LocalDensity.current) { drawH.toDp() })
+                        .align(Alignment.Center)
+                ) {
+                    // 底图：使用 Image 进行渲染，避免依赖 drawImage 扩展
+                    Image(
+                        bitmap = imageBitmap,
+                        contentDescription = null,
+                        modifier = Modifier.matchParentSize(),
+                        contentScale = ContentScale.FillBounds
+                    )
+
+                    // 叠加一层 Canvas 仅绘制笔画，并处理绘制手势
+                    Canvas(
+                        modifier = Modifier
+                            .matchParentSize()
+                            .pointerInput(Unit) {
+                                // 兼容性更好的连续绘制：基于 awaitPointerEvent 循环
+                                awaitPointerEventScope {
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull() ?: continue
+                                        val p = change.position
+                                        if (change.pressed) {
+                                            if (p.x in 0f..drawW && p.y in 0f..drawH) {
+                                                currentStroke.add(p) // 实时追加点，触发重绘
+                                            }
+                                        } else {
+                                            if (currentStroke.size > 1) {
+                                                strokes.add(currentStroke.toList())
+                                            }
+                                            currentStroke.clear() // 清空以便下一笔实时绘制
+                                        }
+                                    }
+                                }
+                            }
+                    ) {
+                        // 仅绘制笔画到覆盖层
+                        // 已完成笔画：使用贝塞尔平滑路径，避免“断点”观感
+                        strokes.forEach { pts ->
+                            if (pts.size > 1) {
+                                val path = Path().apply {
+                                    moveTo(pts.first().x, pts.first().y)
+                                    for (i in 1 until pts.size) {
+                                        val prev = pts[i - 1]
+                                        val cur = pts[i]
+                                        // 使用二次贝塞尔，控制点为上一个点，终点为中点，获得平滑曲线
+                                        val mid = Offset(
+                                            (prev.x + cur.x) / 2f,
+                                            (prev.y + cur.y) / 2f
+                                        )
+                                        quadraticBezierTo(prev.x, prev.y, mid.x, mid.y)
+                                    }
+                                    // 收尾：最后一段到最终点
+                                    val last = pts.last()
+                                    lineTo(last.x, last.y)
+                                }
+                                drawPath(
+                                    path = path,
+                                    color = strokeColor,
+                                    style = Stroke(
+                                        width = strokeWidthPx,
+                                        cap = StrokeCap.Round,
+                                        join = StrokeJoin.Round
+                                    )
+                                )
+                            }
+                        }
+                        // 正在进行中的笔画：同样用路径实时绘制
+                        if (currentStroke.size > 1) {
+                            val pts = currentStroke
+                            val path = Path().apply {
+                                moveTo(pts.first().x, pts.first().y)
+                                for (i in 1 until pts.size) {
+                                    val prev = pts[i - 1]
+                                    val cur = pts[i]
+                                    val mid = Offset(
+                                        (prev.x + cur.x) / 2f,
+                                        (prev.y + cur.y) / 2f
+                                    )
+                                    quadraticBezierTo(prev.x, prev.y, mid.x, mid.y)
+                                }
+                                val last = pts.last()
+                                lineTo(last.x, last.y)
+                            }
+                            drawPath(
+                                path = path,
+                                color = strokeColor,
+                                style = Stroke(
+                                    width = strokeWidthPx,
+                                    cap = StrokeCap.Round,
+                                    join = StrokeJoin.Round
+                                )
+                            )
+                        }
+                    }
+                }
+
+                // 顶部标题、左侧竖向笔刷调节、底部工具条（取消/撤销/重做/下一步）
+                Box(modifier = Modifier.fillMaxSize()) {
+
+                    // 顶部标题
+                    Text(
+                        text = "选择要编辑的区域",
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(start = 20.dp, top = 16.dp)
+                    )
+
+                    // 左侧不显示笔刷调节控件（按要求固定画笔大小与颜色）
+
+                    // 底部工具条：取消 | 撤销/重做 | 下一步（等分布局，避免单个按钮占满）
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .align(Alignment.BottomCenter)
+                            .padding(horizontal = 20.dp, vertical = 20.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // 左：取消（占1/3）
+                        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f),
+                                contentColor = Color.White,
+                                shape = RoundedCornerShape(24.dp),
+                                modifier = Modifier
+                                    .height(44.dp)
+                                    .widthIn(min = 84.dp)
+                                    .clickable { onCancel() }
+                            ) {
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    Text("取消", style = MaterialTheme.typography.labelLarge)
+                                }
+                            }
+                        }
+
+                        // 中：撤销 / 重做（占1/3）
+                        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(28.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                IconButton(
+                                    onClick = {
+                                        if (strokes.isNotEmpty()) {
+                                            val last = strokes.removeAt(strokes.lastIndex)
+                                            undoneStrokes.add(last)
+                                        }
+                                    },
+                                    enabled = strokes.isNotEmpty()
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Undo,
+                                        contentDescription = "撤销",
+                                        tint = if (strokes.isNotEmpty()) Color.White else Color.White.copy(alpha = 0.4f)
+                                    )
+                                }
+                                IconButton(
+                                    onClick = {
+                                        if (undoneStrokes.isNotEmpty()) {
+                                            val last = undoneStrokes.removeAt(undoneStrokes.lastIndex)
+                                            strokes.add(last)
+                                        }
+                                    },
+                                    enabled = undoneStrokes.isNotEmpty()
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Redo,
+                                        contentDescription = "重做",
+                                        tint = if (undoneStrokes.isNotEmpty()) Color.White else Color.White.copy(alpha = 0.4f)
+                                    )
+                                }
+                            }
+                        }
+
+                        // 右：下一步（占1/3）
+                        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary,
+                                shape = RoundedCornerShape(24.dp),
+                                modifier = Modifier
+                                    .height(44.dp)
+                                    .widthIn(min = 112.dp)
+                                    .clickable {
+                                        // 合成到原图尺寸
+                                        val out = Bitmap.createBitmap(baseBitmap.width, baseBitmap.height, Bitmap.Config.ARGB_8888)
+                                        val c = Canvas(out)
+                                        c.drawBitmap(baseBitmap, 0f, 0f, null)
+                                        val paint = android.graphics.Paint().apply {
+                                            color = android.graphics.Color.RED
+                                            isAntiAlias = true
+                                            strokeWidth = strokeWidthPx / scale
+                                            style = android.graphics.Paint.Style.STROKE
+                                            strokeCap = android.graphics.Paint.Cap.ROUND
+                                            strokeJoin = android.graphics.Paint.Join.ROUND
+                                        }
+                                        val sx = bmpW / drawW
+                                        val sy = bmpH / drawH
+                                        val allStrokes = (strokes + if (currentStroke.isNotEmpty()) listOf(currentStroke) else emptyList())
+                                        allStrokes.forEach { pts ->
+                                            if (pts.size > 1) {
+                                                for (i in 0 until pts.size - 1) {
+                                                    val x1 = pts[i].x * sx
+                                                    val y1 = pts[i].y * sy
+                                                    val x2 = pts[i + 1].x * sx
+                                                    val y2 = pts[i + 1].y * sy
+                                                    c.drawLine(x1, y1, x2, y2, paint)
+                                                }
+                                            }
+                                        }
+                                        onDone(out)
+                                    }
+                            ) {
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    Text("下一步", style = MaterialTheme.typography.labelLarge)
+                                }
+                            }
                         }
                     }
                 }
@@ -893,11 +1213,11 @@ private fun AiMessageItem(
                         }
                         AttachmentsContent(
                             attachments = message.imageUrls.map { SelectedMediaItem.ImageFromUri(Uri.parse(it), UUID.randomUUID().toString()) },
-                            onAttachmentClick = { att ->
-                                when (att) {
-                                    is SelectedMediaItem.ImageFromUri -> onOpenPreview(att.uri)
-                                    is SelectedMediaItem.ImageFromBitmap -> att.bitmap?.let { onOpenPreview(it) }
-                                    else -> { /* ignore */ }
+                            onAttachmentClick = { _ ->
+                                // 单击直接走“长按-查看图片”的同一路径（使用消息里的 URL）
+                                val firstUrl = message.imageUrls.firstOrNull()
+                                if (!firstUrl.isNullOrBlank()) {
+                                    onOpenPreview(firstUrl)
                                 }
                             },
                             maxWidth = maxWidth,

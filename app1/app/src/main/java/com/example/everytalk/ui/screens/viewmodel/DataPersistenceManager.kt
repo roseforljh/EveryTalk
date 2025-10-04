@@ -9,6 +9,7 @@ import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.local.SharedPreferencesDataSource
 import com.example.everytalk.models.SelectedMediaItem
 import com.example.everytalk.statecontroller.ViewModelStateHolder
+import com.example.everytalk.data.DataClass.GenerationConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -258,6 +259,18 @@ class DataPersistenceManager(
                 Log.d(TAG, "saveSelectedConfigIdentifier: 保存选中配置ID '$configId' 到 dataSource...")
                 dataSource.saveSelectedConfigId(configId)
                 Log.i(TAG, "saveSelectedConfigIdentifier: 选中配置ID已通过 dataSource 保存。")
+            }
+        }
+    }
+    
+    // 新增：持久化保存“会话ID -> GenerationConfig”映射
+    suspend fun saveConversationParameters(parameters: Map<String, GenerationConfig>) {
+        withContext(Dispatchers.IO) {
+            try {
+                dataSource.saveConversationParameters(parameters)
+                Log.d(TAG, "saveConversationParameters: 已持久化 ${parameters.size} 个会话参数映射")
+            } catch (e: Exception) {
+                Log.e(TAG, "saveConversationParameters 失败", e)
             }
         }
     }

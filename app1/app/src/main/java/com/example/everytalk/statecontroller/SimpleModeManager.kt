@@ -101,6 +101,7 @@ class SimpleModeManager(
             stateHolder._loadedHistoryIndex.value = null
             stateHolder._currentConversationId.value = "chat_${UUID.randomUUID()}"
             stateHolder.systemPrompts[stateHolder._currentConversationId.value] = ""
+            // 不为新会话自动回填会话参数，保持默认关闭
         }
         
         // 5. 重置输入框
@@ -210,7 +211,8 @@ class SimpleModeManager(
         
         // 5. 设置对话ID和系统提示（必须在消息加载前设置）
         Log.d(TAG, "🔥 [STEP 5] Setting conversation ID...")
-        val stableId = conversationToLoad.firstOrNull()?.id ?: "history_${UUID.randomUUID()}"
+        // 使用基于历史索引的稳定ID，确保与参数持久化键一一对应
+        val stableId = "history_chat_$index"
         Log.d(TAG, "🔥 [STEP 5] StableId: $stableId")
         stateHolder._currentConversationId.value = stableId
         Log.d(TAG, "🔥 [STEP 5] ConversationId set to: ${stateHolder._currentConversationId.value}")

@@ -665,6 +665,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     
     // 获取当前会话的生成参数
     fun getCurrentConversationParameters(): GenerationConfig? {
+        // 严格按会话返回；新会话默认无配置（maxTokens 关闭）
         return stateHolder.getCurrentConversationConfig()
     }
 

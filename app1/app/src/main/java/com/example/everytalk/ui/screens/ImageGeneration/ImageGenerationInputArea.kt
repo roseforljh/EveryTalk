@@ -234,15 +234,21 @@ fun SelectedItemPreview(
             onClick = onRemoveClicked,
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(2.dp)
-                .size(20.dp)
-                .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.7f), CircleShape)
+                .padding(1.dp)
+                .size(16.dp)
+                .background(
+                    color = Color.Black.copy(alpha = 0.32f),
+                    shape = CircleShape
+                ),
+            colors = IconButtonDefaults.iconButtonColors(
+                containerColor = Color.Transparent,
+                contentColor = Color.White
+            )
         ) {
             Icon(
                 Icons.Filled.Close,
                 contentDescription = "Remove item",
-                tint = MaterialTheme.colorScheme.onPrimary,
-                modifier = Modifier.size(14.dp)
+                modifier = Modifier.size(12.dp)
             )
         }
     }

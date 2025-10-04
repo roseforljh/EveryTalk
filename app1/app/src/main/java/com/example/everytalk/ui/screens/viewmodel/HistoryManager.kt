@@ -171,7 +171,7 @@ class HistoryManager(
             }
             mutableHistory
         }
-
+ 
         if (loadedHistoryIndex != finalNewLoadedIndex) {
             if (isImageGeneration) {
                 stateHolder._loadedImageGenerationHistoryIndex.value = finalNewLoadedIndex
@@ -181,10 +181,32 @@ class HistoryManager(
             loadedIndexChanged = true
             Log.d(TAG_HM, "LoadedHistoryIndex updated to: $finalNewLoadedIndex")
         }
-
+ 
         if (needsPersistenceSaveOfHistoryList) {
             persistenceManager.saveChatHistory(historicalConversations.value, isImageGeneration)
             Log.d(TAG_HM, "Chat history list persisted.")
+        }
+        
+        // 参数键迁移：将当前会话ID下的参数映射到稳定的历史会话ID
+        if (!isImageGeneration) {
+            val currentId = stateHolder._currentConversationId.value
+            val stableIndex = finalNewLoadedIndex ?: stateHolder._loadedHistoryIndex.value
+            if (stableIndex != null) {
+                val stableId = "history_chat_$stableIndex"
+                val currentConfigs = stateHolder.conversationGenerationConfigs.value
+                val currentConfigForSession = currentConfigs[currentId]
+                if (currentConfigForSession != null) {
+                    val newMap = currentConfigs.toMutableMap()
+                    newMap[stableId] = currentConfigForSession
+                    if (currentId != stableId) {
+                        newMap.remove(currentId)
+                    }
+                    stateHolder.conversationGenerationConfigs.value = newMap
+                    // 使用 PersistenceManager 正式持久化映射，避免访问私有 dataSource
+                    persistenceManager.saveConversationParameters(newMap)
+                    Log.d(TAG_HM, "Migrated conversation parameters from '$currentId' to stable '$stableId'")
+                }
+            }
         }
 
         if (messagesToSave.isNotEmpty() || forceSave) {

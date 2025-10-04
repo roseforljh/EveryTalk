@@ -597,10 +597,11 @@ private data class AttachmentProcessingResult(
                     apiKey = currentConfig.key,
                     model = currentConfig.model,
                     useWebSearch = stateHolder._isWebSearchEnabled.value,
+                    // 新会话未设置时，只回落温度/TopP；maxTokens 一律保持关闭（null）
                     generationConfig = stateHolder.getCurrentConversationConfig() ?: GenerationConfig(
                         temperature = currentConfig.temperature,
                         topP = currentConfig.topP,
-                        maxOutputTokens = currentConfig.maxTokens,
+                        maxOutputTokens = null,
                         thinkingConfig = if (modelIsGeminiType) ThinkingConfig(
                             includeThoughts = true,
                             thinkingBudget = if (currentConfig.model.contains(

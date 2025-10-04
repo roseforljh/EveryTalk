@@ -242,12 +242,11 @@ object ApiClient {
             else -> trimmedAddress
         }
 
-        // 强制将 http 转换为 https
+        // 所有构建均保留 http，避免将明文后端误升为 https
         if (finalAddress.startsWith("http://")) {
-            finalAddress = "https://" + finalAddress.substring(7)
-            android.util.Log.w("ApiClient", "URL was forced to HTTPS: $finalAddress")
+            android.util.Log.i("ApiClient", "Keeping HTTP endpoint: $finalAddress")
         }
-        
+
         return finalAddress + defaultPath
     }
 
