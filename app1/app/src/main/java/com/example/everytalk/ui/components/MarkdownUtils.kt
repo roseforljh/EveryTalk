@@ -242,8 +242,10 @@ fun sanitizeAiOutput(text: String): String {
  */
 fun wrapBareLatexForInline(text: String): String {
     if (text.isEmpty()) return text
-    // 只调用“裸 LaTeX 自动包裹”这一条规则，避免额外副作用
-    return autoWrapBareLatexAsMath(text)
+    // 先做最小预修复：为常见 LaTeX 令牌补反斜杠（如 sqrt -> \sqrt）
+    val pre = preRepairCommonLatexErrors(text)
+    // 再进行裸 LaTeX 自动包裹，便于渲染管线识别
+    return autoWrapBareLatexAsMath(pre)
 }
 
 /**
@@ -618,6 +620,8 @@ private fun autoWrapBareLatexAsMath(md: String): String {
         Regex("""\\frac\{[^}]+\}\{[^}]+\}"""),
         Regex("""\\sqrt\{[^}]+\}"""),
         Regex("""\\sqrt\s*\([^)]*\)"""),
+        // 兼容“未带反斜杠的 sqrt(...)”写法，先最小包裹后由后续渲染解析
+        Regex("""(?<!\\)sqrt\s*\([^)]*\)"""),
         Regex("""\\text\{[^}]*\}"""),
         Regex("""\\text\s*\([^)]*\)"""),
         Regex("""\\(alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|xi|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega)\b"""),

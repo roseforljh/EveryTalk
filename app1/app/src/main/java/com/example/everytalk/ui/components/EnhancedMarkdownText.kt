@@ -277,21 +277,26 @@ private fun SmartTextRenderer(
     style: TextStyle,
     modifier: Modifier = Modifier
 ) {
-    val hasInlineCode = text.contains('`') && !text.startsWith("```")
-    val hasMath = text.contains('$')
+    // 关键修复：在做能力分支前，先最小化将“裸 sqrt/frac 等”包裹为 $...$
+    // 这样 hasMath 判定才能捕捉到后续渲染为 LaTeX，而不是被走到 Markdown 渲染路径
+    val preWrapped = remember(text) {
+        if (!text.contains('$')) wrapBareLatexForInline(text) else text
+    }
+    val hasInlineCode = preWrapped.contains('`') && !preWrapped.startsWith("```")
+    val hasMath = preWrapped.contains('$')
     
     when {
         hasInlineCode && hasMath -> {
             // 同时包含内联代码和数学公式，使用复合渲染
-            RenderTextWithInlineCodeAndMath(text, textColor, style, modifier)
+            RenderTextWithInlineCodeAndMath(preWrapped, textColor, style, modifier)
         }
         hasInlineCode -> {
             // 只有内联代码，使用自定义渲染器
-            RenderTextWithInlineCode(text, style, textColor)
+            RenderTextWithInlineCode(preWrapped, style, textColor)
         }
         hasMath -> {
             // 只有数学公式，使用数学渲染器
-            RenderTextWithInlineMath(text, textColor, style)
+            RenderTextWithInlineMath(preWrapped, textColor, style)
         }
         else -> {
             // 0) 优先处理“块级数学 $$...$$”场景（严格成对），避免误切导致文本缺失
@@ -430,9 +435,10 @@ private fun RenderTextWithInlineCodeAndMath(
                 // 内联代码片段，使用自定义样式
                 InlineCodeChip(segment.text, style.copy(color = textColor))
             } else {
-                // 非代码片段，检查是否有数学公式
-                if (segment.text.contains('$')) {
-                    RenderTextWithInlineMath(segment.text, textColor, style)
+                // 非代码片段，检查是否有数学公式；先做最小包裹，捕捉裸 sqrt/frac
+                val maybeWrapped = if (!segment.text.contains('$')) wrapBareLatexForInline(segment.text) else segment.text
+                if (maybeWrapped.contains('$')) {
+                    RenderTextWithInlineMath(maybeWrapped, textColor, style)
                 } else {
                     MarkdownText(
                         markdown = normalizeBasicMarkdownNoMath(segment.text),
