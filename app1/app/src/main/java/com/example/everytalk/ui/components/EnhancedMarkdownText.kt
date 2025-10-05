@@ -222,7 +222,19 @@ private fun InlineContentRenderer(
                 is MarkdownPart.Text -> {
                     if (part.content.isNotBlank()) {
                         val processedText = part.content
-                        if (processedText.contains("$")) {
+                        // 先处理“纯裸 LaTeX 单行”——例如：\boxed{275.5}
+                        if (isPureBareLatexLine(processedText)) {
+                            LatexMath(
+                                latex = processedText.trim(),
+                                inline = false,
+                                color = textColor,
+                                style = style,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                messageId = "pure_bare_latex_line"
+                            )
+                        } else if (processedText.contains("$")) {
                             RenderTextWithInlineMath(
                                 text = processedText,
                                 textColor = textColor,
@@ -282,6 +294,27 @@ private fun SmartTextRenderer(
             RenderTextWithInlineMath(text, textColor, style)
         }
         else -> {
+            // 0) 优先处理“块级数学 $$...$$”场景（严格成对），避免误切导致文本缺失
+            run {
+                val pairCount = Regex("\\$\\$").findAll(text).count()
+                if (pairCount >= 2 && pairCount % 2 == 0) {
+                    RenderTextWithBlockMath(
+                        text = text,
+                        textColor = textColor,
+                        style = style
+                    )
+                    return
+                }
+            }
+            // 0b) 裸 LaTeX 直达行内数学管线（如 \boxed{...} / \frac 等未加 $ 的情形）
+            if (containsBareLatexToken(text)) {
+                RenderTextWithInlineMath(
+                    text = wrapBareLatexForInline(text),
+                    textColor = textColor,
+                    style = style
+                )
+                return
+            }
             // 1) 兜底：优先检测 Markdown 围栏代码块并使用自定义 CodePreview 渲染
             // 匹配 ```lang\n...\n``` 的首个代码块；语言可为空
             val fencedRegex = Regex("(?s)```\\s*([a-zA-Z0-9_+\\-#.]*)\\s*\\n(.*?)\\n```")
@@ -338,6 +371,42 @@ private fun SmartTextRenderer(
     }
 }
 
+// 🎯 处理包含块级数学（$$...$$）与普通文本的混合内容
+@Composable
+private fun RenderTextWithBlockMath(
+    text: String,
+    textColor: Color,
+    style: TextStyle
+) {
+    // 以成对 $$ 作为分段，奇数段为文本，偶数段为数学（与 split 结果一致）
+    val parts = text.split("$$")
+    Column(modifier = Modifier.fillMaxWidth()) {
+        parts.forEachIndexed { idx, seg ->
+            if (seg.isEmpty()) return@forEachIndexed
+            if (idx % 2 == 1) {
+                // 数学段（块级）
+                LatexMath(
+                    latex = seg.trim(),
+                    inline = false,
+                    color = textColor,
+                    style = style,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    messageId = "block_segment"
+                )
+            } else {
+                // 普通文本（不做数学改写）
+                MarkdownText(
+                    markdown = normalizeBasicMarkdownNoMath(seg),
+                    style = style.copy(color = textColor, platformStyle = PlatformTextStyle(includeFontPadding = false)),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+    }
+}
+
 // 🎯 处理同时包含内联代码和数学公式的文本
 @Composable
 private fun RenderTextWithInlineCodeAndMath(
@@ -366,7 +435,7 @@ private fun RenderTextWithInlineCodeAndMath(
                     RenderTextWithInlineMath(segment.text, textColor, style)
                 } else {
                     MarkdownText(
-                        markdown = normalizeBasicMarkdown(segment.text),
+                        markdown = normalizeBasicMarkdownNoMath(segment.text),
                         style = style.copy(color = textColor),
                         modifier = Modifier.wrapContentWidth()
                     )
@@ -407,7 +476,7 @@ private fun RenderTextWithInlineMath(
                 val (prefix, glue) = splitForNoWrapTail(seg.content)
                 if (prefix.isNotBlank()) {
                     MarkdownText(
-                        markdown = normalizeBasicMarkdown(prefix),
+                        markdown = normalizeBasicMarkdownNoMath(prefix),
                         style = style.copy(color = textColor, platformStyle = PlatformTextStyle(includeFontPadding = false)),
                         modifier = Modifier.wrapContentWidth()
                     )
@@ -440,7 +509,7 @@ private fun RenderTextWithInlineMath(
                     RenderTextWithInlineCode(seg.content, style, textColor)
                 } else {
                     MarkdownText(
-                        markdown = normalizeBasicMarkdown(seg.content),
+                        markdown = normalizeBasicMarkdownNoMath(seg.content),
                         style = style.copy(color = textColor, platformStyle = PlatformTextStyle(includeFontPadding = false)),
                         modifier = Modifier.wrapContentWidth()
                     )
@@ -465,7 +534,7 @@ private fun NoWrapTextAndMath(
         verticalAlignment = Alignment.CenterVertically
     ) {
         MarkdownText(
-            markdown = normalizeBasicMarkdown(text),
+            markdown = normalizeBasicMarkdownNoMath(text),
             style = style.copy(color = textColor, platformStyle = PlatformTextStyle(includeFontPadding = false)),
             modifier = Modifier.wrapContentWidth()
         )
@@ -560,8 +629,11 @@ fun EnhancedMarkdownText(
         baseStyle.color != Color.Unspecified -> baseStyle.color
         else -> if (systemDark) Color(0xFFFFFFFF) else Color(0xFF000000)
     }
-
-    DisposableEffect(message.id) {
+    
+    // 🔧 统一清洗：去行尾“\”与相邻重复段，避免重复/脏字符导致的格式混乱
+    val cleanedText = remember(message.text) { sanitizeAiOutput(message.text) }
+ 
+     DisposableEffect(message.id) {
         onDispose {
             RenderingMonitor.trackRenderingPerformance(message.id, startTime)
             // 清理渲染状态
@@ -569,11 +641,11 @@ fun EnhancedMarkdownText(
         }
     }
 
-    // 🎯 检查消息是否包含数学公式，提交渲染任务
-    LaunchedEffect(message.id, message.text) {
-        if (message.sender == com.example.everytalk.data.DataClass.Sender.AI && 
-            MathRenderingManager.hasRenderableMath(message.text)) {
-            val mathBlocks = ConversationLoadManager.extractMathBlocks(message.text, message.id)
+    // 🎯 检查消息是否包含数学公式，提交渲染任务（基于清洗后的文本）
+    LaunchedEffect(message.id, cleanedText) {
+        if (message.sender == com.example.everytalk.data.DataClass.Sender.AI &&
+            MathRenderingManager.hasRenderableMath(cleanedText)) {
+            val mathBlocks = ConversationLoadManager.extractMathBlocks(cleanedText, message.id)
             if (mathBlocks.isNotEmpty()) {
                 MathRenderingManager.submitMessageMathTasks(message.id, mathBlocks)
             }
@@ -600,7 +672,7 @@ fun EnhancedMarkdownText(
         
         // 🎯 简单Markdown快速路径：无$$块级数学、无围栏代码、无表格时，直接交给SmartTextRenderer统一渲染
         run {
-            val t = message.text
+            val t = cleanedText
             val hasBlockMath = t.contains("$$")
             val hasFenced = Regex("(?s)```").containsMatchIn(t)
             val hasTable = detectMarkdownTable(t)
@@ -616,8 +688,8 @@ fun EnhancedMarkdownText(
         }
         
         // 优先级更高：整条消息级别的表格检测与切分渲染（避免被分片打散而检测失败）
-        if (detectMarkdownTable(message.text)) {
-            val (before, tableBlock, after) = splitByFirstMarkdownTable(message.text)
+        if (detectMarkdownTable(cleanedText)) {
+            val (before, tableBlock, after) = splitByFirstMarkdownTable(cleanedText)
             if (before.isNotBlank()) {
                 SmartTextRenderer(
                     text = before,
@@ -649,11 +721,11 @@ fun EnhancedMarkdownText(
         // 在"消息级别"先对整条 message.text 扫描并渲染所有围栏代码块，直接走自定义 CodePreview，避免依赖 parts 粒度。
         run {
             val fencedRegex = Regex("(?s)```\\s*([a-zA-Z0-9_+\\-#.]*)[ \\t]*\\r?\\n?([\\s\\S]*?)\\r?\\n?```")
-            val matches = fencedRegex.findAll(message.text).toList()
+            val matches = fencedRegex.findAll(cleanedText).toList()
             if (matches.isNotEmpty()) {
                 var last = 0
                 matches.forEachIndexed { idx, mr ->
-                    val before = message.text.substring(last, mr.range.first)
+                    val before = cleanedText.substring(last, mr.range.first)
                     if (before.isNotBlank()) {
                         SmartTextRenderer(
                             text = before,
@@ -694,11 +766,11 @@ fun EnhancedMarkdownText(
         if (message.parts.isEmpty()) {
             android.util.Log.w("EnhancedMarkdownText", "⚠️ AI Message parts is EMPTY, attempting to parse math formulas")
             // 🎯 临时修复：即使parts为空，也尝试解析数学公式（仅针对AI消息）
-            if (message.text.contains("$") || message.text.contains("\\")) {
+            if (cleanedText.contains("$") || cleanedText.contains("\\")) {
                 android.util.Log.d("EnhancedMarkdownText", "Found potential math content, parsing...")
                 
                 val parsedParts = try {
-                    parseMarkdownParts(message.text)
+                    parseMarkdownParts(cleanedText)
                 } catch (e: Exception) {
                     android.util.Log.e("EnhancedMarkdownText", "Failed to parse math content: ${e.message}")
                     emptyList()
@@ -757,7 +829,7 @@ fun EnhancedMarkdownText(
                 } else {
                     // 解析失败，使用智能渲染器
                     SmartTextRenderer(
-                        text = message.text,
+                        text = cleanedText,
                         textColor = textColor,
                         style = baseStyle,
                         modifier = Modifier
@@ -766,7 +838,7 @@ fun EnhancedMarkdownText(
             } else {
                 // 没有数学内容，使用智能渲染器
                 SmartTextRenderer(
-                    text = message.text,
+                    text = cleanedText,
                     textColor = textColor,
                     style = baseStyle,
                     modifier = Modifier
@@ -800,23 +872,23 @@ fun EnhancedMarkdownText(
             
             if (!hasValidParts && message.text.isNotBlank()) {
                 // 回退到原始文本渲染，使用智能渲染器
-                RenderingMonitor.logRenderingIssue(message.id, "Parts无效，回退到原始文本", message.text)
+                RenderingMonitor.logRenderingIssue(message.id, "Parts无效，回退到原始文本", cleanedText)
                 SmartTextRenderer(
-                    text = message.text,
+                    text = cleanedText,
                     textColor = textColor,
                     style = style,
                     modifier = Modifier
                 )
             } else {
                 // 🎯 智能检测：如果内容很短且可能被错误分割，直接合并渲染
-                val shouldMergeContent = shouldMergeAllContent(message.parts, message.text)
+                val shouldMergeContent = shouldMergeAllContent(message.parts, cleanedText)
                 android.util.Log.d("EnhancedMarkdownText", "Should merge content: $shouldMergeContent")
                 
                 if (shouldMergeContent) {
                     android.util.Log.d("EnhancedMarkdownText", "🔧 检测到内容被错误分割，合并渲染")
-                    // 直接使用原始文本进行完整渲染，使用智能渲染器
+                    // 直接使用清洗后的文本进行完整渲染，使用智能渲染器
                     SmartTextRenderer(
-                        text = message.text,
+                        text = cleanedText,
                         textColor = textColor,
                         style = baseStyle,
                         modifier = Modifier.fillMaxWidth()
@@ -1030,7 +1102,7 @@ private fun RenderTextWithInlineCode(
                 )
             } else {
                 MarkdownText(
-                    markdown = normalizeBasicMarkdown(seg.text),
+                    markdown = normalizeBasicMarkdownNoMath(seg.text),
                     style = style.copy(color = textColor, platformStyle = PlatformTextStyle(includeFontPadding = false)),
                     modifier = Modifier.wrapContentWidth()
                 )

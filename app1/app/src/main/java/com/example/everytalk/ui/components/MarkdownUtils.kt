@@ -6,6 +6,9 @@ fun normalizeBasicMarkdown(text: String): String {
     var t = normalizeMarkdownGlyphs(text)
     // CJK 引号/括号与粗体边界的兼容修复（例如 **“学习型”** -> “**学习型**”）
     t = normalizeCjkEmphasisWrapping(t)
+    // 数学定界与松散 LaTeX 规范化（使数学走标准渲染管线）
+    t = normalizeInlineMathDelimiters(t)      // \( ... \) / \[ ... \] -> $...$ / $$...$$
+    t = autoWrapBareLatexAsMath(t)            // \boxed{...} 等裸 LaTeX 包裹为 $...$
     // 先保护行首粗体，避免与列表/代码块归一化冲突
     t = protectLeadingBoldMarkers(t)
     // 修正轻度缩进的列表（1~3 个空格）为标准左对齐，避免被当作代码块
@@ -14,7 +17,149 @@ fun normalizeBasicMarkdown(text: String): String {
     t = normalizeListSpacing(t)
     t = normalizeTableSpacing(t) // 🎯 新增：表格格式化
     t = normalizeDetachedBulletPoints(t) // 🔧 新增：处理分离式列表项目符号
+    t = normalizeDanglingBackslashes(t)  // 🔧 修复：清理行尾孤立反斜杠
     return t
+}
+
+/**
+ * ✅ 不改写数学的 Markdown 规范化：
+ * - 完全跳过数学相关改写（不插入/替换 $ 定界）
+ * - 其余标题/列表/表格/字形等规范化保持一致
+ * 使用场景：已在“行内数学拆分”管线中，对非数学片段做安全规范化。
+ */
+fun normalizeBasicMarkdownNoMath(text: String): String {
+    if (text.isEmpty()) return text
+    var t = normalizeMarkdownGlyphs(text)
+    t = normalizeCjkEmphasisWrapping(t)
+    // 跳过 normalizeInlineMathDelimiters / autoWrapBareLatexAsMath
+    t = protectLeadingBoldMarkers(t)
+    t = normalizeSoftIndentedLists(t)
+    t = normalizeHeadingSpacing(t)
+    t = normalizeListSpacing(t)
+    t = normalizeTableSpacing(t)
+    t = normalizeDetachedBulletPoints(t)
+    t = normalizeDanglingBackslashes(t) // 保证行尾不再残留 "\"
+    return t
+}
+
+/**
+ * 修复 AI 输出中常见的“行尾孤立反斜杠”问题：
+ * - 对非代码围栏区段，若一行以若干空格后紧跟单个 '\' 结尾，则移除该 '\'
+ * - 保留换行本身，不影响代码块/路径
+ */
+private fun normalizeDanglingBackslashes(md: String): String {
+    if (md.isEmpty()) return md
+    val lines = md.split("\n")
+    val out = StringBuilder()
+    var fence = false
+    lines.forEachIndexed { idx, raw ->
+        var s = raw
+        if (s.contains("```")) {
+            val c = "```".toRegex().findAll(s).count()
+            fence = (c % 2 == 1) xor fence
+        }
+        if (!fence) {
+            // 移除行尾的空格 + 单个 '\'
+            s = s.replace(Regex("""\s*\\\s*$"""), "")
+        }
+        out.append(s)
+        if (idx != lines.lastIndex) out.append('\n')
+    }
+    return out.toString()
+}
+
+/**
+ * 检测是否包含“未用 $ 定界的裸 LaTeX token”
+ * 仅做快速启发式：存在形如 \alpha / \frac{...}{...} / \boxed{...} 等命令即认为可能需要包裹
+ */
+fun containsBareLatexToken(text: String): Boolean {
+    if (text.isEmpty()) return false
+    if (text.contains('$')) return false
+    // 常见 LaTeX 命令（与 autoWrapBareLatexAsMath 的 token 列表保持一致方向）
+    val token = Regex("""\\(boxed|frac|sqrt|[a-zA-Z]+)\b""")
+    return token.containsMatchIn(text)
+}
+
+/**
+ * 判断是否为“纯裸 LaTeX 行”（便于安全直达数学渲染）：
+ * - 单行（不含换行）
+ * - 去掉前后空白后，以 '\' 命令开头，且不含 Markdown 的列表/标题/代码围栏标记
+ */
+fun isPureBareLatexLine(text: String): Boolean {
+    if (text.isEmpty()) return false
+    if (text.contains('\n')) return false
+    val t = text.trim()
+    if (t.startsWith("```") || t.startsWith("#") || Regex("""^\s*([*+\-]|\d+[.)])\s+""").containsMatchIn(t)) return false
+    return Regex("""^\\[a-zA-Z]+.*""").matches(t)
+}
+
+/**
+ * 去重：移除非代码围栏内的“连续重复行/段落”
+ * - 连续两行完全相同则保留一行
+ * - 连续两段（被空行分隔）完全相同则保留一段
+ * - 围栏代码块内不做处理
+ */
+fun dedupeConsecutiveContent(text: String): String {
+    if (text.isEmpty()) return text
+    val lines = text.split("\n")
+    val out = StringBuilder()
+    var fence = false
+    var lastNonFenceLine: String? = null
+    lines.forEachIndexed { idx, raw ->
+        var s = raw
+        if (s.contains("```")) {
+            val c = "```".toRegex().findAll(s).count()
+            fence = (c % 2 == 1) xor fence
+            // 围栏行原样写出并重置“上一行”记忆，避免跨围栏去重
+            lastNonFenceLine = null
+            out.append(s)
+            if (idx != lines.lastIndex) out.append('\n')
+            return@forEachIndexed
+        }
+        if (!fence) {
+            // 段落级重复：当遇到空行时重置比较基准
+            val trimmed = s.trimEnd()
+            val isEmpty = trimmed.isEmpty()
+            if (!isEmpty) {
+                if (lastNonFenceLine != null && lastNonFenceLine == s) {
+                    // 跳过重复行
+                } else {
+                    out.append(s)
+                    if (idx != lines.lastIndex) out.append('\n')
+                }
+                lastNonFenceLine = s
+            } else {
+                // 空行直接输出并重置“上一行”
+                out.append(s)
+                if (idx != lines.lastIndex) out.append('\n')
+                lastNonFenceLine = null
+            }
+        } else {
+            // 围栏内不过滤
+            out.append(s)
+            if (idx != lines.lastIndex) out.append('\n')
+        }
+    }
+    return out.toString()
+}
+
+/**
+ * 统一的 AI 输出清理：行尾反斜杠 -> 去重（不改写数学）
+ */
+fun sanitizeAiOutput(text: String): String {
+    if (text.isEmpty()) return text
+    val noBackslashes = normalizeDanglingBackslashes(text)
+    return dedupeConsecutiveContent(noBackslashes)
+}
+
+/**
+ * 仅对“裸 LaTeX”做最小包裹为 $...$，不做其它 Markdown 规范化，
+ * 便于后续直接走 RenderTextWithInlineMath 管线原生渲染。
+ */
+fun wrapBareLatexForInline(text: String): String {
+    if (text.isEmpty()) return text
+    // 只调用“裸 LaTeX 自动包裹”这一条规则，避免额外副作用
+    return autoWrapBareLatexAsMath(text)
 }
 
 /**
@@ -321,6 +466,115 @@ private fun normalizeCjkEmphasisWrapping(md: String): String {
         if (idx != lines.lastIndex) out.append('\n')
     }
     return out.toString()
+}
+/**
+ * ✅ 数学定界规范化：
+ * - 将 \( ... \) 转为 $...$（行内）
+ * - 将 \[ ... \] 转为 $$...$$（块级）
+ * - 跳过 ``` 围栏代码
+ */
+private fun normalizeInlineMathDelimiters(md: String): String {
+    if (md.isEmpty()) return md
+    val lines = md.split("\n")
+    val out = StringBuilder()
+    var fence = false
+
+    // 行内 (非贪婪) 替换；块级允许跨行
+    val inlinePattern = Regex("""\\\((.+?)\\\)""")
+    val blockPattern = Regex("""\\\[(.+?)\\\]""", RegexOption.DOT_MATCHES_ALL)
+
+    lines.forEachIndexed { idx, raw ->
+        var s = raw
+        if (s.contains("```")) {
+            val c = "```".toRegex().findAll(s).count()
+            if (!fence) {
+                s = s.replace(inlinePattern) { mr -> "\$${mr.groupValues[1]}\$" }
+                s = s.replace(blockPattern) { mr -> "\$\$${mr.groupValues[1]}\$\$" }
+            }
+            fence = (c % 2 == 1) xor fence
+            out.append(s)
+        } else {
+            if (!fence) {
+                s = s.replace(inlinePattern) { mr -> "\$${mr.groupValues[1]}\$" }
+                s = s.replace(blockPattern) { mr -> "\$\$${mr.groupValues[1]}\$\$" }
+            }
+            out.append(s)
+        }
+        if (idx != lines.lastIndex) out.append('\n')
+    }
+    return out.toString()
+}
+
+/**
+ * ✅ 裸 LaTeX 自动包裹为 $...$：
+ * - \boxed{...}、\frac{...}{...}、\sqrt{...}、\alpha 等在非代码且不在 $...$ 中时，自动添加行内 $ 定界
+ * - 保守策略：以 token 为中心最小包裹，避免吞并整行
+ * - 跳过 ``` 围栏代码
+ */
+private fun autoWrapBareLatexAsMath(md: String): String {
+    if (md.isEmpty()) return md
+
+    // 常见 LaTeX token（可按需扩充）
+    // 为避免 ICU 对 '}' 字面量及复杂大合并正则的不兼容，改为逐条安全模式
+    // 注意：字面 '}' 必须转义为 \}
+    val tokenPatterns = listOf(
+        Regex("""\\boxed\{[^}]+\}"""),
+        Regex("""\\frac\{[^}]+\}\{[^}]+\}"""),
+        Regex("""\\sqrt\{[^}]+\}"""),
+        Regex("""\\sqrt\s*\([^)]*\)"""),
+        Regex("""\\(alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|xi|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega)\b"""),
+        Regex("""\\(leq|geq|neq|approx|equiv|times|div|cdot|infty|sum|prod|int|oint|partial|nabla)\b""")
+    )
+
+    // 简易判断当前位置是否在 $...$ 内
+    fun insideDollar(s: String, idx: Int): Boolean {
+        var i = 0
+        var open = false
+        while (i < idx && i < s.length) {
+            if (s[i] == '$') open = !open
+            i++
+        }
+        return open
+    }
+
+    val lines = md.split("\n").toMutableList()
+    var fence = false
+    for (i in lines.indices) {
+        var s = lines[i]
+        if (s.contains("```")) {
+            val c = "```".toRegex().findAll(s).count()
+            fence = (c % 2 == 1) xor fence
+            continue
+        }
+        if (fence) continue
+
+        val sb = StringBuilder(s)
+        // 逐个安全模式处理，避免 ICU 对大模式报错
+        tokenPatterns.forEach { pattern ->
+            var offset = 0
+            val base = sb.toString()
+            pattern.findAll(base).forEach { mr ->
+                val start = mr.range.first + offset
+                val end = mr.range.last + offset
+                val current = sb.toString()
+                // 跳过已在 $...$ 内的命中
+                if (insideDollar(current, start)) return@forEach
+                // 跳过由 ` 或 $ 直接前缀的命中
+                val prev = if (start - 1 in current.indices) current[start - 1] else null
+                if (prev == '`' || prev == '$') return@forEach
+                sb.insert(end + 1, '$')
+                sb.insert(start, '$')
+                offset += 2
+            }
+        }
+        val trimmed = sb.toString().trim()
+        if (trimmed.startsWith("\\boxed{") && trimmed.endsWith("}") && !trimmed.startsWith("$")) {
+            lines[i] = "$$trimmed$"
+        } else {
+            lines[i] = sb.toString()
+        }
+    }
+    return lines.joinToString("\n")
 }
 
 /**

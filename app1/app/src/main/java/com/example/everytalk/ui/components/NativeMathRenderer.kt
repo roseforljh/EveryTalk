@@ -248,11 +248,13 @@ object NativeMathRenderer {
         textSize: Float,
         isInline: Boolean
     ): Bitmap? {
-        val cacheKey = getCacheKey(latex, textColor, textSize, isInline)
+        // 兼容性预处理：将 JLatexMath 不完全支持的命令转为等效语法（如 \boxed）
+        val prepared = preprocessLatexForJlm(latex)
+        val cacheKey = getCacheKey(prepared, textColor, textSize, isInline)
         
         // 检查缓存
         bitmapCache[cacheKey]?.let { cachedBitmap ->
-            Log.d(TAG, "📦 Cache hit for: $latex")
+            Log.d(TAG, "📦 Cache hit for: $prepared")
             return cachedBitmap
         }
         
@@ -260,13 +262,13 @@ object NativeMathRenderer {
         renderStateCache[cacheKey] = RenderState.RENDERING
         
         try {
-            val bitmap = if (canUseUnicodeConversion(latex)) {
+            val bitmap = if (canUseUnicodeConversion(prepared)) {
                 // Layer 1: Unicode快速转换
-                Log.d(TAG, "⚡ Using Unicode conversion for: $latex")
-                renderUnicodeText(convertToUnicode(latex), textColor, textSize)
+                Log.d(TAG, "⚡ Using Unicode conversion for: $prepared")
+                renderUnicodeText(convertToUnicode(prepared), textColor, textSize)
             } else {
                 // Layer 2: JLatexMath渲染
-                renderWithJLatexMath(latex, textColor, textSize, isInline)
+                renderWithJLatexMath(prepared, textColor, textSize, isInline)
             }
             
             bitmap?.let {
@@ -274,10 +276,10 @@ object NativeMathRenderer {
                 cleanupCache()
                 bitmapCache[cacheKey] = it
                 renderStateCache[cacheKey] = RenderState.COMPLETED
-                Log.d(TAG, "✅ Math rendered and cached: $latex")
+                Log.d(TAG, "✅ Math rendered and cached: $prepared")
             } ?: run {
                 renderStateCache[cacheKey] = RenderState.FAILED
-                Log.e(TAG, "❌ Math render failed: $latex")
+                Log.e(TAG, "❌ Math render failed: $prepared")
             }
             
             return bitmap
@@ -357,6 +359,23 @@ object NativeMathRenderer {
     fun getRenderState(latex: String, textColor: Int, textSize: Float, isInline: Boolean): RenderState {
         val cacheKey = getCacheKey(latex, textColor, textSize, isInline)
         return renderStateCache[cacheKey] ?: RenderState.PENDING
+    }
+    
+    /**
+     * 将部分 KaTeX/AMS 命令转换为 JLatexMath 更稳妥的等价形式
+     * 目前覆盖：
+     *  - \boxed{...}  -> \fbox{$...$}
+     */
+    private fun preprocessLatexForJlm(src: String): String {
+        var s = src
+        // 仅替换最外层 \boxed{...}，避免过度替换嵌套
+        val boxed = Regex("""\\boxed\{([^{}]+)\}""")
+        s = s.replace(boxed) { mr ->
+            val inner = mr.groupValues[1]
+            // \fbox 本身是文本盒，为了保持数学字体，内部再包一层 $...$
+            "\\fbox{\$$inner\$}"
+        }
+        return s
     }
 }
 
