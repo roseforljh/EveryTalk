@@ -4,6 +4,8 @@ package com.example.everytalk.ui.components
 fun normalizeBasicMarkdown(text: String): String {
     if (text.isEmpty()) return text
     var t = normalizeMarkdownGlyphs(text)
+    // CJK 引号/括号与粗体边界的兼容修复（例如 **“学习型”** -> “**学习型**”）
+    t = normalizeCjkEmphasisWrapping(t)
     // 先保护行首粗体，避免与列表/代码块归一化冲突
     t = protectLeadingBoldMarkers(t)
     // 修正轻度缩进的列表（1~3 个空格）为标准左对齐，避免被当作代码块
@@ -131,12 +133,24 @@ private fun normalizeTableSpacing(md: String): String {
             var j = i + 1
             while (j < rawLines.size && rawLines[j].trim().isEmpty()) j++
             if (j < rawLines.size) {
-                val sepLine = rawLines[j].trim()
-                if (separatorRegex.containsMatchIn(sepLine)) {
+                val sepLineRaw = rawLines[j]
+                val sepLine = sepLineRaw.trim()
+                // 先归一化分隔候选行中的竖线字符
+                val sepCandidate = sepLine.replace("｜", "|").replace("│", "|").replace("┃", "|")
+                val mr = separatorRegex.find(sepCandidate)
+                if (mr != null) {
                     // 确认进入表格块：规范化表头与分隔行
                     result.add(ensureRowPipes(headerCandidate))
-                    result.add(ensureRowPipes(sepLine))
+                    // 拆出“标准分隔部分”和其后的“误并入的首行数据”
+                    val matchedSep = mr.value.trim()
+                    val tail = sepCandidate.substring(mr.range.last + 1).trim()
+                    result.add(ensureRowPipes(matchedSep))
                     i = j + 1
+                    // 若同一行在分隔后还拼接了数据（常见于 `|---|| 单元格... |`），作为第一条数据行写入
+                    if (tail.isNotEmpty()) {
+                        val firstData = if (tail.startsWith("|")) tail else "| $tail"
+                        result.add(ensureRowPipes(firstData))
+                    }
                     // 处理随后的数据行，直到遇到空行或无竖线行
                     while (i < rawLines.size) {
                         val data = rawLines[i]
@@ -246,6 +260,67 @@ private fun normalizeDetachedBulletPoints(md: String): String {
     }
 
     return result.joinToString("\n")
+}
+
+/**
+ * 🔧 CJK 引号/括号与粗体强调的兼容修复
+ * 一些 Markdown 解析器在 ** 与中文引号/括号直接相邻时不识别强调，
+ * 例如：**“学习型”**，这里把外侧标点移到强调外： “**学习型**”
+ * 同理支持 『』 「」 《》 （） 【】 以及英文引号 ""。
+ * 跳过 ``` 围栏内的代码内容。
+ */
+private fun normalizeCjkEmphasisWrapping(md: String): String {
+    if (md.isEmpty()) return md
+    val lines = md.split("\n")
+    val out = StringBuilder()
+    var insideFence = false
+
+    // 针对不同成对标点构造替换
+    data class Rule(val left: String, val right: String)
+    val rules = listOf(
+        Rule("“", "”"),
+        Rule("『", "』"),
+        Rule("「", "」"),
+        Rule("《", "》"),
+        Rule("（", "）"),
+        Rule("【", "】"),
+        Rule("\"", "\"")
+    )
+
+    fun fixLine(line: String): String {
+        var s = line
+        rules.forEach { r ->
+            // 形如 **“内容”** -> “**内容**”
+            val patternOuter = Regex("\\*\\*${Regex.escape(r.left)}([^${Regex.escape(r.right)}]+)${Regex.escape(r.right)}\\*\\*")
+            s = s.replace(patternOuter) { mr -> "${r.left}**${mr.groupValues[1]}**${r.right}" }
+            // 形如 *“内容”* -> “*内容*”（斜体同理）
+            val patternOuterItalic = Regex("\\*${Regex.escape(r.left)}([^${Regex.escape(r.right)}]+)${Regex.escape(r.right)}\\*")
+            s = s.replace(patternOuterItalic) { mr -> "${r.left}*${mr.groupValues[1]}*${r.right}" }
+        }
+        return s
+    }
+
+    lines.forEachIndexed { idx, raw ->
+        var line = raw
+        if (line.contains("```")) {
+            val c = "```".toRegex().findAll(line).count()
+            if (c % 2 == 1) {
+                // 在进入/离开围栏前，若当前不在围栏则先修复；进入后不再处理
+                if (!insideFence) {
+                    out.append(fixLine(line))
+                } else {
+                    out.append(line)
+                }
+                insideFence = !insideFence
+            } else {
+                if (!insideFence) out.append(fixLine(line)) else out.append(line)
+            }
+        } else {
+            if (!insideFence) out.append(fixLine(line)) else out.append(line)
+        }
+        if (idx != lines.lastIndex) out.append('\n')
+    }
+    return out.toString()
 }
 
 /**

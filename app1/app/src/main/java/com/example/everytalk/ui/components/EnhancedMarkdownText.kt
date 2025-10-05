@@ -918,32 +918,79 @@ private fun splitTextIntoBlocks(text: String): List<MarkdownPart.Text> {
 private fun detectMarkdownTable(content: String): Boolean {
     val lines = content.trim().lines().filter { it.isNotBlank() }
     if (lines.size < 2) return false
-    val hasPipes = lines.count { it.contains("|") } >= 2
+    // 允许全角/框线竖线
+    fun normPipes(s: String) = s.replace("｜", "|").replace("│", "|").replace("┃", "|")
+    val hasPipes = lines.count { normPipes(it).contains("|") } >= 2
     if (!hasPipes) return false
-    val separatorRegex = Regex("^\\s*\\|?\\s*:?[-]{2,}:?\\s*(\\|\\s*:?[-]{2,}:?\\s*)+\\|?\\s*$")
-    return lines.any { separatorRegex.matches(it.trim()) }
+    // 放宽匹配：允许分隔行后紧跟首行数据（同一行）
+    val separatorRegexLoose = Regex("^\\s*\\|?\\s*:?[-]{2,}:?\\s*(\\|\\s*:?[-]{2,}:?\\s*)+\\|?\\s*")
+    return lines.any { line ->
+        val t = normPipes(line).trim()
+        separatorRegexLoose.containsMatchIn(t)
+    }
 }
 
 // 从整段文本中提取第一张 Markdown 表格，返回 (表格前文本, 表格文本, 表格后文本)
 private fun splitByFirstMarkdownTable(content: String): Triple<String, String, String> {
-    val lines = content.lines()
-    val separatorRegex = Regex("^\\s*\\|?\\s*:?[-]{2,}:?\\s*(\\|\\s*:?[-]{2,}:?\\s*)+\\|?\\s*$")
+    val rawLines = content.lines()
+    fun normPipes(s: String) = s.replace("｜", "|").replace("│", "|").replace("┃", "|")
+    // 放宽：分隔模式无需锚定到行尾，便于从同行中切出尾部数据
+    val separatorRegexLoose = Regex("^\\s*\\|?\\s*:?[-]{2,}:?\\s*(\\|\\s*:?[-]{2,}:?\\s*)+\\|?\\s*")
+
+    // 找到第一条分隔行（宽松匹配）
     var sepIdx = -1
-    for (i in lines.indices) {
-        if (separatorRegex.matches(lines[i].trim())) {
+    var sepMatch: MatchResult? = null
+    for (i in rawLines.indices) {
+        val t = normPipes(rawLines[i]).trim()
+        val mr = separatorRegexLoose.find(t)
+        if (mr != null) {
             sepIdx = i
+            sepMatch = mr
             break
         }
     }
-    if (sepIdx <= 0) return Triple(content, "", "")
-    val headerIdx = sepIdx - 1
-    // 向上扩展到表头起始（通常就是 headerIdx）
-    var start = headerIdx
-    // 向下扩展，直到不再是"含管道符的非空行"
+    if (sepIdx <= 0 || sepMatch == null) return Triple(content, "", "")
+
+    // 表头行：向上找第一条“含管道且非空”的行
+    var headerIdx = sepIdx - 1
+    while (headerIdx >= 0) {
+        val ht = normPipes(rawLines[headerIdx])
+        if (ht.isNotBlank() && ht.contains("|")) break
+        headerIdx--
+    }
+    if (headerIdx < 0) return Triple(content, "", "")
+
+    // 计算 start/end，并处理“分隔行后拼接了首行数据”的尾巴
+    val start = headerIdx
+    val lines = rawLines.toMutableList()
+
+    // 取分隔片段与尾部数据
+    val sepLineNorm = normPipes(lines[sepIdx])
+    val matchedSep = sepMatch!!.value.trim()
+    val tail = sepLineNorm.substring(sepMatch!!.range.last + 1).trim()
+
+    // 用纯分隔行替换原 sepIdx 行
+    lines[sepIdx] = matchedSep
+
+    // 如果 tail 存在，作为第一条数据行插入到 sepIdx+1
     var end = sepIdx + 1
-    while (end < lines.size && lines[end].isNotBlank() && lines[end].contains("|")) {
+    if (tail.isNotEmpty()) {
+        val firstData = if (tail.startsWith("|")) tail else "| $tail |"
+        lines.add(end, firstData)
+        end++ // 指向下一行
+    }
+
+    // 继续向下吞并数据行
+    while (end < lines.size) {
+        val dt = normPipes(lines[end])
+        if (dt.isBlank()) {
+            // 空行算作表格块的终止，与后文分隔
+            break
+        }
+        if (!dt.contains("|")) break
         end++
     }
+
     val before = lines.take(start).joinToString("\n").trimEnd()
     val tableBlock = lines.subList(start, end).joinToString("\n").trim()
     val after = if (end < lines.size) lines.drop(end).joinToString("\n").trimStart() else ""
