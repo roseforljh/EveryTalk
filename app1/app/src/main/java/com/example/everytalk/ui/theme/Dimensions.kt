@@ -6,6 +6,7 @@ import androidx.compose.ui.unit.sp
 object ChatDimensions {
     // 气泡相关
     const val BUBBLE_WIDTH_RATIO = 0.9f
+    const val USER_BUBBLE_WIDTH_RATIO = 0.85f  // 用户气泡最大宽度比例
     val CORNER_RADIUS_LARGE = 18.dp
     val CORNER_RADIUS_SMALL = 8.dp
     

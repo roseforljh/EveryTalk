@@ -744,7 +744,7 @@ fun EnhancedMarkdownText(
                                 text = before,
                                 textColor = textColor,
                                 style = baseStyle,
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                         }
@@ -768,7 +768,7 @@ fun EnhancedMarkdownText(
                                 text = tail,
                                 textColor = textColor,
                                 style = baseStyle,
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier
                             )
                         }
                     }
@@ -789,7 +789,7 @@ fun EnhancedMarkdownText(
                 text = t,
                 textColor = textColor,
                 style = baseStyle,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
             )
             return@Column
         }
@@ -806,7 +806,8 @@ fun EnhancedMarkdownText(
             android.util.Log.d("EnhancedMarkdownText", "User/Non-AI message - displaying raw text without formatting")
             Text(
                 text = message.text,
-                style = style.copy(color = textColor, platformStyle = PlatformTextStyle(includeFontPadding = false))
+                style = style.copy(color = textColor, platformStyle = PlatformTextStyle(includeFontPadding = false)),
+                modifier = Modifier.wrapContentWidth()
             )
             return@Column
         }

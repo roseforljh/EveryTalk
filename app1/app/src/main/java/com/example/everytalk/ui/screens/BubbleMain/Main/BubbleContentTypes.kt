@@ -131,29 +131,27 @@ internal fun UserOrErrorMessageContent(
                     )
                 }
         ) {
-            Column {
-                Box(
-                    contentAlignment = Alignment.CenterStart,
-                    modifier = Modifier
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                        .wrapContentWidth()
-                        .defaultMinSize(minHeight = 28.dp)
-                ) {
-                    if (showLoadingDots && !isError) {
-                        ThreeDotsLoadingAnimation(
-                            dotColor = contentColor,
-                            modifier = Modifier
-                                .align(Alignment.Center)
-                                .offset(y = (-6).dp)
-                        )
-                    } else if (displayedText.isNotBlank() || isError) {
-                        // 直接使用EnhancedMarkdownText渲染整个文本
-                        EnhancedMarkdownText(
-                            message = message,
-                            modifier = Modifier.widthIn(max = maxWidth).wrapContentWidth(),
-                            color = contentColor
-                        )
-                    }
+            Box(
+                contentAlignment = Alignment.CenterStart,
+                modifier = Modifier
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .wrapContentWidth()
+                    .defaultMinSize(minHeight = 28.dp)
+            ) {
+                if (showLoadingDots && !isError) {
+                    ThreeDotsLoadingAnimation(
+                        dotColor = contentColor,
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .offset(y = (-6).dp)
+                    )
+                } else if (displayedText.isNotBlank() || isError) {
+                    // 直接使用EnhancedMarkdownText渲染整个文本
+                    EnhancedMarkdownText(
+                        message = message,
+                        modifier = Modifier.wrapContentWidth(),
+                        color = contentColor
+                    )
                 }
             }
         }
