@@ -75,11 +75,8 @@ fun ChatMessagesList(
     val isApiCalling by viewModel.isTextApiCalling.collectAsState()
    val density = LocalDensity.current
 
-    LaunchedEffect(chatItems) {
-        if (chatItems.lastOrNull() is ChatListItem.AiMessageReasoning) {
-            scrollStateManager.jumpToBottom()
-        }
-    }
+    // 取消因思考框(AiMessageReasoning)导致的外层自动滚动，避免联动到外层列表
+    // LaunchedEffect(chatItems) { ... } 已移除
 
     Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(

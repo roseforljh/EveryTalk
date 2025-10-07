@@ -684,8 +684,20 @@ object ApiClient {
             throw IllegalStateException("ApiClient not initialized. Call initialize() first.")
         }
 
-        val url = buildFinalUrl(apiUrl, "/v1/models")
-        android.util.Log.d("ApiClient", "获取模型列表 - 原始URL: '$apiUrl', 处理后URL: '$url'")
+        // 统一去掉尾部 '#'
+        val baseForModels = apiUrl.trim().removeSuffix("#")
+        // 智谱特判：当地址属于 open.bigmodel.cn 时，改用官方模型端点 /api/paas/v4/models
+        val parsedUri = try { java.net.URI(baseForModels) } catch (_: Exception) { null }
+        val hostLower = parsedUri?.host?.lowercase()
+        val scheme = parsedUri?.scheme ?: "https"
+        val url = if (hostLower?.contains("open.bigmodel.cn") == true) {
+            val zhipu = "$scheme://open.bigmodel.cn/api/paas/v4/models"
+            android.util.Log.i("ApiClient", "检测到智谱 BigModel，改用官方模型列表端点: $zhipu")
+            zhipu
+        } else {
+            buildFinalUrl(baseForModels, "/v1/models")
+        }
+        android.util.Log.d("ApiClient", "获取模型列表 - 原始URL: '$apiUrl', 最终请求URL: '$url'")
 
         return try {
             val response = client.get {
@@ -707,7 +719,44 @@ object ApiClient {
                     val modelsList = jsonParser.decodeFromString<List<ModelInfo>>(responseBody)
                     return modelsList.map { it.id }
                 } catch (e2: SerializationException) {
-                    throw IOException("无法解析模型列表的响应。请检查API端点返回的数据格式是否正确。", e2)
+                    // 兜底解析：兼容部分厂商（如智谱）返回的非标准字段或不同包裹结构
+                    try {
+                        val root = jsonParser.parseToJsonElement(responseBody)
+                        fun extractIdFromObj(obj: JsonObject): String? {
+                            val candidates = listOf("id", "model", "name", "identifier")
+                            for (k in candidates) {
+                                obj[k]?.jsonPrimitive?.contentOrNull?.let { s ->
+                                    val v = s.trim()
+                                    if (v.isNotEmpty()) return v
+                                }
+                            }
+                            return null
+                        }
+                        fun extractFromArray(arr: JsonArray): List<String> {
+                            return arr.mapNotNull { el ->
+                                when {
+                                    el is JsonObject -> extractIdFromObj(el)
+                                    else -> el.jsonPrimitive.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
+                                }
+                            }.distinct()
+                        }
+
+                        val ids: List<String> = when {
+                            root is JsonObject && root["data"] is JsonArray ->
+                                extractFromArray(root["data"]!!.jsonArray)
+                            root is JsonArray ->
+                                extractFromArray(root)
+                            else -> emptyList()
+                        }
+
+                        if (ids.isNotEmpty()) {
+                            return ids
+                        } else {
+                            throw IOException("无法解析模型列表的响应。请检查API端点返回的数据格式是否正确。", e2)
+                        }
+                    } catch (e3: Exception) {
+                        throw IOException("无法解析模型列表的响应。请检查API端点返回的数据格式是否正确。", e3)
+                    }
                 }
             }
         } catch (e: Exception) {

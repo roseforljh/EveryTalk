@@ -32,6 +32,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -102,14 +103,36 @@ internal fun ReasoningToggleAndContent(
             ) {
                 Box(modifier = Modifier.fillMaxSize()) {
                     val scrollState = rememberScrollState()
-                    LaunchedEffect(scrollState.maxValue) {
+                    // 拦截器：拦截并消费思考框内的嵌套滚动，避免向外层 LazyColumn 传递
+                    val innerScrollBlocker = remember {
+                        object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
+                            override fun onPreScroll(
+                                available: androidx.compose.ui.geometry.Offset,
+                                source: androidx.compose.ui.input.nestedscroll.NestedScrollSource
+                            ): androidx.compose.ui.geometry.Offset {
+                                // 无论用户还是非用户来源，全部消费，阻断向父级传递
+                                return available
+                            }
+                            override suspend fun onPreFling(available: androidx.compose.ui.unit.Velocity): androidx.compose.ui.unit.Velocity {
+                                // 消费惯性，防止父级接收到 fling
+                                return available
+                            }
+                        }
+                    }
+                    LaunchedEffect(scrollState.maxValue, isReasoningStreaming) {
                         if (isReasoningStreaming) {
-                            scrollState.animateScrollTo(scrollState.maxValue)
+                            // 还原思考框内的平滑滚动动画；由内层拦截器阻断向父级传播
+                            try {
+                                scrollState.animateScrollTo(scrollState.maxValue)
+                            } catch (_: Exception) {
+                                // 忽略偶发取消等异常，保证稳定性
+                            }
                         }
                     }
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
+                            .nestedScroll(innerScrollBlocker)
                             .verticalScroll(scrollState)
                             .padding(horizontal = 12.dp, vertical = scrimHeight)
                     ) {
