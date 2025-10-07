@@ -40,14 +40,12 @@ fun getChatColors(): ChatColors {
     return if (colorScheme.surface.luminance() > 0.5f) {
         // 亮色模式 - AI气泡与背景色完全一致
         lightChatColors.copy(
-            aiBubble = colorScheme.background,
-            codeBlockBackground = colorScheme.surfaceVariant
+            aiBubble = colorScheme.background
         )
     } else {
         // 深色模式 - AI气泡与背景色完全一致  
         darkChatColors.copy(
-            aiBubble = colorScheme.background,
-            codeBlockBackground = colorScheme.surfaceVariant
+            aiBubble = colorScheme.background
         )
     }
 }

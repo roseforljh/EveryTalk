@@ -49,7 +49,7 @@ fun CodePreview(
     code: String,
     language: String?,
     modifier: Modifier = Modifier,
-    backgroundColor: Color = MaterialTheme.chatColors.userBubble
+    backgroundColor: Color = MaterialTheme.chatColors.aiBubble
 ) {
     // 为每个代码块实例创建稳定的唯一标识符
     // 使用UUID确保每个组件实例都有唯一的ID，避免状态冲突
@@ -109,12 +109,12 @@ fun CodePreview(
                             modifier = Modifier
                                 .fillMaxWidth()
                             .background(
-                                color = if (isDarkTheme) Color.Black.copy(alpha = 0.2f) else Color.Gray.copy(alpha = 0.1f),
+                                color = MaterialTheme.chatColors.codeBlockBackground, // ✅ 使用主题颜色
                                 shape = RoundedCornerShape(8.dp)
                             )
                             .border(
                                 width = 1.dp,
-                                color = if (isDarkTheme) Color.White.copy(alpha = 0.1f) else Color.Gray.copy(alpha = 0.3f),
+                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), // ✅ 使用主题轮廓颜色
                                 shape = RoundedCornerShape(8.dp)
                             )
                             .horizontalScroll(scrollState)

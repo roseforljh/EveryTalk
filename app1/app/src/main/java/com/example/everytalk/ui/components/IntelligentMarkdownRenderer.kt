@@ -10,6 +10,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import android.util.Log
 import dev.jeziellago.compose.markdowntext.MarkdownText
+import com.example.everytalk.ui.theme.chatColors
 
 /**
  * 🚀 智能Markdown渲染管理器 - 根据内容自动选择最优渲染策略
@@ -205,9 +206,9 @@ fun SimpleTableRenderer(
         ) {
             for (i in 0 until colCount) {
                 val h = headers.getOrNull(i) ?: ""
-                MarkdownText(
-                    markdown = normalizeBasicMarkdown(h),
-                    style = MaterialTheme.typography.bodyMedium.copy(color = headerFg),
+                TableCellContent(
+                    content = h,
+                    textColor = headerFg,
                     modifier = Modifier
                         .weight(1f)
                         .border(1.dp, gridLine)
@@ -216,7 +217,7 @@ fun SimpleTableRenderer(
             }
         }
 
-        // Body rows（斑马条 + 网格线 + 单元格 Markdown）
+        // Body rows（斑马条 + 网格线 + 单元格 渲染）
         rows.forEachIndexed { index, cells ->
             Row(
                 modifier = Modifier
@@ -225,10 +226,9 @@ fun SimpleTableRenderer(
             ) {
                 for (i in 0 until colCount) {
                     val raw = cells.getOrNull(i) ?: ""
-                    val md = normalizeBasicMarkdown(raw).replace("<br>", "  \n")
-                    MarkdownText(
-                        markdown = md,
-                        style = MaterialTheme.typography.bodyMedium.copy(color = cellFg),
+                    TableCellContent(
+                        content = raw.replace("<br>", "  \n"),
+                        textColor = cellFg,
                         modifier = Modifier
                             .weight(1f)
                             .border(1.dp, gridLine)
@@ -238,6 +238,134 @@ fun SimpleTableRenderer(
             }
         }
     }
+}
+/**
+ * 表格单元格内容渲染（统一自定义风格）
+ * - 支持单元格内围栏代码块 -> 使用 CodePreview（带复制/预览）
+ * - 其余文本：自定义内联 `code` 样式，而不是库默认
+ * - 避免在表格区域使用库的默认 Markdown 内联代码风格，确保视觉统一
+ */
+@Composable
+private fun TableCellContent(
+    content: String,
+    textColor: androidx.compose.ui.graphics.Color,
+    modifier: Modifier = Modifier
+) {
+    val style = MaterialTheme.typography.bodyMedium.copy(color = textColor)
+
+    // 宽松匹配围栏代码：```lang(optional)\n...```，允许缺少末尾换行
+    val fencedRegex = Regex("(?s)```\\s*([a-zA-Z0-9_+\\-#.]*)[ \\t]*\\r?\\n?([\\s\\S]*?)\\r?\\n?```")
+    val match = fencedRegex.find(content)
+
+    if (match != null) {
+        Column(modifier = modifier) {
+            val before = content.substring(0, match.range.first)
+            val after = content.substring(match.range.last + 1)
+            val lang = match.groups[1]?.value?.trim().orEmpty()
+            val code = match.groups[2]?.value ?: ""
+
+            if (before.isNotBlank()) {
+                CellInlineMarkdown(before, style)
+                Spacer(modifier = Modifier.height(6.dp))
+            }
+
+            CodePreview(
+                code = code,
+                language = if (lang.isBlank()) null else lang,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            if (after.isNotBlank()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                CellInlineMarkdown(after, style)
+            }
+        }
+        return
+    }
+
+    // 无围栏代码时，按内联代码/普通文本混排
+    Column(modifier = modifier) {
+        CellInlineMarkdown(content, style)
+    }
+}
+
+/**
+ * 表格内的“内联代码 + 普通 Markdown”混排渲染器
+ * - 使用自定义 chip 风格渲染 `code`
+ * - 非代码片段使用 normalizeBasicMarkdownNoMath -> MarkdownText
+ */
+@Composable
+private fun CellInlineMarkdown(
+    raw: String,
+    baseStyle: androidx.compose.ui.text.TextStyle
+) {
+    val normalized = normalizeMarkdownGlyphs(raw)
+    val parts = splitByBackticks(normalized)
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        parts.forEach { seg ->
+            if (seg.isCode) {
+                androidx.compose.material3.Text(
+                    text = seg.text,
+                    style = baseStyle.copy(
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Normal
+                    ),
+                    modifier = Modifier
+                        .background(
+                            color = MaterialTheme.chatColors.codeBlockBackground,
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(3.dp)
+                        )
+                        .padding(horizontal = 4.dp, vertical = 1.dp)
+                )
+            } else {
+                MarkdownText(
+                    markdown = normalizeBasicMarkdownNoMath(seg.text),
+                    style = baseStyle.copy(platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)),
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 将字符串按反引号切分为 交替的 文本/代码 片段
+ */
+private data class BacktickSegment(val text: String, val isCode: Boolean)
+
+private fun splitByBackticks(s: String): List<BacktickSegment> {
+    if (s.isEmpty()) return listOf(BacktickSegment("", false))
+    val res = mutableListOf<BacktickSegment>()
+    val sb = StringBuilder()
+    var inCode = false
+    var i = 0
+    while (i < s.length) {
+        val c = s[i]
+        if (c == '`') {
+            val escaped = i > 0 && s[i - 1] == '\\'
+            if (!escaped) {
+                if (sb.isNotEmpty()) {
+                    res += BacktickSegment(sb.toString(), inCode)
+                    sb.clear()
+                }
+                inCode = !inCode
+            } else {
+                sb.append('`')
+            }
+        } else {
+            sb.append(c)
+        }
+        i++
+    }
+    if (sb.isNotEmpty()) res += BacktickSegment(sb.toString(), inCode)
+    // 若末尾仍在代码态，视为未闭合，整体按文本输出，避免样式破碎
+    if (res.isNotEmpty() && res.last().isCode) {
+        return listOf(BacktickSegment(res.joinToString("") { (t, code) -> if (code) "`$t`" else t }, false))
+    }
+    return res
 }
 
 /**

@@ -320,43 +320,101 @@ private fun SmartTextRenderer(
                 )
                 return
             }
-            // 1) 兜底：优先检测 Markdown 围栏代码块并使用自定义 CodePreview 渲染
-            // 匹配 ```lang\n...\n``` 的首个代码块；语言可为空
+            // 1) 围栏代码：严格匹配并“全部遍历”，确保每个代码块都走自定义 CodePreview
             val fencedRegex = Regex("(?s)```\\s*([a-zA-Z0-9_+\\-#.]*)\\s*\\n(.*?)\\n```")
-            val fencedMatch = fencedRegex.find(text)
-            if (fencedMatch != null) {
-                val before = text.substring(0, fencedMatch.range.first)
-                val after = text.substring(fencedMatch.range.last + 1)
-                val lang = fencedMatch.groups[1]?.value?.trim().orEmpty()
-                val code = fencedMatch.groups[2]?.value ?: ""
-
-                if (before.isNotBlank()) {
-                    MarkdownText(
-                        markdown = normalizeBasicMarkdown(before),
-                        style = style.copy(color = textColor, platformStyle = PlatformTextStyle(includeFontPadding = false)),
+            val matches = fencedRegex.findAll(text).toList()
+            if (matches.isNotEmpty()) {
+                var last = 0
+                matches.forEachIndexed { idx, mr ->
+                    val before = text.substring(last, mr.range.first)
+                    if (before.isNotBlank()) {
+                        SmartTextRenderer(
+                            text = before,
+                            textColor = textColor,
+                            style = style,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                    val lang = mr.groups[1]?.value?.trim().orEmpty()
+                    val code = mr.groups[2]?.value ?: ""
+                    CodePreview(
+                        code = code,
+                        language = if (lang.isBlank()) null else lang,
                         modifier = Modifier.fillMaxWidth()
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
+                    last = mr.range.last + 1
+                    if (idx != matches.lastIndex) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
                 }
-
-                CodePreview(
-                    code = code,
-                    language = if (lang.isBlank()) null else lang,
-                    modifier = Modifier.fillMaxWidth()
+                if (last < text.length) {
+                    val tail = text.substring(last)
+                    if (tail.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        SmartTextRenderer(
+                            text = tail,
+                            textColor = textColor,
+                            style = style,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+                // 已处理全部代码块，直接返回
+                return
+            } else if (text.contains("```")) {
+                // 宽松兜底：即使围栏不规范（缺少换行或末尾未闭合），也按围栏切片渲染
+                // 这样不会退回库默认的 MarkdownText，从而保证启用自定义 CodePreview（带复制/预览）
+                FallbackFencedRenderer(
+                    raw = text,
+                    textColor = textColor,
+                    style = style
                 )
-
-                if (after.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    MarkdownText(
-                        markdown = normalizeBasicMarkdown(after),
-                        style = style.copy(color = textColor, platformStyle = PlatformTextStyle(includeFontPadding = false)),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-                // 已处理，直接返回
                 return
             }
-
+ 
+            // 1b) 识别“缩进式代码块”（以4个空格或Tab起始的连续行），统一走 CodePreview 渲染
+            run {
+                val blocks = extractIndentedCodeBlocks(text)
+                if (blocks != null && blocks.blocks.isNotEmpty()) {
+                    var last = 0
+                    blocks.blocks.forEachIndexed { idx, b ->
+                        val before = text.substring(last, b.range.first)
+                        if (before.isNotBlank()) {
+                            SmartTextRenderer(
+                                text = before,
+                                textColor = textColor,
+                                style = style,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                        CodePreview(
+                            code = b.code,
+                            language = null,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        last = b.range.last + 1
+                        if (idx != blocks.blocks.lastIndex) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                    }
+                    if (last < text.length) {
+                        val tail = text.substring(last)
+                        if (tail.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            SmartTextRenderer(
+                                text = tail,
+                                textColor = textColor,
+                                style = style,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                    return
+                }
+            }
+ 
             // 2) 表格兜底检测：即使上游给到 Text，也分流到表格渲染
             if (detectMarkdownTable(text)) {
                 // 原生表格兜底渲染
@@ -402,9 +460,10 @@ private fun RenderTextWithBlockMath(
                 )
             } else {
                 // 普通文本（不做数学改写）
-                MarkdownText(
-                    markdown = normalizeBasicMarkdownNoMath(seg),
-                    style = style.copy(color = textColor, platformStyle = PlatformTextStyle(includeFontPadding = false)),
+                SmartTextRenderer(
+                    text = seg,
+                    textColor = textColor,
+                    style = style,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -420,35 +479,13 @@ private fun RenderTextWithInlineCodeAndMath(
     style: TextStyle,
     modifier: Modifier = Modifier
 ) {
-    // 先按代码块分割，然后在每个片段中处理数学公式
-    val codeSegments = splitInlineCodeSegments(text)
-    
-    // 🎯 修复：改用 Center，实现垂直居中
-    FlowRow(
-        modifier = modifier.wrapContentWidth(),
-        horizontalArrangement = Arrangement.spacedBy(0.dp), // 紧密排列
-        verticalArrangement = Arrangement.Center,  // ✅ 垂直居中
-        maxItemsInEachRow = Int.MAX_VALUE // 避免不必要的换行
-    ) {
-        codeSegments.forEach { segment ->
-            if (segment.isCode) {
-                // 内联代码片段，使用自定义样式
-                InlineCodeChip(segment.text, style.copy(color = textColor))
-            } else {
-                // 非代码片段，检查是否有数学公式；先做最小包裹，捕捉裸 sqrt/frac
-                val maybeWrapped = if (!segment.text.contains('$')) wrapBareLatexForInline(segment.text) else segment.text
-                if (maybeWrapped.contains('$')) {
-                    RenderTextWithInlineMath(maybeWrapped, textColor, style)
-                } else {
-                    MarkdownText(
-                        markdown = normalizeBasicMarkdownNoMath(segment.text),
-                        style = style.copy(color = textColor),
-                        modifier = Modifier.wrapContentWidth()
-                    )
-                }
-            }
-        }
-    }
+    // 统一渲染：去除内联代码反引号，再按行内数学拆分渲染，避免 FlowRow 造成的断行/间距混乱
+    val noTicks = remember(text) { removeInlineCodeBackticks(text) }
+    RenderTextWithInlineMath(
+        text = noTicks,
+        textColor = textColor,
+        style = style
+    )
 }
 
 // 🎯 处理包含行内数学公式的文本
@@ -514,9 +551,10 @@ private fun RenderTextWithInlineMath(
                 if (seg.content.contains('`')) {
                     RenderTextWithInlineCode(seg.content, style, textColor)
                 } else {
-                    MarkdownText(
-                        markdown = normalizeBasicMarkdownNoMath(seg.content),
-                        style = style.copy(color = textColor, platformStyle = PlatformTextStyle(includeFontPadding = false)),
+                    SmartTextRenderer(
+                        text = seg.content,
+                        textColor = textColor,
+                        style = style,
                         modifier = Modifier.wrapContentWidth()
                     )
                 }
@@ -539,9 +577,10 @@ private fun NoWrapTextAndMath(
         horizontalArrangement = Arrangement.Start,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        MarkdownText(
-            markdown = normalizeBasicMarkdownNoMath(text),
-            style = style.copy(color = textColor, platformStyle = PlatformTextStyle(includeFontPadding = false)),
+        SmartTextRenderer(
+            text = text,
+            textColor = textColor,
+            style = style,
             modifier = Modifier.wrapContentWidth()
         )
         LatexMath(
@@ -659,6 +698,102 @@ fun EnhancedMarkdownText(
     }
 
     Column(modifier = modifier) {
+        // 若已结束流式（最终态），优先使用“整段文本级”的渲染策略，避免被碎片化 parts 干扰
+        if (!isStreaming) {
+            val t = cleanedText
+            // 先渲染整段中的首张表格（若存在）
+            if (detectMarkdownTable(t)) {
+                val (before, tableBlock, after) = splitByFirstMarkdownTable(t)
+                if (before.isNotBlank()) {
+                    SmartTextRenderer(
+                        text = before,
+                        textColor = textColor,
+                        style = baseStyle,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+                if (tableBlock.isNotBlank()) {
+                    SimpleTableRenderer(
+                        content = tableBlock,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                if (after.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    SmartTextRenderer(
+                        text = after,
+                        textColor = textColor,
+                        style = baseStyle,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                return@Column
+            }
+
+            // 再渲染整段中的围栏代码（严格：多段顺序渲染；失败则宽松兜底），强制使用 CodePreview（带复制/预览）
+            run {
+                val strict = Regex("(?s)```\\s*([a-zA-Z0-9_+\\-#.]*)\\s*\\n(.*?)\\n```")
+                val matches = strict.findAll(t).toList()
+                if (matches.isNotEmpty()) {
+                    var last = 0
+                    matches.forEachIndexed { idx, mr ->
+                        val before = t.substring(last, mr.range.first)
+                        if (before.isNotBlank()) {
+                            SmartTextRenderer(
+                                text = before,
+                                textColor = textColor,
+                                style = baseStyle,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                        val lang = mr.groups[1]?.value?.trim().orEmpty()
+                        val code = mr.groups[2]?.value ?: ""
+                        CodePreview(
+                            code = code,
+                            language = if (lang.isBlank()) null else lang,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        last = mr.range.last + 1
+                        if (idx != matches.lastIndex) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                    }
+                    if (last < t.length) {
+                        val tail = t.substring(last)
+                        if (tail.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            SmartTextRenderer(
+                                text = tail,
+                                textColor = textColor,
+                                style = baseStyle,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                    return@Column
+                } else if (t.contains("```")) {
+                    // 宽松兜底：不规范围栏（缺换行/缺闭合）整体交给 FallbackFencedRenderer，保证依然走 CodePreview
+                    FallbackFencedRenderer(
+                        raw = t,
+                        textColor = textColor,
+                        style = baseStyle
+                    )
+                    return@Column
+                }
+            }
+
+            // 无表格/围栏，走智能渲染（含行内代码/数学）
+            SmartTextRenderer(
+                text = t,
+                textColor = textColor,
+                style = baseStyle,
+                modifier = Modifier.fillMaxWidth()
+            )
+            return@Column
+        }
+
         // 🎯 调试日志：检查消息的解析状态
         android.util.Log.d("EnhancedMarkdownText", "=== Rendering Message ${message.id} ===")
         android.util.Log.d("EnhancedMarkdownText", "Message sender: ${message.sender}")
@@ -753,8 +888,9 @@ fun EnhancedMarkdownText(
                         Spacer(modifier = Modifier.height(8.dp))
                     }
                 }
-                if (last < message.text.length) {
-                    val tail = message.text.substring(last)
+                // 统一使用 cleanedText，避免与上面的切片来源不一致导致错位
+                if (last < cleanedText.length) {
+                    val tail = cleanedText.substring(last)
                     if (tail.isNotBlank()) {
                         Spacer(modifier = Modifier.height(8.dp))
                         SmartTextRenderer(
@@ -1091,59 +1227,14 @@ private fun RenderTextWithInlineCode(
     style: TextStyle,
     textColor: Color
 ) {
-    val normalized = normalizeMarkdownGlyphs(unwrapFileExtensionsInBackticks(text))
-    val segments = remember(normalized) { splitInlineCodeSegments(normalized) }
-    // 🎯 修复：改用 Center，实现垂直居中
-    FlowRow(
-        modifier = Modifier.wrapContentWidth(),
-        horizontalArrangement = Arrangement.spacedBy(0.dp),
-        verticalArrangement = Arrangement.Center,  // ✅ 垂直居中
-        maxItemsInEachRow = Int.MAX_VALUE
-    ) {
-        segments.forEach { seg ->
-            if (seg.isCode) {
-                InlineCodeChip(
-                    code = seg.text,
-                    baseStyle = style.copy(color = textColor)
-                )
-            } else {
-                MarkdownText(
-                    markdown = normalizeBasicMarkdownNoMath(seg.text),
-                    style = style.copy(color = textColor, platformStyle = PlatformTextStyle(includeFontPadding = false)),
-                    modifier = Modifier.wrapContentWidth()
-                )
-            }
-        }
+    // 单体渲染：去掉反引号后交给 MarkdownText，保持段落级排版稳定且无白底
+    val unified = remember(text) {
+        normalizeBasicMarkdownNoMath(removeInlineCodeBackticks(unwrapFileExtensionsInBackticks(text)))
     }
-}
-
-@Composable
-private fun InlineCodeChip(
-    code: String,
-    baseStyle: TextStyle
-) {
-    // ✅ 修复内联代码位置飘动的根本原因：
-    // 1. 统一字号和行高，避免基线差异
-    // 2. 添加 baselineShift 微调，补偿 Monospace 字体的基线偏移
-    // 3. 最小化竖向内边距，防止被"顶起"
-    Text(
-        text = code,
-        style = baseStyle.copy(
-            fontWeight = FontWeight.Normal,
-            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-            fontSize = baseStyle.fontSize,               // 与周围文本保持一致字号
-            lineHeight = baseStyle.lineHeight,           // 与周围文本保持一致行高
-            baselineShift = BaselineShift(0.0f),         // ✅ 统一基线，不再上浮/下沉
-            platformStyle = PlatformTextStyle(
-                includeFontPadding = false               // ✅ 禁用字体内边距，消除额外空间
-            )
-        ),
-        modifier = Modifier
-            .background(
-                color = MaterialTheme.chatColors.codeBlockBackground,
-                shape = RoundedCornerShape(3.dp)
-            )
-            .padding(horizontal = 4.dp, vertical = 1.dp)  // 最小化竖向内边距
+    MarkdownText(
+        markdown = unified,
+        style = style.copy(color = textColor, platformStyle = PlatformTextStyle(includeFontPadding = false)),
+        modifier = Modifier.fillMaxWidth()
     )
 }
 
@@ -1186,6 +1277,52 @@ private fun splitInlineCodeSegments(text: String): List<InlineSegment> {
     return res
 }
 
+// 识别“缩进式代码块”工具：连续两行及以上以4空格或Tab开头的文本
+private data class IndentedBlock(val range: IntRange, val code: String)
+private data class IndentedBlocks(val blocks: List<IndentedBlock>)
+
+private fun extractIndentedCodeBlocks(text: String): IndentedBlocks? {
+    if (text.isBlank()) return null
+    val lines = text.split("\n")
+    val blocks = mutableListOf<IndentedBlock>()
+    var i = 0
+    var offset = 0
+    while (i < lines.size) {
+        val line = lines[i]
+        val isIndented = line.startsWith("    ") || line.startsWith("\t")
+        if (!isIndented) {
+            offset += line.length + if (i != lines.lastIndex) 1 else 0
+            i++
+            continue
+        }
+        val startOffset = offset
+        val startLine = i
+        val buf = StringBuilder()
+        var count = 0
+        while (i < lines.size) {
+            val cur = lines[i]
+            if (cur.startsWith("    ") || cur.startsWith("\t")) {
+                val stripped = if (cur.startsWith("\t")) cur.removePrefix("\t") else cur.removePrefix("    ")
+                buf.append(stripped)
+                if (i != lines.lastIndex) buf.append("\n")
+                offset += cur.length + if (i != lines.lastIndex) 1 else 0
+                i++
+                count++
+            } else {
+                break
+            }
+        }
+        if (count >= 2) {
+            // 仅将“至少两行”的连续缩进行视为代码块
+            val endOffsetExclusive = offset
+            blocks += IndentedBlock(IntRange(startOffset, endOffsetExclusive - 1), buf.toString().trimEnd('\n'))
+        } else {
+            // 单行缩进回退为普通文本
+        }
+    }
+    return if (blocks.isEmpty()) null else IndentedBlocks(blocks)
+}
+
 private fun unwrapFileExtensionsInBackticks(text: String): String {
     val regex = Regex("`\\.(?:[a-zA-Z0-9]{2,10})`")
     if (!regex.containsMatchIn(text)) return text
@@ -1204,8 +1341,73 @@ private fun normalizeHeadingsForSimplePath(text: String): String {
             "${mr.groups[1]!!.value} ${mr.groups[2]!!.value}"
         }
         l
+
     }
     return lines.joinToString("\n")
+}
+
+/**
+* 宽松的围栏代码渲染器：
+* - 仅依据 “```” 分割奇偶段；偶数段视为围栏头（可能包含语言与同一行代码）
+* - 允许缺少结尾 ```；最后一个代码段也会用 CodePreview 渲染
+* - 尽最大努力提取语言：开头行的“```lang”作为语言，紧随其后的同一行残余拼到代码正文
+*/
+@Composable
+private fun FallbackFencedRenderer(
+   raw: String,
+   textColor: Color,
+   style: TextStyle
+) {
+   val parts = raw.split("```")
+   // 没有足够的片段，直接按普通文本渲染
+   if (parts.size <= 1) {
+       SmartTextRenderer(
+           text = raw,
+           textColor = textColor,
+           style = style,
+           modifier = Modifier.fillMaxWidth()
+       )
+       return
+   }
+
+   Column(modifier = Modifier.fillMaxWidth()) {
+       var i = 0
+       while (i < parts.size) {
+           val segment = parts[i]
+           if (i % 2 == 0) {
+               // 非代码段
+               if (segment.isNotBlank()) {
+                   SmartTextRenderer(
+                       text = segment,
+                       textColor = textColor,
+                       style = style,
+                       modifier = Modifier.fillMaxWidth()
+                   )
+               }
+           } else {
+               // 代码段（可能是不规范的开头/缺少闭合）
+               val lines = segment.lines()
+               val header = lines.firstOrNull() ?: ""
+               val lang = header.trim().takeWhile { !it.isWhitespace() }
+               val restFirst = header.removePrefix(lang).trimStart()
+               val body = buildString {
+                   if (restFirst.isNotEmpty()) appendLine(restFirst)
+                   if (lines.size > 1) {
+                       append(lines.drop(1).joinToString("\n"))
+                   }
+               }.trimEnd()
+
+               Spacer(modifier = Modifier.height(8.dp))
+               CodePreview(
+                   code = body,
+                   language = if (lang.isBlank()) null else lang,
+                   modifier = Modifier.fillMaxWidth()
+               )
+               Spacer(modifier = Modifier.height(8.dp))
+           }
+           i++
+       }
+   }
 }
 
 object RenderingMonitor {

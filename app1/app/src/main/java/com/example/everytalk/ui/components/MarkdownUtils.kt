@@ -229,11 +229,46 @@ fun dedupeConsecutiveContent(text: String): String {
 
 /**
  * 统一的 AI 输出清理：行尾反斜杠 -> 去重（不改写数学）
+ * 并补救围栏代码格式（缺少换行/缺少闭合 ```）
  */
 fun sanitizeAiOutput(text: String): String {
     if (text.isEmpty()) return text
     val noBackslashes = normalizeDanglingBackslashes(text)
-    return dedupeConsecutiveContent(noBackslashes)
+    val deduped = dedupeConsecutiveContent(noBackslashes)
+    return repairFencedCodeBlocks(deduped)
+}
+
+/**
+ * 去除“内联代码”反引号（不影响围栏代码块）：
+ * - 将 `xxx` -> xxx
+ * - 多次出现全部去除；不处理 ``` 围栏内的内容
+ * 用途：需要由 MarkdownText 统一排版，但不想要库默认的内联代码底色时使用。
+ */
+fun removeInlineCodeBackticks(md: String): String {
+    if (md.isEmpty()) return md
+    val lines = md.split("\n")
+    val out = StringBuilder()
+    var fence = false
+    val inlineCode = Regex("`([^`]+)`")
+    lines.forEachIndexed { idx, raw ->
+        var s = raw
+        if (s.contains("```")) {
+            val c = "```".toRegex().findAll(s).count()
+            if (!fence) {
+                // 仅当当前不在围栏内时，先清理本行中的内联代码（围栏起始前可能有普通文本）
+                s = s.replace(inlineCode) { mr -> mr.groupValues[1] }
+            }
+            fence = (c % 2 == 1) xor fence
+            out.append(s)
+        } else {
+            if (!fence) {
+                s = s.replace(inlineCode) { mr -> mr.groupValues[1] }
+            }
+            out.append(s)
+        }
+        if (idx != lines.lastIndex) out.append('\n')
+    }
+    return out.toString()
 }
 
 /**
@@ -707,6 +742,54 @@ private fun protectLeadingBoldMarkers(md: String): String {
     // 说明：此前在行首 "**" 后强插空格会把 "**文本**" 变为 "** 文本**"，
     // 使 CommonMark 不再识别为粗体。这里改为不做任何修改。
     return md
+}
+
+/**
+ * 补救围栏代码块：
+ * - 允许形如 ```bashsudo xxx 的错误，把 "sudo xxx" 断行为下一行内容
+ * - 若只有开头 ``` 未找到闭合，则在文本末尾自动补上 ```
+ * - 跳过已在围栏内的内容计数干扰
+ */
+fun repairFencedCodeBlocks(md: String): String {
+    if (md.isEmpty()) return md
+    val lines = md.split("\n").toMutableList()
+    var i = 0
+    var inFence = false
+
+    // 正则：行首围栏起始，捕获语言与同一行残余代码
+    val fenceOpen = Regex("""^\s*```([A-Za-z0-9_+\-#.]*)\s*(.*)$""")
+    val fenceLine = Regex("""^\s*```+\s*$""")
+
+    while (i < lines.size) {
+        val line = lines[i]
+        if (!inFence) {
+            val m = fenceOpen.find(line)
+            if (m != null) {
+                inFence = true
+                val lang = m.groupValues[1]
+                val rest = m.groupValues[2]
+                // 若同一行在语言后还紧跟代码，则把其移动到下一行
+                if (rest.isNotBlank()) {
+                    // 将当前行重写为纯开栏
+                    lines[i] = if (lang.isNotBlank()) "```$lang" else "```"
+                    // 在下一行插入余下代码
+                    lines.add(i + 1, rest.trimStart())
+                    i += 1
+                }
+            }
+        } else {
+            // 围栏内遇到闭合
+            if (fenceLine.containsMatchIn(line)) {
+                inFence = false
+            }
+        }
+        i += 1
+    }
+    // 若到末尾仍在围栏内，自动补闭合
+    if (inFence) {
+        lines.add("```")
+    }
+    return lines.joinToString("\n")
 }
 
 /**
