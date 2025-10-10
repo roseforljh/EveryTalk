@@ -17,6 +17,9 @@ fun normalizeBasicMarkdown(text: String): String {
     t = normalizeSoftIndentedLists(t)
     t = normalizeHeadingSpacing(t)
     t = normalizeListSpacing(t)
+    // 🎯 新增：将中文分节标题（学习目标/算法步骤/示例/边界/复杂度/对比/小结/自测等）
+    // 统一提升为标准 Markdown 二级标题，增强渲染结构性
+    t = normalizeChineseSectionHeadings(t)
     t = normalizeTableSpacing(t) // 🎯 新增：表格格式化
     t = normalizeDetachedBulletPoints(t) // 🔧 新增：处理分离式列表项目符号
     t = normalizeDanglingBackslashes(t)  // 🔧 修复：清理行尾孤立反斜杠
@@ -40,6 +43,8 @@ fun normalizeBasicMarkdownNoMath(text: String): String {
     t = normalizeListSpacing(t)
     t = normalizeTableSpacing(t)
     t = normalizeDetachedBulletPoints(t)
+    // 与完整管线保持一致：中文分节标题标准化（不触碰数学）
+    t = normalizeChineseSectionHeadings(t)
     t = normalizeDanglingBackslashes(t) // 保证行尾不再残留 "\"
     return t
 }
@@ -134,20 +139,19 @@ private fun preRepairCommonLatexErrors(md: String): String {
     }
 
     var out = lines.joinToString("\n")
-
     // 平衡 $$ 与 $ 定界（只在非围栏上下文整体做数量校正）
-    val doubleCount = Regex("\\$\\$").findAll(out).count()
-    if (doubleCount % 2 != 0) {
-        out += "$$"
-    }
-    // 单个 $ 的数量需要排除 $$ 已计数的部分
-    // 将 $$ 临时替换为占位符后再统计单 $ 数
-    val placeholder = "\u0001\u0001"
-    val tmp = out.replace("$$", placeholder)
-    val singleCount = Regex("\\$").findAll(tmp).count()
-    if (singleCount % 2 != 0) {
-        out += "$"
-    }
+    // val doubleCount = Regex("\\$\\$").findAll(out).count()
+    // if (doubleCount % 2 != 0) {
+    //     out += "$$"
+    // }
+    // // 单个 $ 的数量需要排除 $$ 已计数的部分
+    // // 将 $$ 临时替换为占位符后再统计单 $ 数
+    // val placeholder = "\u0001\u0001"
+    // val tmp = out.replace("$$", placeholder)
+    // val singleCount = Regex("\\$").findAll(tmp).count()
+    // if (singleCount % 2 != 0) {
+    //     out += "$"
+    // }
 
     return out
 }
@@ -228,6 +232,62 @@ fun dedupeConsecutiveContent(text: String): String {
 }
 
 /**
+ * 🎯 新增：结构性行去重
+ * - 对相邻的“标题行(# 开头)”与“列表项（-、*、+ 或有序 1. / 1) 开头）”做规范化比较，若文本一致则移除后者
+ * - 跳过代码围栏
+ * - 忽略中英文标点与多空格差异（弱化细小差别导致的重复）
+ */
+private fun dedupeStructuralLines(md: String): String {
+    if (md.isEmpty()) return md
+    val lines = md.split("\n")
+    val out = StringBuilder()
+    var fence = false
+    var lastStructNorm: String? = null
+
+    fun normalizeForCompare(s: String): String {
+        // 去掉 Markdown 结构前缀与多余空格/标点差异
+        var t = s.trim()
+        t = t.replace(Regex("^(#{1,6}\\s+)"), "")                 // 标题前缀
+             .replace(Regex("^([*+\\-]\\s+)"), "")               // 无序列表
+             .replace(Regex("^(\\d+\\s*[.)]\\s+)"), "")           // 有序列表
+             .replace(Regex("\\s+"), " ")                        // 多空格规整
+             .replace('：', ':')                                  // 标点归一
+             .replace('—', '-')                                   // 破折号归一
+        return t
+    }
+
+    lines.forEachIndexed { idx, raw ->
+        var s = raw
+        if (s.contains("```")) {
+            val c = "```".toRegex().findAll(s).count()
+            fence = (c % 2 == 1) xor fence
+            // 进入/离开围栏都重置结构记忆，避免跨域误判
+            lastStructNorm = null
+            out.append(s)
+        } else if (!fence) {
+            val isHeading = s.trimStart().startsWith("#")
+            val isList = Regex("^\\s*([*+\\-]|\\d+[.)])\\s+").containsMatchIn(s)
+            if (isHeading || isList) {
+                val cur = normalizeForCompare(s)
+                if (lastStructNorm != null && lastStructNorm!!.equals(cur, ignoreCase = true)) {
+                    // 跳过与上一条结构性行等价的重复
+                } else {
+                    out.append(s)
+                    lastStructNorm = cur
+                }
+            } else {
+                out.append(s)
+                lastStructNorm = null
+            }
+        } else {
+            out.append(s)
+        }
+        if (idx != lines.lastIndex) out.append('\n')
+    }
+    return out.toString()
+}
+
+/**
  * 统一的 AI 输出清理：行尾反斜杠 -> 去重（不改写数学）
  * 并补救围栏代码格式（缺少换行/缺少闭合 ```）
  */
@@ -235,7 +295,9 @@ fun sanitizeAiOutput(text: String): String {
     if (text.isEmpty()) return text
     val noBackslashes = normalizeDanglingBackslashes(text)
     val deduped = dedupeConsecutiveContent(noBackslashes)
-    return repairFencedCodeBlocks(deduped)
+    // 🎯 新增：结构行去重（标题/列表项的相邻重复）
+    val structuralCleaned = dedupeStructuralLines(deduped)
+    return repairFencedCodeBlocks(structuralCleaned)
 }
 
 /**
@@ -357,6 +419,7 @@ private fun normalizeTableSpacing(md: String): String {
     val result = mutableListOf<String>()
     var insideFence = false
     var i = 0
+    var loggedTableBlock = false
     
     // 标准Markdown表格的分隔行：| --- | :---: | ---: |
     val separatorRegex = Regex("^\\|?\\s*:?[-]{3,}:?\\s*(\\|\\s*:?[-]{3,}:?\\s*)+\\|?$")
@@ -412,12 +475,14 @@ private fun normalizeTableSpacing(md: String): String {
                     val tail = sepCandidate.substring(mr.range.last + 1).trim()
                     result.add(ensureRowPipes(matchedSep))
                     i = j + 1
+                    val tailAdded = tail.isNotEmpty()
                     // 若同一行在分隔后还拼接了数据（常见于 `|---|| 单元格... |`），作为第一条数据行写入
-                    if (tail.isNotEmpty()) {
+                    if (tailAdded) {
                         val firstData = if (tail.startsWith("|")) tail else "| $tail"
                         result.add(ensureRowPipes(firstData))
                     }
                     // 处理随后的数据行，直到遇到空行或无竖线行
+                    val dataStartIndex = i
                     while (i < rawLines.size) {
                         val data = rawLines[i]
                         if (data.trim().isEmpty()) {
@@ -461,6 +526,18 @@ internal fun normalizeMarkdownGlyphs(text: String): String {
         .replace("\u200C", "") // ZERO WIDTH NON-JOINER
         .replace("\u200D", "") // ZERO WIDTH JOINER
         .replace("\uFEFF", "") // ZERO WIDTH NO-BREAK SPACE (BOM)
+        // 额外：移除 Unicode 双向控制字符，防止段落被强制成 RTL 而“挤到右边”
+        .replace("\u200E", "") // LRM
+        .replace("\u200F", "") // RLM
+        .replace("\u202A", "") // LRE
+        .replace("\u202B", "") // RLE
+        .replace("\u202D", "") // LRO
+        .replace("\u202E", "") // RLO
+        .replace("\u202C", "") // PDF
+        .replace("\u2066", "") // LRI
+        .replace("\u2067", "") // RLI
+        .replace("\u2068", "") // FSI
+        .replace("\u2069", "") // PDI
         // 归一化各类“看起来是空格但不是空格”的字符：防止列表识别失败或被误判为代码块
         .replace('\u00A0', ' ') // NO-BREAK SPACE
         .replace('\u1680', ' ')
@@ -642,6 +719,9 @@ private fun autoWrapBareLatexAsMath(md: String): String {
 
     fun looksLikeHeavyMath(line: String): Boolean {
         if (line.contains('$')) return false
+        // 快速排除：包含代码/表格/标题/列表时，大概率不是纯数学公式
+        if (line.contains('`') || line.contains('|') || Regex("""^(\s*#{1,6}|\s*([*+\-]|\d+[.)]))\s+""").containsMatchIn(line)) return false
+
         val cmdCount = heavyCmd.findAll(line).count()
         val subSupHit = subSup.containsMatchIn(line)
         val opsCount = opsMany.findAll(line).count()
@@ -790,6 +870,63 @@ fun repairFencedCodeBlocks(md: String): String {
         lines.add("```")
     }
     return lines.joinToString("\n")
+}
+
+/**
+ * 🎯 新增：将常见中文分节标题提升为标准 Markdown 标题
+ * 目的：把 AI 输出中的“学习目标/算法步骤/示例/边界/复杂度/对比/小结/自测题/参考资料/常见陷阱”等
+ * 行首短语规范化为 '## ' 开头的二级标题，并在其前后补空行，增强结构清晰度。
+ * - 跳过 ``` 围栏代码
+ * - 若本行已是 # 开头则不处理
+ */
+private fun normalizeChineseSectionHeadings(md: String): String {
+    if (md.isEmpty()) return md
+    val keywords = listOf(
+        "学习目标", "目标", "算法步骤", "步骤", "示例", "示例输入", "示例输出",
+        "边界用例", "边界", "复杂度", "时间复杂度", "空间复杂度", "对比",
+        "小结", "总结", "自测", "自测题", "练习", "参考资料", "延伸阅读",
+        "常见陷阱", "注意", "提示"
+    )
+
+    fun shouldPromote(line: String): Boolean {
+        val t = line.trim()
+        if (t.isEmpty()) return false
+        if (t.startsWith("#")) return false
+        return keywords.any { kw ->
+            t.startsWith(kw) &&
+            (t.length == kw.length ||
+             t[kw.length].let { it == '：' || it == ':' || it == '-' || it == '—' || it.isWhitespace() })
+        }
+    }
+
+    val lines = md.split("\n")
+    val out = StringBuilder()
+    var fence = false
+    lines.forEachIndexed { idx, raw ->
+        var s = raw
+        if (s.contains("```")) {
+            val c = "```".toRegex().findAll(s).count()
+            fence = (c % 2 == 1) xor fence
+            out.append(s)
+        } else {
+            if (!fence && shouldPromote(s)) {
+                val t = s.trim().trimStart('—', '-', '：', ':').trim()
+                if (out.isNotEmpty()) {
+                    val prevIsNewline = out.last() == '\n'
+                    if (!prevIsNewline) out.append('\n')
+                }
+                out.append("## ").append(t)
+            } else {
+                out.append(s)
+            }
+        }
+        if (idx != lines.lastIndex) out.append('\n')
+    }
+
+    var text = out.toString()
+    text = text.replace(Regex("(?m)([^\\n])\\n(##\\s+)"), "$1\n\n$2")
+    text = text.replace(Regex("(?m)(##\\s+.*)\\n([^\\n])"), "$1\n\n$2")
+    return text
 }
 
 /**

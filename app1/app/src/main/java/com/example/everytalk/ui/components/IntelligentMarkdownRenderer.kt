@@ -87,12 +87,45 @@ fun IntelligentMarkdownRenderer(
                 }
                 
                 is MarkdownPart.Text -> {
-                    // 使用标准 Markdown 渲染，保持一致的显示效果
-                    MarkdownText(
-                        markdown = normalizeBasicMarkdown(part.content),
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    // 结构化卡片优先渲染：Commands / QnA / Risks（移动端友好）
+                    val trimmed = part.content.trimStart()
+                    when {
+                        trimmed.startsWith("Commands:", ignoreCase = true) -> {
+                            val body = trimmed.removePrefix("Commands:").trimStart()
+                            CommandListCard(
+                                content = body,
+                                modifier = Modifier.fillMaxWidth(),
+                                title = "Commands"
+                            )
+                        }
+                        trimmed.startsWith("QnA:", ignoreCase = true) -> {
+                            val body = trimmed.removePrefix("QnA:").trimStart()
+                            QnAListCard(
+                                content = body,
+                                modifier = Modifier.fillMaxWidth(),
+                                title = "QnA"
+                            )
+                        }
+                        trimmed.startsWith("Risks:", ignoreCase = true) ||
+                        trimmed.startsWith("Risk:", ignoreCase = true) -> {
+                            val body = trimmed.removePrefix("Risks:")
+                                .ifEmpty { trimmed.removePrefix("Risk:") }
+                                .trimStart()
+                            RiskAlert(
+                                content = body,
+                                modifier = Modifier.fillMaxWidth(),
+                                title = "Risks"
+                            )
+                        }
+                        else -> {
+                            // 默认：使用标准 Markdown 渲染，保持一致的显示效果
+                            MarkdownText(
+                                markdown = normalizeBasicMarkdown(part.content),
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
                 }
                 
                 is MarkdownPart.HtmlContent -> {
@@ -301,31 +334,37 @@ private fun CellInlineMarkdown(
 ) {
     val normalized = normalizeMarkdownGlyphs(raw)
     val parts = splitByBackticks(normalized)
-    Row(
+    
+    androidx.compose.foundation.layout.FlowRow(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        verticalArrangement = Arrangement.Center
     ) {
         parts.forEach { seg ->
             if (seg.isCode) {
-                androidx.compose.material3.Text(
-                    text = seg.text,
-                    style = baseStyle.copy(
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        fontWeight = androidx.compose.ui.text.font.FontWeight.Normal
-                    ),
-                    modifier = Modifier
-                        .background(
-                            color = MaterialTheme.chatColors.codeBlockBackground,
-                            shape = androidx.compose.foundation.shape.RoundedCornerShape(3.dp)
-                        )
-                        .padding(horizontal = 4.dp, vertical = 1.dp)
-                )
+                // 内联代码：使用自定义样式保持内联
+                androidx.compose.material3.Surface(
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp),
+                    color = MaterialTheme.chatColors.codeBlockBackground,
+                    modifier = Modifier.wrapContentSize()
+                ) {
+                    androidx.compose.material3.Text(
+                        text = seg.text,
+                        style = baseStyle.copy(
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            color = baseStyle.color
+                        ),
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
             } else {
-                MarkdownText(
-                    markdown = normalizeBasicMarkdownNoMath(seg.text),
-                    style = baseStyle.copy(platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)),
-                    modifier = Modifier.weight(1f, fill = false)
-                )
+                if (seg.text.isNotBlank()) {
+                    MarkdownText(
+                        markdown = normalizeBasicMarkdownNoMath(seg.text),
+                        style = baseStyle.copy(platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false)),
+                        modifier = Modifier.wrapContentWidth()
+                    )
+                }
             }
         }
     }

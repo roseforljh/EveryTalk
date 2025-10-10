@@ -220,7 +220,8 @@ fun ChatScreen(
 
 
     val screenWidth = configuration.screenWidthDp.dp
-    val bubbleMaxWidth = remember(screenWidth) { screenWidth.coerceAtMost(600.dp) }
+    // 放宽列表传入的上限为整屏，由子项根据角色再做 60%/80% 约束
+    val bubbleMaxWidth = remember(screenWidth) { screenWidth }
 
 
 

@@ -289,12 +289,20 @@ class MessageProcessor {
                                 else -> "" // Should not happen
                             }
                             
-                            // ContentFinal事件直接替换整个内容（已经过完整修复）
+                            // ContentFinal事件处理：只有在内容非空时才替换，避免清空已有内容
                             if (event is AppStreamEvent.ContentFinal) {
-                                currentTextBuilder.set(StringBuilder(eventText))
-                                processedChunks.clear()
-                                logger.debug("Applied final repaired content from backend")
-                                return@withLock ProcessedEventResult.ContentUpdated(eventText)
+                                if (eventText.isNotEmpty()) {
+                                    // 只有当ContentFinal包含实际内容时才替换
+                                    currentTextBuilder.set(StringBuilder(eventText))
+                                    processedChunks.clear()
+                                    logger.debug("Applied final repaired content from backend: ${eventText.length} chars")
+                                    return@withLock ProcessedEventResult.ContentUpdated(eventText)
+                                } else {
+                                    // 如果ContentFinal是空的，保持现有内容不变
+                                    val existingContent = currentTextBuilder.get().toString()
+                                    logger.debug("Received empty ContentFinal, keeping existing content: ${existingContent.length} chars")
+                                    return@withLock ProcessedEventResult.ContentUpdated(existingContent)
+                                }
                             }
 
                             if (eventText.isNotEmpty() && !isEffectivelyEmpty(eventText)) {
@@ -478,8 +486,13 @@ class MessageProcessor {
                             }
                             ProcessedEventResult.ReasoningComplete
                         }
-                        is AppStreamEvent.WebSearchStatus -> {
-                            ProcessedEventResult.StatusUpdate(event.stage)
+                        is AppStreamEvent.WebSearchStatus, is AppStreamEvent.StatusUpdate -> {
+                            val stage = when(event) {
+                                is AppStreamEvent.WebSearchStatus -> event.stage
+                                is AppStreamEvent.StatusUpdate -> event.stage
+                                else -> ""
+                            }
+                            ProcessedEventResult.StatusUpdate(stage)
                         }
                         is AppStreamEvent.WebSearchResults -> {
                             ProcessedEventResult.WebSearchResults(event.results)

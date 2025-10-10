@@ -16,23 +16,25 @@ class MarkdownBlockManager {
     private var incompleteBlockContent = StringBuilder()
 
     val blocks = mutableStateListOf<MarkdownPart>()
-
+ 
     fun processEvent(event: AppStreamEvent.Content) {
         val eventBlockType = event.block_type ?: "text"
         
         if (eventBlockType != currentBlockType) {
-            // Finalize the previous block before starting a new one
+            // 结束旧块，开启新块（后端现为“累计全文”语义）
             finalizeCurrentBlock()
             
-            // Start a new block
             currentBlockType = eventBlockType
             currentBlockId = UUID.randomUUID().toString()
+            // 新块直接以当前事件文本为“完整内容”
+            incompleteBlockContent.clear()
             incompleteBlockContent.append(event.text)
             
             val newBlock = createNewBlock(currentBlockId!!, currentBlockType!!, incompleteBlockContent.toString())
             blocks.add(newBlock)
         } else {
-            // Continue with the current block
+            // 同一块类型下：用本次事件提供的“完整内容”覆盖先前累计，避免重复累加
+            incompleteBlockContent.setLength(0)
             incompleteBlockContent.append(event.text)
             val updatedBlock = createNewBlock(currentBlockId!!, currentBlockType!!, incompleteBlockContent.toString())
             

@@ -112,6 +112,10 @@ object ApiClient {
                     }
                     AppStreamEvent.WebSearchResults(results)
                 }
+                "status_update" -> {
+                    val stage = jsonObject["stage"]?.jsonPrimitive?.content ?: ""
+                    AppStreamEvent.StatusUpdate(stage)
+                }
                 "tool_call" -> {
                     val id = jsonObject["id"]?.jsonPrimitive?.content ?: ""
                     val name = jsonObject["name"]?.jsonPrimitive?.content ?: ""
@@ -166,6 +170,7 @@ object ApiClient {
                     subclass(AppStreamEvent.StreamEnd::class)
                     subclass(AppStreamEvent.WebSearchStatus::class)
                     subclass(AppStreamEvent.WebSearchResults::class)
+                    subclass(AppStreamEvent.StatusUpdate::class)
                     subclass(AppStreamEvent.ToolCall::class)
                     subclass(AppStreamEvent.Error::class)
                     subclass(AppStreamEvent.Finish::class)
@@ -432,6 +437,36 @@ object ApiClient {
                                     val appEvent = parseBackendStreamEvent(chunk)
                                     if (appEvent != null) {
                                         eventCount++
+                                        // 详细日志轰炸：记录事件类型与文本长度/预览
+                                        when (appEvent) {
+                                            is AppStreamEvent.Content -> {
+                                                android.util.Log.i(
+                                                    "ApiClientEvent",
+                                                    "Content len=${appEvent.text.length} preview=${appEvent.text.take(120)}"
+                                                )
+                                            }
+                                            is AppStreamEvent.ContentFinal -> {
+                                                android.util.Log.i(
+                                                    "ApiClientEvent",
+                                                    "ContentFinal len=${appEvent.text.length} preview=${appEvent.text.take(120)}"
+                                                )
+                                            }
+                                            is AppStreamEvent.Text -> {
+                                                android.util.Log.i(
+                                                    "ApiClientEvent",
+                                                    "Text len=${appEvent.text.length} preview=${appEvent.text.take(120)}"
+                                                )
+                                            }
+                                            is AppStreamEvent.Finish -> {
+                                                android.util.Log.w("ApiClientEvent", "Finish reason=${appEvent.reason}")
+                                            }
+                                            is AppStreamEvent.Error -> {
+                                                android.util.Log.e("ApiClientEvent", "Error upstreamStatus=${appEvent.upstreamStatus} msg=${appEvent.message}")
+                                            }
+                                            else -> {
+                                                android.util.Log.d("ApiClientEvent", "Other event=${appEvent.javaClass.simpleName}")
+                                            }
+                                        }
                                         if (eventCount <= 5) {
                                             android.util.Log.d("ApiClient", "解析到流事件 #$eventCount: ${appEvent.javaClass.simpleName}")
                                         } else if (eventCount % 10 == 0) {

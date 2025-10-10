@@ -60,6 +60,7 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import coil3.compose.AsyncImage
 import com.example.everytalk.data.DataClass.Message
+import com.example.everytalk.data.DataClass.Sender
 import com.example.everytalk.models.SelectedMediaItem
 import com.example.everytalk.ui.theme.ChatDimensions
 import com.example.everytalk.ui.theme.chatColors
@@ -97,6 +98,11 @@ internal fun UserOrErrorMessageContent(
     val haptic = LocalHapticFeedback.current
     var globalPosition by remember { mutableStateOf(Offset.Zero) }
 
+    // 基于发送者动态计算最大宽度：用户60%，AI80%
+    val screenDp = LocalConfiguration.current.screenWidthDp.dp
+    val roleMax = if (message.sender == Sender.User) screenDp * 0.6f else screenDp * 0.8f
+    val appliedMax = roleMax.coerceAtMost(maxWidth)
+
     Box(
         modifier = modifier
             .wrapContentWidth()
@@ -114,7 +120,7 @@ internal fun UserOrErrorMessageContent(
             tonalElevation = if (isError) 0.dp else 1.dp,
             modifier = Modifier
                 .wrapContentWidth()                 // 以内容宽度为准
-                .widthIn(max = maxWidth)            // 同时限制最大宽度
+                .widthIn(max = appliedMax)          // 根据角色限制最大宽度（用户60%/AI80%）
                 .onGloballyPositioned { coordinates ->
                     // 存储组件在屏幕中的全局位置
                     globalPosition = coordinates.localToRoot(Offset.Zero)
@@ -176,6 +182,11 @@ fun AttachmentsContent(
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
 
+    // 附件区域也跟随相同的最大宽度限制
+    val screenDp = LocalConfiguration.current.screenWidthDp.dp
+    val roleMax = if (message.sender == Sender.User) screenDp * 0.6f else screenDp * 0.8f
+    val attachmentsAppliedMax = roleMax.coerceAtMost(maxWidth)
+
     Box {
         Column(
             modifier = Modifier.padding(top = 8.dp),
@@ -188,7 +199,7 @@ fun AttachmentsContent(
                         ProportionalAsyncImage(
                             model = attachment.uri,
                             contentDescription = "Image attachment",
-                            maxWidth = maxWidth * 0.8f,
+                            maxWidth = attachmentsAppliedMax * 0.8f,
                             isAiGenerated = isAiGenerated,
                             onSuccess = { _ -> onImageLoaded() },
                             modifier = Modifier
@@ -216,7 +227,7 @@ fun AttachmentsContent(
                         ProportionalAsyncImage(
                             model = attachment.bitmap,
                             contentDescription = "Image attachment",
-                            maxWidth = maxWidth * 0.8f,
+                            maxWidth = attachmentsAppliedMax * 0.8f,
                             isAiGenerated = isAiGenerated,
                             onSuccess = { _ -> onImageLoaded() },
                             modifier = Modifier
@@ -241,7 +252,7 @@ fun AttachmentsContent(
                         var itemGlobalPosition by remember { mutableStateOf(Offset.Zero) }
                         Row(
                             modifier = Modifier
-                                .widthIn(max = maxWidth)
+                                .widthIn(max = attachmentsAppliedMax)
                                 .padding(vertical = 4.dp)
                                 .background(bubbleColor, RoundedCornerShape(12.dp))
                                 .clip(RoundedCornerShape(12.dp))
@@ -290,7 +301,7 @@ fun AttachmentsContent(
                         var itemGlobalPosition by remember { mutableStateOf(Offset.Zero) }
                         Row(
                             modifier = Modifier
-                                .widthIn(max = maxWidth)
+                                .widthIn(max = attachmentsAppliedMax)
                                 .padding(vertical = 4.dp)
                                 .background(bubbleColor, RoundedCornerShape(12.dp))
                                 .clip(RoundedCornerShape(12.dp))

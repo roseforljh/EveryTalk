@@ -21,6 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -61,9 +62,31 @@ internal fun ReasoningToggleAndContent(
     var showReasoningDialog by remember(currentMessageId) { mutableStateOf(false) }
 
     var visibilityNotified by remember(currentMessageId) { mutableStateOf(false) }
-    // 修改显示条件：当有推理内容且正在流式传输时显示思考框，但当AI开始输出正式内容时应该收起
-    // 这样可以在<think>标签内容正在输出时实时显示，但在开始输出正式内容时自动收起变成小黑点
-    val showInlineStreamingBox = isReasoningStreaming && !messageIsError && !isReasoningComplete && !mainContentHasStarted
+    
+    // 添加一个状态来追踪思考框是否应该保持显示一段时间
+    var keepBubbleVisible by remember(currentMessageId) { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
+    
+    // 当推理内容存在且流式传输时，设置保持显示状态
+    LaunchedEffect(isReasoningStreaming, displayedReasoningText) {
+        if (isReasoningStreaming && displayedReasoningText.isNotBlank()) {
+            keepBubbleVisible = true
+        }
+    }
+    
+    // 当内容开始输出时，延迟隐藏思考框
+    LaunchedEffect(mainContentHasStarted, isReasoningComplete) {
+        if ((mainContentHasStarted || isReasoningComplete) && keepBubbleVisible) {
+            // 延迟1.5秒后再隐藏思考框，给用户足够时间看到推理内容
+            delay(1500)
+            keepBubbleVisible = false
+        }
+    }
+    
+    // 修改显示条件：考虑延迟隐藏的状态
+    val showInlineStreamingBox = (isReasoningStreaming || keepBubbleVisible) && 
+                                 !messageIsError && 
+                                 displayedReasoningText.isNotBlank()
 
     val showDotsAnimationOnToggle = false
 

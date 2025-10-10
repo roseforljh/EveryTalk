@@ -12,11 +12,11 @@ sealed class AppStreamEvent {
 
     @Serializable
     @SerialName("content")
-    data class Content(val text: String, val output_type: String? = null, val block_type: String? = null) : AppStreamEvent()
+    data class Content(val text: String, val output_type: String? = null, val block_type: String? = null, val timestamp: String? = null) : AppStreamEvent()
     
     @Serializable
     @SerialName("content_final")
-    data class ContentFinal(val text: String, val output_type: String? = null, val block_type: String? = null) : AppStreamEvent()
+    data class ContentFinal(val text: String, val output_type: String? = null, val block_type: String? = null, val timestamp: String? = null) : AppStreamEvent()
 
     @Serializable
     @SerialName("reasoning")
@@ -37,6 +37,10 @@ sealed class AppStreamEvent {
     @Serializable
     @SerialName("web_search_results")
     data class WebSearchResults(val results: List<WebSearchResult>) : AppStreamEvent()
+
+    @Serializable
+    @SerialName("status_update")
+    data class StatusUpdate(val stage: String) : AppStreamEvent()
 
     @Serializable
     @SerialName("tool_call")

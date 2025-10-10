@@ -353,15 +353,39 @@ class ApiHandler(
                                 finalizedMessage.parts.forEachIndexed { index, part ->
                                     logger.debug("Part $index: ${part::class.simpleName} - ${part.toString().take(50)}...")
                                 }
+
+                                // 🎯 合并策略：以 BlockManager 的丰富块为准；finalize 结果仅作为补充
+                                val bmBlocks = blockManagerMap[aiMessageId]?.blocks?.toList().orEmpty()
+                                val chosenParts = when {
+                                    bmBlocks.isNotEmpty() && bmBlocks.size >= finalizedMessage.parts.size -> bmBlocks
+                                    else -> finalizedMessage.parts
+                                }
                                 
-                                // 🎯 最终修复：流结束时，用 finalizeMessageProcessing 的结果覆盖 blockManager 的临时结果
+                                // 🎯 文本兜底：如 text 为空则从 chosenParts 的 Text 片段拼接
+                                val fallbackText = when {
+                                    finalizedMessage.text.isNotBlank() -> finalizedMessage.text
+                                    else -> chosenParts
+                                        .filterIsInstance<com.example.everytalk.ui.components.MarkdownPart.Text>()
+                                        .joinToString(separator = "") { it.content }
+                                }
+                                
+                                // 🎯 最终修复：合并后的消息，确保 contentStarted=true
                                 val fullyUpdatedMessage = finalizedMessage.copy(
-                                    parts = finalizedMessage.parts, // 明确使用最终解析的 parts
+                                    text = fallbackText,
+                                    parts = chosenParts,
                                     contentStarted = true
                                 )
-                                logger.debug("Final message parts count: ${fullyUpdatedMessage.parts.size}")
+                                logger.debug("Final message parts count: ${fullyUpdatedMessage.parts.size}, textLen=${fullyUpdatedMessage.text.length}")
                                 messageList[messageIndex] = fullyUpdatedMessage
-                                logger.debug("Message updated in list")
+                                // 🎯 通知“完整文本已更新”，确保上游依赖 text 的渲染/粘贴/复制/持久化链路被触发
+                                try {
+                                    if (fullyUpdatedMessage.text.isNotBlank()) {
+                                        onAiMessageFullTextChanged(aiMessageId, fullyUpdatedMessage.text)
+                                    }
+                                } catch (e: Exception) {
+                                    logger.warn("onAiMessageFullTextChanged callback failed: ${e.message}")
+                                }
+                                logger.debug("Message updated in list and fullText callback fired if non-blank")
                             } else {
                                 logger.error("Message with id $aiMessageId not found in messageList!")
                             }
@@ -461,10 +485,28 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                         )
                     }
                 }
-                is AppStreamEvent.Text, is AppStreamEvent.ContentFinal -> {
+                is AppStreamEvent.Text -> {
                     if (processedResult is com.example.everytalk.util.messageprocessor.ProcessedEventResult.ContentUpdated) {
                         updatedMessage = updatedMessage.copy(
                             text = processedResult.content,
+                            contentStarted = true
+                        )
+                    }
+                }
+                is AppStreamEvent.ContentFinal -> {
+                    // 关键修复：最终内容也走块处理，确保 parts 不丢失且 contentStarted 为 true
+                    val currentBlockManager = blockManagerMap.getOrPut(aiMessageId) { MarkdownBlockManager() }
+                    currentBlockManager.processEvent(
+                        AppStreamEvent.Content(
+                            text = (appEvent as AppStreamEvent.ContentFinal).text,
+                            output_type = appEvent.output_type,
+                            block_type = appEvent.block_type
+                        )
+                    )
+                    if (processedResult is com.example.everytalk.util.messageprocessor.ProcessedEventResult.ContentUpdated) {
+                        updatedMessage = updatedMessage.copy(
+                            text = processedResult.content,
+                            parts = currentBlockManager.blocks.toList(),
                             contentStarted = true
                         )
                     }
@@ -496,7 +538,32 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     finalizedMessage.parts.forEachIndexed { index, part ->
                         logger.debug("Final Part $index: ${part::class.simpleName} - ${part.toString().take(50)}...")
                     }
-                    updatedMessage = finalizedMessage
+                    // 🎯 以 BlockManager 的块为主，finalize 结果为辅
+                    val bmBlocks = blockManagerMap[aiMessageId]?.blocks?.toList().orEmpty()
+                    val chosenParts = when {
+                        bmBlocks.isNotEmpty() && bmBlocks.size >= finalizedMessage.parts.size -> bmBlocks
+                        else -> finalizedMessage.parts
+                    }
+                    // 🎯 文本兜底：保证最终消息有可显示文本
+                    val fallbackText = when {
+                        finalizedMessage.text.isNotBlank() -> finalizedMessage.text
+                        else -> chosenParts
+                            .filterIsInstance<com.example.everytalk.ui.components.MarkdownPart.Text>()
+                            .joinToString(separator = "") { it.content }
+                    }
+                    updatedMessage = finalizedMessage.copy(
+                        text = fallbackText,
+                        parts = chosenParts,
+                        contentStarted = true
+                    )
+                    // 🎯 回调通知最终文本，避免“依赖 text 的视图”空白
+                    try {
+                        if (fallbackText.isNotBlank()) {
+                            onAiMessageFullTextChanged(aiMessageId, fallbackText)
+                        }
+                    } catch (e: Exception) {
+                        logger.warn("onAiMessageFullTextChanged in Finish handler failed: ${e.message}")
+                    }
                 }
                 is AppStreamEvent.Error -> {
                     updateMessageWithError(aiMessageId, IOException(appEvent.message), isImageGeneration)

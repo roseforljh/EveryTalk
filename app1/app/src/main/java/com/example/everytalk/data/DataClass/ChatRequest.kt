@@ -51,10 +51,10 @@ data class ChatRequest(
     @SerialName("channel")
     val channel: String,
 
-    @SerialName("api_address")
+    @SerialName("apiAddress")
     val apiAddress: String?,
 
-    @SerialName("api_key")
+    @SerialName("apiKey")
     val apiKey: String,
 
     @SerialName("model")
@@ -66,24 +66,24 @@ data class ChatRequest(
     @SerialName("use_web_search")
     val useWebSearch: Boolean? = null,
 
-    @SerialName("generation_config")
+    @SerialName("generationConfig")
     val generationConfig: GenerationConfig? = null,
 
     @SerialName("tools")
     val tools: List<Map<String, @Contextual Any>>? = null,
 
-    @SerialName("tool_choice")
+    @SerialName("toolChoice")
     val toolChoice: @Contextual Any? = null,
 
-    @SerialName("qwen_enable_search")
+    @SerialName("qwenEnableSearch")
     val qwenEnableSearch: Boolean? = null,
 
-    @SerialName("custom_model_parameters")
+    @SerialName("customModelParameters")
     val customModelParameters: Map<String, @Contextual Any>? = null,
 
-    @SerialName("custom_extra_body")
+    @SerialName("customExtraBody")
     val customExtraBody: Map<String, @Contextual Any>? = null,
 
-    @SerialName("image_gen_request")
+    @SerialName("imageGenRequest")
     val imageGenRequest: ImageGenRequest? = null
 )

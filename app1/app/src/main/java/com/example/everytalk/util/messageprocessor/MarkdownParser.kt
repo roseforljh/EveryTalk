@@ -77,124 +77,14 @@ private fun isTableContent(content: String): Boolean {
 }
 
 /**
- * 🎯 数学内容智能预处理 - 彻底清理LaTeX语法
+ * 🎯 数学内容预处理（安全直通版）
+ * 根因修复：
+ * 先前实现会无差别“清空/替换” \commands、$ 定界、上下标等，且未跳过 ``` 代码围栏，
+ * 导致含代码块或命令示例的长文在最终阶段被彻底改写，结构混乱。
+ * 这里改为“零改写直通”，具体渲染由后续管线与渲染组件处理（前端已有数学/代码/表格分流）。
  */
 private fun preprocessMarkdownForMath(markdown: String): String {
-    var content = markdown
-    
-    // 1. 彻底清理LaTeX语法,转换为Unicode
-    // 处理分数 \frac{a}{b} -> (a)/(b)
-    content = content.replace(Regex("\\\\frac\\{([^}]+)\\}\\{([^}]+)\\}"), "($1)/($2)")
-    
-    // 处理根号 \sqrt{x} -> √(x)
-    content = content.replace(Regex("\\\\sqrt\\{([^}]+)\\}"), "√($1)")
-    content = content.replace(Regex("\\\\sqrt\\s+(\\d+\\.?\\d*)"), "√$1")
-    
-    // 处理上标 ^{n} -> ⁿ
-    val superscriptMap = mapOf(
-        '0' to '⁰', '1' to '¹', '2' to '²', '3' to '³', '4' to '⁴',
-        '5' to '⁵', '6' to '⁶', '7' to '⁷', '8' to '⁸', '9' to '⁹',
-        '+' to '⁺', '-' to '⁻', '=' to '⁼', '(' to '⁽', ')' to '⁾',
-        'n' to 'ⁿ', 'i' to 'ⁱ', 'x' to 'ˣ', 'y' to 'ʸ'
-    )
-    
-    content = content.replace(Regex("\\^(\\d)")) { match ->
-        superscriptMap[match.groupValues[1][0]]?.toString() ?: match.value
-    }
-    
-    content = content.replace(Regex("\\^\\{([^}]+)\\}")) { match ->
-        match.groupValues[1].map { char -> superscriptMap[char]?.toString() ?: char.toString() }.joinToString("")
-    }
-    
-    // 处理下标 _{n} -> ₙ  
-    val subscriptMap = mapOf(
-        '0' to '₀', '1' to '₁', '2' to '₂', '3' to '₃', '4' to '₄',
-        '5' to '₅', '6' to '₆', '7' to '₇', '8' to '₈', '9' to '₉',
-        '+' to '₊', '-' to '₋', '=' to '₌', '(' to '₍', ')' to '₎',
-        'a' to 'ₐ', 'e' to 'ₑ', 'h' to 'ₕ', 'i' to 'ᵢ', 'j' to 'ⱼ',
-        'k' to 'ₖ', 'l' to 'ₗ', 'm' to 'ₘ', 'n' to 'ₙ', 'o' to 'ₒ',
-        'p' to 'ₚ', 'r' to 'ᵣ', 's' to 'ₛ', 't' to 'ₜ', 'u' to 'ᵤ',
-        'v' to 'ᵥ', 'x' to 'ₓ'
-    )
-    
-    content = content.replace(Regex("_(\\d)")) { match ->
-        subscriptMap[match.groupValues[1][0]]?.toString() ?: match.value
-    }
-    
-    content = content.replace(Regex("_\\{([^}]+)\\}")) { match ->
-        match.groupValues[1].map { char -> subscriptMap[char]?.toString() ?: char.toString() }.joinToString("")
-    }
-    
-    // 2. 处理常见数学运算符
-    content = content.replace("\\pm", "±")
-    content = content.replace("\\mp", "∓")  
-    content = content.replace("\\times", "×")
-    content = content.replace("\\div", "÷")
-    content = content.replace("\\cdot", "·")
-    
-    // 3. 处理比较运算符
-    content = content.replace("\\leq", "≤")
-    content = content.replace("\\geq", "≥")
-    content = content.replace("\\neq", "≠")
-    content = content.replace("\\approx", "≈")
-    content = content.replace("\\equiv", "≡")
-    
-    // 4. 处理希腊字母
-    val greekLetters = mapOf(
-        "\\alpha" to "α", "\\beta" to "β", "\\gamma" to "γ", "\\delta" to "δ",
-        "\\epsilon" to "ε", "\\zeta" to "ζ", "\\eta" to "η", "\\theta" to "θ",
-        "\\iota" to "ι", "\\kappa" to "κ", "\\lambda" to "λ", "\\mu" to "μ",
-        "\\nu" to "ν", "\\xi" to "ξ", "\\pi" to "π", "\\rho" to "ρ",
-        "\\sigma" to "σ", "\\tau" to "τ", "\\upsilon" to "υ", "\\phi" to "φ",
-        "\\chi" to "χ", "\\psi" to "ψ", "\\omega" to "ω",
-        "\\Alpha" to "Α", "\\Beta" to "Β", "\\Gamma" to "Γ", "\\Delta" to "Δ",
-        "\\Epsilon" to "Ε", "\\Zeta" to "Ζ", "\\Eta" to "Η", "\\Theta" to "Θ",
-        "\\Iota" to "Ι", "\\Kappa" to "Κ", "\\Lambda" to "Λ", "\\Mu" to "Μ",
-        "\\Nu" to "Ν", "\\Xi" to "Ξ", "\\Pi" to "Π", "\\Rho" to "Ρ",
-        "\\Sigma" to "Σ", "\\Tau" to "Τ", "\\Upsilon" to "Υ", "\\Phi" to "Φ",
-        "\\Chi" to "Χ", "\\Psi" to "Ψ", "\\Omega" to "Ω"
-    )
-    
-    greekLetters.forEach { (latex, unicode) ->
-        content = content.replace(latex, unicode)
-    }
-    
-    // 5. 处理特殊符号
-    content = content.replace("\\partial", "∂")
-    content = content.replace("\\nabla", "∇")
-    content = content.replace("\\sum", "∑")
-    content = content.replace("\\prod", "∏")
-    content = content.replace("\\int", "∫")
-    content = content.replace("\\oint", "∮")
-    content = content.replace("\\infty", "∞")
-    content = content.replace("\\forall", "∀")
-    content = content.replace("\\exists", "∃")
-    content = content.replace("\\in", "∈")
-    content = content.replace("\\notin", "∉")
-    content = content.replace("\\subset", "⊂")
-    content = content.replace("\\supset", "⊃")
-    content = content.replace("\\cup", "∪")
-    content = content.replace("\\cap", "∩")
-    content = content.replace("\\emptyset", "∅")
-    
-    // 6. 处理省略号
-    content = content.replace("\\ldots", "…")
-    content = content.replace("\\cdots", "⋯")
-    content = content.replace("\\vdots", "⋮")
-    content = content.replace("\\ddots", "⋱")
-    
-    // 7. 清理所有剩余的LaTeX语法
-    content = content.replace(Regex("\\\\[a-zA-Z]+\\{[^}]*\\}"), "") // 清理 \command{content}
-    content = content.replace(Regex("\\\\[a-zA-Z]+"), "") // 清理 \command
-    content = content.replace(Regex("\\$+"), "") // 清理 $ 符号
-    
-    // 8. 清理多余空格
-    content = content.replace(Regex("\\s+"), " ").trim()
-    
-    android.util.Log.d("MarkdownParser", "LaTeX清理前: ${markdown.take(100)}...")
-    android.util.Log.d("MarkdownParser", "LaTeX清理后: ${content.take(100)}...")
-    
-    return content
+    return markdown
 }
 
 /**

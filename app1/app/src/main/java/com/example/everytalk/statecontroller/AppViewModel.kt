@@ -146,7 +146,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 stateHolder,
                 viewModelScope,
                 historyManager,
-                onAiMessageFullTextChanged = { _, _ -> },
+                onAiMessageFullTextChanged = ::onAiMessageFullTextChanged,
                 ::triggerScrollToBottom
         )
     }
@@ -470,52 +470,68 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
 
      private fun createAiMessageItems(
              message: Message,
-            isApiCalling: Boolean,
-            currentStreamingAiMessageId: String?
-    ): List<ChatListItem> {
-        val showLoading =
-                isApiCalling &&
-                        message.id == currentStreamingAiMessageId &&
-                        message.text.isBlank() &&
-                        message.reasoning.isNullOrBlank() &&
-                        !message.contentStarted
-
-        if (showLoading) {
-            return listOf(ChatListItem.LoadingIndicator(message.id))
-        }
-
-        val reasoningItem =
-                if (!message.reasoning.isNullOrBlank()) {
-                    listOf(ChatListItem.AiMessageReasoning(message))
-                } else {
-                    emptyList()
-                }
-
-        val hasReasoning = reasoningItem.isNotEmpty()
-        
-        // 简化处理：直接使用消息文本，不进行复杂的 Markdown 解析
-        val messageItem = if (message.text.isNotBlank() || !message.imageUrls.isNullOrEmpty()) {
-            when (message.outputType) {
-                "math" -> listOf(ChatListItem.AiMessageMath(message.id, message.text, hasReasoning))
-                "code" -> listOf(ChatListItem.AiMessageCode(message.id, message.text, hasReasoning))
-                // "json" an so on
-                else -> listOf(ChatListItem.AiMessage(message.id, message.text, hasReasoning))
-            }
-        } else {
-            emptyList()
-        }
-
-        val footerItem =
-                if (!message.webSearchResults.isNullOrEmpty() &&
-                                !(isApiCalling && message.id == currentStreamingAiMessageId)
-                ) {
-                    listOf(ChatListItem.AiMessageFooter(message))
-                } else {
-                    emptyList()
-                }
-
-        return reasoningItem + messageItem + footerItem
-    }
+             isApiCalling: Boolean,
+             currentStreamingAiMessageId: String?
+     ): List<ChatListItem> {
+         // 1) 首先判断“连接中”占位
+         val showLoading =
+             isApiCalling &&
+             message.id == currentStreamingAiMessageId &&
+             message.text.isBlank() &&
+             message.reasoning.isNullOrBlank() &&
+             !message.contentStarted
+         if (showLoading) {
+             return listOf(ChatListItem.LoadingIndicator(message.id))
+         }
+ 
+         // 2) 思考内容项（可与主内容并存）
+         val reasoningItem =
+             if (!message.reasoning.isNullOrBlank()) {
+                 listOf(ChatListItem.AiMessageReasoning(message))
+             } else {
+                 emptyList()
+             }
+         val hasReasoning = reasoningItem.isNotEmpty()
+ 
+         // 3) 主内容项
+         // 关键修复：
+         // - 流式过程中，可能先将 contentStarted=true，但 text 仍是空（例如首块为空或被预处理跳过）。
+         //   这会导致既不满足“Loading占位”（因为 contentStarted=true），也不满足“有文本显示”，从而完全不渲染AI气泡。
+         // - 这里放宽规则：当处于流式且 currentStreamingAiMessageId 命中，且 contentStarted=true 时，仍渲染一个空文本气泡，
+         //   以便后续增量文本到来时即时可见。
+         val shouldShowPlaceholderWhileStreaming =
+             isApiCalling &&
+             message.id == currentStreamingAiMessageId &&
+             message.contentStarted &&
+             message.text.isBlank()
+ 
+         val messageItem =
+             if (message.text.isNotBlank() || !message.imageUrls.isNullOrEmpty() || shouldShowPlaceholderWhileStreaming) {
+                 val displayText = message.text // 允许为空，占位也渲染
+                 when (message.outputType) {
+                     "math" -> listOf(ChatListItem.AiMessageMath(message.id, displayText, hasReasoning))
+                     "code" -> listOf(ChatListItem.AiMessageCode(message.id, displayText, hasReasoning))
+                     else -> listOf(ChatListItem.AiMessage(message.id, displayText, hasReasoning))
+                 }
+             } else if (hasReasoning && message.contentStarted && !isApiCalling) {
+                 // 仅推理内容的最终态也给出一个空文本气泡以承载“推理折叠开关”
+                 listOf(ChatListItem.AiMessage(message.id, "", hasReasoning))
+             } else {
+                 emptyList()
+             }
+ 
+         // 4) 底部“来源/搜索结果”按钮
+         val footerItem =
+             if (!message.webSearchResults.isNullOrEmpty() &&
+                 !(isApiCalling && message.id == currentStreamingAiMessageId)
+             ) {
+                 listOf(ChatListItem.AiMessageFooter(message))
+             } else {
+                 emptyList()
+             }
+ 
+         return reasoningItem + messageItem + footerItem
+     }
 
     private fun createOtherMessageItems(message: Message): List<ChatListItem> {
         return when {

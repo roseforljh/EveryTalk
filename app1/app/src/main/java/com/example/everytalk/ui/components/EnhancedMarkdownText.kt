@@ -1,10 +1,11 @@
-package com.example.everytalk.ui.components
+﻿package com.example.everytalk.ui.components
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -25,41 +26,65 @@ import dev.jeziellago.compose.markdowntext.MarkdownText
 import com.example.everytalk.util.messageprocessor.parseMarkdownParts
 import java.util.UUID
 
-// 🎯 新的合并内容数据类
+// 瀹夊叏鐨?MarkdownText 鍖呰鍣紝闃叉璐熷搴﹀竷灞€閿欒
+@Composable
+private fun SafeMarkdownText(
+    markdown: String,
+    style: TextStyle,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .wrapContentHeight()
+    ) {
+        // 馃幆 淇锛氱Щ闄や簡 try-catch 鍧椾互瑙ｅ喅缂栬瘧閿欒銆?
+        // Compose 涓嶆敮鎸佸湪 @Composable 鍑芥暟璋冪敤鍛ㄥ洿浣跨敤 try-catch銆?
+        // 濡傛灉 MarkdownText 鍙戠敓杩愯鏃跺穿婧冿紝闇€瑕佸鎵惧叾浠栨柟寮忔潵澶勭悊锛?
+        // 渚嬪鍦ㄨ皟鐢ㄥ墠瀵?markdown 鍐呭杩涜鏇翠弗鏍肩殑楠岃瘉銆?
+        MarkdownText(
+            markdown = markdown,
+            style = style,
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
+// 馃幆 鏂扮殑鍚堝苟鍐呭鏁版嵁绫?
 private sealed class ConsolidatedContent {
     data class FlowContent(val parts: List<MarkdownPart>) : ConsolidatedContent()
     data class BlockContent(val part: MarkdownPart) : ConsolidatedContent()
 }
 
-// 🎯 智能检测是否应该合并所有内容进行统一渲染
+// 馃幆 鏅鸿兘妫€娴嬫槸鍚﹀簲璇ュ悎骞舵墍鏈夊唴瀹硅繘琛岀粺涓€娓叉煋
 private fun shouldMergeAllContent(parts: List<MarkdownPart>, originalText: String): Boolean {
-    // 🎯 重要修复：如果包含MathBlock，绝对不要合并，让数学公式正确渲染
+    // 馃幆 閲嶈淇锛氬鏋滃寘鍚玀athBlock锛岀粷瀵逛笉瑕佸悎骞讹紝璁╂暟瀛﹀叕寮忔纭覆鏌?
     val hasMathBlocks = parts.any { it is MarkdownPart.MathBlock }
     if (hasMathBlocks) {
-        android.util.Log.d("shouldMergeAllContent", "🎯 Found MathBlocks, will NOT merge to preserve math rendering")
+        android.util.Log.d("shouldMergeAllContent", "馃幆 Found MathBlocks, will NOT merge to preserve math rendering")
         return false
     }
 
-    // 优先：强特征的"多行列表/编号段落"→ 合并整段渲染,避免被拆散后丢失列表上下文
+    // 浼樺厛锛氬己鐗瑰緛鐨?澶氳鍒楄〃/缂栧彿娈佃惤"鈫?鍚堝苟鏁存娓叉煋,閬垮厤琚媶鏁ｅ悗涓㈠け鍒楄〃涓婁笅鏂?
     run {
         val lines = originalText.lines()
-        // 统计项目符号或有序编号开头的行数（允许前导空格）
+        // 缁熻椤圭洰绗﹀彿鎴栨湁搴忕紪鍙峰紑澶寸殑琛屾暟锛堝厑璁稿墠瀵肩┖鏍硷級
         val bulletRegex = Regex("^\\s*([*+\\-]|\\d+[.)])\\s+")
         val bulletLines = lines.count { bulletRegex.containsMatchIn(it) }
-        // 若存在"编号标题行 + 若干缩进子项"的结构，也强制合并
+        // 鑻ュ瓨鍦?缂栧彿鏍囬琛?+ 鑻ュ共缂╄繘瀛愰」"鐨勭粨鏋勶紝涔熷己鍒跺悎骞?
         val hasHeadingNumber = lines.any { Regex("^\\s*\\d+[.)]\\s+").containsMatchIn(it) }
         if (bulletLines >= 2 || (hasHeadingNumber && bulletLines >= 1)) {
             return true
         }
     }
     
-    // 条件1：如果原始文本很短（小于200字符），倾向于合并
+    // 鏉′欢1锛氬鏋滃師濮嬫枃鏈緢鐭紙灏忎簬200瀛楃锛夛紝鍊惧悜浜庡悎骞?
     if (originalText.length < 200) {
-        // 条件1a：没有复杂的块级内容
+        // 鏉′欢1a锛氭病鏈夊鏉傜殑鍧楃骇鍐呭
         val hasComplexBlocks = parts.any { part ->
             when (part) {
                 is MarkdownPart.CodeBlock -> true
-                is MarkdownPart.MathBlock -> part.displayMode // 只有显示模式的数学公式算复杂
+                is MarkdownPart.MathBlock -> part.displayMode // 鍙湁鏄剧ず妯″紡鐨勬暟瀛﹀叕寮忕畻澶嶆潅
                 else -> false
             }
         }
@@ -68,12 +93,12 @@ private fun shouldMergeAllContent(parts: List<MarkdownPart>, originalText: Strin
             return true
         }
         
-        // 条件1b：parts数量过多相对于内容长度（可能被过度分割）
+        // 鏉′欢1b锛歱arts鏁伴噺杩囧鐩稿浜庡唴瀹归暱搴︼紙鍙兘琚繃搴﹀垎鍓诧級
         if (parts.size > originalText.length / 20) {
             return true
         }
         
-        // 条件1c：大多数parts都很短（可能是错误分割的结果）
+        // 鏉′欢1c锛氬ぇ澶氭暟parts閮藉緢鐭紙鍙兘鏄敊璇垎鍓茬殑缁撴灉锛?
         val shortParts = parts.count { part ->
             when (part) {
                 is MarkdownPart.Text -> part.content.trim().length < 10
@@ -82,13 +107,13 @@ private fun shouldMergeAllContent(parts: List<MarkdownPart>, originalText: Strin
             }
         }
         
-        if (shortParts > parts.size * 0.7) { // 超过70%的parts都很短
+        if (shortParts > parts.size * 0.7) { // 瓒呰繃70%鐨刾arts閮藉緢鐭?
             return true
         }
     }
     
-    // 条件2：检测明显的错误分割模式
-    // 如果有很多单字符或超短的文本part，可能是分割错误
+    // 鏉′欢2锛氭娴嬫槑鏄剧殑閿欒鍒嗗壊妯″紡
+    // 濡傛灉鏈夊緢澶氬崟瀛楃鎴栬秴鐭殑鏂囨湰part锛屽彲鑳芥槸鍒嗗壊閿欒
     val singleCharParts = parts.count { part ->
         part is MarkdownPart.Text && part.content.trim().length <= 2
     }
@@ -97,10 +122,10 @@ private fun shouldMergeAllContent(parts: List<MarkdownPart>, originalText: Strin
         return true
     }
     
-    // 条件3：如果原始文本包含明显的连续内容但被分割了
-    // 检测类似 "- *文字 e^x · **" 这样的模式
+    // 鏉′欢3锛氬鏋滃師濮嬫枃鏈寘鍚槑鏄剧殑杩炵画鍐呭浣嗚鍒嗗壊浜?
+    // 妫€娴嬬被浼?"- *鏂囧瓧 e^x 路 **" 杩欐牱鐨勬ā寮?
     val isListLikePattern = originalText.trim().let { text ->
-        (text.startsWith("-") || text.startsWith("*") || text.startsWith("·")) &&
+        (text.startsWith("-") || text.startsWith("*") || text.startsWith("路")) &&
         text.length < 100 &&
         parts.size > 3
     }
@@ -112,7 +137,7 @@ private fun shouldMergeAllContent(parts: List<MarkdownPart>, originalText: Strin
     return false
 }
 
-// 🎯 激进的内容合并函数
+// 馃幆 婵€杩涚殑鍐呭鍚堝苟鍑芥暟
 private fun consolidateInlineContent(parts: List<MarkdownPart>): List<ConsolidatedContent> {
     val result = mutableListOf<ConsolidatedContent>()
     var currentInlineGroup = mutableListOf<MarkdownPart>()
@@ -131,31 +156,31 @@ private fun consolidateInlineContent(parts: List<MarkdownPart>): List<Consolidat
             }
             is MarkdownPart.MathBlock -> {
                 if (!part.displayMode) {
-                    // 行内数学公式加入当前组
+                    // 琛屽唴鏁板鍏紡鍔犲叆褰撳墠缁?
                     currentInlineGroup.add(part)
                 } else {
-                    // 块级数学公式：先输出当前组，然后独立处理
+                    // 鍧楃骇鏁板鍏紡锛氬厛杈撳嚭褰撳墠缁勶紝鐒跺悗鐙珛澶勭悊
                     flushInlineGroup()
                     result.add(ConsolidatedContent.BlockContent(part))
                 }
             }
             is MarkdownPart.CodeBlock -> {
-                // 代码块：先输出当前组，然后独立处理
+                // 浠ｇ爜鍧楋細鍏堣緭鍑哄綋鍓嶇粍锛岀劧鍚庣嫭绔嬪鐞?
                 flushInlineGroup()
                 result.add(ConsolidatedContent.BlockContent(part))
             }
             is MarkdownPart.HtmlContent -> {
-                // HTML内容：先输出当前组，然后独立处理
+                // HTML鍐呭锛氬厛杈撳嚭褰撳墠缁勶紝鐒跺悗鐙珛澶勭悊
                 flushInlineGroup()
                 result.add(ConsolidatedContent.BlockContent(part))
             }
             is MarkdownPart.Table -> {
-                // 表格：先输出当前组，然后独立处理
+                // 琛ㄦ牸锛氬厛杈撳嚭褰撳墠缁勶紝鐒跺悗鐙珛澶勭悊
                 flushInlineGroup()
                 result.add(ConsolidatedContent.BlockContent(part))
             }
             is MarkdownPart.MixedContent -> {
-                // 混合内容：先输出当前组，然后独立处理
+                // 娣峰悎鍐呭锛氬厛杈撳嚭褰撳墠缁勶紝鐒跺悗鐙珛澶勭悊
                 flushInlineGroup()
                 result.add(ConsolidatedContent.BlockContent(part))
             }
@@ -166,18 +191,18 @@ private fun consolidateInlineContent(parts: List<MarkdownPart>): List<Consolidat
     return result
 }
 
-// 🎯 自定义行内内容渲染器
+// 馃幆 鑷畾涔夎鍐呭唴瀹规覆鏌撳櫒
 @Composable
 private fun InlineContentRenderer(
     parts: List<MarkdownPart>,
     textColor: Color,
     style: TextStyle
 ) {
-    // 🎯 修复：改用 Center 替代 Bottom，实现垂直居中
+    // 馃幆 淇锛氭敼鐢?Center 鏇夸唬 Bottom锛屽疄鐜板瀭鐩村眳涓?
     FlowRow(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(1.dp),
-        verticalArrangement = Arrangement.Center,  // ✅ 垂直居中对齐
+        verticalArrangement = Arrangement.Center,  // 鉁?鍨傜洿灞呬腑瀵归綈
         maxItemsInEachRow = Int.MAX_VALUE
     ) {
         var i = 0
@@ -188,13 +213,13 @@ private fun InlineContentRenderer(
         while (i < parts.size) {
             val part = parts[i]
             val next = if (i + 1 < parts.size) parts[i + 1] else null
-            // 检测 "文本(无尾空格) + 行内公式" 组合，作为一个不可换行单元渲染
+            // 妫€娴?"鏂囨湰(鏃犲熬绌烘牸) + 琛屽唴鍏紡" 缁勫悎锛屼綔涓轰竴涓笉鍙崲琛屽崟鍏冩覆鏌?
             if (part is MarkdownPart.Text &&
                 next is MarkdownPart.MathBlock &&
                 !next.displayMode
             ) {
-                // 将前一段文本拆成"可换行前缀 + 不可换行的结尾词"，
-                // 用结尾词与数学公式粘连，避免公式单独跑到下一行
+                // 灏嗗墠涓€娈垫枃鏈媶鎴?鍙崲琛屽墠缂€ + 涓嶅彲鎹㈣鐨勭粨灏捐瘝"锛?
+                // 鐢ㄧ粨灏捐瘝涓庢暟瀛﹀叕寮忕矘杩烇紝閬垮厤鍏紡鍗曠嫭璺戝埌涓嬩竴琛?
                 val (prefix, glue) = splitForNoWrapTail(part.content)
                 if (prefix.isNotBlank()) {
                     SmartTextRenderer(
@@ -204,7 +229,7 @@ private fun InlineContentRenderer(
                         modifier = Modifier.wrapContentWidth()
                     )
                 }
-                val glueText = glue.trimEnd() // 去掉尾部空格，避免"为 "+ 公式之间出现断行/间隙
+                val glueText = glue.trimEnd() // 鍘绘帀灏鹃儴绌烘牸锛岄伩鍏?涓?"+ 鍏紡涔嬮棿鍑虹幇鏂/闂撮殭
                 if (glueText.isNotBlank()) {
                     NoWrapTextAndMath(
                         text = glueText,
@@ -215,14 +240,14 @@ private fun InlineContentRenderer(
                     i += 2
                     continue
                 }
-                // 若无法有效拆分，则走默认流程
+                // 鑻ユ棤娉曟湁鏁堟媶鍒嗭紝鍒欒蛋榛樿娴佺▼
             }
 
             when (part) {
                 is MarkdownPart.Text -> {
                     if (part.content.isNotBlank()) {
                         val processedText = part.content
-                        // 先处理“纯裸 LaTeX 单行”——例如：\boxed{275.5}
+                        // 鍏堝鐞嗏€滅函瑁?LaTeX 鍗曡鈥濃€斺€斾緥濡傦細\boxed{275.5}
                         if (isPureBareLatexLine(processedText)) {
                             LatexMath(
                                 latex = processedText.trim(),
@@ -262,14 +287,14 @@ private fun InlineContentRenderer(
                         )
                     }
                 }
-                else -> { /* 忽略其他类型 */ }
+                else -> { /* 蹇界暐鍏朵粬绫诲瀷 */ }
             }
             i += 1
         }
     }
 }
 
-// 🎯 智能文本渲染器：自动检测内联代码和数学公式
+// 馃幆 鏅鸿兘鏂囨湰娓叉煋鍣細鑷姩妫€娴嬪唴鑱斾唬鐮佸拰鏁板鍏紡
 @Composable
 private fun SmartTextRenderer(
     text: String,
@@ -277,29 +302,120 @@ private fun SmartTextRenderer(
     style: TextStyle,
     modifier: Modifier = Modifier
 ) {
-    // 关键修复：在做能力分支前，先最小化将“裸 sqrt/frac 等”包裹为 $...$
-    // 这样 hasMath 判定才能捕捉到后续渲染为 LaTeX，而不是被走到 Markdown 渲染路径
+    // 鍏抽敭淇锛氬湪鍋氳兘鍔涘垎鏀墠锛屽厛鏈€灏忓寲灏嗏€滆８ sqrt/frac 绛夆€濆寘瑁逛负 $...$
+    // 杩欐牱 hasMath 鍒ゅ畾鎵嶈兘鎹曟崏鍒板悗缁覆鏌撲负 LaTeX锛岃€屼笉鏄璧板埌 Markdown 娓叉煋璺緞
     val preWrapped = remember(text) {
-        if (!text.contains('$')) wrapBareLatexForInline(text) else text
+        if (!text.contains('$') &&
+            containsBareLatexToken(text) &&
+            !text.contains('`') &&
+            !text.contains('|')
+        ) {
+            wrapBareLatexForInline(text)
+        } else {
+            text
+        }
     }
     val hasInlineCode = preWrapped.contains('`') && !preWrapped.startsWith("```")
     val hasMath = preWrapped.contains('$')
     
     when {
         hasInlineCode && hasMath -> {
-            // 同时包含内联代码和数学公式，使用复合渲染
+            // 鍚屾椂鍖呭惈鍐呰仈浠ｇ爜鍜屾暟瀛﹀叕寮忥紝浣跨敤澶嶅悎娓叉煋
             RenderTextWithInlineCodeAndMath(preWrapped, textColor, style, modifier)
         }
         hasInlineCode -> {
-            // 只有内联代码，使用自定义渲染器
-            RenderTextWithInlineCode(preWrapped, style, textColor)
+            // 鍐呰仈浠ｇ爜淇濇寔鍐呰仈鏍峰紡锛屼笉杞崲涓轰唬鐮佸潡
+            val segments = splitInlineCodeSegments(preWrapped)
+            // 浣跨敤Column鑰屼笉鏄疐lowRow浠ラ伩鍏嶅竷灞€闂
+            Column(
+                modifier = modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                // 灏嗗唴鑱斾唬鐮佸拰鏂囨湰缁勫悎鎴愯
+                var currentLine = mutableListOf<InlineSegment>()
+                segments.forEach { segment ->
+                    currentLine.add(segment)
+                    // 濡傛灉閬囧埌鎹㈣绗︼紝娓叉煋褰撳墠琛?
+                    if (segment.text.contains('\n')) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Start,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            currentLine.forEach { seg ->
+                                if (seg.isCode) {
+                                    // 鍐呰仈浠ｇ爜浣跨敤鐗规畩鏍峰紡锛屼絾淇濇寔鍐呰仈
+                                    Surface(
+                                        shape = RoundedCornerShape(4.dp),
+                                        color = MaterialTheme.chatColors.codeBlockBackground,
+                                        modifier = Modifier.wrapContentSize()
+                                    ) {
+                                        Text(
+                                            text = seg.text.replace("\n", ""),
+                                            style = style.copy(
+                                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                                color = textColor
+                                            ),
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                } else {
+                                    if (seg.text.isNotBlank()) {
+                                        Text(
+                                            text = seg.text.replace("\n", ""),
+                                            style = style.copy(color = textColor),
+                                            modifier = Modifier.wrapContentWidth()
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        currentLine.clear()
+                    }
+                }
+                // 娓叉煋鍓╀綑鐨勫唴瀹?
+                if (currentLine.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Start,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        currentLine.forEach { seg ->
+                            if (seg.isCode) {
+                                Surface(
+                                    shape = RoundedCornerShape(4.dp),
+                                    color = MaterialTheme.chatColors.codeBlockBackground,
+                                    modifier = Modifier.wrapContentSize()
+                                ) {
+                                    Text(
+                                        text = seg.text,
+                                        style = style.copy(
+                                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                            color = textColor
+                                        ),
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            } else {
+                                if (seg.text.isNotBlank()) {
+                                    Text(
+                                        text = seg.text,
+                                        style = style.copy(color = textColor),
+                                        modifier = Modifier.wrapContentWidth()
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         hasMath -> {
-            // 只有数学公式，使用数学渲染器
+            // 鍙湁鏁板鍏紡锛屼娇鐢ㄦ暟瀛︽覆鏌撳櫒
             RenderTextWithInlineMath(preWrapped, textColor, style)
         }
         else -> {
-            // 0) 优先处理“块级数学 $$...$$”场景（严格成对），避免误切导致文本缺失
+            // 0) 浼樺厛澶勭悊鈥滃潡绾ф暟瀛?$$...$$鈥濆満鏅紙涓ユ牸鎴愬锛夛紝閬垮厤璇垏瀵艰嚧鏂囨湰缂哄け
             run {
                 val pairCount = Regex("\\$\\$").findAll(text).count()
                 if (pairCount >= 2 && pairCount % 2 == 0) {
@@ -311,7 +427,7 @@ private fun SmartTextRenderer(
                     return
                 }
             }
-            // 0b) 裸 LaTeX 直达行内数学管线（如 \boxed{...} / \frac 等未加 $ 的情形）
+            // 0b) 瑁?LaTeX 鐩磋揪琛屽唴鏁板绠＄嚎锛堝 \boxed{...} / \frac 绛夋湭鍔?$ 鐨勬儏褰級
             if (containsBareLatexToken(text)) {
                 RenderTextWithInlineMath(
                     text = wrapBareLatexForInline(text),
@@ -320,8 +436,9 @@ private fun SmartTextRenderer(
                 )
                 return
             }
-            // 1) 围栏代码：严格匹配并“全部遍历”，确保每个代码块都走自定义 CodePreview
-            val fencedRegex = Regex("(?s)```\\s*([a-zA-Z0-9_+\\-#.]*)\\s*\\n(.*?)\\n```")
+            // 1) 鍥存爮浠ｇ爜锛氬鏉惧尮閰嶅苟"鍏ㄩ儴閬嶅巻"锛岀‘淇濇瘡涓唬鐮佸潡閮借蛋鑷畾涔?CodePreview
+            // 鏀硅繘锛氭敮鎸佹棤鎹㈣绗︾殑浠ｇ爜鍧楋紝鏇村鏉剧殑鍖归厤
+            val fencedRegex = Regex("(?s)```\\s*([a-zA-Z0-9_+\\-#.]*)[ \\t]*\\r?\\n?([\\s\\S]*?)\\r?\\n?```")
             val matches = fencedRegex.findAll(text).toList()
             if (matches.isNotEmpty()) {
                 var last = 0
@@ -360,11 +477,11 @@ private fun SmartTextRenderer(
                         )
                     }
                 }
-                // 已处理全部代码块，直接返回
+                // 宸插鐞嗗叏閮ㄤ唬鐮佸潡锛岀洿鎺ヨ繑鍥?
                 return
             } else if (text.contains("```")) {
-                // 宽松兜底：即使围栏不规范（缺少换行或末尾未闭合），也按围栏切片渲染
-                // 这样不会退回库默认的 MarkdownText，从而保证启用自定义 CodePreview（带复制/预览）
+                // 瀹芥澗鍏滃簳锛氬嵆浣垮洿鏍忎笉瑙勮寖锛堢己灏戞崲琛屾垨鏈熬鏈棴鍚堬級锛屼篃鎸夊洿鏍忓垏鐗囨覆鏌?
+                // 杩欐牱涓嶄細閫€鍥炲簱榛樿鐨?MarkdownText锛屼粠鑰屼繚璇佸惎鐢ㄨ嚜瀹氫箟 CodePreview锛堝甫澶嶅埗/棰勮锛?
                 FallbackFencedRenderer(
                     raw = text,
                     textColor = textColor,
@@ -373,7 +490,7 @@ private fun SmartTextRenderer(
                 return
             }
  
-            // 1b) 识别“缩进式代码块”（以4个空格或Tab起始的连续行），统一走 CodePreview 渲染
+            // 1b) 璇嗗埆鈥滅缉杩涘紡浠ｇ爜鍧椻€濓紙浠?涓┖鏍兼垨Tab璧峰鐨勮繛缁锛夛紝缁熶竴璧?CodePreview 娓叉煋
             run {
                 val blocks = extractIndentedCodeBlocks(text)
                 if (blocks != null && blocks.blocks.isNotEmpty()) {
@@ -415,39 +532,62 @@ private fun SmartTextRenderer(
                 }
             }
  
-            // 2) 表格兜底检测：即使上游给到 Text，也分流到表格渲染
+            // 2) 琛ㄦ牸鍏滃簳妫€娴嬶細鍗充娇涓婃父缁欏埌 Text锛屼篃鍒嗘祦鍒拌〃鏍兼覆鏌?
             if (detectMarkdownTable(text)) {
-                // 原生表格兜底渲染
-                SimpleTableRenderer(
-                    content = text,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                // 馃幆 淇锛氶€掑綊娓叉煋琛ㄦ牸鍓嶅悗鍐呭锛岄伩鍏嶆埅鏂悗缁殑 Markdown 娓叉煋
+                val (before, tableBlock, after) = splitByFirstMarkdownTable(text)
+                if (before.isNotBlank()) {
+                    SmartTextRenderer(
+                        text = before,
+                        textColor = textColor,
+                        style = style,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                if (tableBlock.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    SafeMarkdownText(
+                        markdown = tableBlock,
+                        style = style,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                if (after.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    SmartTextRenderer(
+                        text = after,
+                        textColor = textColor,
+                        style = style,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             } else {
-                // 3) 纯Markdown文本，使用原始渲染器
-                MarkdownText(
+                // 3) 绾疢arkdown鏂囨湰锛屼娇鐢ㄥ師濮嬫覆鏌撳櫒
+                // 馃幆 淇锛氫娇鐢⊿afeMarkdownText閬垮厤璐熷搴﹀竷灞€閿欒
+                SafeMarkdownText(
                     markdown = normalizeBasicMarkdown(text),
                     style = style.copy(color = textColor, platformStyle = PlatformTextStyle(includeFontPadding = false)),
-                    modifier = modifier
+                    modifier = modifier.fillMaxWidth()
                 )
             }
         }
     }
 }
 
-// 🎯 处理包含块级数学（$$...$$）与普通文本的混合内容
+// 馃幆 澶勭悊鍖呭惈鍧楃骇鏁板锛?$...$$锛変笌鏅€氭枃鏈殑娣峰悎鍐呭
 @Composable
 private fun RenderTextWithBlockMath(
     text: String,
     textColor: Color,
     style: TextStyle
 ) {
-    // 以成对 $$ 作为分段，奇数段为文本，偶数段为数学（与 split 结果一致）
+    // 浠ユ垚瀵?$$ 浣滀负鍒嗘锛屽鏁版涓烘枃鏈紝鍋舵暟娈典负鏁板锛堜笌 split 缁撴灉涓€鑷达級
     val parts = text.split("$$")
     Column(modifier = Modifier.fillMaxWidth()) {
         parts.forEachIndexed { idx, seg ->
             if (seg.isEmpty()) return@forEachIndexed
             if (idx % 2 == 1) {
-                // 数学段（块级）
+                // 鏁板娈碉紙鍧楃骇锛?
                 LatexMath(
                     latex = seg.trim(),
                     inline = false,
@@ -459,7 +599,7 @@ private fun RenderTextWithBlockMath(
                     messageId = "block_segment"
                 )
             } else {
-                // 普通文本（不做数学改写）
+                // 鏅€氭枃鏈紙涓嶅仛鏁板鏀瑰啓锛?
                 SmartTextRenderer(
                     text = seg,
                     textColor = textColor,
@@ -471,7 +611,7 @@ private fun RenderTextWithBlockMath(
     }
 }
 
-// 🎯 处理同时包含内联代码和数学公式的文本
+// 馃幆 澶勭悊鍚屾椂鍖呭惈鍐呰仈浠ｇ爜鍜屾暟瀛﹀叕寮忕殑鏂囨湰
 @Composable
 private fun RenderTextWithInlineCodeAndMath(
     text: String,
@@ -479,30 +619,121 @@ private fun RenderTextWithInlineCodeAndMath(
     style: TextStyle,
     modifier: Modifier = Modifier
 ) {
-    // 统一渲染：去除内联代码反引号，再按行内数学拆分渲染，避免 FlowRow 造成的断行/间距混乱
-    val noTicks = remember(text) { removeInlineCodeBackticks(text) }
-    RenderTextWithInlineMath(
-        text = noTicks,
-        textColor = textColor,
-        style = style
-    )
+    // 涓嶅啀杞崲鍐呰仈浠ｇ爜涓哄洿鏍忎唬鐮佸潡锛屼繚鎸佸唴鑱旀牱寮?
+    // 浣跨敤鏇存櫤鑳界殑鍒嗗壊鏂规硶锛屽悓鏃跺鐞嗗唴鑱斾唬鐮佸拰鏁板鍏紡
+    
+    FlowRow(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        verticalArrangement = Arrangement.Center
+    ) {
+        var currentPos = 0
+        val segments = mutableListOf<Pair<String, String>>() // content, type: "text", "code", "math"
+        
+        while (currentPos < text.length) {
+            // 鏌ユ壘涓嬩竴涓壒娈婃爣璁?
+            val nextCode = text.indexOf('`', currentPos)
+            val nextMath = text.indexOf('$', currentPos)
+            
+            when {
+                nextCode == -1 && nextMath == -1 -> {
+                    // 娌℃湁鏇村鐗规畩鏍囪锛屾坊鍔犲墿浣欐枃鏈?
+                    if (currentPos < text.length) {
+                        segments.add(text.substring(currentPos) to "text")
+                    }
+                    break
+                }
+                nextCode != -1 && (nextMath == -1 || nextCode < nextMath) -> {
+                    // 鍏堥亣鍒颁唬鐮佹爣璁?
+                    if (nextCode > currentPos) {
+                        segments.add(text.substring(currentPos, nextCode) to "text")
+                    }
+                    val codeEnd = text.indexOf('`', nextCode + 1)
+                    if (codeEnd != -1) {
+                        segments.add(text.substring(nextCode + 1, codeEnd) to "code")
+                        currentPos = codeEnd + 1
+                    } else {
+                        segments.add(text.substring(nextCode) to "text")
+                        break
+                    }
+                }
+                else -> {
+                    // 鍏堥亣鍒版暟瀛︽爣璁?
+                    if (nextMath > currentPos) {
+                        segments.add(text.substring(currentPos, nextMath) to "text")
+                    }
+                    val mathEnd = text.indexOf('$', nextMath + 1)
+                    if (mathEnd != -1) {
+                        segments.add(text.substring(nextMath + 1, mathEnd) to "math")
+                        currentPos = mathEnd + 1
+                    } else {
+                        segments.add(text.substring(nextMath) to "text")
+                        break
+                    }
+                }
+            }
+        }
+        
+        // 娓叉煋鎵€鏈夌墖娈?
+        segments.forEach { (content, type) ->
+            when (type) {
+                "code" -> {
+                    // 鍐呰仈浠ｇ爜浣跨敤鐗规畩鏍峰紡锛屼絾淇濇寔鍐呰仈
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = MaterialTheme.chatColors.codeBlockBackground,
+                        modifier = Modifier.wrapContentSize()
+                    ) {
+                        Text(
+                            text = content,
+                            style = style.copy(
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                color = textColor
+                            ),
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+                "math" -> {
+                    LatexMath(
+                        latex = content,
+                        inline = true,
+                        color = textColor,
+                        style = style,
+                        modifier = Modifier.wrapContentWidth(),
+                        messageId = "inline_math"
+                    )
+                }
+                "text" -> {
+                    if (content.isNotBlank()) {
+                        // 閬垮厤浣跨敤MarkdownText锛岀洿鎺ヤ娇鐢═ext鏉ラ槻姝㈠竷灞€閿欒
+                        Text(
+                            text = content,
+                            style = style.copy(color = textColor),
+                            modifier = Modifier.wrapContentWidth()
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
-// 🎯 处理包含行内数学公式的文本
+// 馃幆 澶勭悊鍖呭惈琛屽唴鏁板鍏紡鐨勬枃鏈?
 @Composable
 private fun RenderTextWithInlineMath(
     text: String,
     textColor: Color,
     style: TextStyle
 ) {
-    // 简单的$...$分割处理
+    // 绠€鍗曠殑$...$鍒嗗壊澶勭悊
     val segments = splitMathSegments(text)
     
-    // 🎯 修复：改用 Center，实现垂直居中
+    // 馃幆 淇锛氭敼鐢?Center锛屽疄鐜板瀭鐩村眳涓?
     FlowRow(
         modifier = Modifier.wrapContentWidth(),
         horizontalArrangement = Arrangement.spacedBy(1.dp),
-        verticalArrangement = Arrangement.Center,  // ✅ 垂直居中
+        verticalArrangement = Arrangement.Center,  // 鉁?鍨傜洿灞呬腑
         maxItemsInEachRow = Int.MAX_VALUE
     ) {
         fun String.endsWithoutSpace(): Boolean {
@@ -513,15 +744,15 @@ private fun RenderTextWithInlineMath(
         while (i < segments.size) {
             val seg = segments[i]
             val next = if (i + 1 < segments.size) segments[i + 1] else null
-            // 将 "文本(无尾空格) + 数学" 合并为不可换行单元
+            // 灏?"鏂囨湰(鏃犲熬绌烘牸) + 鏁板" 鍚堝苟涓轰笉鍙崲琛屽崟鍏?
             if (!seg.isMath && next != null && next.isMath) {
-                // 将分段文本的尾部词与接下来的数学段粘连，形成不可换行单元
+                // 灏嗗垎娈垫枃鏈殑灏鹃儴璇嶄笌鎺ヤ笅鏉ョ殑鏁板娈电矘杩烇紝褰㈡垚涓嶅彲鎹㈣鍗曞厓
                 val (prefix, glue) = splitForNoWrapTail(seg.content)
                 if (prefix.isNotBlank()) {
-                    MarkdownText(
+                    SafeMarkdownText(
                         markdown = normalizeBasicMarkdownNoMath(prefix),
                         style = style.copy(color = textColor, platformStyle = PlatformTextStyle(includeFontPadding = false)),
-                        modifier = Modifier.wrapContentWidth()
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
                 val glueText = glue.trimEnd()
@@ -535,7 +766,7 @@ private fun RenderTextWithInlineMath(
                     i += 2
                     continue
                 }
-                // 拆分失败则走默认流程
+                // 鎷嗗垎澶辫触鍒欒蛋榛樿娴佺▼
             }
 
             if (seg.isMath) {
@@ -548,14 +779,12 @@ private fun RenderTextWithInlineMath(
                     messageId = "math_segment"
                 )
             } else {
-                if (seg.content.contains('`')) {
-                    RenderTextWithInlineCode(seg.content, style, textColor)
-                } else {
-                    SmartTextRenderer(
-                        text = seg.content,
-                        textColor = textColor,
-                        style = style,
-                        modifier = Modifier.wrapContentWidth()
+                // 閬垮厤閫掑綊璋冪敤SmartTextRenderer
+                if (seg.content.isNotBlank()) {
+                    SafeMarkdownText(
+                        markdown = normalizeBasicMarkdownNoMath(seg.content),
+                        style = style.copy(color = textColor, platformStyle = PlatformTextStyle(includeFontPadding = false)),
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
             }
@@ -564,7 +793,7 @@ private fun RenderTextWithInlineMath(
     }
 }
 
-// 将"文本+行内数学"渲染为不可换行单元，避免被拆行
+// 灏?鏂囨湰+琛屽唴鏁板"娓叉煋涓轰笉鍙崲琛屽崟鍏冿紝閬垮厤琚媶琛?
 @Composable
 private fun NoWrapTextAndMath(
     text: String,
@@ -577,11 +806,11 @@ private fun NoWrapTextAndMath(
         horizontalArrangement = Arrangement.Start,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        SmartTextRenderer(
-            text = text,
-            textColor = textColor,
-            style = style,
-            modifier = Modifier.wrapContentWidth()
+        // 閬垮厤閫掑綊璋冪敤SmartTextRenderer
+        SafeMarkdownText(
+            markdown = normalizeBasicMarkdownNoMath(text),
+            style = style.copy(color = textColor, platformStyle = PlatformTextStyle(includeFontPadding = false)),
+            modifier = Modifier.fillMaxWidth()
         )
         LatexMath(
             latex = latex,
@@ -594,24 +823,24 @@ private fun NoWrapTextAndMath(
     }
 }
 
-// 将文本分割为可换行前缀和不可换行尾部
+// 灏嗘枃鏈垎鍓蹭负鍙崲琛屽墠缂€鍜屼笉鍙崲琛屽熬閮?
 private fun splitForNoWrapTail(text: String): Pair<String, String> {
     if (text.isBlank()) return Pair("", "")
     
-    // 找到最后一个空格或标点符号的位置
+    // 鎵惧埌鏈€鍚庝竴涓┖鏍兼垨鏍囩偣绗﹀彿鐨勪綅缃?
     val words = text.split(Regex("\\s+"))
     if (words.size <= 1) {
-        return Pair("", text) // 只有一个词，全部作为尾部
+        return Pair("", text) // 鍙湁涓€涓瘝锛屽叏閮ㄤ綔涓哄熬閮?
     }
     
-    // 取最后一个词作为不可换行部分
+    // 鍙栨渶鍚庝竴涓瘝浣滀负涓嶅彲鎹㈣閮ㄥ垎
     val prefix = words.dropLast(1).joinToString(" ")
     val tail = words.last()
     
     return Pair(prefix, tail)
 }
 
-// 🎯 简单的数学公式分割器
+// 馃幆 绠€鍗曠殑鏁板鍏紡鍒嗗壊鍣?
 private data class TextSegment(val content: String, val isMath: Boolean)
 
 private fun splitMathSegments(text: String): List<TextSegment> {
@@ -621,27 +850,27 @@ private fun splitMathSegments(text: String): List<TextSegment> {
     while (currentPos < text.length) {
         val mathStart = text.indexOf('$', currentPos)
         if (mathStart == -1) {
-            // 没有更多数学公式，添加剩余文本
+            // 娌℃湁鏇村鏁板鍏紡锛屾坊鍔犲墿浣欐枃鏈?
             if (currentPos < text.length) {
                 segments.add(TextSegment(text.substring(currentPos), false))
             }
             break
         }
         
-        // 添加数学公式前的文本
+        // 娣诲姞鏁板鍏紡鍓嶇殑鏂囨湰
         if (mathStart > currentPos) {
             segments.add(TextSegment(text.substring(currentPos, mathStart), false))
         }
         
-        // 查找数学公式结束
+        // 鏌ユ壘鏁板鍏紡缁撴潫
         val mathEnd = text.indexOf('$', mathStart + 1)
         if (mathEnd == -1) {
-            // 没有找到结束$，当作普通文本
+            // 娌℃湁鎵惧埌缁撴潫$锛屽綋浣滄櫘閫氭枃鏈?
             segments.add(TextSegment(text.substring(mathStart), false))
             break
         }
         
-        // 添加数学公式
+        // 娣诲姞鏁板鍏紡
         val mathContent = text.substring(mathStart + 1, mathEnd)
         if (mathContent.isNotBlank()) {
             segments.add(TextSegment(mathContent, true))
@@ -675,18 +904,18 @@ fun EnhancedMarkdownText(
         else -> if (systemDark) Color(0xFFFFFFFF) else Color(0xFF000000)
     }
     
-    // 🔧 统一清洗：去行尾“\”与相邻重复段，避免重复/脏字符导致的格式混乱
+    // 馃敡 缁熶竴娓呮礂锛氬幓琛屽熬鈥淺鈥濅笌鐩搁偦閲嶅娈碉紝閬垮厤閲嶅/鑴忓瓧绗﹀鑷寸殑鏍煎紡娣蜂贡
     val cleanedText = remember(message.text) { sanitizeAiOutput(message.text) }
  
      DisposableEffect(message.id) {
         onDispose {
             RenderingMonitor.trackRenderingPerformance(message.id, startTime)
-            // 清理渲染状态
+            // 娓呯悊娓叉煋鐘舵€?
             MathRenderingManager.clearMessageStates(message.id)
         }
     }
 
-    // 🎯 检查消息是否包含数学公式，提交渲染任务（基于清洗后的文本）
+    // 馃幆 妫€鏌ユ秷鎭槸鍚﹀寘鍚暟瀛﹀叕寮忥紝鎻愪氦娓叉煋浠诲姟锛堝熀浜庢竻娲楀悗鐨勬枃鏈級
     LaunchedEffect(message.id, cleanedText) {
         if (message.sender == com.example.everytalk.data.DataClass.Sender.AI &&
             MathRenderingManager.hasRenderableMath(cleanedText)) {
@@ -698,10 +927,74 @@ fun EnhancedMarkdownText(
     }
 
     Column(modifier = modifier) {
-        // 若已结束流式（最终态），优先使用“整段文本级”的渲染策略，避免被碎片化 parts 干扰
+        // 浼樺厛锛氶潪 AI 娑堟伅锛堢敤鎴?绯荤粺/宸ュ叿锛変娇鐢ㄥ唴瀹硅嚜閫傚簲娓叉煋锛岄伩鍏嶈鍚庣画 fillMaxWidth 鍒嗘敮鎾戞弧
+        if (message.sender != com.example.everytalk.data.DataClass.Sender.AI) {
+            Text(
+                text = message.text,
+                style = style.copy(color = textColor, platformStyle = PlatformTextStyle(includeFontPadding = false)),
+                modifier = Modifier.wrapContentWidth()
+            )
+            return@Column
+        }
+
+        // 鑻ュ凡缁撴潫娴佸紡锛堟渶缁堟€侊級锛屼紭鍏堜娇鐢?鏁存鏂囨湰绾?鐨勬覆鏌撶瓥鐣ワ紝閬垮厤琚鐗囧寲 parts 骞叉壈
         if (!isStreaming) {
             val t = cleanedText
-            // 先渲染整段中的首张表格（若存在）
+            
+            // 馃幆 鏈€楂樹紭鍏堢骇锛氬厛澶勭悊鍥存爮浠ｇ爜鍧楋紝纭繚浣跨敤CodePreview缁勪欢
+            val fencedRegex = Regex("(?s)```\\s*([a-zA-Z0-9_+\\-#.]*)[ \\t]*\\r?\\n?([\\s\\S]*?)\\r?\\n?```")
+            val codeMatches = fencedRegex.findAll(t).toList()
+            
+            if (codeMatches.isNotEmpty()) {
+                // 鎵惧埌浠ｇ爜鍧楋紝鍒嗘娓叉煋
+                var lastPos = 0
+                codeMatches.forEachIndexed { idx, matchResult ->
+                    // 娓叉煋浠ｇ爜鍧楀墠鐨勫唴瀹?
+                    val beforeCode = t.substring(lastPos, matchResult.range.first)
+                    if (beforeCode.isNotBlank()) {
+                        SmartTextRenderer(
+                            text = beforeCode,
+                            textColor = textColor,
+                            style = baseStyle,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                    
+                    // 娓叉煋浠ｇ爜鍧?- 浣跨敤CodePreview缁勪欢
+                    val language = matchResult.groups[1]?.value?.trim().orEmpty()
+                    val codeContent = matchResult.groups[2]?.value ?: ""
+                    
+                    android.util.Log.d("EnhancedMarkdownText", "馃幆 Rendering code block with language: '$language'")
+                    CodePreview(
+                        code = codeContent,
+                        language = if (language.isBlank()) null else language,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    
+                    lastPos = matchResult.range.last + 1
+                    if (idx != codeMatches.lastIndex) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                }
+                
+                // 娓叉煋鏈€鍚庝竴涓唬鐮佸潡鍚庣殑鍐呭
+                if (lastPos < t.length) {
+                    val afterCode = t.substring(lastPos)
+                    if (afterCode.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        SmartTextRenderer(
+                            text = afterCode,
+                            textColor = textColor,
+                            style = baseStyle,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+                return@Column
+            }
+            
+            // 妫€娴嬭〃鏍?
             if (detectMarkdownTable(t)) {
                 val (before, tableBlock, after) = splitByFirstMarkdownTable(t)
                 if (before.isNotBlank()) {
@@ -714,8 +1007,9 @@ fun EnhancedMarkdownText(
                     Spacer(modifier = Modifier.height(8.dp))
                 }
                 if (tableBlock.isNotBlank()) {
-                    SimpleTableRenderer(
-                        content = tableBlock,
+                    SafeMarkdownText(
+                        markdown = tableBlock,
+                        style = baseStyle,
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
@@ -731,105 +1025,68 @@ fun EnhancedMarkdownText(
                 return@Column
             }
 
-            // 再渲染整段中的围栏代码（严格：多段顺序渲染；失败则宽松兜底），强制使用 CodePreview（带复制/预览）
+            // 鏁板浼樺厛锛氳嫢瀛樺湪鎴愬 $$锛堝潡绾ф暟瀛︼級锛屼娇鐢ㄥ潡绾ф暟瀛︽覆鏌?
             run {
-                val strict = Regex("(?s)```\\s*([a-zA-Z0-9_+\\-#.]*)\\s*\\n(.*?)\\n```")
-                val matches = strict.findAll(t).toList()
-                if (matches.isNotEmpty()) {
-                    var last = 0
-                    matches.forEachIndexed { idx, mr ->
-                        val before = t.substring(last, mr.range.first)
-                        if (before.isNotBlank()) {
-                            SmartTextRenderer(
-                                text = before,
-                                textColor = textColor,
-                                style = baseStyle,
-                                modifier = Modifier
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                        }
-                        val lang = mr.groups[1]?.value?.trim().orEmpty()
-                        val code = mr.groups[2]?.value ?: ""
-                        CodePreview(
-                            code = code,
-                            language = if (lang.isBlank()) null else lang,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        last = mr.range.last + 1
-                        if (idx != matches.lastIndex) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                        }
-                    }
-                    if (last < t.length) {
-                        val tail = t.substring(last)
-                        if (tail.isNotBlank()) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            SmartTextRenderer(
-                                text = tail,
-                                textColor = textColor,
-                                style = baseStyle,
-                                modifier = Modifier
-                            )
-                        }
-                    }
-                    return@Column
-                } else if (t.contains("```")) {
-                    // 宽松兜底：不规范围栏（缺换行/缺闭合）整体交给 FallbackFencedRenderer，保证依然走 CodePreview
-                    FallbackFencedRenderer(
-                        raw = t,
+                val pairCount = Regex("\\$\\$").findAll(t).count()
+                if (pairCount >= 2 && pairCount % 2 == 0) {
+                    RenderTextWithBlockMath(
+                        text = t,
                         textColor = textColor,
                         style = baseStyle
                     )
                     return@Column
                 }
             }
+            // 琛屽唴鏁板鎴栬８ LaTeX锛氳蛋鍐呰仈鏁板娓叉煋锛堝繀瑕佹椂鍏堟渶灏忓寘瑁癸級
+            if (t.contains('$') || containsBareLatexToken(t)) {
+                val prepared = if (!t.contains('$')) wrapBareLatexForInline(t) else t
+                RenderTextWithInlineMath(
+                    text = prepared,
+                    textColor = textColor,
+                    style = baseStyle
+                )
+                return@Column
+            }
 
-            // 无表格/围栏，走智能渲染（含行内代码/数学）
-            SmartTextRenderer(
-                text = t,
-                textColor = textColor,
-                style = baseStyle,
-                modifier = Modifier
+            // 鏃犳暟瀛?浠ｇ爜/琛ㄦ牸锛氱洿鎺ヤ娇鐢?Markdown 娓叉煋锛屽苟绉婚櫎鍐呰仈鍙嶅紩鍙蜂互閬垮厤鐧借壊鍐呰仈浠ｇ爜鍧?
+            SafeMarkdownText(
+                markdown = removeInlineCodeBackticks(normalizeBasicMarkdown(t)),
+                style = baseStyle.copy(color = textColor, platformStyle = PlatformTextStyle(includeFontPadding = false)),
+                modifier = Modifier.fillMaxWidth()
             )
             return@Column
         }
 
-        // 🎯 调试日志：检查消息的解析状态
+        // 馃幆 璋冭瘯鏃ュ織锛氭鏌ユ秷鎭殑瑙ｆ瀽鐘舵€?
         android.util.Log.d("EnhancedMarkdownText", "=== Rendering Message ${message.id} ===")
         android.util.Log.d("EnhancedMarkdownText", "Message sender: ${message.sender}")
         android.util.Log.d("EnhancedMarkdownText", "Message text: ${message.text.take(100)}...")
         android.util.Log.d("EnhancedMarkdownText", "Message parts count: ${message.parts.size}")
         android.util.Log.d("EnhancedMarkdownText", "Message contentStarted: ${message.contentStarted}")
         
-        // 🎯 保持原逻辑：非 AI 消息不做任何格式转换，完全不影响用户气泡自适应宽度
-        if (message.sender != com.example.everytalk.data.DataClass.Sender.AI) {
-            android.util.Log.d("EnhancedMarkdownText", "User/Non-AI message - displaying raw text without formatting")
-            Text(
-                text = message.text,
-                style = style.copy(color = textColor, platformStyle = PlatformTextStyle(includeFontPadding = false)),
-                modifier = Modifier.wrapContentWidth()
-            )
-            return@Column
-        }
+        // 宸插湪鍑芥暟寮€澶翠紭鍏堝鐞嗕簡闈?AI 鍒嗘敮锛堝唴瀹硅嚜閫傚簲 + 鎻愬墠杩斿洖锛?
         
-        // 🎯 简单Markdown快速路径：无$$块级数学、无围栏代码、无表格时，直接交给SmartTextRenderer统一渲染
+        // 馃幆 绠€鍗昅arkdown蹇€熻矾寰勶細鏃?$鍧楃骇鏁板銆佹棤鍥存爮浠ｇ爜銆佹棤琛ㄦ牸鏃讹紝鐩存帴浜ょ粰SmartTextRenderer缁熶竴娓叉煋
         run {
             val t = cleanedText
             val hasBlockMath = t.contains("$$")
-            val hasFenced = Regex("(?s)```").containsMatchIn(t)
+            val hasFenced = t.contains("```")  // 绠€鍖栨娴?
             val hasTable = detectMarkdownTable(t)
+            
+            android.util.Log.d("EnhancedMarkdownText", "Quick check - hasBlockMath: $hasBlockMath, hasFenced: $hasFenced, hasTable: $hasTable")
+            
             if (!hasBlockMath && !hasFenced && !hasTable) {
-                SmartTextRenderer(
-                    text = t,
-                    textColor = textColor,
-                    style = baseStyle,
+                // 鐩存帴鐢?SafeMarkdownText 娓叉煋锛屽苟绉婚櫎鍐呰仈鍙嶅紩鍙凤紝閬垮厤鐧借壊鍐呰仈浠ｇ爜鍧?
+                SafeMarkdownText(
+                    markdown = removeInlineCodeBackticks(normalizeBasicMarkdown(t)),
+                    style = baseStyle.copy(color = textColor, platformStyle = PlatformTextStyle(includeFontPadding = false)),
                     modifier = Modifier.fillMaxWidth()
                 )
                 return@Column
             }
         }
         
-        // 优先级更高：整条消息级别的表格检测与切分渲染（避免被分片打散而检测失败）
+        // 浼樺厛绾ф洿楂橈細鏁存潯娑堟伅绾у埆鐨勮〃鏍兼娴嬩笌鍒囧垎娓叉煋锛堥伩鍏嶈鍒嗙墖鎵撴暎鑰屾娴嬪け璐ワ級
         if (detectMarkdownTable(cleanedText)) {
             val (before, tableBlock, after) = splitByFirstMarkdownTable(cleanedText)
             if (before.isNotBlank()) {
@@ -842,8 +1099,9 @@ fun EnhancedMarkdownText(
                 Spacer(modifier = Modifier.height(8.dp))
             }
             if (tableBlock.isNotBlank()) {
-                SimpleTableRenderer(
-                    content = tableBlock,
+                SafeMarkdownText(
+                    markdown = tableBlock,
+                    style = baseStyle,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -859,56 +1117,59 @@ fun EnhancedMarkdownText(
             return@Column
         }
 
-        // 🎯 致命问题根因修复：上游将整段代码围栏拆成多个 Text 分片，导致每个分片都看不到完整的 ```...```。
-        // 在"消息级别"先对整条 message.text 扫描并渲染所有围栏代码块，直接走自定义 CodePreview，避免依赖 parts 粒度。
-        run {
-            val fencedRegex = Regex("(?s)```\\s*([a-zA-Z0-9_+\\-#.]*)[ \\t]*\\r?\\n?([\\s\\S]*?)\\r?\\n?```")
-            val matches = fencedRegex.findAll(cleanedText).toList()
-            if (matches.isNotEmpty()) {
-                var last = 0
-                matches.forEachIndexed { idx, mr ->
-                    val before = cleanedText.substring(last, mr.range.first)
-                    if (before.isNotBlank()) {
-                        SmartTextRenderer(
-                            text = before,
-                            textColor = textColor,
-                            style = baseStyle,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                    }
-                    val lang = mr.groups[1]?.value?.trim().orEmpty()
-                    val code = mr.groups[2]?.value ?: ""
-                    CodePreview(
-                        code = code,
-                        language = if (lang.isBlank()) null else lang,
+        // 馃幆 鏈€楂樹紭鍏堢骇锛氬鐞嗗洿鏍忎唬鐮佸潡锛岀‘淇濅娇鐢–odePreview缁勪欢
+        val fencedRegex = Regex("(?s)```\\s*([a-zA-Z0-9_+\\-#.]*)[ \\t]*\\r?\\n?([\\s\\S]*?)\\r?\\n?```")
+        val codeMatches = fencedRegex.findAll(cleanedText).toList()
+        
+        if (codeMatches.isNotEmpty()) {
+            android.util.Log.d("EnhancedMarkdownText", "馃幆 Found ${codeMatches.size} code blocks in streaming message")
+            var lastPos = 0
+            codeMatches.forEachIndexed { idx, matchResult ->
+                val beforeCode = cleanedText.substring(lastPos, matchResult.range.first)
+                if (beforeCode.isNotBlank()) {
+                    SmartTextRenderer(
+                        text = beforeCode,
+                        textColor = textColor,
+                        style = baseStyle,
                         modifier = Modifier.fillMaxWidth()
                     )
-                    last = mr.range.last + 1
-                    if (idx != matches.lastIndex) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                    }
+                    Spacer(modifier = Modifier.height(8.dp))
                 }
-                // 统一使用 cleanedText，避免与上面的切片来源不一致导致错位
-                if (last < cleanedText.length) {
-                    val tail = cleanedText.substring(last)
-                    if (tail.isNotBlank()) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        SmartTextRenderer(
-                            text = tail,
-                            textColor = textColor,
-                            style = baseStyle,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
+                
+                val language = matchResult.groups[1]?.value?.trim().orEmpty()
+                val codeContent = matchResult.groups[2]?.value ?: ""
+                
+                android.util.Log.d("EnhancedMarkdownText", "馃幆 Rendering code block with language: '$language'")
+                CodePreview(
+                    code = codeContent,
+                    language = if (language.isBlank()) null else language,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                
+                lastPos = matchResult.range.last + 1
+                if (idx != codeMatches.lastIndex) {
+                    Spacer(modifier = Modifier.height(8.dp))
                 }
-                return@Column
             }
+            
+            if (lastPos < cleanedText.length) {
+                val afterCode = cleanedText.substring(lastPos)
+                if (afterCode.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    SmartTextRenderer(
+                        text = afterCode,
+                        textColor = textColor,
+                        style = baseStyle,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+            return@Column
         }
         
         if (message.parts.isEmpty()) {
-            android.util.Log.w("EnhancedMarkdownText", "⚠️ AI Message parts is EMPTY, attempting to parse math formulas")
-            // 🎯 临时修复：即使parts为空，也尝试解析数学公式（仅针对AI消息）
+            android.util.Log.w("EnhancedMarkdownText", "鈿狅笍 AI Message parts is EMPTY, attempting to parse math formulas")
+            // 馃幆 涓存椂淇锛氬嵆浣縫arts涓虹┖锛屼篃灏濊瘯瑙ｆ瀽鏁板鍏紡锛堜粎閽堝AI娑堟伅锛?
             if (cleanedText.contains("$") || cleanedText.contains("\\")) {
                 android.util.Log.d("EnhancedMarkdownText", "Found potential math content, parsing...")
                 
@@ -925,7 +1186,7 @@ fun EnhancedMarkdownText(
                 }
                 
                 if (parsedParts.isNotEmpty()) {
-                    // 使用解析后的parts进行渲染
+                    // 浣跨敤瑙ｆ瀽鍚庣殑parts杩涜娓叉煋
                     parsedParts.forEach { part ->
                         when (part) {
                             is MarkdownPart.Text -> {
@@ -958,19 +1219,20 @@ fun EnhancedMarkdownText(
                                 )
                             }
                             is MarkdownPart.Table -> {
-                                // 表格原生渲染（禁止 WebView/HTML）
-                                SimpleTableRenderer(
-                                    content = part.content,
+                                // 琛ㄦ牸鍘熺敓娓叉煋锛堢姝?WebView/HTML锛?
+                                SafeMarkdownText(
+                                    markdown = part.content,
+                                    style = baseStyle,
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             }
                             else -> {
-                                // 其他类型
+                                // 鍏朵粬绫诲瀷
                             }
                         }
                     }
                 } else {
-                    // 解析失败，使用智能渲染器
+                    // 瑙ｆ瀽澶辫触锛屼娇鐢ㄦ櫤鑳芥覆鏌撳櫒
                     SmartTextRenderer(
                         text = cleanedText,
                         textColor = textColor,
@@ -979,7 +1241,7 @@ fun EnhancedMarkdownText(
                     )
                 }
             } else {
-                // 没有数学内容，使用智能渲染器
+                // 娌℃湁鏁板鍐呭锛屼娇鐢ㄦ櫤鑳芥覆鏌撳櫒
                 SmartTextRenderer(
                     text = cleanedText,
                     textColor = textColor,
@@ -988,7 +1250,7 @@ fun EnhancedMarkdownText(
                 )
             }
         } else {
-            // 检查 parts 的有效性
+            // 妫€鏌?parts 鐨勬湁鏁堟€?
             val hasValidParts = message.parts.any { part ->
                 when (part) {
                     is MarkdownPart.Text -> part.content.isNotBlank()
@@ -1014,8 +1276,8 @@ fun EnhancedMarkdownText(
             }
             
             if (!hasValidParts && message.text.isNotBlank()) {
-                // 回退到原始文本渲染，使用智能渲染器
-                RenderingMonitor.logRenderingIssue(message.id, "Parts无效，回退到原始文本", cleanedText)
+                // 鍥為€€鍒板師濮嬫枃鏈覆鏌擄紝浣跨敤鏅鸿兘娓叉煋鍣?
+                RenderingMonitor.logRenderingIssue(message.id, "Parts invalid, fallback to original text", cleanedText)
                 SmartTextRenderer(
                     text = cleanedText,
                     textColor = textColor,
@@ -1023,13 +1285,13 @@ fun EnhancedMarkdownText(
                     modifier = Modifier
                 )
             } else {
-                // 🎯 智能检测：如果内容很短且可能被错误分割，直接合并渲染
+                // 馃幆 鏅鸿兘妫€娴嬶細濡傛灉鍐呭寰堢煭涓斿彲鑳借閿欒鍒嗗壊锛岀洿鎺ュ悎骞舵覆鏌?
                 val shouldMergeContent = shouldMergeAllContent(message.parts, cleanedText)
                 android.util.Log.d("EnhancedMarkdownText", "Should merge content: $shouldMergeContent")
                 
                 if (shouldMergeContent) {
-                    android.util.Log.d("EnhancedMarkdownText", "🔧 检测到内容被错误分割，合并渲染")
-                    // 直接使用清洗后的文本进行完整渲染，使用智能渲染器
+                    android.util.Log.d("EnhancedMarkdownText", "馃敡 妫€娴嬪埌鍐呭琚敊璇垎鍓诧紝鍚堝苟娓叉煋")
+                    // 鐩存帴浣跨敤娓呮礂鍚庣殑鏂囨湰杩涜瀹屾暣娓叉煋锛屼娇鐢ㄦ櫤鑳芥覆鏌撳櫒
                     SmartTextRenderer(
                         text = cleanedText,
                         textColor = textColor,
@@ -1037,16 +1299,16 @@ fun EnhancedMarkdownText(
                         modifier = Modifier.fillMaxWidth()
                     )
                 } else {
-                    android.util.Log.d("EnhancedMarkdownText", "🎯 Using part-by-part rendering with ${message.parts.size} parts")
-                    // 🎯 激进优化：将连续的文本和行内数学公式合并成一个流式布局
+                    android.util.Log.d("EnhancedMarkdownText", "馃幆 Using part-by-part rendering with ${message.parts.size} parts")
+                    // 馃幆 婵€杩涗紭鍖栵細灏嗚繛缁殑鏂囨湰鍜岃鍐呮暟瀛﹀叕寮忓悎骞舵垚涓€涓祦寮忓竷灞€
                     val consolidatedContent = consolidateInlineContent(message.parts)
                     android.util.Log.d("EnhancedMarkdownText", "Consolidated content count: ${consolidatedContent.size}")
                     
                     consolidatedContent.forEach { content ->
                         when (content) {
                             is ConsolidatedContent.FlowContent -> {
-                                android.util.Log.d("EnhancedMarkdownText", "🎯 Rendering FlowContent with ${content.parts.size} parts")
-                                // 使用自定义的行内渲染器，完全消除换行
+                                android.util.Log.d("EnhancedMarkdownText", "馃幆 Rendering FlowContent with ${content.parts.size} parts")
+                                // 浣跨敤鑷畾涔夌殑琛屽唴娓叉煋鍣紝瀹屽叏娑堥櫎鎹㈣
                                 InlineContentRenderer(
                                     parts = content.parts,
                                     textColor = textColor,
@@ -1055,17 +1317,17 @@ fun EnhancedMarkdownText(
                             }
                             is ConsolidatedContent.BlockContent -> {
                                 val part = content.part
-                                android.util.Log.d("EnhancedMarkdownText", "🎯 Rendering BlockContent: ${part::class.simpleName}")
+                                android.util.Log.d("EnhancedMarkdownText", "馃幆 Rendering BlockContent: ${part::class.simpleName}")
                                 when (part) {
                                     is MarkdownPart.CodeBlock -> {
-                                        android.util.Log.d("EnhancedMarkdownText", "🎯 Rendering CodeBlock")
+                                        android.util.Log.d("EnhancedMarkdownText", "馃幆 Rendering CodeBlock")
                                         CodePreview(
                                             code = part.content,
                                             language = part.language
                                         )
                                     }
                                     is MarkdownPart.MathBlock -> {
-                                        android.util.Log.d("EnhancedMarkdownText", "🎯 Rendering MathBlock: '${part.latex}' (displayMode=${part.displayMode})")
+                                        android.util.Log.d("EnhancedMarkdownText", "馃幆 Rendering MathBlock: '${part.latex}' (displayMode=${part.displayMode})")
                                         LatexMath(
                                             latex = part.latex,
                                             inline = false,
@@ -1076,15 +1338,16 @@ fun EnhancedMarkdownText(
                                         )
                                     }
                                     is MarkdownPart.Table -> {
-                                        android.util.Log.d("EnhancedMarkdownText", "🎯 Rendering Table block (native)")
-                                        SimpleTableRenderer(
-                                            content = part.content,
+                                        android.util.Log.d("EnhancedMarkdownText", "馃幆 Rendering Table block (native)")
+                                        SafeMarkdownText(
+                                            markdown = part.content,
+                                            style = style,
                                             modifier = Modifier.fillMaxWidth()
                                         )
                                     }
                                     else -> {
-                                        android.util.Log.d("EnhancedMarkdownText", "🎯 Other block content type: ${part::class.simpleName}")
-                                        // 处理其他块级内容
+                                        android.util.Log.d("EnhancedMarkdownText", "馃幆 Other block content type: ${part::class.simpleName}")
+                                        // 澶勭悊鍏朵粬鍧楃骇鍐呭
                                     }
                                 }
                             }
@@ -1106,9 +1369,9 @@ private fun LatexMath(
     messageId: String = "",
     mathId: String = "${messageId}_${latex.hashCode()}"
 ) {
-    android.util.Log.d("LatexMath", "🎯 开始原生渲染LaTeX: '$latex' (inline=$inline, mathId=$mathId)")
+    android.util.Log.d("LatexMath", "馃幆 寮€濮嬪師鐢熸覆鏌揕aTeX: '$latex' (inline=$inline, mathId=$mathId)")
     
-    // 直接使用新的原生渲染器，无需复杂的状态管理
+    // 鐩存帴浣跨敤鏂扮殑鍘熺敓娓叉煋鍣紝鏃犻渶澶嶆潅鐨勭姸鎬佺鐞?
     NativeMathText(
         latex = latex,
         isInline = inline,
@@ -1129,30 +1392,45 @@ private fun splitTextIntoBlocks(text: String): List<MarkdownPart.Text> {
     }
 }
 
-// 轻量表格检测（前端兜底用）：存在带竖线的多行，且第二行/任一行包含 --- 分隔
+// 杞婚噺琛ㄦ牸妫€娴嬶紙鍓嶇鍏滃簳鐢級锛氬瓨鍦ㄥ甫绔栫嚎鐨勫琛岋紝涓旂浜岃/浠讳竴琛屽寘鍚?--- 鍒嗛殧
 private fun detectMarkdownTable(content: String): Boolean {
     val lines = content.trim().lines().filter { it.isNotBlank() }
     if (lines.size < 2) return false
-    // 允许全角/框线竖线
-    fun normPipes(s: String) = s.replace("｜", "|").replace("│", "|").replace("┃", "|")
+    // 鍏佽鍏ㄨ/妗嗙嚎绔栫嚎
+    fun normPipes(s: String): String {
+        val barLikes = setOf('｜','│','┃','∣','︱','ǀ','❘','❙','❚','⎪','￨')
+        val sb = StringBuilder(s.length)
+        for (ch in s) {
+            sb.append(if (ch in barLikes) '|' else ch)
+        }
+        return sb.toString()
+    }
     val hasPipes = lines.count { normPipes(it).contains("|") } >= 2
     if (!hasPipes) return false
-    // 放宽匹配：允许分隔行后紧跟首行数据（同一行）
+    // 鏀惧鍖归厤锛氬厑璁稿垎闅旇鍚庣揣璺熼琛屾暟鎹紙鍚屼竴琛岋級
     val separatorRegexLoose = Regex("^\\s*\\|?\\s*:?[-]{2,}:?\\s*(\\|\\s*:?[-]{2,}:?\\s*)+\\|?\\s*")
-    return lines.any { line ->
+    val detectedIndex = lines.indexOfFirst { line ->
         val t = normPipes(line).trim()
         separatorRegexLoose.containsMatchIn(t)
     }
+    return detectedIndex != -1
 }
 
-// 从整段文本中提取第一张 Markdown 表格，返回 (表格前文本, 表格文本, 表格后文本)
+// 浠庢暣娈垫枃鏈腑鎻愬彇绗竴寮?Markdown 琛ㄦ牸锛岃繑鍥?(琛ㄦ牸鍓嶆枃鏈? 琛ㄦ牸鏂囨湰, 琛ㄦ牸鍚庢枃鏈?
 private fun splitByFirstMarkdownTable(content: String): Triple<String, String, String> {
     val rawLines = content.lines()
-    fun normPipes(s: String) = s.replace("｜", "|").replace("│", "|").replace("┃", "|")
-    // 放宽：分隔模式无需锚定到行尾，便于从同行中切出尾部数据
+    fun normPipes(s: String): String {
+        val barLikes = setOf('｜','│','┃','∣','︱','ǀ','❘','❙','❚','⎪','￨')
+        val sb = StringBuilder(s.length)
+        for (ch in s) {
+            sb.append(if (ch in barLikes) '|' else ch)
+        }
+        return sb.toString()
+    }
+    // 鏀惧锛氬垎闅旀ā寮忔棤闇€閿氬畾鍒拌灏撅紝渚夸簬浠庡悓琛屼腑鍒囧嚭灏鹃儴鏁版嵁
     val separatorRegexLoose = Regex("^\\s*\\|?\\s*:?[-]{2,}:?\\s*(\\|\\s*:?[-]{2,}:?\\s*)+\\|?\\s*")
 
-    // 找到第一条分隔行（宽松匹配）
+    // 鎵惧埌绗竴鏉″垎闅旇锛堝鏉惧尮閰嶏級
     var sepIdx = -1
     var sepMatch: MatchResult? = null
     for (i in rawLines.indices) {
@@ -1166,7 +1444,7 @@ private fun splitByFirstMarkdownTable(content: String): Triple<String, String, S
     }
     if (sepIdx <= 0 || sepMatch == null) return Triple(content, "", "")
 
-    // 表头行：向上找第一条“含管道且非空”的行
+    // 琛ㄥご琛岋細鍚戜笂鎵剧涓€鏉♀€滃惈绠￠亾涓旈潪绌衡€濈殑琛?
     var headerIdx = sepIdx - 1
     while (headerIdx >= 0) {
         val ht = normPipes(rawLines[headerIdx])
@@ -1175,40 +1453,43 @@ private fun splitByFirstMarkdownTable(content: String): Triple<String, String, S
     }
     if (headerIdx < 0) return Triple(content, "", "")
 
-    // 计算 start/end，并处理“分隔行后拼接了首行数据”的尾巴
+    // 璁＄畻 start/end锛屽苟澶勭悊鈥滃垎闅旇鍚庢嫾鎺ヤ簡棣栬鏁版嵁鈥濈殑灏惧反
     val start = headerIdx
     val lines = rawLines.toMutableList()
 
-    // 取分隔片段与尾部数据
+    // 鍙栧垎闅旂墖娈典笌灏鹃儴鏁版嵁
     val sepLineNorm = normPipes(lines[sepIdx])
     val matchedSep = sepMatch!!.value.trim()
     val tail = sepLineNorm.substring(sepMatch!!.range.last + 1).trim()
 
-    // 用纯分隔行替换原 sepIdx 行
+    // 鐢ㄧ函鍒嗛殧琛屾浛鎹㈠師 sepIdx 琛?
     lines[sepIdx] = matchedSep
 
-    // 如果 tail 存在，作为第一条数据行插入到 sepIdx+1
+    // 濡傛灉 tail 瀛樺湪锛屼綔涓虹涓€鏉℃暟鎹鎻掑叆鍒?sepIdx+1
     var end = sepIdx + 1
     if (tail.isNotEmpty()) {
         val firstData = if (tail.startsWith("|")) tail else "| $tail |"
         lines.add(end, firstData)
-        end++ // 指向下一行
+        end++ // 鎸囧悜涓嬩竴琛?
     }
 
-    // 继续向下吞并数据行
+    // 缁х画鍚戜笅鍚炲苟鏁版嵁琛?
     while (end < lines.size) {
         val dt = normPipes(lines[end])
         if (dt.isBlank()) {
-            // 空行算作表格块的终止，与后文分隔
+            // 绌鸿绠椾綔琛ㄦ牸鍧楃殑缁堟锛屼笌鍚庢枃鍒嗛殧
             break
         }
         if (!dt.contains("|")) break
         end++
     }
 
+
     val before = lines.take(start).joinToString("\n").trimEnd()
     val tableBlock = lines.subList(start, end).joinToString("\n").trim()
     val after = if (end < lines.size) lines.drop(end).joinToString("\n").trimStart() else ""
+
+
     return Triple(before, tableBlock, after)
 }
 
@@ -1218,25 +1499,27 @@ fun StableMarkdownText(
     style: TextStyle,
     modifier: Modifier = Modifier
 ) {
-    MarkdownText(markdown = markdown, style = style, modifier = modifier)
+    SafeMarkdownText(markdown = markdown, style = style, modifier = modifier)
 }
 
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun RenderTextWithInlineCode(
-    text: String,
-    style: TextStyle,
-    textColor: Color
-) {
-    // 单体渲染：去掉反引号后交给 MarkdownText，保持段落级排版稳定且无白底
-    val unified = remember(text) {
-        normalizeBasicMarkdownNoMath(removeInlineCodeBackticks(unwrapFileExtensionsInBackticks(text)))
+// 灏嗗唴鑱斾唬鐮佽浆鎹负鍥存爮浠ｇ爜鍧楁牸寮忥紝浠ヤ究浣跨敤CodePreview缁勪欢
+private fun convertInlineToFencedCode(text: String): String {
+    if (!text.contains('`')) return text
+    val segments = splitInlineCodeSegments(text)
+    val result = StringBuilder()
+    
+    segments.forEach { segment ->
+        if (segment.isCode) {
+            // 杞崲涓哄洿鏍忎唬鐮佸潡鏍煎紡
+            result.append("\n```\n")
+            result.append(segment.text)
+            result.append("\n```\n")
+        } else {
+            result.append(segment.text)
+        }
     }
-    MarkdownText(
-        markdown = unified,
-        style = style.copy(color = textColor, platformStyle = PlatformTextStyle(includeFontPadding = false)),
-        modifier = Modifier.fillMaxWidth()
-    )
+    
+    return result.toString()
 }
 
 private data class InlineSegment(val text: String, val isCode: Boolean)
@@ -1278,7 +1561,7 @@ private fun splitInlineCodeSegments(text: String): List<InlineSegment> {
     return res
 }
 
-// 识别“缩进式代码块”工具：连续两行及以上以4空格或Tab开头的文本
+// 璇嗗埆鈥滅缉杩涘紡浠ｇ爜鍧椻€濆伐鍏凤細杩炵画涓よ鍙婁互涓婁互4绌烘牸鎴朤ab寮€澶寸殑鏂囨湰
 private data class IndentedBlock(val range: IntRange, val code: String)
 private data class IndentedBlocks(val blocks: List<IndentedBlock>)
 
@@ -1314,11 +1597,11 @@ private fun extractIndentedCodeBlocks(text: String): IndentedBlocks? {
             }
         }
         if (count >= 2) {
-            // 仅将“至少两行”的连续缩进行视为代码块
+            // 浠呭皢鈥滆嚦灏戜袱琛屸€濈殑杩炵画缂╄繘琛岃涓轰唬鐮佸潡
             val endOffsetExclusive = offset
             blocks += IndentedBlock(IntRange(startOffset, endOffsetExclusive - 1), buf.toString().trimEnd('\n'))
         } else {
-            // 单行缩进回退为普通文本
+            // 鍗曡缂╄繘鍥為€€涓烘櫘閫氭枃鏈?
         }
     }
     return if (blocks.isEmpty()) null else IndentedBlocks(blocks)
@@ -1334,24 +1617,23 @@ private fun normalizeHeadingsForSimplePath(text: String): String {
     if (text.isBlank()) return text
     val lines = text.lines().map { line ->
         var l = line
-        if (l.startsWith("＃")) {
-            val count = l.takeWhile { it == '＃' }.length
+        if (l.startsWith("#")) {
+            val count = l.takeWhile { it == '#' }.length
             l = "#".repeat(count) + l.drop(count)
         }
         l = l.replace(Regex("^(\\s*#{1,6})([^#\\s])")) { mr ->
             "${mr.groups[1]!!.value} ${mr.groups[2]!!.value}"
         }
         l
-
     }
     return lines.joinToString("\n")
 }
 
 /**
-* 宽松的围栏代码渲染器：
-* - 仅依据 “```” 分割奇偶段；偶数段视为围栏头（可能包含语言与同一行代码）
-* - 允许缺少结尾 ```；最后一个代码段也会用 CodePreview 渲染
-* - 尽最大努力提取语言：开头行的“```lang”作为语言，紧随其后的同一行残余拼到代码正文
+* 瀹芥澗鐨勫洿鏍忎唬鐮佹覆鏌撳櫒锛?
+* - 浠呬緷鎹?鈥渀``鈥?鍒嗗壊濂囧伓娈碉紱鍋舵暟娈佃涓哄洿鏍忓ご锛堝彲鑳藉寘鍚瑷€涓庡悓涓€琛屼唬鐮侊級
+* - 鍏佽缂哄皯缁撳熬 ```锛涙渶鍚庝竴涓唬鐮佹涔熶細鐢?CodePreview 娓叉煋
+* - 灏芥渶澶у姫鍔涙彁鍙栬瑷€锛氬紑澶磋鐨勨€渀``lang鈥濅綔涓鸿瑷€锛岀揣闅忓叾鍚庣殑鍚屼竴琛屾畫浣欐嫾鍒颁唬鐮佹鏂?
 */
 @Composable
 private fun FallbackFencedRenderer(
@@ -1360,7 +1642,7 @@ private fun FallbackFencedRenderer(
    style: TextStyle
 ) {
    val parts = raw.split("```")
-   // 没有足够的片段，直接按普通文本渲染
+   // 娌℃湁瓒冲鐨勭墖娈碉紝鐩存帴鎸夋櫘閫氭枃鏈覆鏌?
    if (parts.size <= 1) {
        SmartTextRenderer(
            text = raw,
@@ -1376,7 +1658,7 @@ private fun FallbackFencedRenderer(
        while (i < parts.size) {
            val segment = parts[i]
            if (i % 2 == 0) {
-               // 非代码段
+               // 闈炰唬鐮佹
                if (segment.isNotBlank()) {
                    SmartTextRenderer(
                        text = segment,
@@ -1386,7 +1668,7 @@ private fun FallbackFencedRenderer(
                    )
                }
            } else {
-               // 代码段（可能是不规范的开头/缺少闭合）
+               // 浠ｇ爜娈碉紙鍙兘鏄笉瑙勮寖鐨勫紑澶?缂哄皯闂悎锛?
                val lines = segment.lines()
                val header = lines.firstOrNull() ?: ""
                val lang = header.trim().takeWhile { !it.isWhitespace() }
@@ -1415,16 +1697,16 @@ object RenderingMonitor {
     private const val TAG = "MarkdownRendering"
     
     fun logRenderingIssue(messageId: String, issue: String, content: String) {
-        android.util.Log.w(TAG, "消息$messageId 渲染问题: $issue")
-        android.util.Log.v(TAG, "问题内容摘要: ${content.take(100)}...")
+        android.util.Log.w(TAG, "娑堟伅$messageId 娓叉煋闂: $issue")
+        android.util.Log.v(TAG, "闂鍐呭鎽樿: ${content.take(100)}...")
     }
     
     fun trackRenderingPerformance(messageId: String, startTime: Long) {
         val duration = System.currentTimeMillis() - startTime
         if (duration > 1000) {
-            android.util.Log.w(TAG, "消息$messageId 渲染耗时: ${duration}ms")
+            android.util.Log.w(TAG, "娑堟伅$messageId 娓叉煋鑰楁椂: ${duration}ms")
         } else {
-            android.util.Log.v(TAG, "消息$messageId 渲染完成: ${duration}ms")
+            android.util.Log.v(TAG, "娑堟伅$messageId 娓叉煋瀹屾垚: ${duration}ms")
         }
     }
     
@@ -1432,14 +1714,14 @@ object RenderingMonitor {
         val issues = mutableListOf<String>()
         val fenceCount = Regex("```").findAll(content).count()
         if (fenceCount % 2 != 0) {
-            issues.add("未闭合的代码块")
+            issues.add("Unclosed code fence")
         }
         val tableLines = content.lines().map { it.trim() }.filter { it.isNotEmpty() && it.contains("|") }
         if (tableLines.isNotEmpty()) {
             val separatorRegex = Regex("^\\|?\\s*:?[-]{3,}:?\\s*(\\|\\s*:?[-]{3,}:?\\s*)+\\|?$")
             val hasSeparator = tableLines.any { separatorRegex.containsMatchIn(it) }
             if (!hasSeparator) {
-                issues.add("表格缺少分隔行")
+                issues.add("Table missing separator row")
             }
         }
         return issues.isEmpty() to issues
