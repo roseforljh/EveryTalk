@@ -5,6 +5,7 @@ import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -682,7 +683,12 @@ fun AppDrawerContent(
                         OutlinedTextField(
                             value = newName,
                             onValueChange = { newName = it },
-                            singleLine = true
+                            singleLine = true,
+                            shape = RoundedCornerShape(32.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                unfocusedBorderColor = Color.Gray.copy(alpha = 0.5f)
+                            )
                         )
                     },
                     confirmButton = {
@@ -691,25 +697,28 @@ fun AppDrawerContent(
                                 onRenameRequest(index, newName)
                                 renamingIndex = null
                             },
+                            shape = RoundedCornerShape(32.dp),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary,
-                                contentColor = MaterialTheme.colorScheme.onPrimary
+                                containerColor = MaterialTheme.colorScheme.surface,
+                                contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black
                             )
                         ) {
-                            Text("确定")
+                            Text("确定", fontWeight = FontWeight.Bold)
                         }
                     },
                     dismissButton = {
                         Button(
                             onClick = { renamingIndex = null },
+                            shape = RoundedCornerShape(32.dp),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.secondary,
-                                contentColor = MaterialTheme.colorScheme.onSecondary
+                                containerColor = MaterialTheme.colorScheme.surface,
+                                contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black
                             )
                         ) {
-                            Text("取消")
+                            Text("取消", fontWeight = FontWeight.Bold)
                         }
                     },
+                    shape = RoundedCornerShape(32.dp),
                     containerColor = MaterialTheme.colorScheme.surface
                 )
             }

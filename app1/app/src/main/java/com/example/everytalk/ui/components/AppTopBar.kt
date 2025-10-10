@@ -10,6 +10,8 @@ package com.example.everytalk.ui.components
  import androidx.compose.foundation.clickable
  import androidx.compose.foundation.interaction.MutableInteractionSource
  import androidx.compose.foundation.layout.*
+ import androidx.compose.foundation.BorderStroke
+ import androidx.compose.foundation.isSystemInDarkTheme
  import androidx.compose.foundation.shape.CircleShape
  import androidx.compose.material.icons.Icons
  import androidx.compose.material.icons.filled.Menu
@@ -24,6 +26,7 @@ package com.example.everytalk.ui.components
  import androidx.compose.ui.Modifier
  import androidx.compose.ui.draw.clip
  import androidx.compose.ui.draw.scale
+ import androidx.compose.ui.graphics.Brush
  import androidx.compose.ui.graphics.Color
  import androidx.compose.ui.text.font.FontWeight
  import androidx.compose.ui.text.style.TextAlign
@@ -98,7 +101,7 @@ package com.example.everytalk.ui.components
                       // 胶囊
                       Surface(
                           shape = CircleShape,
-                          color = MaterialTheme.colorScheme.surfaceDim,
+                          color = if (isSystemInDarkTheme()) Color.Black else MaterialTheme.colorScheme.surfaceDim,
                           modifier = Modifier
                               .height(28.dp)
                               .wrapContentWidth(unbounded = true)

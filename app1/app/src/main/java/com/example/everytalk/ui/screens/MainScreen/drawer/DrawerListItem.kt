@@ -6,6 +6,7 @@ import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.gestures.GestureCancellationException
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
@@ -79,6 +80,7 @@ internal fun DrawerConversationListItem(
     var pressAndHoldJob by remember { mutableStateOf<Job?>(null) }
     val haptic = LocalHapticFeedback.current
 
+    val isDarkTheme = isSystemInDarkTheme()
     val alpha = remember { Animatable(0f) }
     val translationY = remember { Animatable(50f) }
 
@@ -137,7 +139,7 @@ internal fun DrawerConversationListItem(
                     val alpha = CUSTOM_RIPPLE_START_ALPHA * (1f - animationProgress)
                     if (alpha > 0f) {
                         drawCircle(
-                            color = CUSTOM_RIPPLE_COLOR,
+                            color = if (isDarkTheme) Color.White else CUSTOM_RIPPLE_COLOR,
                             radius = rippleRadius,
                             center = currentPressPosition,
                             alpha = alpha.coerceIn(

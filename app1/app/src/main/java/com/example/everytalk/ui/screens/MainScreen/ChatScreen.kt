@@ -550,7 +550,7 @@ private fun AboutDialog(
                     viewModel.checkForUpdates()
                     onDismiss() // Immediately close the about dialog
                 },
-                shape = RoundedCornerShape(20.dp),
+                shape = RoundedCornerShape(32.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary
@@ -562,7 +562,7 @@ private fun AboutDialog(
         dismissButton = {
             Button(
                 onClick = onDismiss,
-                shape = RoundedCornerShape(20.dp),
+                shape = RoundedCornerShape(32.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.secondary,
                     contentColor = MaterialTheme.colorScheme.onSecondary
@@ -571,7 +571,7 @@ private fun AboutDialog(
                 Text("关闭")
             }
         },
-        shape = RoundedCornerShape(28.dp),
+        shape = RoundedCornerShape(32.dp),
         containerColor = MaterialTheme.colorScheme.surface
     )
 }
@@ -591,7 +591,7 @@ private fun UpdateAvailableDialog(
         confirmButton = {
             Button(
                 onClick = { onUpdate(releaseInfo.htmlUrl) },
-                shape = RoundedCornerShape(20.dp),
+                shape = RoundedCornerShape(32.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary
@@ -603,7 +603,7 @@ private fun UpdateAvailableDialog(
         dismissButton = {
             Button(
                 onClick = onDismiss,
-                shape = RoundedCornerShape(20.dp),
+                shape = RoundedCornerShape(32.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.secondary,
                     contentColor = MaterialTheme.colorScheme.onSecondary
@@ -612,7 +612,7 @@ private fun UpdateAvailableDialog(
                 Text("稍后")
             }
         },
-        shape = RoundedCornerShape(28.dp),
+        shape = RoundedCornerShape(32.dp),
         containerColor = MaterialTheme.colorScheme.surface
     )
 }

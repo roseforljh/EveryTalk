@@ -25,7 +25,7 @@ val lightChatColors = ChatColors(
 )
 
 val darkChatColors = ChatColors(
-    userBubble = Color(0xFF404040),               // 深色模式下的淡灰色背景
+    userBubble = Color(0xFF2C2C2E),               // 深色模式下的淡灰色背景
     aiBubble = Color(0xFF1A1A1A),                 // 🎯 修复：与夜间模式app背景一致
     errorContent = Color(0xFFE57373),             // 柔和的错误色
     reasoningText = Color(0xFFD0D0D0),            // 柔和的次要文字颜色

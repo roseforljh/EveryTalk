@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -55,6 +56,8 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
@@ -218,7 +221,7 @@ fun ModelSelectionBottomSheet(
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,
         sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surfaceDim,
+        containerColor = MaterialTheme.colorScheme.background,
         dragHandle = null
     ) {
         Column(
@@ -227,6 +230,21 @@ fun ModelSelectionBottomSheet(
                 .height(configuration.screenHeightDp.dp * 0.5f)
                 .nestedScroll(nestedScrollConnection)
         ) {
+            val borderColor = if (isSystemInDarkTheme()) Color.White.copy(alpha = 0.2f) else Color.Black.copy(alpha = 0.15f)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(0.5.dp)
+                    .background(
+                        brush = Brush.horizontalGradient(
+                            colors = listOf(
+                                Color.Transparent,
+                                borderColor,
+                                Color.Transparent
+                            )
+                        )
+                    )
+            )
             // 搜索和平台切换
             Row(
                 modifier = Modifier
@@ -235,7 +253,7 @@ fun ModelSelectionBottomSheet(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                val searchBarColor = MaterialTheme.colorScheme.surfaceVariant
+                val searchBarColor = Color(0xFF1F1F1F)
                 BasicTextField(
                     value = searchText,
                     onValueChange = { searchText = it },
@@ -251,7 +269,7 @@ fun ModelSelectionBottomSheet(
                             modifier = Modifier
                                 .height(36.dp)
                                 .shadow(8.dp, CircleShape, clip = false)
-                                .background(searchBarColor, CircleShape)
+                                .background(searchBarColor, RoundedCornerShape(32.dp))
                                 .padding(horizontal = 12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -281,9 +299,9 @@ fun ModelSelectionBottomSheet(
                 Box(
                     modifier = Modifier
                         .size(32.dp)
-                        .shadow(6.dp, CircleShape, clip = false)
-                        .clip(CircleShape)
-                        .background(searchBarColor)
+                        .shadow(6.dp, RoundedCornerShape(32.dp), clip = false)
+                        .clip(RoundedCornerShape(32.dp))
+                        .background(Color.Black)
                         .clickable { showPlatformDialog = true },
                     contentAlignment = Alignment.Center
                 ) {

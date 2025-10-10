@@ -30,6 +30,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import com.example.everytalk.ui.theme.SeaBlue
@@ -41,6 +42,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
@@ -444,19 +446,27 @@ fun ChatInputArea(
                 .align(Alignment.BottomCenter)
                 // 与底部留更大空间（使用 start/end/bottom 以匹配重载）
                 .padding(start = 6.dp, end = 6.dp, bottom = 10.dp)
-                .shadow(
-                    elevation = 6.dp,
-                    shape = RoundedCornerShape(24.dp),
-                    clip = false
-                )
                 .background(
-                    MaterialTheme.colorScheme.surface,
-                    RoundedCornerShape(24.dp)
+                    MaterialTheme.colorScheme.background
                 )
-                .clip(RoundedCornerShape(24.dp))
                 // 外层已统一处理 ime 与导航栏内边距
                 .onSizeChanged { intSize -> chatInputContentHeightPx = intSize.height }
         ) {
+            val borderColor = if (isSystemInDarkTheme()) Color.Gray.copy(alpha = 0.3f) else Color.Gray.copy(alpha = 0.2f)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(0.5.dp)
+                    .background(
+                        brush = Brush.horizontalGradient(
+                            colors = listOf(
+                                Color.Transparent,
+                                borderColor,
+                                Color.Transparent
+                            )
+                        )
+                    )
+            )
             Column(
                 modifier = Modifier
                     // 略减整体高度：上下内边距更紧凑
@@ -495,7 +505,7 @@ fun ChatInputArea(
                     ),
                     minLines = 1,
                     maxLines = 5,
-                    shape = RoundedCornerShape(16.dp)
+                    shape = RoundedCornerShape(32.dp)
                 )
 
                 // 使用优化的控制按钮行组件

@@ -7,6 +7,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -34,6 +35,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -48,7 +50,7 @@ val DialogTextFieldColors
         disabledTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
         cursorColor = MaterialTheme.colorScheme.primary,
         focusedBorderColor = MaterialTheme.colorScheme.primary,
-        unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+        unfocusedBorderColor = Color.Gray.copy(alpha = 0.5f),
         disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
         focusedLabelColor = MaterialTheme.colorScheme.primary,
         unfocusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
@@ -57,7 +59,7 @@ val DialogTextFieldColors
         unfocusedContainerColor = MaterialTheme.colorScheme.surface,
         disabledContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
     )
-val DialogShape = RoundedCornerShape(24.dp)
+val DialogShape = RoundedCornerShape(32.dp)
 
 private fun normalizeBaseUrlForPreview(url: String): String =
     url.trim().trimEnd('#')
@@ -194,18 +196,20 @@ internal fun AddProviderDialog(
                 onClick = onConfirm,
                 enabled = newProviderName.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black
                 )
-            ) { Text("添加") }
+            ) { Text("添加", fontWeight = FontWeight.Bold) }
         },
         dismissButton = {
-            TextButton(
+            Button(
                 onClick = onDismissRequest,
-                colors = ButtonDefaults.textButtonColors(
-                    contentColor = MaterialTheme.colorScheme.error
+                shape = RoundedCornerShape(32.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black
                 )
-            ) { Text("取消") }
+            ) { Text("取消", fontWeight = FontWeight.Bold) }
         },
         containerColor = MaterialTheme.colorScheme.surface,
         titleContentColor = MaterialTheme.colorScheme.onSurface,
@@ -342,6 +346,7 @@ internal fun AddNewFullConfigDialog(
     }
 
     AlertDialog(
+        shape = RoundedCornerShape(32.dp),
         onDismissRequest = onDismissRequest,
         title = { Text("添加配置", color = MaterialTheme.colorScheme.onSurface) },
         text = {
@@ -565,18 +570,23 @@ internal fun AddNewFullConfigDialog(
                 onClick = { onConfirm(provider, apiAddress, apiKey, selectedChannel, imageSize, numInferenceSteps.toIntOrNull(), guidanceScale.toFloatOrNull()) },
                 enabled = apiKey.isNotBlank() && provider.isNotBlank() && apiAddress.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black,
+                    disabledContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
                 )
             ) {
-                Text("确定")
+                Text("确定", fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
-            TextButton(
+            Button(
                 onClick = onDismissRequest,
-                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-            ) { Text("取消") }
+                shape = RoundedCornerShape(32.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black
+                )
+            ) { Text("取消", fontWeight = FontWeight.Bold) }
         },
         containerColor = MaterialTheme.colorScheme.surface,
         titleContentColor = MaterialTheme.colorScheme.onSurface,
@@ -656,36 +666,52 @@ internal fun EditConfigDialog(
                 
                 // 渠道类型选择下拉框
                 var expanded by remember { mutableStateOf(false) }
+                var channelMenuExpanded by remember { mutableStateOf(false) }
+                var channelTextFieldAnchorBounds by remember { mutableStateOf<Rect?>(null) }
+                val channelMenuTransitionState = remember { MutableTransitionState(initialState = false) }
+                val shouldShowChannelMenuLogical = channelMenuExpanded && channelTextFieldAnchorBounds != null
+
+                LaunchedEffect(shouldShowChannelMenuLogical) {
+                    channelMenuTransitionState.targetState = shouldShowChannelMenuLogical
+                }
+
                 ExposedDropdownMenuBox(
-                    expanded = expanded,
-                    onExpandedChange = { expanded = !expanded },
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
+                    expanded = channelMenuExpanded,
+                    onExpandedChange = { channelMenuExpanded = !channelMenuExpanded },
+                    modifier = Modifier.padding(bottom = 12.dp)
                 ) {
                     OutlinedTextField(
                         value = selectedChannel,
-                        onValueChange = { },
-                        label = { Text("渠道类型") },
+                        onValueChange = {},
                         readOnly = true,
-                        trailingIcon = {
-                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
-                        },
+                        label = { Text("渠道") },
                         modifier = Modifier
+                            .menuAnchor()
                             .fillMaxWidth()
-                            .menuAnchor(),
+                            .onGloballyPositioned { coordinates ->
+                                channelTextFieldAnchorBounds = coordinates.boundsInWindow()
+                            },
+                        trailingIcon = {
+                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = channelMenuExpanded)
+                        },
                         shape = DialogShape,
                         colors = DialogTextFieldColors
                     )
-                    
-                    ExposedDropdownMenu(
-                        expanded = expanded,
-                        onDismissRequest = { expanded = false }
+
+                    CustomStyledDropdownMenu(
+                        transitionState = channelMenuTransitionState,
+                        onDismissRequest = {
+                            channelMenuExpanded = false
+                        },
+                        anchorBounds = channelTextFieldAnchorBounds,
+                        yOffsetDp = 220.dp
                     ) {
-                        channelTypes.forEach { channelType ->
+                        channelTypes.forEach { channel ->
                             DropdownMenuItem(
-                                text = { Text(channelType) },
+                                text = { Text(channel) },
                                 onClick = {
-                                    selectedChannel = channelType
-                                    expanded = false
+                                    selectedChannel = channel
+                                    channelMenuExpanded = false
                                 }
                             )
                         }
@@ -698,16 +724,21 @@ internal fun EditConfigDialog(
                 onClick = { onConfirm(apiAddress, apiKey, selectedChannel) },
                 enabled = apiKey.isNotBlank() && apiAddress.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black,
+                    disabledContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
                 )
-            ) { Text("更新") }
+            ) { Text("更新", fontWeight = FontWeight.Bold) }
         },
         dismissButton = {
-            TextButton(
+            Button(
                 onClick = onDismissRequest,
-                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-            ) { Text("取消") }
+                shape = RoundedCornerShape(32.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black
+                )
+            ) { Text("取消", fontWeight = FontWeight.Bold) }
         },
         containerColor = MaterialTheme.colorScheme.surface,
         shape = DialogShape,
@@ -742,15 +773,19 @@ internal fun ConfirmDeleteDialog(
                     contentColor = MaterialTheme.colorScheme.onError
                 )
             ) {
-                Text("确认删除")
+                Text("确认删除", fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
-            TextButton(
+            Button(
                 onClick = onDismissRequest,
-                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)
+                shape = RoundedCornerShape(32.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black
+                )
             ) {
-                Text("取消")
+                Text("取消", fontWeight = FontWeight.Bold)
             }
         },
         containerColor = MaterialTheme.colorScheme.surface,
@@ -783,35 +818,39 @@ internal fun ImportExportDialog(
                     onClick = onExport,
                     enabled = isExportEnabled,
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(50.dp),
+                    shape = RoundedCornerShape(32.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black
                     )
                 ) {
-                    Text("导出配置")
+                    Text("导出配置", fontWeight = FontWeight.Bold)
                 }
                 Spacer(Modifier.height(16.dp))
                 Button(
                     onClick = onImport,
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(50.dp),
+                    shape = RoundedCornerShape(32.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black
                     )
                 ) {
-                    Text("导入配置")
+                    Text("导入配置", fontWeight = FontWeight.Bold)
                 }
             }
         },
         confirmButton = {},
         dismissButton = {
-            TextButton(
+            Button(
                 onClick = onDismissRequest,
-                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                shape = RoundedCornerShape(32.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black
+                )
             ) {
-                Text("取消")
+                Text("取消", fontWeight = FontWeight.Bold)
             }
         }
     )
@@ -849,16 +888,20 @@ internal fun AddModelDialog(
                 onClick = { onConfirm(modelName) },
                 enabled = modelName.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black
                 )
-            ) { Text("添加") }
+            ) { Text("添加", fontWeight = FontWeight.Bold) }
         },
         dismissButton = {
-            TextButton(
+            Button(
                 onClick = onDismissRequest,
-                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-            ) { Text("取消") }
+                shape = RoundedCornerShape(32.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black
+                )
+            ) { Text("取消", fontWeight = FontWeight.Bold) }
         },
         containerColor = MaterialTheme.colorScheme.surface,
         shape = DialogShape,

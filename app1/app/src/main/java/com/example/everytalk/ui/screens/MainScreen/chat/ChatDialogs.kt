@@ -17,7 +17,9 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -93,7 +95,7 @@ fun EditMessageDialog(
                     },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = MaterialTheme.colorScheme.primary,
-                        unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                        unfocusedBorderColor = Color.Gray.copy(alpha = 0.5f),
                         focusedLabelColor = MaterialTheme.colorScheme.primary,
                         unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
                         cursorColor = MaterialTheme.colorScheme.primary,
@@ -101,23 +103,31 @@ fun EditMessageDialog(
                         unfocusedTextColor = MaterialTheme.colorScheme.onSurface
                     ),
                     singleLine = false, maxLines = 5,
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(32.dp)
                 )
             }
         },
         confirmButton = {
-            TextButton(
+            Button(
                 onClick = onConfirmMessageEdit,
-                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.primary)
-            ) { Text("确定") }
+                shape = RoundedCornerShape(32.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black
+                )
+            ) { Text("确定", fontWeight = FontWeight.Bold) }
         },
         dismissButton = {
-            TextButton(
+            Button(
                 onClick = onDismissRequest,
-                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant)
-            ) { Text("取消") }
+                shape = RoundedCornerShape(32.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black
+                )
+            ) { Text("取消", fontWeight = FontWeight.Bold) }
         },
-        shape = RoundedCornerShape(20.dp)
+        shape = RoundedCornerShape(32.dp)
     )
 }
 @Composable
@@ -138,7 +148,7 @@ fun SystemPromptDialog(
                     onValueChange = onPromptChange,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(200.dp),
+                        .height(225.dp),
                     label = { Text("设置系统提示") },
                     shape = RoundedCornerShape(16.dp)
                 )

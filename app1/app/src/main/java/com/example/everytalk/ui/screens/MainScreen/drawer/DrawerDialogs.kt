@@ -1,8 +1,10 @@
 package com.example.everytalk.ui.screens.MainScreen.drawer
 
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 
 /**
  * 删除确认对话框。
@@ -20,25 +22,28 @@ internal fun DeleteConfirmationDialog(
 ) {
     if (showDialog) {
         AlertDialog(
+            shape = RoundedCornerShape(32.dp),
             onDismissRequest = onDismiss,
             title = { Text(if (selectedItemCount > 1) "确定删除所有所选项？" else if (selectedItemCount == 1) "确定删除所选项？" else "确定删除此项？") },
             // text = { Text("此操作无法撤销。") }, // 可选
             confirmButton = {
-                TextButton(
+                Button(
+                    shape = RoundedCornerShape(32.dp),
                     onClick = {
                         onConfirm()
                         onDismiss() // 确认后也关闭对话框
                     },
-                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                 ) { Text("确定") }
             },
             dismissButton = {
-                TextButton(
+                Button(
+                    shape = RoundedCornerShape(32.dp),
                     onClick = onDismiss,
-                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surface)
                 ) { Text("取消") }
             },
-            containerColor = MaterialTheme.colorScheme.background,
+            containerColor = MaterialTheme.colorScheme.surface,
             titleContentColor = MaterialTheme.colorScheme.onSurface,
             textContentColor = MaterialTheme.colorScheme.onSurface
         )
@@ -59,25 +64,28 @@ internal fun ClearAllConfirmationDialog(
 ) {
     if (showDialog) {
         AlertDialog(
+            shape = RoundedCornerShape(32.dp),
             onDismissRequest = onDismiss,
             title = { Text("确定清空所有聊天记录？") },
             text = { Text("此操作无法撤销，所有聊天记录将被永久删除。") },
             confirmButton = {
-                TextButton(
+                Button(
+                    shape = RoundedCornerShape(32.dp),
                     onClick = {
                         onConfirm()
                         onDismiss() // 确认后也关闭对话框
                     },
-                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                 ) { Text("确定清空") }
             },
             dismissButton = {
-                TextButton(
+                Button(
+                    shape = RoundedCornerShape(32.dp),
                     onClick = onDismiss,
-                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surface)
                 ) { Text("取消") }
             },
-            containerColor = MaterialTheme.colorScheme.background,
+            containerColor = MaterialTheme.colorScheme.surface,
             titleContentColor = MaterialTheme.colorScheme.onSurface,
             textContentColor = MaterialTheme.colorScheme.onSurface
         )
@@ -91,25 +99,28 @@ internal fun ClearImageHistoryConfirmationDialog(
 ) {
    if (showDialog) {
        AlertDialog(
+           shape = RoundedCornerShape(32.dp),
            onDismissRequest = onDismiss,
            title = { Text("确定清空所有图像生成历史？") },
            text = { Text("此操作无法撤销，所有图像生成历史将被永久删除。") },
            confirmButton = {
-               TextButton(
+               Button(
+                   shape = RoundedCornerShape(32.dp),
                    onClick = {
                        onConfirm()
                        onDismiss()
                    },
-                   colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                   colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                ) { Text("确定清空") }
            },
            dismissButton = {
-               TextButton(
+               Button(
+                   shape = RoundedCornerShape(32.dp),
                    onClick = onDismiss,
-                   colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)
+                   colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surface)
                ) { Text("取消") }
            },
-           containerColor = MaterialTheme.colorScheme.background,
+           containerColor = MaterialTheme.colorScheme.surface,
            titleContentColor = MaterialTheme.colorScheme.onSurface,
            textContentColor = MaterialTheme.colorScheme.onSurface
        )

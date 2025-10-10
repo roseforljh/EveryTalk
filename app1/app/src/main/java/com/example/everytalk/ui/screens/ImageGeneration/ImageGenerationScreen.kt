@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.example.everytalk.navigation.Screen
 import com.example.everytalk.statecontroller.AppViewModel
+import com.example.everytalk.ui.components.AppTopBar
 import com.example.everytalk.statecontroller.SimpleModeManager
 import com.example.everytalk.data.DataClass.ImageRatio
 import com.example.everytalk.ui.screens.MainScreen.chat.ModelSelectionBottomSheet
@@ -122,13 +123,11 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
         containerColor = MaterialTheme.colorScheme.background,
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
         topBar = {
-            ImageGenerationTopBar(
+            AppTopBar(
                 selectedConfigName = selectedApiConfig?.name?.takeIf { it.isNotBlank() }
                     ?: selectedApiConfig?.model ?: "选择配置",
                 onMenuClick = { coroutineScope.launch { viewModel.drawerState.open() } },
                 onSettingsClick = {
-                    // 根据应用的当前模式状态决定跳转到哪个设置页面
-                    // 使用更可靠的模式检测，基于uiModeFlow而不是消息内容
                     val currentMode = viewModel.getCurrentMode()
                     val targetScreen = if (currentMode == SimpleModeManager.ModeType.IMAGE) {
                         Screen.IMAGE_GENERATION_SETTINGS_SCREEN
@@ -137,9 +136,10 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                     }
                     navController.navigate(targetScreen)
                 },
-                onTitleClick = {
-                    showModelSelection = true
-                }
+                onTitleClick = { showModelSelection = true },
+                onSystemPromptClick = {},
+                systemPrompt = "",
+                isSystemPromptExpanded = false
             )
         }
     ) { paddingValues ->
