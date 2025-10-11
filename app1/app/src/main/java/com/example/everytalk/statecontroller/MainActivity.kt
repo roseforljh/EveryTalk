@@ -465,14 +465,14 @@ class MainActivity : ComponentActivity() {
        super.onPause()
        // 在应用暂停时也保存数据作为额外保护
        if (this::appViewModel.isInitialized) {
-           // appViewModel.onAppStop() // 临时注释掉，避免编译错误
+           appViewModel.onAppStop()
        }
    }
    
    override fun onStop() {
        super.onStop()
        if (this::appViewModel.isInitialized) {
-           // appViewModel.onAppStop() // 临时注释掉，避免编译错误
+           appViewModel.onAppStop()
        }
        // 🎯 应用停止时执行内存清理
        MemoryLeakGuard.performEmergencyCleanup()

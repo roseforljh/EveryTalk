@@ -23,6 +23,10 @@ sealed class AppStreamEvent {
     data class Reasoning(val text: String) : AppStreamEvent()
 
     @Serializable
+    @SerialName("reasoning_finish")
+    data class ReasoningFinish(val timestamp: String? = null) : AppStreamEvent()
+
+    @Serializable
     @SerialName("output_type")
     data class OutputType(val type: String) : AppStreamEvent()
 

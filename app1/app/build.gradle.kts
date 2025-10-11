@@ -121,7 +121,7 @@ android {
 
         implementation("androidx.compose.material:material") // 保留基础 Material 依赖
         
-        // Markdown 渲染 - 被使用,保留
+        // Markdown 渲染库（JitPack）
         implementation("com.github.jeziellago:compose-markdown:0.5.7")
         
         implementation("androidx.compose.material3:material3-window-size-class")
@@ -184,9 +184,4 @@ android {
         // ===== 网络 - OkHttp =====
         implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
-        // ===== LaTeX 数学公式渲染 =====
-        implementation("ru.noties:jlatexmath-android:0.2.0")
-        
-        // ===== 已移除的未使用依赖 =====
-        // implementation("com.google.code.gson:gson:2.10.1") // 未使用 Gson,已移除 (~2MB)
     }

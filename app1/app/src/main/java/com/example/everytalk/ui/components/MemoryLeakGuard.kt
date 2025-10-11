@@ -132,8 +132,8 @@ object MemoryLeakGuard {
      */
     private suspend fun handleEmergencyMemoryPressure() {
         withContext(Dispatchers.Main) {
-            // 只有在真正紧急的情况下才清理缓存
-            NativeMathRenderer.clearCache()
+            // 仅记录：已进入紧急清理（NativeMathRenderer 已移除）
+            // NativeMathRenderer.clearCache() // removed
             
             // 强制多次垃圾回收
             repeat(3) {
@@ -215,8 +215,8 @@ private class LeakDetector {
             android.util.Log.w("MemoryLeakGuard", 
                 "检测到内存使用增长：当前 ${currentMemory / 1024 / 1024}MB")
             
-            // 触发清理
-            NativeMathRenderer.clearCache()
+            // 触发清理（NativeMathRenderer 已移除）
+            // NativeMathRenderer.clearCache() // removed
         }
         
         lastMemory = currentMemory

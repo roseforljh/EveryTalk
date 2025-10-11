@@ -38,15 +38,11 @@ val darkChatColors = ChatColors(
 fun getChatColors(): ChatColors {
     val colorScheme = MaterialTheme.colorScheme
     return if (colorScheme.surface.luminance() > 0.5f) {
-        // 亮色模式 - AI气泡与背景色完全一致
-        lightChatColors.copy(
-            aiBubble = colorScheme.background
-        )
+        // 亮色模式：使用为聊天定制的配色（适配白天）
+        lightChatColors
     } else {
-        // 深色模式 - AI气泡与背景色完全一致  
-        darkChatColors.copy(
-            aiBubble = colorScheme.background
-        )
+        // 深色模式：使用为聊天定制的配色（适配夜晚）
+        darkChatColors
     }
 }
 

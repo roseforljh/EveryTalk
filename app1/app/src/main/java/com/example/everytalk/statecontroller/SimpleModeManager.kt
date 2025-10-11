@@ -76,29 +76,45 @@ class SimpleModeManager(
         _lastModeSwitch = System.currentTimeMillis()
         _uiMode.value = ModeType.TEXT
         
-        // 若当前文本会话为空且仅“应用了参数未发消息”，按要求删除该空会话（丢弃pending）
+        // 若当前文本会话为空且仅"应用了参数未发消息"，按要求删除该空会话（丢弃pending）
         if (stateHolder.messages.isEmpty() && stateHolder.hasPendingConversationParams()) {
             stateHolder.abandonEmptyPendingConversation()
         }
         
-        // 1. 同步保存图像模式的当前状态 - 确保状态切换的原子性
+        // 1. 同步保存两种模式的当前状态 - 确保状态切换的原子性
+        // 1. 保存当前会话，这是关键的第一步
         withContext(Dispatchers.IO) {
-            historyManager.saveCurrentChatToHistoryIfNeeded(
-                isImageGeneration = true,
-                forceSave = true
-            )
+            historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = false, forceSave = true)
+            historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true, forceSave = true)
         }
         
-        // 2. 清理图像模式状态
+        // 2. 然后再清理状态
         clearImageApiState()
         
-        // 🎯 增强会话隔离：清理图像模式的所有资源
-        val currentImageSessionId = stateHolder._currentImageGenerationConversationId.value
-        stateHolder.getApiHandler().clearImageChatResources(currentImageSessionId)
+        // 🔥 添加调试日志，诊断会话切换问题
+        Log.d(TAG, "=== MODE SWITCH DEBUG (TO TEXT) ===")
+        Log.d(TAG, "Current image messages before clear: ${stateHolder.imageGenerationMessages.map { "ID:${it.id}, Text:'${it.text.take(20)}...', ContentStarted:${it.contentStarted}" }}")
+        Log.d(TAG, "Current loaded image history index before clear: ${stateHolder._loadedImageGenerationHistoryIndex.value}")
+        Log.d(TAG, "Current image conversation ID before clear: ${stateHolder._currentImageGenerationConversationId.value}")
+        
+        // 🔥 修复：移到清空消息列表之后调用，避免清理正在使用的处理器
+        // val currentImageSessionId = stateHolder._currentImageGenerationConversationId.value
+        // stateHolder.getApiHandler().clearImageChatResources(currentImageSessionId)
         
         // 3. 强制清除图像模式的历史记录索引，确保完全独立
         stateHolder._loadedImageGenerationHistoryIndex.value = null
+        Log.d(TAG, "Cleared loaded image history index")
+        
+        // 保存消息列表的副本，用于调试
+        val imageMessagesBeforeClear = stateHolder.imageGenerationMessages.toList()
         stateHolder.imageGenerationMessages.clear()
+        Log.d(TAG, "Cleared ${imageMessagesBeforeClear.size} image messages")
+        
+        // 🔥 修复：在清空消息列表后才清理资源，这样不会清理当前文本模式的消息处理器
+        val currentImageSessionId = stateHolder._currentImageGenerationConversationId.value
+        Log.d(TAG, "Calling clearImageChatResources with session ID: $currentImageSessionId")
+        stateHolder.getApiHandler().clearImageChatResources(currentImageSessionId)
+        Log.d(TAG, "=== END MODE SWITCH DEBUG ===")
         
         // 4. 如果强制新建，清除文本模式状态
         if (forceNew) {
@@ -132,29 +148,54 @@ class SimpleModeManager(
         _lastModeSwitch = System.currentTimeMillis()
         _uiMode.value = ModeType.IMAGE
         
-        // 若当前文本会话为空且仅“应用了参数未发消息”，按要求删除该空会话（丢弃pending）
+        // 若当前文本会话为空且仅"应用了参数未发消息"，按要求删除该空会话（丢弃pending）
         if (stateHolder.messages.isEmpty() && stateHolder.hasPendingConversationParams()) {
             stateHolder.abandonEmptyPendingConversation()
         }
         
-        // 1. 同步保存文本模式的当前状态 - 确保状态切换的原子性
+        // 1. 同步保存两种模式的当前状态 - 确保状态切换的原子性
         withContext(Dispatchers.IO) {
+            // 保存文本模式的当前会话
             historyManager.saveCurrentChatToHistoryIfNeeded(
                 isImageGeneration = false,
                 forceSave = true
             )
+            // 如果forceNew为true，也要保存图像模式的当前会话
+            if (forceNew && stateHolder.imageGenerationMessages.isNotEmpty()) {
+                historyManager.saveCurrentChatToHistoryIfNeeded(
+                    isImageGeneration = true,
+                    forceSave = true
+                )
+            }
         }
         
         // 2. 清理文本模式状态
         clearTextApiState()
         
-        // 🎯 增强会话隔离：清理文本模式的所有资源
-        val currentTextSessionId = stateHolder._currentConversationId.value
-        stateHolder.getApiHandler().clearTextChatResources(currentTextSessionId)
+        // 🔥 添加调试日志，诊断会话切换问题
+        Log.d(TAG, "=== MODE SWITCH DEBUG (TO IMAGE) ===")
+        Log.d(TAG, "Current text messages before clear: ${stateHolder.messages.map { "ID:${it.id}, Text:'${it.text.take(20)}...', ContentStarted:${it.contentStarted}" }}")
+        Log.d(TAG, "Current loaded history index before clear: ${stateHolder._loadedHistoryIndex.value}")
+        Log.d(TAG, "Current conversation ID before clear: ${stateHolder._currentConversationId.value}")
+        
+        // 🔥 修复：移到清空消息列表之后调用，避免清理正在使用的处理器
+        // val currentTextSessionId = stateHolder._currentConversationId.value
+        // stateHolder.getApiHandler().clearTextChatResources(currentTextSessionId)
         
         // 3. 强制清除文本模式的历史记录索引，确保完全独立
         stateHolder._loadedHistoryIndex.value = null
+        Log.d(TAG, "Cleared loaded history index")
+        
+        // 保存消息列表的副本，用于调试
+        val messagesBeforeClear = stateHolder.messages.toList()
         stateHolder.messages.clear()
+        Log.d(TAG, "Cleared ${messagesBeforeClear.size} text messages")
+        
+        // 🔥 修复：在清空消息列表后才清理资源，这样不会清理当前图像模式的消息处理器
+        val currentTextSessionId = stateHolder._currentConversationId.value
+        Log.d(TAG, "Calling clearTextChatResources with session ID: $currentTextSessionId")
+        stateHolder.getApiHandler().clearTextChatResources(currentTextSessionId)
+        Log.d(TAG, "=== END MODE SWITCH DEBUG ===")
         
         // 4. 如果强制新建，清除图像模式状态
         if (forceNew) {
@@ -178,128 +219,98 @@ class SimpleModeManager(
      */
     suspend fun loadTextHistory(index: Int) {
         Log.d(TAG, "🔥 [START] Loading TEXT history at index: $index")
-        
-        // 若当前文本会话为空且仅“应用了参数未发消息”，按要求删除该空会话（丢弃pending）
-        if (stateHolder.messages.isEmpty() && stateHolder.hasPendingConversationParams()) {
-            stateHolder.abandonEmptyPendingConversation()
-        }
-        
-        // 同步保存当前状态 - 确保状态切换的一致性
-        withContext(Dispatchers.IO) {
-            historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = false, forceSave = true)
-            historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true, forceSave = true)
-        }
+        _uiMode.value = ModeType.TEXT // 立即更新意图
 
-        // 1. 完全重置文本模式状态 - 确保独立加载
-        Log.d(TAG, "🔥 [STEP 1] 完全重置文本模式状态...")
-        clearTextApiState()
+        // 关键修复：在加载历史之前，不再强制保存当前会话，避免索引和状态错乱
+        // if (stateHolder.messages.isNotEmpty() || stateHolder.hasPendingConversationParams()) {
+        //     withContext(Dispatchers.IO) {
+        //         historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = false, forceSave = true)
+        //     }
+        // }
         
-        // 关键修复：强制清除图像模式索引，确保文本模式历史记录选择完全独立
-        stateHolder._loadedImageGenerationHistoryIndex.value = null
-        stateHolder.imageGenerationMessages.clear()
-        
-        // 清空文本模式消息列表和索引
-        stateHolder.messages.clear()
-        stateHolder._loadedHistoryIndex.value = null
-        
-        Log.d(TAG, "🔥 [STEP 1] 状态重置完成")
-        
-        // 2. 验证索引
-        Log.d(TAG, "🔥 [STEP 2] Validating index...")
         val conversationList = stateHolder._historicalConversations.value
-        Log.d(TAG, "🔥 [STEP 2] ConversationList size: ${conversationList.size}")
         if (index < 0 || index >= conversationList.size) {
             Log.e(TAG, "🔥 [ERROR] Invalid TEXT history index: $index (size: ${conversationList.size})")
+            stateHolder._isLoadingHistory.value = false
             return
         }
-        
-        // 3. 再次确保文本模式状态清理
-        Log.d(TAG, "🔥 [STEP 3] 再次确保文本模式状态清理...")
-        clearTextApiState()
-        Log.d(TAG, "🔥 [STEP 3] 状态清理完成")
-        
-        // 4. 加载历史对话
-        Log.d(TAG, "🔥 [STEP 4] Loading conversation...")
+
         val conversationToLoad = conversationList[index]
-        Log.d(TAG, "🔥 [STEP 4] Conversation loaded, size: ${conversationToLoad.size}")
-        conversationToLoad.forEachIndexed { i, msg ->
-            Log.d(TAG, "🔥 [STEP 4] Message $i: sender=${msg.sender}, text='${msg.text.take(50)}...', id=${msg.id}")
-        }
-        
-        // 5. 设置对话ID和系统提示（必须在消息加载前设置）
-        Log.d(TAG, "🔥 [STEP 5] Setting conversation ID...")
-        // 使用该历史会话“首条消息的ID”作为稳定会话ID，和参数持久化使用的稳定键一致
-        val firstMessageId = conversationToLoad.firstOrNull()?.id
-        val stableId = firstMessageId ?: "history_${UUID.randomUUID()}"
-        Log.d(TAG, "🔥 [STEP 5] StableId (firstMessageId or fallback): $stableId")
-        stateHolder._currentConversationId.value = stableId
-        Log.d(TAG, "🔥 [STEP 5] ConversationId set to: ${stateHolder._currentConversationId.value}")
-        
-        val systemPrompt = conversationToLoad
-            .firstOrNull { it.sender == com.example.everytalk.data.DataClass.Sender.System && !it.isPlaceholderName }?.text ?: ""
-        stateHolder.systemPrompts[stableId] = systemPrompt
-        Log.d(TAG, "🔥 [STEP 5] SystemPrompt set: '$systemPrompt'")
-        
-        // 6. 处理消息并更新状态
-        Log.d(TAG, "🔥 [STEP 6] Processing and updating message states...")
-        Log.d(TAG, "🔥 [STEP 6] Before clear - messages.size: ${stateHolder.messages.size}")
-        stateHolder.messages.clear()
-        Log.d(TAG, "🔥 [STEP 6] After clear - messages.size: ${stateHolder.messages.size}")
-        
-        // 处理消息：设置 contentStarted 状态并添加到列表
-        // 🎯 强制对加载的历史消息进行最终处理，确保parts被填充
-        val processedMessages = conversationToLoad.map { msg ->
-            if (msg.sender == Sender.AI && msg.parts.isEmpty() && msg.text.isNotBlank()) {
-                // 🎯 使用新的MessageProcessor创建方式，增强会话隔离
-                val sessionId = stateHolder._currentConversationId.value
-                val tempProcessor = com.example.everytalk.util.messageprocessor.MessageProcessor()
-                tempProcessor.initialize(sessionId, msg.id)
-                tempProcessor.finalizeMessageProcessing(msg)
-            } else {
-                msg
+        Log.d(TAG, "🔥 Found conversation to load with ${conversationToLoad.size} messages.")
+        val stableId = conversationToLoad.firstOrNull()?.id ?: "history_${UUID.randomUUID()}"
+        val systemPrompt = conversationToLoad.firstOrNull { it.sender == Sender.System && !it.isPlaceholderName }?.text ?: ""
+        Log.d(TAG, "🔥 Stable ID: $stableId, System Prompt: '$systemPrompt'")
+
+        val processedMessages = withContext(Dispatchers.Default) {
+            conversationToLoad.map { msg ->
+                // 🔥 修复：处理AI消息文本丢失问题
+                if (msg.sender == Sender.AI) {
+                    android.util.Log.d("SimpleModeManager", "Processing AI message ${msg.id}: text length=${msg.text.length}, parts=${msg.parts.size}, contentStarted=${msg.contentStarted}")
+                    
+                    if (msg.text.isBlank() && msg.parts.isNotEmpty()) {
+                        // 尝试从parts重建文本内容
+                        val rebuiltText = msg.parts.filterIsInstance<com.example.everytalk.ui.components.MarkdownPart.Text>()
+                            .joinToString("") { it.content }
+                        
+                        if (rebuiltText.isNotBlank()) {
+                            android.util.Log.d("SimpleModeManager", "Rebuilt AI message text from parts: ${rebuiltText.take(50)}...")
+                            msg.copy(text = rebuiltText, contentStarted = true)
+                        } else if (msg.contentStarted && msg.text.isBlank()) {
+                            // 如果contentStarted=true但文本为空，至少保留占位符
+                            android.util.Log.w("SimpleModeManager", "AI message ${msg.id} has contentStarted=true but empty text, using placeholder")
+                            msg.copy(text = "...", contentStarted = true)
+                        } else {
+                            msg
+                        }
+                    } else if (msg.parts.isEmpty() && msg.text.isNotBlank()) {
+                        val tempProcessor = com.example.everytalk.util.messageprocessor.MessageProcessor().apply { initialize(stableId, msg.id) }
+                        tempProcessor.finalizeMessageProcessing(msg)
+                    } else {
+                        msg
+                    }
+                } else {
+                    msg
+                }
+            }.map { msg ->
+                // 🔥 修复：确保AI消息总是有 contentStarted = true，即使文本为空
+                val updatedContentStarted = when {
+                    msg.sender == Sender.AI -> true  // AI消息始终设置为true
+                    else -> msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || msg.isError
+                }
+                msg.copy(contentStarted = updatedContentStarted)
             }
-        }.map { msg ->
-             val updatedContentStarted = msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || msg.isError
-             msg.copy(contentStarted = updatedContentStarted)
         }
-        
-        // 添加处理后的消息
-        stateHolder.messages.addAll(processedMessages)
-        Log.d(TAG, "🔥 [STEP 6] Added ${processedMessages.size} processed messages - total size: ${stateHolder.messages.size}")
-        
-        // 设置推理和动画状态
-        processedMessages.forEach { msg ->
-            val hasContentOrError = msg.contentStarted || msg.isError
-            val hasReasoning = !msg.reasoning.isNullOrBlank()
+        Log.d(TAG, "🔥 Processed ${processedMessages.size} messages.")
+
+        withContext(Dispatchers.Main.immediate) {
+            Log.d(TAG, "🔥 Updating state on Main thread...")
+            clearTextApiState()
+            stateHolder._loadedImageGenerationHistoryIndex.value = null
+            stateHolder.imageGenerationMessages.clear()
+            Log.d(TAG, "🔥 Cleared image generation state.")
             
-            if (msg.sender == com.example.everytalk.data.DataClass.Sender.AI && hasReasoning) {
-                stateHolder.textReasoningCompleteMap[msg.id] = true
-            }
+            stateHolder._currentConversationId.value = stableId
+            stateHolder.systemPrompts[stableId] = systemPrompt
+            Log.d(TAG, "🔥 Set current conversation ID and system prompt.")
+
+            stateHolder.messages.clear()
+            stateHolder.messages.addAll(processedMessages)
+            Log.d(TAG, "🔥 Loaded messages into state.")
             
-            val animationPlayedCondition = hasContentOrError || (msg.sender == com.example.everytalk.data.DataClass.Sender.AI && hasReasoning)
-            if (animationPlayedCondition) {
-                stateHolder.textMessageAnimationStates[msg.id] = true
+            processedMessages.forEach { msg ->
+                val hasContentOrError = msg.contentStarted || msg.isError
+                val hasReasoning = !msg.reasoning.isNullOrBlank()
+                if (msg.sender == Sender.AI && hasReasoning) stateHolder.textReasoningCompleteMap[msg.id] = true
+                if (hasContentOrError || (msg.sender == Sender.AI && hasReasoning)) stateHolder.textMessageAnimationStates[msg.id] = true
             }
-        }
-        
-        Log.d(TAG, "🔥 [STEP 6] Before setting loadedHistoryIndex: ${stateHolder._loadedHistoryIndex.value}")
-        stateHolder._loadedHistoryIndex.value = index
-        Log.d(TAG, "🔥 [STEP 6] After setting loadedHistoryIndex: ${stateHolder._loadedHistoryIndex.value}")
-        
-        // 7. 最终确认图像模式状态清空
-        Log.d(TAG, "🔥 [STEP 7] 最终确认图像模式状态清空...")
-        stateHolder.imageGenerationMessages.clear()
-        stateHolder._loadedImageGenerationHistoryIndex.value = null
-        Log.d(TAG, "🔥 [STEP 7] 图像模式状态已清空")
-        
-        // 8. 重置输入框
-        Log.d(TAG, "🔥 [STEP 8] Resetting input text...")
-        Log.d(TAG, "🔥 [STEP 8] Before reset - text: '${stateHolder._text.value}'")
-        stateHolder._text.value = ""
-        Log.d(TAG, "🔥 [STEP 8] After reset - text: '${stateHolder._text.value}'")
+            Log.d(TAG, "🔥 Set reasoning and animation states.")
+            
+            stateHolder._loadedHistoryIndex.value = index
+            stateHolder._text.value = ""
+            Log.d(TAG, "🔥 Set loaded history index to $index and cleared text input.")
         
         Log.d(TAG, "🔥 [END] Loaded TEXT history successfully: ${conversationToLoad.size} messages")
-        Log.d(TAG, "🔥 [FINAL STATE] messages.size=${stateHolder.messages.size}, loadedIndex=${stateHolder._loadedHistoryIndex.value}, conversationId=${stateHolder._currentConversationId.value}")
+    }
     }
     
     /**
@@ -309,6 +320,10 @@ class SimpleModeManager(
         Log.d(TAG, "Loading IMAGE history at index: $index")
         
         // 同步保存当前状态 - 确保状态切换的一致性
+        // 1. 先保存所有模式的当前状态
+        // 关键修复：必须先保存当前会话，再清理状态以加载新会话
+        // 关键修复：必须先保存当前会话，再清理状态以加载新会话
+        // 关键修复：必须先保存当前会话，再清理状态以加载新会话
         withContext(Dispatchers.IO) {
             historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = false, forceSave = true)
             historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true, forceSave = true)
@@ -391,14 +406,14 @@ class SimpleModeManager(
      * 获取当前是否在文本模式
      */
     fun isInTextMode(): Boolean {
-        return stateHolder.messages.isNotEmpty() || stateHolder._loadedHistoryIndex.value != null
+        return _uiMode.value == ModeType.TEXT
     }
     
     /**
      * 获取当前是否在图像模式
      */
     fun isInImageMode(): Boolean {
-        return stateHolder.imageGenerationMessages.isNotEmpty() || stateHolder._loadedImageGenerationHistoryIndex.value != null
+        return _uiMode.value == ModeType.IMAGE
     }
     
     enum class ModeType {

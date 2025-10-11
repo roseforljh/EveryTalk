@@ -44,6 +44,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.*
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -87,12 +88,10 @@ import com.example.everytalk.ui.screens.BubbleMain.Main.AttachmentsContent
 import com.example.everytalk.ui.screens.BubbleMain.Main.UserOrErrorMessageContent
 import com.example.everytalk.ui.screens.BubbleMain.Main.MessageContextMenu
 import com.example.everytalk.ui.screens.BubbleMain.Main.ImageContextMenu
-import com.example.everytalk.ui.screens.BubbleMain.Main.ThreeDotsWaveAnimation
 import com.example.everytalk.ui.theme.ChatDimensions
 import com.example.everytalk.ui.theme.chatColors
 import com.example.everytalk.ui.components.EnhancedMarkdownText
 import com.example.everytalk.ui.components.normalizeMarkdownGlyphs
-import com.example.everytalk.util.messageprocessor.parseMarkdownParts
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -101,23 +100,53 @@ import kotlinx.coroutines.withContext
 fun ImageGenerationLoadingView() {
     Box(
         modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
+        contentAlignment = Alignment.CenterStart
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+        Row(
+            verticalAlignment = Alignment.Bottom,
+            horizontalArrangement = Arrangement.Start
         ) {
-            ThreeDotsWaveAnimation(
-                dotColor = MaterialTheme.colorScheme.primary,
-                dotSize = 12.dp,
-                spacing = 8.dp
+            val style = MaterialTheme.typography.bodyLarge.copy(
+                fontWeight = FontWeight.ExtraBold,
             )
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = "正在连接图像大模型...",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-            )
+            Text("正在生成图像", style = style)
+
+            val animY = remember { List(3) { Animatable(0f) } }
+            val coroutineScope = rememberCoroutineScope()
+            val density = LocalDensity.current
+
+            LaunchedEffect(Unit) {
+                animY.forEach { it.snapTo(0f) } // 初始化
+                try {
+                    repeat(Int.MAX_VALUE) {
+                        animY.forEachIndexed { index, anim ->
+                            launch {
+                                kotlinx.coroutines.delay((index * 150L) % 450)
+                                anim.animateTo(
+                                    targetValue = with(density) { (-6).dp.toPx() },
+                                    animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing)
+                                )
+                                anim.animateTo(
+                                    targetValue = 0f,
+                                    animationSpec = tween(durationMillis = 450, easing = FastOutSlowInEasing)
+                                )
+                                if (index == animY.lastIndex) kotlinx.coroutines.delay(600)
+                            }
+                        }
+                        kotlinx.coroutines.delay(1200)
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    coroutineScope.launch { animY.forEach { launch { it.snapTo(0f) } } }
+                }
+            }
+
+            animY.forEach {
+                Text(
+                    text = ".",
+                    style = style,
+                    modifier = Modifier.offset(y = with(density) { it.value.toDp() })
+                )
+            }
         }
     }
 }
@@ -241,21 +270,50 @@ fun ImageGenerationMessagesList(
                                         )
                                     }
                                     if (item.text.isNotBlank()) {
-                                        UserOrErrorMessageContent(
-                                            message = message,
-                                            displayedText = item.text,
-                                            showLoadingDots = false,
-                                            bubbleColor = MaterialTheme.chatColors.userBubble,
+                                        // 用户气泡：右对齐 + 自适应宽度（右上角直角，其他圆角）
+                                        var bubbleGlobalPosition by remember { mutableStateOf(Offset.Zero) }
+                                        Surface(
+                                            modifier = Modifier
+                                                .wrapContentWidth()
+                                                .widthIn(max = bubbleMaxWidth * ChatDimensions.USER_BUBBLE_WIDTH_RATIO)
+                                                .onGloballyPositioned {
+                                                    bubbleGlobalPosition = it.localToRoot(Offset.Zero)
+                                                }
+                                                .pointerInput(message.id) {
+                                                    detectTapGestures(
+                                                        onLongPress = { localOffset ->
+                                                            // 图像模式下用户气泡补充震动 + 全局坐标
+                                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                            contextMenuMessage = message
+                                                            contextMenuPressOffset = bubbleGlobalPosition + localOffset
+                                                            isContextMenuVisible = true
+                                                        }
+                                                    )
+                                                },
+                                            shape = RoundedCornerShape(
+                                                topStart = ChatDimensions.CORNER_RADIUS_LARGE,
+                                                topEnd = 0.dp,
+                                                bottomStart = ChatDimensions.CORNER_RADIUS_LARGE,
+                                                bottomEnd = ChatDimensions.CORNER_RADIUS_LARGE
+                                            ),
+                                            color = MaterialTheme.chatColors.userBubble,
                                             contentColor = MaterialTheme.colorScheme.onSurface,
-                                            isError = false,
-                                            maxWidth = bubbleMaxWidth * ChatDimensions.BUBBLE_WIDTH_RATIO,
-                                            onLongPress = { msg, offset ->
-                                                contextMenuMessage = msg
-                                                contextMenuPressOffset = offset
-                                                isContextMenuVisible = true
-                                            },
-                                            scrollStateManager = scrollStateManager
-                                        )
+                                            shadowElevation = 0.dp
+                                        ) {
+                                            Box(
+                                                modifier = Modifier.padding(
+                                                    horizontal = ChatDimensions.BUBBLE_INNER_PADDING_HORIZONTAL,
+                                                    vertical = ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL
+                                                )
+                                            ) {
+                                                Text(
+                                                    text = item.text,
+                                                    style = MaterialTheme.typography.bodyLarge,
+                                                    color = MaterialTheme.colorScheme.onSurface,
+                                                    textAlign = androidx.compose.ui.text.style.TextAlign.End
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -289,8 +347,55 @@ fun ImageGenerationMessagesList(
                             }
                         }
                         is ChatListItem.LoadingIndicator -> {
-                            Box(modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
-                                ThreeDotsWaveAnimation()
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 16.dp),
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.Bottom,
+                                    horizontalArrangement = Arrangement.Start
+                                ) {
+                                    val style = MaterialTheme.typography.bodyLarge.copy(
+                                        fontWeight = FontWeight.ExtraBold,
+                                    )
+                                    Text("正在生成图像", style = style)
+                                    val animY = remember { List(3) { Animatable(0f) } }
+                                    val coroutineScope = rememberCoroutineScope()
+                                    val density = LocalDensity.current
+                                    LaunchedEffect(Unit) {
+                                        animY.forEach { it.snapTo(0f) }
+                                        try {
+                                            repeat(Int.MAX_VALUE) {
+                                                animY.forEachIndexed { index, anim ->
+                                                    launch {
+                                                        kotlinx.coroutines.delay((index * 150L) % 450)
+                                                        anim.animateTo(
+                                                            targetValue = with(density) { (-6).dp.toPx() },
+                                                            animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing)
+                                                        )
+                                                        anim.animateTo(
+                                                            targetValue = 0f,
+                                                            animationSpec = tween(durationMillis = 450, easing = FastOutSlowInEasing)
+                                                        )
+                                                        if (index == animY.lastIndex) kotlinx.coroutines.delay(600)
+                                                    }
+                                                }
+                                                kotlinx.coroutines.delay(1200)
+                                            }
+                                        } catch (e: kotlinx.coroutines.CancellationException) {
+                                            coroutineScope.launch { animY.forEach { launch { it.snapTo(0f) } } }
+                                        }
+                                    }
+                                    animY.forEach {
+                                        Text(
+                                            text = ".",
+                                            style = style,
+                                            modifier = Modifier.offset(y = with(density) { it.value.toDp() })
+                                        )
+                                    }
+                                }
                             }
                         }
                         else -> {}
@@ -309,9 +414,11 @@ fun ImageGenerationMessagesList(
                 message = message,
                 pressOffset = with(density) {
                     if (message.sender == com.example.everytalk.data.DataClass.Sender.User) {
+                        // 图像模式用户气泡
                         Offset(contextMenuPressOffset.x, contextMenuPressOffset.y)
                     } else {
-                        Offset(contextMenuPressOffset.x, contextMenuPressOffset.y + 100.dp.toPx())
+                        // 图像模式 AI 气泡）
+                        Offset(contextMenuPressOffset.x, contextMenuPressOffset.y)
                     }
                 },
                 onDismiss = { isContextMenuVisible = false },
@@ -1157,35 +1264,34 @@ private fun AiMessageItem(
     onImageLoaded: () -> Unit,
     scrollStateManager: ChatScrollStateManager
 ) {
-    val shape = RoundedCornerShape(
-        topStart = ChatDimensions.CORNER_RADIUS_LARGE,
-        topEnd = ChatDimensions.CORNER_RADIUS_LARGE,
-        bottomStart = ChatDimensions.CORNER_RADIUS_LARGE,
-        bottomEnd = ChatDimensions.CORNER_RADIUS_LARGE
-    )
+    val shape = androidx.compose.ui.graphics.RectangleShape
     val aiReplyMessageDescription = stringResource(id = R.string.ai_reply_message)
 
     Row(
         modifier = modifier
-            .fillMaxWidth()
-            .pointerInput(message.id) {
-                detectTapGestures(
-                    onLongPress = { localOffset ->
-                        // 非图片区域长按，使用本地偏移；图片区域长按由 AttachmentsContent 传递全局坐标
-                        onLongPress(message, localOffset)
-                    }
-                )
-            },
+            .fillMaxWidth(),
         horizontalArrangement = Arrangement.Start
     ) {
+        var itemGlobalPosition by remember { mutableStateOf(Offset.Zero) }
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
+                .onGloballyPositioned { coords ->
+                    itemGlobalPosition = coords.localToRoot(Offset.Zero)
+                }
+                .pointerInput(message.id) {
+                    detectTapGestures(
+                        onLongPress = { localOffset ->
+                            // 将本地偏移转换为全局，统一与附件一致的定位体验
+                            onLongPress(message, itemGlobalPosition + localOffset)
+                        }
+                    )
+                }
                 .semantics {
                     contentDescription = aiReplyMessageDescription
                 },
             shape = shape,
-            color = MaterialTheme.chatColors.aiBubble,
+            color = Color.Transparent,
             contentColor = MaterialTheme.colorScheme.onSurface,
             shadowElevation = 0.dp
         ) {

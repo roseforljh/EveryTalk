@@ -23,7 +23,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import com.example.everytalk.ui.theme.chatColors
-import dev.jeziellago.compose.markdowntext.MarkdownText
 
 /**
  * Commands/QnA/Risks 三类结构化卡片组件（移动端友好）
@@ -74,9 +73,9 @@ fun CommandListCard(
                     .background(bg, shape)
                     .padding(10.dp)
             ) {
-                // 使用 Markdown 渲染（支持 ```bash 代码块）
-                MarkdownText(
-                    markdown = content,
+                // 纯文本渲染（下线 Markdown 渲染）
+                Text(
+                    text = content,
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -164,8 +163,8 @@ fun RiskAlert(
                 style = MaterialTheme.typography.titleMedium
             )
             Spacer(Modifier.height(6.dp))
-            MarkdownText(
-                markdown = content,
+            Text(
+                text = content,
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.fillMaxWidth()
             )

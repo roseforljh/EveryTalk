@@ -13,8 +13,7 @@ class HistoryManager(
     private val stateHolder: ViewModelStateHolder,
     private val persistenceManager: DataPersistenceManager,
     private val compareMessageLists: suspend (List<Message>?, List<Message>?) -> Boolean,
-    private val onHistoryModified: () -> Unit,
-    private val finalizeMessage: (Message) -> Message
+    private val onHistoryModified: () -> Unit
 ) {
     private val TAG_HM = "HistoryManager"
 
@@ -22,7 +21,11 @@ class HistoryManager(
         return messagesToFilter.map { msg ->
             // 在保存前，确保消息的最终文本内容被同步
             if (msg.sender == Sender.AI) {
-                msg.copy(text = msg.text)
+                // 🔥 修复：确保AI消息始终标记为已开始，以便保存
+                msg.copy(
+                    text = msg.text,
+                    contentStarted = true  // 强制设置为true，确保AI消息被保存
+                )
             } else {
                 msg
             }
@@ -30,7 +33,8 @@ class HistoryManager(
             (!msg.isError) &&
             (
                 (msg.sender == Sender.User) ||
-                (msg.sender == Sender.AI && (msg.contentStarted || msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank())) ||
+                // 🔥 修复：简化条件，只要是AI消息就保存（除非是错误消息）
+                (msg.sender == Sender.AI) ||
                 (msg.sender == Sender.System)
             )
         }.toList()
@@ -70,9 +74,7 @@ class HistoryManager(
         }
         
         // Final check before saving
-        val fullyProcessedMessages = messagesWithPrompt.map { finalizeMessage(it) }
-        
-        val messagesToSave = filterMessagesForSaving(fullyProcessedMessages)
+        val messagesToSave = filterMessagesForSaving(messagesWithPrompt)
         var historyListModified = false
         var loadedIndexChanged = false
 
@@ -90,9 +92,10 @@ class HistoryManager(
             stateHolder.messages.isNotEmpty()
         }
         
+        val isDirty = if (isImageGeneration) stateHolder.isImageConversationDirty.value else stateHolder.isTextConversationDirty.value
         Log.d(
             TAG_HM,
-            "saveCurrent: Mode=${if (isImageGeneration) "IMAGE" else "TEXT"}, Snapshot msgs=${currentMessagesSnapshot.size}, Filtered to save=${messagesToSave.size}, Force=$forceSave, CurrentLoadedIdx=$loadedHistoryIndex, HasMessages=$currentModeHasMessages"
+            "saveCurrent: Mode=${if (isImageGeneration) "IMAGE" else "TEXT"}, Snapshot msgs=${currentMessagesSnapshot.size}, Filtered to save=${messagesToSave.size}, Force=$forceSave, isDirty=$isDirty, CurrentLoadedIdx=$loadedHistoryIndex, HasMessages=$currentModeHasMessages"
         )
 
         if (messagesToSave.isEmpty() && !forceSave && !isImageGeneration) {
@@ -112,35 +115,25 @@ class HistoryManager(
             val currentLoadedIdx = loadedHistoryIndex
 
             if (currentLoadedIdx != null && currentLoadedIdx >= 0 && currentLoadedIdx < mutableHistory.size) {
-                val existingChatInHistoryFiltered =
-                    filterMessagesForSaving(mutableHistory[currentLoadedIdx])
-                val contentChanged = runBlocking {
-                    !compareMessageLists(
-                        messagesToSave,
-                        existingChatInHistoryFiltered
-                    )
-                }
-                if (forceSave || contentChanged) {
+                val isDirty = if (isImageGeneration) stateHolder.isImageConversationDirty.value else stateHolder.isTextConversationDirty.value
+                if (forceSave || isDirty) {
                     Log.d(
                         TAG_HM,
-                        "Updating history index $currentLoadedIdx. Force: $forceSave. Content changed: $contentChanged"
+                        "Updating history index $currentLoadedIdx. Force: $forceSave. isDirty: $isDirty"
                     )
-                    if (messagesToSave.isNotEmpty() || forceSave) {
+                    // 关键修复：即使强制保存，也绝不能用空列表覆盖一个有效的历史记录
+                    if (messagesToSave.isNotEmpty()) {
                         mutableHistory[currentLoadedIdx] = messagesToSave
                         historyListModified = true
                         needsPersistenceSaveOfHistoryList = true
                     } else {
                         Log.d(
                             TAG_HM,
-                            "Attempt to update history index $currentLoadedIdx with empty messages (not forced). No change to this history entry."
+                            "Save is forced but there are no messages to save for index $currentLoadedIdx. Skipping update to prevent data loss."
                         )
                     }
                 } else {
-                    Log.d(
-                        TAG_HM,
-                        "History index $currentLoadedIdx content unchanged and not force saving."
-                    )
-                    return@update currentHistory
+                    Log.d(TAG_HM, "History index $currentLoadedIdx content unchanged and not force saving.")
                 }
             } else {
                 if (messagesToSave.isNotEmpty()) {
@@ -184,7 +177,12 @@ class HistoryManager(
  
         if (needsPersistenceSaveOfHistoryList) {
             persistenceManager.saveChatHistory(historicalConversations.value, isImageGeneration)
-            Log.d(TAG_HM, "Chat history list persisted.")
+            if (isImageGeneration) {
+                stateHolder.isImageConversationDirty.value = false
+            } else {
+                stateHolder.isTextConversationDirty.value = false
+            }
+            Log.d(TAG_HM, "Chat history list persisted and dirty flag reset.")
         }
         
         // 参数键迁移（根本修复）：用“会话的稳定键 = 首条消息的ID”，而不是“历史索引”
@@ -216,7 +214,19 @@ class HistoryManager(
             }
         }
 
-        if (messagesToSave.isNotEmpty() || forceSave) {
+        // 关键修复：如果当前对话未保存到历史记录中，则保存为"last open chat"
+        // 这样在切换对话或新建对话后，可以恢复之前的未完成对话
+        if (messagesToSave.isNotEmpty()) {
+            if (loadedHistoryIndex == null) {
+                // 当前对话不在历史记录中，保存为"last open chat"以便后续恢复
+                persistenceManager.saveLastOpenChat(messagesToSave, isImageGeneration)
+                Log.d(TAG_HM, "Current conversation saved as last open chat for recovery.")
+            } else {
+                // 当前对话已在历史记录中，清除"last open chat"
+                persistenceManager.clearLastOpenChat(isImageGeneration)
+                Log.d(TAG_HM, "\"Last open chat\" record has been cleared in persistence.")
+            }
+        } else if (forceSave) {
             persistenceManager.clearLastOpenChat(isImageGeneration)
             Log.d(TAG_HM, "\"Last open chat\" record has been cleared in persistence.")
         }

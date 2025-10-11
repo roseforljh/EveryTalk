@@ -183,6 +183,24 @@ class DataPersistenceManager(
                         stateHolder.imageGenerationMessages.clear()
                         stateHolder.imageGenerationMessages.addAll(lastOpenImageGenChat)
 
+                        // ✅ 修复：为已恢复的对话补齐推理完成映射，保证“小白点”可见
+                        // 文本模式
+                        stateHolder.textReasoningCompleteMap.clear()
+                        stateHolder.messages.forEach { msg ->
+                            if (msg.sender == com.example.everytalk.data.DataClass.Sender.AI &&
+                                !msg.reasoning.isNullOrBlank()) {
+                                stateHolder.textReasoningCompleteMap[msg.id] = true
+                            }
+                        }
+                        // 图像模式
+                        stateHolder.imageReasoningCompleteMap.clear()
+                        stateHolder.imageGenerationMessages.forEach { msg ->
+                            if (msg.sender == com.example.everytalk.data.DataClass.Sender.AI &&
+                                !msg.reasoning.isNullOrBlank()) {
+                                stateHolder.imageReasoningCompleteMap[msg.id] = true
+                            }
+                        }
+
                         // 为“文本模式/图像模式”恢复稳定的会话ID，保证后端多轮会话可延续
                         val textConvId = lastOpenChat.firstOrNull()?.id ?: "new_chat_${System.currentTimeMillis()}"
                         val imageConvId = lastOpenImageGenChat.firstOrNull()?.id ?: "image_resume_${System.currentTimeMillis()}"
@@ -200,6 +218,9 @@ class DataPersistenceManager(
                         stateHolder.imageGenerationMessages.clear()
                         stateHolder._loadedHistoryIndex.value = null
                         stateHolder._loadedImageGenerationHistoryIndex.value = null
+                        // 若未加载“last open chat”，也重置推理完成映射
+                        stateHolder.textReasoningCompleteMap.clear()
+                        stateHolder.imageReasoningCompleteMap.clear()
                     }
                     Log.i(TAG, "loadInitialData: Skipped loading last open chats.")
                 }
@@ -300,19 +321,47 @@ class DataPersistenceManager(
        
        messages.forEachIndexed { index, message ->
            android.util.Log.d("DataPersistenceManager", "Message $index (${message.id}): text length=${message.text.length}, parts=${message.parts.size}, contentStarted=${message.contentStarted}")
+           android.util.Log.d("DataPersistenceManager", "  Text preview: '${message.text.take(50)}${if (message.text.length > 50) "..." else ""}'")
+           android.util.Log.d("DataPersistenceManager", "  Sender: ${message.sender}, IsError: ${message.isError}")
            message.parts.forEachIndexed { partIndex, part ->
                android.util.Log.d("DataPersistenceManager", "  Part $partIndex: ${part::class.simpleName}")
            }
        }
        
+       // 🔥 修复：确保AI消息的文本内容不会丢失
+       val processedMessages = messages.map { message ->
+           if (message.sender == com.example.everytalk.data.DataClass.Sender.AI &&
+               message.contentStarted &&
+               message.text.isBlank() &&
+               message.parts.isNotEmpty()) {
+               
+               android.util.Log.w("DataPersistenceManager", "Fixing AI message with blank text but has parts: ${message.id}")
+               
+               // 尝试从parts重建文本内容
+               val rebuiltText = message.parts.filterIsInstance<com.example.everytalk.ui.components.MarkdownPart.Text>()
+                   .joinToString("") { it.content }
+               
+               if (rebuiltText.isNotBlank()) {
+                   android.util.Log.d("DataPersistenceManager", "Rebuilt text from parts: length=${rebuiltText.length}")
+                   message.copy(text = rebuiltText)
+               } else {
+                   // 如果无法重建，至少保留一个占位符
+                   android.util.Log.w("DataPersistenceManager", "Could not rebuild text from parts, using placeholder")
+                   message.copy(text = "...")
+               }
+           } else {
+               message
+           }
+       }
+       
        withContext(Dispatchers.IO) {
-           Log.d(TAG, "saveLastOpenChat: Saving ${messages.size} messages for isImageGen=$isImageGeneration")
+           Log.d(TAG, "saveLastOpenChat: Saving ${processedMessages.size} messages for isImageGen=$isImageGeneration")
            try {
                if (isImageGeneration) {
-                   dataSource.saveLastOpenImageGenerationChat(messages)
+                   dataSource.saveLastOpenImageGenerationChat(processedMessages)
                    android.util.Log.d("DataPersistenceManager", "Image chat saved successfully")
                } else {
-                   dataSource.saveLastOpenChat(messages)
+                   dataSource.saveLastOpenChat(processedMessages)
                    android.util.Log.d("DataPersistenceManager", "Text chat saved successfully")
                }
            } catch (e: Exception) {

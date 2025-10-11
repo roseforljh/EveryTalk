@@ -342,7 +342,7 @@ fun ConversationParametersDialog(
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = MaterialTheme.colorScheme.primary,
                             checkedTrackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
-                            uncheckedThumbColor = MaterialTheme.colorScheme.outline,
+                            uncheckedThumbColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                             uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
                         )
                     )

@@ -1,22 +1,38 @@
 package com.example.everytalk.ui.components
 
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.background
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.widget.Toast
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.ui.theme.chatColors
-import dev.jeziellago.compose.markdowntext.MarkdownText
+import com.example.everytalk.ui.theme.ChatDimensions
 
 /**
  * 优化的文本布局组件 - 支持Markdown渲染但不处理数学公式
@@ -70,22 +86,29 @@ fun OptimizedTextLayout(
                 .padding(horizontal = 4.dp, vertical = 2.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            contentParts.forEach { part ->
+            contentParts.forEachIndexed { index, part ->
                 when (part.type) {
                     ContentType.TEXT -> {
-                        // 使用 MarkdownText 进行完整的 Markdown 渲染
-                        MarkdownText(
-                            markdown = normalizeBasicMarkdown(part.content),
+                        // 降级：使用 Text 显示规范化后的 Markdown 文本（不做富渲染）
+                        Text(
+                            text = normalizeBasicMarkdown(part.content),
                             style = optimizedTextStyle.copy(color = textColor),
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth(),
+                            textAlign = TextAlign.Start
                         )
                     }
                     ContentType.CODE -> {
+                        val prevType = if (index > 0) contentParts[index - 1].type else null
+                        val nextType = if (index < contentParts.lastIndex) contentParts[index + 1].type else null
+                        val topPadding = if (prevType == ContentType.TEXT) 24.dp else 0.dp
+                        val bottomPadding = if (nextType == ContentType.TEXT) 24.dp else 0.dp
                         CodeBlock(
                             code = part.content,
                             language = part.metadata,
                             textColor = textColor,
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = topPadding, bottom = bottomPadding)
                         )
                     }
                 }
@@ -95,31 +118,107 @@ fun OptimizedTextLayout(
 }
 
 /**
- * 代码块组件
+ * 代码块组件（自定义样式）
+ * - 固定高度（可调），大圆角
+ * - 支持水平/垂直双向滚动
+ * - 顶部右侧“复制”按钮
+ * - 适配明暗主题
  */
 @Composable
 fun CodeBlock(
     code: String,
     language: String?,
     textColor: Color,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    maxHeight: Int = 220,          // dp
+    cornerRadius: Int = 18         // dp
 ) {
-    Box(
+    val isDark = isSystemInDarkTheme()
+    val bg = if (isDark) Color(0xFF1E1F22) else Color(0xFFF5F7FA)
+    val border = if (isDark) Color(0xFF2A2C2F) else Color(0xFFE6EAF0)
+    val headerBg = if (isDark) Color(0xFF2A2C2F) else Color(0xFFEFF3F8)
+    val codeColor = if (isDark) Color(0xFFDEE3EA) else Color(0xFF2B2F36)
+
+    val vScroll = rememberScrollState()
+    val hScroll = rememberScrollState()
+    val clipboard = LocalClipboardManager.current
+    val ctx = LocalContext.current
+
+    Surface(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp)
+            .heightIn(max = maxHeight.dp)
+            .clip(RoundedCornerShape(cornerRadius.dp)),
+        color = bg,
+        contentColor = codeColor,
+        shadowElevation = 0.dp
     ) {
-        SelectionContainer {
-            Text(
-                text = code,
-                style = MaterialTheme.typography.bodyMedium.copy(
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 14.sp,
-                    lineHeight = 18.sp
-                ),
-                color = textColor,
-                modifier = Modifier.padding(8.dp)
-            )
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 8.dp)
+        ) {
+            // 顶部栏：语言标签 + 复制按钮
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(36.dp)
+                    .background(headerBg, RoundedCornerShape(topStart = cornerRadius.dp, topEnd = cornerRadius.dp))
+                    .padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val langText = (language?.takeIf { it.isNotBlank() } ?: "").ifBlank { "code" }
+                Text(
+                    text = langText,
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontFamily = FontFamily.Monospace,
+                        color = if (isDark) Color(0xFFB7C1D3) else Color(0xFF4B5565)
+                    ),
+                    modifier = Modifier
+                        .padding(start = 4.dp)
+                        .weight(1f)
+                )
+                IconButton(
+                    onClick = {
+                        clipboard.setText(AnnotatedString(code))
+                        Toast.makeText(ctx, "代码已复制", Toast.LENGTH_SHORT).show()
+                    },
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.ContentCopy,
+                        contentDescription = "复制代码",
+                        tint = if (isDark) Color(0xFFB7C1D3) else Color(0xFF4B5565),
+                        modifier = Modifier.size(ChatDimensions.COPY_ICON_SIZE)
+                    )
+                }
+            }
+
+            // 代码主体（双向滚动：横向+纵向）
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = (maxHeight - 36).dp) // 固定内容区最大高度，顶部栏固定
+                    .verticalScroll(vScroll) // 垂直滚动仅作用于代码主体
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+            ) {
+                SelectionContainer {
+                    Row(
+                        modifier = Modifier
+                            .horizontalScroll(hScroll) // 横向滚动
+                    ) {
+                        Text(
+                            text = code,
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 14.sp,
+                                lineHeight = 18.sp,
+                                color = codeColor
+                            )
+                        )
+                    }
+                }
+            }
         }
     }
 }

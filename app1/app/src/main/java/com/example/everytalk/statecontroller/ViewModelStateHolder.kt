@@ -26,6 +26,9 @@ data class ConversationScrollState(
 )
  
  class ViewModelStateHolder {
+    // Dirty flags to track conversation changes
+    val isTextConversationDirty = MutableStateFlow(false)
+    val isImageConversationDirty = MutableStateFlow(false)
     lateinit var scrollController: ScrollController
      val drawerState: DrawerState = DrawerState(initialValue = DrawerValue.Closed)
     
@@ -225,6 +228,7 @@ data class ConversationScrollState(
         if (::_apiHandler.isInitialized) {
             _apiHandler.clearTextChatResources()
         }
+        isTextConversationDirty.value = false
     }
 
     // 清理图像模式状态的方法 - 增强版本，确保完全隔离
@@ -244,6 +248,7 @@ data class ConversationScrollState(
         if (::_apiHandler.isInitialized) {
             _apiHandler.clearImageChatResources()
         }
+        isImageConversationDirty.value = false
     }
 
     val selectedMediaItems: SnapshotStateList<SelectedMediaItem> =
@@ -297,8 +302,10 @@ fun addMessage(message: Message, isImageGeneration: Boolean = false) {
     }
     if (isImageGeneration) {
         imageGenerationMessages.add(message)
+        isImageConversationDirty.value = true
     } else {
         messages.add(message)
+        isTextConversationDirty.value = true
     }
 }
 
@@ -322,6 +329,12 @@ fun addMessage(message: Message, isImageGeneration: Boolean = false) {
                 reasoning = (currentMessage.reasoning ?: "") + text
             )
             messageList[index] = updatedMessage
+            // 🎯 根因修复：推理文本更新必须标记“会话脏”，否则不会被持久化
+            if (isImageGeneration) {
+                isImageConversationDirty.value = true
+            } else {
+                isTextConversationDirty.value = true
+            }
         }
     }
 
@@ -335,6 +348,11 @@ fun addMessage(message: Message, isImageGeneration: Boolean = false) {
                 contentStarted = true
             )
             messageList[index] = updatedMessage
+        }
+        if (isImageGeneration) {
+            isImageConversationDirty.value = true
+        } else {
+            isTextConversationDirty.value = true
         }
     }
     

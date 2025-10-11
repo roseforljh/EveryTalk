@@ -73,11 +73,6 @@ import com.example.everytalk.ui.screens.MainScreen.chat.EmptyChatView
 import com.example.everytalk.ui.screens.MainScreen.chat.ModelSelectionBottomSheet
 import com.example.everytalk.ui.screens.MainScreen.chat.rememberChatScrollStateManager
 import com.example.everytalk.ui.components.EnhancedMarkdownText
-import com.example.everytalk.ui.components.normalizeBasicMarkdown
-import com.example.everytalk.ui.components.normalizeMarkdownGlyphs
-import com.example.everytalk.util.messageprocessor.parseMarkdownParts
-import dev.jeziellago.compose.markdowntext.MarkdownText
-import com.example.everytalk.ui.theme.chatColors
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.delay

@@ -7,14 +7,20 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.ClickableText
+import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.SpanStyle
@@ -27,9 +33,12 @@ import com.example.everytalk.statecontroller.AppViewModel
 import com.example.everytalk.ui.components.AppTopBar
 import com.example.everytalk.statecontroller.SimpleModeManager
 import com.example.everytalk.data.DataClass.ImageRatio
+import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.ui.screens.MainScreen.chat.ModelSelectionBottomSheet
 import com.example.everytalk.ui.screens.MainScreen.chat.rememberChatScrollStateManager
 import kotlinx.coroutines.launch
+import com.example.everytalk.ui.components.ScrollToBottomButton
+import androidx.compose.ui.Alignment
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -53,6 +62,14 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
     val screenWidth = configuration.screenWidthDp.dp
     val bubbleMaxWidth = remember(screenWidth) { screenWidth.coerceAtMost(600.dp) }
 
+    // 统一振动反馈（与文本模式一致）
+    val haptic = LocalHapticFeedback.current
+
+    // 图像模式下的 AI 消息选项 BottomSheet（与文本模式一致的交互体验）
+    var showImageMessageOptionsBottomSheet by remember { mutableStateOf(false) }
+    var selectedMessageForOptions by remember { mutableStateOf<Message?>(null) }
+    val imageMessageOptionsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    
     var showModelSelection by remember { mutableStateOf(false) }
     
     // 图像比例状态（使用全局StateHolder，便于下游请求读取）
@@ -163,7 +180,11 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                         listState = listState,
                         scrollStateManager = scrollStateManager,
                         bubbleMaxWidth = bubbleMaxWidth,
-                        onShowAiMessageOptions = { /*TODO*/ },
+                        onShowAiMessageOptions = { msg ->
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            selectedMessageForOptions = msg
+                            showImageMessageOptionsBottomSheet = true
+                        },
                         onImageLoaded = {
                             if (!scrollStateManager.userInteracted) {
                                 scrollStateManager.jumpToBottom()
@@ -171,6 +192,13 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                         },
                     )
                 }
+
+                // 复用文本模式的“返回底部”按钮，悬浮于列表右下角
+                ScrollToBottomButton(
+                    scrollStateManager = scrollStateManager,
+                    bottomPadding = 24.dp,
+                    endPadding = 16.dp
+                )
             }
             ImageGenerationInputArea(
                 text = text,
@@ -202,6 +230,75 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                 selectedImageRatio = selectedImageRatio,
                 onImageRatioChanged = { viewModel.stateHolder._selectedImageRatio.value = it }
             )
+        }
+    }
+
+    // 图像模式下的 AI 消息选项 BottomSheet：查看图片 / 下载图片（与文本模式交互一致）
+    if (showImageMessageOptionsBottomSheet && selectedMessageForOptions != null) {
+        ModalBottomSheet(
+            onDismissRequest = { showImageMessageOptionsBottomSheet = false },
+            sheetState = imageMessageOptionsSheetState,
+            containerColor = MaterialTheme.colorScheme.surfaceDim,
+        ) {
+            Column(modifier = Modifier.padding(bottom = 32.dp)) {
+                // 查看图片
+                ListItem(
+                    headlineContent = { Text("查看图片", color = MaterialTheme.colorScheme.onSurface) },
+                    leadingContent = {
+                        Icon(
+                            imageVector = Icons.Outlined.Image,
+                            contentDescription = "查看图片",
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            // 这里可扩展为内置预览对话框；先保持简单提示
+                            viewModel.showSnackbar("即将支持图片预览")
+                            coroutineScope.launch {
+                                imageMessageOptionsSheetState.hide()
+                            }.invokeOnCompletion {
+                                if (!imageMessageOptionsSheetState.isVisible) {
+                                    showImageMessageOptionsBottomSheet = false
+                                }
+                            }
+                        },
+                    colors = ListItemDefaults.colors(
+                        containerColor = MaterialTheme.colorScheme.surfaceDim,
+                        headlineColor = MaterialTheme.colorScheme.onSurface,
+                        leadingIconColor = MaterialTheme.colorScheme.onSurface
+                    )
+                )
+                // 下载图片
+                ListItem(
+                    headlineContent = { Text("下载图片", color = MaterialTheme.colorScheme.onSurface) },
+                    leadingContent = {
+                        Icon(
+                            imageVector = Icons.Outlined.Download,
+                            contentDescription = "下载图片",
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            selectedMessageForOptions?.let { viewModel.downloadImageFromMessage(it) }
+                            coroutineScope.launch {
+                                imageMessageOptionsSheetState.hide()
+                            }.invokeOnCompletion {
+                                if (!imageMessageOptionsSheetState.isVisible) {
+                                    showImageMessageOptionsBottomSheet = false
+                                }
+                            }
+                        },
+                    colors = ListItemDefaults.colors(
+                        containerColor = MaterialTheme.colorScheme.surfaceDim,
+                        headlineColor = MaterialTheme.colorScheme.onSurface,
+                        leadingIconColor = MaterialTheme.colorScheme.onSurface
+                    )
+                )
+            }
         }
     }
 }

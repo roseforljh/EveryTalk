@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.CompositionLocalProvider
@@ -44,9 +45,7 @@ import com.example.everytalk.ui.theme.ChatDimensions
 import com.example.everytalk.ui.theme.chatColors
 
 import com.example.everytalk.ui.components.EnhancedMarkdownText
-import com.example.everytalk.ui.components.CodePreview
 import com.example.everytalk.ui.components.normalizeMarkdownGlyphs
-import com.example.everytalk.util.messageprocessor.parseMarkdownParts
 import com.example.everytalk.ui.components.normalizeBasicMarkdown
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -152,21 +151,49 @@ fun ChatMessagesList(
                                         )
                                     }
                                     if (item.text.isNotBlank()) {
-                                        UserOrErrorMessageContent(
-                                            message = message,
-                                            displayedText = item.text,
-                                            showLoadingDots = false,
-                                            bubbleColor = MaterialTheme.chatColors.userBubble,
+                                        // 用户气泡：右对齐 + 自适应宽度
+                                        var bubbleGlobalPosition by remember { mutableStateOf(Offset.Zero) }
+                                        Surface(
+                                            modifier = Modifier
+                                                .wrapContentWidth()
+                                                .widthIn(max = bubbleMaxWidth * ChatDimensions.USER_BUBBLE_WIDTH_RATIO)
+                                                .onGloballyPositioned {
+                                                    bubbleGlobalPosition = it.localToRoot(Offset.Zero)
+                                                }
+                                                .pointerInput(message.id) {
+                                                    detectTapGestures(
+                                                        onLongPress = { localOffset ->
+                                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                            contextMenuMessage = message
+                                                            contextMenuPressOffset = bubbleGlobalPosition + localOffset
+                                                            isContextMenuVisible = true
+                                                        }
+                                                    )
+                                                },
+                                            shape = RoundedCornerShape(
+                                                topStart = ChatDimensions.CORNER_RADIUS_LARGE,
+                                                topEnd = 0.dp,
+                                                bottomStart = ChatDimensions.CORNER_RADIUS_LARGE,
+                                                bottomEnd = ChatDimensions.CORNER_RADIUS_LARGE
+                                            ),
+                                            color = MaterialTheme.chatColors.userBubble,
                                             contentColor = MaterialTheme.colorScheme.onSurface,
-                                            isError = false,
-                                            maxWidth = bubbleMaxWidth * ChatDimensions.USER_BUBBLE_WIDTH_RATIO,
-                                            onLongPress = { msg, offset ->
-                                                contextMenuMessage = msg
-                                                contextMenuPressOffset = offset
-                                                isContextMenuVisible = true
-                                            },
-                                            scrollStateManager = scrollStateManager
-                                        )
+                                            shadowElevation = 0.dp
+                                        ) {
+                                            Box(
+                                                modifier = Modifier.padding(
+                                                    horizontal = ChatDimensions.BUBBLE_INNER_PADDING_HORIZONTAL,
+                                                    vertical = ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL
+                                                )
+                                            ) {
+                                                Text(
+                                                    text = item.text,
+                                                    style = MaterialTheme.typography.bodyLarge,
+                                                    color = MaterialTheme.colorScheme.onSurface,
+                                                    textAlign = TextAlign.End
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -174,8 +201,17 @@ fun ChatMessagesList(
 
                         is ChatListItem.AiMessageReasoning -> {
                             val reasoningCompleteMap = viewModel.textReasoningCompleteMap
-                            val isReasoningStreaming = remember(isApiCalling, item.message.reasoning, reasoningCompleteMap[item.message.id]) {
-                                isApiCalling && item.message.reasoning != null && reasoningCompleteMap[item.message.id] != true
+                            // 修复：主内容开始后不再视为“思考流式中”，避免思考框被延迟到“整条消息结束”才收起
+                            val isReasoningStreaming = remember(
+                                isApiCalling,
+                                item.message.reasoning,
+                                reasoningCompleteMap[item.message.id],
+                                item.message.contentStarted
+                            ) {
+                                isApiCalling &&
+                                item.message.reasoning != null &&
+                                reasoningCompleteMap[item.message.id] != true &&
+                                !item.message.contentStarted
                             }
                             val isReasoningComplete = reasoningCompleteMap[item.message.id] ?: false
 
@@ -309,34 +345,35 @@ fun ChatMessagesList(
 
         contextMenuMessage?.let { message ->
             MessageContextMenu(
-            isVisible = isContextMenuVisible,
-            message = message,
-            pressOffset = with(density) {
-                if (message.sender == com.example.everytalk.data.DataClass.Sender.User) {
-                    Offset(contextMenuPressOffset.x, contextMenuPressOffset.y)
-                } else {
-                    Offset(contextMenuPressOffset.x, contextMenuPressOffset.y)
+                isVisible = isContextMenuVisible,
+                message = message,
+                pressOffset = with(density) {
+                    if (message.sender == com.example.everytalk.data.DataClass.Sender.User) {
+                        // 文本模式用户气泡：进一步下移以贴近手指
+                        Offset(contextMenuPressOffset.x, contextMenuPressOffset.y)
+                    } else {
+                        Offset(contextMenuPressOffset.x, contextMenuPressOffset.y)
+                    }
+                },
+                onDismiss = { isContextMenuVisible = false },
+                onCopy = {
+                    viewModel.copyToClipboard(it.text)
+                    isContextMenuVisible = false
+                },
+                onEdit = {
+                    viewModel.requestEditMessage(it)
+                    isContextMenuVisible = false
+                },
+                onRegenerate = {
+                    scrollStateManager.resetScrollState()
+                    viewModel.regenerateAiResponse(it, isImageGeneration = false)
+                    isContextMenuVisible = false
+                    coroutineScope.launch {
+                        scrollStateManager.jumpToBottom()
+                    }
                 }
-            },
-            onDismiss = { isContextMenuVisible = false },
-            onCopy = {
-                viewModel.copyToClipboard(it.text)
-                isContextMenuVisible = false
-            },
-            onEdit = {
-                viewModel.requestEditMessage(it)
-                isContextMenuVisible = false
-            },
-            onRegenerate = {
-                scrollStateManager.resetScrollState()
-                viewModel.regenerateAiResponse(it, isImageGeneration = false)
-                isContextMenuVisible = false
-                coroutineScope.launch {
-                    scrollStateManager.jumpToBottom()
-                }
-            }
-        )
-    }
+            )
+        }
     }
 }
 
@@ -387,7 +424,7 @@ fun AiMessageItem(
                     contentDescription = aiReplyMessageDescription
                 },
             shape = shape,
-            color = MaterialTheme.chatColors.aiBubble,
+            color = Color.Transparent,
             contentColor = MaterialTheme.colorScheme.onSurface,
             shadowElevation = 0.dp
         ) {

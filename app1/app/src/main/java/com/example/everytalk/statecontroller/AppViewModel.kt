@@ -10,8 +10,6 @@ import androidx.compose.material3.DrawerState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.snapshots.SnapshotStateMap
-import com.example.everytalk.ui.components.MathRenderingManager
-import com.example.everytalk.ui.components.ConversationLoadManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import coil3.ImageLoader
@@ -123,14 +121,6 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                     onHistoryModified = {
                         textConversationPreviewCache.evictAll()
                         imageConversationPreviewCache.evictAll()
-                    },
-                    finalizeMessage = { message ->
-                        // 🎯 由于ApiHandler不再提供全局messageProcessor，需要为每个消息创建临时处理器
-                        val sessionId = stateHolder._currentConversationId.value
-                        val tempProcessor = com.example.everytalk.util.messageprocessor.MessageProcessor().apply {
-                            initialize(sessionId, message.id)
-                        }
-                        tempProcessor.finalizeMessageProcessing(message)
                     }
             )
     
@@ -347,7 +337,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                             createAiMessageItems(
                                 message,
                                 isApiCalling,
-                                currentStreamingAiMessageId
+                                currentStreamingAiMessageId,
+                                isImageGeneration = true
                             )
                         }
                         else -> createOtherMessageItems(message)
@@ -471,9 +462,25 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
      private fun createAiMessageItems(
              message: Message,
              isApiCalling: Boolean,
-             currentStreamingAiMessageId: String?
+             currentStreamingAiMessageId: String?,
+             isImageGeneration: Boolean = false
      ): List<ChatListItem> {
-         // 1) 首先判断“连接中”占位
+         // 🔥 添加调试日志，诊断AI气泡消失问题
+         android.util.Log.d("AI_BUBBLE_DEBUG", """
+             |=== AI Bubble Debug ===
+             |Message ID: ${message.id}
+             |Sender: ${message.sender}
+             |IsImageGeneration: $isImageGeneration
+             |Text: '${message.text.take(50)}${if (message.text.length > 50) "..." else ""}'
+             |ContentStarted: ${message.contentStarted}
+             |IsError: ${message.isError}
+             |IsApiCalling: $isApiCalling
+             |CurrentStreamingId: $currentStreamingAiMessageId
+             |Reasoning: ${message.reasoning?.take(30)}${if (message.reasoning?.length ?: 0 > 30) "..." else ""}'
+             |========================
+         """.trimMargin())
+         
+         // 1) 首先判断"连接中"占位
          val showLoading =
              isApiCalling &&
              message.id == currentStreamingAiMessageId &&
@@ -481,10 +488,15 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
              message.reasoning.isNullOrBlank() &&
              !message.contentStarted
          if (showLoading) {
+             android.util.Log.d("AI_BUBBLE_DEBUG", "Showing loading indicator for message ${message.id}")
              return listOf(ChatListItem.LoadingIndicator(message.id))
          }
  
-         // 2) 思考内容项（可与主内容并存）
+         // 获取对应的reasoning完成状态映射
+         val reasoningCompleteMap = if (isImageGeneration) imageReasoningCompleteMap else textReasoningCompleteMap
+         val reasoningComplete = reasoningCompleteMap[message.id] ?: false
+         
+         // 2) 思考内容项（始终显示，但状态会影响展开/收起）
          val reasoningItem =
              if (!message.reasoning.isNullOrBlank()) {
                  listOf(ChatListItem.AiMessageReasoning(message))
@@ -492,11 +504,11 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                  emptyList()
              }
          val hasReasoning = reasoningItem.isNotEmpty()
- 
+         
          // 3) 主内容项
          // 关键修复：
          // - 流式过程中，可能先将 contentStarted=true，但 text 仍是空（例如首块为空或被预处理跳过）。
-         //   这会导致既不满足“Loading占位”（因为 contentStarted=true），也不满足“有文本显示”，从而完全不渲染AI气泡。
+         //   这会导致既不满足"Loading占位"（因为 contentStarted=true），也不满足"有文本显示"，从而完全不渲染AI气泡。
          // - 这里放宽规则：当处于流式且 currentStreamingAiMessageId 命中，且 contentStarted=true 时，仍渲染一个空文本气泡，
          //   以便后续增量文本到来时即时可见。
          val shouldShowPlaceholderWhileStreaming =
@@ -504,19 +516,69 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
              message.id == currentStreamingAiMessageId &&
              message.contentStarted &&
              message.text.isBlank()
+         
+         // 🔥 新增：即使不在流式传输状态，只要是AI消息且已开始内容，也应该显示气泡
+         // 这样可以确保用户离开会话再返回时，AI气泡不会消失
+         val shouldAlwaysShowAiBubble =
+             message.sender == Sender.AI &&
+             message.contentStarted &&
+             !message.isError
+         
+         // 🔥 添加更详细的调试日志
+         android.util.Log.d("AI_BUBBLE_DEBUG", """
+             |Display Conditions:
+             |Text.isNotBlank: ${message.text.isNotBlank()}
+             |ImageUrls.isNotEmpty: ${!message.imageUrls.isNullOrEmpty()}
+             |ShouldShowPlaceholderWhileStreaming: $shouldShowPlaceholderWhileStreaming
+             |ShouldAlwaysShowAiBubble: $shouldAlwaysShowAiBubble
+             |HasReasoning: $hasReasoning
+             |ContentStarted: ${message.contentStarted}
+             |IsApiCalling: $isApiCalling
+         """.trimMargin())
  
+         // 🔥 调整：允许正式内容与“思考框”并行显示，避免等待 ReasoningFinish
+         // 思考框隐藏条件（仅用于控制思考框自身的收起时机，主内容不再依赖它）
+         val hasReasoningContent = !message.reasoning.isNullOrBlank()
+         val shouldHideReasoning = reasoningComplete || !hasReasoningContent
+         
+         // 🎯 新规则：一旦 contentStarted 或有任意内容块，就渲染 AI 主气泡进行流式输出
+         val shouldShowAiMessage =
+             message.sender == Sender.AI && (
+                 message.text.isNotBlank() ||
+                 !message.imageUrls.isNullOrEmpty() ||
+                 shouldShowPlaceholderWhileStreaming ||
+                 shouldAlwaysShowAiBubble ||
+                 message.contentStarted
+             )
+         
+         // 🔥 添加更详细的调试日志，特别是关于思考框和正式消息的显示时机
+         android.util.Log.d("AI_BUBBLE_DEBUG", """
+             |=== AI MESSAGE DISPLAY DECISION ===
+             |Message ID: ${message.id}
+             |ShouldShowAiMessage: $shouldShowAiMessage
+             |ContentStarted: ${message.contentStarted}
+             |HasReasoning: $hasReasoning
+             |ReasoningComplete: $reasoningComplete
+             |HasReasoningContent: $hasReasoningContent
+             |ShouldHideReasoning: $shouldHideReasoning
+             |IsApiCalling: $isApiCalling
+             |CurrentStreamingId: $currentStreamingAiMessageId
+             |Text.isNotBlank: ${message.text.isNotBlank()}
+             |Text length: ${message.text.length}
+             |===============================
+         """.trimMargin())
+         
          val messageItem =
-             if (message.text.isNotBlank() || !message.imageUrls.isNullOrEmpty() || shouldShowPlaceholderWhileStreaming) {
+             if (shouldShowAiMessage) {
                  val displayText = message.text // 允许为空，占位也渲染
+                 android.util.Log.d("AI_BUBBLE_DEBUG", "Creating AI message item for ${message.id} with text length: ${displayText.length}")
                  when (message.outputType) {
                      "math" -> listOf(ChatListItem.AiMessageMath(message.id, displayText, hasReasoning))
                      "code" -> listOf(ChatListItem.AiMessageCode(message.id, displayText, hasReasoning))
                      else -> listOf(ChatListItem.AiMessage(message.id, displayText, hasReasoning))
                  }
-             } else if (hasReasoning && message.contentStarted && !isApiCalling) {
-                 // 仅推理内容的最终态也给出一个空文本气泡以承载“推理折叠开关”
-                 listOf(ChatListItem.AiMessage(message.id, "", hasReasoning))
              } else {
+                 android.util.Log.w("AI_BUBBLE_DEBUG", "AI message ${message.id} will NOT be displayed! Conditions not met.")
                  emptyList()
              }
  
@@ -745,6 +807,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                     }
                 }
             }
+            stateHolder.isTextConversationDirty.value = true
             if (needsHistorySave) {
                 viewModelScope.launch(Dispatchers.IO) { historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true) }
             }
@@ -773,6 +836,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             if (needsHistorySave) {
                 historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = true)
             }
+            stateHolder.isImageConversationDirty.value = true
             _editingMessage.value = null
             stateHolder._text.value = ""
         }
@@ -894,6 +958,11 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                     }
 
             if (success) {
+                if (isImageGeneration) {
+                    stateHolder.isImageConversationDirty.value = true
+                } else {
+                    stateHolder.isTextConversationDirty.value = true
+                }
                 viewModelScope.launch(Dispatchers.IO) { historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration) }
                 onSendMessage(
                         messageText = originalUserMessageText,
@@ -986,6 +1055,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                          stateHolder.messages.clear()
                          stateHolder.messages.addAll(modifiedMessages!!)
                      }
+                     stateHolder.isTextConversationDirty.value = true
                  }
 
                  if (modifiedMessages != null) {
@@ -1048,9 +1118,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         apiHandler.cancelCurrentApiJob("开始新的图像生成")
         viewModelScope.launch {
             try {
-                // 仅当当前没有已恢复/正在进行的图像会话时才新建会话
-                val shouldForceNew = stateHolder.imageGenerationMessages.isEmpty()
-                simpleModeManager.switchToImageMode(forceNew = shouldForceNew)
+                // 修复：始终强制新建图像会话，避免复用上一会话
+                simpleModeManager.switchToImageMode(forceNew = true)
                 
                 messagesMutex.withLock {
                     if (stateHolder.shouldAutoScroll()) {
@@ -1072,71 +1141,20 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         apiHandler.cancelCurrentApiJob("加载文本模式历史索引 $index", isNewMessageSend = false, isImageGeneration = false)
 
         viewModelScope.launch {
-            stateHolder._isLoadingTextHistory.value = true
-            
+            stateHolder._isLoadingHistory.value = true
             try {
-                // 为历史会话设置稳定的ID
-                stateHolder.setConversationIdForHistory(index)
-                
-                // Step 1: 预检查会话是否包含数学公式（优化性能）
-                val historyMessages = stateHolder._historicalConversations.value.getOrNull(index) ?: emptyList()
-                val hasMath = ConversationLoadManager.preCheckConversationMath(historyMessages)
-                
-                Log.d("AppViewModel", "🚀 [TEXT] 预检会话包含数学公式: $hasMath")
-                
-                if (hasMath) {
-                    // Step 2: 使用优化的异步加载模式
-                    Log.d("AppViewModel", "🚀 [TEXT] 使用优化异步加载模式")
-                    
-                    // 重置渲染状态
-                    MathRenderingManager.resetAllStates()
-                    
-                    ConversationLoadManager.loadConversationAsyncOptimized(
-                        messages = historyMessages,
-                        hasMathPreChecked = hasMath,
-                        onConversationReady = {
-                            // 立即进入会话，显示基础内容
-                            viewModelScope.launch {
-                                Log.d("AppViewModel", "🚀 [TEXT] 会话基础内容准备就绪，开始加载")
-                                simpleModeManager.loadTextHistory(index)
-                                
-                                val processedMessages = processLoadedMessages(stateHolder.messages.toList())
-                                val repairedMessages = repairHistoryMessageParts(processedMessages)
-                                stateHolder.messages.clear()
-                                stateHolder.messages.addAll(repairedMessages)
-                                
-                                Log.d("AppViewModel", "🚀 [TEXT] 基础内容加载完成")
-                            }
-                        },
-                        onPageTransitionComplete = {
-                            Log.d("AppViewModel", "🚀 [TEXT] 页面过渡完成，准备渲染数学公式")
-                        },
-                        onMathRenderingStart = {
-                            Log.d("AppViewModel", "🚀 [TEXT] 开始优化数学公式渲染")
-                        }
-                    )
-                } else {
-                    // Step 3: 普通加载（无数学公式）
-                    Log.d("AppViewModel", "🚀 [TEXT] 使用普通加载模式")
-                    simpleModeManager.loadTextHistory(index)
-                    
-                    val processedMessages = processLoadedMessages(stateHolder.messages.toList())
-                    val repairedMessages = repairHistoryMessageParts(processedMessages)
-                    stateHolder.messages.clear()
-                    stateHolder.messages.addAll(repairedMessages)
-                }
+                // 完全委托给 SimpleModeManager
+                simpleModeManager.loadTextHistory(index)
 
-                Log.d("AppViewModel", "🚀 [TEXT] SimpleModeManager completed successfully")
-
+                Log.d("AppViewModel", "✅ History loading delegated to SimpleModeManager.")
                 if (_isSearchActiveInDrawer.value) {
                     withContext(Dispatchers.Main.immediate) { setSearchActiveInDrawer(false) }
                 }
-                
             } catch (e: Exception) {
-                Log.e("AppViewModel", "🚀 [TEXT ERROR] Error loading text history", e)
+                Log.e("AppViewModel", "🚨 Error loading text history", e)
                 showSnackbar("加载文本历史对话失败: ${e.message}")
             } finally {
-                stateHolder._isLoadingTextHistory.value = false
+                stateHolder._isLoadingHistory.value = false
             }
         }
     }
@@ -1842,6 +1860,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                         
                         val updatedMessage = messageToUpdate.copy(text = currentFullText)
                         stateHolder.messages[messageIndex] = updatedMessage
+                        // 核心修复：一旦AI消息文本发生变化，立即将会话标记为“脏”，确保它能被保存
+                        stateHolder.isTextConversationDirty.value = true
                         
                         // 检查消息完整性
                         val issues = com.example.everytalk.util.MessageDebugUtil.checkMessageIntegrity(updatedMessage)
@@ -1942,6 +1962,29 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             } catch (e: Exception) {
                 Log.e("AppViewModel", "Settings import failed", e)
                 withContext(Dispatchers.Main) { showSnackbar("导入失败: 文件内容或格式无效") }
+            }
+        }
+    }
+
+    // 应用暂停或停止时保存当前对话状态
+    fun onAppStop() {
+        viewModelScope.launch {
+            try {
+                // 保存当前的文本和图像模式对话
+                // ✅ 根因修复：使用 forceSave=true，确保“仅推理更新”也被落盘（否则 reasoning 未持久化导致重启后小白点消失）
+                withContext(Dispatchers.IO) {
+                    historyManager.saveCurrentChatToHistoryIfNeeded(
+                        isImageGeneration = false,
+                        forceSave = true
+                    )
+                    historyManager.saveCurrentChatToHistoryIfNeeded(
+                        isImageGeneration = true,
+                        forceSave = true
+                    )
+                }
+                Log.d("AppViewModel", "App state saved on stop/pause")
+            } catch (e: Exception) {
+                Log.e("AppViewModel", "Failed to save app state on stop", e)
             }
         }
     }

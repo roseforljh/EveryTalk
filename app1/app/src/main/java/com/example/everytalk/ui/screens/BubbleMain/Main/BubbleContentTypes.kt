@@ -67,9 +67,6 @@ import com.example.everytalk.ui.theme.chatColors
 import com.example.everytalk.ui.components.ProportionalAsyncImage
 
 import com.example.everytalk.ui.components.EnhancedMarkdownText
-import com.example.everytalk.ui.components.CodePreview
-import com.example.everytalk.ui.components.normalizeMarkdownGlyphs
-import com.example.everytalk.util.messageprocessor.parseMarkdownParts
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -77,8 +74,8 @@ import kotlinx.coroutines.withContext
 private const val CONTEXT_MENU_ANIMATION_DURATION_MS = 150
 private val CONTEXT_MENU_CORNER_RADIUS = 16.dp
 private val CONTEXT_MENU_ITEM_ICON_SIZE = 20.dp
-// 菜单相对于手指按下位置的Y轴偏移量（向上偏移避免手指遮挡）
-private val CONTEXT_MENU_OFFSET_FROM_PRESS_Y = (-48).dp
+// 基本对齐采用“角点贴手指”，再整体向下微移，避免“整体偏高”
+private val CONTEXT_MENU_FINGER_VERTICAL_OFFSET = -90.dp
 private val CONTEXT_MENU_FIXED_WIDTH = 120.dp
 
 
@@ -413,12 +410,24 @@ fun MessageContextMenu(
         val density = LocalDensity.current
         val configuration = LocalConfiguration.current
         
+        val menuWidthPx = with(density) { CONTEXT_MENU_FIXED_WIDTH.toPx() }
+        val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
+        val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
+        val estimatedMenuHeightPx = with(density) { (48.dp * 3 + 16.dp).toPx() }
+        val fingerOffsetYPx = with(density) { CONTEXT_MENU_FINGER_VERTICAL_OFFSET.toPx() }
+ 
+        // 角点贴手指（水平：优先右，垂直：上边对齐），再整体向下微移避免“偏高”
+        val canPlaceRight = pressOffset.x + menuWidthPx <= screenWidthPx
+        val rawX = if (canPlaceRight) pressOffset.x else pressOffset.x - menuWidthPx
+        val rawY = pressOffset.y + fingerOffsetYPx
+ 
+        // 边界夹紧（若越界则回退，但尽量保持角点贴手指的原则）
+        val finalX = rawX.coerceIn(0f, screenWidthPx - menuWidthPx)
+        val finalY = rawY.coerceIn(0f, screenHeightPx - estimatedMenuHeightPx)
+
         Popup(
             alignment = Alignment.TopStart,
-            offset = IntOffset(
-                (pressOffset.x - with(density) { CONTEXT_MENU_FIXED_WIDTH.toPx() }).toInt(),
-                (pressOffset.y + with(density) { CONTEXT_MENU_OFFSET_FROM_PRESS_Y.toPx() }).toInt()
-            ),
+            offset = IntOffset(finalX.toInt(), finalY.toInt()),
             onDismissRequest = onDismiss,
             properties = PopupProperties(
                 focusable = true,
@@ -559,24 +568,20 @@ fun ImageContextMenu(
        val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
        val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
 
-       // 2 个菜单项 + 内边距 估算
        val estimatedMenuHeightPx = with(density) { (48.dp * 2 + 16.dp).toPx() }
+       val fingerOffsetYPx = with(density) { CONTEXT_MENU_FINGER_VERTICAL_OFFSET.toPx() }
 
-       // 右下角定位 + 少量偏移
-       val offsetX = with(density) { 8.dp.toPx() }
-       val offsetY = with(density) { 32.dp.toPx() }
-       val targetX = pressOffset.x + offsetX
-       val targetY = pressOffset.y + offsetY
+       // 角点贴手指 + 整体向下微移
+       val canPlaceRight = pressOffset.x + menuWidthPx <= screenWidthPx
+       val rawX = if (canPlaceRight) pressOffset.x else pressOffset.x - menuWidthPx
+       val rawY = pressOffset.y + fingerOffsetYPx
 
-       val finalX = targetX.coerceAtLeast(0f).coerceAtMost(screenWidthPx - menuWidthPx)
-       val finalY = targetY.coerceAtLeast(0f).coerceAtMost(screenHeightPx - estimatedMenuHeightPx)
+       val finalX = rawX.coerceIn(0f, screenWidthPx - menuWidthPx)
+       val finalY = rawY.coerceIn(0f, screenHeightPx - estimatedMenuHeightPx)
 
        Popup(
            alignment = Alignment.TopStart,
-           offset = IntOffset(
-               (pressOffset.x - with(density) { CONTEXT_MENU_FIXED_WIDTH.toPx() }).toInt(),
-               (pressOffset.y + with(density) { CONTEXT_MENU_OFFSET_FROM_PRESS_Y.toPx() }).toInt()
-           ),
+           offset = IntOffset(finalX.toInt(), finalY.toInt()),
            onDismissRequest = onDismiss,
            properties = PopupProperties(
                focusable = true,

@@ -1,10 +1,17 @@
 package com.example.everytalk.ui.components
 
-import kotlinx.serialization.Contextual
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
 
 /**
- * 🚀 增强的MarkdownPart - 支持专业数学公式渲染
+ * 兼容性最小实现：MarkdownPart
+ * 说明：
+ * - 用于恢复编译，后续你可按新方案替换。
+ * - 不包含任何数学渲染逻辑，仅数据结构。
  */
 @Serializable
 sealed class MarkdownPart {
@@ -20,18 +27,15 @@ sealed class MarkdownPart {
         val language: String = ""
     ) : MarkdownPart()
 
-    /**
-     * 🎯 专业数学块 - 支持完整LaTeX渲染
-     */
+    // 保留 MathBlock 仅作为数据占位，便于现有代码编译通过；无渲染逻辑
     @Serializable
     data class MathBlock(
         override val id: String,
         val content: String,
-        val latex: String = "",  // 保持向后兼容
-        val displayMode: Boolean = true,  // 保持向后兼容
-        val renderMode: String = "professional"  // 新增：渲染模式标识
+        val latex: String = "",
+        val displayMode: Boolean = true,
+        val renderMode: String = "professional"
     ) : MarkdownPart() {
-        // 兼容性构造函数
         constructor(id: String, latex: String, displayMode: Boolean = true) : this(
             id = id,
             content = if (displayMode) "$$\n$latex\n$$" else "$$latex$",
@@ -41,9 +45,6 @@ sealed class MarkdownPart {
         )
     }
 
-    /**
-     * 🎯 表格块 - 专用表格渲染
-     */
     @Serializable
     data class Table(
         override val id: String,
@@ -51,9 +52,6 @@ sealed class MarkdownPart {
         val renderMode: String = "webview"
     ) : MarkdownPart()
 
-    /**
-     * 🎯 混合内容块 - 包含数学公式的复杂内容
-     */
     @Serializable
     data class MixedContent(
         override val id: String,
@@ -64,10 +62,7 @@ sealed class MarkdownPart {
 
     @Serializable
     data class HtmlContent(override val id: String, val html: String) : MarkdownPart()
-    
-    /**
-     * 获取渲染优先级，用于智能渲染策略选择
-     */
+
     fun getRenderPriority(): Int = when (this) {
         is MathBlock -> if (renderMode == "professional") 100 else 80
         is Table -> 90
@@ -76,10 +71,7 @@ sealed class MarkdownPart {
         is HtmlContent -> 50
         is Text -> 10
     }
-    
-    /**
-     * 检查是否需要WebView渲染
-     */
+
     fun requiresWebView(): Boolean = when (this) {
         is MathBlock -> renderMode == "professional"
         is Table -> renderMode == "webview"
@@ -87,10 +79,7 @@ sealed class MarkdownPart {
         is HtmlContent -> true
         else -> false
     }
-    
-    /**
-     * 获取内容摘要，用于调试和日志
-     */
+
     fun getContentSummary(): String {
         val content = when (this) {
             is MathBlock -> this.content
@@ -101,5 +90,23 @@ sealed class MarkdownPart {
             is HtmlContent -> this.html
         }
         return "${this::class.simpleName}(${content.take(50)}${if (content.length > 50) "..." else ""})"
+    }
+}
+
+/**
+ * 兼容性序列化器：MarkdownPartSerializer
+ * 说明：
+ * - 保持与旧注解 @Serializable(with = MarkdownPartSerializer::class) 一致。
+ */
+object MarkdownPartSerializer : KSerializer<List<MarkdownPart>> {
+    private val delegateSerializer = ListSerializer(MarkdownPart.serializer())
+    override val descriptor: SerialDescriptor = delegateSerializer.descriptor
+
+    override fun serialize(encoder: Encoder, value: List<MarkdownPart>) {
+        delegateSerializer.serialize(encoder, value)
+    }
+
+    override fun deserialize(decoder: Decoder): List<MarkdownPart> {
+        return delegateSerializer.deserialize(decoder)
     }
 }

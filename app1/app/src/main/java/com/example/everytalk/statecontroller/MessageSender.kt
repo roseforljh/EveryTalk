@@ -11,6 +11,7 @@ import android.util.Base64
 import android.util.Log
 import androidx.core.content.FileProvider
 import com.example.everytalk.models.SelectedMediaItem
+import com.example.everytalk.util.FileManager
 import com.example.everytalk.data.DataClass.AbstractApiMessage
 import com.example.everytalk.data.DataClass.ApiContentPart
 import com.example.everytalk.data.DataClass.ChatRequest
@@ -505,6 +506,38 @@ private data class AttachmentProcessingResult(
             val shouldUsePartsApiMessage = modelIsGeminiType
             val providerForRequestBackend = currentConfig.provider
 
+            // 自动注入“上一轮AI出图”作为参考，以支持“在上一张基础上修改”等编辑语义
+            if (isImageGeneration && allAttachments.isEmpty()) {
+                val t = textToActuallySend.lowercase()
+                if (hasImageEditKeywords(t)) {
+                    try {
+                        // 找到最近一条包含图片的AI消息
+                        val lastAiWithImage = stateHolder.imageGenerationMessages.lastOrNull {
+                            it.sender == UiSender.AI && !it.imageUrls.isNullOrEmpty()
+                        }
+                        val refImageUrl = lastAiWithImage?.imageUrls?.lastOrNull()
+                        if (!refImageUrl.isNullOrBlank()) {
+                            // 下载并等比压缩该图片，作为位图附件加入
+                            val fm = FileManager(application)
+                            val refBitmap = fm.loadAndCompressBitmapFromUrl(refImageUrl, isImageGeneration = true)
+                            if (refBitmap != null) {
+                                allAttachments.add(
+                                    SelectedMediaItem.ImageFromBitmap.fromBitmap(
+                                        bitmap = refBitmap,
+                                        id = "ref_${UUID.randomUUID()}"
+                                    )
+                                )
+                                Log.d("MessageSender", "已自动附带上一轮AI图片作为参考: $refImageUrl")
+                            } else {
+                                Log.w("MessageSender", "未能下载上一轮AI图片，跳过自动引用")
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.w("MessageSender", "自动引用上一轮AI图片失败: ${e.message}")
+                    }
+                }
+            }
+
             val attachmentResult = processAttachments(allAttachments, shouldUsePartsApiMessage, textToActuallySend, isImageGeneration)
             if (!attachmentResult.success) {
                 return@launch
@@ -765,18 +798,31 @@ private suspend fun readTextFromUri(context: Context, uri: Uri): String? {
         if (text.isNullOrBlank()) return false
         val t = text.lowercase().trim()
         val imageKeywords = listOf(
-            "画", "绘制", "画个", "画张", "画一张", "来一张", "给我一张", "出一张", 
-            "生成图片", "生成", "生成几张", "生成多张", "出图", "图片", "图像", 
-            "配图", "背景图", "封面图", "插画", "插图", "海报", "头像", "壁纸", 
+            "画", "绘制", "画个", "画张", "画一张", "来一张", "给我一张", "出一张",
+            "生成图片", "生成", "生成几张", "生成多张", "出图", "图片", "图像",
+            "配图", "背景图", "封面图", "插画", "插图", "海报", "头像", "壁纸",
             "封面", "表情包", "贴图", "示意图", "场景图", "示例图", "图标",
-            "手绘", "素描", "线稿", "上色", "涂色", "水彩", "油画", "像素画", 
+            "手绘", "素描", "线稿", "上色", "涂色", "水彩", "油画", "像素画",
             "漫画", "二次元", "渲染", "p图", "p一张", "制作一张", "做一张", "合成一张",
-            "image", "picture", "pictures", "photo", "photos", "art", "artwork", 
-            "illustration", "render", "rendering", "draw", "sketch", "paint", 
-            "painting", "watercolor", "oil painting", "pixel art", "comic", 
-            "manga", "sticker", "cover", "wallpaper", "avatar", "banner", 
+            "image", "picture", "pictures", "photo", "photos", "art", "artwork",
+            "illustration", "render", "rendering", "draw", "sketch", "paint",
+            "painting", "watercolor", "oil painting", "pixel art", "comic",
+            "manga", "sticker", "cover", "wallpaper", "avatar", "banner",
             "logo", "icon", "generate image", "generate a picture"
         )
         return imageKeywords.any { keyword -> t.contains(keyword) }
+    }
+
+    // 识别“编辑/基于上一张修改”的语义，用于自动附带上一轮AI图片
+    private fun hasImageEditKeywords(text: String?): Boolean {
+        if (text.isNullOrBlank()) return false
+        val t = text.lowercase().trim()
+        val editKeywords = listOf(
+            "改成", "换成", "替换", "修改", "调整", "改为", "基于上一张", "在上一张基础上",
+            "把", "改一下", "修一下", "换一下", "同一张", "同这张", "继续修改",
+            // 英文常见编辑意图
+            "replace", "change to", "edit", "modify", "adjust", "based on previous", "on the previous image"
+        )
+        return editKeywords.any { k -> t.contains(k) }
     }
 }

@@ -63,30 +63,17 @@ internal fun ReasoningToggleAndContent(
 
     var visibilityNotified by remember(currentMessageId) { mutableStateOf(false) }
     
-    // 添加一个状态来追踪思考框是否应该保持显示一段时间
-    var keepBubbleVisible by remember(currentMessageId) { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
     
-    // 当推理内容存在且流式传输时，设置保持显示状态
-    LaunchedEffect(isReasoningStreaming, displayedReasoningText) {
-        if (isReasoningStreaming && displayedReasoningText.isNotBlank()) {
-            keepBubbleVisible = true
-        }
-    }
+    // 移除宽限期逻辑：主内容一旦开始，由 isReasoningStreaming 立即决定收起
     
-    // 当内容开始输出时，延迟隐藏思考框
-    LaunchedEffect(mainContentHasStarted, isReasoningComplete) {
-        if ((mainContentHasStarted || isReasoningComplete) && keepBubbleVisible) {
-            // 延迟1.5秒后再隐藏思考框，给用户足够时间看到推理内容
-            delay(1500)
-            keepBubbleVisible = false
-        }
-    }
+    // 统一由 inGracePeriod 控制收起时机（移除 hideScheduled/keepBubbleVisible 复杂逻辑）
+    // 收起逻辑见上面的两个 LaunchedEffect
     
-    // 修改显示条件：考虑延迟隐藏的状态
-    val showInlineStreamingBox = (isReasoningStreaming || keepBubbleVisible) && 
-                                 !messageIsError && 
-                                 displayedReasoningText.isNotBlank()
+    // 简化显示条件：仅在推理流式期间显示思考框；主内容开始后即收起
+    val showInlineStreamingBox = isReasoningStreaming &&
+            !messageIsError &&
+            displayedReasoningText.isNotBlank()
 
     val showDotsAnimationOnToggle = false
 

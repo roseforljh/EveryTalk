@@ -407,148 +407,22 @@ object ApiClient {
                     throw IOException("获取来自 $backendProxyUrl 的响应体通道失败。")
                 }
 
-                val lineBuffer = StringBuilder()
-                var eventCount = 0
-                var lineCount = 0
-                try {
-                    android.util.Log.d("ApiClient", "开始读取流数据通道")
-                    while (!channel.isClosedForRead) {
-                        val line = channel.readUTF8Line()
-                        lineCount++
-                        
-                        if (lineCount <= 10) {
-                            android.util.Log.d("ApiClient", "读取行 #$lineCount: '${line ?: "NULL"}'")
-                        } else if (lineCount % 50 == 0) {
-                            android.util.Log.d("ApiClient", "已读取 $lineCount 行，当前行: '${line?.take(50) ?: "NULL"}'")
-                        }
-                        
-                        if (line.isNullOrEmpty()) {
-                            val chunk = lineBuffer.toString().trim()
-                            if (chunk.isNotEmpty()) {
-                                android.util.Log.d("ApiClient", "处理数据块 (长度=${chunk.length}): '${chunk.take(100)}${if(chunk.length > 100) "..." else ""}'")
-                                
-                                if (chunk.equals("[DONE]", ignoreCase = true)) {
-                                    android.util.Log.d("ApiClient", "收到[DONE]标记，结束流处理")
-                                    channel.cancel(CoroutineCancellationException("[DONE] marker received"))
-                                    break
-                                }
-                                try {
-                                    // Parse the backend JSON format and convert to AppStreamEvent
-                                    val appEvent = parseBackendStreamEvent(chunk)
-                                    if (appEvent != null) {
-                                        eventCount++
-                                        // 详细日志轰炸：记录事件类型与文本长度/预览
-                                        when (appEvent) {
-                                            is AppStreamEvent.Content -> {
-                                                android.util.Log.i(
-                                                    "ApiClientEvent",
-                                                    "Content len=${appEvent.text.length} preview=${appEvent.text.take(120)}"
-                                                )
-                                            }
-                                            is AppStreamEvent.ContentFinal -> {
-                                                android.util.Log.i(
-                                                    "ApiClientEvent",
-                                                    "ContentFinal len=${appEvent.text.length} preview=${appEvent.text.take(120)}"
-                                                )
-                                            }
-                                            is AppStreamEvent.Text -> {
-                                                android.util.Log.i(
-                                                    "ApiClientEvent",
-                                                    "Text len=${appEvent.text.length} preview=${appEvent.text.take(120)}"
-                                                )
-                                            }
-                                            is AppStreamEvent.Finish -> {
-                                                android.util.Log.w("ApiClientEvent", "Finish reason=${appEvent.reason}")
-                                            }
-                                            is AppStreamEvent.Error -> {
-                                                android.util.Log.e("ApiClientEvent", "Error upstreamStatus=${appEvent.upstreamStatus} msg=${appEvent.message}")
-                                            }
-                                            else -> {
-                                                android.util.Log.d("ApiClientEvent", "Other event=${appEvent.javaClass.simpleName}")
-                                            }
-                                        }
-                                        if (eventCount <= 5) {
-                                            android.util.Log.d("ApiClient", "解析到流事件 #$eventCount: ${appEvent.javaClass.simpleName}")
-                                        } else if (eventCount % 10 == 0) {
-                                            android.util.Log.d("ApiClient", "已处理 $eventCount 个流事件")
-                                        }
-                                        val sendResult = trySend(appEvent)
-                                        if (!sendResult.isSuccess) {
-                                            android.util.Log.w("ApiClient", "流事件发送失败: $sendResult")
-                                            if (!isClosedForSend && !channel.isClosedForRead) {
-                                                channel.cancel(CoroutineCancellationException("Downstream channel closed: $sendResult"))
-                                            }
-                                            return@execute
-                                        }
-                                    } else {
-                                        android.util.Log.w("ApiClient", "无法解析的流数据块: '$chunk'")
-                                    }
-                                } catch (e: SerializationException) {
-                                    android.util.Log.e("ApiClientStream", "Serialization failed for chunk: '$chunk'", e)
-                                } catch (e: Exception) {
-                                    android.util.Log.e("ApiClientStream", "Exception during event processing for chunk: '$chunk'", e)
-                                }
-                            } else {
-                                android.util.Log.d("ApiClient", "遇到空行，但lineBuffer为空")
-                            }
-                            lineBuffer.clear()
-                        } else if (line.startsWith("data:")) {
-                            val dataContent = line.substring(5).trim()
-                            android.util.Log.d("ApiClient", "SSE data行: '$dataContent'")
-                            lineBuffer.append(dataContent)
-                        } else {
-                            // 不是SSE格式，可能是直接的JSON流
-                            android.util.Log.d("ApiClient", "非SSE格式行，直接处理: '$line'")
-                            if (line.trim().isNotEmpty()) {
-                                try {
-                                    val appEvent = parseBackendStreamEvent(line.trim())
-                                    if (appEvent != null) {
-                                        eventCount++
-                                        android.util.Log.d("ApiClient", "非SSE格式解析到事件 #$eventCount: ${appEvent.javaClass.simpleName}")
-                                        val sendResult = trySend(appEvent)
-                                        if (!sendResult.isSuccess) {
-                                            android.util.Log.w("ApiClient", "非SSE事件发送失败: $sendResult")
-                                            if (!isClosedForSend && !channel.isClosedForRead) {
-                                                channel.cancel(CoroutineCancellationException("Downstream channel closed: $sendResult"))
-                                            }
-                                            return@execute
-                                        }
-                                    }
-                                } catch (e: Exception) {
-                                    android.util.Log.e("ApiClient", "非SSE格式解析失败: '$line'", e)
-                                }
+                val processingCompleted = CompletableDeferred<Unit>()
+                val processJob = launch(Dispatchers.IO) {
+                    try {
+                        processChannel(channel, backendProxyUrl) { event ->
+                            trySend(event)
+                            if (event is AppStreamEvent.Finish && event.reason == "stream_end") {
+                                processingCompleted.complete(Unit)
                             }
                         }
-                    }
-                } catch (e: IOException) {
-                    android.util.Log.e("ApiClient", "流读取IO异常 ($backendProxyUrl)", e)
-                    if (!isClosedForSend) throw e
-                } catch (e: CoroutineCancellationException) {
-                    android.util.Log.d("ApiClient", "流读取被取消 ($backendProxyUrl): ${e.message}")
-                    throw e
-                } catch (e: Exception) {
-                    android.util.Log.e("ApiClient", "流读取意外异常 ($backendProxyUrl)", e)
-                    if (!isClosedForSend) throw IOException(
-                        "意外流错误 ($backendProxyUrl): ${e.message}",
-                        e
-                    )
-                } finally {
-                    android.util.Log.d("ApiClient", "流处理结束，共读取 $lineCount 行，处理 $eventCount 个事件")
-                    if (lineCount == 0) {
-                        android.util.Log.w("ApiClient", "警告：没有读取到任何数据行！")
-                    }
-                    val chunk = lineBuffer.toString().trim()
-                    if (chunk.isNotEmpty()) {
-                        try {
-                            val appEvent = parseBackendStreamEvent(chunk)
-                            if (appEvent != null) {
-                                trySend(appEvent)
-                            }
-                        } catch (e: SerializationException) {
-                            android.util.Log.e("ApiClientStream", "Serialization failed for final chunk: '$chunk'", e)
-                        }
+                    } finally {
+                        processingCompleted.complete(Unit) // 确保在任何情况下都能完成
                     }
                 }
+                
+                processingCompleted.await() // 等待 processChannel 完成
+                processJob.join()
             }
         } catch (e: CoroutineCancellationException) {
             android.util.Log.d("ApiClient", "Connection cancelled for $backendProxyUrl: ${e.message}")
@@ -590,6 +464,127 @@ object ApiClient {
                 "未知客户端错误 ($backendProxyUrl)$statusInfo: ${e.message}",
                 e
             )
+        }
+    }
+
+    private suspend fun CoroutineScope.processChannel(
+        channel: ByteReadChannel,
+        backendProxyUrl: String,
+        trySend: suspend (AppStreamEvent) -> Unit
+    ) {
+        val lineBuffer = StringBuilder()
+        var eventCount = 0
+        var lineCount = 0
+        try {
+            android.util.Log.d("ApiClient", "开始读取流数据通道")
+            while (!channel.isClosedForRead) {
+                val line = channel.readUTF8Line()
+                lineCount++
+
+                if (lineCount <= 10) {
+                    android.util.Log.d("ApiClient", "读取行 #$lineCount: '${line ?: "NULL"}'")
+                } else if (lineCount % 50 == 0) {
+                    android.util.Log.d(
+                        "ApiClient",
+                        "已读取 $lineCount 行，当前行: '${line?.take(50) ?: "NULL"}'"
+                    )
+                }
+
+                if (line.isNullOrEmpty()) {
+                    val chunk = lineBuffer.toString().trim()
+                    if (chunk.isNotEmpty()) {
+                        android.util.Log.d(
+                            "ApiClient",
+                            "处理数据块 (长度=${chunk.length}): '${chunk.take(100)}${if (chunk.length > 100) "..." else ""}'"
+                        )
+
+                        if (chunk.equals("[DONE]", ignoreCase = true)) {
+                            android.util.Log.d("ApiClient", "收到[DONE]标记，结束流处理")
+                            channel.cancel(CoroutineCancellationException("[DONE] marker received"))
+                            break
+                        }
+                        try {
+                            val appEvent = parseBackendStreamEvent(chunk)
+                            if (appEvent != null) {
+                                eventCount++
+                                when (appEvent) {
+                                    is AppStreamEvent.Content -> android.util.Log.i("ApiClientEvent", "Content len=${appEvent.text.length} preview=${appEvent.text.take(120)}")
+                                    is AppStreamEvent.ContentFinal -> android.util.Log.i("ApiClientEvent", "ContentFinal len=${appEvent.text.length} preview=${appEvent.text.take(120)}")
+                                    is AppStreamEvent.Text -> android.util.Log.i("ApiClientEvent", "Text len=${appEvent.text.length} preview=${appEvent.text.take(120)}")
+                                    is AppStreamEvent.Finish -> android.util.Log.w("ApiClientEvent", "Finish reason=${appEvent.reason}")
+                                    is AppStreamEvent.Error -> android.util.Log.e("ApiClientEvent", "Error upstreamStatus=${appEvent.upstreamStatus} msg=${appEvent.message}")
+                                    else -> android.util.Log.d("ApiClientEvent", "Other event=${appEvent.javaClass.simpleName}")
+                                }
+                                if (eventCount <= 5) {
+                                    android.util.Log.d("ApiClient", "解析到流事件 #$eventCount: ${appEvent.javaClass.simpleName}")
+                                } else if (eventCount % 10 == 0) {
+                                    android.util.Log.d("ApiClient", "已处理 $eventCount 个流事件")
+                                }
+                                trySend(appEvent)
+                            } else {
+                                android.util.Log.w("ApiClient", "无法解析的流数据块: '$chunk'")
+                            }
+                        } catch (e: SerializationException) {
+                            android.util.Log.e("ApiClientStream", "Serialization failed for chunk: '$chunk'", e)
+                        } catch (e: Exception) {
+                            android.util.Log.e("ApiClientStream", "Exception during event processing for chunk: '$chunk'", e)
+                        }
+                    } else {
+                        android.util.Log.d("ApiClient", "遇到空行，但lineBuffer为空")
+                    }
+                    lineBuffer.clear()
+                } else if (line.startsWith("data:")) {
+                    val dataContent = line.substring(5).trim()
+                    android.util.Log.d("ApiClient", "SSE data行: '$dataContent'")
+                    lineBuffer.append(dataContent)
+                } else {
+                    android.util.Log.d("ApiClient", "非SSE格式行，直接处理: '$line'")
+                    if (line.trim().isNotEmpty()) {
+                        try {
+                            val appEvent = parseBackendStreamEvent(line.trim())
+                            if (appEvent != null) {
+                                eventCount++
+                                android.util.Log.d(
+                                    "ApiClient",
+                                    "非SSE格式解析到事件 #$eventCount: ${appEvent.javaClass.simpleName}"
+                                )
+                                trySend(appEvent)
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.e("ApiClient", "非SSE格式解析失败: '$line'", e)
+                        }
+                    }
+                }
+            }
+        } catch (e: IOException) {
+            android.util.Log.e("ApiClient", "流读取IO异常 ($backendProxyUrl)", e)
+            throw e
+        } catch (e: CoroutineCancellationException) {
+            android.util.Log.d("ApiClient", "流读取被取消 ($backendProxyUrl): ${e.message}")
+            throw e
+        } catch (e: Exception) {
+            android.util.Log.e("ApiClient", "流读取意外异常 ($backendProxyUrl)", e)
+            throw IOException("意外流错误 ($backendProxyUrl): ${e.message}", e)
+        } finally {
+            android.util.Log.d("ApiClient", "流处理结束，共读取 $lineCount 行，处理 $eventCount 个事件")
+            if (lineCount == 0) {
+                android.util.Log.w("ApiClient", "警告：没有读取到任何数据行！")
+            }
+            val chunk = lineBuffer.toString().trim()
+            if (chunk.isNotEmpty()) {
+                try {
+                    val appEvent = parseBackendStreamEvent(chunk)
+                    if (appEvent != null) {
+                        trySend(appEvent)
+                    }
+                } catch (e: SerializationException) {
+                    android.util.Log.e(
+                        "ApiClientStream",
+                        "Serialization failed for final chunk: '$chunk'",
+                        e
+                    )
+                }
+            }
         }
     }
 

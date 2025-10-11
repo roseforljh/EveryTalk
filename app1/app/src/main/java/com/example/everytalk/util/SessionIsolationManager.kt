@@ -2,7 +2,6 @@ package com.example.everytalk.util
 
 import com.example.everytalk.config.SessionIsolationConfig
 import com.example.everytalk.util.messageprocessor.MessageProcessor
-import com.example.everytalk.util.messageprocessor.MarkdownBlockManager
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -17,7 +16,6 @@ class SessionIsolationManager {
     
     // 🎯 会话级别的资源映射
     private val sessionProcessors = ConcurrentHashMap<String, ConcurrentHashMap<String, MessageProcessor>>()
-    private val sessionBlockManagers = ConcurrentHashMap<String, ConcurrentHashMap<String, MarkdownBlockManager>>()
     
     // 活跃会话跟踪
     private val activeTextSession = AtomicReference<String?>(null)
@@ -42,14 +40,6 @@ class SessionIsolationManager {
     /**
      * 🎯 获取会话的块管理器
      */
-    fun getBlockManager(sessionId: String, messageId: String): MarkdownBlockManager {
-        val sessionMap = sessionBlockManagers.getOrPut(sessionId) { ConcurrentHashMap() }
-        return sessionMap.getOrPut(messageId) {
-            MarkdownBlockManager().apply {
-                logger.debug("🎯 Created MarkdownBlockManager for session=$sessionId, message=$messageId")
-            }
-        }
-    }
     
     /**
      * 🎯 切换到新的文本会话
@@ -98,7 +88,7 @@ class SessionIsolationManager {
         
         // 清理资源映射
         val processorsRemoved = sessionProcessors.remove(sessionId)?.size ?: 0
-        val blockManagersRemoved = sessionBlockManagers.remove(sessionId)?.size ?: 0
+        val blockManagersRemoved = 0
         
         logger.debug("🎯 Cleared session $sessionId: $processorsRemoved processors, $blockManagersRemoved block managers")
     }
@@ -116,7 +106,6 @@ class SessionIsolationManager {
         
         val totalSessions = sessionProcessors.size
         sessionProcessors.clear()
-        sessionBlockManagers.clear()
         
         activeTextSession.set(null)
         activeImageSession.set(null)
@@ -127,28 +116,13 @@ class SessionIsolationManager {
     /**
      * 🎯 强制完成指定会话的所有流
      */
-    suspend fun forceCompleteSessionStreams(sessionId: String) {
-        logger.debug("🎯 Force completing streams for session: $sessionId")
-        
-        sessionProcessors[sessionId]?.values?.forEach { processor ->
-            if (!processor.isStreamCompleted()) {
-                processor.completeStream()
-                logger.debug("🎯 Force completed stream for processor in session $sessionId")
-            }
-        }
-        
-        // 等待一小段时间确保完成处理
-        if (SessionIsolationConfig.FORCE_FINALIZATION_DELAY_MS > 0) {
-            delay(SessionIsolationConfig.FORCE_FINALIZATION_DELAY_MS)
-        }
-    }
     
     /**
      * 🎯 获取会话统计信息
      */
     fun getSessionStats(): String {
         val totalProcessors = sessionProcessors.values.sumOf { it.size }
-        val totalBlockManagers = sessionBlockManagers.values.sumOf { it.size }
+        val totalBlockManagers = 0
         val activeSessions = sessionProcessors.keys.size
         
         return """
