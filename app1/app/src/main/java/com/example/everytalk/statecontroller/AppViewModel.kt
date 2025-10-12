@@ -1095,7 +1095,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
        val current = stateHolder.systemPromptEngagedState[conversationId] ?: false
        stateHolder.systemPromptEngagedState[conversationId] = !current
        // 轻提示
-       showSnackbar(if (!current) "已开始接入系统提示" else "已暂停接入系统提示")
+       
    }
    
    // 显式设置接入状态
