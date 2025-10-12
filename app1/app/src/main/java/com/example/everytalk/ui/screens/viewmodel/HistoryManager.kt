@@ -18,26 +18,31 @@ class HistoryManager(
     private val TAG_HM = "HistoryManager"
 
     private fun filterMessagesForSaving(messagesToFilter: List<Message>): List<Message> {
-        return messagesToFilter.map { msg ->
-            // 在保存前，确保消息的最终文本内容被同步
-            if (msg.sender == Sender.AI) {
-                // 🔥 修复：确保AI消息始终标记为已开始，以便保存
-                msg.copy(
-                    text = msg.text,
-                    contentStarted = true  // 强制设置为true，确保AI消息被保存
-                )
-            } else {
-                msg
+        fun hasValidParts(parts: List<com.example.everytalk.ui.components.MarkdownPart>): Boolean {
+            return parts.any { part ->
+                when (part) {
+                    is com.example.everytalk.ui.components.MarkdownPart.Text -> part.content.isNotBlank()
+                    is com.example.everytalk.ui.components.MarkdownPart.CodeBlock -> part.content.isNotBlank()
+                    else -> true
+                }
             }
-        }.filter { msg ->
-            (!msg.isError) &&
-            (
-                (msg.sender == Sender.User) ||
-                // 🔥 修复：简化条件，只要是AI消息就保存（除非是错误消息）
-                (msg.sender == Sender.AI) ||
-                (msg.sender == Sender.System)
-            )
-        }.toList()
+        }
+        fun hasAiSubstance(msg: Message): Boolean {
+            if (msg.sender != Sender.AI) return true
+            val hasText = msg.text.isNotBlank()
+            val hasReasoning = !msg.reasoning.isNullOrBlank()
+            val hasParts = hasValidParts(msg.parts)
+            return hasText || hasReasoning || hasParts
+        }
+        return messagesToFilter
+            .filter { msg ->
+                !msg.isError && when (msg.sender) {
+                    Sender.User, Sender.System -> true
+                    Sender.AI -> hasAiSubstance(msg)
+                    else -> true
+                }
+            }
+            .toList()
     }
 
     suspend fun findChatInHistory(messagesToFind: List<Message>, isImageGeneration: Boolean = false): Int = withContext(Dispatchers.Default) {
@@ -185,12 +190,14 @@ class HistoryManager(
             Log.d(TAG_HM, "Chat history list persisted and dirty flag reset.")
         }
         
-        // 参数键迁移（根本修复）：用“会话的稳定键 = 首条消息的ID”，而不是“历史索引”
-        // 历史索引会因插入/删除而变化，导致重启后无法按原键取到参数，表现为“回到默认”
+        // 参数键迁移（根本修复）：稳定会话键改为“首条有效用户消息ID”，否则回退“非占位System”，再回退“首条消息ID”
+        // 避免因系统提示/标题插入到索引0而导致稳定键抖动
         if (!isImageGeneration) {
             val currentId = stateHolder._currentConversationId.value
-            // 从“准备保存”的会话内容中取第一条消息ID，作为稳定键
-            val stableKeyFromMessages = messagesToSave.firstOrNull()?.id
+            val stableKeyFromMessages =
+                messagesToSave.firstOrNull { it.sender == Sender.User }?.id
+                    ?: messagesToSave.firstOrNull { it.sender == Sender.System && !it.isPlaceholderName }?.id
+                    ?: messagesToSave.firstOrNull()?.id
             if (stableKeyFromMessages != null) {
                 val stableId = stableKeyFromMessages
                 val currentConfigs = stateHolder.conversationGenerationConfigs.value
@@ -206,7 +213,7 @@ class HistoryManager(
                     persistenceManager.saveConversationParameters(newMap)
                     // 切换当前会话ID为稳定键，后续读取与重启后都一致
                     stateHolder._currentConversationId.value = stableId
-                    Log.d(TAG_HM, "Migrated parameters from '$currentId' to stable key(firstMessageId) '$stableId' and switched currentConversationId")
+                    Log.d(TAG_HM, "Migrated parameters from '$currentId' to stable key '$stableId' (prefer first user message) and switched currentConversationId")
                 }
             } else {
                 // 极端情况：没有消息可用，跳过迁移（空会话本就不应落库）
@@ -286,9 +293,49 @@ class HistoryManager(
             if (loadedHistoryIndex.value != finalLoadedIndexAfterDelete) {
                 loadedHistoryIndex.value = finalLoadedIndexAfterDelete
                 Log.d(
-                    TAG_HM,
-                    "Due to deletion, LoadedHistoryIndex updated to: $finalLoadedIndexAfterDelete"
+                        TAG_HM,
+                        "Due to deletion, LoadedHistoryIndex updated to: $finalLoadedIndexAfterDelete"
                 )
+            }
+            // 🔧 修复：删除历史项后，重建 systemPrompts 映射，并保证当前加载会话的会话ID稳定
+            runCatching {
+                val currentHistoryFinal = historicalConversations.value
+    
+                // 1) 重建 systemPrompts（避免需要重进页面才能恢复）
+                stateHolder.systemPrompts.clear()
+                currentHistoryFinal.forEach { conversation ->
+                    val stableIdForConv =
+                        conversation.firstOrNull { it.sender == Sender.User }?.id
+                            ?: conversation.firstOrNull { it.sender == Sender.System && !it.isPlaceholderName }?.id
+                            ?: conversation.firstOrNull()?.id
+                    val promptForConv =
+                        conversation.firstOrNull { it.sender == Sender.System && !it.isPlaceholderName }?.text ?: ""
+                    if (stableIdForConv != null) {
+                        stateHolder.systemPrompts[stableIdForConv] = promptForConv
+                    }
+                }
+    
+                // 2) 若仍存在“已加载的会话”，将 currentConversationId（或图像模式的ID）同步到该会话的稳定键
+                if (finalLoadedIndexAfterDelete != null &&
+                    finalLoadedIndexAfterDelete >= 0 &&
+                    finalLoadedIndexAfterDelete < currentHistoryFinal.size
+                ) {
+                    val conv = currentHistoryFinal[finalLoadedIndexAfterDelete]
+                    val stableIdLoaded =
+                        conv.firstOrNull { it.sender == Sender.User }?.id
+                            ?: conv.firstOrNull { it.sender == Sender.System && !it.isPlaceholderName }?.id
+                            ?: conv.firstOrNull()?.id
+    
+                    if (stableIdLoaded != null) {
+                        if (isImageGeneration) {
+                            stateHolder._currentImageGenerationConversationId.value = stableIdLoaded
+                        } else {
+                            stateHolder._currentConversationId.value = stableIdLoaded
+                        }
+                    }
+                }
+            }.onFailure { e ->
+                Log.w(TAG_HM, "Failed to rebuild prompts or adjust conversationId after deletion", e)
             }
             persistenceManager.saveChatHistory(historicalConversations.value, isImageGeneration)
             if (finalLoadedIndexAfterDelete == null) {

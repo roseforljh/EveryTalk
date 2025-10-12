@@ -96,12 +96,13 @@ fun ChatScreen(
     val isLoadingHistoryData by viewModel.isLoadingHistoryData.collectAsState()
     val conversationId by viewModel.currentConversationId.collectAsState()
     val latestReleaseInfo by viewModel.latestReleaseInfo.collectAsState()
-   val systemPrompt by viewModel.systemPrompt.collectAsState()
-   val isSystemPromptExpanded by remember(conversationId) {
-       derivedStateOf {
-           viewModel.systemPromptExpandedState[conversationId] ?: false
-       }
-   }
+    val systemPrompt by viewModel.systemPrompt.collectAsState()
+    val isSystemPromptEngaged by viewModel.isSystemPromptEngaged.collectAsState()
+    val isSystemPromptExpanded by remember(conversationId) {
+        derivedStateOf {
+            viewModel.systemPromptExpandedState[conversationId] ?: false
+        }
+    }
  
      val coroutineScope = rememberCoroutineScope()
      val loadedHistoryIndex by viewModel.loadedHistoryIndex.collectAsState()
@@ -294,12 +295,14 @@ fun ChatScreen(
                         }
                     }
                 },
-               onSystemPromptClick = {
-                   viewModel.toggleSystemPromptExpanded()
-                   viewModel.showSystemPromptDialog()
-               },
-               systemPrompt = systemPrompt,
-               isSystemPromptExpanded = isSystemPromptExpanded
+                onSystemPromptClick = {
+                    viewModel.toggleSystemPromptExpanded()
+                    viewModel.showSystemPromptDialog()
+                },
+                systemPrompt = systemPrompt,
+                isSystemPromptExpanded = isSystemPromptExpanded,
+                isSystemPromptEngaged = isSystemPromptEngaged,
+                onToggleSystemPromptEngaged = { viewModel.toggleSystemPromptEngaged() }
             )
         },
         floatingActionButton = {
@@ -495,14 +498,16 @@ fun ChatScreen(
    val showSystemPromptDialog by viewModel.showSystemPromptDialog.collectAsState()
 
    if (showSystemPromptDialog) {
-        SystemPromptDialog(
-            prompt = systemPrompt,
-            onDismissRequest = { viewModel.dismissSystemPromptDialog() },
-            onPromptChange = { newPrompt -> viewModel.onSystemPromptChange(newPrompt) },
-            onConfirm = { viewModel.saveSystemPrompt() },
-            onClear = { viewModel.clearSystemPrompt() }  // 添加onClear参数
-        )
-    }
+       SystemPromptDialog(
+           prompt = systemPrompt,
+           isEngaged = isSystemPromptEngaged,
+           onToggleEngaged = { viewModel.toggleSystemPromptEngaged() },
+           onDismissRequest = { viewModel.dismissSystemPromptDialog() },
+           onPromptChange = { newPrompt -> viewModel.onSystemPromptChange(newPrompt) },
+           onConfirm = { viewModel.saveSystemPrompt() },
+           onClear = { viewModel.clearSystemPrompt() }
+       )
+   }
 }
  
 @Composable

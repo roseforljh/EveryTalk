@@ -57,6 +57,8 @@ data class ConversationScrollState(
     val _currentTextStreamingAiMessageId = MutableStateFlow<String?>(null)
     val _currentImageStreamingAiMessageId = MutableStateFlow<String?>(null)
 
+// 全局流式暂停状态（文本/图像共用）
+val _isStreamingPaused = MutableStateFlow(false)
     // 分离的API Job
     var textApiJob: Job? = null
     var imageApiJob: Job? = null
@@ -193,7 +195,8 @@ data class ConversationScrollState(
     val conversationScrollStates = mutableStateMapOf<String, ConversationScrollState>()
     val systemPromptExpandedState = mutableStateMapOf<String, Boolean>()
     val systemPrompts = mutableStateMapOf<String, String>()
-
+    // 是否将当前系统提示接入到该会话（开始/暂停）
+    val systemPromptEngagedState = mutableStateMapOf<String, Boolean>()
 
     // 清理文本模式状态的方法 - 增强版本，确保完全隔离
     fun clearForNewTextChat() {

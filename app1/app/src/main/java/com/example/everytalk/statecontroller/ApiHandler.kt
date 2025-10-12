@@ -488,12 +488,15 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     updatedMessage = finalizedMessage.copy(
                         contentStarted = true
                     )
-                    try {
-                        if (finalizedMessage.text.isNotBlank()) {
-                            onAiMessageFullTextChanged(aiMessageId, finalizedMessage.text)
+                    // 暂停时不触发UI刷新，等待恢复后统一刷新
+                    if (!stateHolder._isStreamingPaused.value) {
+                        try {
+                            if (finalizedMessage.text.isNotBlank()) {
+                                onAiMessageFullTextChanged(aiMessageId, finalizedMessage.text)
+                            }
+                        } catch (e: Exception) {
+                            logger.warn("onAiMessageFullTextChanged in Finish handler failed: ${e.message}")
                         }
-                    } catch (e: Exception) {
-                        logger.warn("onAiMessageFullTextChanged in Finish handler failed: ${e.message}")
                     }
 
                     // 核心修复：在消息处理完成并最终化之后，在这里触发强制保存
@@ -514,7 +517,8 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                 }
             }
 
-            if (updatedMessage != currentMessage) {
+            // 若处于“暂停流式显示”状态，则不更新UI，仅由恢复时一次性刷新
+            if (!stateHolder._isStreamingPaused.value && updatedMessage != currentMessage) {
                 messageList[messageIndex] = updatedMessage
             }
         }
@@ -791,5 +795,40 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
     // 为兼容调用方，提供带 sessionId 的重载，内部忽略参数
     fun clearImageChatResources(@Suppress("UNUSED_PARAMETER") sessionId: String?) {
         clearImageChatResources()
+    }
+
+    /**
+     * 当暂停恢复时，将当前流式消息的累积文本一次性刷新到UI。
+     */
+    fun flushPausedStreamingUpdate(isImageGeneration: Boolean = false) {
+        val messageId = if (isImageGeneration)
+            stateHolder._currentImageStreamingAiMessageId.value
+        else
+            stateHolder._currentTextStreamingAiMessageId.value
+
+        if (messageId.isNullOrBlank()) return
+
+        val processor = messageProcessorMap[messageId] ?: return
+        val fullText = processor.getCurrentText()
+
+        viewModelScope.launch(Dispatchers.Main.immediate) {
+            val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
+            val idx = messageList.indexOfFirst { it.id == messageId }
+            if (idx != -1) {
+                val msg = messageList[idx]
+                val updated = msg.copy(
+                    text = fullText,
+                    contentStarted = msg.contentStarted || fullText.isNotBlank()
+                )
+                messageList[idx] = updated
+                try {
+                    if (fullText.isNotBlank()) {
+                        onAiMessageFullTextChanged(messageId, fullText)
+                    }
+                } catch (_: Exception) {
+                    // 忽略刷新失败，避免影响恢复流程
+                }
+            }
+        }
     }
 }

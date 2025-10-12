@@ -49,6 +49,7 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
     val editingMessage by viewModel.editingMessage.collectAsState()
     val selectedMediaItems = viewModel.selectedMediaItems
     val isApiCalling by viewModel.isImageApiCalling.collectAsState()
+    val isStreamingPaused by viewModel.isStreamingPaused.collectAsState()
     val focusRequester = remember { FocusRequester() }
     val imeInsets = WindowInsets.ime
     val density = LocalDensity.current

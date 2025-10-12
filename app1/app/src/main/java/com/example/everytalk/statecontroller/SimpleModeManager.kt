@@ -68,8 +68,8 @@ class SimpleModeManager(
     /**
      * 安全的模式切换到文本模式
      */
-    suspend fun switchToTextMode(forceNew: Boolean = false) {
-        Log.d(TAG, "Switching to TEXT mode (forceNew: $forceNew)")
+    suspend fun switchToTextMode(forceNew: Boolean = false, skipSavingTextChat: Boolean = false) {
+        Log.d(TAG, "Switching to TEXT mode (forceNew: $forceNew, skipSavingTextChat: $skipSavingTextChat)")
         
         // 跟踪模式切换（立即更新意图模式，供UI使用）
         _currentMode = ModeType.TEXT
@@ -84,7 +84,9 @@ class SimpleModeManager(
         // 1. 同步保存两种模式的当前状态 - 确保状态切换的原子性
         // 1. 保存当前会话，这是关键的第一步
         withContext(Dispatchers.IO) {
-            historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = false, forceSave = true)
+            if (!skipSavingTextChat) {
+                historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = false, forceSave = true)
+            }
             historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true, forceSave = true)
         }
         
@@ -140,8 +142,8 @@ class SimpleModeManager(
     /**
      * 安全的模式切换到图像模式
      */
-    suspend fun switchToImageMode(forceNew: Boolean = false) {
-        Log.d(TAG, "Switching to IMAGE mode (forceNew: $forceNew)")
+    suspend fun switchToImageMode(forceNew: Boolean = false, skipSavingImageChat: Boolean = false) {
+        Log.d(TAG, "Switching to IMAGE mode (forceNew: $forceNew, skipSavingImageChat: $skipSavingImageChat)")
         
         // 跟踪模式切换（立即更新意图模式，供UI使用）
         _currentMode = ModeType.IMAGE
@@ -161,11 +163,13 @@ class SimpleModeManager(
                 forceSave = true
             )
             // 如果forceNew为true，也要保存图像模式的当前会话
-            if (forceNew && stateHolder.imageGenerationMessages.isNotEmpty()) {
-                historyManager.saveCurrentChatToHistoryIfNeeded(
-                    isImageGeneration = true,
-                    forceSave = true
-                )
+            if (!skipSavingImageChat) {
+                if (forceNew && stateHolder.imageGenerationMessages.isNotEmpty()) {
+                    historyManager.saveCurrentChatToHistoryIfNeeded(
+                        isImageGeneration = true,
+                        forceSave = true
+                    )
+                }
             }
         }
         
@@ -237,7 +241,10 @@ class SimpleModeManager(
 
         val conversationToLoad = conversationList[index]
         Log.d(TAG, "🔥 Found conversation to load with ${conversationToLoad.size} messages.")
-        val stableId = conversationToLoad.firstOrNull()?.id ?: "history_${UUID.randomUUID()}"
+        val stableId = conversationToLoad.firstOrNull { it.sender == Sender.User }?.id
+            ?: conversationToLoad.firstOrNull { it.sender == Sender.System && !it.isPlaceholderName }?.id
+            ?: conversationToLoad.firstOrNull()?.id
+            ?: "history_${UUID.randomUUID()}"
         val systemPrompt = conversationToLoad.firstOrNull { it.sender == Sender.System && !it.isPlaceholderName }?.text ?: ""
         Log.d(TAG, "🔥 Stable ID: $stableId, System Prompt: '$systemPrompt'")
 
@@ -308,6 +315,8 @@ class SimpleModeManager(
             stateHolder._loadedHistoryIndex.value = index
             stateHolder._text.value = ""
             Log.d(TAG, "🔥 Set loaded history index to $index and cleared text input.")
+            // Reset dirty flag after loading history to avoid unnecessary saves
+            stateHolder.isTextConversationDirty.value = false
         
         Log.d(TAG, "🔥 [END] Loaded TEXT history successfully: ${conversationToLoad.size} messages")
     }

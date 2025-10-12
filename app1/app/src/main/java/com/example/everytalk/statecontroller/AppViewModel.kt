@@ -274,6 +274,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         get() = stateHolder._showSourcesDialog.asStateFlow()
     val sourcesForDialog: StateFlow<List<WebSearchResult>>
         get() = stateHolder._sourcesForDialog.asStateFlow()
+    val isStreamingPaused: StateFlow<Boolean>
+        get() = stateHolder._isStreamingPaused.asStateFlow()
 
     private val _showSelectableTextDialog = MutableStateFlow(false)
     val showSelectableTextDialog: StateFlow<Boolean> = _showSelectableTextDialog.asStateFlow()
@@ -286,6 +288,10 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     val systemPrompt: StateFlow<String> = stateHolder._currentConversationId.flatMapLatest { id ->
         snapshotFlow { stateHolder.systemPrompts[id] ?: "" }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+    // 当前会话是否“接入系统提示”（开始/暂停）
+    val isSystemPromptEngaged: StateFlow<Boolean> = stateHolder._currentConversationId.flatMapLatest { id ->
+        snapshotFlow { stateHolder.systemPromptEngagedState[id] ?: false }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
     private var originalSystemPrompt: String? = null
  
    private val _showAboutDialog = MutableStateFlow(false)
@@ -705,13 +711,16 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         if (_editingMessage.value != null && isImageGeneration) {
             confirmImageGenerationMessageEdit(messageText)
         } else {
+            // 仅在“接入系统提示”开启时，才把系统提示注入到本次会话
+            val engaged = stateHolder.systemPromptEngagedState[stateHolder._currentConversationId.value] ?: false
+            val promptToUse = if (engaged) systemPrompt.value else null
             messageSender.sendMessage(
                 messageText,
                 isFromRegeneration,
                 attachments,
                 audioBase64 = audioBase64,
                 mimeType = mimeType,
-                systemPrompt = systemPrompt.value,
+                systemPrompt = promptToUse,
                 isImageGeneration = isImageGeneration
             )
         }
@@ -1079,6 +1088,21 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
        val currentState = stateHolder.systemPromptExpandedState[conversationId] ?: false
        stateHolder.systemPromptExpandedState[conversationId] = !currentState
    }
+   
+   // 切换“系统提示接入”状态（开始/暂停）
+   fun toggleSystemPromptEngaged() {
+       val conversationId = stateHolder._currentConversationId.value
+       val current = stateHolder.systemPromptEngagedState[conversationId] ?: false
+       stateHolder.systemPromptEngagedState[conversationId] = !current
+       // 轻提示
+       showSnackbar(if (!current) "已开始接入系统提示" else "已暂停接入系统提示")
+   }
+   
+   // 显式设置接入状态
+   fun setSystemPromptEngaged(enabled: Boolean) {
+       val conversationId = stateHolder._currentConversationId.value
+       stateHolder.systemPromptEngagedState[conversationId] = enabled
+   }
 
     fun triggerScrollToBottom() {
         viewModelScope.launch { stateHolder._scrollToBottomEvent.tryEmit(Unit) }
@@ -1088,6 +1112,26 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         // 根据当前模式取消对应的流/任务，确保图像模式可被中止
         val isImageMode = simpleModeManager.isInImageMode()
         apiHandler.cancelCurrentApiJob("用户取消操作", isNewMessageSend = false, isImageGeneration = isImageMode)
+    }
+
+    /**
+     * 切换“暂停/继续”流式显示。
+     * 暂停：仍然接收并解析后端数据，但不更新UI；
+     * 继续：一次性将暂停期间累积的文本刷新到UI。
+     */
+    fun toggleStreamingPause() {
+        val newState = !stateHolder._isStreamingPaused.value
+        stateHolder._isStreamingPaused.value = newState
+        if (newState) {
+            // 进入暂停
+            showSnackbar("已暂停显示")
+        } else {
+            // 恢复显示：将当前流式消息的累积文本一次性刷新
+            val isImageMode = simpleModeManager.isInImageMode()
+            apiHandler.flushPausedStreamingUpdate(isImageGeneration = isImageMode)
+            triggerScrollToBottom()
+            showSnackbar("已继续")
+        }
     }
 
     fun startNewChat() {
@@ -1204,15 +1248,31 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             val wasCurrentChatDeleted = (currentLoadedIndex == indexToDelete)
             val idsInDeletedConversation =
                     historicalConversations.getOrNull(indexToDelete)?.map { it.id } ?: emptyList()
-
+    
             // HistoryManager.deleteConversation 已经包含了媒体文件清理逻辑
             withContext(Dispatchers.IO) { historyManager.deleteConversation(indexToDelete) }
-
+    
             if (wasCurrentChatDeleted) {
-                simpleModeManager.switchToTextMode(forceNew = true)
+                simpleModeManager.switchToTextMode(forceNew = true, skipSavingTextChat = true)
                 apiHandler.cancelCurrentApiJob("当前聊天(#$indexToDelete)被删除，开始新聊天")
             }
+            // 🔧 修复：及时清理与已删除消息相关的UI状态映射，避免需要重入页面才恢复
+            if (idsInDeletedConversation.isNotEmpty()) {
+                stateHolder.textReasoningCompleteMap.keys.removeAll(idsInDeletedConversation)
+                stateHolder.textExpandedReasoningStates.keys.removeAll(idsInDeletedConversation)
+                stateHolder.textMessageAnimationStates.keys.removeAll(idsInDeletedConversation)
+            }
+            // 🔧 修复：同步修正抽屉中当前展开的历史索引，保持选择稳定
+            val expandedIndex = _expandedDrawerItemIndex.value
+            if (expandedIndex != null) {
+                when {
+                    expandedIndex == indexToDelete -> _expandedDrawerItemIndex.value = null
+                    expandedIndex > indexToDelete -> _expandedDrawerItemIndex.value = expandedIndex - 1
+                }
+            }
             textConversationPreviewCache.evictAll()
+            // 🔧 修复：强制触发 StateFlow 更新，确保UI在删除后能彻底重组
+            stateHolder._historicalConversations.value = stateHolder._historicalConversations.value.toList()
         }
     }
     fun deleteImageGenerationConversation(indexToDelete: Int) {
@@ -1224,13 +1284,23 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         }
         viewModelScope.launch {
             val wasCurrentChatDeleted = (currentLoadedIndex == indexToDelete)
+            val idsInDeletedConversation =
+                historicalConversations.getOrNull(indexToDelete)?.map { it.id } ?: emptyList()
             withContext(Dispatchers.IO) { historyManager.deleteConversation(indexToDelete, isImageGeneration = true) }
-
+    
             if (wasCurrentChatDeleted) {
-                simpleModeManager.switchToImageMode(forceNew = true)
+                simpleModeManager.switchToImageMode(forceNew = true, skipSavingImageChat = true)
                 apiHandler.cancelCurrentApiJob("当前图像生成聊天(#$indexToDelete)被删除，开始新聊天")
             }
+            // 🔧 修复：清理图像模式的UI状态映射，避免残留状态影响UI
+            if (idsInDeletedConversation.isNotEmpty()) {
+                stateHolder.imageReasoningCompleteMap.keys.removeAll(idsInDeletedConversation)
+                stateHolder.imageExpandedReasoningStates.keys.removeAll(idsInDeletedConversation)
+                stateHolder.imageMessageAnimationStates.keys.removeAll(idsInDeletedConversation)
+            }
             imageConversationPreviewCache.evictAll()
+            // 🔧 修复：强制触发 StateFlow 更新，确保UI在删除后能彻底重组
+            stateHolder._imageGenerationHistoricalConversations.value = stateHolder._imageGenerationHistoricalConversations.value.toList()
         }
     }
 

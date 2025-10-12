@@ -572,11 +572,36 @@ private data class AttachmentProcessingResult(
                 triggerScrollToBottom()
             }
 
+            // 🔥 新增：当在新会话中发送第一条消息时，立即将其添加到历史记录中，以便在抽屉中即时可见
+            val isNewTextChatFirstMessage = !isImageGeneration &&
+                    stateHolder.messages.size == 1 &&
+                    stateHolder._loadedHistoryIndex.value == null
+
+            val isNewImageChatFirstMessage = isImageGeneration &&
+                    stateHolder.imageGenerationMessages.size == 1 &&
+                    stateHolder._loadedImageGenerationHistoryIndex.value == null
+
+            if (isNewTextChatFirstMessage || isNewImageChatFirstMessage) {
+                withContext(Dispatchers.IO) {
+                    historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration)
+                }
+            }
 
             withContext(Dispatchers.IO) {
                 val messagesInChatUiSnapshot = if (isImageGeneration) stateHolder.imageGenerationMessages.toList() else stateHolder.messages.toList()
                 val historyEndIndex = messagesInChatUiSnapshot.indexOfFirst { it.id == newUserMessageForUi.id }
-                val historyUiMessages = if (historyEndIndex != -1) messagesInChatUiSnapshot.subList(0, historyEndIndex) else messagesInChatUiSnapshot
+                val historyUiMessagesRaw = if (historyEndIndex != -1) messagesInChatUiSnapshot.subList(0, historyEndIndex) else messagesInChatUiSnapshot
+
+                // 当“系统提示接入”处于暂停状态时，过滤掉会话历史中的系统消息，避免仍然将 Prompt 注入到请求
+                val engagedForThisConversation = stateHolder.systemPromptEngagedState[stateHolder._currentConversationId.value] ?: false
+                val historyUiMessages = if (engagedForThisConversation) {
+                    historyUiMessagesRaw
+                } else {
+                    historyUiMessagesRaw.filter { msg ->
+                        // 保留非系统消息；若有系统占位标题(isPlaceholderName)可选择保留，这里彻底禁用非占位系统提示
+                        !(msg.sender == UiSender.System && !msg.isPlaceholderName)
+                    }
+                }
 
                 // 图像会话的稳定会话ID规则：
                 // 第一次消息（historyEndIndex==0 且非从历史加载）时，用“首条用户消息ID”作为 conversationId，

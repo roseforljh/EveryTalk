@@ -47,7 +47,11 @@ package com.example.everytalk.ui.components
      onSystemPromptClick: () -> Unit,
      systemPrompt: String,
      isSystemPromptExpanded: Boolean,
+     // 新增：系统提示接入开关与回调（有默认值，避免现有调用方编译失败）
+     isSystemPromptEngaged: Boolean = false,
+     onToggleSystemPromptEngaged: () -> Unit = {},
      modifier: Modifier = Modifier,
+     // 恢复首页顶栏原始高度与控件尺寸
      barHeight: Dp = 85.dp,
      contentPaddingHorizontal: Dp = 8.dp,
      bottomAlignPadding: Dp = 12.dp,
@@ -122,8 +126,8 @@ package com.example.everytalk.ui.components
                                   .offset(y = (-1.8).dp)
                           )
                       }
-
-                      // 圆点
+ 
+                      // 圆点（点击进入系统提示页面；开始接入时播放动画）
                       val clickAnimationScale = remember { Animatable(1f) }
                       Box(
                           modifier = Modifier
@@ -142,17 +146,19 @@ package com.example.everytalk.ui.components
                           contentAlignment = Alignment.Center
                       ) {
                           val scale = remember { Animatable(1f) }
-                          val targetColor = if (systemPrompt.isNotEmpty() && !isSystemPromptExpanded) DarkGreen else MaterialTheme.colorScheme.primary
+                          // 仅在“接入开启”时变为深绿；暂停或展开时使用主题主色
+                          val targetColor = if (isSystemPromptEngaged && !isSystemPromptExpanded) DarkGreen else MaterialTheme.colorScheme.primary
                           val color by animateColorAsState(
                               targetValue = targetColor,
                               animationSpec = tween(durationMillis = 1200, easing = FastOutSlowInEasing), label = ""
                           )
 
-                          LaunchedEffect(isSystemPromptExpanded, systemPrompt) {
+                          // 动画仅在“接入开启”时播放；暂停或展开时不播放
+                          LaunchedEffect(isSystemPromptExpanded, isSystemPromptEngaged) {
                               scale.stop()
                               when {
                                   isSystemPromptExpanded -> scale.animateTo(1.25f, tween(300, easing = FastOutSlowInEasing))
-                                  systemPrompt.isNotEmpty() -> {
+                                  isSystemPromptEngaged -> {
                                       scale.snapTo(1.0f)
                                       scale.animateTo(1.25f, infiniteRepeatable(tween(1200, easing = FastOutSlowInEasing), RepeatMode.Reverse))
                                   }

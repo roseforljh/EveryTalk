@@ -31,6 +31,19 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material3.Surface
+import androidx.compose.foundation.Image
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.heightIn
+import com.example.everytalk.R
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -188,7 +201,7 @@ fun ConversationParametersDialog(
     var temperature by remember(initialTemperature) { mutableStateOf(initialTemperature ?: 0.7f) }
     var topP by remember(initialTopP) { mutableStateOf(initialTopP ?: 1.0f) }
     var useCustomMaxTokens by remember(initialMaxTokens) { mutableStateOf(initialMaxTokens != null) }
-    var maxTokens by remember(initialMaxTokens) { mutableStateOf(initialMaxTokens?.toString() ?: "4096") }
+    var maxTokens by remember(initialMaxTokens) { mutableStateOf(initialMaxTokens?.toString() ?: "64000") }
 
     AlertDialog(
         onDismissRequest = onDismissRequest,
@@ -362,12 +375,12 @@ fun ConversationParametersDialog(
                             .fillMaxWidth()
                             .padding(top = 8.dp),
                         label = { Text("最大令牌数") },
-                        placeholder = { Text("例如: 4096") },
+                        placeholder = { Text("例如: 64000") },
                         singleLine = true,
                         shape = RoundedCornerShape(24.dp),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
                             focusedLabelColor = MaterialTheme.colorScheme.primary,
                             unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
                             cursorColor = MaterialTheme.colorScheme.primary,
@@ -382,7 +395,7 @@ fun ConversationParametersDialog(
             TextButton(
                 onClick = {
                     val maxTokensValue = if (useCustomMaxTokens) {
-                        maxTokens.toIntOrNull() ?: 4096
+                        maxTokens.toIntOrNull() ?: 64000
                     } else {
                         null
                     }
