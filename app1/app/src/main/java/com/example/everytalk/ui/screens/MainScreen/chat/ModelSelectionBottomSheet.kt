@@ -253,7 +253,9 @@ fun ModelSelectionBottomSheet(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                val searchBarColor = Color(0xFF1F1F1F)
+                // 搜索框背景根据主题自适应
+                val isDark = isSystemInDarkTheme()
+                val searchBarColor = if (isDark) Color(0xFF1F1F1F) else Color(0xFFF5F5F5)
                 BasicTextField(
                     value = searchText,
                     onValueChange = { searchText = it },
@@ -296,12 +298,14 @@ fun ModelSelectionBottomSheet(
 
                 Spacer(modifier = Modifier.size(12.dp))
 
+                // 切换平台按钮背景根据主题自适应
+                val buttonBgColor = if (isDark) Color(0xFF1F1F1F) else Color(0xFFF5F5F5)
                 Box(
                     modifier = Modifier
                         .size(32.dp)
                         .shadow(6.dp, RoundedCornerShape(32.dp), clip = false)
                         .clip(RoundedCornerShape(32.dp))
-                        .background(Color.Black)
+                        .background(buttonBgColor)
                         .clickable { showPlatformDialog = true },
                     contentAlignment = Alignment.Center
                 ) {

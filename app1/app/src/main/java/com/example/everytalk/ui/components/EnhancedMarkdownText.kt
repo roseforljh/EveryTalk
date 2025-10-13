@@ -1,7 +1,9 @@
 ﻿package com.example.everytalk.ui.components
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -9,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.unit.dp
 import com.example.everytalk.data.DataClass.Message
 import dev.jeziellago.compose.markdowntext.MarkdownText
 
@@ -35,27 +38,49 @@ fun EnhancedMarkdownText(
         removeInlineCodeBackticks(sanitizeAiOutput(message.text))
     }
 
-    // 拆分为“文本 + 代码块”分段，代码块用自定义样式渲染
+    // 拆分为"文本 + 代码块"分段，代码块用自定义样式渲染
     val parts = remember(processed) { parseMessageContent(processed) }
 
+    // 使用分段渲染：普通文本交给 MarkdownText，代码块用自定义 CodeBlock（深色样式、避免"大白块"）
     Column(modifier = modifier.fillMaxWidth()) {
-        parts.forEach { part ->
+        parts.forEachIndexed { index, part ->
+            val prevType = if (index > 0) parts[index - 1].type else null
+            val nextType = if (index < parts.lastIndex) parts[index + 1].type else null
+            
             when (part.type) {
                 ContentType.TEXT -> {
-                    MarkdownText(
-                        markdown = part.content,
-                        style = style.copy(
-                            color = textColor,
-                            platformStyle = PlatformTextStyle(includeFontPadding = false)
+                    val topPadding = if (prevType == ContentType.CODE) 12.dp else 0.dp
+                    val bottomPadding = if (nextType == ContentType.CODE) 12.dp else 0.dp
+                    
+                    Box(modifier = Modifier.padding(top = topPadding, bottom = bottomPadding)) {
+                        MarkdownText(
+                            markdown = part.content,
+                            style = style.copy(
+                                color = textColor,
+                                platformStyle = PlatformTextStyle(includeFontPadding = false)
+                            )
                         )
-                    )
+                    }
                 }
                 ContentType.CODE -> {
+                    val topPadding = when (prevType) {
+                        ContentType.CODE -> 16.dp
+                        ContentType.TEXT -> 12.dp
+                        null -> 0.dp
+                    }
+                    val bottomPadding = when (nextType) {
+                        ContentType.CODE -> 0.dp
+                        ContentType.TEXT -> 12.dp
+                        null -> 0.dp
+                    }
+                    
                     CodeBlock(
                         code = part.content,
                         language = part.metadata,
                         textColor = textColor,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = topPadding, bottom = bottomPadding)
                     )
                 }
             }
@@ -74,23 +99,45 @@ fun StableMarkdownText(
     }
     val partsStable = remember(cleaned) { parseMessageContent(cleaned) }
 
+    // 稳定版本也采用分段渲染，确保代码块使用自定义深色样式，避免"大白块"
     Column(modifier = modifier.fillMaxWidth()) {
-        partsStable.forEach { part ->
+        partsStable.forEachIndexed { index, part ->
+            val prevType = if (index > 0) partsStable[index - 1].type else null
+            val nextType = if (index < partsStable.lastIndex) partsStable[index + 1].type else null
+            
             when (part.type) {
                 ContentType.TEXT -> {
-                    MarkdownText(
-                        markdown = part.content,
-                        style = style.copy(
-                            platformStyle = PlatformTextStyle(includeFontPadding = false)
+                    val topPadding = if (prevType == ContentType.CODE) 12.dp else 0.dp
+                    val bottomPadding = if (nextType == ContentType.CODE) 12.dp else 0.dp
+                    
+                    Box(modifier = Modifier.padding(top = topPadding, bottom = bottomPadding)) {
+                        MarkdownText(
+                            markdown = part.content,
+                            style = style.copy(
+                                platformStyle = PlatformTextStyle(includeFontPadding = false)
+                            )
                         )
-                    )
+                    }
                 }
                 ContentType.CODE -> {
+                    val topPadding = when (prevType) {
+                        ContentType.CODE -> 16.dp
+                        ContentType.TEXT -> 12.dp
+                        null -> 0.dp
+                    }
+                    val bottomPadding = when (nextType) {
+                        ContentType.CODE -> 0.dp
+                        ContentType.TEXT -> 12.dp
+                        null -> 0.dp
+                    }
+                    
                     CodeBlock(
                         code = part.content,
                         language = part.metadata,
                         textColor = style.color.takeIf { it != Color.Unspecified } ?: MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = topPadding, bottom = bottomPadding)
                     )
                 }
             }

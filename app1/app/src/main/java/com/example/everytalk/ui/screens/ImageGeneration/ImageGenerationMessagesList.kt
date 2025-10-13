@@ -310,7 +310,7 @@ fun ImageGenerationMessagesList(
                                                     text = item.text,
                                                     style = MaterialTheme.typography.bodyLarge,
                                                     color = MaterialTheme.colorScheme.onSurface,
-                                                    textAlign = androidx.compose.ui.text.style.TextAlign.End
+                                                    textAlign = androidx.compose.ui.text.style.TextAlign.Start
                                                 )
                                             }
                                         }

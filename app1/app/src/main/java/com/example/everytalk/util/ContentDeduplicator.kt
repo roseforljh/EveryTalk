@@ -58,8 +58,8 @@ object ContentDeduplicator {
     }
     
     /**
-     * 计算两个字符串的相似度 (简单版本)
-     * 
+     * 计算两个字符串的相似度（改进版 - 使用 Levenshtein 距离）
+     *
      * @return 0.0-1.0之间的相似度值
      */
     private fun calculateSimilarity(s1: String, s2: String): Double {
@@ -69,14 +69,58 @@ object ContentDeduplicator {
         val longer = if (s1.length > s2.length) s1 else s2
         val shorter = if (s1.length > s2.length) s2 else s1
         
+        // 长度差异过大，直接认为不相似
+        if (longer.length > shorter.length * 2) {
+            return 0.0
+        }
+        
         // 如果较短字符串完全包含在较长字符串中，认为高度相似
         if (longer.contains(shorter)) {
             return shorter.length.toDouble() / longer.length
         }
         
-        // 计算共同字符数
-        val matchingChars = shorter.toSet().intersect(longer.toSet()).size
-        return matchingChars.toDouble() / longer.length
+        // 使用 Levenshtein 距离计算编辑距离
+        val distance = levenshteinDistance(s1, s2)
+        val maxLength = maxOf(s1.length, s2.length)
+        
+        // 相似度 = 1 - (编辑距离 / 最大长度)
+        return 1.0 - (distance.toDouble() / maxLength)
+    }
+    
+    /**
+     * 计算 Levenshtein 距离（编辑距离）
+     * 表示将一个字符串转换为另一个字符串所需的最少编辑操作数
+     *
+     * @return 编辑距离
+     */
+    private fun levenshteinDistance(s1: String, s2: String): Int {
+        val len1 = s1.length
+        val len2 = s2.length
+        
+        // 优化：如果其中一个为空，距离就是另一个的长度
+        if (len1 == 0) return len2
+        if (len2 == 0) return len1
+        
+        // 动态规划矩阵（使用一维数组优化空间）
+        var prevRow = IntArray(len2 + 1) { it }
+        
+        for (i in 1..len1) {
+            val currRow = IntArray(len2 + 1)
+            currRow[0] = i
+            
+            for (j in 1..len2) {
+                val cost = if (s1[i - 1] == s2[j - 1]) 0 else 1
+                currRow[j] = minOf(
+                    currRow[j - 1] + 1,      // 插入
+                    prevRow[j] + 1,          // 删除
+                    prevRow[j - 1] + cost    // 替换
+                )
+            }
+            
+            prevRow = currRow
+        }
+        
+        return prevRow[len2]
     }
     
     /**

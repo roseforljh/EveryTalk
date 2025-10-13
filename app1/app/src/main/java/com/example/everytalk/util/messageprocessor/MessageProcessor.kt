@@ -73,42 +73,28 @@ class MessageProcessor {
         val currentText = getCurrentText()
         val currentReasoning = getCurrentReasoning()
         
-        // 🔥 添加调试日志，诊断消息文本丢失问题
-        android.util.Log.d("MessageProcessor", "=== FINALIZE MESSAGE PROCESSING ===")
-        android.util.Log.d("MessageProcessor", "Message ID: ${message.id}")
-        android.util.Log.d("MessageProcessor", "Original text length: ${message.text.length}")
-        android.util.Log.d("MessageProcessor", "Current text length: ${currentText.length}")
-        android.util.Log.d("MessageProcessor", "Current reasoning length: ${currentReasoning?.length ?: 0}")
-        android.util.Log.d("MessageProcessor", "Parts count: ${message.parts.size}")
+        logger.debug("Finalizing message ${message.id}: currentText=${currentText.length} chars, reasoning=${currentReasoning?.length ?: 0} chars")
         
-        // 确保文本内容不会丢失
-        val finalText = if (currentText.isNotBlank()) {
-            currentText
-        } else if (message.text.isNotBlank()) {
-            // 如果当前文本为空但原消息有文本，使用原消息文本
-            android.util.Log.d("MessageProcessor", "Using original message text as fallback")
-            message.text
-        } else if (message.parts.isNotEmpty()) {
-            // 尝试从parts重建文本
-            val rebuiltFromParts = message.parts.filterIsInstance<com.example.everytalk.ui.components.MarkdownPart.Text>()
-                .joinToString("") { it.content }
-            
-            if (rebuiltFromParts.isNotBlank()) {
-                android.util.Log.d("MessageProcessor", "Rebuilt text from parts: ${rebuiltFromParts.take(50)}...")
-                rebuiltFromParts
-            } else {
-                // 最后的占位符
-                android.util.Log.w("MessageProcessor", "Using placeholder text - all recovery methods failed")
-                "..."
+        // 简化逻辑：优先使用 currentText，只在为空时才使用 message.text 作为 fallback
+        val finalText = when {
+            currentText.isNotBlank() -> {
+                // 正常情况：流式处理累积的文本
+                currentText
             }
-        } else {
-            // 完全没有内容，使用占位符
-            android.util.Log.w("MessageProcessor", "No content available, using placeholder")
-            "..."
+            message.text.isNotBlank() -> {
+                // Fallback 1：使用原消息文本（可能是非流式或已完成的消息）
+                logger.warn("Message ${message.id}: Using original text as fallback (currentText is empty)")
+                message.text
+            }
+            else -> {
+                // 异常情况：文本丢失，记录错误并抛出异常
+                logger.error("Message ${message.id}: CRITICAL - Both currentText and message.text are empty!")
+                throw IllegalStateException(
+                    "Message text is empty during finalization. This indicates a processing error. " +
+                    "MessageId: ${message.id}, Parts count: ${message.parts.size}"
+                )
+            }
         }
-        
-        android.util.Log.d("MessageProcessor", "Final text length: ${finalText.length}")
-        android.util.Log.d("MessageProcessor", "=== END FINALIZE MESSAGE PROCESSING ===")
         
         return message.copy(
             text = finalText,

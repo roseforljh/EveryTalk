@@ -7,6 +7,7 @@ package com.example.everytalk.ui.components
  import androidx.compose.animation.core.infiniteRepeatable
  import androidx.compose.animation.core.tween
  import androidx.compose.foundation.background
+ import androidx.compose.foundation.border
  import androidx.compose.foundation.clickable
  import androidx.compose.foundation.interaction.MutableInteractionSource
  import androidx.compose.foundation.layout.*
@@ -102,14 +103,18 @@ package com.example.everytalk.ui.components
                       horizontalArrangement = Arrangement.Center,
                       modifier = Modifier.fillMaxWidth().offset(x = 15.dp)
                   ) {
-                      // 胶囊
+                      // 胶囊 - 添加与代码块一样的边框
+                      val isDark = isSystemInDarkTheme()
+                      val borderColor = if (isDark) Color(0xFF3E3E42) else Color(0xFFD0D7DE)
+                      
                       Surface(
                           shape = CircleShape,
-                          color = if (isSystemInDarkTheme()) Color.Black else MaterialTheme.colorScheme.surfaceDim,
+                          color = if (isDark) Color.Black else MaterialTheme.colorScheme.surfaceDim,
                           modifier = Modifier
                               .height(28.dp)
                               .wrapContentWidth(unbounded = true)
                               .widthIn(max = 200.dp) // 限制最大宽度
+                              .border(1.dp, borderColor, CircleShape)
                               .clip(CircleShape)
                               .clickable(onClick = onTitleClick)
                       ) {

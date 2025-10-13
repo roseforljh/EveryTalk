@@ -11,19 +11,35 @@ import java.util.concurrent.atomic.AtomicLong
 class StreamingOutputController(
     private val onUpdate: (String) -> Unit,
     private val updateIntervalMs: Long = 100L,
-    private val minCharsToUpdate: Int = 10
+    private val minCharsToUpdate: Int = 10,
+    private val maxAccumulatedChars: Int = 500_000 // 500KB 最大累积限制
 ) {
     private val logger = AppLogger.forComponent("StreamingOutputController")
     private var accumulatedText = StringBuilder()
     private val lastUpdateTime = AtomicLong(0)
     private var updateJob: Job? = null
+    private var isOverflowing = false
     
     /**
      * 添加文本块
      * @param text 新增的文本内容
+     * @return true 表示成功添加，false 表示已达到最大限制
      */
-    fun addText(text: String) {
+    fun addText(text: String): Boolean {
         synchronized(accumulatedText) {
+            // 检查是否会超出最大限制
+            val newLength = accumulatedText.length + text.length
+            if (newLength > maxAccumulatedChars) {
+                if (!isOverflowing) {
+                    isOverflowing = true
+                    logger.warn("Accumulated text reached maximum limit ($maxAccumulatedChars chars). Stopping accumulation.")
+                    // 添加截断提示
+                    accumulatedText.append("\n\n[内容过长，已截断显示]")
+                    flushUpdate()
+                }
+                return false
+            }
+            
             accumulatedText.append(text)
         }
         
@@ -35,6 +51,8 @@ class StreamingOutputController(
         if (hasEnoughChars && timeSinceLastUpdate >= updateIntervalMs) {
             flushUpdate()
         }
+        
+        return true
     }
     
     /**
@@ -68,7 +86,20 @@ class StreamingOutputController(
         }
         lastUpdateTime.set(0L)
         updateJob?.cancel()
+        isOverflowing = false
         logger.debug("Controller cleared")
+    }
+    
+    /**
+     * 检查是否已达到最大限制
+     */
+    fun isOverflowing(): Boolean = isOverflowing
+    
+    /**
+     * 获取当前累积的字符数
+     */
+    fun getCurrentLength(): Int = synchronized(accumulatedText) {
+        accumulatedText.length
     }
 }
 
@@ -82,15 +113,17 @@ object StreamingOutputManager {
      * 为指定消息创建流式输出控制器
      * @param messageId 消息ID
      * @param onUpdate 更新回调
+     * @param maxAccumulatedChars 最大累积字符数限制（默认500KB）
      * @return 控制器实例
      */
     fun createController(
         messageId: String,
         onUpdate: (String) -> Unit,
         updateIntervalMs: Long = 100L,
-        minCharsToUpdate: Int = 10
+        minCharsToUpdate: Int = 10,
+        maxAccumulatedChars: Int = 500_000
     ): StreamingOutputController {
-        val controller = StreamingOutputController(onUpdate, updateIntervalMs, minCharsToUpdate)
+        val controller = StreamingOutputController(onUpdate, updateIntervalMs, minCharsToUpdate, maxAccumulatedChars)
         controllers[messageId] = controller
         return controller
     }

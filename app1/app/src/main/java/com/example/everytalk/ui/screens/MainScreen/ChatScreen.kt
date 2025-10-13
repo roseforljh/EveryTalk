@@ -675,12 +675,11 @@ private fun UpdateAvailableDialog(
                             .verticalScroll(scrollState)
                             .padding(vertical = scrimHeight)
                     ) {
-                        // 🎯 显示原始Markdown文本，保持原始样式且支持文本选择
-                        Text(
-                            text = textToDisplay,
+                        // 🎯 改为真实 Markdown 渲染，同时保持选择能力
+                        com.example.everytalk.ui.components.StableMarkdownText(
+                            markdown = textToDisplay,
                             style = MaterialTheme.typography.bodyLarge.copy(
-                                color = MaterialTheme.colorScheme.onSurface,
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                color = MaterialTheme.colorScheme.onSurface
                             ),
                             modifier = Modifier.fillMaxWidth()
                         )

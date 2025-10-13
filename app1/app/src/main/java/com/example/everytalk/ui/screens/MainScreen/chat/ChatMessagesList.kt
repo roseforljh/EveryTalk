@@ -190,7 +190,7 @@ fun ChatMessagesList(
                                                     text = item.text,
                                                     style = MaterialTheme.typography.bodyLarge,
                                                     color = MaterialTheme.colorScheme.onSurface,
-                                                    textAlign = TextAlign.End
+                                                    textAlign = TextAlign.Start
                                                 )
                                             }
                                         }
