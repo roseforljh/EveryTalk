@@ -648,7 +648,10 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                         }
                     }.filterNotNull().toSet()
 
-            if (msg1.id != msg2.id ||
+            // 重要修复：忽略消息ID差异，仅比较“内容等效性”
+            // 由于系统提示消息ID会随会话ID迁移（例如从 new_chat_* 迁到首条用户消息ID），
+            // 严格比较 id 会导致同一会话被判为不相等，从而在历史顶部重复插入一条“看起来完全一样”的会话。
+            if (
                 msg1.sender != msg2.sender ||
                 !textMatch ||
                 !reasoningMatch ||
