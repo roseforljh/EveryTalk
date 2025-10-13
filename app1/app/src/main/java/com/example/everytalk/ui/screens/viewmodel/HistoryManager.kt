@@ -56,7 +56,7 @@ class HistoryManager(
         }
 
         history.indexOfFirst { historyChat ->
-            runBlocking { compareMessageLists(filterMessagesForSaving(historyChat), filteredMessagesToFind) }
+            compareMessageLists(filterMessagesForSaving(historyChat), filteredMessagesToFind)
         }
     }
 
@@ -142,7 +142,10 @@ class HistoryManager(
                 }
             } else {
                 if (messagesToSave.isNotEmpty()) {
-                    val duplicateIndex = findChatInHistory(messagesToSave, isImageGeneration)
+                    // 🔧 修复：在 historicalConversations.update 闭包内同步检查重复，避免竞态条件
+                    val duplicateIndex = mutableHistory.indexOfFirst { historyChat ->
+                        runBlocking { compareMessageLists(filterMessagesForSaving(historyChat), messagesToSave) }
+                    }
                     if (duplicateIndex == -1) {
                         Log.d(
                             TAG_HM,

@@ -1521,14 +1521,17 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     fun updateConfig(config: ApiConfig, isImageGen: Boolean = false) = configManager.updateConfig(config, isImageGen)
     fun deleteConfig(config: ApiConfig, isImageGen: Boolean = false) = configManager.deleteConfig(config, isImageGen)
     fun deleteConfigGroup(
-            apiKey: String,
-            modalityType: com.example.everytalk.data.DataClass.ModalityType,
+            representativeConfig: ApiConfig,
             isImageGen: Boolean = false
     ) {
         viewModelScope.launch(Dispatchers.IO) {
             val originalConfigs = if (isImageGen) stateHolder._imageGenApiConfigs.value else stateHolder._apiConfigs.value
             val configsToKeep = originalConfigs.filterNot {
-                it.key == apiKey && it.modalityType == modalityType
+                it.key == representativeConfig.key &&
+                it.modalityType == representativeConfig.modalityType &&
+                it.provider == representativeConfig.provider &&
+                it.address == representativeConfig.address &&
+                it.channel == representativeConfig.channel
             }
 
             if (originalConfigs.size != configsToKeep.size) {
@@ -1544,13 +1547,16 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     }
     
     fun deleteImageGenConfigGroup(
-            apiKey: String,
-            modalityType: com.example.everytalk.data.DataClass.ModalityType
+            representativeConfig: ApiConfig
     ) {
         viewModelScope.launch(Dispatchers.IO) {
             val originalConfigs = stateHolder._imageGenApiConfigs.value
             val configsToKeep = originalConfigs.filterNot {
-                it.key == apiKey && it.modalityType == modalityType
+                it.key == representativeConfig.key &&
+                it.modalityType == representativeConfig.modalityType &&
+                it.provider == representativeConfig.provider &&
+                it.address == representativeConfig.address &&
+                it.channel == representativeConfig.channel
             }
 
             if (originalConfigs.size != configsToKeep.size) {
@@ -1610,13 +1616,16 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             val trimmedChannel = newChannel.trim()
 
             val originalKey = representativeConfig.key
+            val originalProvider = representativeConfig.provider
+            val originalAddress = representativeConfig.address
+            val originalChannel = representativeConfig.channel
             val modality = representativeConfig.modalityType
             
             // 根据模态类型选择正确的配置列表和保存方法
             val useImageGen = isImageGen ?: (modality == com.example.everytalk.data.DataClass.ModalityType.IMAGE)
             
             Log.d("AppViewModel", "=== UPDATE CONFIG GROUP DEBUG ===")
-            Log.d("AppViewModel", "Original config - Model: ${representativeConfig.model}, Provider: ${representativeConfig.provider}, Channel: ${representativeConfig.channel}")
+            Log.d("AppViewModel", "Original config - Provider: $originalProvider, Address: $originalAddress, Channel: $originalChannel, Key: ${originalKey.take(10)}...")
             Log.d("AppViewModel", "New values - Address: $trimmedAddress, Key: ${trimmedKey.take(10)}..., Provider: $providerToKeep, Channel: $trimmedChannel")
             Log.d("AppViewModel", "IsImageGen: $useImageGen, Modality: $modality")
             
@@ -1626,7 +1635,11 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 Log.d("AppViewModel", "Current image configs count: ${currentConfigs.size}")
                 val newConfigs =
                         currentConfigs.map { config ->
-                            if (config.key == originalKey && config.modalityType == modality) {
+                            if (config.key == originalKey &&
+                                config.modalityType == modality &&
+                                config.provider == originalProvider &&
+                                config.address == originalAddress &&
+                                config.channel == originalChannel) {
                                 val updatedConfig = config.copy(address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
                                 Log.d("AppViewModel", "Updated config - Model: ${updatedConfig.model}, Provider: ${updatedConfig.provider}, Channel: ${updatedConfig.channel}")
                                 updatedConfig
@@ -1642,7 +1655,10 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                     Log.d("AppViewModel", "Current selected config: ${currentSelectedConfig?.model}, Channel: ${currentSelectedConfig?.channel}")
                     if (currentSelectedConfig != null &&
                                     currentSelectedConfig.key == originalKey &&
-                                    currentSelectedConfig.modalityType == modality
+                                    currentSelectedConfig.modalityType == modality &&
+                                    currentSelectedConfig.provider == originalProvider &&
+                                    currentSelectedConfig.address == originalAddress &&
+                                    currentSelectedConfig.channel == originalChannel
                     ) {
                         val newSelectedConfig =
                                 currentSelectedConfig.copy(address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
@@ -1657,7 +1673,11 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 val currentConfigs = stateHolder._apiConfigs.value
                 val newConfigs =
                         currentConfigs.map { config ->
-                            if (config.key == originalKey && config.modalityType == modality) {
+                            if (config.key == originalKey &&
+                                config.modalityType == modality &&
+                                config.provider == originalProvider &&
+                                config.address == originalAddress &&
+                                config.channel == originalChannel) {
                                 config.copy(address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
                             } else {
                                 config
@@ -1670,7 +1690,10 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                     val currentSelectedConfig = stateHolder._selectedApiConfig.value
                     if (currentSelectedConfig != null &&
                                     currentSelectedConfig.key == originalKey &&
-                                    currentSelectedConfig.modalityType == modality
+                                    currentSelectedConfig.modalityType == modality &&
+                                    currentSelectedConfig.provider == originalProvider &&
+                                    currentSelectedConfig.address == originalAddress &&
+                                    currentSelectedConfig.channel == originalChannel
                     ) {
                         val newSelectedConfig =
                                 currentSelectedConfig.copy(address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
@@ -2123,32 +2146,27 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         }
     }
 
+    // 新增：用于通知UI显示添加模型对话框的 Flow
+    private val _showManualModelInputRequest = MutableSharedFlow<ManualModelInputRequest>(replay = 0)
+    val showManualModelInputRequest: SharedFlow<ManualModelInputRequest> = _showManualModelInputRequest.asSharedFlow()
+    
+    data class ManualModelInputRequest(
+        val provider: String,
+        val address: String,
+        val key: String,
+        val channel: String,
+        val isImageGen: Boolean
+    )
+
     fun createConfigAndFetchModels(provider: String, address: String, key: String, channel: String, isImageGen: Boolean = false) {
         viewModelScope.launch {
-            // 1. 创建一个临时的配置以立即更新UI
-            val tempId = UUID.randomUUID().toString()
-            val tempConfig = ApiConfig(
-                id = tempId,
-                name = "正在获取模型...",
-                provider = provider,
-                address = address,
-                key = key,
-                model = "temp_model_placeholder",
-                modalityType = if (isImageGen) com.example.everytalk.data.DataClass.ModalityType.IMAGE else com.example.everytalk.data.DataClass.ModalityType.TEXT,
-                channel = channel
-            )
-            configManager.addConfig(tempConfig, isImageGen)
-
-            // 2. 在后台获取模型
+            // 不再创建临时配置，直接尝试获取模型
             try {
                 val models = withContext(Dispatchers.IO) {
                     ApiClient.getModels(address, key)
                 }
                 
-                // 3. 删除临时配置
-                configManager.deleteConfig(tempConfig, isImageGen)
-
-                // 4. 添加获取到的新配置
+                // 添加获取到的新配置
                 if (models.isNotEmpty()) {
                     val newConfigs = models.map { modelName ->
                         ApiConfig(
@@ -2166,25 +2184,19 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                     newConfigs.forEach { config ->
                         configManager.addConfig(config, isImageGen)
                     }
+                    showSnackbar("成功添加 ${models.size} 个模型")
                 } else {
-                     // 如果没有获取到模型，仍然创建一个空的占位配置
-                    val placeholderConfig = tempConfig.copy(
-                        id = UUID.randomUUID().toString(),
-                        name = provider,
-                        model = "",
-                        channel = channel
+                    // 🔧 修复：如果没有获取到模型，直接触发手动输入对话框，不显示Snackbar
+                    _showManualModelInputRequest.emit(
+                        ManualModelInputRequest(provider, address, key, channel, isImageGen)
                     )
-                    configManager.addConfig(placeholderConfig, isImageGen)
                 }
             } catch (e: Exception) {
                 Log.e("AppViewModel", "获取模型失败", e)
-                // 获取失败，更新临时配置以提示用户
-                 val errorConfig = tempConfig.copy(
-                    name = provider,
-                    model = "",
-                    channel = channel
+                // 🔧 修复：获取失败时，直接触发手动输入对话框，不显示Snackbar
+                _showManualModelInputRequest.emit(
+                    ManualModelInputRequest(provider, address, key, channel, isImageGen)
                 )
-                configManager.updateConfig(errorConfig, isImageGen)
             }
         }
     }
@@ -2193,7 +2205,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         createConfigAndFetchModels(provider, address, key, channel, false)
     }
 
-    fun addModelToConfigGroup(apiKey: String, provider: String, address: String, modelName: String, isImageGen: Boolean = false) {
+    fun addModelToConfigGroup(apiKey: String, provider: String, address: String, modelName: String, channel: String, isImageGen: Boolean = false) {
         viewModelScope.launch {
             val newConfig = ApiConfig(
                 id = UUID.randomUUID().toString(),
@@ -2202,14 +2214,15 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 address = address,
                 key = apiKey,
                 model = modelName,
-                modalityType = if (isImageGen) com.example.everytalk.data.DataClass.ModalityType.IMAGE else com.example.everytalk.data.DataClass.ModalityType.TEXT
+                modalityType = if (isImageGen) com.example.everytalk.data.DataClass.ModalityType.IMAGE else com.example.everytalk.data.DataClass.ModalityType.TEXT,
+                channel = channel
             )
             configManager.addConfig(newConfig, isImageGen)
         }
     }
     
     fun addModelToConfigGroup(apiKey: String, provider: String, address: String, modelName: String) {
-        addModelToConfigGroup(apiKey, provider, address, modelName, false)
+        addModelToConfigGroup(apiKey, provider, address, modelName, "OpenAI兼容", false)
     }
 
     fun refreshModelsForConfig(config: ApiConfig) {

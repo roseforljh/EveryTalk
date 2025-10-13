@@ -25,7 +25,8 @@ class ConfigManager(
             it.key == configToAdd.key &&
             it.model == configToAdd.model &&
             it.address == configToAdd.address &&
-            it.provider == configToAdd.provider
+            it.provider == configToAdd.provider &&
+            it.channel == configToAdd.channel
         }
 
         if (isDuplicate) {

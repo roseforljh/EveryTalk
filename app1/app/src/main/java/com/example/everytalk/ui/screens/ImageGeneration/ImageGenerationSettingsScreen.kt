@@ -27,6 +27,7 @@ import com.example.everytalk.ui.screens.settings.ImportExportDialog
 import com.example.everytalk.ui.screens.settings.SettingsScreenContent
 import com.example.everytalk.ui.screens.settings.defaultApiAddresses
 import java.util.UUID
+import com.example.everytalk.ui.screens.settings.DialogTextFieldColors
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -50,7 +51,7 @@ fun ImageGenerationSettingsScreen(
     // 固定为图像模式的配置分组
     val apiConfigsByApiKeyAndModality = remember(savedConfigs) {
         savedConfigs.filter { it.modalityType == ModalityType.IMAGE }
-            .groupBy { it.key }
+            .groupBy { "${it.provider}|${it.address}|${it.channel}|${it.key}" }
             .mapValues { entry ->
                 entry.value.groupBy { it.modalityType }
             }
@@ -68,6 +69,7 @@ fun ImageGenerationSettingsScreen(
     var addModelToKeyTargetApiKey by remember { mutableStateOf("") }
     var addModelToKeyTargetProvider by remember { mutableStateOf("") }
     var addModelToKeyTargetAddress by remember { mutableStateOf("") }
+    var addModelToKeyTargetChannel by remember { mutableStateOf("") }
     var addModelToKeyTargetModality by remember { mutableStateOf(ModalityType.IMAGE) }
     var addModelToKeyNewModelName by remember { mutableStateOf("") }
 
@@ -198,10 +200,11 @@ fun ImageGenerationSettingsScreen(
                 viewModel.selectConfig(configToSelect, isImageGen = true)
             },
             selectedConfigIdInApp = selectedConfigForApp?.id,
-            onAddModelForApiKeyClick = { apiKey, existingProvider, existingAddress, existingModality ->
+            onAddModelForApiKeyClick = { apiKey, existingProvider, existingAddress, existingChannel, existingModality ->
                 addModelToKeyTargetApiKey = apiKey
                 addModelToKeyTargetProvider = existingProvider
                 addModelToKeyTargetAddress = existingAddress
+                addModelToKeyTargetChannel = existingChannel
                 addModelToKeyTargetModality = existingModality
                 addModelToKeyNewModelName = ""
                 showAddModelToKeyDialog = true
@@ -213,8 +216,8 @@ fun ImageGenerationSettingsScreen(
                 configToEdit = config
                 showEditConfigDialog = true
             },
-            onDeleteConfigGroup = { apiKey, modalityType ->
-                viewModel.deleteImageGenConfigGroup(apiKey, modalityType)
+            onDeleteConfigGroup = { representativeConfig ->
+                viewModel.deleteImageGenConfigGroup(representativeConfig)
             },
             onRefreshModelsClick = { config ->
                 viewModel.refreshModelsForConfig(config)
@@ -299,7 +302,8 @@ fun ImageGenerationSettingsScreen(
                     model = modelName,
                     provider = addModelToKeyTargetProvider,
                     name = modelName,
-                    modalityType = ModalityType.IMAGE
+                    modalityType = ModalityType.IMAGE,
+                    channel = addModelToKeyTargetChannel
                 )
                 viewModel.addConfig(config, isImageGen = true)
                 showAddModelToKeyDialog = false
@@ -404,7 +408,8 @@ private fun AddImageModelToKeyDialog(
                 onValueChange = { modelName = it },
                 label = { Text("模型名称") },
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(24.dp)
+                shape = RoundedCornerShape(16.dp),
+                colors = DialogTextFieldColors
             )
         },
         confirmButton = {

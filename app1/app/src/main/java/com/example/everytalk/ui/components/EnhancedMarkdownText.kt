@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -38,8 +40,19 @@ fun EnhancedMarkdownText(
         removeInlineCodeBackticks(sanitizeAiOutput(message.text))
     }
 
-    // 拆分为"文本 + 代码块"分段，代码块用自定义样式渲染
-    val parts = remember(processed) { parseMessageContent(processed) }
+    // 🎯 关键修复：使用 derivedStateOf 来稳定解析结果
+    // 流式输出时，只在文本有实质性变化时才重新解析，避免频繁重组
+    val parts by remember(processed) {
+        derivedStateOf {
+            // 对于流式输出的表格等复杂内容，延迟完整解析直到内容稳定
+            if (isStreaming && processed.contains("|") && processed.count { it == '\n' } < 3) {
+                // 表格开始但还不完整时，暂时显示为纯文本，避免频繁重解析
+                listOf(ContentPart(ContentType.TEXT, processed))
+            } else {
+                parseMessageContent(processed)
+            }
+        }
+    }
 
     // 使用分段渲染：普通文本交给 MarkdownText，代码块用自定义 CodeBlock（深色样式、避免"大白块"）
     Column(modifier = modifier.fillMaxWidth()) {
@@ -97,7 +110,13 @@ fun StableMarkdownText(
     val cleaned = remember(markdown) {
         removeInlineCodeBackticks(sanitizeAiOutput(markdown))
     }
-    val partsStable = remember(cleaned) { parseMessageContent(cleaned) }
+    
+    // 🎯 同样使用 derivedStateOf 来稳定解析
+    val partsStable by remember(cleaned) {
+        derivedStateOf {
+            parseMessageContent(cleaned)
+        }
+    }
 
     // 稳定版本也采用分段渲染，确保代码块使用自定义深色样式，避免"大白块"
     Column(modifier = modifier.fillMaxWidth()) {

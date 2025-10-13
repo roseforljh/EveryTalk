@@ -7,12 +7,18 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
@@ -21,6 +27,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.Cancel
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material3.*
+import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,10 +50,10 @@ internal fun SettingsScreenContent(
     onAddFullConfigClick: () -> Unit,
     onSelectConfig: (config: ApiConfig) -> Unit,
     selectedConfigIdInApp: String?,
-    onAddModelForApiKeyClick: (apiKey: String, existingProvider: String, existingAddress: String, existingModality: ModalityType) -> Unit,
+    onAddModelForApiKeyClick: (apiKey: String, existingProvider: String, existingAddress: String, existingChannel: String, existingModality: ModalityType) -> Unit,
     onDeleteModelForApiKey: (configToDelete: ApiConfig) -> Unit,
     onEditConfigClick: (config: ApiConfig) -> Unit,
-    onDeleteConfigGroup: (apiKey: String, modalityType: ModalityType) -> Unit,
+    onDeleteConfigGroup: (representativeConfig: ApiConfig) -> Unit,
     onRefreshModelsClick: (config: ApiConfig) -> Unit,
     isRefreshingModels: Set<String>
 ) {
@@ -56,35 +63,73 @@ internal fun SettingsScreenContent(
             .padding(paddingValues)
             .background(MaterialTheme.colorScheme.background)
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 16.dp)
+            .padding(horizontal = 20.dp, vertical = 20.dp)
     ) {
-        Button(
+        // 添加配置按钮 - 更现代的设计
+        ElevatedButton(
             onClick = onAddFullConfigClick,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 0.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary
+                .height(56.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = ButtonDefaults.elevatedButtonColors(
+                containerColor = Color(0xFF616161),
+                contentColor = Color.White
+            ),
+            elevation = ButtonDefaults.elevatedButtonElevation(
+                defaultElevation = 4.dp,
+                pressedElevation = 8.dp
             )
         ) {
-            Icon(Icons.Filled.Add, contentDescription = "添加配置")
-            Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-            Text("添加配置")
+            Icon(
+                Icons.Filled.Add,
+                contentDescription = "添加配置",
+                modifier = Modifier.size(24.dp)
+            )
+            Spacer(Modifier.width(12.dp))
+            Text(
+                "添加新配置",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
         }
 
-        HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+        Spacer(modifier = Modifier.height(24.dp))
 
         if (apiConfigsByApiKeyAndModality.isEmpty()) {
-            Text(
-                "暂无API配置，请点击上方按钮添加。",
+            // 空状态提示 - 更友好的设计
+            Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 32.dp)
-                    .align(Alignment.CenterHorizontally),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-            )
+                    .padding(vertical = 40.dp),
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            ) {
+                Column(
+                    modifier = Modifier.padding(32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(
+                        Icons.Filled.Add,
+                        contentDescription = null,
+                        modifier = Modifier.size(48.dp),
+                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        "暂无API配置",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "点击上方按钮添加您的第一个配置",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                }
+            }
         } else {
             apiConfigsByApiKeyAndModality.forEach { (apiKey, configsByModality) ->
                 configsByModality.forEach { (modalityType, configsForKeyAndModality) ->
@@ -98,19 +143,20 @@ internal fun SettingsScreenContent(
                             onAddModelForApiKeyClick = {
                                 val representativeConfig = configsForKeyAndModality.first()
                                 onAddModelForApiKeyClick(
-                                    apiKey,
+                                    representativeConfig.key,
                                     representativeConfig.provider,
                                     representativeConfig.address,
+                                    representativeConfig.channel,
                                     representativeConfig.modalityType
                                 )
                             },
                             onDeleteModelForApiKey = onDeleteModelForApiKey,
                             onEditConfigClick = { onEditConfigClick(configsForKeyAndModality.first()) },
-                            onDeleteGroup = { onDeleteConfigGroup(apiKey, modalityType) },
+                            onDeleteGroup = { onDeleteConfigGroup(configsForKeyAndModality.first()) },
                             onRefreshModelsClick = { onRefreshModelsClick(configsForKeyAndModality.first()) },
                             isRefreshing = isRefreshingModels.contains("$apiKey-${modalityType}")
                         )
-                        Spacer(Modifier.height(18.dp))
+                        Spacer(Modifier.height(16.dp))
                     }
                 }
             }
@@ -135,73 +181,125 @@ private fun ApiKeyItemGroup(
 ) {
     var expandedModels by remember { mutableStateOf(false) }
     var showConfirmDeleteGroupDialog by remember { mutableStateOf(false) }
+    // 仅拦截“甩动”(fling)的动量，避免外层跟随；不拦截普通滚动，确保列表可正常滚动
+    val innerListNestedScroll = remember {
+        object : NestedScrollConnection {
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                // 消耗所有可用的 fling 速度，阻止向外层传递
+                return available
+            }
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                // 同样消耗剩余 fling 动量，彻底避免连带外层
+                return available
+            }
+        }
+    }
     val providerName =
         configsInGroup.firstOrNull()?.provider?.ifBlank { null } ?: "综合平台"
+    val isDarkMode = isSystemInDarkTheme()
+    val cardContainerColor = if (isDarkMode) {
+        Color.Black
+    } else {
+        MaterialTheme.colorScheme.surfaceColorAtElevation(2.dp)
+    }
+    val cardBorderColor = if (isDarkMode) {
+        Color.White.copy(alpha = 0.45f)
+    } else {
+        MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+    }
+    val cardElevation = if (isDarkMode) 6.dp else 2.dp
 
-    Card(
-        modifier = modifier
-            .fillMaxWidth()
-            .clickable(onClick = onEditConfigClick),
-        shape = RoundedCornerShape(20.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    OutlinedCard(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.outlinedCardColors(
+            containerColor = cardContainerColor
+        ),
+        elevation = CardDefaults.outlinedCardElevation(
+            defaultElevation = cardElevation
+        ),
+        border = androidx.compose.foundation.BorderStroke(
+            width = 2.dp,
+            color = cardBorderColor
+        )
     ) {
-        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp)) {
+            // 头部信息 + 操作按钮
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onEditConfigClick)
+                    .padding(vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = providerName,
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        ),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                    Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = "Key: ${maskApiKey(apiKey)}",
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            color = MaterialTheme.colorScheme.onSurface
-                        ),
-                        modifier = Modifier.padding(top = 4.dp)
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = FontWeight.Normal
                     )
                 }
                 IconButton(
                     onClick = { showConfirmDeleteGroupDialog = true },
-                    modifier = Modifier.size(20.dp)
+                    modifier = Modifier.size(40.dp)
                 ) {
                     Icon(
                         Icons.Outlined.Cancel,
                         contentDescription = "删除配置组",
-                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(22.dp)
                     )
                 }
             }
 
-            Spacer(Modifier.height(12.dp))
+            HorizontalDivider(
+                modifier = Modifier.padding(vertical = 12.dp),
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+            )
 
+            // 模型列表标题行
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(MaterialTheme.shapes.small)
+                    .clip(RoundedCornerShape(8.dp))
                     .clickable { expandedModels = !expandedModels }
                     .padding(vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "Models (${configsInGroup.size})",
-                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Medium),
-                    modifier = Modifier.weight(1f)
-                )
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "模型列表",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "${configsInGroup.size} 个模型",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     if (modalityType != ModalityType.IMAGE) {
                         if (isRefreshing) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(20.dp),
-                                strokeWidth = 2.dp
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.primary
                             )
                         } else {
                             IconButton(
@@ -211,7 +309,8 @@ private fun ApiKeyItemGroup(
                                 Icon(
                                     Icons.Default.Refresh,
                                     contentDescription = "刷新模型列表",
-                                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
                         }
@@ -223,7 +322,8 @@ private fun ApiKeyItemGroup(
                         Icon(
                             Icons.Filled.Add,
                             contentDescription = "为此Key和类型添加模型",
-                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                            tint = Color(0xFF4CAF50),
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                 }
@@ -236,41 +336,31 @@ private fun ApiKeyItemGroup(
                     animationSpec = tween(durationMillis = 150)
                 )
             ) {
-                Column {
-                    HorizontalDivider(
-                        modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
-                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                // 限高 + 内部滚动，避免长列表撑满屏幕
+                if (configsInGroup.isEmpty()) {
+                    Text(
+                        "此分类下暂无模型，点击右上方 \"+\" 添加模型",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp, bottom = 16.dp),
+                        fontWeight = FontWeight.Normal
                     )
-                    if (configsInGroup.isEmpty()) {
-                        Text(
-                            "此分类下暂无模型，请点击右上方 \"+\" 添加。",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier
-                                .padding(vertical = 8.dp)
-                                .align(Alignment.CenterHorizontally)
-                        )
-                    } else {
-                        configsInGroup.forEach { config ->
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .padding(top = 8.dp)
+                            .heightIn(max = 360.dp),
+                        contentPadding = PaddingValues(vertical = 4.dp)
+                    ) {
+                        items(configsInGroup) { config ->
                             ModelItem(
                                 config = config,
                                 isSelected = config.id == selectedConfigIdInApp,
                                 onSelect = { onSelectConfig(config) },
                                 onDelete = { onDeleteModelForApiKey(config) }
                             )
-                            if (config != configsInGroup.last()) {
-                                HorizontalDivider(
-                                    color = MaterialTheme.colorScheme.outline.copy(
-                                        alpha = 0.1f
-                                    ),
-                                    modifier = Modifier.padding(
-                                        start = 24.dp,
-                                        end = 0.dp,
-                                        top = 4.dp,
-                                        bottom = 4.dp
-                                    )
-                                )
-                            }
                         }
                     }
                 }
@@ -286,7 +376,7 @@ private fun ApiKeyItemGroup(
                 showConfirmDeleteGroupDialog = false
             },
             title = "删除整个配置组?",
-            text = "您确定要删除 “$providerName” 的所有 ${modalityType.displayName} 模型配置吗？\n\n此操作会删除 ${configsInGroup.size} 个模型，且不可撤销。"
+            text = "您确定要删除 \"$providerName\" 的所有 ${modalityType.displayName} 模型配置吗？\n\n此操作会删除 ${configsInGroup.size} 个模型，且不可撤销。"
         )
     }
 }
@@ -299,47 +389,75 @@ private fun ModelItem(
     onDelete: () -> Unit
 ) {
     var showConfirmDeleteDialog by remember { mutableStateOf(false) }
+    val isDarkMode = isSystemInDarkTheme()
+    val rowBackgroundColor = if (isSelected) {
+        if (isDarkMode) {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.75f)
+        } else {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+        }
+    } else {
+        if (isDarkMode) Color.Black else MaterialTheme.colorScheme.surfaceColorAtElevation(1.dp)
+    }
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
                 onClick = onSelect
             )
-            .padding(vertical = 10.dp, horizontal = 8.dp),
+            .background(rowBackgroundColor)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
-            modifier = Modifier.size(18.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = if (isSelected) Icons.Filled.CheckCircle else Icons.Outlined.RadioButtonUnchecked,
-                contentDescription = "选择模型",
-                tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-            )
-        }
-        Spacer(Modifier.width(8.dp))
+        // 选择指示器
+        Icon(
+            imageVector = if (isSelected) Icons.Filled.CheckCircle else Icons.Outlined.RadioButtonUnchecked,
+            contentDescription = "选择模型",
+            tint = if (isSelected)
+                MaterialTheme.colorScheme.primary
+            else
+                MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp)
+        )
+        
+        Spacer(Modifier.width(12.dp))
+        
+        // 模型名称
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = config.name.ifEmpty { config.model },
                 style = MaterialTheme.typography.bodyLarge,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
+                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
                 color = MaterialTheme.colorScheme.onSurface
             )
+            if (config.name.isNotEmpty() && config.name != config.model) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = config.model,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
+        
+        // 删除按钮
         IconButton(
             onClick = { showConfirmDeleteDialog = true },
-            modifier = Modifier.size(20.dp)
+            modifier = Modifier.size(32.dp)
         ) {
             Icon(
                 Icons.Filled.Close,
                 contentDescription = "删除模型",
-                tint = MaterialTheme.colorScheme.error
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(18.dp)
             )
         }
     }
@@ -352,7 +470,7 @@ private fun ModelItem(
                 showConfirmDeleteDialog = false
             },
             title = "删除模型",
-            text = "您确定要删除模型 “${config.name}” 吗？此操作不可撤销。"
+            text = "您确定要删除模型 \"${config.name.ifEmpty { config.model }}\" 吗？此操作不可撤销。"
         )
     }
 }

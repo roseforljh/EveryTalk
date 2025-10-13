@@ -34,10 +34,12 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
@@ -48,16 +50,16 @@ val DialogTextFieldColors
         focusedTextColor = MaterialTheme.colorScheme.onSurface,
         unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
         disabledTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-        cursorColor = MaterialTheme.colorScheme.primary,
-        focusedBorderColor = MaterialTheme.colorScheme.primary,
+        cursorColor = MaterialTheme.colorScheme.tertiary,
+        focusedBorderColor = MaterialTheme.colorScheme.tertiary,
         unfocusedBorderColor = Color.Gray.copy(alpha = 0.5f),
         disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
-        focusedLabelColor = MaterialTheme.colorScheme.primary,
+        focusedLabelColor = MaterialTheme.colorScheme.tertiary,
         unfocusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
         disabledLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-        focusedContainerColor = MaterialTheme.colorScheme.surface,
-        unfocusedContainerColor = MaterialTheme.colorScheme.surface,
-        disabledContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
+        focusedContainerColor = Color.Transparent,
+        unfocusedContainerColor = Color.Transparent,
+        disabledContainerColor = Color.Transparent
     )
 val DialogShape = RoundedCornerShape(32.dp)
 
@@ -175,45 +177,111 @@ internal fun AddProviderDialog(
 
     AlertDialog(
         onDismissRequest = onDismissRequest,
-        title = { Text("添加新模型平台", color = MaterialTheme.colorScheme.onSurface) },
-        text = {
-            OutlinedTextField(
-                value = newProviderName,
-                onValueChange = onNewProviderNameChange,
-                label = { Text("平台名称") },
-                singleLine = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .focusRequester(focusRequester),
-                keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { onConfirm() }),
-                shape = DialogShape,
-                colors = DialogTextFieldColors
-            )
-        },
-        confirmButton = {
-            Button(
-                onClick = onConfirm,
-                enabled = newProviderName.isNotBlank(),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black
-                )
-            ) { Text("添加", fontWeight = FontWeight.Bold) }
-        },
-        dismissButton = {
-            Button(
-                onClick = onDismissRequest,
-                shape = RoundedCornerShape(32.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black
-                )
-            ) { Text("取消", fontWeight = FontWeight.Bold) }
-        },
+        shape = RoundedCornerShape(32.dp),
         containerColor = MaterialTheme.colorScheme.surface,
         titleContentColor = MaterialTheme.colorScheme.onSurface,
-        textContentColor = MaterialTheme.colorScheme.onSurface
+        textContentColor = MaterialTheme.colorScheme.onSurface,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(bottom = 8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Add,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(end = 12.dp).size(24.dp)
+                )
+                Text(
+                    "添加新模型平台",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text(
+                    "为自定义API提供商添加一个标识名称，方便后续管理和配置",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = MaterialTheme.typography.bodyMedium.lineHeight * 1.5f
+                )
+                OutlinedTextField(
+                    value = newProviderName,
+                    onValueChange = onNewProviderNameChange,
+                    label = { Text("平台名称", fontWeight = FontWeight.Medium) },
+                    placeholder = { Text("例如: OpenRouter, Anthropic...") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(focusRequester),
+                    keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { if (newProviderName.isNotBlank()) onConfirm() }),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = DialogTextFieldColors
+                )
+                // 提示信息
+                if (newProviderName.isNotBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "✓",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.secondary,
+                                modifier = Modifier.padding(end = 8.dp)
+                            )
+                            Text(
+                                "平台名称: $newProviderName",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            FilledTonalButton(
+                onClick = onConfirm,
+                enabled = newProviderName.isNotBlank(),
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp),
+                colors = ButtonDefaults.filledTonalButtonColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                )
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Add,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp).padding(end = 4.dp)
+                )
+                Text("添加平台", fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismissRequest,
+                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp)
+            ) {
+                Text("取消", fontWeight = FontWeight.Medium)
+            }
+        }
     )
 
     LaunchedEffect(Unit) {
@@ -227,7 +295,7 @@ private fun CustomStyledDropdownMenu(
     onDismissRequest: () -> Unit,
     anchorBounds: Rect?,
     modifier: Modifier = Modifier,
-    yOffsetDp: Dp = 74.dp,
+    yOffsetDp: Dp = 8.dp,
     content: @Composable ColumnScope.() -> Unit
 ) {
     Log.d(
@@ -238,58 +306,31 @@ private fun CustomStyledDropdownMenu(
     if ((transitionState.currentState || transitionState.targetState) && anchorBounds != null) {
         val density = LocalDensity.current
         val menuWidth = with(density) { anchorBounds.width.toDp() }
+        val isDark = isSystemInDarkTheme()
 
-        val yAdjustmentInPx = with(density) { yOffsetDp.toPx() }.toInt()
-        val yOffset = anchorBounds.bottom.toInt() - yAdjustmentInPx
-
-        val xAdjustmentDp: Dp = 24.dp
-        val xAdjustmentInPx = with(density) { xAdjustmentDp.toPx() }.toInt()
-        val xOffset = anchorBounds.left.toInt() - xAdjustmentInPx
-
-        Popup(
-            alignment = Alignment.TopStart,
-            offset = IntOffset(xOffset, yOffset),
-            onDismissRequest = onDismissRequest,
-            properties = PopupProperties(
-                focusable = true,
-                dismissOnClickOutside = true,
-                dismissOnBackPress = true,
-                usePlatformDefaultWidth = false
+        // 使用 DropdownMenu 并设置样式和颜色，深色模式使用灰色背景
+        MaterialTheme(
+            shapes = MaterialTheme.shapes.copy(
+                extraSmall = RoundedCornerShape(32.dp)
+            ),
+            colorScheme = MaterialTheme.colorScheme.copy(
+                surface = if (isDark) Color(0xFF424242) else MaterialTheme.colorScheme.surfaceContainerHighest
             )
         ) {
-            AnimatedVisibility(
-                visibleState = transitionState,
-                enter = fadeIn(animationSpec = tween(durationMillis = 200, delayMillis = 50)) +
-                        slideInVertically(
-                            animationSpec = tween(durationMillis = 250, delayMillis = 50),
-                            initialOffsetY = { -it / 3 }
-                        ),
-                exit = fadeOut(animationSpec = tween(durationMillis = 150)) +
-                        slideOutVertically(
-                            animationSpec = tween(durationMillis = 200),
-                            targetOffsetY = { -it / 3 }
-                        )
-            ) {
-                Log.d(
-                    "DropdownAnimation",
-                    "AnimatedVisibility content rendering. CurrentState: ${transitionState.currentState}"
+            DropdownMenu(
+                expanded = transitionState.currentState || transitionState.targetState,
+                onDismissRequest = onDismissRequest,
+                modifier = modifier
+                    .width(menuWidth)
+                    .heightIn(max = 280.dp),
+                offset = DpOffset(0.dp, yOffsetDp),
+                properties = PopupProperties(
+                    focusable = true,
+                    dismissOnClickOutside = true,
+                    dismissOnBackPress = true
                 )
-                Surface(
-                    shape = DialogShape,
-                    color = MaterialTheme.colorScheme.surfaceDim,
-                    shadowElevation = 6.dp,
-                    tonalElevation = 0.dp,
-                    modifier = modifier
-                        .width(menuWidth)
-                        .heightIn(max = 240.dp)
-                        .padding(vertical = 4.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.verticalScroll(rememberScrollState())
-                    ) {
-                        content()
-                    }
-                }
+            ) {
+                content()
             }
         }
     } else if ((transitionState.currentState || transitionState.targetState) && anchorBounds == null) {
@@ -345,10 +386,38 @@ internal fun AddNewFullConfigDialog(
         Log.d("DropdownDebug", "AddNewFullConfigDialog: allProviders size: ${allProviders.size}")
     }
 
+    val isDark = isSystemInDarkTheme()
     AlertDialog(
         shape = RoundedCornerShape(32.dp),
         onDismissRequest = onDismissRequest,
-        title = { Text("添加配置", color = MaterialTheme.colorScheme.onSurface) },
+        containerColor = if (isDark) Color.Black else MaterialTheme.colorScheme.surface,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(bottom = 8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Add,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(end = 12.dp).size(24.dp)
+                )
+                Column {
+                    Text(
+                        "添加配置",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        "为模型平台配置API访问信息",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+            }
+        },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 ExposedDropdownMenuBox(
@@ -434,7 +503,9 @@ internal fun AddNewFullConfigDialog(
                                         onProviderChange(providerItem)
                                         providerMenuExpanded = false
                                     },
-                                    colors = MenuDefaults.itemColors(textColor = MaterialTheme.colorScheme.onSurface)
+                                    colors = MenuDefaults.itemColors(
+                                        textColor = MaterialTheme.colorScheme.onSurface
+                                    )
                                 )
                             }
                         }
@@ -468,8 +539,7 @@ internal fun AddNewFullConfigDialog(
                         onDismissRequest = {
                             channelMenuExpanded = false
                         },
-                        anchorBounds = channelTextFieldAnchorBounds,
-                        yOffsetDp = 150.dp
+                        anchorBounds = channelTextFieldAnchorBounds
                     ) {
                         channels.forEach { channel ->
                             DropdownMenuItem(
@@ -566,29 +636,34 @@ internal fun AddNewFullConfigDialog(
             }
         },
         confirmButton = {
-            Button(
+            FilledTonalButton(
                 onClick = { onConfirm(provider, apiAddress, apiKey, selectedChannel, imageSize, numInferenceSteps.toIntOrNull(), guidanceScale.toFloatOrNull()) },
                 enabled = apiKey.isNotBlank() && provider.isNotBlank() && apiAddress.isNotBlank(),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black,
-                    disabledContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp),
+                colors = ButtonDefaults.filledTonalButtonColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                 )
             ) {
-                Text("确定", fontWeight = FontWeight.Bold)
+                Icon(
+                    imageVector = Icons.Outlined.Add,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp).padding(end = 4.dp)
+                )
+                Text("确定添加", fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
-            Button(
+            TextButton(
                 onClick = onDismissRequest,
-                shape = RoundedCornerShape(32.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black
-                )
-            ) { Text("取消", fontWeight = FontWeight.Bold) }
+                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp)
+            ) {
+                Text("取消", fontWeight = FontWeight.Medium)
+            }
         },
-        containerColor = MaterialTheme.colorScheme.surface,
         titleContentColor = MaterialTheme.colorScheme.onSurface,
         textContentColor = MaterialTheme.colorScheme.onSurface
     )
@@ -611,9 +686,40 @@ internal fun EditConfigDialog(
     // 固定的渠道类型选项
     val channelTypes = listOf("OpenAI兼容", "Gemini")
 
+    val isDark = isSystemInDarkTheme()
     AlertDialog(
         onDismissRequest = onDismissRequest,
-        title = { Text("编辑配置", color = MaterialTheme.colorScheme.onSurface) },
+        shape = RoundedCornerShape(32.dp),
+        containerColor = if (isDark) Color.Black else MaterialTheme.colorScheme.surface,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurface,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(bottom = 8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.KeyboardArrowUp,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.tertiary,
+                    modifier = Modifier.padding(end = 12.dp).size(24.dp)
+                )
+                Column {
+                    Text(
+                        "编辑配置",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        "修改API访问配置信息",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+            }
+        },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 OutlinedTextField(
@@ -703,8 +809,7 @@ internal fun EditConfigDialog(
                         onDismissRequest = {
                             channelMenuExpanded = false
                         },
-                        anchorBounds = channelTextFieldAnchorBounds,
-                        yOffsetDp = 220.dp
+                        anchorBounds = channelTextFieldAnchorBounds
                     ) {
                         channelTypes.forEach { channel ->
                             DropdownMenuItem(
@@ -720,30 +825,29 @@ internal fun EditConfigDialog(
             }
         },
         confirmButton = {
-            Button(
+            FilledTonalButton(
                 onClick = { onConfirm(apiAddress, apiKey, selectedChannel) },
                 enabled = apiKey.isNotBlank() && apiAddress.isNotBlank(),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black,
-                    disabledContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp),
+                colors = ButtonDefaults.filledTonalButtonColors(
+                    containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                 )
-            ) { Text("更新", fontWeight = FontWeight.Bold) }
+            ) {
+                Text("保存更新", fontWeight = FontWeight.Bold)
+            }
         },
         dismissButton = {
-            Button(
+            TextButton(
                 onClick = onDismissRequest,
-                shape = RoundedCornerShape(32.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black
-                )
-            ) { Text("取消", fontWeight = FontWeight.Bold) }
-        },
-        containerColor = MaterialTheme.colorScheme.surface,
-        shape = DialogShape,
-        titleContentColor = MaterialTheme.colorScheme.onSurface,
-        textContentColor = MaterialTheme.colorScheme.onSurface
+                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp)
+            ) {
+                Text("取消", fontWeight = FontWeight.Medium)
+            }
+        }
     )
 
     LaunchedEffect(Unit) {
@@ -760,38 +864,93 @@ internal fun ConfirmDeleteDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismissRequest,
-        title = { Text(title, color = MaterialTheme.colorScheme.onSurface) },
-        text = { Text(text, color = MaterialTheme.colorScheme.onSurface) },
+        shape = RoundedCornerShape(32.dp),
+        containerColor = MaterialTheme.colorScheme.surface,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurface,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(bottom = 8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Close,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(end = 12.dp).size(24.dp)
+                )
+                Text(
+                    title,
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = MaterialTheme.typography.bodyMedium.lineHeight * 1.5f
+                )
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.2f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "⚠️",
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.padding(end = 8.dp)
+                        )
+                        Text(
+                            "此操作不可撤销，请谨慎操作",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            }
+        },
         confirmButton = {
-            Button(
+            FilledTonalButton(
                 onClick = {
                     onConfirm()
                     onDismissRequest()
                 },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.error,
-                    contentColor = MaterialTheme.colorScheme.onError
-                )
+                shape = RoundedCornerShape(20.dp),
+                colors = ButtonDefaults.filledTonalButtonColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                ),
+                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp)
             ) {
+                Icon(
+                    imageVector = Icons.Filled.Close,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp).padding(end = 4.dp)
+                )
                 Text("确认删除", fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
-            Button(
+            TextButton(
                 onClick = onDismissRequest,
-                shape = RoundedCornerShape(32.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black
-                )
+                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp)
             ) {
-                Text("取消", fontWeight = FontWeight.Bold)
+                Text("取消", fontWeight = FontWeight.Medium)
             }
-        },
-        containerColor = MaterialTheme.colorScheme.surface,
-        shape = DialogShape,
-        titleContentColor = MaterialTheme.colorScheme.onSurface,
-        textContentColor = MaterialTheme.colorScheme.onSurface
+        }
     )
 }
 
@@ -808,49 +967,126 @@ internal fun ImportExportDialog(
         containerColor = MaterialTheme.colorScheme.surface,
         titleContentColor = MaterialTheme.colorScheme.onSurface,
         textContentColor = MaterialTheme.colorScheme.onSurface,
-        title = { Text("导入 / 导出配置", color = MaterialTheme.colorScheme.onSurface) },
+        title = {
+            Text(
+                "配置管理",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        },
         text = {
             Column(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Button(
+                // 导出配置卡片
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f),
                     onClick = onExport,
-                    enabled = isExportEnabled,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(32.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                        contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black
-                    )
+                    enabled = isExportEnabled
                 ) {
-                    Text("导出配置", fontWeight = FontWeight.Bold)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp, vertical = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "导出配置",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isExportEnabled)
+                                    MaterialTheme.colorScheme.onSurface
+                                else
+                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                "保存当前配置到文件",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (isExportEnabled)
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                else
+                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.Filled.KeyboardArrowDown,
+                            contentDescription = "导出",
+                            tint = if (isExportEnabled)
+                                MaterialTheme.colorScheme.primary
+                            else
+                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
                 }
-                Spacer(Modifier.height(16.dp))
-                Button(
-                    onClick = onImport,
+                
+                // 导入配置卡片
+                Surface(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(32.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                        contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black
-                    )
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f),
+                    onClick = onImport
                 ) {
-                    Text("导入配置", fontWeight = FontWeight.Bold)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp, vertical = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "导入配置",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                "从文件加载配置",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.Filled.KeyboardArrowUp,
+                            contentDescription = "导入",
+                            tint = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
                 }
+                
+                // 提示信息
+                Text(
+                    "💡 导出的配置文件可在其他设备导入使用",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    modifier = Modifier.padding(top = 4.dp)
+                )
             }
         },
         confirmButton = {},
         dismissButton = {
-            Button(
+            TextButton(
                 onClick = onDismissRequest,
-                shape = RoundedCornerShape(32.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black
-                )
+                shape = RoundedCornerShape(20.dp)
             ) {
-                Text("取消", fontWeight = FontWeight.Bold)
+                Text(
+                    "关闭",
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.error
+                )
             }
         }
     )
@@ -867,46 +1103,119 @@ internal fun AddModelDialog(
 
     AlertDialog(
         onDismissRequest = onDismissRequest,
-        title = { Text("添加新模型", color = MaterialTheme.colorScheme.onSurface) },
+        shape = RoundedCornerShape(32.dp),
+        containerColor = MaterialTheme.colorScheme.surface,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurface,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(bottom = 8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Add,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.padding(end = 12.dp).size(24.dp)
+                )
+                Column {
+                    Text(
+                        "添加新模型",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        "添加模型到当前配置组",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+            }
+        },
         text = {
-            OutlinedTextField(
-                value = modelName,
-                onValueChange = { modelName = it },
-                label = { Text("模型名称") },
-                singleLine = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .focusRequester(focusRequester),
-                keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { if (modelName.isNotBlank()) onConfirm(modelName) }),
-                shape = DialogShape,
-                colors = DialogTextFieldColors
-            )
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text(
+                    "输入模型的完整名称（例如: gpt-4, claude-3-opus, gemini-pro）",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = MaterialTheme.typography.bodyMedium.lineHeight * 1.5f
+                )
+                OutlinedTextField(
+                    value = modelName,
+                    onValueChange = { modelName = it },
+                    label = { Text("模型名称", fontWeight = FontWeight.Medium) },
+                    placeholder = { Text("例如: gpt-4-turbo") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(focusRequester),
+                    keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { if (modelName.isNotBlank()) onConfirm(modelName) }),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = DialogTextFieldColors
+                )
+                // 提示信息
+                if (modelName.isNotBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "✓",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.secondary,
+                                modifier = Modifier.padding(end = 8.dp)
+                            )
+                            Text(
+                                "将添加模型: $modelName",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+            }
         },
         confirmButton = {
-            Button(
+            FilledTonalButton(
                 onClick = { onConfirm(modelName) },
                 enabled = modelName.isNotBlank(),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp),
+                colors = ButtonDefaults.filledTonalButtonColors(
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                 )
-            ) { Text("添加", fontWeight = FontWeight.Bold) }
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Add,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp).padding(end = 4.dp)
+                )
+                Text("添加模型", fontWeight = FontWeight.Bold)
+            }
         },
         dismissButton = {
-            Button(
+            TextButton(
                 onClick = onDismissRequest,
-                shape = RoundedCornerShape(32.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black
-                )
-            ) { Text("取消", fontWeight = FontWeight.Bold) }
-        },
-        containerColor = MaterialTheme.colorScheme.surface,
-        shape = DialogShape,
-        titleContentColor = MaterialTheme.colorScheme.onSurface,
-        textContentColor = MaterialTheme.colorScheme.onSurface
+                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp)
+            ) {
+                Text("取消", fontWeight = FontWeight.Medium)
+            }
+        }
     )
 
     LaunchedEffect(Unit) {

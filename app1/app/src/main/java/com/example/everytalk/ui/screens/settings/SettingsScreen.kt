@@ -53,7 +53,7 @@ fun SettingsScreen(
         }
         
         configsToShow
-            .groupBy { it.key }
+            .groupBy { "${it.provider}|${it.address}|${it.channel}|${it.key}" }
             .mapValues { entry ->
                 entry.value.groupBy { it.modalityType }
             }
@@ -69,8 +69,18 @@ fun SettingsScreen(
     var addModelToKeyTargetApiKey by remember { mutableStateOf("") }
     var addModelToKeyTargetProvider by remember { mutableStateOf("") }
     var addModelToKeyTargetAddress by remember { mutableStateOf("") }
+    var addModelToKeyTargetChannel by remember { mutableStateOf("") }
     var addModelToKeyTargetModality by remember { mutableStateOf(ModalityType.TEXT) }
     var addModelToKeyNewModelName by remember { mutableStateOf("") }
+    
+    // 🔧 新增：手动输入模型对话框状态
+    var showManualModelInputDialog by remember { mutableStateOf(false) }
+    var manualModelInputProvider by remember { mutableStateOf("") }
+    var manualModelInputAddress by remember { mutableStateOf("") }
+    var manualModelInputKey by remember { mutableStateOf("") }
+    var manualModelInputChannel by remember { mutableStateOf("") }
+    var manualModelInputIsImageGen by remember { mutableStateOf(false) }
+    var manualModelInputName by remember { mutableStateOf("") }
 
     var showAddCustomProviderDialog by remember { mutableStateOf(false) }
     var newCustomProviderNameInput by remember { mutableStateOf("") }
@@ -129,6 +139,19 @@ fun SettingsScreen(
         viewModel.settingsExportRequest.collect { data ->
             exportData = data
             exportSettingsLauncher.launch(data.first)
+        }
+    }
+    
+    // 🔧 新增：监听手动输入模型请求
+    LaunchedEffect(Unit) {
+        viewModel.showManualModelInputRequest.collect { request ->
+            manualModelInputProvider = request.provider
+            manualModelInputAddress = request.address
+            manualModelInputKey = request.key
+            manualModelInputChannel = request.channel
+            manualModelInputIsImageGen = request.isImageGen
+            manualModelInputName = ""
+            showManualModelInputDialog = true
         }
     }
 
@@ -204,10 +227,11 @@ fun SettingsScreen(
                 viewModel.selectConfig(configToSelect, isInImageMode)
             },
             selectedConfigIdInApp = selectedConfigForApp?.id,
-            onAddModelForApiKeyClick = { apiKey, existingProvider, existingAddress, existingModality ->
+            onAddModelForApiKeyClick = { apiKey, existingProvider, existingAddress, existingChannel, existingModality ->
                 addModelToKeyTargetApiKey = apiKey
                 addModelToKeyTargetProvider = existingProvider
                 addModelToKeyTargetAddress = existingAddress
+                addModelToKeyTargetChannel = existingChannel
                 addModelToKeyTargetModality = existingModality
                 addModelToKeyNewModelName = ""
                 showAddModelToKeyDialog = true
@@ -219,8 +243,8 @@ fun SettingsScreen(
                 configToEdit = config
                 showEditConfigDialog = true
             },
-            onDeleteConfigGroup = { apiKey, modalityType ->
-                viewModel.deleteConfigGroup(apiKey, modalityType, isInImageMode)
+            onDeleteConfigGroup = { representativeConfig ->
+                viewModel.deleteConfigGroup(representativeConfig, isInImageMode)
             },
             onRefreshModelsClick = { config ->
                 viewModel.refreshModelsForConfig(config)
@@ -264,11 +288,6 @@ fun SettingsScreen(
 
 
     if (showAddModelToKeyDialog) {
-        // This dialog is no longer used in the new workflow, but we keep the logic here
-        // in case it's needed in the future.
-    }
-
-    if (showAddModelToKeyDialog) {
         AddModelDialog(
             onDismissRequest = { showAddModelToKeyDialog = false },
             onConfirm = { newModelName ->
@@ -278,9 +297,38 @@ fun SettingsScreen(
                         provider = addModelToKeyTargetProvider,
                         address = addModelToKeyTargetAddress,
                         modelName = newModelName,
+                        channel = addModelToKeyTargetChannel,
                         isImageGen = isInImageMode
                     )
                     showAddModelToKeyDialog = false
+                }
+            }
+        )
+    }
+    
+    // 🔧 新增：手动输入模型对话框
+    if (showManualModelInputDialog) {
+        AddModelDialog(
+            onDismissRequest = {
+                showManualModelInputDialog = false
+                manualModelInputName = ""
+            },
+            onConfirm = { modelName ->
+                if (modelName.isNotBlank()) {
+                    val newConfig = ApiConfig(
+                        id = UUID.randomUUID().toString(),
+                        name = modelName,
+                        provider = manualModelInputProvider,
+                        address = manualModelInputAddress,
+                        key = manualModelInputKey,
+                        model = modelName,
+                        modalityType = if (manualModelInputIsImageGen) ModalityType.IMAGE else ModalityType.TEXT,
+                        channel = manualModelInputChannel,
+                        isValid = true
+                    )
+                    viewModel.addConfig(newConfig, manualModelInputIsImageGen)
+                    showManualModelInputDialog = false
+                    manualModelInputName = ""
                 }
             }
         )

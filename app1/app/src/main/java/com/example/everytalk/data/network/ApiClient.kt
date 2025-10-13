@@ -713,43 +713,79 @@ object ApiClient {
         if (!isInitialized) {
             throw IllegalStateException("ApiClient not initialized. Call initialize() first.")
         }
-
+    
         // 统一去掉尾部 '#'
         val baseForModels = apiUrl.trim().removeSuffix("#")
-        // 智谱特判：当地址属于 open.bigmodel.cn 时，改用官方模型端点 /api/paas/v4/models
         val parsedUri = try { java.net.URI(baseForModels) } catch (_: Exception) { null }
         val hostLower = parsedUri?.host?.lowercase()
         val scheme = parsedUri?.scheme ?: "https"
-        val url = if (hostLower?.contains("open.bigmodel.cn") == true) {
-            val zhipu = "$scheme://open.bigmodel.cn/api/paas/v4/models"
-            android.util.Log.i("ApiClient", "检测到智谱 BigModel，改用官方模型列表端点: $zhipu")
-            zhipu
-        } else {
-            buildFinalUrl(baseForModels, "/v1/models")
+    
+        // 优化：当为 Google Gemini 官方域名时，使用官方的 models 列表端点，而不是 OpenAI 兼容的 /v1/models
+        val isGoogleOfficial = hostLower == "generativelanguage.googleapis.com" ||
+                (hostLower?.endsWith("googleapis.com") == true &&
+                 baseForModels.contains("generativelanguage", ignoreCase = true))
+    
+        val url = when {
+            isGoogleOfficial -> {
+                val googleUrl = "$scheme://generativelanguage.googleapis.com/v1beta/models?key=$apiKey"
+                android.util.Log.i("ApiClient", "检测到 Google Gemini 官方API，改用官方模型列表端点: $googleUrl")
+                googleUrl
+            }
+            // 智谱 BigModel 官方特判
+            hostLower?.contains("open.bigmodel.cn") == true -> {
+                val zhipu = "$scheme://open.bigmodel.cn/api/paas/v4/models"
+                android.util.Log.i("ApiClient", "检测到智谱 BigModel，改用官方模型列表端点: $zhipu")
+                zhipu
+            }
+            else -> {
+                buildFinalUrl(baseForModels, "/v1/models")
+            }
         }
         android.util.Log.d("ApiClient", "获取模型列表 - 原始URL: '$apiUrl', 最终请求URL: '$url'")
-
+    
         return try {
             val response = client.get {
                 url(url)
-                header(HttpHeaders.Authorization, "Bearer $apiKey")
+                // Google 官方端点使用 ?key=API_KEY，不需要 Authorization 头；其余保持 Bearer 头
+                if (!isGoogleOfficial) {
+                    header(HttpHeaders.Authorization, "Bearer $apiKey")
+                }
                 header(HttpHeaders.Accept, "application/json")
                 header(HttpHeaders.UserAgent, "KunTalkwithAi/1.0")
             }
-
+    
             val responseBody = response.bodyAsText()
-
-            // 尝试解析第一种格式: {"data": [...]}
+    
+            // Google 官方响应优先解析：{"models":[{"name":"models/gemini-1.5-pro", ...}, ...]}
+            if (isGoogleOfficial) {
+                try {
+                    val root = jsonParser.parseToJsonElement(responseBody)
+                    if (root is JsonObject && root["models"] is JsonArray) {
+                        val arr = root["models"]!!.jsonArray
+                        val ids = arr.mapNotNull { el ->
+                            try {
+                                val name = el.jsonObject["name"]?.jsonPrimitive?.contentOrNull?.trim()
+                                name?.removePrefix("models/")?.takeIf { it.isNotEmpty() }
+                            } catch (_: Exception) { null }
+                        }.distinct()
+                        if (ids.isNotEmpty()) return ids
+                    }
+                } catch (_: Exception) {
+                    // 继续走下方通用解析
+                }
+            }
+    
+            // 通用解析 1: {"data":[{"id": "..."}]}
             try {
                 val modelsResponse = jsonParser.decodeFromString<ModelsResponse>(responseBody)
                 return modelsResponse.data.map { it.id }
-            } catch (e: SerializationException) {
-                // 如果第一种格式解析失败，尝试第二种格式: [...]
+            } catch (_: SerializationException) {
+                // 通用解析 2: [{"id": "..."}]
                 try {
                     val modelsList = jsonParser.decodeFromString<List<ModelInfo>>(responseBody)
                     return modelsList.map { it.id }
-                } catch (e2: SerializationException) {
-                    // 兜底解析：兼容部分厂商（如智谱）返回的非标准字段或不同包裹结构
+                } catch (_: SerializationException) {
+                    // 兜底解析：尝试从常见容器字段中提取（data/models），并兼容 name/model/id 等字段
                     try {
                         val root = jsonParser.parseToJsonElement(responseBody)
                         fun extractIdFromObj(obj: JsonObject): String? {
@@ -757,7 +793,10 @@ object ApiClient {
                             for (k in candidates) {
                                 obj[k]?.jsonPrimitive?.contentOrNull?.let { s ->
                                     val v = s.trim()
-                                    if (v.isNotEmpty()) return v
+                                    if (v.isNotEmpty()) {
+                                        // 若为 Google 风格 "models/xxx"，统一去掉前缀
+                                        return v.removePrefix("models/")
+                                    }
                                 }
                             }
                             return null
@@ -766,23 +805,27 @@ object ApiClient {
                             return arr.mapNotNull { el ->
                                 when {
                                     el is JsonObject -> extractIdFromObj(el)
-                                    else -> el.jsonPrimitive.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
+                                    else -> el.jsonPrimitive.contentOrNull?.trim()
+                                        ?.removePrefix("models/")
+                                        ?.takeIf { it.isNotEmpty() }
                                 }
                             }.distinct()
                         }
-
+    
                         val ids: List<String> = when {
                             root is JsonObject && root["data"] is JsonArray ->
                                 extractFromArray(root["data"]!!.jsonArray)
+                            root is JsonObject && root["models"] is JsonArray ->
+                                extractFromArray(root["models"]!!.jsonArray)
                             root is JsonArray ->
                                 extractFromArray(root)
                             else -> emptyList()
                         }
-
+    
                         if (ids.isNotEmpty()) {
                             return ids
                         } else {
-                            throw IOException("无法解析模型列表的响应。请检查API端点返回的数据格式是否正确。", e2)
+                            throw IOException("无法解析模型列表的响应。请检查API端点返回的数据格式是否正确。")
                         }
                     } catch (e3: Exception) {
                         throw IOException("无法解析模型列表的响应。请检查API端点返回的数据格式是否正确。", e3)
