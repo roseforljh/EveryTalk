@@ -45,6 +45,7 @@ import com.example.everytalk.ui.theme.ChatDimensions
 import com.example.everytalk.ui.theme.chatColors
 
 import com.example.everytalk.ui.components.EnhancedMarkdownText
+import com.example.everytalk.ui.components.StableMarkdownText
 import com.example.everytalk.ui.components.normalizeMarkdownGlyphs
 import com.example.everytalk.ui.components.normalizeBasicMarkdown
 import kotlinx.coroutines.delay
@@ -439,14 +440,26 @@ fun AiMessageItem(
                         vertical = if (needsZeroPadding) 0.dp else ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL
                     )
             ) {
-                EnhancedMarkdownText(
-                    message = message,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    isStreaming = isStreaming,
-                    messageOutputType = messageOutputType,
-                    onLongPress = onLongPress
-                )
+                // 优先使用传入的 text（例如 AiMessageCode 会包裹 ```lang ... ```）
+                // 这样可绕过库默认的浅色代码背景，统一走自定义 CodeBlock 深色样式
+                if (text != message.text) {
+                    StableMarkdownText(
+                        markdown = text,
+                        style = MaterialTheme.typography.bodyLarge.copy(
+                            color = MaterialTheme.colorScheme.onSurface
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                } else {
+                    EnhancedMarkdownText(
+                        message = message,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        isStreaming = isStreaming,
+                        messageOutputType = messageOutputType,
+                        onLongPress = onLongPress
+                    )
+                }
             }
         }
     }

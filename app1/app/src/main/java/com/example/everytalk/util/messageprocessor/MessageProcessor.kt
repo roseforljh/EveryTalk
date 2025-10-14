@@ -21,6 +21,19 @@ class MessageProcessor {
     fun initialize(sessionId: String, messageId: String) {
         this.sessionId.set(sessionId)
         this.messageId.set(messageId)
+        logger.debug("Initialized MessageProcessor for session=$sessionId, message=$messageId")
+    }
+
+    /**
+     * 轻量级文本清理：仅处理关键的全角符号转换
+     * 这个方法设计为高性能，适合在流式处理的每个chunk上调用
+     */
+    private fun lightweightCleanup(text: String): String {
+        if (text.isEmpty()) return text
+        return text
+            .replace('＊', '*')  // 全角星号 -> 半角（列表标记）
+            .replace('＃', '#')  // 全角井号 -> 半角（标题标记）
+            .replace('｀', '`')  // 全角反引号 -> 半角（代码标记）
     }
 
     fun getCurrentText(): String = currentTextBuilder.get().toString()
@@ -38,15 +51,47 @@ class MessageProcessor {
 
         return messagesMutex.withLock {
             when (event) {
-                is AppStreamEvent.Text, is AppStreamEvent.Content, is AppStreamEvent.ContentFinal -> {
+                is AppStreamEvent.Text, is AppStreamEvent.Content -> {
                     val eventText = when (event) {
                         is AppStreamEvent.Text -> event.text
                         is AppStreamEvent.Content -> event.text
-                        is AppStreamEvent.ContentFinal -> event.text
                         else -> ""
                     }
                     if (eventText.isNotEmpty()) {
-                        currentTextBuilder.get().append(eventText)
+                        // 对每个chunk进行轻量级清理（仅转换全角符号）
+                        val cleanedChunk = lightweightCleanup(eventText)
+                        
+                        // 记录是否发生了清理
+                        if (cleanedChunk != eventText) {
+                            logger.debug("Chunk cleaned: '${eventText.take(20)}...' -> '${cleanedChunk.take(20)}...' (${eventText.length} -> ${cleanedChunk.length} chars)")
+                        }
+                        
+                        currentTextBuilder.get().append(cleanedChunk)
+                    }
+                    ProcessedEventResult.ContentUpdated(currentTextBuilder.get().toString())
+                }
+                is AppStreamEvent.ContentFinal -> {
+                    // ContentFinal 包含后端清理后的完整内容，应该替换而不是追加
+                    // 这样可以确保使用清理后的文本（已处理全角符号、不可见字符等）
+                    if (event.text.isNotEmpty()) {
+                        val beforeLength = currentTextBuilder.get().length
+                        val afterLength = event.text.length
+                        val lengthDiff = afterLength - beforeLength
+                        
+                        logger.info("ContentFinal received: replacing accumulated content")
+                        logger.info("  Before: $beforeLength chars")
+                        logger.info("  After:  $afterLength chars")
+                        logger.info("  Diff:   ${if (lengthDiff >= 0) "+" else ""}$lengthDiff chars")
+                        
+                        // 记录前后文本的开头部分，便于调试
+                        val beforePreview = currentTextBuilder.get().toString().take(100).replace("\n", "\\n")
+                        val afterPreview = event.text.take(100).replace("\n", "\\n")
+                        logger.debug("  Before preview: $beforePreview...")
+                        logger.debug("  After preview:  $afterPreview...")
+                        
+                        currentTextBuilder.set(StringBuilder(event.text))
+                    } else {
+                        logger.warn("ContentFinal event received but text is empty")
                     }
                     ProcessedEventResult.ContentUpdated(currentTextBuilder.get().toString())
                 }

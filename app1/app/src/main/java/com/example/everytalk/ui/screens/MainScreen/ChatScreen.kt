@@ -675,9 +675,9 @@ private fun UpdateAvailableDialog(
                             .verticalScroll(scrollState)
                             .padding(vertical = scrimHeight)
                     ) {
-                        // 🎯 改为真实 Markdown 渲染，同时保持选择能力
-                        com.example.everytalk.ui.components.StableMarkdownText(
-                            markdown = textToDisplay,
+                        // 🎯 显示纯文本（移除Markdown标记），使文本可以被正确选择
+                        Text(
+                            text = com.example.everytalk.ui.components.markdownToPlainText(textToDisplay),
                             style = MaterialTheme.typography.bodyLarge.copy(
                                 color = MaterialTheme.colorScheme.onSurface
                             ),

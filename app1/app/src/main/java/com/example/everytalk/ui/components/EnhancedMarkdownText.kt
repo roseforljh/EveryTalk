@@ -17,6 +17,31 @@ import androidx.compose.ui.unit.dp
 import com.example.everytalk.data.DataClass.Message
 import dev.jeziellago.compose.markdowntext.MarkdownText
 
+/**
+ * 预处理：保护三连反引号/波浪号围栏，避免后续内联反引号清理误伤代码围栏
+ * 思路：
+ * - 先把 ``` 和 ~~~ 临时替换为私用区占位符
+ * - 再调用现有的 sanitizeAiOutput + removeInlineCodeBackticks
+ * - 最后把占位符还原为原始围栏
+ */
+private fun fenceSafePreprocess(raw: String): String {
+   if (raw.isEmpty()) return raw
+
+   // 使用 Unicode 私用区字符作为占位，避免与正文冲突
+   val backtickFencePlaceholder = "\uE000\uE001\uE000"
+   val tildeFencePlaceholder = "\uE000\uE001\uE001"
+
+   var tmp = raw
+     .replace("```", backtickFencePlaceholder)
+     .replace("~~~", tildeFencePlaceholder)
+
+   // 保持原有清理顺序：先 sanitize 再移除内联反引号
+   tmp = removeInlineCodeBackticks(sanitizeAiOutput(tmp))
+
+   return tmp
+     .replace(backtickFencePlaceholder, "```")
+     .replace(tildeFencePlaceholder, "~~~")
+}
 @Composable
 fun EnhancedMarkdownText(
     message: Message,
@@ -36,9 +61,7 @@ fun EnhancedMarkdownText(
     }
 
     // 轻量清理 + 去除内联代码反引号，避免库的默认高亮底色
-    val processed = remember(message.text) {
-        removeInlineCodeBackticks(sanitizeAiOutput(message.text))
-    }
+    val  processed  =  remember(message.text)  {  fenceSafePreprocess(message.text)  }
 
     // 🎯 关键修复：使用 derivedStateOf 来稳定解析结果
     // 流式输出时，只在文本有实质性变化时才重新解析，避免频繁重组
@@ -49,7 +72,7 @@ fun EnhancedMarkdownText(
                 // 表格开始但还不完整时，暂时显示为纯文本，避免频繁重解析
                 listOf(ContentPart(ContentType.TEXT, processed))
             } else {
-                parseMessageContent(processed)
+                parseMessageContentRobust(processed)
             }
         }
     }
@@ -162,4 +185,166 @@ fun StableMarkdownText(
             }
         }
     }
+}
+
+// --- robust parser to avoid "white block" by capturing indented/fenced code and rendering via CodeBlock ---
+private fun parseMessageContentRobust(text: String): List<ContentPart> {
+    if (text.isEmpty()) return listOf(ContentPart(ContentType.TEXT, text))
+
+    val parts = mutableListOf<ContentPart>()
+    val lines = text.split("\n")
+    var i = 0
+
+    val textBuf = StringBuilder()
+    fun flushText() {
+        if (textBuf.isNotEmpty()) {
+            parts.add(ContentPart(ContentType.TEXT, textBuf.toString()))
+            textBuf.clear()
+        }
+    }
+
+    var inFence = false
+    var fenceChar = '`'
+    var fenceLen = 0
+    var currentLang: String? = null
+
+    fun parseFenceOpen(raw: String): Triple<Boolean, String, String> {
+        val s = raw.trimStart()
+        if (s.length < 3) return Triple(false, "", "")
+        val ch = s[0]
+        if (ch != '`' && ch != '~') return Triple(false, "", "")
+        var cnt = 0
+        while (cnt < s.length && s[cnt] == ch) cnt++
+        if (cnt < 3) return Triple(false, "", "")
+        var pos = cnt
+        while (pos < s.length && s[pos].isWhitespace()) pos++
+        val langStart = pos
+        while (pos < s.length && !s[pos].isWhitespace()) pos++
+        val lang = if (pos > langStart) s.substring(langStart, pos) else ""
+        val rest = if (pos < s.length) s.substring(pos).trimStart() else ""
+        fenceChar = ch
+        fenceLen = cnt
+        return Triple(true, lang, rest)
+    }
+
+    fun isFenceClose(raw: String): Boolean {
+        val t = raw.trim()
+        if (t.isEmpty()) return false
+        var cnt = 0
+        while (cnt < t.length && t[cnt] == fenceChar) cnt++
+        return cnt >= fenceLen && (cnt == t.length || t.substring(cnt).isBlank())
+    }
+
+    fun isStructureBoundary(raw: String): Boolean {
+        val ts = raw.trimStart()
+        if (ts.isEmpty()) return true
+        if (ts.startsWith("#")) return true
+        if (Regex("^([*+\\-]|\\d+[.)])\\s+").containsMatchIn(ts)) return true
+        val tt = ts.trim()
+        if (tt.length >= 3 && tt.all { it == '-' }) return true
+        return false
+    }
+
+    while (i < lines.size) {
+        val line = lines[i]
+
+        if (!inFence) {
+            // fenced code
+            val (open, lang, rest) = parseFenceOpen(line)
+            if (open) {
+                flushText()
+                currentLang = lang.ifBlank { null }
+                val codeLines = mutableListOf<String>()
+                if (rest.isNotBlank()) codeLines.add(rest)
+
+                i += 1
+                var blanks = 0
+                inFence = true
+                while (i < lines.size) {
+                    val cur = lines[i]
+                    val t = cur.trim()
+                    if (t.isEmpty()) blanks++ else blanks = 0
+
+                    if (isFenceClose(cur)) {
+                        val content = codeLines.joinToString("\n")
+                        if (content.isNotBlank()) {
+                            parts.add(ContentPart(ContentType.CODE, content, currentLang))
+                        }
+                        inFence = false
+                        currentLang = null
+                        i += 1
+                        break
+                    }
+
+                    if (false && (isStructureBoundary(cur) || blanks >= 2)) {
+                        val content = codeLines.joinToString("\n")
+                        if (content.isNotBlank()) {
+                            parts.add(ContentPart(ContentType.CODE, content, currentLang))
+                        }
+                        inFence = false
+                        currentLang = null
+                        // do not consume boundary line; handle again as normal
+                        break
+                    }
+
+                    codeLines.add(cur)
+                    i += 1
+                }
+
+                if (inFence) {
+                    // EOF without explicit close
+                    val content = codeLines.joinToString("\n")
+                    if (content.isNotBlank()) {
+                        parts.add(ContentPart(ContentType.CODE, content, currentLang))
+                    }
+                    inFence = false
+                    currentLang = null
+                }
+                continue
+            }
+
+            // indented code block (>=4 spaces or tab) → treat as CODE to avoid MarkdownText's light background
+            if (line.startsWith("    ") || line.startsWith("\t")) {
+                flushText()
+                val codeLines = mutableListOf<String>()
+                var j = i
+                while (j < lines.size) {
+                    val l = lines[j]
+                    when {
+                        l.startsWith("    ") -> {
+                            codeLines.add(l.removePrefix("    "))
+                            j++
+                        }
+                        l.startsWith("\t") -> {
+                            codeLines.add(l.removePrefix("\t"))
+                            j++
+                        }
+                        l.isBlank() -> {
+                            codeLines.add("")
+                            j++
+                        }
+                        else -> break
+                    }
+                }
+                val content = codeLines.joinToString("\n").trimEnd()
+                if (content.isNotBlank()) {
+                    parts.add(ContentPart(ContentType.CODE, content, null))
+                }
+                i = j
+                continue
+            }
+
+            // normal text
+            if (textBuf.isNotEmpty()) textBuf.append('\n')
+            textBuf.append(line)
+            i += 1
+        } else {
+            // safety; should be handled inside fence loop
+            i += 1
+        }
+    }
+
+    flushText()
+    if (parts.isEmpty()) parts.add(ContentPart(ContentType.TEXT, text))
+    return parts
 }

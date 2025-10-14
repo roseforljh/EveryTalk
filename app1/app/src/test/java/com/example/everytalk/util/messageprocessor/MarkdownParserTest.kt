@@ -1,5 +1,6 @@
 package com.example.everytalk.util.messageprocessor
 
+import  com.example.everytalk.ui.components.MarkdownPart
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -7,14 +8,14 @@ class MarkdownParserTest {
 
     @Test
     fun `inline dollar math should be parsed`() {
-        val text = "这是爱因斯坦公式 $E = mc^2$ 的示例。"
+        val text = "这是爱因斯坦公式 \\\\$2\\\\$3"
         val parts = parseMarkdownParts(text)
         assertTrue(parts.any { it is MarkdownPart.MathBlock && !it.displayMode })
     }
 
     @Test
     fun `inline dollar math adjacent to Chinese should be parsed`() {
-        val text = "中文$\\alpha$中文"
+        val text = "中文\\$\\alpha\\$中文"
         val parts = parseMarkdownParts(text)
         assertTrue(parts.any { it is MarkdownPart.MathBlock && !it.displayMode })
     }
@@ -35,7 +36,7 @@ class MarkdownParserTest {
 
     @Test
     fun `double dollar block should be parsed`() {
-        val text = "$$ \\sum_{k=1}^{n} k = \\frac{n(n+1)}{2} $$"
+        val text = "\\$\\$ \\sum_{k=1}^{n} k = \\frac{n(n+1)}{2} \\$\\$"
         val parts = parseMarkdownParts(text)
         assertTrue(parts.any { it is MarkdownPart.MathBlock && it.displayMode })
     }

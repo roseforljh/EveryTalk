@@ -193,8 +193,11 @@ fun sanitizeAiOutput(text: String): String {
         // 修复代码围栏（拆分 "```lang inline"、补齐/早闭合）
         val fencedFixed = repairFencedCodeBlocks(normalized)
 
+        // 进一步：降级 Markdown 引用块为普通文本，避免第三方库为 blockquote 添加浅色背景导致“白块”
+        val withoutQuotes = demoteBlockQuotes(fencedFixed)
+
         // 保证文末换行，部分 Markdown 解析器在无终止换行时可能忽略末尾结构行
-        if (fencedFixed.endsWith("\n")) fencedFixed else fencedFixed + "\n"
+        if (withoutQuotes.endsWith("\n")) withoutQuotes else withoutQuotes + "\n"
     }
 }
 
@@ -431,6 +434,13 @@ fun repairFencedCodeBlocks(md: String): String {
         // 分隔线 ---
         val tt = ts.trim()
         if (tt.length >= 3 && tt.all { it == '-' }) return true
+        
+        // 启发式规则：完全由粗体包裹的行很可能是标题 (过于激进，已禁用)
+        // if (tt.startsWith("**") && tt.endsWith("**") && tt.length > 4) return true
+
+        // 启发式规则：以冒号结尾的行很可能是标签 (过于激进，已禁用)
+        // if (tt.endsWith(":") || tt.endsWith("：")) return true
+
         return false
     }
 
@@ -575,4 +585,132 @@ fun normalizeMarkdownGlyphs(text: String): String {
         // 统一星号
         .replace('＊', '*')  // 全角星号 -> 半角
         .replace('﹡', '*')  // 小型星号 -> 半角
+}
+
+/**
+ * 将 Markdown 文本转换为纯文本，移除所有 Markdown 语法标记
+ * 用于在文本选择对话框中显示可选择的纯文本内容
+ */
+fun markdownToPlainText(markdown: String): String {
+    if (markdown.isEmpty()) return markdown
+    
+    var text = markdown
+    
+    // 1. 移除代码块（保留内容）
+    text = text.replace(Regex("```[\\w]*\\n([\\s\\S]*?)```"), "$1")
+    text = text.replace(Regex("~~~[\\w]*\\n([\\s\\S]*?)~~~"), "$1")
+    
+    // 2. 移除内联代码反引号
+    text = text.replace(Regex("`([^`]+)`"), "$1")
+    
+    // 3. 移除标题标记
+    text = text.replace(Regex("^#{1,6}\\s+", RegexOption.MULTILINE), "")
+    
+    // 4. 移除加粗和斜体
+    text = text.replace(Regex("\\*\\*\\*([^*]+)\\*\\*\\*"), "$1") // 粗斜体
+    text = text.replace(Regex("___([^_]+)___"), "$1") // 粗斜体
+    text = text.replace(Regex("\\*\\*([^*]+)\\*\\*"), "$1") // 加粗
+    text = text.replace(Regex("__([^_]+)__"), "$1") // 加粗
+    text = text.replace(Regex("\\*([^*]+)\\*"), "$1") // 斜体
+    text = text.replace(Regex("_([^_]+)_"), "$1") // 斜体
+    
+    // 5. 移除删除线
+    text = text.replace(Regex("~~([^~]+)~~"), "$1")
+    
+    // 6. 移除链接，保留链接文本
+    text = text.replace(Regex("\\[([^\\]]+)\\]\\([^)]+\\)"), "$1")
+    
+    // 7. 移除图片标记
+    text = text.replace(Regex("!\\[([^\\]]*)\\]\\([^)]+\\)"), "$1")
+    
+    // 8. 移除引用标记
+    text = text.replace(Regex("^>\\s+", RegexOption.MULTILINE), "")
+    
+    // 9. 移除无序列表标记
+    text = text.replace(Regex("^[\\s]*[-*+]\\s+", RegexOption.MULTILINE), "")
+    
+    // 10. 移除有序列表标记
+    text = text.replace(Regex("^[\\s]*\\d+\\.\\s+", RegexOption.MULTILINE), "")
+    
+    // 11. 移除水平分隔线
+    text = text.replace(Regex("^[-*_]{3,}$", RegexOption.MULTILINE), "")
+    
+    // 12. 移除表格分隔符行
+    text = text.replace(Regex("^\\|?[\\s]*:?-+:?[\\s]*\\|.*$", RegexOption.MULTILINE), "")
+    
+    // 13. 简化表格行（移除管道符，保留内容）
+    text = text.replace(Regex("^\\|(.*)\\|$", RegexOption.MULTILINE), "$1")
+    text = text.replace(Regex("\\|"), " ")
+    
+    // 14. 清理多余的空行（超过2个连续空行的压缩为2个）
+    text = text.replace(Regex("\\n{3,}"), "\n\n")
+    
+    // 15. 清理首尾空白
+    text = text.trim()
+    
+    return text
+}
+
+
+// --- Added: Demote Markdown blockquotes to plain text to avoid library's light background "white blocks"
+private fun demoteBlockQuotes(md: String): String {
+    if (md.isEmpty()) return md
+    val lines = md.split("\n")
+    val out = StringBuilder()
+    var inFence = false
+    var fenceChar = '`'
+    var fenceLen = 0
+
+    fun toggleFenceIfNeeded(line: String) {
+        val t = line.trimStart()
+        if (t.isEmpty()) return
+        val ch = t[0]
+        if (ch != '`' && ch != '~') return
+        var cnt = 0
+        while (cnt < t.length && t[cnt] == ch) cnt++
+        if (cnt >= 3) {
+            if (!inFence) {
+                inFence = true
+                fenceChar = ch
+                fenceLen = cnt
+            } else {
+                // close only if the same fence char and len or longer
+                var closeCnt = 0
+                while (closeCnt < t.length && t[closeCnt] == fenceChar) closeCnt++
+                if (fenceChar == ch && closeCnt >= fenceLen) {
+                    inFence = false
+                }
+            }
+        }
+    }
+
+    lines.forEachIndexed { idx, raw ->
+        var s = raw
+
+        // Detect fence open/close
+        toggleFenceIfNeeded(raw)
+
+        if (!inFence) {
+            // Remove all leading '>' markers (including nested) and a single following space for each
+            // while keeping original indentation before '>' group.
+            val leadingWs = raw.indexOfFirst { it != ' ' && it != '\t' }.let { if (it == -1) 0 else it }
+            val head = raw.substring(0, leadingWs)
+            var rest = raw.substring(leadingWs)
+
+            if (rest.startsWith(">")) {
+                var p = 0
+                while (p < rest.length && rest[p] == '>') {
+                    p++
+                    if (p < rest.length && rest[p] == ' ') p++
+                }
+                rest = if (p < rest.length) rest.substring(p) else ""
+                s = head + rest
+            }
+        }
+
+        out.append(s)
+        if (idx != lines.lastIndex) out.append('\n')
+    }
+
+    return out.toString()
 }
