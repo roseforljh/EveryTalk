@@ -33,16 +33,27 @@ fun EnhancedMarkdownText(
         else -> MaterialTheme.colorScheme.onSurface
     }
 
-    // 若消息包含结构化 parts，逐段渲染（文本/代码/数学/混合/表格/HTML）
-    // The logic to split parts is no longer needed, as WebView handles everything.
-
-    // 否则按整段 Markdown 文本(规范化后)展示
-    val md = normalizeBasicMarkdown(message.text)
-    // 整段使用基于 CDN 的 Markdown 富文本渲染
-    MarkdownHtmlView(
-        markdown = md,
-        modifier = modifier.fillMaxWidth()
-    )
+    // 流式期间跳过复杂规范化，避免主线程阻塞导致ANR
+    if (isStreaming) {
+        OptimizedTextLayout(
+            message = message.copy(
+                // 流式期间仅做最轻量字形清理，跳过正则密集的sanitizeAiOutput
+                text = normalizeMarkdownGlyphs(message.text)
+            ),
+            modifier = modifier.fillMaxWidth(),
+            textColor = if (color != Color.Unspecified) color else textColor,
+            style = style
+        )
+    } else {
+        // 仅在非流式/最终态时，用 WebView 渲染完整 Markdown + 数学
+        val md = normalizeBasicMarkdown(message.text)
+        MarkdownHtmlView(
+            markdown = md,
+            isStreaming = false,
+            isFinal = true,
+            modifier = modifier.fillMaxWidth()
+        )
+    }
 }
 
 @Composable
@@ -55,6 +66,8 @@ fun StableMarkdownText(
     // 使用基于 CDN 的 Markdown 富文本渲染，避免原始文本直出
     MarkdownHtmlView(
         markdown = md,
+        isStreaming = false,
+        isFinal = true,
         modifier = modifier
     )
 }

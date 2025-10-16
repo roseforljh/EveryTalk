@@ -73,7 +73,8 @@ fun ChatMessagesList(
     var contextMenuPressOffset by remember { mutableStateOf(Offset.Zero) }
 
     val isApiCalling by viewModel.isTextApiCalling.collectAsState()
-   val density = LocalDensity.current
+    val currentStreamingId by viewModel.currentTextStreamingAiMessageId.collectAsState()
+    val density = LocalDensity.current
 
     // 取消因思考框(AiMessageReasoning)导致的外层自动滚动，避免联动到外层列表
     // LaunchedEffect(chatItems) { ... } 已移除
@@ -92,31 +93,30 @@ fun ChatMessagesList(
             key = { _, item -> item.stableId },
             contentType = { _, item -> item::class.java.simpleName }
         ) { index, item ->
-            key(item.stableId) {
-                // 根据消息类型决定Box是否占满宽度
-                val isUserMessage = item is ChatListItem.UserMessage || 
-                    (item is ChatListItem.ErrorMessage && 
-                     viewModel.getMessageById((item as ChatListItem.ErrorMessage).messageId)?.sender == com.example.everytalk.data.DataClass.Sender.User)
-                
-                Box(
-                    modifier = if (isUserMessage) {
-                        Modifier.fillMaxWidth() // 用户消息需要fillMaxWidth以便右对齐
-                    } else {
-                        Modifier.fillMaxWidth() // AI消息也需要fillMaxWidth以便左对齐
-                    }
-                ) {
-                    val alignment = when (item) {
-                        is ChatListItem.UserMessage -> Alignment.CenterEnd
-                        is ChatListItem.ErrorMessage -> {
-                            val message = viewModel.getMessageById(item.messageId)
-                            if (message?.sender == com.example.everytalk.data.DataClass.Sender.User) {
-                                Alignment.CenterEnd
-                            } else {
-                                Alignment.CenterStart
-                            }
+            // 根据消息类型决定Box是否占满宽度
+            val isUserMessage = item is ChatListItem.UserMessage ||
+                (item is ChatListItem.ErrorMessage &&
+                 viewModel.getMessageById((item as ChatListItem.ErrorMessage).messageId)?.sender == com.example.everytalk.data.DataClass.Sender.User)
+            
+            Box(
+                modifier = if (isUserMessage) {
+                    Modifier.fillMaxWidth() // 用户消息需要fillMaxWidth以便右对齐
+                } else {
+                    Modifier.fillMaxWidth() // AI消息也需要fillMaxWidth以便左对齐
+                }
+            ) {
+                val alignment = when (item) {
+                    is ChatListItem.UserMessage -> Alignment.CenterEnd
+                    is ChatListItem.ErrorMessage -> {
+                        val message = viewModel.getMessageById(item.messageId)
+                        if (message?.sender == com.example.everytalk.data.DataClass.Sender.User) {
+                            Alignment.CenterEnd
+                        } else {
+                            Alignment.CenterStart
                         }
-                        else -> Alignment.CenterStart
                     }
+                    else -> Alignment.CenterStart
+                }
 
                     // 用户消息直接渲染，不需要Column包装
                     when (item) {
@@ -242,7 +242,7 @@ fun ChatMessagesList(
                                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                         onShowAiMessageOptions(message)
                                     },
-                                    isStreaming = viewModel.currentTextStreamingAiMessageId.collectAsState().value == message.id,
+                                    isStreaming = currentStreamingId == message.id,
                                     messageOutputType = message.outputType
                                 )
                             }
@@ -260,7 +260,7 @@ fun ChatMessagesList(
                                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                         onShowAiMessageOptions(message)
                                     },
-                                    isStreaming = viewModel.currentTextStreamingAiMessageId.collectAsState().value == message.id,
+                                    isStreaming = currentStreamingId == message.id,
                                     messageOutputType = message.outputType
                                 )
                             }
@@ -278,7 +278,7 @@ fun ChatMessagesList(
                                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                         onShowAiMessageOptions(message)
                                     },
-                                    isStreaming = viewModel.currentTextStreamingAiMessageId.collectAsState().value == message.id,
+                                    isStreaming = currentStreamingId == message.id,
                                     messageOutputType = message.outputType
                                 )
                             }
@@ -339,11 +339,10 @@ fun ChatMessagesList(
                     }
                 }
             }
+            item(key = "chat_screen_footer_spacer_in_list") {
+                Spacer(modifier = Modifier.height(1.dp))
+            }
         }
-        item(key = "chat_screen_footer_spacer_in_list") {
-            Spacer(modifier = Modifier.height(1.dp))
-        }
-    }
 
         contextMenuMessage?.let { message ->
             MessageContextMenu(

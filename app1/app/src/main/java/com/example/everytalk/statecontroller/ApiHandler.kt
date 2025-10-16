@@ -374,38 +374,20 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
             when (appEvent) {
                 is AppStreamEvent.Content -> {
                     if (processedResult is com.example.everytalk.util.messageprocessor.ProcessedEventResult.ContentUpdated) {
-                        // 🎯 关键修复：一旦收到正式内容块，立刻开始显示正式内容（contentStarted=true），不再依赖推理完成
-                        val hasStreamingContent = processedResult.content.isNotBlank()
-
-                        android.util.Log.d("ApiHandler", "=== CONTENT EVENT DEBUG ===")
-                        android.util.Log.d("ApiHandler", "Message ID: $aiMessageId")
-                        android.util.Log.d("ApiHandler", "Event type: Content")
-                        android.util.Log.d("ApiHandler", "Content length: ${processedResult.content.length}")
-                        android.util.Log.d("ApiHandler", "Setting contentStarted to: $hasStreamingContent")
-
-                        // ✅ 强制开启主内容显示：一旦收到内容事件，立即标记 contentStarted=true
-                        updatedMessage = updatedMessage.copy(
-                            text = processedResult.content,
-                            contentStarted = true
-                        )
+                        val deltaChunk = appEvent.text
+                        // 过滤纯空白内容，防止后端发送大量空格导致卡死
+                        if (!deltaChunk.isNullOrEmpty() && deltaChunk.isNotBlank()) {
+                            stateHolder.appendContentToMessage(aiMessageId, deltaChunk, isImageGeneration)
+                        }
                     }
                 }
                 is AppStreamEvent.Text -> {
                     if (processedResult is com.example.everytalk.util.messageprocessor.ProcessedEventResult.ContentUpdated) {
-                        // 🎯 关键修复：文本块到来即开启正式内容显示（contentStarted=true）
-                        val hasStreamingContent = processedResult.content.isNotBlank()
-
-                        android.util.Log.d("ApiHandler", "=== TEXT EVENT DEBUG ===")
-                        android.util.Log.d("ApiHandler", "Message ID: $aiMessageId")
-                        android.util.Log.d("ApiHandler", "Event type: Text")
-                        android.util.Log.d("ApiHandler", "Text length: ${processedResult.content.length}")
-                        android.util.Log.d("ApiHandler", "Setting contentStarted to: $hasStreamingContent")
-
-                        // ✅ 强制开启主内容显示：一旦收到文本事件，立即标记 contentStarted=true
-                        updatedMessage = updatedMessage.copy(
-                            text = processedResult.content,
-                            contentStarted = true
-                        )
+                        val deltaChunk = appEvent.text
+                        // 过滤纯空白内容
+                        if (!deltaChunk.isNullOrEmpty() && deltaChunk.isNotBlank()) {
+                            stateHolder.appendContentToMessage(aiMessageId, deltaChunk, isImageGeneration)
+                        }
                     }
                 }
                 is AppStreamEvent.ContentFinal -> {
@@ -419,10 +401,10 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                         android.util.Log.d("ApiHandler", "Content length: ${processedResult.content.length}")
                         android.util.Log.d("ApiHandler", "Setting contentStarted to: $hasStreamingContent")
 
-                        // ✅ 最终内容到来时同样确保 contentStarted=true
+                        // ✅ 最终内容到来：一次性写入完整清理后的文本以持久化/回放
                         updatedMessage = updatedMessage.copy(
-                            text = processedResult.content,
-                            contentStarted = true
+                            contentStarted = true,
+                            text = processedResult.content
                         )
                     }
                 }
