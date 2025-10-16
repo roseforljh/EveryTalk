@@ -270,7 +270,8 @@ fun ChatMessagesList(
                             if (message != null) {
                                 AiMessageItem(
                                     message = message,
-                                    text = "```${(message.outputType)}\n${item.text}\n```",
+                                    // 不再任何包裹：按原文渲染，避免把普通文本误判为代码
+                                    text = item.text,
                                     maxWidth = bubbleMaxWidth,
                                     hasReasoning = item.hasReasoning,
                                     onLongPress = {

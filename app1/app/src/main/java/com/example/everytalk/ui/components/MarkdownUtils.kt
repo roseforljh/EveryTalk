@@ -181,6 +181,11 @@ fun sanitizeAiOutput(text: String): String {
                         val idxStart = s.indexOf(trimmed)
                         s = s.substring(0, idxStart) + "- " + trimmed.substring(2)
                     }
+                    // 4.1) 修复单独一行的连字符 "-" 被渲染为“白块/列表项”的问题：直接清空该行
+                    // 典型场景：数学推导中用 "-" 作为视觉分隔，Markdown 库会将其当作列表项并渲染灰底
+                    if (s.trim() == "-") {
+                        s = ""
+                    }
                 }
                 out.append(s)
                 if (idx != lines.lastIndex) out.append('\n')

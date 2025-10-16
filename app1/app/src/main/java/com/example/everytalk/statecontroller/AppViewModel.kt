@@ -1530,12 +1530,11 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         viewModelScope.launch(Dispatchers.IO) {
             val originalConfigs = if (isImageGen) stateHolder._imageGenApiConfigs.value else stateHolder._apiConfigs.value
             val configsToKeep = originalConfigs.filterNot {
-                it.key == representativeConfig.key &&
-                it.modalityType == representativeConfig.modalityType &&
-                it.provider == representativeConfig.provider &&
-                it.address == representativeConfig.address &&
-                it.channel == representativeConfig.channel
-            }
+                            it.key == representativeConfig.key &&
+                            it.provider == representativeConfig.provider &&
+                            it.address == representativeConfig.address &&
+                            it.channel == representativeConfig.channel
+                        }
 
             if (originalConfigs.size != configsToKeep.size) {
                 if (isImageGen) {
@@ -1555,12 +1554,11 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         viewModelScope.launch(Dispatchers.IO) {
             val originalConfigs = stateHolder._imageGenApiConfigs.value
             val configsToKeep = originalConfigs.filterNot {
-                it.key == representativeConfig.key &&
-                it.modalityType == representativeConfig.modalityType &&
-                it.provider == representativeConfig.provider &&
-                it.address == representativeConfig.address &&
-                it.channel == representativeConfig.channel
-            }
+                            it.key == representativeConfig.key &&
+                            it.provider == representativeConfig.provider &&
+                            it.address == representativeConfig.address &&
+                            it.channel == representativeConfig.channel
+                        }
 
             if (originalConfigs.size != configsToKeep.size) {
                 stateHolder._imageGenApiConfigs.value = configsToKeep
@@ -1639,10 +1637,9 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 val newConfigs =
                         currentConfigs.map { config ->
                             if (config.key == originalKey &&
-                                config.modalityType == modality &&
-                                config.provider == originalProvider &&
-                                config.address == originalAddress &&
-                                config.channel == originalChannel) {
+                                                            config.provider == originalProvider &&
+                                                            config.address == originalAddress &&
+                                                            config.channel == originalChannel) {
                                 val updatedConfig = config.copy(address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
                                 Log.d("AppViewModel", "Updated config - Model: ${updatedConfig.model}, Provider: ${updatedConfig.provider}, Channel: ${updatedConfig.channel}")
                                 updatedConfig
@@ -1657,12 +1654,11 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                     val currentSelectedConfig = stateHolder._selectedImageGenApiConfig.value
                     Log.d("AppViewModel", "Current selected config: ${currentSelectedConfig?.model}, Channel: ${currentSelectedConfig?.channel}")
                     if (currentSelectedConfig != null &&
-                                    currentSelectedConfig.key == originalKey &&
-                                    currentSelectedConfig.modalityType == modality &&
-                                    currentSelectedConfig.provider == originalProvider &&
-                                    currentSelectedConfig.address == originalAddress &&
-                                    currentSelectedConfig.channel == originalChannel
-                    ) {
+                                                        currentSelectedConfig.key == originalKey &&
+                                                        currentSelectedConfig.provider == originalProvider &&
+                                                        currentSelectedConfig.address == originalAddress &&
+                                                        currentSelectedConfig.channel == originalChannel
+                                        ) {
                         val newSelectedConfig =
                                 currentSelectedConfig.copy(address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
                         stateHolder._selectedImageGenApiConfig.value = newSelectedConfig
@@ -1675,33 +1671,31 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 // 文本生成配置
                 val currentConfigs = stateHolder._apiConfigs.value
                 val newConfigs =
-                        currentConfigs.map { config ->
-                            if (config.key == originalKey &&
-                                config.modalityType == modality &&
-                                config.provider == originalProvider &&
-                                config.address == originalAddress &&
-                                config.channel == originalChannel) {
-                                config.copy(address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
-                            } else {
-                                config
-                            }
-                        }
+                                        currentConfigs.map { config ->
+                                            if (config.key == originalKey &&
+                                                config.provider == originalProvider &&
+                                                config.address == originalAddress &&
+                                                config.channel == originalChannel) {
+                                                config.copy(address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
+                                            } else {
+                                                config
+                                            }
+                                        }
                 if (currentConfigs != newConfigs) {
                     stateHolder._apiConfigs.value = newConfigs
                     persistenceManager.saveApiConfigs(newConfigs)
 
                     val currentSelectedConfig = stateHolder._selectedApiConfig.value
-                    if (currentSelectedConfig != null &&
-                                    currentSelectedConfig.key == originalKey &&
-                                    currentSelectedConfig.modalityType == modality &&
-                                    currentSelectedConfig.provider == originalProvider &&
-                                    currentSelectedConfig.address == originalAddress &&
-                                    currentSelectedConfig.channel == originalChannel
-                    ) {
-                        val newSelectedConfig =
-                                currentSelectedConfig.copy(address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
-                        stateHolder._selectedApiConfig.value = newSelectedConfig
-                    }
+                                        if (currentSelectedConfig != null &&
+                                                        currentSelectedConfig.key == originalKey &&
+                                                        currentSelectedConfig.provider == originalProvider &&
+                                                        currentSelectedConfig.address == originalAddress &&
+                                                        currentSelectedConfig.channel == originalChannel
+                                        ) {
+                                            val newSelectedConfig =
+                                                    currentSelectedConfig.copy(address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
+                                            stateHolder._selectedApiConfig.value = newSelectedConfig
+                                        }
 
                     withContext(Dispatchers.Main) { showSnackbar("配置已更新") }
                 }
@@ -2240,8 +2234,11 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 // 1. 删除与此API密钥和模态类型匹配的所有现有配置
                 val currentConfigs = stateHolder._apiConfigs.value
                 val configsToKeep = currentConfigs.filterNot {
-                    it.key == config.key && it.modalityType == config.modalityType
-                }
+                                    it.key == config.key &&
+                                    it.provider == config.provider &&
+                                    it.address == config.address &&
+                                    it.channel == config.channel
+                                }
 
                 // 2. 根据获取的模型创建新配置
                 val newConfigs = models.map { modelName ->
@@ -2266,17 +2263,22 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
 
                 // 4. 更新选中的配置（如果需要）
                 val currentSelectedConfig = stateHolder._selectedApiConfig.value
-                if (currentSelectedConfig != null &&
-                    currentSelectedConfig.key == config.key &&
-                    currentSelectedConfig.modalityType == config.modalityType &&
-                    !finalConfigs.any { it.id == currentSelectedConfig.id }
-                ) {
-                    val newSelection = finalConfigs.firstOrNull {
-                        it.key == config.key && it.modalityType == config.modalityType
-                    }
-                    stateHolder._selectedApiConfig.value = newSelection
-                    persistenceManager.saveSelectedConfigIdentifier(newSelection?.id)
-                }
+                                if (currentSelectedConfig != null &&
+                                    currentSelectedConfig.key == config.key &&
+                                    currentSelectedConfig.provider == config.provider &&
+                                    currentSelectedConfig.address == config.address &&
+                                    currentSelectedConfig.channel == config.channel &&
+                                    !finalConfigs.any { it.id == currentSelectedConfig.id }
+                                ) {
+                                    val newSelection = finalConfigs.firstOrNull {
+                                        it.key == config.key &&
+                                        it.provider == config.provider &&
+                                        it.address == config.address &&
+                                        it.channel == config.channel
+                                    }
+                                    stateHolder._selectedApiConfig.value = newSelection
+                                    persistenceManager.saveSelectedConfigIdentifier(newSelection?.id)
+                                }
 
                 showSnackbar("刷新成功，获取到 ${models.size} 个模型")
             } catch (e: Exception) {

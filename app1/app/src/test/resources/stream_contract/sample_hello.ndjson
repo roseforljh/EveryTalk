@@ -1,4 +1,0 @@
-{"type":"content","text":"Hello","output_type":"general","block_type":"text","timestamp":"2025-01-01T00:00:00Z"}
-{"type":"content","text":"Hello, world!","output_type":"general","block_type":"text","timestamp":"2025-01-01T00:00:02Z"}
-{"type":"content_final","text":"Hello, world!","output_type":"general","block_type":"text","timestamp":"2025-01-01T00:00:03Z"}
-{"type":"finish","reason":"stop"}

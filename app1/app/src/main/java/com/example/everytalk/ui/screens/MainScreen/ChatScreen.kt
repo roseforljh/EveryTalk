@@ -203,10 +203,14 @@ fun ChatScreen(
 
     val filteredModelsForBottomSheet by remember(availableModels, selectedApiConfig) {
         derivedStateOf {
-            selectedApiConfig?.key?.takeIf { it.isNotBlank() }?.let { key ->
-                availableModels.filter { it.key == key }.ifEmpty {
-                    listOfNotNull(selectedApiConfig)
+            selectedApiConfig?.let { sel ->
+                val filtered = availableModels.filter {
+                    it.provider == sel.provider &&
+                    it.address == sel.address &&
+                    it.key == sel.key &&
+                    it.channel == sel.channel
                 }
+                if (filtered.isNotEmpty()) filtered else listOfNotNull(sel)
             } ?: availableModels
         }
     }

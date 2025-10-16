@@ -42,7 +42,7 @@ android {
         //noinspection OldTargetApi
         targetSdk = 35 // 通常与 compileSdk 一致
         versionCode = 5949
-        versionName = "1.5.2"
+        versionName = "1.5.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -121,9 +121,7 @@ android {
 
         implementation("androidx.compose.material:material") // 保留基础 Material 依赖
         
-        // Markdown 渲染库（JitPack）
-        implementation("com.github.jeziellago:compose-markdown:0.5.7")
-        
+        // Markdown 渲染库已移除
         implementation("androidx.compose.material3:material3-window-size-class")
         implementation("androidx.compose.material:material-icons-core")
         implementation("androidx.compose.material:material-icons-extended")
