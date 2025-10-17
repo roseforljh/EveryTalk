@@ -119,33 +119,45 @@ fun MarkdownHtmlView(
                     android.util.Log.i("MdHtmlView", "WebView factory created (MarkdownHtmlView) — using WebView for markdown")
                     webViewRef.value = this
                     
-                    // 🔥 添加触摸事件监听器来处理水平滚动
+                    // 🔥 智能触摸处理：防止触发侧滑手势，同时允许垂直滚动
                     var startX = 0f
                     var startY = 0f
+                    var hasRequestedDisallow = false
+                    
                     setOnTouchListener { view, event ->
                         when (event.action) {
                             MotionEvent.ACTION_DOWN -> {
                                 startX = event.x
                                 startY = event.y
-                                // 初始不拦截，让 WebView 有机会处理
-                                view.parent?.requestDisallowInterceptTouchEvent(false)
+                                hasRequestedDisallow = false
                             }
                             MotionEvent.ACTION_MOVE -> {
                                 val deltaX = kotlin.math.abs(event.x - startX)
                                 val deltaY = kotlin.math.abs(event.y - startY)
                                 
-                                // 🔥 关键：检测水平滚动意图
-                                // 如果水平移动明显大于垂直移动，请求父视图不拦截
-                                if (deltaX > deltaY * 1.5f && deltaX > 15f) {
-                                    android.util.Log.d("MdHtmlView", "Horizontal scroll detected, requesting parent not to intercept")
-                                    view.parent?.requestDisallowInterceptTouchEvent(true)
+                                if (!hasRequestedDisallow) {
+                                    // 🔥 关键策略：只要有任何移动（包括快速滑动），就暂时拦截
+                                    // 这样可以防止侧滑手势在我们判断方向之前就触发
+                                    if (deltaX > 3f || deltaY > 3f) {
+                                        view.parent?.requestDisallowInterceptTouchEvent(true)
+                                        hasRequestedDisallow = true
+                                    }
+                                }
+                                
+                                // 🔥 如果明确是垂直滚动，释放拦截让外层处理
+                                if (hasRequestedDisallow && deltaY > 20f && deltaY > deltaX * 2f) {
+                                    view.parent?.requestDisallowInterceptTouchEvent(false)
+                                    hasRequestedDisallow = false
                                 }
                             }
                             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                                view.parent?.requestDisallowInterceptTouchEvent(false)
+                                if (hasRequestedDisallow) {
+                                    view.parent?.requestDisallowInterceptTouchEvent(false)
+                                }
+                                hasRequestedDisallow = false
                             }
                         }
-                        false // 返回 false 让 WebView 自己处理事件
+                        false // 让 WebView 处理所有事件
                     }
                     layoutParams = ViewGroup.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
@@ -300,6 +312,11 @@ fun MarkdownHtmlView(
                             /* 🔥 添加滚动条样式，确保用户知道可以滚动 */
                             scrollbar-width: thin;
                             scrollbar-color: #666 #2d2d2d;
+                            /* 🔥 硬件加速优化：提示浏览器即将滚动 */
+                            will-change: scroll-position;
+                            transform: translateZ(0);
+                            backface-visibility: hidden;
+                            perspective: 1000px;
                           }
                           
                           /* 🔥 WebKit滚动条样式 */
@@ -328,6 +345,9 @@ fun MarkdownHtmlView(
                             white-space: pre;
                             word-wrap: normal;
                             overflow-wrap: normal;
+                            /* 🔥 硬件加速优化 */
+                            transform: translateZ(0);
+                            will-change: contents;
                           }
                           
                           .katex { color: inherit; }
@@ -343,6 +363,9 @@ fun MarkdownHtmlView(
                             border-radius:8px;
                             touch-action: pan-x pan-y pinch-zoom;
                             -webkit-overflow-scrolling: touch;
+                            /* 🔥 硬件加速优化 */
+                            will-change: scroll-position;
+                            transform: translateZ(0);
                           }
                           #live-code { 
                             white-space: pre; 
@@ -360,6 +383,9 @@ fun MarkdownHtmlView(
                             touch-action: pan-x pan-y pinch-zoom;
                             padding: 8px 0;
                             margin: 1em 0;
+                            /* 🔥 硬件加速优化 */
+                            will-change: scroll-position;
+                            transform: translateZ(0);
                           }
                           
                           /* 🔥 数学公式滚动条样式 */
@@ -375,7 +401,7 @@ fun MarkdownHtmlView(
                             border-radius: 3px;
                           }
                           
-                          table { display:block; max-width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; border-collapse:collapse; touch-action: pan-x pan-y; }
+                          table { display:block; max-width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; border-collapse:collapse; touch-action: pan-x pan-y; will-change: scroll-position; transform: translateZ(0); }
                           thead, tbody, tr, th, td { box-sizing:border-box; }
                           th, td { word-break:break-word; white-space:normal; padding:8px; border:1px solid rgba(255,255,255,0.12); }
                           td pre, td code { white-space:pre-wrap; word-break:break-word; }
@@ -1061,64 +1087,57 @@ fun MarkdownHtmlView(
                           };
                         </script>
                         <script>
-                          // 🔥 关键修复：为所有可滚动元素添加触摸事件处理
+                          // 🔥 简化方案：让浏览器处理原生滚动，我们只做方向判断
                           document.addEventListener('DOMContentLoaded', function() {
-                            function makeScrollable(element) {
+                            // 为所有可滚动元素添加轻量级触摸处理
+                            function setupNativeScroll(element) {
                               if (!element) return;
                               
-                              let startX = 0;
-                              let startY = 0;
-                              let scrollLeft = 0;
-                              let isHorizontalScroll = false;
+                              let startX = 0, startY = 0;
+                              let isHorizontalIntent = false;
                               
                               element.addEventListener('touchstart', function(e) {
                                 if (element.scrollWidth <= element.clientWidth) return;
                                 startX = e.touches[0].pageX;
                                 startY = e.touches[0].pageY;
-                                scrollLeft = element.scrollLeft;
-                                isHorizontalScroll = false;
+                                isHorizontalIntent = false;
                               }, { passive: true });
                               
                               element.addEventListener('touchmove', function(e) {
                                 if (element.scrollWidth <= element.clientWidth) return;
                                 
-                                const x = e.touches[0].pageX;
-                                const y = e.touches[0].pageY;
-                                const deltaX = Math.abs(x - startX);
-                                const deltaY = Math.abs(y - startY);
-                                
-                                // 🔥 只有在明确的水平滑动时才处理
-                                if (!isHorizontalScroll && deltaX > 10 && deltaX > deltaY * 1.5) {
-                                  isHorizontalScroll = true;
+                                if (!isHorizontalIntent) {
+                                  const deltaX = Math.abs(e.touches[0].pageX - startX);
+                                  const deltaY = Math.abs(e.touches[0].pageY - startY);
+                                  
+                                  // 🔥 更早判断水平意图（与Android层一致）
+                                  // 降低阈值，更积极地识别水平滚动
+                                  if ((deltaX > 10 && deltaX > deltaY * 1.2) || (deltaX > 5 && deltaY < 3)) {
+                                    isHorizontalIntent = true;
+                                  }
                                 }
                                 
-                                if (isHorizontalScroll) {
-                                  const walk = (startX - x);
-                                  element.scrollLeft = scrollLeft + walk;
-                                  // 🔥 阻止默认行为和事件冒泡
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                }
-                              }, { passive: false });
-                              
-                              element.addEventListener('touchend', function() {
-                                isHorizontalScroll = false;
+                                // 不阻止默认行为，让浏览器处理滚动
+                                // 浏览器的原生滚动已经很流畅了
                               }, { passive: true });
                             }
                             
-                            // 为所有pre元素添加滚动支持
-                            document.querySelectorAll('pre').forEach(makeScrollable);
-                            makeScrollable(document.getElementById('liveCodePre'));
+                            // 为所有可滚动元素设置
+                            document.querySelectorAll('pre, table, .katex-display').forEach(setupNativeScroll);
+                            setupNativeScroll(document.getElementById('liveCodePre'));
                             
-                            // 监听DOM变化，为新添加的pre元素添加滚动支持
+                            // 监听新添加的元素
                             const observer = new MutationObserver(function(mutations) {
                               mutations.forEach(function(mutation) {
                                 mutation.addedNodes.forEach(function(node) {
                                   if (node.nodeType === 1) {
-                                    if (node.tagName === 'PRE') {
-                                      makeScrollable(node);
+                                    if (node.tagName === 'PRE' || node.tagName === 'TABLE' || 
+                                        (node.classList && node.classList.contains('katex-display'))) {
+                                      setupNativeScroll(node);
                                     }
-                                    node.querySelectorAll && node.querySelectorAll('pre').forEach(makeScrollable);
+                                    if (node.querySelectorAll) {
+                                      node.querySelectorAll('pre, table, .katex-display').forEach(setupNativeScroll);
+                                    }
                                   }
                                 });
                               });
