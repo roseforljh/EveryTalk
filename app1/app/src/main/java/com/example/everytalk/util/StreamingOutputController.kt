@@ -19,6 +19,11 @@ class StreamingOutputController(
     private val lastUpdateTime = AtomicLong(0)
     private var updateJob: Job? = null
     private var isOverflowing = false
+    // 改进去重：基于 SHA-256 + LRU + 过期清理，避免增量重复渲染
+    private val deduplicator = ImprovedContentDeduplicator(
+        maxCacheSize = 1000,
+        expirationMs = 60_000
+    )
     
     /**
      * 添加文本块
@@ -26,9 +31,15 @@ class StreamingOutputController(
      * @return true 表示成功添加，false 表示已达到最大限制
      */
     fun addText(text: String): Boolean {
+        // 先进行去重检查：如果该增量在时间窗口内已处理过，则直接跳过
+        val toAppend = deduplicator.deduplicate(text) ?: run {
+            logger.debug("Duplicate chunk skipped (length=${text.length})")
+            return true
+        }
+
         synchronized(accumulatedText) {
             // 检查是否会超出最大限制
-            val newLength = accumulatedText.length + text.length
+            val newLength = accumulatedText.length + toAppend.length
             if (newLength > maxAccumulatedChars) {
                 if (!isOverflowing) {
                     isOverflowing = true
@@ -40,7 +51,7 @@ class StreamingOutputController(
                 return false
             }
             
-            accumulatedText.append(text)
+            accumulatedText.append(toAppend)
         }
         
         // 检查是否满足更新条件
@@ -87,6 +98,8 @@ class StreamingOutputController(
         lastUpdateTime.set(0L)
         updateJob?.cancel()
         isOverflowing = false
+        // 同步清理去重缓存，避免跨会话残留导致误判
+        deduplicator.clear()
         logger.debug("Controller cleared")
     }
     

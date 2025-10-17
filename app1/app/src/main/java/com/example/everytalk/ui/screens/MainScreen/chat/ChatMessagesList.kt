@@ -440,8 +440,8 @@ fun AiMessageItem(
                         vertical = if (needsZeroPadding) 0.dp else ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL
                     )
             ) {
-                // 优先使用传入的 text（例如 AiMessageCode 会包裹 ```lang ... ```）
-                // 这样可绕过库默认的浅色代码背景，统一走自定义 CodeBlock 深色样式
+                // 回滚：按原逻辑渲染
+                // 如果传入的 text 与 message.text 不同（如包含 ```lang 包裹等），走 StableMarkdownText 直出
                 if (text != message.text) {
                     StableMarkdownText(
                         markdown = text,

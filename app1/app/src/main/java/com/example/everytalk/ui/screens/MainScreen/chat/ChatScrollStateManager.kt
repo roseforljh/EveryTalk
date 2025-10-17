@@ -45,28 +45,42 @@ class ChatScrollStateManager(
 
     val nestedScrollConnection = object : NestedScrollConnection {
         override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-            // Any user scroll (not just upwards) should immediately interrupt the auto-scroll.
-            // This makes the interruption much more sensitive and responsive.
+            // 🔥 修复：只在明确的垂直滚动时标记用户交互，不拦截任何滚动
             if (source == NestedScrollSource.UserInput) {
-                if (!userInteracted) {
-                    logger.debug("User interaction detected. Interrupting auto-scroll.")
-                    userInteracted = true
-                    cancelAutoScroll()
+                val absY = kotlin.math.abs(available.y)
+                val absX = kotlin.math.abs(available.x)
+                
+                // 🔥 提高判定阈值：垂直分量必须明显大于水平分量
+                val isVerticalScroll = absY > absX * 2.0f && absY > 10f
+                
+                if (isVerticalScroll) {
+                    if (!userInteracted) {
+                        logger.debug("User vertical interaction detected. Interrupting auto-scroll.")
+                        userInteracted = true
+                        cancelAutoScroll()
+                    }
+                    if (available.y < -0.1 && !_isAtBottom.value) {
+                        showAndThenHideButton()
+                    }
                 }
-                // If they are scrolling up and not at the bottom, show the button.
-                if (available.y < -0.1 && !_isAtBottom.value) {
-                    showAndThenHideButton()
-                }
+                // 🔥 关键修复：不拦截任何滚动，让LazyColumn自己处理
+                return Offset.Zero
             }
             return Offset.Zero
         }
 
         override suspend fun onPreFling(available: Velocity): Velocity {
-            if (available.y < -100) { // Detect a clear upward fling
+            // 🔥 修复：只标记用户交互，不拦截快速滑动
+            val absY = kotlin.math.abs(available.y)
+            val absX = kotlin.math.abs(available.x)
+            val isVerticalFling = absY > absX * 2.0f && absY > 300f
+            
+            if (isVerticalFling && available.y < -100) {
                 logger.debug("User flung upwards.")
                 userInteracted = true
                 cancelAutoScroll()
             }
+            // 🔥 关键修复：不拦截任何快速滑动
             return Velocity.Zero
         }
 

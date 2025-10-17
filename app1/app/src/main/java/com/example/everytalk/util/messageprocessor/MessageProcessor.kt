@@ -3,6 +3,7 @@ package com.example.everytalk.util.messageprocessor
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.network.AppStreamEvent
 import com.example.everytalk.util.AppLogger
+import com.example.everytalk.util.messageprocessor.ContentFinalValidator
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.atomic.AtomicBoolean
@@ -71,25 +72,23 @@ class MessageProcessor {
                     ProcessedEventResult.ContentUpdated(currentTextBuilder.get().toString())
                 }
                 is AppStreamEvent.ContentFinal -> {
-                    // ContentFinal 包含后端清理后的完整内容，应该替换而不是追加
-                    // 这样可以确保使用清理后的文本（已处理全角符号、不可见字符等）
                     if (event.text.isNotEmpty()) {
-                        val beforeLength = currentTextBuilder.get().length
-                        val afterLength = event.text.length
-                        val lengthDiff = afterLength - beforeLength
-                        
-                        logger.info("ContentFinal received: replacing accumulated content")
-                        logger.info("  Before: $beforeLength chars")
-                        logger.info("  After:  $afterLength chars")
-                        logger.info("  Diff:   ${if (lengthDiff >= 0) "+" else ""}$lengthDiff chars")
-                        
-                        // 记录前后文本的开头部分，便于调试
-                        val beforePreview = currentTextBuilder.get().toString().take(100).replace("\n", "\\n")
-                        val afterPreview = event.text.take(100).replace("\n", "\\n")
-                        logger.debug("  Before preview: $beforePreview...")
-                        logger.debug("  After preview:  $afterPreview...")
-                        
-                        currentTextBuilder.set(StringBuilder(event.text))
+                        val currentContent = currentTextBuilder.get().toString()
+                        val finalContent = event.text
+
+                        val shouldReplace = ContentFinalValidator.shouldReplaceCurrent(currentContent, finalContent)
+                        if (shouldReplace) {
+                            currentTextBuilder.set(StringBuilder(finalContent))
+                            logger.debug("ContentFinal: replaced current content with validated final.")
+                        } else {
+                            val merged = ContentFinalValidator.mergeContent(currentContent, finalContent)
+                            if (merged != currentContent) {
+                                currentTextBuilder.set(StringBuilder(merged))
+                                logger.debug("ContentFinal: applied conservative merge.")
+                            } else {
+                                logger.debug("ContentFinal: kept current content; final not suitable for replace/merge.")
+                            }
+                        }
                     } else {
                         logger.warn("ContentFinal event received but text is empty")
                     }

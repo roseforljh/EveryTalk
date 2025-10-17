@@ -33,11 +33,10 @@ fun EnhancedMarkdownText(
         else -> MaterialTheme.colorScheme.onSurface
     }
 
-    // 流式期间跳过复杂规范化，避免主线程阻塞导致ANR
+    // 回滚：流式期间使用轻量 Compose 文本，避免 WebView 参与导致重组与时序问题
     if (isStreaming) {
         OptimizedTextLayout(
             message = message.copy(
-                // 流式期间仅做最轻量字形清理，跳过正则密集的sanitizeAiOutput
                 text = normalizeMarkdownGlyphs(message.text)
             ),
             modifier = modifier.fillMaxWidth(),

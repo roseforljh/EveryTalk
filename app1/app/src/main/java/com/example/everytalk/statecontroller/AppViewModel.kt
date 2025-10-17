@@ -465,140 +465,112 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         return simpleModeManager.isInTextMode()
     }
 
+     // 采用轻量状态机统一驱动“连接中/思考/流式/完成/错误”的展示
+     private val bubbleStateMachines = mutableMapOf<String, com.example.everytalk.ui.state.AiBubbleStateMachine>()
+ 
+     private fun getBubbleStateMachine(messageId: String): com.example.everytalk.ui.state.AiBubbleStateMachine {
+         return bubbleStateMachines.getOrPut(messageId) {
+             com.example.everytalk.ui.state.AiBubbleStateMachine()
+         }
+     }
+ 
+     private fun computeBubbleState(
+         message: Message,
+         isApiCalling: Boolean,
+         currentStreamingAiMessageId: String?,
+         isImageGeneration: Boolean
+     ): com.example.everytalk.ui.state.AiBubbleState {
+         if (message.isError) return com.example.everytalk.ui.state.AiBubbleState.Error(message.text)
+ 
+         val isCurrentStreaming = isApiCalling && message.id == currentStreamingAiMessageId
+         val hasReasoning = !message.reasoning.isNullOrBlank()
+         val reasoningCompleteMap = if (isImageGeneration) imageReasoningCompleteMap else textReasoningCompleteMap
+         val reasoningComplete = reasoningCompleteMap[message.id] ?: false
+ 
+         return when {
+             // 连接中：无任何内容
+             isCurrentStreaming && !message.contentStarted && message.text.isBlank() && message.reasoning.isNullOrBlank() ->
+                 com.example.everytalk.ui.state.AiBubbleState.Connecting
+ 
+             // 仅思考阶段
+             hasReasoning && message.text.isBlank() ->
+                 com.example.everytalk.ui.state.AiBubbleState.Reasoning(message.reasoning ?: "", isComplete = reasoningComplete)
+ 
+             // 流式输出
+             isCurrentStreaming && message.contentStarted ->
+                 com.example.everytalk.ui.state.AiBubbleState.Streaming(
+                     content = message.text,
+                     hasReasoning = hasReasoning,
+                     reasoningComplete = reasoningComplete
+                 )
+ 
+             // 完成状态（含历史重载）
+             (message.contentStarted || message.text.isNotBlank()) ->
+                 com.example.everytalk.ui.state.AiBubbleState.Complete(
+                     content = message.text,
+                     reasoning = message.reasoning
+                 )
+ 
+             else -> com.example.everytalk.ui.state.AiBubbleState.Idle
+         }
+     }
+ 
      private fun createAiMessageItems(
              message: Message,
              isApiCalling: Boolean,
              currentStreamingAiMessageId: String?,
              isImageGeneration: Boolean = false
      ): List<ChatListItem> {
-         // 🔥 添加调试日志，诊断AI气泡消失问题
-         android.util.Log.d("AI_BUBBLE_DEBUG", """
-             |=== AI Bubble Debug ===
-             |Message ID: ${message.id}
-             |Sender: ${message.sender}
-             |IsImageGeneration: $isImageGeneration
-             |Text: '${message.text.take(50)}${if (message.text.length > 50) "..." else ""}'
-             |ContentStarted: ${message.contentStarted}
-             |IsError: ${message.isError}
-             |IsApiCalling: $isApiCalling
-             |CurrentStreamingId: $currentStreamingAiMessageId
-             |Reasoning: ${message.reasoning?.take(30)}${if (message.reasoning?.length ?: 0 > 30) "..." else ""}'
-             |========================
-         """.trimMargin())
-         
-         // 1) 首先判断"连接中"占位
-         val showLoading =
-             isApiCalling &&
-             message.id == currentStreamingAiMessageId &&
-             message.text.isBlank() &&
-             message.reasoning.isNullOrBlank() &&
-             !message.contentStarted
-         if (showLoading) {
-             android.util.Log.d("AI_BUBBLE_DEBUG", "Showing loading indicator for message ${message.id}")
-             return listOf(ChatListItem.LoadingIndicator(message.id))
-         }
+         val sm = getBubbleStateMachine(message.id)
+         val state = computeBubbleState(message, isApiCalling, currentStreamingAiMessageId, isImageGeneration)
  
-         // 获取对应的reasoning完成状态映射
-         val reasoningCompleteMap = if (isImageGeneration) imageReasoningCompleteMap else textReasoningCompleteMap
-         val reasoningComplete = reasoningCompleteMap[message.id] ?: false
-         
-         // 2) 思考内容项（始终显示，但状态会影响展开/收起）
-         val reasoningItem =
-             if (!message.reasoning.isNullOrBlank()) {
+         return when (state) {
+             is com.example.everytalk.ui.state.AiBubbleState.Connecting -> {
+                 listOf(ChatListItem.LoadingIndicator(message.id))
+             }
+             is com.example.everytalk.ui.state.AiBubbleState.Reasoning -> {
                  listOf(ChatListItem.AiMessageReasoning(message))
-             } else {
-                 emptyList()
              }
-         val hasReasoning = reasoningItem.isNotEmpty()
-         
-         // 3) 主内容项
-         // 关键修复：
-         // - 流式过程中，可能先将 contentStarted=true，但 text 仍是空（例如首块为空或被预处理跳过）。
-         //   这会导致既不满足"Loading占位"（因为 contentStarted=true），也不满足"有文本显示"，从而完全不渲染AI气泡。
-         // - 这里放宽规则：当处于流式且 currentStreamingAiMessageId 命中，且 contentStarted=true 时，仍渲染一个空文本气泡，
-         //   以便后续增量文本到来时即时可见。
-         val shouldShowPlaceholderWhileStreaming =
-             isApiCalling &&
-             message.id == currentStreamingAiMessageId &&
-             message.contentStarted &&
-             message.text.isBlank()
-         
-         // 🔥 新增：即使不在流式传输状态，只要是AI消息且已开始内容，也应该显示气泡
-         // 这样可以确保用户离开会话再返回时，AI气泡不会消失
-         val shouldAlwaysShowAiBubble =
-             message.sender == Sender.AI &&
-             message.contentStarted &&
-             !message.isError
-         
-         // 🔥 添加更详细的调试日志
-         android.util.Log.d("AI_BUBBLE_DEBUG", """
-             |Display Conditions:
-             |Text.isNotBlank: ${message.text.isNotBlank()}
-             |ImageUrls.isNotEmpty: ${!message.imageUrls.isNullOrEmpty()}
-             |ShouldShowPlaceholderWhileStreaming: $shouldShowPlaceholderWhileStreaming
-             |ShouldAlwaysShowAiBubble: $shouldAlwaysShowAiBubble
-             |HasReasoning: $hasReasoning
-             |ContentStarted: ${message.contentStarted}
-             |IsApiCalling: $isApiCalling
-         """.trimMargin())
- 
-         // 🔥 调整：允许正式内容与“思考框”并行显示，避免等待 ReasoningFinish
-         // 思考框隐藏条件（仅用于控制思考框自身的收起时机，主内容不再依赖它）
-         val hasReasoningContent = !message.reasoning.isNullOrBlank()
-         val shouldHideReasoning = reasoningComplete || !hasReasoningContent
-         
-         // 🎯 新规则：一旦 contentStarted 或有任意内容块，就渲染 AI 主气泡进行流式输出
-         val shouldShowAiMessage =
-             message.sender == Sender.AI && (
-                 message.text.isNotBlank() ||
-                 !message.imageUrls.isNullOrEmpty() ||
-                 shouldShowPlaceholderWhileStreaming ||
-                 shouldAlwaysShowAiBubble ||
-                 message.contentStarted
-             )
-         
-         // 🔥 添加更详细的调试日志，特别是关于思考框和正式消息的显示时机
-         android.util.Log.d("AI_BUBBLE_DEBUG", """
-             |=== AI MESSAGE DISPLAY DECISION ===
-             |Message ID: ${message.id}
-             |ShouldShowAiMessage: $shouldShowAiMessage
-             |ContentStarted: ${message.contentStarted}
-             |HasReasoning: $hasReasoning
-             |ReasoningComplete: $reasoningComplete
-             |HasReasoningContent: $hasReasoningContent
-             |ShouldHideReasoning: $shouldHideReasoning
-             |IsApiCalling: $isApiCalling
-             |CurrentStreamingId: $currentStreamingAiMessageId
-             |Text.isNotBlank: ${message.text.isNotBlank()}
-             |Text length: ${message.text.length}
-             |===============================
-         """.trimMargin())
-         
-         val messageItem =
-             if (shouldShowAiMessage) {
-                 val displayText = message.text // 允许为空，占位也渲染
-                 android.util.Log.d("AI_BUBBLE_DEBUG", "Creating AI message item for ${message.id} with text length: ${displayText.length}")
-                 when (message.outputType) {
-                     "math" -> listOf(ChatListItem.AiMessageMath(message.id, displayText, hasReasoning))
-                     "code" -> listOf(ChatListItem.AiMessageCode(message.id, displayText, hasReasoning))
-                     else -> listOf(ChatListItem.AiMessage(message.id, displayText, hasReasoning))
+             is com.example.everytalk.ui.state.AiBubbleState.Streaming -> {
+                 val items = mutableListOf<ChatListItem>()
+                 if (state.hasReasoning && state.reasoningComplete && !message.reasoning.isNullOrBlank()) {
+                     items.add(ChatListItem.AiMessageReasoning(message))
                  }
-             } else {
-                 android.util.Log.w("AI_BUBBLE_DEBUG", "AI message ${message.id} will NOT be displayed! Conditions not met.")
-                 emptyList()
+                 if (message.text.isNotBlank() || message.contentStarted) {
+                     items.add(
+                         when (message.outputType) {
+                             "math" -> ChatListItem.AiMessageMath(message.id, message.text, state.hasReasoning)
+                             "code" -> ChatListItem.AiMessageCode(message.id, message.text, state.hasReasoning)
+                             else -> ChatListItem.AiMessage(message.id, message.text, state.hasReasoning)
+                         }
+                     )
+                 }
+                 items
              }
- 
-         // 4) 底部“来源/搜索结果”按钮
-         val footerItem =
-             if (!message.webSearchResults.isNullOrEmpty() &&
-                 !(isApiCalling && message.id == currentStreamingAiMessageId)
-             ) {
-                 listOf(ChatListItem.AiMessageFooter(message))
-             } else {
-                 emptyList()
+             is com.example.everytalk.ui.state.AiBubbleState.Complete -> {
+                 val items = mutableListOf<ChatListItem>()
+                 if (!message.reasoning.isNullOrBlank()) {
+                     items.add(ChatListItem.AiMessageReasoning(message))
+                 }
+                 if (message.text.isNotBlank()) {
+                     items.add(
+                         when (message.outputType) {
+                             "math" -> ChatListItem.AiMessageMath(message.id, message.text, !message.reasoning.isNullOrBlank())
+                             "code" -> ChatListItem.AiMessageCode(message.id, message.text, !message.reasoning.isNullOrBlank())
+                             else -> ChatListItem.AiMessage(message.id, message.text, !message.reasoning.isNullOrBlank())
+                         }
+                     )
+                 }
+                 if (!message.webSearchResults.isNullOrEmpty()) {
+                     items.add(ChatListItem.AiMessageFooter(message))
+                 }
+                 items
              }
- 
-         return reasoningItem + messageItem + footerItem
+             is com.example.everytalk.ui.state.AiBubbleState.Error -> {
+                 listOf(ChatListItem.ErrorMessage(message.id, message.text))
+             }
+             else -> emptyList()
+         }
      }
 
     private fun createOtherMessageItems(message: Message): List<ChatListItem> {
