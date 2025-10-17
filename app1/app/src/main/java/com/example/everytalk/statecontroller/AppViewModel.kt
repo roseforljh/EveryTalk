@@ -58,6 +58,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOn
@@ -302,34 +303,82 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
 
    private val _showClearImageHistoryDialog = MutableStateFlow(false)
    val showClearImageHistoryDialog: StateFlow<Boolean> = _showClearImageHistoryDialog.asStateFlow()
-     val chatListItems: StateFlow<List<ChatListItem>> =
-             combine(
-                             snapshotFlow { messages.toList() },
-                            isTextApiCalling,
-                            currentTextStreamingAiMessageId
-                     ) { messages, isApiCalling, currentStreamingAiMessageId ->
-                         messages
-                                 .map { message ->
-                                     when (message.sender) {
-                                         Sender.AI -> {
-                                             createAiMessageItems(
-                                                     message,
-                                                     isApiCalling,
-                                                     currentStreamingAiMessageId
-                                             )
-                                         }
-                                         else -> createOtherMessageItems(message)
-                                     }
-                                 }
-                                 .flatten()
-                     }
-                     .flowOn(Dispatchers.Default)
-                     .stateIn(
-                             scope = viewModelScope,
-                             started = SharingStarted.WhileSubscribed(5000),
-                             initialValue = emptyList()
-                     )
+    // 🎯 优化：添加缓存，避免重复计算相同消息的 ChatListItem
+    private val chatListItemCache = mutableMapOf<String, CacheEntry>()
+    
+    private data class CacheEntry(
+        val text: String,
+        val reasoning: String?,
+        val outputType: String,
+        val hasReasoning: Boolean,
+        val items: List<ChatListItem>
+    )
+    
+    val chatListItems: StateFlow<List<ChatListItem>> =
+            combine(
+                            snapshotFlow { messages.toList() },
+                           isTextApiCalling,
+                           currentTextStreamingAiMessageId
+                    ) { messages, isApiCalling, currentStreamingAiMessageId ->
+                        messages
+                                .map { message ->
+                                    when (message.sender) {
+                                        Sender.AI -> {
+                                            // 🎯 优化：检查缓存，避免重复计算
+                                            val cached = chatListItemCache[message.id]
+                                            val hasReasoning = !message.reasoning.isNullOrBlank()
+                                            
+                                            // 检查缓存是否有效（内容未变化）
+                                            val cacheValid = cached != null &&
+                                                cached.text == message.text &&
+                                                cached.reasoning == message.reasoning &&
+                                                cached.outputType == message.outputType &&
+                                                cached.hasReasoning == hasReasoning
+                                            
+                                            if (cacheValid) {
+                                                // ✅ 缓存命中，直接返回
+                                                android.util.Log.d("AppViewModel", "🎯 Cache HIT for ${message.id.take(8)}, items=${cached!!.items.map { it::class.simpleName }}")
+                                                cached.items
+                                            } else {
+                                                // ❌ 缓存未命中或失效，重新计算
+                                                android.util.Log.d("AppViewModel", "🎯 Cache MISS for ${message.id.take(8)}, " +
+                                                    "text.len=${message.text.length}, reasoning.len=${message.reasoning?.length}, " +
+                                                    "cached.reasoning.len=${cached?.reasoning?.length}")
+                                                val newItems = createAiMessageItems(
+                                                    message,
+                                                    isApiCalling,
+                                                    currentStreamingAiMessageId
+                                                )
+                                                
+                                                // 更新缓存
+                                                chatListItemCache[message.id] = CacheEntry(
+                                                    text = message.text,
+                                                    reasoning = message.reasoning,
+                                                    outputType = message.outputType,
+                                                    hasReasoning = hasReasoning,
+                                                    items = newItems
+                                                )
+                                                
+                                                android.util.Log.d("AppViewModel", "🎯 Generated items: ${newItems.map { it::class.simpleName }}")
+                                                newItems
+                                            }
+                                        }
+                                        else -> createOtherMessageItems(message)
+                                    }
+                                }
+                                .flatten()
+                    }
+                    .flowOn(Dispatchers.Default)
+                    .distinctUntilChanged()  // 🎯 优化：避免相同内容重复发射
+                    .stateIn(
+                            scope = viewModelScope,
+                            started = SharingStarted.WhileSubscribed(5000),
+                            initialValue = emptyList()
+                    )
 
+    // 🎯 优化：图像生成消息也使用缓存
+    private val imageGenerationChatListItemCache = mutableMapOf<String, CacheEntry>()
+    
     val imageGenerationChatListItems: StateFlow<List<ChatListItem>> =
         combine(
             snapshotFlow { imageGenerationMessages.toList() },
@@ -340,12 +389,36 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 .map { message ->
                     when (message.sender) {
                         Sender.AI -> {
-                            createAiMessageItems(
-                                message,
-                                isApiCalling,
-                                currentStreamingAiMessageId,
-                                isImageGeneration = true
-                            )
+                            // 🎯 优化：检查缓存
+                            val cached = imageGenerationChatListItemCache[message.id]
+                            val hasReasoning = !message.reasoning.isNullOrBlank()
+                            
+                            val cacheValid = cached != null &&
+                                cached.text == message.text &&
+                                cached.reasoning == message.reasoning &&
+                                cached.outputType == message.outputType &&
+                                cached.hasReasoning == hasReasoning
+                            
+                            if (cacheValid) {
+                                cached!!.items
+                            } else {
+                                val newItems = createAiMessageItems(
+                                    message,
+                                    isApiCalling,
+                                    currentStreamingAiMessageId,
+                                    isImageGeneration = true
+                                )
+                                
+                                imageGenerationChatListItemCache[message.id] = CacheEntry(
+                                    text = message.text,
+                                    reasoning = message.reasoning,
+                                    outputType = message.outputType,
+                                    hasReasoning = hasReasoning,
+                                    items = newItems
+                                )
+                                
+                                newItems
+                            }
                         }
                         else -> createOtherMessageItems(message)
                     }
@@ -353,6 +426,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 .flatten()
         }
         .flowOn(Dispatchers.Default)
+        .distinctUntilChanged()  // 🎯 优化：避免重复发射
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
@@ -417,6 +491,36 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
        if (messages.isEmpty() && imageGenerationMessages.isEmpty()) {
            startNewChat()
        }
+       
+       // Initialize buffer scope for StreamingBuffer operations
+       stateHolder.initializeBufferScope(viewModelScope)
+    }
+    
+    /**
+     * Get streaming content for a message
+     * 
+     * This method provides access to the real-time streaming content for a message.
+     * During streaming, it returns content from the StreamingMessageStateManager.
+     * After streaming completes, it returns the final content from the message itself.
+     * 
+     * This enables efficient recomposition by allowing UI components to observe
+     * only the streaming content changes without triggering recomposition of the
+     * entire message list.
+     * 
+     * Requirements: 1.4, 3.4
+     * 
+     * @param messageId The ID of the message
+     * @return StateFlow of the message content (streaming or final)
+     */
+    fun getStreamingContent(messageId: String): StateFlow<String> {
+        return stateHolder.streamingMessageStateManager.getOrCreateStreamingState(messageId)
+    }
+    
+    /**
+     * Alias for getStreamingContent for backward compatibility
+     */
+    fun getStreamingText(messageId: String): StateFlow<String> {
+        return getStreamingContent(messageId)
     }
 
     fun showAboutDialog() {
@@ -487,22 +591,40 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
          val reasoningCompleteMap = if (isImageGeneration) imageReasoningCompleteMap else textReasoningCompleteMap
          val reasoningComplete = reasoningCompleteMap[message.id] ?: false
  
-         return when {
-             // 连接中：无任何内容
-             isCurrentStreaming && !message.contentStarted && message.text.isBlank() && message.reasoning.isNullOrBlank() ->
-                 com.example.everytalk.ui.state.AiBubbleState.Connecting
- 
-             // 仅思考阶段
-             hasReasoning && message.text.isBlank() ->
-                 com.example.everytalk.ui.state.AiBubbleState.Reasoning(message.reasoning ?: "", isComplete = reasoningComplete)
- 
-             // 流式输出
-             isCurrentStreaming && message.contentStarted ->
-                 com.example.everytalk.ui.state.AiBubbleState.Streaming(
-                     content = message.text,
-                     hasReasoning = hasReasoning,
-                     reasoningComplete = reasoningComplete
-                 )
+        // 🎯 获取StreamingMessageStateManager的实际内容
+        val streamingContent = if (isCurrentStreaming) {
+            stateHolder.streamingMessageStateManager.getCurrentContent(message.id)
+        } else {
+            ""
+        }
+        
+        android.util.Log.d("AppViewModel", "🎯 computeBubbleState: id=${message.id.take(8)}, " +
+            "isStreaming=$isCurrentStreaming, hasReasoning=$hasReasoning, " +
+            "reasoningComplete=$reasoningComplete, streamingContent.length=${streamingContent.length}, " +
+            "message.reasoning=${message.reasoning?.take(20)}")
+        
+        return when {
+            // 🎯 仅思考阶段：有reasoning但还没有文本内容
+            isCurrentStreaming && hasReasoning && streamingContent.isEmpty() -> {
+                android.util.Log.d("AppViewModel", "🎯 State: Reasoning")
+                com.example.everytalk.ui.state.AiBubbleState.Reasoning(message.reasoning ?: "", isComplete = reasoningComplete)
+            }
+
+            // 🎯 流式输出：StreamingMessageStateManager有实际内容了
+            isCurrentStreaming && streamingContent.isNotEmpty() -> {
+                android.util.Log.d("AppViewModel", "🎯 State: Streaming")
+                com.example.everytalk.ui.state.AiBubbleState.Streaming(
+                    content = message.text,
+                    hasReasoning = hasReasoning,
+                    reasoningComplete = reasoningComplete
+                )
+            }
+            
+            // 🎯 连接中：正在流式，但既没有reasoning也没有内容
+            isCurrentStreaming && !hasReasoning && streamingContent.isEmpty() -> {
+                android.util.Log.d("AppViewModel", "🎯 State: Connecting")
+                com.example.everytalk.ui.state.AiBubbleState.Connecting
+            }
  
              // 完成状态（含历史重载）
              (message.contentStarted || message.text.isNotBlank()) ->
@@ -515,38 +637,42 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
          }
      }
  
-     private fun createAiMessageItems(
-             message: Message,
-             isApiCalling: Boolean,
-             currentStreamingAiMessageId: String?,
-             isImageGeneration: Boolean = false
-     ): List<ChatListItem> {
-         val sm = getBubbleStateMachine(message.id)
-         val state = computeBubbleState(message, isApiCalling, currentStreamingAiMessageId, isImageGeneration)
- 
-         return when (state) {
-             is com.example.everytalk.ui.state.AiBubbleState.Connecting -> {
-                 listOf(ChatListItem.LoadingIndicator(message.id))
-             }
-             is com.example.everytalk.ui.state.AiBubbleState.Reasoning -> {
-                 listOf(ChatListItem.AiMessageReasoning(message))
-             }
-             is com.example.everytalk.ui.state.AiBubbleState.Streaming -> {
-                 val items = mutableListOf<ChatListItem>()
-                 if (state.hasReasoning && state.reasoningComplete && !message.reasoning.isNullOrBlank()) {
-                     items.add(ChatListItem.AiMessageReasoning(message))
-                 }
-                 if (message.text.isNotBlank() || message.contentStarted) {
-                     items.add(
-                         when (message.outputType) {
-                             "math" -> ChatListItem.AiMessageMath(message.id, message.text, state.hasReasoning)
-                             "code" -> ChatListItem.AiMessageCode(message.id, message.text, state.hasReasoning)
-                             else -> ChatListItem.AiMessage(message.id, message.text, state.hasReasoning)
-                         }
-                     )
-                 }
-                 items
-             }
+    private fun createAiMessageItems(
+            message: Message,
+            isApiCalling: Boolean,
+            currentStreamingAiMessageId: String?,
+            isImageGeneration: Boolean = false
+    ): List<ChatListItem> {
+        val sm = getBubbleStateMachine(message.id)
+        val state = computeBubbleState(message, isApiCalling, currentStreamingAiMessageId, isImageGeneration)
+
+        val result = when (state) {
+            is com.example.everytalk.ui.state.AiBubbleState.Connecting -> {
+                android.util.Log.d("AppViewModel", "🎯 createAiMessageItems: Connecting -> LoadingIndicator")
+                listOf(ChatListItem.LoadingIndicator(message.id))
+            }
+            is com.example.everytalk.ui.state.AiBubbleState.Reasoning -> {
+                android.util.Log.d("AppViewModel", "🎯 createAiMessageItems: Reasoning -> AiMessageReasoning, reasoning=${message.reasoning?.take(30)}")
+                listOf(ChatListItem.AiMessageReasoning(message))
+            }
+            is com.example.everytalk.ui.state.AiBubbleState.Streaming -> {
+                val items = mutableListOf<ChatListItem>()
+                if (state.hasReasoning && state.reasoningComplete && !message.reasoning.isNullOrBlank()) {
+                    items.add(ChatListItem.AiMessageReasoning(message))
+                }
+                
+                // 🎯 流式期间：使用 streamingMessageStateManager 的文本
+                // message.text保持不变（空字符串），ChatListItem保持稳定
+                // UI层通过collectAsState从StreamingMessageStateManager获取实时内容
+                items.add(
+                    when (message.outputType) {
+                        "math" -> ChatListItem.AiMessageMath(message.id, message.text, state.hasReasoning)
+                        "code" -> ChatListItem.AiMessageCode(message.id, message.text, state.hasReasoning)
+                        else -> ChatListItem.AiMessage(message.id, message.text, state.hasReasoning)
+                    }
+                )
+                items
+            }
              is com.example.everytalk.ui.state.AiBubbleState.Complete -> {
                  val items = mutableListOf<ChatListItem>()
                  if (!message.reasoning.isNullOrBlank()) {
@@ -571,6 +697,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
              }
              else -> emptyList()
          }
+         
+         return result
      }
 
     private fun createOtherMessageItems(message: Message): List<ChatListItem> {

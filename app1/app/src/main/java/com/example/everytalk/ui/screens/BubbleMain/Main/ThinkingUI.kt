@@ -65,11 +65,6 @@ internal fun ReasoningToggleAndContent(
     
     val coroutineScope = rememberCoroutineScope()
     
-    // 移除宽限期逻辑：主内容一旦开始，由 isReasoningStreaming 立即决定收起
-    
-    // 统一由 inGracePeriod 控制收起时机（移除 hideScheduled/keepBubbleVisible 复杂逻辑）
-    // 收起逻辑见上面的两个 LaunchedEffect
-    
     // 简化显示条件：仅在推理流式期间显示思考框；主内容开始后即收起
     val showInlineStreamingBox = isReasoningStreaming &&
             !messageIsError &&

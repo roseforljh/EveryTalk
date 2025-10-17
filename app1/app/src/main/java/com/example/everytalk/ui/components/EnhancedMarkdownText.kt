@@ -7,6 +7,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.PlatformTextStyle
@@ -14,6 +20,10 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.util.CodeHighlighter
+import com.example.everytalk.statecontroller.AppViewModel
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
 @Composable
 fun EnhancedMarkdownText(
@@ -25,7 +35,8 @@ fun EnhancedMarkdownText(
     messageOutputType: String = "",
     inTableContext: Boolean = false,
     onLongPress: (() -> Unit)? = null,
-    inSelectionDialog: Boolean = false
+    inSelectionDialog: Boolean = false,
+    viewModel: AppViewModel? = null
 ) {
     val textColor = when {
         color != Color.Unspecified -> color
@@ -33,26 +44,30 @@ fun EnhancedMarkdownText(
         else -> MaterialTheme.colorScheme.onSurface
     }
 
-    // 回滚：流式期间使用轻量 Compose 文本，避免 WebView 参与导致重组与时序问题
-    if (isStreaming) {
-        OptimizedTextLayout(
-            message = message.copy(
-                text = normalizeMarkdownGlyphs(message.text)
-            ),
-            modifier = modifier.fillMaxWidth(),
-            textColor = if (color != Color.Unspecified) color else textColor,
-            style = style
-        )
+    // 🎯 核心修复：正确地observe流式内容
+    // 始终subscribe到StreamingMessageStateManager，即使不在流式期间
+    val streamingText by remember(message.id, viewModel) {
+        if (viewModel != null) {
+            viewModel.getStreamingContent(message.id)
+        } else {
+            kotlinx.coroutines.flow.MutableStateFlow(message.text)
+        }
+    }.collectAsState()
+    
+    // 根据流式状态决定使用哪个文本源
+    val displayText = if (isStreaming && streamingText.isNotEmpty()) {
+        streamingText
     } else {
-        // 仅在非流式/最终态时，用 WebView 渲染完整 Markdown + 数学
-        val md = normalizeBasicMarkdown(message.text)
-        MarkdownHtmlView(
-            markdown = md,
-            isStreaming = false,
-            isFinal = true,
-            modifier = modifier.fillMaxWidth()
-        )
+        message.text
     }
+    
+    val md = normalizeBasicMarkdown(displayText)
+    MarkdownHtmlView(
+        markdown = md,
+        isStreaming = isStreaming,
+        isFinal = !isStreaming,
+        modifier = modifier.fillMaxWidth()
+    )
 }
 
 @Composable

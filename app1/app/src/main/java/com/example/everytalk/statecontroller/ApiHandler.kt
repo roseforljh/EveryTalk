@@ -58,6 +58,11 @@ class ApiHandler(
     private val USER_CANCEL_PREFIX = "USER_CANCELLED:"
     private val NEW_STREAM_CANCEL_PREFIX = "NEW_STREAM_INITIATED:"
     private val ERROR_VISUAL_PREFIX = "⚠️ "
+    
+    // 🎯 Retry mechanism configuration (Requirements: 7.3)
+    private val MAX_RETRY_ATTEMPTS = 3
+    private val RETRY_DELAY_MS = 2000L
+    private val retryCountMap = mutableMapOf<String, Int>()
 
 
     fun cancelCurrentApiJob(reason: String, isNewMessageSend: Boolean = false, isImageGeneration: Boolean = false) {
@@ -92,6 +97,9 @@ class ApiHandler(
                         if (partialText.isNotBlank() && messageIdBeingCancelled != null) {
                             onAiMessageFullTextChanged(messageIdBeingCancelled, partialText)
                         }
+                        
+                        // 🎯 Save partial content to history on cancellation (Requirements: 7.5)
+                        logger.debug("Saving partial content on user cancellation (${partialText.length} chars)")
                         historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration)
                     }
                 }
@@ -112,6 +120,10 @@ class ApiHandler(
         
         // 清理对应的消息处理器和块管理器
         if (messageIdBeingCancelled != null) {
+            // 🎯 清理 StreamingBuffer（Requirements: 7.5）
+            stateHolder.clearStreamingBuffer(messageIdBeingCancelled)
+            logger.debug("Cleared StreamingBuffer on cancellation for message: $messageIdBeingCancelled")
+            
             messageProcessorMap.remove(messageIdBeingCancelled)
         }
 
@@ -179,6 +191,8 @@ class ApiHandler(
             id = UUID.randomUUID().toString(),
             text = "",
             sender = Sender.AI,
+            // 关键修复：不要在创建时置为 true
+            // 仅当首个正文增量到来时再置 true，否则思考框判定条件将被提前终止
             contentStarted = false
         )
         val aiMessageId = newAiMessage.id
@@ -186,6 +200,19 @@ class ApiHandler(
         // 为新消息创建独立的消息处理器和块管理器
         val newMessageProcessor = MessageProcessor()
         messageProcessorMap[aiMessageId] = newMessageProcessor
+        
+        // 🎯 检测内存压力并触发清理（Requirements: 6.5）
+        if (checkMemoryPressureAndCleanup()) {
+            logger.debug("Memory pressure cleanup triggered before starting new stream")
+        }
+        
+        // 🎯 启动流式状态管理
+        stateHolder.streamingMessageStateManager.startStreaming(aiMessageId)
+        logger.debug("Started streaming for message: $aiMessageId")
+        
+        // 🎯 创建 StreamingBuffer 用于节流更新（Requirements: 1.1, 3.1, 3.2）
+        stateHolder.createStreamingBuffer(aiMessageId, isImageGeneration)
+        logger.debug("Created StreamingBuffer for message: $aiMessageId")
 
         viewModelScope.launch(Dispatchers.Main.immediate) {
             val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
@@ -317,6 +344,12 @@ class ApiHandler(
                                 thisJob?.cancel(CancellationException("API job 或 streaming ID 已更改，停止收集旧数据块"))
                                 return@collect
                             }
+                            
+                            // 🎯 Task 11: Monitor memory usage during long streaming sessions
+                            // Check memory periodically to detect potential issues
+                            // Requirements: 1.4, 3.4
+                            stateHolder.checkMemoryUsage()
+                            
                             processStreamEvent(appEvent, aiMessageId, isImageGeneration)
                             newEventChannel.trySend(appEvent)
                         }
@@ -331,6 +364,28 @@ class ApiHandler(
                     onRequestFailed(e)
                 } else {
                     logger.debug("Stream cancelled: ${e.message}")
+                    
+                    // 🎯 Save partial content to history on cancellation (Requirements: 7.5)
+                    stateHolder.flushStreamingBuffer(aiMessageId)
+                    logger.debug("Flushed StreamingBuffer on cancellation for message: $aiMessageId")
+                    
+                    // Get partial content from message processor
+                    val partialText = currentMessageProcessor.getCurrentText().trim()
+                    if (partialText.isNotBlank()) {
+                        logger.debug("Saving partial content (${partialText.length} chars) to history on cancellation")
+                        viewModelScope.launch(Dispatchers.IO) {
+                            try {
+                                historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration)
+                                logger.debug("Successfully saved partial content to history")
+                            } catch (saveError: Exception) {
+                                logger.error("Failed to save partial content to history", saveError)
+                            }
+                        }
+                    }
+                    
+                    // 🎯 清理 StreamingBuffer（Requirements: 7.5）
+                    stateHolder.clearStreamingBuffer(aiMessageId)
+                    logger.debug("Cleared StreamingBuffer on cancellation exception for message: $aiMessageId")
                 }
             } finally {
                 val currentJob = if (isImageGeneration) stateHolder.imageApiJob else stateHolder.textApiJob
@@ -378,6 +433,12 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                         // 过滤纯空白内容，防止后端发送大量空格导致卡死
                         if (!deltaChunk.isNullOrEmpty() && deltaChunk.isNotBlank()) {
                             stateHolder.appendContentToMessage(aiMessageId, deltaChunk, isImageGeneration)
+                            // 🎯 第一个非空内容到来时，标记contentStarted = true
+                            // 这样思考框会收起，正式内容开始流式展示
+                            if (!currentMessage.contentStarted) {
+                                updatedMessage = updatedMessage.copy(contentStarted = true)
+                                logger.debug("First content chunk received for message $aiMessageId, setting contentStarted=true")
+                            }
                         }
                     }
                 }
@@ -387,6 +448,11 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                         // 过滤纯空白内容
                         if (!deltaChunk.isNullOrEmpty() && deltaChunk.isNotBlank()) {
                             stateHolder.appendContentToMessage(aiMessageId, deltaChunk, isImageGeneration)
+                            // 🎯 第一个非空文本到来时，标记contentStarted = true
+                            if (!currentMessage.contentStarted) {
+                                updatedMessage = updatedMessage.copy(contentStarted = true)
+                                logger.debug("First text chunk received for message $aiMessageId, setting contentStarted=true")
+                            }
                         }
                     }
                 }
@@ -412,9 +478,21 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     if (processedResult is com.example.everytalk.util.messageprocessor.ProcessedEventResult.ReasoningUpdated) {
                         // 推理增量更新
                         updatedMessage = updatedMessage.copy(reasoning = processedResult.reasoning)
+                        
+                        // 🔥 核心修复：立即更新消息列表中的 reasoning，确保 UI 实时显示思考框
+                        val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
+                        val currentMessage = messageList.find { it.id == aiMessageId }
+                        if (currentMessage != null) {
+                            val deltaReasoning = processedResult.reasoning.removePrefix(currentMessage.reasoning ?: "")
+                            if (deltaReasoning.isNotEmpty()) {
+                                stateHolder.appendReasoningToMessage(aiMessageId, deltaReasoning, isImageGeneration)
+                                android.util.Log.d("ApiHandler", "🎯 Appended reasoning delta (${deltaReasoning.length} chars) to message $aiMessageId")
+                            }
+                        }
+                        
                         // 🎯 根因修复：
-                        // - 推理更新之前未标记“会话脏”，导致退出时 reasoning 未被持久化，重启后小白点消失
-                        // - 这里在每次推理增量到来时标记脏并立即持久化“last open chat”，确保 reasoning 保留
+                        // - 推理更新之前未标记"会话脏"，导致退出时 reasoning 未被持久化，重启后小白点消失
+                        // - 这里在每次推理增量到来时标记脏并立即持久化"last open chat"，确保 reasoning 保留
                         if (isImageGeneration) {
                             stateHolder.isImageConversationDirty.value = true
                         } else {
@@ -431,13 +509,14 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                 }
                 is AppStreamEvent.ReasoningFinish -> {
                     // 🔥 关键修复：收到推理完成事件时，立即标记推理完成并触发UI更新
-                    // 这样思考框会立即收起，然后开始流式展示正式内容
+                    // ✅ 但不设置contentStarted=true，等到第一个Content事件时再设置
+                    // 这样思考框会继续显示，直到内容真正开始输出
                     val reasoningMap = if (isImageGeneration) stateHolder.imageReasoningCompleteMap else stateHolder.textReasoningCompleteMap
                     reasoningMap[aiMessageId] = true
                     logger.debug("Reasoning finished for message $aiMessageId, marking reasoning as complete")
                     
+                    // ❌ 不在这里设置contentStarted = true，避免思考框过早消失
                     updatedMessage = updatedMessage.copy(
-                        contentStarted = true,
                         timestamp = System.currentTimeMillis()
                     )
                 }
@@ -457,6 +536,34 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     }
                     processedMessageIds.add(aiMessageId)
 
+                    // 🎯 刷新 StreamingBuffer 确保所有内容已提交（Requirements: 3.3, 7.1, 7.2）
+                    stateHolder.flushStreamingBuffer(aiMessageId)
+                    logger.debug("Flushed StreamingBuffer for message: $aiMessageId")
+                    
+                    // 🎯 Task 11: Log performance metrics at stream completion
+                    // This provides a summary of streaming performance for debugging
+                    // Requirements: 1.4, 3.4
+                    try {
+                        val metrics = stateHolder.getStreamingPerformanceMetrics()
+                        logger.debug("Stream completion performance metrics: $metrics")
+                        android.util.Log.d("ApiHandler", 
+                            "=== STREAMING PERFORMANCE SUMMARY ===\n" +
+                            "Message ID: $aiMessageId\n" +
+                            "Active Buffers: ${metrics["activeBufferCount"]}\n" +
+                            "Total Flushes: ${metrics["totalFlushes"]}\n" +
+                            "Total Chars: ${metrics["totalCharsProcessed"]}\n" +
+                            "Avg Chars/Flush: ${metrics["avgCharsPerFlush"]}\n" +
+                            "Memory Usage: ${metrics["usedMemoryMB"]}MB / ${metrics["maxMemoryMB"]}MB (${metrics["memoryUsagePercent"]}%)\n" +
+                            "Text Messages: ${metrics["textMessageCount"]}\n" +
+                            "Image Messages: ${metrics["imageMessageCount"]}")
+                    } catch (e: Exception) {
+                        logger.warn("Failed to log performance metrics: ${e.message}")
+                    }
+                    
+                    // 🎯 重置重试计数（Requirements: 7.3）
+                    resetRetryCount(aiMessageId)
+                    logger.debug("Reset retry count for successfully completed message: $aiMessageId")
+
                     // 确保推理标记为完成（如果之前没有收到 ReasoningFinish 事件）
                     val reasoningMap = if (isImageGeneration) stateHolder.imageReasoningCompleteMap else stateHolder.textReasoningCompleteMap
                     if (reasoningMap[aiMessageId] != true) {
@@ -470,6 +577,11 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     updatedMessage = finalizedMessage.copy(
                         contentStarted = true
                     )
+                    
+                    // 🎯 同步流式消息到 messages 列表（一次性更新）
+                    stateHolder.syncStreamingMessageToList(aiMessageId, isImageGeneration)
+                    logger.debug("Synced streaming message $aiMessageId to messages list")
+                    
                     // 暂停时不触发UI刷新，等待恢复后统一刷新
                     if (!stateHolder._isStreamingPaused.value) {
                         try {
@@ -491,6 +603,7 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     logger.debug("Message processor for $aiMessageId retained after stream completion")
                 }
                 is AppStreamEvent.Error -> {
+                    // 🎯 错误事件会触发 updateMessageWithError，它会自动刷新和清理 buffer
                     updateMessageWithError(aiMessageId, IOException(appEvent.message), isImageGeneration)
                 }
                 // 其他事件类型（如ToolCall, ImageGeneration）暂时不直接更新消息UI，由特定逻辑处理
@@ -511,8 +624,45 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
     }
 
 
-    private suspend fun updateMessageWithError(messageId: String, error: Throwable, isImageGeneration: Boolean = false) {
+    private suspend fun updateMessageWithError(messageId: String, error: Throwable, isImageGeneration: Boolean = false, allowRetry: Boolean = true) {
         logger.error("Updating message with error", error)
+        
+        // 🎯 刷新 StreamingBuffer 保留部分内容（Requirements: 7.1, 7.2, 7.5）
+        stateHolder.flushStreamingBuffer(messageId)
+        logger.debug("Flushed StreamingBuffer before error for message: $messageId")
+        
+        // 🎯 检查是否应该重试（Requirements: 7.3）
+        if (allowRetry && isNetworkError(error)) {
+            val currentRetryCount = retryCountMap.getOrDefault(messageId, 0)
+            if (currentRetryCount < MAX_RETRY_ATTEMPTS) {
+                logger.debug("Network error detected, attempting retry ${currentRetryCount + 1}/$MAX_RETRY_ATTEMPTS for message: $messageId")
+                retryCountMap[messageId] = currentRetryCount + 1
+                
+                // 延迟后重试
+                delay(RETRY_DELAY_MS)
+                
+                // 触发重试（通过更新消息状态提示用户）
+                withContext(Dispatchers.Main.immediate) {
+                    val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
+                    val idx = messageList.indexOfFirst { it.id == messageId }
+                    if (idx != -1) {
+                        val msg = messageList[idx]
+                        val retryMessage = msg.copy(
+                            currentWebSearchStage = "正在重试... (${currentRetryCount + 1}/$MAX_RETRY_ATTEMPTS)"
+                        )
+                        messageList[idx] = retryMessage
+                    }
+                }
+                
+                // 注意：实际重试需要在调用方实现，这里只是标记和延迟
+                // 调用方应该检测到重试状态并重新发起请求
+                return
+            } else {
+                logger.debug("Max retry attempts reached for message: $messageId")
+                retryCountMap.remove(messageId)
+            }
+        }
+        
         // 获取当前消息ID对应的处理器并重置
         val currentMessageProcessor = messageProcessorMap[messageId] ?: MessageProcessor()
         currentMessageProcessor.reset()
@@ -571,6 +721,10 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     stateHolder._currentTextStreamingAiMessageId.value = null
                 }
             }
+            
+            // 🎯 清理 StreamingBuffer（Requirements: 7.1, 7.2）
+            stateHolder.clearStreamingBuffer(messageId)
+            logger.debug("Cleared StreamingBuffer after error for message: $messageId")
         }
     }
 
@@ -703,40 +857,95 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
         }
     }
 
+    /**
+     * Check if an error is a network-related error that should trigger retry
+     * 
+     * 🎯 Network error detection (Requirements: 7.3)
+     * 
+     * @param error The error to check
+     * @return true if this is a retryable network error
+     */
+    private fun isNetworkError(error: Throwable): Boolean {
+        return when (error) {
+            is IOException -> {
+                val message = error.message?.lowercase() ?: ""
+                // Check for common network error patterns
+                message.contains("network") ||
+                message.contains("timeout") ||
+                message.contains("connection") ||
+                message.contains("unreachable") ||
+                message.contains("failed to connect") ||
+                message.contains("socket") ||
+                message.contains("interrupted")
+            }
+            else -> false
+        }
+    }
+    
+    /**
+     * Reset retry count for a message
+     * Should be called when stream completes successfully
+     * 
+     * @param messageId Message ID to reset retry count for
+     */
+    private fun resetRetryCount(messageId: String) {
+        retryCountMap.remove(messageId)
+    }
+    
     private companion object {
         private const val ERROR_VISUAL_PREFIX = "⚠️ "
     }
     
     /**
      * 清理文本聊天相关的资源，确保会话间完全隔离
+     * 
+     * 🎯 优化策略（Requirements: 6.1, 6.2, 6.3）：
+     * - 只清理不在当前消息列表中的处理器（inactive processors）
+     * - 保留当前活跃会话的所有处理器
+     * - 清理已处理的消息ID集合
+     * - 触发会话参数清理（保留最近50个）
      */
     fun clearTextChatResources() {
-        logger.debug("Clearing text chat resources for session isolation")
+        logger.debug("=== TEXT CHAT RESOURCE CLEANUP START ===")
+        logger.debug("Clearing text chat resources for session isolation (Requirements: 6.1, 6.2)")
         
-        // 🔥 添加调试日志，诊断消息处理器清理问题
-        logger.debug("=== MESSAGE PROCESSOR CLEANUP DEBUG ===")
-        logger.debug("Current message IDs in stateHolder: ${stateHolder.messages.map { it.id }}")
-        logger.debug("MessageProcessorMap keys before cleanup: ${messageProcessorMap.keys}")
-        logger.debug("ProcessedMessageIds before cleanup: $processedMessageIds")
-        
-        // 🔥 修复：只清理不在当前消息列表中的处理器，避免清除正在使用的消息内容
+        // 获取当前活跃的消息ID
         val currentMessageIds = stateHolder.messages.map { it.id }.toSet()
-        val textMessageIds = messageProcessorMap.keys.filter { id ->
-            // 只清理不在当前消息列表中的处理器
-            !currentMessageIds.contains(id)
+        val currentStreamingId = stateHolder._currentTextStreamingAiMessageId.value
+        
+        // 识别需要清理的处理器（不在当前消息列表中的）
+        val inactiveProcessorIds = messageProcessorMap.keys.filter { id ->
+            !currentMessageIds.contains(id) && id != currentStreamingId
         }
         
-        logger.debug("Message IDs to be removed: $textMessageIds")
-        logger.debug("Message IDs to be kept: $currentMessageIds")
+        logger.debug("Current active message count: ${currentMessageIds.size}")
+        logger.debug("Current streaming message ID: $currentStreamingId")
+        logger.debug("Total processors before cleanup: ${messageProcessorMap.size}")
+        logger.debug("Inactive processors to remove: ${inactiveProcessorIds.size}")
         
-        textMessageIds.forEach { messageId ->
-            logger.debug("Removing message processor for: $messageId")
-            messageProcessorMap.remove(messageId)
+        // 清理不活跃的处理器
+        var removedCount = 0
+        inactiveProcessorIds.forEach { messageId ->
+            messageProcessorMap.remove(messageId)?.let {
+                removedCount++
+                logger.debug("✓ Removed inactive processor: $messageId")
+            }
         }
-        processedMessageIds.clear() // 清理已处理的消息ID集合
-        logger.debug("Cleared ${textMessageIds.size} text chat message processors (kept ${currentMessageIds.size} active)")
-        logger.debug("MessageProcessorMap keys after cleanup: ${messageProcessorMap.keys}")
-        logger.debug("=== END MESSAGE PROCESSOR CLEANUP DEBUG ===")
+        
+        // 清理已处理的消息ID集合
+        val processedIdsBeforeCleanup = processedMessageIds.size
+        processedMessageIds.clear()
+        
+        logger.debug("Removed $removedCount inactive message processors")
+        logger.debug("Cleared $processedIdsBeforeCleanup processed message IDs")
+        logger.debug("Remaining active processors: ${messageProcessorMap.size}")
+        logger.debug("Active processor IDs: ${messageProcessorMap.keys}")
+        
+        // 🎯 触发会话参数清理（Requirements: 6.4）
+        stateHolder.cleanupOldConversationParameters()
+        logger.debug("Triggered conversation parameter cleanup (keep last 50)")
+        
+        logger.debug("=== TEXT CHAT RESOURCE CLEANUP END ===")
     }
 
     // 为兼容调用方，提供带 sessionId 的重载，内部忽略参数
@@ -746,32 +955,54 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
     
     /**
      * 清理图像聊天相关的资源，确保会话间完全隔离
+     * 
+     * 🎯 优化策略（Requirements: 6.1, 6.2, 6.3）：
+     * - 只清理不在当前消息列表中的处理器（inactive processors）
+     * - 保留当前活跃会话的所有处理器
+     * - 清理已处理的消息ID集合
+     * - 触发会话参数清理（保留最近50个）
      */
     fun clearImageChatResources() {
-        logger.debug("Clearing image chat resources for session isolation")
+        logger.debug("=== IMAGE CHAT RESOURCE CLEANUP START ===")
+        logger.debug("Clearing image chat resources for session isolation (Requirements: 6.1, 6.2)")
         
-        // 🔥 添加调试日志，诊断消息处理器清理问题
-        logger.debug("=== IMAGE MESSAGE PROCESSOR CLEANUP DEBUG ===")
-        logger.debug("Current image message IDs in stateHolder: ${stateHolder.imageGenerationMessages.map { it.id }}")
-        logger.debug("MessageProcessorMap keys before cleanup: ${messageProcessorMap.keys}")
-        
-        // 🔥 修复：只清理不在当前消息列表中的处理器，避免清除正在使用的消息内容
+        // 获取当前活跃的消息ID
         val currentMessageIds = stateHolder.imageGenerationMessages.map { it.id }.toSet()
-        val imageMessageIds = messageProcessorMap.keys.filter { id ->
-            // 只清理不在当前消息列表中的处理器
-            !currentMessageIds.contains(id)
+        val currentStreamingId = stateHolder._currentImageStreamingAiMessageId.value
+        
+        // 识别需要清理的处理器（不在当前消息列表中的）
+        val inactiveProcessorIds = messageProcessorMap.keys.filter { id ->
+            !currentMessageIds.contains(id) && id != currentStreamingId
         }
         
-        logger.debug("Image message IDs to be removed: $imageMessageIds")
-        logger.debug("Image message IDs to be kept: $currentMessageIds")
+        logger.debug("Current active image message count: ${currentMessageIds.size}")
+        logger.debug("Current streaming image message ID: $currentStreamingId")
+        logger.debug("Total processors before cleanup: ${messageProcessorMap.size}")
+        logger.debug("Inactive processors to remove: ${inactiveProcessorIds.size}")
         
-        imageMessageIds.forEach { messageId ->
-            logger.debug("Removing image message processor for: $messageId")
-            messageProcessorMap.remove(messageId)
+        // 清理不活跃的处理器
+        var removedCount = 0
+        inactiveProcessorIds.forEach { messageId ->
+            messageProcessorMap.remove(messageId)?.let {
+                removedCount++
+                logger.debug("✓ Removed inactive image processor: $messageId")
+            }
         }
-        logger.debug("Cleared ${imageMessageIds.size} image chat message processors (kept ${currentMessageIds.size} active)")
-        logger.debug("MessageProcessorMap keys after cleanup: ${messageProcessorMap.keys}")
-        logger.debug("=== END IMAGE MESSAGE PROCESSOR CLEANUP DEBUG ===")
+        
+        // 清理已处理的消息ID集合
+        val processedIdsBeforeCleanup = processedMessageIds.size
+        processedMessageIds.clear()
+        
+        logger.debug("Removed $removedCount inactive image message processors")
+        logger.debug("Cleared $processedIdsBeforeCleanup processed message IDs")
+        logger.debug("Remaining active processors: ${messageProcessorMap.size}")
+        logger.debug("Active processor IDs: ${messageProcessorMap.keys}")
+        
+        // 🎯 触发会话参数清理（Requirements: 6.4）
+        stateHolder.cleanupOldConversationParameters()
+        logger.debug("Triggered conversation parameter cleanup (keep last 50)")
+        
+        logger.debug("=== IMAGE CHAT RESOURCE CLEANUP END ===")
     }
 
     // 为兼容调用方，提供带 sessionId 的重载，内部忽略参数
@@ -811,6 +1042,85 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     // 忽略刷新失败，避免影响恢复流程
                 }
             }
+        }
+    }
+    
+    /**
+     * 检测内存压力并触发清理
+     * 
+     * 🎯 内存管理策略（Requirements: 6.5）：
+     * - 监控消息处理器数量
+     * - 当处理器数量超过阈值时触发清理
+     * - 优先清理不活跃的处理器
+     * - 清理旧的会话参数
+     * 
+     * @return true if cleanup was triggered, false otherwise
+     */
+    fun checkMemoryPressureAndCleanup(): Boolean {
+        val processorCount = messageProcessorMap.size
+        val threshold = 100 // 当处理器数量超过100时触发清理
+        
+        if (processorCount > threshold) {
+            logger.debug("=== MEMORY PRESSURE DETECTED ===")
+            logger.debug("Processor count ($processorCount) exceeds threshold ($threshold)")
+            logger.debug("Triggering aggressive cleanup (Requirement: 6.5)")
+            
+            // 获取当前活跃的消息ID（文本和图像）
+            val activeTextMessageIds = stateHolder.messages.map { it.id }.toSet()
+            val activeImageMessageIds = stateHolder.imageGenerationMessages.map { it.id }.toSet()
+            val currentTextStreamingId = stateHolder._currentTextStreamingAiMessageId.value
+            val currentImageStreamingId = stateHolder._currentImageStreamingAiMessageId.value
+            
+            val allActiveIds = activeTextMessageIds + activeImageMessageIds + 
+                listOfNotNull(currentTextStreamingId, currentImageStreamingId)
+            
+            // 清理所有不活跃的处理器
+            val inactiveProcessorIds = messageProcessorMap.keys.filter { id ->
+                !allActiveIds.contains(id)
+            }
+            
+            logger.debug("Active message IDs: ${allActiveIds.size}")
+            logger.debug("Inactive processors to remove: ${inactiveProcessorIds.size}")
+            
+            var removedCount = 0
+            inactiveProcessorIds.forEach { messageId ->
+                messageProcessorMap.remove(messageId)?.let {
+                    removedCount++
+                }
+            }
+            
+            // 清理已处理的消息ID集合
+            processedMessageIds.clear()
+            
+            // 清理旧的会话参数
+            stateHolder.cleanupOldConversationParameters()
+            
+            logger.debug("Memory pressure cleanup complete:")
+            logger.debug("  - Removed $removedCount inactive processors")
+            logger.debug("  - Remaining processors: ${messageProcessorMap.size}")
+            logger.debug("  - Cleared processed message IDs")
+            logger.debug("  - Cleaned up old conversation parameters")
+            logger.debug("=== MEMORY PRESSURE CLEANUP END ===")
+            
+            return true
+        }
+        
+        return false
+    }
+    
+    /**
+     * 获取当前资源使用统计信息
+     * 用于调试和监控
+     */
+    fun getResourceStats(): String {
+        return buildString {
+            appendLine("=== Resource Statistics ===")
+            appendLine("Message Processors: ${messageProcessorMap.size}")
+            appendLine("Processed Message IDs: ${processedMessageIds.size}")
+            appendLine("Active Text Messages: ${stateHolder.messages.size}")
+            appendLine("Active Image Messages: ${stateHolder.imageGenerationMessages.size}")
+            appendLine("Conversation Parameters: ${stateHolder.conversationGenerationConfigs.value.size}")
+            appendLine("Streaming Buffers: ${stateHolder.getStreamingBufferCount()}")
         }
     }
 }

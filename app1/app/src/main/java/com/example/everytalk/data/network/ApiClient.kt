@@ -83,6 +83,10 @@ object ApiClient {
                     val text = jsonObject["text"]?.jsonPrimitive?.content ?: ""
                     AppStreamEvent.Reasoning(text)
                 }
+                "reasoning_finish" -> {
+                    val ts = jsonObject["timestamp"]?.jsonPrimitive?.content
+                    AppStreamEvent.ReasoningFinish(ts)
+                }
                 "stream_end" -> {
                     val messageId = jsonObject["messageId"]?.jsonPrimitive?.content ?: ""
                     AppStreamEvent.StreamEnd(messageId)
@@ -167,6 +171,7 @@ object ApiClient {
                     subclass(AppStreamEvent.Content::class)
                     subclass(AppStreamEvent.ContentFinal::class)
                     subclass(AppStreamEvent.Reasoning::class)
+                    subclass(AppStreamEvent.ReasoningFinish::class)
                     subclass(AppStreamEvent.StreamEnd::class)
                     subclass(AppStreamEvent.WebSearchStatus::class)
                     subclass(AppStreamEvent.WebSearchResults::class)

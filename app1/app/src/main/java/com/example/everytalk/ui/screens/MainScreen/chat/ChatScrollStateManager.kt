@@ -184,12 +184,18 @@ class ChatScrollStateManager(
 
     fun handleStreamingScroll() {
         if (userInteracted) return
+        if (_isAtBottom.value) return
 
         if (autoScrollJob?.isActive == true) {
             autoScrollJob?.cancel()
         }
+        // 更细腻的“吸底”策略：短周期小步滚动，避免跳动
         autoScrollJob = coroutineScope.launch {
-            listState.scrollBy(10000f) // Scroll a large amount to ensure it hits the bottom
+            try {
+                repeat(3) {
+                    listState.scrollBy(1500f)
+                }
+            } catch (_: Exception) {}
         }
     }
 

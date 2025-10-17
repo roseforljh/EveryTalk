@@ -27,6 +27,7 @@ import com.example.everytalk.ui.components.IncrementalMarkdownRenderer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -55,34 +56,155 @@ fun MarkdownHtmlView(
     val isPageLoaded = remember { mutableStateOf(false) }
     val rememberedWebView = remember { WebView(context) }
     val lastSentContent = remember { mutableStateOf<String?>(null) }
-    // 记录“JS侧 last 的长度”，用它来计算真实应发送的增量，彻底消除重复内容
+    // 记录"JS侧 last 的长度"，用它来计算真实应发送的增量，彻底消除重复内容
     val lastJsLen = remember { mutableStateOf(0) }
     val isFinalState = remember { mutableStateOf(false) }
-    val isLoading = remember(markdown, isFinal) { mutableStateOf(true) }
-    val isVisible = remember(markdown) { mutableStateOf(true) }
-    // 新增：小增量批处理，避免因过滤小增量导致“非前缀重置”
+    val isLoading = remember { mutableStateOf(false) }  // 🎯 默认不显示loading
+    val isVisible = remember { mutableStateOf(true) }  // 🎯 始终可见，避免闪烁
+    // 新增：小增量批处理，避免因过滤小增量导致"非前缀重置"
     val pendingDelta = remember { mutableStateOf("") }
     val pendingFlushJob = remember { mutableStateOf<Job?>(null) }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     // 引入增量渲染器
     val incRenderer = remember { mutableStateOf<IncrementalMarkdownRenderer?>(null) }
+    
+    // 🎯 核心修复：流式节流控制（300ms间隔，减少WebView更新频率）
+    val lastRenderTime = remember { mutableStateOf(0L) }
+    val pendingRenderJob = remember { mutableStateOf<Job?>(null) }
+    
+    // 🎯 执行实际的WebView渲染逻辑（定义在Composable内部以访问remember变量）
+    fun executeRender(webView: WebView, markdown: String, isFinal: Boolean, isStreaming: Boolean) {
+        val escapedContent = markdown
+            .replace("\\", "\\\\")
+            .replace("`", "\\`")
+            .replace("'", "\\'")
+            .replace("\n", "\\n")
 
-    LaunchedEffect(markdown, isFinal) {
-        isFinalState.value = isFinal
-        if (!isFinal) return@LaunchedEffect
-        delay(3000)
-        if (isLoading.value) {
-            isLoading.value = false
-            onRendered?.invoke(false)
+        val last = lastSentContent.value ?: ""
+        val shouldUpdate = (last != escapedContent) || isFinal
+        
+        if (shouldUpdate) {
+            lastRenderTime.value = System.currentTimeMillis()
+            val isIncremental = escapedContent.startsWith(last) && last.isNotEmpty()
+            
+            when {
+                // 场景1：增量更新（流式输出的正常情况）
+                isIncremental && isStreaming && !isFinal -> {
+                    val delta = escapedContent.substring(last.length)
+                    
+                    if (delta.length <= 3) {
+                        // 🎯 小增量批处理：积累到一定大小再发送
+                        pendingDelta.value += delta
+                        
+                        // 取消之前的刷新任务
+                        pendingFlushJob.value?.cancel()
+                        
+                        // 如果累积超过20字符，立即刷新
+                        if (pendingDelta.value.length >= 20) {
+                            val batched = pendingDelta.value
+                            incRenderer.value?.appendDelta(
+                                escapedDelta = batched,
+                                isFinal = false,
+                                isStreaming = true
+                            )
+                            lastSentContent.value = last + batched
+                            pendingDelta.value = ""
+                        } else {
+                            // 设置延迟刷新（200ms）
+                            pendingFlushJob.value = scope.launch {
+                                delay(200)
+                                if (pendingDelta.value.isNotEmpty()) {
+                                    val batched = pendingDelta.value
+                                    incRenderer.value?.appendDelta(
+                                        escapedDelta = batched,
+                                        isFinal = false,
+                                        isStreaming = true
+                                    )
+                                    lastSentContent.value = lastSentContent.value + batched
+                                    pendingDelta.value = ""
+                                }
+                            }
+                        }
+                    } else {
+                        // 🎯 较大增量：立即发送（不积累）
+                        // 先刷新之前累积的小增量
+                        if (pendingDelta.value.isNotEmpty()) {
+                            incRenderer.value?.appendDelta(
+                                escapedDelta = pendingDelta.value,
+                                isFinal = false,
+                                isStreaming = true
+                            )
+                            pendingDelta.value = ""
+                        }
+                        
+                        // 发送当前增量
+                        incRenderer.value?.appendDelta(
+                            escapedDelta = delta,
+                            isFinal = false,
+                            isStreaming = true
+                        )
+                        lastSentContent.value = escapedContent
+                    }
+                }
+                
+                // 场景2：最终状态（流式结束）
+                isFinal -> {
+                    // 取消所有挂起的任务
+                    pendingFlushJob.value?.cancel()
+                    
+                    // 如果有未发送的小增量，先发送
+                    if (pendingDelta.value.isNotEmpty() && isIncremental) {
+                        incRenderer.value?.appendDelta(
+                            escapedDelta = pendingDelta.value,
+                            isFinal = false,
+                            isStreaming = false
+                        )
+                        pendingDelta.value = ""
+                    }
+                    
+                    // 发送最终内容
+                    if (isIncremental) {
+                        val finalDelta = escapedContent.substring((lastSentContent.value ?: "").length)
+                        if (finalDelta.isNotEmpty()) {
+                            incRenderer.value?.appendDelta(
+                                escapedDelta = finalDelta,
+                                isFinal = true,
+                                isStreaming = false
+                            )
+                        }
+                    } else {
+                        incRenderer.value?.updateMarkdown(
+                            fullEscapedContent = escapedContent,
+                            isFinal = true,
+                            isStreaming = false
+                        )
+                    }
+                    lastSentContent.value = escapedContent
+                    pendingDelta.value = ""
+                }
+                
+                // 场景3：非增量更新（内容完全改变，需要重新渲染）
+                else -> {
+                    pendingFlushJob.value?.cancel()
+                    incRenderer.value?.updateMarkdown(
+                        fullEscapedContent = escapedContent,
+                        isFinal = isFinal,
+                        isStreaming = isStreaming
+                    )
+                    lastSentContent.value = escapedContent
+                    pendingDelta.value = ""
+                }
+            }
         }
     }
 
-    // 防止双通道重复派发：把实际派发集中在 AndroidView.update 内
-    LaunchedEffect(isPageLoaded.value, markdown, isFinal, isStreaming) {
-        if (!isPageLoaded.value) return@LaunchedEffect
-        // 仅用于触发 Compose 重组，不在此处调用 evaluateJavascript
-        android.util.Log.d("MdHtmlView", "LE: no-op (dispatch happens in AndroidView.update)")
+    LaunchedEffect(markdown, isFinal) {
+        isFinalState.value = isFinal
+        // 🎯 移除loading超时逻辑，避免不必要的状态变化
     }
+
+    // 🎯 优化：只在页面加载完成后执行 WebView 更新
+    // 删除不必要的 LaunchedEffect，改为在 AndroidView.update 中统一处理
  
     val density = LocalDensity.current
     val webViewHeight = remember { mutableStateOf(50.dp) }
@@ -90,12 +212,9 @@ fun MarkdownHtmlView(
     // 回滚：恢复旧限高（与历史行为一致）
     val maxCapDp = 8000.dp
 
-    LaunchedEffect(markdown) {
-        // 保留高度复位，避免初始闪烁；不再清空 lastSentContent，保证前缀连续
-        lastHeightPxState.value = 0
-        webViewHeight.value = 50.dp
-        // 不重置 lastJsLen，这样可确保严格“只追加”，防止重复
-    }
+    // 🎯 修复：移除LaunchedEffect(markdown)，避免流式期间重置高度
+    // 问题：每次markdown变化都重置为50dp，导致内容显示不完整
+    // 解决：让WebView自动根据内容调整高度，不要手动重置
  
     Box(
         modifier = modifier
@@ -112,52 +231,63 @@ fun MarkdownHtmlView(
         AndroidView(
             modifier = androidx.compose.ui.Modifier
                 .fillMaxWidth()
-                .height(webViewHeight.value)
-                .alpha(if (isVisible.value) 1f else 0f),
+                .height(webViewHeight.value),
+                // 🎯 移除alpha控制，避免闪烁
             factory = { ctx ->
                 rememberedWebView.apply {
                     android.util.Log.i("MdHtmlView", "WebView factory created (MarkdownHtmlView) — using WebView for markdown")
                     webViewRef.value = this
                     
-                    // 🔥 智能触摸处理：防止触发侧滑手势，同时允许垂直滚动
+                    // Task 8: Improved touch event handling for WebView
+                    // Detects scroll direction and manages parent touch event interception
                     var startX = 0f
                     var startY = 0f
                     var hasRequestedDisallow = false
+                    var scrollDirectionDetermined = false
                     
                     setOnTouchListener { view, event ->
                         when (event.action) {
                             MotionEvent.ACTION_DOWN -> {
+                                // Reset state on new touch
                                 startX = event.x
                                 startY = event.y
                                 hasRequestedDisallow = false
+                                scrollDirectionDetermined = false
                             }
                             MotionEvent.ACTION_MOVE -> {
                                 val deltaX = kotlin.math.abs(event.x - startX)
                                 val deltaY = kotlin.math.abs(event.y - startY)
                                 
-                                if (!hasRequestedDisallow) {
-                                    // 🔥 关键策略：只要有任何移动（包括快速滑动），就暂时拦截
-                                    // 这样可以防止侧滑手势在我们判断方向之前就触发
-                                    if (deltaX > 3f || deltaY > 3f) {
+                                // Task 8: Add 20px movement threshold for direction detection
+                                if (!scrollDirectionDetermined && (deltaX >= 20f || deltaY >= 20f)) {
+                                    scrollDirectionDetermined = true
+                                    
+                                    // Determine scroll direction based on which delta is larger
+                                    if (deltaX > deltaY) {
+                                        // Task 8: Horizontal scrolling detected
+                                        // Task 8: Implement requestDisallowInterceptTouchEvent() for horizontal scrolling
                                         view.parent?.requestDisallowInterceptTouchEvent(true)
                                         hasRequestedDisallow = true
+                                        android.util.Log.d("MarkdownHtmlView", "Touch: Horizontal scroll detected (deltaX=$deltaX, deltaY=$deltaY)")
+                                    } else {
+                                        // Task 8: Vertical scrolling detected
+                                        // Task 8: Release interception when vertical scrolling is detected
+                                        view.parent?.requestDisallowInterceptTouchEvent(false)
+                                        hasRequestedDisallow = false
+                                        android.util.Log.d("MarkdownHtmlView", "Touch: Vertical scroll detected (deltaX=$deltaX, deltaY=$deltaY)")
                                     }
-                                }
-                                
-                                // 🔥 如果明确是垂直滚动，释放拦截让外层处理
-                                if (hasRequestedDisallow && deltaY > 20f && deltaY > deltaX * 2f) {
-                                    view.parent?.requestDisallowInterceptTouchEvent(false)
-                                    hasRequestedDisallow = false
                                 }
                             }
                             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                                // Clean up: release interception on touch end
                                 if (hasRequestedDisallow) {
                                     view.parent?.requestDisallowInterceptTouchEvent(false)
                                 }
                                 hasRequestedDisallow = false
+                                scrollDirectionDetermined = false
                             }
                         }
-                        false // 让 WebView 处理所有事件
+                        false // Let WebView handle all events
                     }
                     layoutParams = ViewGroup.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
@@ -203,9 +333,15 @@ fun MarkdownHtmlView(
                         override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                                 if (request?.isForMainFrame == true) {
+                                    // 🎯 Graceful degradation for WebView failures (Requirements: 7.4)
                                     Log.e("WebViewError", "Error: ${error?.description} on URL: ${request?.url}")
-                                    isLoading.value = false
+                                    Log.e("WebViewError", "Graceful degradation: WebView failed to load, content may not render properly")
+                                    
+                                    // Notify that rendering failed but don't crash
                                     onRendered?.invoke(false)
+                                    
+                                    // Note: The content is still available in markdown variable
+                                    // The UI layer can decide to show a fallback plain text view
                                 }
                             }
                             super.onReceivedError(view, request, error)
@@ -214,9 +350,15 @@ fun MarkdownHtmlView(
                         @Suppress("OverridingDeprecatedMember")
                         override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {
                             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+                                // 🎯 Graceful degradation for WebView failures (Requirements: 7.4)
                                 Log.e("WebViewError", "Error: $description on URL: $failingUrl")
-                                isLoading.value = false
+                                Log.e("WebViewError", "Graceful degradation: WebView failed to load (legacy), content may not render properly")
+                                
+                                // Notify that rendering failed but don't crash
                                 onRendered?.invoke(false)
+                                
+                                // Note: The content is still available in markdown variable
+                                // The UI layer can decide to show a fallback plain text view
                             }
                             super.onReceivedError(view, errorCode, description, failingUrl)
                         }
@@ -228,11 +370,11 @@ fun MarkdownHtmlView(
                             try {
                                 val raw = if (px < 0) 0 else px
                                 val p = raw.coerceIn(0, 120_000)
-                                this@apply.post {
+                            this@apply.post {
                                     val lastPx = lastHeightPxState.value
                                     val finalMode = isFinalState.value
-                                    val minDeltaStream = 200
-                                    val minDeltaFinalPx = 24
+                                    val minDeltaStream = 32
+                                    val minDeltaFinalPx = 12
                                     val minDeltaPercent = 0.05f
                                     if (!finalMode) {
                                         val diff = p - lastPx
@@ -445,10 +587,20 @@ fun MarkdownHtmlView(
                             } catch (e) {}
                           }
                           let _nhTimer = null;
+                          // 🎯 Task 11: Track WebView height notification frequency
+                          // Performance monitoring for height notifications
+                          // Requirements: 4.2
+                          window._heightNotificationCount = 0;
+                          window._heightNotificationStartTime = Date.now();
+                          window._lastHeightNotificationTime = 0;
+                          
                           function notifyHeightThrottled() {
+                            // 🔥 基于流式/最终两种模式节流，提升气泡高度变更的平滑度
                             if (_nhTimer) return;
-                            let streaming = !!window._isStreaming;
-                            const throttle = streaming ? 700 : 250; // 调高节流以减少回传频率
+                            const streaming = !!window._isStreaming;
+                            // 更快：流式 120ms，最终 160ms
+                            const throttle = streaming ? 120 : 160;
+                            
                             _nhTimer = setTimeout(function(){
                               _nhTimer = null;
                               try {
@@ -457,9 +609,42 @@ fun MarkdownHtmlView(
                                 var h = Math.ceil(cssPx);
                                 if (h < 0) h = 0;
                                 if (h > 120000) h = 120000;
+                                
                                 window._lastNotifiedH = window._lastNotifiedH || 0;
-                                const minDelta = streaming ? 240 : 24; // 提升最小高度变更阈值
+                                
+                                // 更细腻的高度更新阈值：流式 24px，最终 12px
+                                const minDelta = streaming ? 24 : 12;
+                                
+                                // 🔥 Task 5.5: Prevent height notifications during code block accumulation
+                                // When in streaming mode and inside a code block, skip height notification
+                                // to avoid layout shifts while code is being accumulated
+                                if (streaming && codeOpen) {
+                                  // Skip notification during code block accumulation
+                                  return;
+                                }
+                                
                                 if (Math.abs(h - window._lastNotifiedH) >= minDelta) {
+                                  // 🎯 Task 11: Track height notification frequency
+                                  const now = Date.now();
+                                  const timeSinceLastNotification = now - window._lastHeightNotificationTime;
+                                  window._heightNotificationCount++;
+                                  window._lastHeightNotificationTime = now;
+                                  
+                                  // Log every 10th notification to track frequency
+                                  if (window._heightNotificationCount % 10 === 0) {
+                                    const totalTime = now - window._heightNotificationStartTime;
+                                    const avgInterval = totalTime / window._heightNotificationCount;
+                                    const notificationsPerSecond = (window._heightNotificationCount / (totalTime / 1000)).toFixed(2);
+                                    
+                                    console.log('[WebView Height] Notification #' + window._heightNotificationCount + ': ' +
+                                      'height=' + h + 'px, ' +
+                                      'delta=' + Math.abs(h - window._lastNotifiedH) + 'px, ' +
+                                      'timeSinceLast=' + timeSinceLastNotification + 'ms, ' +
+                                      'avgInterval=' + avgInterval.toFixed(0) + 'ms, ' +
+                                      'rate=' + notificationsPerSecond + '/sec, ' +
+                                      'streaming=' + streaming);
+                                  }
+                                  
                                   window._lastNotifiedH = h;
                                   AndroidBridge.onHeight(h);
                                 }
@@ -542,40 +727,58 @@ fun MarkdownHtmlView(
                           /* duplicate findSafeIndex removed */
 
                          // Detect safe commit boundary without mutating global code state
-                         // Find safe commit point: paragraph break outside code blocks
+                         // Find safe commit point: prefer sentence/paragraph boundary outside code blocks
                          function findSafeIndex(text) {
+                           // 在流式模式下且处于代码块中，等待块结束，避免把代码劈开
+                           if (window._isStreaming && codeOpen) return -1;
+                           
                            let i = 0;
                            let safe = -1;
                            let localOpen = codeOpen;
                            
-                           // 🔥 修复：在流式模式下，如果当前在代码块内，不要提交任何内容
-                           // 直到代码块完全闭合，避免代码块被分割
-                           if (window._isStreaming && localOpen) {
-                             return -1; // 强制等待代码块完成
-                           }
+                           // 句子结束标记（中文/英文），避免把一句话切断
+                           const sentenceRegex = /([。！？!?])\s|\n/g; // includes newline after punctuation
                            
                            while (i < text.length) {
-                             // Check for fence toggle
+                             const slice = text.slice(i);
                              const fenceInfo = localOpen
-                               ? findClosingFence(text.slice(i), currentFenceChar, currentFenceLen)
-                               : findOpeningFence(text.slice(i));
+                               ? findClosingFence(slice, currentFenceChar, currentFenceLen)
+                               : findOpeningFence(slice);
                              const paraIdx = text.indexOf('\n\n', i);
                              
-                             if (fenceInfo && (paraIdx === -1 || fenceInfo.idx + i < paraIdx)) {
-                               localOpen = !localOpen;
-                               i += fenceInfo.idx + (fenceInfo.len || 3) + 1;
-                               
-                               // 🔥 修复：如果刚刚闭合了一个代码块，这是一个安全的提交点
-                               if (!localOpen && window._isStreaming) {
-                                 safe = i;
+                             // 当未在代码块内时，优先寻找“完整句子”边界
+                             let sentenceIdx = -1;
+                             if (!localOpen) {
+                               const m = sentenceRegex.exec(slice);
+                               if (m) sentenceIdx = i + m.index + (m[1] ? m[1].length : 0) + 1; // consume trailing space/newline
+                               // 重置 lastIndex 以便下一轮重新匹配
+                               sentenceRegex.lastIndex = 0;
+                             }
+                             
+                             // 决策：取最早出现的安全边界（代码块开/关、段落、句子）
+                             const candidates = [];
+                             if (fenceInfo) candidates.push(i + fenceInfo.idx + (fenceInfo.len || 3) + 1);
+                             if (paraIdx !== -1) candidates.push(paraIdx + 2);
+                             if (sentenceIdx !== -1) candidates.push(sentenceIdx);
+                             const nextIdx = candidates.length ? Math.min.apply(null, candidates) : -1;
+                             
+                             if (nextIdx !== -1) {
+                               // 如果命中的是围栏，则翻转 localOpen
+                               if (fenceInfo && (i + fenceInfo.idx + (fenceInfo.len || 3) + 1) === nextIdx) {
+                                 localOpen = !localOpen;
+                                 // 关闭围栏后也可作为一次提交点
+                                 if (!localOpen) safe = nextIdx;
+                               } else {
+                                 // 段落或句子结束：记录为提交点
+                                 if (!localOpen) safe = nextIdx;
                                }
-                             } else if (paraIdx !== -1) {
-                               if (!localOpen) safe = paraIdx + 2;
-                               i = paraIdx + 2;
+                               i = nextIdx;
                              } else {
                                break;
                              }
                            }
+                           
+                           // 兜底：若是最终态且无代码块，允许提交全部
                            return safe;
                          }
 
@@ -642,41 +845,53 @@ fun MarkdownHtmlView(
 
                          // Process complete code blocks only when closing fence is found
                          function processCodeFencesInline() {
+                           // 🔥 优化：检测代码块开始标记
                            if (!codeOpen) {
                              const open = findOpeningFence(buffer);
                              if (open) {
                                // Commit text before fence
                                const plain = buffer.slice(0, open.idx);
                                if (plain) commitMarkdown(plain);
+                               
                                // Enter code mode
                                currentFenceChar = open.ch;
                                currentFenceLen = open.len;
                                currentLang = open.lang || '';
+                               
+                               // Skip the opening fence line
                                let j = open.idx + open.len;
                                while (j < buffer.length && buffer[j] === ' ') j++;
                                const nextNl = buffer.indexOf('\n', j);
                                buffer = nextNl === -1 ? '' : buffer.slice(nextNl + 1);
-                               codeOpen = true;
-                               if (liveCodePre) liveCodePre.style.display = 'block';
                                
-                               // 🔥 修复：进入代码块时，清空实时预览区域
+                               codeOpen = true;
+                               
+                               // 🔥 优化：进入代码块时，初始化实时预览区域
                                if (liveCode) liveCode.textContent = '';
+                               if (liveCodePre) liveCodePre.style.display = 'block';
                              }
                            }
                            
+                           // 🔥 优化：处理代码块内容
                            if (codeOpen) {
                              const close = findClosingFence(buffer, currentFenceChar, currentFenceLen);
+                             
                              if (close) {
-                               // Complete code block found - render it
-                               const codeText = (liveCode ? liveCode.textContent : '') + buffer.slice(0, close.idx);
+                               // 🔥 优化：检测到代码块结束标记 - 完整渲染代码块
+                               const codeText = buffer.slice(0, close.idx);
+                               
                                try {
+                                 // Create code block wrapper with toolbar
                                  const wrapper = document.createElement('div');
                                  wrapper.className = 'code-block-wrapper';
+                                 
                                  const toolbar = document.createElement('div');
                                  toolbar.className = 'code-toolbar';
+                                 
                                  const langLabel = document.createElement('span');
                                  langLabel.className = 'code-lang';
                                  langLabel.textContent = currentLang || 'text';
+                                 
                                  const copyBtn = document.createElement('button');
                                  copyBtn.className = 'copy-btn';
                                  copyBtn.textContent = '复制';
@@ -694,42 +909,49 @@ fun MarkdownHtmlView(
                                      }
                                    } catch(e) {}
                                  };
+                                 
                                  toolbar.appendChild(langLabel);
                                  toolbar.appendChild(copyBtn);
                                  wrapper.appendChild(toolbar);
+                                 
                                  const pre = document.createElement('pre');
                                  const code = document.createElement('code');
                                  if (currentLang) code.className = 'language-' + currentLang;
                                  code.textContent = codeText;
                                  pre.appendChild(code);
                                  wrapper.appendChild(pre);
+                                 
+                                 // 🔥 优化：提交完整的代码块到静态容器
                                  staticC.appendChild(wrapper);
-                               } catch(_e){}
+                               } catch(_e) {
+                                 console.error('Error rendering code block:', _e);
+                               }
                                
-                               // 🔥 修复：代码块完成后，清理状态并隐藏实时预览
+                               // 🔥 优化：清理代码块状态和实时预览
                                if (liveCode) liveCode.textContent = '';
                                if (liveCodePre) liveCodePre.style.display = 'none';
                                
+                               // Skip the closing fence line
                                let j = close.idx + close.len;
                                while (j < buffer.length && buffer[j] === ' ') j++;
                                const nextNl = buffer.indexOf('\n', j);
                                buffer = nextNl === -1 ? '' : buffer.slice(nextNl + 1);
+                               
+                               // Reset code block state
                                codeOpen = false;
                                currentFenceChar = '';
                                currentFenceLen = 0;
                                currentLang = '';
                                prevCodeOpen = false;
-                             } else if (window._isStreaming) {
-                               // 🔥 修复：流式模式下，将代码内容累积到实时预览区域
-                               // 但不要清空buffer，保持代码块的连续性
-                               const newCodeContent = buffer;
-                               if (liveCode) {
-                                 // 只更新实时预览，不清空buffer
-                                 liveCode.textContent = newCodeContent;
+                             } else {
+                               // 🔥 优化：代码块未完成 - 在实时预览中累积显示，不清空buffer
+                               // 这确保了代码块内容的连续性，避免内容丢失
+                               if (liveCode && buffer.length > 0) {
+                                 liveCode.textContent = buffer;
                                  if (liveCodePre) liveCodePre.style.display = 'block';
                                }
-                               // 🔥 关键修复：不要清空buffer！保持代码块内容的连续性
-                               // buffer = ''; // 移除这行，避免代码块内容丢失
+                               // 🔥 关键优化：不清空buffer！保持代码块内容完整
+                               // 让buffer继续累积，直到检测到闭合标记
                              }
                            }
                          }
@@ -814,6 +1036,23 @@ fun MarkdownHtmlView(
 
                           function autoScrollIfNeeded(force) { /* no-op in auto-height mode */ }
 
+                          // 🔥 Task 6.1: Implement findLongestCommonPrefix() in JavaScript
+                          // Finds the longest common prefix between two strings
+                          // Returns the length of the common prefix
+                          function findLongestCommonPrefix(str1, str2) {
+                            if (!str1 || !str2) return 0;
+                            
+                            const maxLen = Math.min(str1.length, str2.length);
+                            let i = 0;
+                            
+                            // Compare character by character using charCodeAt for performance
+                            while (i < maxLen && str1.charCodeAt(i) === str2.charCodeAt(i)) {
+                              i++;
+                            }
+                            
+                            return i;
+                          }
+
                           let waiter = null, pending = null;
                           window.updateMarkdown = function(newContent, isFinal, isStreaming) {
                             window._isStreaming = !!isStreaming;
@@ -843,35 +1082,83 @@ fun MarkdownHtmlView(
                             }
 
                             let delta = '';
+                            // 🔥 Task 6.2: Update updateMarkdown() to detect non-prefix updates
                             if (newContent && newContent.indexOf(last) === 0) {
-                              // 前缀正常增长
+                              // Prefix match - normal incremental growth
                               delta = newContent.slice(last.length);
                               buffer += delta;
                               last = newContent || '';
                             } else {
+                              // 🔥 Task 6.2: Non-prefix update detected
                               // 非前缀：在流式模式尝试“最长公共前缀(LCP)”缓解，尽量避免从头重建
                               let handled = false;
-                              try {
-                                const oldStr = last || '';
-                                const newStr = newContent || '';
-                                if (window._isStreaming && oldStr && newStr) {
-                                  let i = 0;
-                                  const maxLcp = Math.min(oldStr.length, newStr.length);
-                                  while (i < maxLcp && oldStr.charCodeAt(i) === newStr.charCodeAt(i)) i++;
-                                  const keepRatio = oldStr.length ? (i / oldStr.length) : 0;
-                                  // 当 LCP 覆盖原文本 ≥70%，保留已提交内容，仅把差异部分作为增量追加
-                                  if (keepRatio >= 0.7) {
-                                    const appendPart = newStr.slice(i);
-                                    try { console.warn('non-prefix-lcp-append', { prevLen: oldStr.length, newLen: newStr.length, lcp: i, keepRatio }); } catch(_e){}
+                              
+                              // 🔥 Task 6.5: Only attempt LCP recovery during streaming (not in final state)
+                              if (isStreaming && !isFinal) {
+                                try {
+                                  const oldStr = last || '';
+                                  const newStr = newContent || '';
+                                  if (oldStr && newStr) {
+                                  // 🔥 Task 6.1: Use findLongestCommonPrefix() function
+                                  const lcpLength = findLongestCommonPrefix(oldStr, newStr);
+                                  const lcpRatio = oldStr.length > 0 ? (lcpLength / oldStr.length) : 0;
+                                  
+                                  // 🔥 Task 6.3: Add 70% LCP threshold check for incremental append
+                                  if (lcpRatio >= 0.7) {
+                                    // LCP covers ≥70% of previous content - use incremental append
+                                    const appendPart = newStr.slice(lcpLength);
+                                    
+                                    // 🔥 Task 6.4: Log non-prefix events for debugging
+                                    try {
+                                      console.warn('[LCP-RECOVERY] Non-prefix update recovered via LCP', {
+                                        prevLen: oldStr.length,
+                                        newLen: newStr.length,
+                                        lcpLength: lcpLength,
+                                        lcpRatio: lcpRatio.toFixed(3),
+                                        appendLen: appendPart.length,
+                                        strategy: 'incremental-append'
+                                      });
+                                    } catch(_e) {}
+                                    
                                     buffer += appendPart;
                                     last = newStr;
                                     handled = true;
+                                  } else {
+                                    // 🔥 Task 6.4: Log non-prefix events for debugging
+                                    try {
+                                      console.warn('[LCP-RECOVERY] Non-prefix update - LCP ratio too low, performing full reset', {
+                                        prevLen: oldStr.length,
+                                        newLen: newStr.length,
+                                        lcpLength: lcpLength,
+                                        lcpRatio: lcpRatio.toFixed(3),
+                                        threshold: 0.7,
+                                        strategy: 'full-reset'
+                                      });
+                                    } catch(_e) {}
                                   }
                                 }
-                              } catch(_e) {}
+                                } catch(e) {
+                                  // 🔥 Task 6.4: Log errors for debugging
+                                  try {
+                                    console.error('[LCP-RECOVERY] Error during LCP calculation', e);
+                                  } catch(_e) {}
+                                }
+                              } else {
+                                // 🔥 Task 6.5: Final state - always perform full reset
+                                // 🔥 Task 6.4: Log non-prefix events for debugging
+                                try {
+                                  console.warn('[LCP-RECOVERY] Non-prefix update in final state, performing full reset', {
+                                    prevLen: (last || '').length,
+                                    newLen: (newContent || '').length,
+                                    isFinal: isFinal,
+                                    isStreaming: isStreaming,
+                                    strategy: 'full-reset'
+                                  });
+                                } catch(_e) {}
+                              }
+                              
                               if (!handled) {
-                                // 回退：仍执行从头重建（完成态或 LCP 不足）
-                                try { console.warn('non-prefix-reset', { prevLen: (last || '').length, newLen: (newContent || '').length }); } catch(_e){}
+                                // 🔥 Task 6.5: Full reset for final state or low LCP ratio
                                 staticC.innerHTML = '';
                                 tail.textContent = '';
                                 if (liveCode) { liveCode.textContent = ''; }
@@ -897,16 +1184,20 @@ fun MarkdownHtmlView(
                               try { console.debug('commit-safe(updateMarkdown)', {safeIdx, safeLen: safe.length, bufferLen: buffer.length}); } catch(_e){}
                               commitMarkdown(safe);
                               buffer = buffer.slice(safeIdx);
-                            } else if (codeOpen && liveCode && !isFinal) {
-                              // 🔥 修复：流式模式下，保持代码内容的连续性
-                              // 直接更新实时预览，不要分割buffer
-                              if (buffer.length > 0) {
+                            }
+                            
+                            // 🔥 优化：在代码块未完成时，更新实时预览但不修改buffer
+                            // 这确保了代码块内容的连续性和完整性
+                            if (codeOpen && !isFinal) {
+                              if (liveCode && buffer.length > 0) {
                                 liveCode.textContent = buffer;
                                 if (liveCodePre) liveCodePre.style.display = 'block';
-                                // 🔥 关键修复：不要修改buffer，保持完整的代码块内容
-                                // 让buffer保持完整，直到代码块闭合
                               }
+                              // 🔥 关键优化：不清空buffer，保持代码块内容完整
+                              // buffer继续累积，直到检测到闭合标记
                             }
+                            
+                            // 🔥 优化：tail显示未提交的buffer内容（包括未完成的代码块）
                             tail.textContent = buffer;
                             notifyHeightThrottled();
                             if (isFinal) {
@@ -1005,12 +1296,17 @@ fun MarkdownHtmlView(
                               const safe = buffer.slice(0, safeIdx);
                               commitMarkdown(safe);
                               buffer = buffer.slice(safeIdx);
-                            } else if (codeOpen && liveCode && !isFinal) {
-                              // 围栏未闭合：实时预览代码内容，但不清空 buffer，保持连续性
-                              if (buffer.length > 0) {
+                            }
+                            
+                            // 🔥 优化：在代码块未完成时，更新实时预览但不修改buffer
+                            // 这确保了代码块内容的连续性和完整性
+                            if (codeOpen && !isFinal) {
+                              if (liveCode && buffer.length > 0) {
                                 liveCode.textContent = buffer;
                                 if (liveCodePre) liveCodePre.style.display = 'block';
                               }
+                              // 🔥 关键优化：不清空buffer，保持代码块内容完整
+                              // buffer继续累积，直到检测到闭合标记
                             }
 
                             // 尾部直出：确保“1..100”连续可见
@@ -1157,88 +1453,32 @@ fun MarkdownHtmlView(
             },
             update = { webView ->
                 if (isPageLoaded.value) {
-                    // 回滚：恢复旧的转义方案（包含反引号转义）
-                    val escapedContent = markdown
-                        .replace("\\", "\\\\")
-                        .replace("`", "\\`")
-                        .replace("'", "\\'")
-                        .replace("\n", "\\n")
-
-                    val shouldSend = lastSentContent.value != escapedContent || isFinal
-                    if (shouldSend) {
-                        val last = lastSentContent.value ?: ""
-                        var skipRest = false
-                        if (isStreaming && escapedContent.startsWith(last) && !isFinal) {
-                            val deltaLen = escapedContent.length - last.length
-                            val deltaStr = escapedContent.substring(last.length)
-                            if (deltaLen in 1..2) {
-                                // 合并到 pending，由上面的 LaunchedEffect 定时器冲刷
-                                pendingDelta.value = pendingDelta.value + deltaStr
-                                isLoading.value = false
-                                skipRest = true
-                            } else {
-                                // 冲刷 pending
-                                if (pendingDelta.value.isNotEmpty()) {
-                                    val batched = pendingDelta.value
-                                    webView.evaluateJavascript(
-                                        "appendDelta('${batched.replace("\\", "\\\\").replace("`", "\\`").replace("'", "\\'").replace("\n", "\\n")}', false, true)"
-                                    ) { }
-                                    lastSentContent.value = (last + batched)
-                                    pendingDelta.value = ""
-                                    pendingFlushJob.value?.cancel()
-                                    pendingFlushJob.value = null
-                                }
-                            }
+                    // 🎯 智能节流策略：减少WebView更新频率
+                    val currentTime = System.currentTimeMillis()
+                    val timeSinceLastRender = currentTime - lastRenderTime.value
+                    
+                    // 流式模式：300ms节流，非流式/最终：立即渲染
+                    val shouldThrottle = isStreaming && !isFinal && timeSinceLastRender < 300L
+                    
+                    if (shouldThrottle) {
+                        // 取消之前的延迟任务
+                        pendingRenderJob.value?.cancel()
+                        
+                        // 安排延迟渲染（在下一次300ms间隔时渲染）
+                        pendingRenderJob.value = scope.launch {
+                            delay(300L - timeSinceLastRender)
+                            // 延迟后执行相同的渲染逻辑
+                            executeRender(webView, markdown, isFinal, isStreaming)
                         }
-                        if (!skipRest) {
-                            val newLast = lastSentContent.value ?: ""
-                            if (escapedContent.startsWith(newLast)) {
-                                val delta = escapedContent.substring(newLast.length)
-                                incRenderer.value?.appendDelta(
-                                    escapedDelta = delta,
-                                    isFinal = isFinal,
-                                    isStreaming = isStreaming
-                                )
-                            } else {
-                                incRenderer.value?.updateMarkdown(
-                                    fullEscapedContent = escapedContent,
-                                    isFinal = isFinal,
-                                    isStreaming = isStreaming
-                                )
-                            }
-                            // 直接更新发送记录与加载状态（回调为可选）
-                            lastSentContent.value = escapedContent
-                            if (isFinal) {
-                                isLoading.value = false
-                                onRendered?.invoke(true)
-                            } else {
-                                isLoading.value = false
-                            }
-                        }
+                    } else {
+                        // 立即渲染
+                        executeRender(webView, markdown, isFinal, isStreaming)
                     }
                 }
             }
         )
 
-        if (!isLoading.value && isFinalState.value && lastHeightPxState.value <= 0) {
-            androidx.compose.material3.Text(
-                text = markdown,
-                modifier = androidx.compose.ui.Modifier
-                    .align(Alignment.TopStart)
-                    .fillMaxWidth()
-                    .padding(8.dp),
-                color = MaterialTheme.colorScheme.onSurface
-            )
-        }
-
-        if (isLoading.value) {
-            CircularProgressIndicator(
-                modifier = androidx.compose.ui.Modifier
-                    .align(Alignment.Center)
-                    .zIndex(1f)
-                    .size(24.dp),
-                color = MaterialTheme.colorScheme.primary
-            )
-        }
+        // 🎯 移除fallback文本和加载动画，避免闪烁
+        // WebView 会直接渲染内容，不需要fallback
     }
 }

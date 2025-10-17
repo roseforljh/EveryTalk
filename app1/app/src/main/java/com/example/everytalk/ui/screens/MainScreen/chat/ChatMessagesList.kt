@@ -15,7 +15,6 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -75,6 +74,20 @@ fun ChatMessagesList(
     val isApiCalling by viewModel.isTextApiCalling.collectAsState()
     val currentStreamingId by viewModel.currentTextStreamingAiMessageId.collectAsState()
     val density = LocalDensity.current
+    
+    // 🎯 Performance monitoring: Track recomposition count for ChatMessagesList
+    // This helps verify that the overall list recomposition is reduced
+    // Requirements: 1.4, 3.4
+    val listRecompositionCount = remember { mutableStateOf(0) }
+    LaunchedEffect(chatItems.size, isApiCalling, currentStreamingId) {
+        listRecompositionCount.value++
+        if (listRecompositionCount.value % 5 == 0) {
+            android.util.Log.d(
+                "ChatMessagesList",
+                "List recomposed ${listRecompositionCount.value} times (items: ${chatItems.size}, streaming: $isApiCalling)"
+            )
+        }
+    }
 
     // 取消因思考框(AiMessageReasoning)导致的外层自动滚动，避免联动到外层列表
     // LaunchedEffect(chatItems) { ... } 已移除
@@ -85,7 +98,12 @@ fun ChatMessagesList(
         modifier = Modifier
             .fillMaxSize()
             .nestedScroll(scrollStateManager.nestedScrollConnection),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+        contentPadding = PaddingValues(
+            start = 16.dp,
+            end = 16.dp,
+            top = 8.dp,
+            bottom = 50.dp  // 增加底部padding以确保内容完全显示在输入框上方
+        ),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         itemsIndexed(
@@ -243,7 +261,8 @@ fun ChatMessagesList(
                                         onShowAiMessageOptions(message)
                                     },
                                     isStreaming = currentStreamingId == message.id,
-                                    messageOutputType = message.outputType
+                                    messageOutputType = message.outputType,
+                                    viewModel = viewModel
                                 )
                             }
                         }
@@ -261,7 +280,8 @@ fun ChatMessagesList(
                                         onShowAiMessageOptions(message)
                                     },
                                     isStreaming = currentStreamingId == message.id,
-                                    messageOutputType = message.outputType
+                                    messageOutputType = message.outputType,
+                                    viewModel = viewModel
                                 )
                             }
                         }
@@ -279,7 +299,8 @@ fun ChatMessagesList(
                                         onShowAiMessageOptions(message)
                                     },
                                     isStreaming = currentStreamingId == message.id,
-                                    messageOutputType = message.outputType
+                                    messageOutputType = message.outputType,
+                                    viewModel = viewModel
                                 )
                             }
                         }
@@ -402,11 +423,12 @@ fun AiMessageItem(
     onLongPress: () -> Unit,
     modifier: Modifier = Modifier,
     isStreaming: Boolean,
-    messageOutputType: String
+    messageOutputType: String,
+    viewModel: AppViewModel
 ) {
     val shape = RectangleShape
     val aiReplyMessageDescription = stringResource(id = R.string.ai_reply_message)
-
+    
     Row(
         modifier = modifier
             .wrapContentWidth()
@@ -457,7 +479,8 @@ fun AiMessageItem(
                         color = MaterialTheme.colorScheme.onSurface,
                         isStreaming = isStreaming,
                         messageOutputType = messageOutputType,
-                        onLongPress = onLongPress
+                        onLongPress = onLongPress,
+                        viewModel = viewModel  // 🎯 传递viewModel以获取实时流式文本
                     )
                 }
             }

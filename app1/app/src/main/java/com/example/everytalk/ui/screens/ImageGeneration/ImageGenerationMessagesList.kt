@@ -342,7 +342,8 @@ fun ImageGenerationMessagesList(
                                     },
                                     isStreaming = viewModel.currentImageStreamingAiMessageId.collectAsState().value == message.id,
                                     onImageLoaded = onImageLoaded,
-                                    scrollStateManager = scrollStateManager
+                                    scrollStateManager = scrollStateManager,
+                                    viewModel = viewModel
                                 )
                             }
                         }
@@ -1262,7 +1263,8 @@ private fun AiMessageItem(
     modifier: Modifier = Modifier,
     isStreaming: Boolean,
     onImageLoaded: () -> Unit,
-    scrollStateManager: ChatScrollStateManager
+    scrollStateManager: ChatScrollStateManager,
+    viewModel: AppViewModel
 ) {
     val shape = androidx.compose.ui.graphics.RectangleShape
     val aiReplyMessageDescription = stringResource(id = R.string.ai_reply_message)
@@ -1309,7 +1311,8 @@ private fun AiMessageItem(
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurface,
                             isStreaming = isStreaming,
-                            messageOutputType = message.outputType
+                            messageOutputType = message.outputType,
+                            viewModel = viewModel  // 🎯 传递viewModel以获取实时流式文本
                         )
                     }
                     if (message.imageUrls != null && message.imageUrls.isNotEmpty()) {
