@@ -38,6 +38,31 @@ sealed interface ChatListItem {
         override val stableId: String = "${messageId}_code"
     }
 
+    // —— 新增：流式渲染专用项（文本/数学/代码）——
+    // 仅携带 messageId（在 UI 层通过 StateFlow 收集流式文本），避免在数据层频繁变更 text
+    data class AiMessageStreaming(
+        val messageId: String,
+        val hasReasoning: Boolean
+    ) : ChatListItem {
+        override val stableId: String = "${messageId}_stream"
+    }
+
+    data class AiMessageMathStreaming(
+        val messageId: String,
+        val hasReasoning: Boolean
+    ) : ChatListItem {
+        override val stableId: String = "${messageId}_math_stream"
+    }
+
+    data class AiMessageCodeStreaming(
+        val messageId: String,
+        val hasReasoning: Boolean
+    ) : ChatListItem {
+        override val stableId: String = "${messageId}_code_stream"
+    }
+    // —— 新增结束 ——
+
+
     data class AiMessageReasoning(val message: Message) : ChatListItem {
         override val stableId: String = "${message.id}_reasoning"
     }

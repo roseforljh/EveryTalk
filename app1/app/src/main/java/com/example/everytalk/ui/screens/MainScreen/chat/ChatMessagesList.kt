@@ -102,7 +102,7 @@ fun ChatMessagesList(
             start = 16.dp,
             end = 16.dp,
             top = 8.dp,
-            bottom = 50.dp  // 增加底部padding以确保内容完全显示在输入框上方
+            bottom = 10.dp  // 增加底部padding以确保内容完全显示在输入框上方
         ),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
@@ -310,6 +310,64 @@ fun ChatMessagesList(
                                 message = item.message,
                                 viewModel = viewModel,
                             )
+                        }
+                        
+                        // 🔥 新增：流式渲染专用分支
+                        is ChatListItem.AiMessageStreaming -> {
+                            val message = viewModel.getMessageById(item.messageId)
+                            if (message != null) {
+                                AiMessageItem(
+                                    message = message,
+                                    text = message.text,
+                                    maxWidth = bubbleMaxWidth,
+                                    hasReasoning = item.hasReasoning,
+                                    onLongPress = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        onShowAiMessageOptions(message)
+                                    },
+                                    isStreaming = true,
+                                    messageOutputType = message.outputType,
+                                    viewModel = viewModel
+                                )
+                            }
+                        }
+                        
+                        is ChatListItem.AiMessageMathStreaming -> {
+                            val message = viewModel.getMessageById(item.messageId)
+                            if (message != null) {
+                                AiMessageItem(
+                                    message = message,
+                                    text = message.text,
+                                    maxWidth = bubbleMaxWidth,
+                                    hasReasoning = item.hasReasoning,
+                                    onLongPress = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        onShowAiMessageOptions(message)
+                                    },
+                                    isStreaming = true,
+                                    messageOutputType = message.outputType,
+                                    viewModel = viewModel
+                                )
+                            }
+                        }
+                        
+                        is ChatListItem.AiMessageCodeStreaming -> {
+                            val message = viewModel.getMessageById(item.messageId)
+                            if (message != null) {
+                                AiMessageItem(
+                                    message = message,
+                                    text = message.text,
+                                    maxWidth = bubbleMaxWidth,
+                                    hasReasoning = item.hasReasoning,
+                                    onLongPress = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        onShowAiMessageOptions(message)
+                                    },
+                                    isStreaming = true,
+                                    messageOutputType = message.outputType,
+                                    viewModel = viewModel
+                                )
+                            }
                         }
 
                         is ChatListItem.ErrorMessage -> {

@@ -38,6 +38,9 @@ object PerformanceConfig {
     const val STREAMING_PARTS_UPDATE_ENABLED = true //  启用流式过程中的parts实时更新
     const val FALLBACK_TO_TEXT_ON_PARTS_FAILURE = true //  parts解析失败时回退到原文本
     const val ENABLE_AGGRESSIVE_PARTS_PROCESSING = true // 启用积极的parts处理，确保UI正确显示
+
+    // 开关：是否在流式期间用 StateFlow 渲染（完成后仍同步到 message.text）
+    const val USE_STREAMING_STATEFLOW_RENDERING = true
     
     // UI渲染配置
     const val MARKDOWN_RENDERING_TIMEOUT_MS = 2000L // Markdown渲染超时

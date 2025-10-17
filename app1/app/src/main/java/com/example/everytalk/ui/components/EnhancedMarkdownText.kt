@@ -54,18 +54,49 @@ fun EnhancedMarkdownText(
         }
     }.collectAsState()
     
-    // 根据流式状态决定使用哪个文本源
-    val displayText = if (isStreaming && streamingText.isNotEmpty()) {
+    // 🔥 修复：更准确的流式状态判断
+    // 优先使用 streamingText，只要它不为空
+    val isActuallyStreaming = remember(isStreaming, streamingText, message.text) {
+        isStreaming && streamingText.isNotEmpty()
+    }
+    
+    // 🔥 关键修复：正确判断是否应该触发最终渲染
+    // 当 isStreaming=false 时（流式真正结束），无论其他条件，都应该 isFinal=true
+    val shouldBeFinal = remember(isStreaming, isActuallyStreaming, message.text) {
+        !isStreaming || (!isActuallyStreaming && message.text.isNotEmpty())
+    }
+    
+    // 🔍 [STREAM_DEBUG] 记录文本源选择
+    // 🎯 关键修复：监听流式状态变化，确保从流式切换到最终状态时强制触发渲染
+    val previouslyStreaming = remember { mutableStateOf(isActuallyStreaming) }
+    LaunchedEffect(isActuallyStreaming, streamingText, message.text, shouldBeFinal) {
+        android.util.Log.i("STREAM_DEBUG", "[EnhancedMarkdownText] msgId=${message.id}, isStreaming=$isStreaming, isActuallyStreaming=$isActuallyStreaming, shouldBeFinal=$shouldBeFinal, streamingLen=${streamingText.length}, msgTextLen=${message.text.length}, preview='${streamingText.take(30)}'")
+        
+        // 🎯 检测流式状态从true切换到false（流式结束）
+        if (previouslyStreaming.value && !isActuallyStreaming && message.text.isNotEmpty()) {
+            android.util.Log.i("STREAM_DEBUG", "[EnhancedMarkdownText] 🔥 STREAMING FINISHED for msgId=${message.id}, forcing final render")
+        }
+        previouslyStreaming.value = isActuallyStreaming
+    }
+    
+    // 🔥 关键修复：流式期间优先使用 streamingText
+    val displayText = if (isActuallyStreaming) {
+        android.util.Log.d("STREAM_DEBUG", "[EnhancedMarkdownText] 🔥 Using streamingText: msgId=${message.id}, len=${streamingText.length}, preview='${streamingText.take(50)}'")
         streamingText
-    } else {
+    } else if (message.text.isNotEmpty()) {
+        android.util.Log.d("STREAM_DEBUG", "[EnhancedMarkdownText] Using message.text: msgId=${message.id}, len=${message.text.length}")
         message.text
+    } else {
+        // 如果 message.text 为空，但有 streamingText，也使用 streamingText
+        android.util.Log.d("STREAM_DEBUG", "[EnhancedMarkdownText] Fallback to streamingText: msgId=${message.id}, len=${streamingText.length}")
+        streamingText
     }
     
     val md = normalizeBasicMarkdown(displayText)
     MarkdownHtmlView(
         markdown = md,
-        isStreaming = isStreaming,
-        isFinal = !isStreaming,
+        isStreaming = isActuallyStreaming,  // 🔥 修复：使用更准确的流式状态
+        isFinal = shouldBeFinal,  // 🔥 修复：使用正确的最终状态判断
         modifier = modifier.fillMaxWidth()
     )
 }

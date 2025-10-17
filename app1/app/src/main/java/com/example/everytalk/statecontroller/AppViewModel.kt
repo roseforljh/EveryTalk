@@ -74,6 +74,7 @@ import kotlinx.coroutines.yield
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import com.example.everytalk.config.PerformanceConfig
 
 class AppViewModel(application: Application, private val dataSource: SharedPreferencesDataSource) :
         AndroidViewModel(application) {
@@ -661,16 +662,21 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                     items.add(ChatListItem.AiMessageReasoning(message))
                 }
                 
-                // 🎯 流式期间：使用 streamingMessageStateManager 的文本
-                // message.text保持不变（空字符串），ChatListItem保持稳定
-                // UI层通过collectAsState从StreamingMessageStateManager获取实时内容
-                items.add(
+                // 流式期间：根据开关选择使用 StateFlow 渲染或旧路径
+                val streamingItem: ChatListItem = if (PerformanceConfig.USE_STREAMING_STATEFLOW_RENDERING) {
+                    when (message.outputType) {
+                        "math" -> ChatListItem.AiMessageMathStreaming(message.id, state.hasReasoning)
+                        "code" -> ChatListItem.AiMessageCodeStreaming(message.id, state.hasReasoning)
+                        else -> ChatListItem.AiMessageStreaming(message.id, state.hasReasoning)
+                    }
+                } else {
                     when (message.outputType) {
                         "math" -> ChatListItem.AiMessageMath(message.id, message.text, state.hasReasoning)
                         "code" -> ChatListItem.AiMessageCode(message.id, message.text, state.hasReasoning)
                         else -> ChatListItem.AiMessage(message.id, message.text, state.hasReasoning)
                     }
-                )
+                }
+                items.add(streamingItem)
                 items
             }
              is com.example.everytalk.ui.state.AiBubbleState.Complete -> {

@@ -72,6 +72,9 @@ fun MarkdownHtmlView(
     val lastRenderTime = remember { mutableStateOf(0L) }
     val pendingRenderJob = remember { mutableStateOf<Job?>(null) }
     
+    // 🎯 新增：缓存pending的渲染内容，在页面加载完成后立即渲染
+    val pendingRenderContent = remember { mutableStateOf<Triple<String, Boolean, Boolean>?>(null) }
+    
     // 🎯 执行实际的WebView渲染逻辑（定义在Composable内部以访问remember变量）
     fun executeRender(webView: WebView, markdown: String, isFinal: Boolean, isStreaming: Boolean) {
         val escapedContent = markdown
@@ -88,99 +91,37 @@ fun MarkdownHtmlView(
             val isIncremental = escapedContent.startsWith(last) && last.isNotEmpty()
             
             when {
-                // 场景1：增量更新（流式输出的正常情况）
+                // 场景1：流式更新 - 使用全量渲染而不是增量渲染
+                // 🔥 修复格式混乱：增量渲染会导致每个小片段被当作独立段落
+                // 解决方案：流式期间每次渲染完整内容，确保格式正确
                 isIncremental && isStreaming && !isFinal -> {
-                    val delta = escapedContent.substring(last.length)
+                    // 取消增量渲染，使用全量渲染
+                    incRenderer.value?.updateMarkdown(
+                        fullEscapedContent = escapedContent,
+                        isFinal = false,
+                        isStreaming = true
+                    )
+                    lastSentContent.value = escapedContent
                     
-                    if (delta.length <= 3) {
-                        // 🎯 小增量批处理：积累到一定大小再发送
-                        pendingDelta.value += delta
-                        
-                        // 取消之前的刷新任务
-                        pendingFlushJob.value?.cancel()
-                        
-                        // 如果累积超过20字符，立即刷新
-                        if (pendingDelta.value.length >= 20) {
-                            val batched = pendingDelta.value
-                            incRenderer.value?.appendDelta(
-                                escapedDelta = batched,
-                                isFinal = false,
-                                isStreaming = true
-                            )
-                            lastSentContent.value = last + batched
-                            pendingDelta.value = ""
-                        } else {
-                            // 设置延迟刷新（200ms）
-                            pendingFlushJob.value = scope.launch {
-                                delay(200)
-                                if (pendingDelta.value.isNotEmpty()) {
-                                    val batched = pendingDelta.value
-                                    incRenderer.value?.appendDelta(
-                                        escapedDelta = batched,
-                                        isFinal = false,
-                                        isStreaming = true
-                                    )
-                                    lastSentContent.value = lastSentContent.value + batched
-                                    pendingDelta.value = ""
-                                }
-                            }
-                        }
-                    } else {
-                        // 🎯 较大增量：立即发送（不积累）
-                        // 先刷新之前累积的小增量
-                        if (pendingDelta.value.isNotEmpty()) {
-                            incRenderer.value?.appendDelta(
-                                escapedDelta = pendingDelta.value,
-                                isFinal = false,
-                                isStreaming = true
-                            )
-                            pendingDelta.value = ""
-                        }
-                        
-                        // 发送当前增量
-                        incRenderer.value?.appendDelta(
-                            escapedDelta = delta,
-                            isFinal = false,
-                            isStreaming = true
-                        )
-                        lastSentContent.value = escapedContent
-                    }
+                    // 🔍 [STREAM_DEBUG_ANDROID]
+                    android.util.Log.i("STREAM_DEBUG", "[MarkdownHtmlView] ✅ FULL RENDER (streaming): totalLen=${escapedContent.length}")
                 }
                 
-                // 场景2：最终状态（流式结束）
+                // 场景2：最终状态（流式结束）- 使用全量渲染
                 isFinal -> {
                     // 取消所有挂起的任务
                     pendingFlushJob.value?.cancel()
-                    
-                    // 如果有未发送的小增量，先发送
-                    if (pendingDelta.value.isNotEmpty() && isIncremental) {
-                        incRenderer.value?.appendDelta(
-                            escapedDelta = pendingDelta.value,
-                            isFinal = false,
-                            isStreaming = false
-                        )
-                        pendingDelta.value = ""
-                    }
-                    
-                    // 发送最终内容
-                    if (isIncremental) {
-                        val finalDelta = escapedContent.substring((lastSentContent.value ?: "").length)
-                        if (finalDelta.isNotEmpty()) {
-                            incRenderer.value?.appendDelta(
-                                escapedDelta = finalDelta,
-                                isFinal = true,
-                                isStreaming = false
-                            )
-                        }
-                    } else {
-                        incRenderer.value?.updateMarkdown(
-                            fullEscapedContent = escapedContent,
-                            isFinal = true,
-                            isStreaming = false
-                        )
-                    }
-                    lastSentContent.value = escapedContent
                     pendingDelta.value = ""
+                    
+                    // 全量渲染最终内容
+                    incRenderer.value?.updateMarkdown(
+                        fullEscapedContent = escapedContent,
+                        isFinal = true,
+                        isStreaming = false
+                    )
+                    lastSentContent.value = escapedContent
+                    
+                    android.util.Log.i("STREAM_DEBUG", "[MarkdownHtmlView] ✅ FULL RENDER (final): totalLen=${escapedContent.length}")
                 }
                 
                 // 场景3：非增量更新（内容完全改变，需要重新渲染）
@@ -215,6 +156,24 @@ fun MarkdownHtmlView(
     // 🎯 修复：移除LaunchedEffect(markdown)，避免流式期间重置高度
     // 问题：每次markdown变化都重置为50dp，导致内容显示不完整
     // 解决：让WebView自动根据内容调整高度，不要手动重置
+    
+    // 🔥 关键修复：监听 markdown、isFinal 和 isStreaming 的变化
+    // 当内容变化 OR 流式状态结束时，都需要触发渲染
+    // 这样可以确保流式结束后立即触发最终的Markdown解析
+    // 🎯 新增：监听 isStreaming 变化，确保从流式切换到最终状态时强制渲染
+    LaunchedEffect(markdown, isFinal, isStreaming) {
+        val webView = webViewRef.value
+        if (webView != null && isPageLoaded.value) {
+            android.util.Log.i("STREAM_DEBUG", "[MarkdownHtmlView] 🔥 LaunchedEffect triggered: len=${markdown.length}, isStreaming=$isStreaming, isFinal=$isFinal, preview='${markdown.take(50)}'")
+            executeRender(webView, markdown, isFinal, isStreaming)
+        } else {
+            android.util.Log.w("STREAM_DEBUG", "[MarkdownHtmlView] ⚠️ Caching render: webView=${webView!=null}, pageLoaded=${isPageLoaded.value}, len=${markdown.length}")
+            if (webView != null) {
+                // 页面还未加载完成，缓存内容
+                pendingRenderContent.value = Triple(markdown, isFinal, isStreaming)
+            }
+        }
+    }
  
     Box(
         modifier = modifier
@@ -328,6 +287,14 @@ fun MarkdownHtmlView(
                         override fun onPageFinished(view: WebView, url: String?) {
                             super.onPageFinished(view, url)
                             isPageLoaded.value = true
+                            
+                            // 🎯 关键修复：页面加载完成后，立即渲染pending内容
+                            // 这样可以避免reasoning导致item重建时丢失content
+                            pendingRenderContent.value?.let { (content, isFinal, isStreaming) ->
+                                android.util.Log.i("STREAM_DEBUG", "[MarkdownHtmlView] 🔥 Page loaded, rendering pending content: len=${content.length}")
+                                executeRender(view, content, isFinal, isStreaming)
+                                pendingRenderContent.value = null
+                            }
                         }
 
                         override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
@@ -729,15 +696,19 @@ fun MarkdownHtmlView(
                          // Detect safe commit boundary without mutating global code state
                          // Find safe commit point: prefer sentence/paragraph boundary outside code blocks
                          function findSafeIndex(text) {
-                           // 在流式模式下且处于代码块中，等待块结束，避免把代码劈开
+                           // 🔥 业内最佳实践：流式期间实时渲染完整的Markdown行
+                           // 策略：检测完整行边界（\n）、段落边界（\n\n）、句子边界（。！？\n）
+                           // 这是 ChatGPT、Claude 等主流应用的做法
+                           
+                           // 代码块特殊处理：等待闭合标记，避免被切断
                            if (window._isStreaming && codeOpen) return -1;
                            
                            let i = 0;
                            let safe = -1;
                            let localOpen = codeOpen;
                            
-                           // 句子结束标记（中文/英文），避免把一句话切断
-                           const sentenceRegex = /([。！？!?])\s|\n/g; // includes newline after punctuation
+                           // 🔥 业内最佳实践：流式期间检测完整行
+                           // 优先级：段落（\n\n）> 完整行（\n）> 句子（。！？\n）
                            
                            while (i < text.length) {
                              const slice = text.slice(i);
@@ -746,19 +717,30 @@ fun MarkdownHtmlView(
                                : findOpeningFence(slice);
                              const paraIdx = text.indexOf('\n\n', i);
                              
-                             // 当未在代码块内时，优先寻找“完整句子”边界
+                             // 🔥 流式期间：检测完整行（用于标题、列表等）
+                             let lineIdx = -1;
+                             if (!localOpen && window._isStreaming) {
+                               const newlinePos = text.indexOf('\n', i);
+                               if (newlinePos !== -1) {
+                                 lineIdx = newlinePos + 1;
+                               }
+                             }
+                             
+                             // 非流式或作为备选：检测句子边界
                              let sentenceIdx = -1;
-                             if (!localOpen) {
+                             if (!localOpen && !window._isStreaming) {
+                               const sentenceRegex = /([。！？!?])\s|\n/g;
                                const m = sentenceRegex.exec(slice);
-                               if (m) sentenceIdx = i + m.index + (m[1] ? m[1].length : 0) + 1; // consume trailing space/newline
-                               // 重置 lastIndex 以便下一轮重新匹配
+                               if (m) sentenceIdx = i + m.index + (m[1] ? m[1].length : 0) + 1;
                                sentenceRegex.lastIndex = 0;
                              }
                              
-                             // 决策：取最早出现的安全边界（代码块开/关、段落、句子）
+                             // 🔥 决策：取最早出现的安全边界
+                             // 优先级：代码块 > 段落 > 完整行（流式）> 句子（非流式）
                              const candidates = [];
                              if (fenceInfo) candidates.push(i + fenceInfo.idx + (fenceInfo.len || 3) + 1);
                              if (paraIdx !== -1) candidates.push(paraIdx + 2);
+                             if (lineIdx !== -1) candidates.push(lineIdx);
                              if (sentenceIdx !== -1) candidates.push(sentenceIdx);
                              const nextIdx = candidates.length ? Math.min.apply(null, candidates) : -1;
                              
@@ -845,6 +827,10 @@ fun MarkdownHtmlView(
 
                          // Process complete code blocks only when closing fence is found
                          function processCodeFencesInline() {
+                           // 🔥 业内最佳实践：流式期间也处理完整的代码块
+                           // ChatGPT/Claude 的做法：当检测到完整代码块（有闭合标记）时立即渲染
+                           // 未完成的代码块在 liveCodePre 中实时预览
+                           
                            // 🔥 优化：检测代码块开始标记
                            if (!codeOpen) {
                              const open = findOpeningFence(buffer);
@@ -1452,28 +1438,21 @@ fun MarkdownHtmlView(
                 }
             },
             update = { webView ->
+                // 🎯 核心修复：移除300ms节流，StreamingBuffer已经做了节流（100ms/10字符）
+                // 问题：update block的300ms节流会导致中间内容被跳过，用户看到的是跳跃式更新而不是流畅的流式输出
+                // 修复：让WebView立即渲染StreamingBuffer flush的内容，保持流式输出的流畅性
                 if (isPageLoaded.value) {
-                    // 🎯 智能节流策略：减少WebView更新频率
-                    val currentTime = System.currentTimeMillis()
-                    val timeSinceLastRender = currentTime - lastRenderTime.value
-                    
-                    // 流式模式：300ms节流，非流式/最终：立即渲染
-                    val shouldThrottle = isStreaming && !isFinal && timeSinceLastRender < 300L
-                    
-                    if (shouldThrottle) {
-                        // 取消之前的延迟任务
-                        pendingRenderJob.value?.cancel()
-                        
-                        // 安排延迟渲染（在下一次300ms间隔时渲染）
-                        pendingRenderJob.value = scope.launch {
-                            delay(300L - timeSinceLastRender)
-                            // 延迟后执行相同的渲染逻辑
-                            executeRender(webView, markdown, isFinal, isStreaming)
-                        }
-                    } else {
-                        // 立即渲染
-                        executeRender(webView, markdown, isFinal, isStreaming)
-                    }
+                    // 立即渲染，不做额外节流
+                    // 🔍 [STREAM_DEBUG_ANDROID]
+                    android.util.Log.i("STREAM_DEBUG", "[MarkdownHtmlView] ✅ Rendering: len=${markdown.length}, isStreaming=$isStreaming, isFinal=$isFinal, preview='${markdown.take(30)}'")
+                    executeRender(webView, markdown, isFinal, isStreaming)
+                    // 清除pending内容（已渲染）
+                    pendingRenderContent.value = null
+                } else {
+                    // 🎯 关键修复：页面未加载完成时，缓存最新内容，等待加载完成后渲染
+                    // 这样可以避免reasoning导致item重建时丢失content
+                    android.util.Log.w("STREAM_DEBUG", "[MarkdownHtmlView] ⚠️ WebView not loaded yet, caching content, len=${markdown.length}")
+                    pendingRenderContent.value = Triple(markdown, isFinal, isStreaming)
                 }
             }
         )

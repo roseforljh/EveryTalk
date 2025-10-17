@@ -95,9 +95,12 @@ class StreamingMessageStateManager {
     fun updateContent(messageId: String, content: String) {
         val stateFlow = streamingStates[messageId]
         if (stateFlow != null) {
+            // 🔍 [STREAM_DEBUG_ANDROID]
+            android.util.Log.i("STREAM_DEBUG", "[StreamingMessageStateManager] ✅ Content updated: msgId=$messageId, len=${content.length}, preview='${content.take(50)}'")
             stateFlow.value = content
         } else {
             // Create new state if it doesn't exist
+            android.util.Log.w("STREAM_DEBUG", "[StreamingMessageStateManager] ⚠️ Creating new state: msgId=$messageId, len=${content.length}")
             streamingStates[messageId] = MutableStateFlow(content)
         }
     }

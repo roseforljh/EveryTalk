@@ -335,6 +335,10 @@ class ApiHandler(
                             logger.debug("Stream completion for messageId: $aiMessageId, cause: $cause, isImageGeneration: $isImageGeneration")
                         }
                         .collect { appEvent ->
+                            // 🔍 [STREAM_DEBUG] 记录每个事件的接收时间
+                            val timestamp = System.currentTimeMillis()
+                            android.util.Log.i("STREAM_DEBUG", "[ApiHandler] 🔥 EVENT RECEIVED at $timestamp: ${appEvent::class.simpleName}, msgId=$aiMessageId")
+                            
                             val currentJob = if (isImageGeneration) stateHolder.imageApiJob else stateHolder.textApiJob
                             val currentStreamingId = if (isImageGeneration) 
                                 stateHolder._currentImageStreamingAiMessageId.value 
@@ -352,6 +356,8 @@ class ApiHandler(
                             
                             processStreamEvent(appEvent, aiMessageId, isImageGeneration)
                             newEventChannel.trySend(appEvent)
+                            
+                            android.util.Log.i("STREAM_DEBUG", "[ApiHandler] ✅ EVENT PROCESSED at ${System.currentTimeMillis()}: took ${System.currentTimeMillis() - timestamp}ms")
                         }
                }
             } catch (e: Exception) {
@@ -432,6 +438,8 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                         val deltaChunk = appEvent.text
                         // 过滤纯空白内容，防止后端发送大量空格导致卡死
                         if (!deltaChunk.isNullOrEmpty() && deltaChunk.isNotBlank()) {
+                            // 🔍 [STREAM_DEBUG_ANDROID]
+                            android.util.Log.i("STREAM_DEBUG", "[ApiHandler] ✅ Content event received: msgId=$aiMessageId, chunkLen=${deltaChunk.length}, preview='${deltaChunk.take(30)}'")
                             stateHolder.appendContentToMessage(aiMessageId, deltaChunk, isImageGeneration)
                             // 🎯 第一个非空内容到来时，标记contentStarted = true
                             // 这样思考框会收起，正式内容开始流式展示
@@ -601,6 +609,21 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     // 🔥 正确的修复：不要删除处理器！让它保留在内存中
                     // 处理器会在清理资源时被正确管理，不需要在这里删除
                     logger.debug("Message processor for $aiMessageId retained after stream completion")
+                    
+                    // 🔥 核心修复：在事件处理完成后立即清空streaming ID
+                    // 这会触发UI重新组合，isStreaming变为false，WebView重新渲染Markdown
+                    // 修复问题：流式结束后需要切换会话才能看到Markdown格式
+                    if (isImageGeneration) {
+                        if (stateHolder._currentImageStreamingAiMessageId.value == aiMessageId) {
+                            stateHolder._currentImageStreamingAiMessageId.value = null
+                            android.util.Log.d("ApiHandler", "🔥 Cleared image streaming ID immediately after Finish for message: $aiMessageId")
+                        }
+                    } else {
+                        if (stateHolder._currentTextStreamingAiMessageId.value == aiMessageId) {
+                            stateHolder._currentTextStreamingAiMessageId.value = null
+                            android.util.Log.d("ApiHandler", "🔥 Cleared text streaming ID immediately after Finish for message: $aiMessageId")
+                        }
+                    }
                 }
                 is AppStreamEvent.Error -> {
                     // 🎯 错误事件会触发 updateMessageWithError，它会自动刷新和清理 buffer

@@ -25,8 +25,8 @@ import kotlinx.coroutines.*
  */
 class StreamingBuffer(
     private val messageId: String,
-    private val updateInterval: Long = 300L,
-    private val batchThreshold: Int = 30,
+    private val updateInterval: Long = 16L,  // 🔥 修复：改为16ms（60fps），接近实时
+    private val batchThreshold: Int = 1,    // 🔥 修复：改为1个字符，立即刷新
     private val onUpdate: (String) -> Unit,
     private val coroutineScope: CoroutineScope
 ) {
@@ -36,6 +36,12 @@ class StreamingBuffer(
      * Internal buffer for accumulating content chunks
      */
     private val buffer = StringBuilder()
+    
+    /**
+     * Accumulated content (never cleared, only grows)
+     * This ensures onUpdate always receives the complete text
+     */
+    private val accumulatedContent = StringBuilder()
     
     /**
      * Timestamp of the last UI update
@@ -80,25 +86,16 @@ class StreamingBuffer(
             val timeSinceLastUpdate = currentTime - lastUpdateTime
             val currentBufferSize = buffer.length
             
-            // Check if we should trigger immediate update
-            val shouldUpdateByTime = timeSinceLastUpdate >= updateInterval
-            val shouldUpdateBySize = currentBufferSize >= batchThreshold
+            // 🔥 修复：立即触发更新，减少缓冲延迟
+            // 对于流式输出，我们希望内容尽快显示，所以立即触发刷新
+            // Cancel any pending delayed flush since we're flushing now
+            pendingFlushJob?.cancel()
+            pendingFlushJob = null
             
-            if (shouldUpdateByTime || shouldUpdateBySize) {
-                // Cancel any pending delayed flush since we're flushing now
-                pendingFlushJob?.cancel()
-                pendingFlushJob = null
-                
-                performFlush(currentTime)
-                
-                Log.d(TAG, "[$messageId] Immediate flush: time=$shouldUpdateByTime, size=$shouldUpdateBySize, " +
-                        "bufferSize=$currentBufferSize, timeSince=${timeSinceLastUpdate}ms")
-            } else {
-                // Schedule delayed flush if not already scheduled
-                if (pendingFlushJob == null || pendingFlushJob?.isActive == false) {
-                    scheduleDelayedFlush()
-                }
-            }
+            performFlush(currentTime)
+            
+            Log.d(TAG, "[$messageId] 🔥 IMMEDIATE FLUSH: chunk_len=${chunk.length}, " +
+                    "bufferSize=$currentBufferSize, timeSince=${timeSinceLastUpdate}ms")
         }
     }
     
@@ -135,11 +132,18 @@ class StreamingBuffer(
     private fun performFlush(currentTime: Long) {
         if (buffer.isEmpty()) return
         
-        val content = buffer.toString()
-        val contentLength = content.length
+        // 🎯 核心修复：将buffer内容追加到累积内容，然后传递完整的累积内容
+        // 这样onUpdate总是收到完整文本，而不是增量
+        val incrementalContent = buffer.toString()
+        accumulatedContent.append(incrementalContent)
+        val fullContent = accumulatedContent.toString()
+        
         buffer.clear()
         lastUpdateTime = currentTime
         flushCount++
+        
+        // 🔍 [STREAM_DEBUG_ANDROID] 每次flush都记录
+        Log.i("STREAM_DEBUG", "[StreamingBuffer] ✅ FLUSH #$flushCount: msgId=$messageId, incrementalLen=${incrementalContent.length}, totalLen=${fullContent.length}")
         
         // 🎯 Task 11: Add logging for buffer flush frequency
         // Log every 5th flush to track performance without overwhelming logs
@@ -147,17 +151,20 @@ class StreamingBuffer(
         if (flushCount % 5 == 0) {
             val avgCharsPerFlush = if (flushCount > 0) totalCharsProcessed / flushCount else 0
             Log.d(TAG, "[$messageId] Buffer flush #$flushCount: " +
-                    "contentLen=$contentLength, " +
+                    "incrementalLen=${incrementalContent.length}, " +
+                    "accumulatedLen=${fullContent.length}, " +
                     "totalChars=$totalCharsProcessed, " +
-                    "avgPerFlush=$avgCharsPerFlush, " +
-                    "timeSinceLastFlush=${currentTime - lastUpdateTime}ms")
+                    "avgPerFlush=$avgCharsPerFlush")
         }
         
         // Invoke callback outside synchronized block to prevent deadlock
+        // 传递完整的累积内容给onUpdate
         try {
-            onUpdate(content)
+            // 🔍 [STREAM_DEBUG_ANDROID] 记录onUpdate调用
+            Log.i("STREAM_DEBUG", "[StreamingBuffer] Calling onUpdate callback: msgId=$messageId, contentLen=${fullContent.length}")
+            onUpdate(fullContent)
         } catch (e: Exception) {
-            Log.e(TAG, "[$messageId] Error in onUpdate callback", e)
+            Log.e("STREAM_DEBUG", "[$messageId] ❌ onUpdate callback ERROR", e)
         }
     }
     
@@ -187,11 +194,11 @@ class StreamingBuffer(
     /**
      * Get current buffered content without flushing
      * 
-     * @return Current content in buffer
+     * @return Current accumulated content (includes flushed + pending)
      */
     fun getCurrentContent(): String {
         synchronized(buffer) {
-            return buffer.toString()
+            return accumulatedContent.toString() + buffer.toString()
         }
     }
     
@@ -223,6 +230,7 @@ class StreamingBuffer(
             pendingFlushJob = null
             
             buffer.clear()
+            accumulatedContent.clear()
             lastUpdateTime = 0L
             
             // 🎯 Task 11: Add performance metrics to debug logs
@@ -251,6 +259,7 @@ class StreamingBuffer(
             return mapOf(
                 "messageId" to messageId,
                 "currentBufferSize" to buffer.length,
+                "accumulatedSize" to accumulatedContent.length,
                 "totalCharsProcessed" to totalCharsProcessed,
                 "flushCount" to flushCount,
                 "hasPendingFlush" to (pendingFlushJob?.isActive == true),
