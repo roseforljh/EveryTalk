@@ -419,8 +419,7 @@ fun addMessage(message: Message, isImageGeneration: Boolean = false) {
                 // StreamingMessageStateManager 用于高效的 StateFlow 观察
                 streamingMessageStateManager.updateContent(messageId, content)
                 
-                // 🔥 关键修复：同时更新 message.text，确保 WebView 能看到变化
-                // 这样即使 StateFlow 的观察有问题，WebView 也能通过 message.text 更新
+                // 关键修复：同时更新 message.text，确保UI能看到变化
                 updateMessageContentDirect(messageId, content, isImageGeneration)
                 
                 // 标记会话为脏，确保内容会被保存
@@ -710,9 +709,8 @@ fun addMessage(message: Message, isImageGeneration: Boolean = false) {
         // Check if we have a StreamingBuffer for this message
         val buffer = streamingBuffers[messageId]
         
-        // 🔥 激进修复：绕过 StreamingBuffer，直接更新 message.text
-        // 原因：即使缓冲机制正常，如果 WebView 更新有问题，内容还是不会显示
-        // 解决方案：直接更新，依靠 Compose 重组触发 WebView 更新
+        // 激进修复：绕过 StreamingBuffer，直接更新 message.text
+        // 直接更新，依靠 Compose 重组触发UI更新
         val messageList = if (isImageGeneration) imageGenerationMessages else messages
         val index = messageList.indexOfFirst { it.id == messageId }
         if (index != -1) {

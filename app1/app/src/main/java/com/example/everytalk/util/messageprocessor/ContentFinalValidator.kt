@@ -21,9 +21,10 @@ object ContentFinalValidator {
      * 2) 最终文本为空 → 不替换
      * 3) 最终文本明显更短（小于当前的50%）→ 不替换（可能后端异常截断）
      * 4) 前缀一致且最终文本更长（严格前缀扩展）→ 替换（最安全）
-     * 5) 长度相近（±10%）且前缀高相似（前100字符相等）→ 替换（多为清理版）
-     * 6) 代码围栏/反引号数量：若最终文本的围栏闭合性更好 → 倾向替换
-     * 7) 默认保守：不替换
+     * 5) 长度相近（±15%）且前缀高相似（前100字符相等）→ 替换（多为清理版）
+     * 6) 检测格式化改进（换行清理、空白优化）→ 倾向替换
+     * 7) 代码围栏/反引号数量：若最终文本的围栏闭合性更好 → 倾向替换
+     * 8) 默认保守：不替换
      */
     fun shouldReplaceCurrent(currentContent: String, finalContent: String): Boolean {
         if (currentContent.isEmpty()) {
@@ -47,13 +48,20 @@ object ContentFinalValidator {
             return true
         }
 
-        // 近似清理：长度接近且前缀高相似
+        // 近似清理：长度接近且前缀高相似（放宽到 ±15%，以支持换行清理）
         val prefixLen = minOf(100, currentContent.length, finalContent.length)
         val currentPrefix = currentContent.take(prefixLen)
         val finalPrefix = finalContent.take(prefixLen)
-        val lengthClose = finalContent.length in (currentContent.length * 0.9).toInt()..(currentContent.length * 1.1).toInt()
+        val lengthClose = finalContent.length in (currentContent.length * 0.85).toInt()..(currentContent.length * 1.15).toInt()
         if (lengthClose && currentPrefix == finalPrefix) {
-            Log.d(TAG, "Length close and prefix match; treat as cleaned version; replace.")
+            Log.d(TAG, "Length close (±15%) and prefix match; treat as cleaned version; replace.")
+            return true
+        }
+
+        // 🎯 新增：检测格式化改进（换行清理、空白优化）
+        val formattingImproved = detectFormattingImprovement(currentContent, finalContent)
+        if (formattingImproved) {
+            Log.d(TAG, "Detected formatting improvement (e.g., newline cleanup); replace.")
             return true
         }
 
@@ -112,5 +120,56 @@ object ContentFinalValidator {
             score += (doubleDollarCount / 2)
         }
         return score
+    }
+
+    /**
+     * 检测格式化改进：判断最终文本是否比当前文本有更好的格式
+     * 
+     * 检测指标：
+     * 1. 换行符显著减少（清理了多余换行）
+     * 2. 行尾空白减少
+     * 3. 内容相似度高（去除空白后的文本接近）
+     * 
+     * 返回 true 表示最终文本包含格式化改进
+     */
+    private fun detectFormattingImprovement(currentContent: String, finalContent: String): Boolean {
+        // 计算换行符数量
+        val currentNewlines = currentContent.count { it == '\n' }
+        val finalNewlines = finalContent.count { it == '\n' }
+        
+        // 计算连续换行符数量（多余的换行）
+        val currentExcessiveNewlines = Regex("\n{3,}").findAll(currentContent).count()
+        val finalExcessiveNewlines = Regex("\n{3,}").findAll(finalContent).count()
+        
+        // 计算行尾空白总数
+        val currentTrailingSpaces = currentContent.lines().sumOf { line -> 
+            line.length - line.trimEnd().length 
+        }
+        val finalTrailingSpaces = finalContent.lines().sumOf { line -> 
+            line.length - line.trimEnd().length 
+        }
+        
+        // 计算去除所有空白后的内容相似度
+        val currentNormalized = currentContent.replace(Regex("\\s+"), " ").trim()
+        val finalNormalized = finalContent.replace(Regex("\\s+"), " ").trim()
+        val contentSimilar = currentNormalized.length > 0 && 
+            finalNormalized.length in (currentNormalized.length * 0.9).toInt()..(currentNormalized.length * 1.1).toInt()
+        
+        // 判断是否有格式化改进
+        val hasNewlineCleanup = (currentExcessiveNewlines > 0 && finalExcessiveNewlines < currentExcessiveNewlines) ||
+            (currentNewlines > finalNewlines * 1.2 && finalNewlines > 0)
+        val hasTrailingSpaceCleanup = currentTrailingSpaces > finalTrailingSpaces * 1.5
+        
+        val hasImprovement = contentSimilar && (hasNewlineCleanup || hasTrailingSpaceCleanup)
+        
+        if (hasImprovement) {
+            Log.d(TAG, "Formatting improvement detected:")
+            Log.d(TAG, "  Newlines: $currentNewlines -> $finalNewlines")
+            Log.d(TAG, "  Excessive newlines: $currentExcessiveNewlines -> $finalExcessiveNewlines")
+            Log.d(TAG, "  Trailing spaces: $currentTrailingSpaces -> $finalTrailingSpaces")
+            Log.d(TAG, "  Content similar: $contentSimilar")
+        }
+        
+        return hasImprovement
     }
 }

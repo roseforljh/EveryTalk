@@ -1,30 +1,30 @@
-﻿package com.example.everytalk.ui.components
+package com.example.everytalk.ui.components
 
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import com.example.everytalk.data.DataClass.Message
-import com.example.everytalk.util.CodeHighlighter
 import com.example.everytalk.statecontroller.AppViewModel
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
 
+/**
+ * 增强的Markdown文本显示组件
+ * 
+ * 支持功能：
+ * - Markdown格式（标题、列表、粗体、斜体等）
+ * - 代码块（自适应滚动）
+ * - 表格渲染
+ * - 流式实时更新
+ */
 @Composable
 fun EnhancedMarkdownText(
     message: Message,
@@ -43,76 +43,86 @@ fun EnhancedMarkdownText(
         style.color != Color.Unspecified -> style.color
         else -> MaterialTheme.colorScheme.onSurface
     }
-
-    // 🎯 核心修复：正确地observe流式内容
-    // 始终subscribe到StreamingMessageStateManager，即使不在流式期间
-    val streamingText by remember(message.id, viewModel) {
-        if (viewModel != null) {
-            viewModel.getStreamingContent(message.id)
-        } else {
-            kotlinx.coroutines.flow.MutableStateFlow(message.text)
-        }
-    }.collectAsState()
     
-    // 🔥 修复：更准确的流式状态判断
-    // 优先使用 streamingText，只要它不为空
-    val isActuallyStreaming = remember(isStreaming, streamingText, message.text) {
-        isStreaming && streamingText.isNotEmpty()
-    }
-    
-    // 🔥 关键修复：正确判断是否应该触发最终渲染
-    // 当 isStreaming=false 时（流式真正结束），无论其他条件，都应该 isFinal=true
-    val shouldBeFinal = remember(isStreaming, isActuallyStreaming, message.text) {
-        !isStreaming || (!isActuallyStreaming && message.text.isNotEmpty())
-    }
-    
-    // 🔍 [STREAM_DEBUG] 记录文本源选择
-    // 🎯 关键修复：监听流式状态变化，确保从流式切换到最终状态时强制触发渲染
-    val previouslyStreaming = remember { mutableStateOf(isActuallyStreaming) }
-    LaunchedEffect(isActuallyStreaming, streamingText, message.text, shouldBeFinal) {
-        android.util.Log.i("STREAM_DEBUG", "[EnhancedMarkdownText] msgId=${message.id}, isStreaming=$isStreaming, isActuallyStreaming=$isActuallyStreaming, shouldBeFinal=$shouldBeFinal, streamingLen=${streamingText.length}, msgTextLen=${message.text.length}, preview='${streamingText.take(30)}'")
-        
-        // 🎯 检测流式状态从true切换到false（流式结束）
-        if (previouslyStreaming.value && !isActuallyStreaming && message.text.isNotEmpty()) {
-            android.util.Log.i("STREAM_DEBUG", "[EnhancedMarkdownText] 🔥 STREAMING FINISHED for msgId=${message.id}, forcing final render")
-        }
-        previouslyStreaming.value = isActuallyStreaming
-    }
-    
-    // 🔥 关键修复：流式期间优先使用 streamingText
-    val displayText = if (isActuallyStreaming) {
-        android.util.Log.d("STREAM_DEBUG", "[EnhancedMarkdownText] 🔥 Using streamingText: msgId=${message.id}, len=${streamingText.length}, preview='${streamingText.take(50)}'")
-        streamingText
-    } else if (message.text.isNotEmpty()) {
-        android.util.Log.d("STREAM_DEBUG", "[EnhancedMarkdownText] Using message.text: msgId=${message.id}, len=${message.text.length}")
-        message.text
+    // 🎯 流式内容实时获取
+    val content = if (isStreaming && viewModel != null) {
+        viewModel.streamingMessageStateManager
+            .getOrCreateStreamingState(message.id)
+            .collectAsState(initial = message.text).value
     } else {
-        // 如果 message.text 为空，但有 streamingText，也使用 streamingText
-        android.util.Log.d("STREAM_DEBUG", "[EnhancedMarkdownText] Fallback to streamingText: msgId=${message.id}, len=${streamingText.length}")
-        streamingText
+        message.text
     }
     
-    val md = normalizeBasicMarkdown(displayText)
-    MarkdownHtmlView(
-        markdown = md,
-        isStreaming = isActuallyStreaming,  // 🔥 修复：使用更准确的流式状态
-        isFinal = shouldBeFinal,  // 🔥 修复：使用正确的最终状态判断
-        modifier = modifier.fillMaxWidth()
-    )
+    // 🎯 解析并分离代码块和表格
+    val parsedContent = remember(content) {
+        ContentParser.parseCompleteContent(content)
+    }
+    
+    // 检查是否只有文本（无代码块和表格）
+    if (parsedContent.size == 1 && parsedContent[0] is ContentPart.Text) {
+        // 纯文本：直接用 MarkdownRenderer（支持数学公式）
+        MarkdownRenderer(
+            markdown = content,
+            style = style,
+            color = textColor,
+            modifier = modifier.fillMaxWidth()
+        )
+    } else {
+        // 混合内容：文本 + 代码块 + 表格
+        Column(modifier = modifier.fillMaxWidth()) {
+            parsedContent.forEach { part ->
+                when (part) {
+                    is ContentPart.Text -> {
+                        // 文本部分：用 MarkdownRenderer（支持数学公式）
+                        MarkdownRenderer(
+                            markdown = part.content,
+                            style = style,
+                            color = textColor,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    
+                    is ContentPart.Code -> {
+                        // 🎯 代码块：使用自定义组件（无高度限制）
+                        val shouldScroll = part.content.lines().maxOfOrNull { it.length } ?: 0 > 80
+                        
+                        CodeBlock(
+                            code = part.content,
+                            language = part.language,
+                            textColor = textColor,
+                            enableHorizontalScroll = shouldScroll,
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            maxHeight = 600  // 增加最大高度限制
+                        )
+                    }
+                    
+                    is ContentPart.Table -> {
+                        // 🎯 表格：使用表格渲染器
+                        TableRenderer(
+                            lines = part.lines,
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
+/**
+ * 简化的静态文本显示组件
+ */
 @Composable
 fun StableMarkdownText(
     markdown: String,
     style: TextStyle,
     modifier: Modifier = Modifier
 ) {
-    val md = normalizeBasicMarkdown(markdown)
-    // 使用基于 CDN 的 Markdown 富文本渲染，避免原始文本直出
-    MarkdownHtmlView(
-        markdown = md,
-        isStreaming = false,
-        isFinal = true,
-        modifier = modifier
+    Text(
+        text = markdown,
+        modifier = modifier,
+        style = style.copy(
+            platformStyle = PlatformTextStyle(includeFontPadding = false)
+        )
     )
 }

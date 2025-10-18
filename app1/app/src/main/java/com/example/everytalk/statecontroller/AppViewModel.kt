@@ -103,6 +103,13 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         // Initialize with data source for persistent parameter storage
         initializeDataSource(dataSource)
     }
+    
+    // 🎯 手势冲突管理器（用于协调代码块滚动和抽屉手势）
+    val gestureManager = com.example.everytalk.ui.components.GestureConflictManager()
+    
+    // 🎯 流式消息状态管理器（用于实时流式内容观察）
+    val streamingMessageStateManager get() = stateHolder.streamingMessageStateManager
+    
     private val imageLoader = ImageLoader.Builder(application.applicationContext)
         .logger(DebugLogger())
         .build()
@@ -329,12 +336,17 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                                             val cached = chatListItemCache[message.id]
                                             val hasReasoning = !message.reasoning.isNullOrBlank()
                                             
-                                            // 检查缓存是否有效（内容未变化）
+                                            // 🔧 修复：缓存验证必须包含流式状态，否则取消后仍显示旧的LoadingIndicator
+                                            val isCurrentlyStreaming = isApiCalling && message.id == currentStreamingAiMessageId
+                                            
+                                            // 检查缓存是否有效（内容未变化 + 流式状态未变化）
                                             val cacheValid = cached != null &&
                                                 cached.text == message.text &&
                                                 cached.reasoning == message.reasoning &&
                                                 cached.outputType == message.outputType &&
-                                                cached.hasReasoning == hasReasoning
+                                                cached.hasReasoning == hasReasoning &&
+                                                // 关键：流式状态变化时缓存失效
+                                                (isCurrentlyStreaming == (cached.items.any { it is ChatListItem.LoadingIndicator }))
                                             
                                             if (cacheValid) {
                                                 // ✅ 缓存命中，直接返回
@@ -394,11 +406,16 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                             val cached = imageGenerationChatListItemCache[message.id]
                             val hasReasoning = !message.reasoning.isNullOrBlank()
                             
+                            // 🔧 修复：图像生成也需要验证流式状态
+                            val isCurrentlyStreaming = isApiCalling && message.id == currentStreamingAiMessageId
+                            
                             val cacheValid = cached != null &&
                                 cached.text == message.text &&
                                 cached.reasoning == message.reasoning &&
                                 cached.outputType == message.outputType &&
-                                cached.hasReasoning == hasReasoning
+                                cached.hasReasoning == hasReasoning &&
+                                // 关键：流式状态变化时缓存失效
+                                (isCurrentlyStreaming == (cached.items.any { it is ChatListItem.LoadingIndicator }))
                             
                             if (cacheValid) {
                                 cached!!.items
@@ -586,6 +603,11 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
          isImageGeneration: Boolean
      ): com.example.everytalk.ui.state.AiBubbleState {
          if (message.isError) return com.example.everytalk.ui.state.AiBubbleState.Error(message.text)
+ 
+         // 🔧 修复：全局暂停时不应显示“正在连接”/任何流式占位，直接让 UI 维持当前画面
+         if (stateHolder._isStreamingPaused.value) {
+             return com.example.everytalk.ui.state.AiBubbleState.Idle
+         }
  
          val isCurrentStreaming = isApiCalling && message.id == currentStreamingAiMessageId
          val hasReasoning = !message.reasoning.isNullOrBlank()
@@ -2556,5 +2578,19 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         // 清理缓存管理器
         cacheManager.cleanup()
         Log.d("AppViewModel", "ViewModel cleared, cache manager cleaned up")
+    }
+    
+    /**
+     * 🎯 低内存回调 - 清理非必要缓存
+     * 在MainActivity的onTrimMemory中调用
+     */
+    fun onLowMemory() {
+        Log.w("AppViewModel", "Low memory detected, clearing caches")
+        
+        // 清理缓存
+        textConversationPreviewCache.evictAll()
+        imageConversationPreviewCache.evictAll()
+        
+        Log.i("AppViewModel", "Low memory caches cleared")
     }
 }

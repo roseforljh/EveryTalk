@@ -11,7 +11,6 @@ import androidx.lifecycle.LifecycleObserver
 import androidx.lifecycle.OnLifecycleEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
-import com.example.everytalk.ui.components.MemoryLeakGuard
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -97,23 +96,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // 🎯 集成内存防护系统 - 解决WebView内存泄漏
-        MemoryLeakGuard.initialize(application)
-        
         // 异步初始化ProfileInstaller
         lifecycleScope.launch(Dispatchers.IO) {
             ProfileInstaller.writeProfile(this@MainActivity)
-        }
-        
-        // 异步预初始化WebView，避免主线程阻塞
-        // 🎯 使用新的统一WebView管理器
-        lifecycleScope.launch(Dispatchers.Main) {
-            try {
-                // WebView预热已移除，使用原生数学渲染器
-                android.util.Log.d("MainActivity", "✅ 使用原生数学渲染器，无需WebView预热")
-            } catch (e: Exception) {
-                android.util.Log.w("MainActivity", "初始化失败", e)
-            }
         }
         
         WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -205,9 +190,12 @@ class MainActivity : ComponentActivity() {
                             }
                         }
 
+                        // 🎯 根据代码块滚动状态动态控制抽屉手势
+                        val isCodeBlockScrolling by appViewModel.gestureManager.isCodeBlockScrolling.collectAsState()
+                        
                         DismissibleNavigationDrawer(
                             drawerState = appViewModel.drawerState,
-                            gesturesEnabled = true,
+                            gesturesEnabled = !isCodeBlockScrolling, // 代码块滚动时禁用抽屉手势
                             modifier = Modifier.fillMaxSize(),
                             drawerContent = {
                                 val navBackStackEntry by navController.currentBackStackEntryAsState()
@@ -474,11 +462,22 @@ class MainActivity : ComponentActivity() {
        if (this::appViewModel.isInitialized) {
            appViewModel.onAppStop()
        }
-       // 🎯 应用停止时执行内存清理
-       MemoryLeakGuard.performEmergencyCleanup()
-       // 🎯 清理统一WebView管理器
-       // com.example.everytalk.ui.components.UnifiedWebViewManager.clearAll()
    }
+   
+   /**
+    * 🎯 低内存回调 - 清理缓存
+    */
+   override fun onTrimMemory(level: Int) {
+       super.onTrimMemory(level)
+       
+       // 中等及以上内存压力时清理缓存
+       if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE) {
+           if (this::appViewModel.isInitialized) {
+               appViewModel.onLowMemory()
+           }
+       }
+   }
+   
     @Composable
     fun SplashScreen(onAnimationEnd: () -> Unit) {
         var startAnimation by remember { mutableStateOf(false) }

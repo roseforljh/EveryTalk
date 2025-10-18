@@ -121,7 +121,6 @@ android {
 
         implementation("androidx.compose.material:material") // 保留基础 Material 依赖
         
-        // Markdown 渲染库已移除
         implementation("androidx.compose.material3:material3-window-size-class")
         implementation("androidx.compose.material:material-icons-core")
         implementation("androidx.compose.material:material-icons-extended")
@@ -181,5 +180,13 @@ android {
 
         // ===== 网络 - OkHttp =====
         implementation("com.squareup.okhttp3:okhttp:4.12.0")
+// ===== Markdown渲染 - compose-markdown =====
+implementation("com.github.jeziellago:compose-markdown:0.5.7")
+
+// ===== Markdown渲染（表格支持）- Markwon =====
+// 用于当检测到 GFM 表格时，回退到 Markwon（支持 TablesPlugin）
+implementation("io.noties.markwon:core:4.6.2")
+implementation("io.noties.markwon:ext-tables:4.6.2")
+
 
     }

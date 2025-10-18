@@ -5,10 +5,6 @@ package com.example.everytalk.config
  */
 object PerformanceConfig {
     
-    // WebView 配置
-    const val WEBVIEW_POOL_SIZE = 3
-    const val WEBVIEW_INIT_TIMEOUT_MS = 5000L
-    
     // Compose 重组阈值
     const val RECOMPOSITION_WARNING_THRESHOLD = 10
     const val RECOMPOSITION_LOG_INTERVAL_MS = 1000L
@@ -43,7 +39,6 @@ object PerformanceConfig {
     const val USE_STREAMING_STATEFLOW_RENDERING = true
     
     // UI渲染配置
-    const val MARKDOWN_RENDERING_TIMEOUT_MS = 2000L // Markdown渲染超时
     const val UI_REFRESH_DEBOUNCE_MS = 50L // UI刷新防抖
     const val COMPOSE_RECOMPOSITION_THRESHOLD = 5 // Compose重组阈值
     
@@ -57,6 +52,21 @@ object PerformanceConfig {
     
     // 主线程监控
     const val MAIN_THREAD_BLOCK_THRESHOLD_MS = 100L
+    
+    // ===== 格式渲染配置 =====
+    // LaTeX公式渲染
+    const val LATEX_BITMAP_CACHE_SIZE = 100 // 缓存100个公式Bitmap
+    const val LATEX_RENDER_TIMEOUT_MS = 5000L // 单个公式渲染超时
+    
+    // Markdown解析
+    const val MARKDOWN_PARSE_CACHE_SIZE = 50 // 缓存50个已解析Markdown
+    
+    // 流式解析
+    const val PARSE_BUFFER_SIZE = 200 // 流式解析缓冲区（字符数）
+    const val PARSE_DEBOUNCE_MS = 300L // 解析防抖时间
+    
+    // 代码块配置
+    const val CODE_BLOCK_SCROLL_THRESHOLD = 80 // 超过80字符启用水平滚动
     
     /**
      * 根据设备性能动态调整配置

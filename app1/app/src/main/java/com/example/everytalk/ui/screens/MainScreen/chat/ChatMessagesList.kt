@@ -13,6 +13,8 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -251,57 +253,126 @@ fun ChatMessagesList(
                         is ChatListItem.AiMessage -> {
                             val message = viewModel.getMessageById(item.messageId)
                             if (message != null) {
-                                AiMessageItem(
-                                    message = message,
-                                    text = item.text,
-                                    maxWidth = bubbleMaxWidth,
-                                    hasReasoning = item.hasReasoning,
-                                    onLongPress = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        onShowAiMessageOptions(message)
-                                    },
-                                    isStreaming = currentStreamingId == message.id,
-                                    messageOutputType = message.outputType,
-                                    viewModel = viewModel
-                                )
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalAlignment = Alignment.Start
+                                ) {
+                                    AiMessageItem(
+                                        message = message,
+                                        text = item.text,
+                                        maxWidth = bubbleMaxWidth,
+                                        hasReasoning = item.hasReasoning,
+                                        onLongPress = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onShowAiMessageOptions(message)
+                                        },
+                                        isStreaming = currentStreamingId == message.id,
+                                        messageOutputType = message.outputType,
+                                        viewModel = viewModel,
+                                        showMenuButton = false
+                                    )
+                                    // 在气泡下方添加三点按钮
+                                    IconButton(
+                                        onClick = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onShowAiMessageOptions(message)
+                                        },
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .padding(top = 4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.MoreVert,
+                                            contentDescription = "消息选项",
+                                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
                             }
                         }
 
                         is ChatListItem.AiMessageMath -> {
                             val message = viewModel.getMessageById(item.messageId)
                             if (message != null) {
-                                AiMessageItem(
-                                    message = message,
-                                    text = item.text,
-                                    maxWidth = bubbleMaxWidth,
-                                    hasReasoning = item.hasReasoning,
-                                    onLongPress = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        onShowAiMessageOptions(message)
-                                    },
-                                    isStreaming = currentStreamingId == message.id,
-                                    messageOutputType = message.outputType,
-                                    viewModel = viewModel
-                                )
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalAlignment = Alignment.Start
+                                ) {
+                                    AiMessageItem(
+                                        message = message,
+                                        text = item.text,
+                                        maxWidth = bubbleMaxWidth,
+                                        hasReasoning = item.hasReasoning,
+                                        onLongPress = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onShowAiMessageOptions(message)
+                                        },
+                                        isStreaming = currentStreamingId == message.id,
+                                        messageOutputType = message.outputType,
+                                        viewModel = viewModel,
+                                        showMenuButton = false
+                                    )
+                                    // 在气泡下方添加三点按钮
+                                    IconButton(
+                                        onClick = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onShowAiMessageOptions(message)
+                                        },
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .padding(top = 4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.MoreVert,
+                                            contentDescription = "消息选项",
+                                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
                             }
                         }
                         is ChatListItem.AiMessageCode -> {
                             val message = viewModel.getMessageById(item.messageId)
                             if (message != null) {
-                                AiMessageItem(
-                                    message = message,
-                                    // 不再任何包裹：按原文渲染，避免把普通文本误判为代码
-                                    text = item.text,
-                                    maxWidth = bubbleMaxWidth,
-                                    hasReasoning = item.hasReasoning,
-                                    onLongPress = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        onShowAiMessageOptions(message)
-                                    },
-                                    isStreaming = currentStreamingId == message.id,
-                                    messageOutputType = message.outputType,
-                                    viewModel = viewModel
-                                )
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalAlignment = Alignment.Start
+                                ) {
+                                    AiMessageItem(
+                                        message = message,
+                                        // 不再任何包裹：按原文渲染，避免把普通文本误判为代码
+                                        text = item.text,
+                                        maxWidth = bubbleMaxWidth,
+                                        hasReasoning = item.hasReasoning,
+                                        onLongPress = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onShowAiMessageOptions(message)
+                                        },
+                                        isStreaming = currentStreamingId == message.id,
+                                        messageOutputType = message.outputType,
+                                        viewModel = viewModel,
+                                        showMenuButton = false
+                                    )
+                                    // 在气泡下方添加三点按钮
+                                    IconButton(
+                                        onClick = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onShowAiMessageOptions(message)
+                                        },
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .padding(top = 4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.MoreVert,
+                                            contentDescription = "消息选项",
+                                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
                             }
                         }
 
@@ -316,57 +387,126 @@ fun ChatMessagesList(
                         is ChatListItem.AiMessageStreaming -> {
                             val message = viewModel.getMessageById(item.messageId)
                             if (message != null) {
-                                AiMessageItem(
-                                    message = message,
-                                    text = message.text,
-                                    maxWidth = bubbleMaxWidth,
-                                    hasReasoning = item.hasReasoning,
-                                    onLongPress = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        onShowAiMessageOptions(message)
-                                    },
-                                    isStreaming = true,
-                                    messageOutputType = message.outputType,
-                                    viewModel = viewModel
-                                )
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalAlignment = Alignment.Start
+                                ) {
+                                    AiMessageItem(
+                                        message = message,
+                                        text = message.text,
+                                        maxWidth = bubbleMaxWidth,
+                                        hasReasoning = item.hasReasoning,
+                                        onLongPress = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onShowAiMessageOptions(message)
+                                        },
+                                        isStreaming = true,
+                                        messageOutputType = message.outputType,
+                                        viewModel = viewModel,
+                                        showMenuButton = false
+                                    )
+                                    // 在气泡下方添加三点按钮
+                                    IconButton(
+                                        onClick = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onShowAiMessageOptions(message)
+                                        },
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .padding(top = 4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.MoreVert,
+                                            contentDescription = "消息选项",
+                                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
                             }
                         }
                         
                         is ChatListItem.AiMessageMathStreaming -> {
                             val message = viewModel.getMessageById(item.messageId)
                             if (message != null) {
-                                AiMessageItem(
-                                    message = message,
-                                    text = message.text,
-                                    maxWidth = bubbleMaxWidth,
-                                    hasReasoning = item.hasReasoning,
-                                    onLongPress = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        onShowAiMessageOptions(message)
-                                    },
-                                    isStreaming = true,
-                                    messageOutputType = message.outputType,
-                                    viewModel = viewModel
-                                )
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalAlignment = Alignment.Start
+                                ) {
+                                    AiMessageItem(
+                                        message = message,
+                                        text = message.text,
+                                        maxWidth = bubbleMaxWidth,
+                                        hasReasoning = item.hasReasoning,
+                                        onLongPress = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onShowAiMessageOptions(message)
+                                        },
+                                        isStreaming = true,
+                                        messageOutputType = message.outputType,
+                                        viewModel = viewModel,
+                                        showMenuButton = false
+                                    )
+                                    // 在气泡下方添加三点按钮
+                                    IconButton(
+                                        onClick = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onShowAiMessageOptions(message)
+                                        },
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .padding(top = 4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.MoreVert,
+                                            contentDescription = "消息选项",
+                                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
                             }
                         }
                         
                         is ChatListItem.AiMessageCodeStreaming -> {
                             val message = viewModel.getMessageById(item.messageId)
                             if (message != null) {
-                                AiMessageItem(
-                                    message = message,
-                                    text = message.text,
-                                    maxWidth = bubbleMaxWidth,
-                                    hasReasoning = item.hasReasoning,
-                                    onLongPress = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        onShowAiMessageOptions(message)
-                                    },
-                                    isStreaming = true,
-                                    messageOutputType = message.outputType,
-                                    viewModel = viewModel
-                                )
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalAlignment = Alignment.Start
+                                ) {
+                                    AiMessageItem(
+                                        message = message,
+                                        text = message.text,
+                                        maxWidth = bubbleMaxWidth,
+                                        hasReasoning = item.hasReasoning,
+                                        onLongPress = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onShowAiMessageOptions(message)
+                                        },
+                                        isStreaming = true,
+                                        messageOutputType = message.outputType,
+                                        viewModel = viewModel,
+                                        showMenuButton = false
+                                    )
+                                    // 在气泡下方添加三点按钮
+                                    IconButton(
+                                        onClick = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onShowAiMessageOptions(message)
+                                        },
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .padding(top = 4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.MoreVert,
+                                            contentDescription = "消息选项",
+                                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
                             }
                         }
 
@@ -482,7 +622,8 @@ fun AiMessageItem(
     modifier: Modifier = Modifier,
     isStreaming: Boolean,
     messageOutputType: String,
-    viewModel: AppViewModel
+    viewModel: AppViewModel,
+    showMenuButton: Boolean = true
 ) {
     val shape = RectangleShape
     val aiReplyMessageDescription = stringResource(id = R.string.ai_reply_message)

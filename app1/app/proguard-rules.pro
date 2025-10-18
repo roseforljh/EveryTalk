@@ -96,14 +96,9 @@
 -keep,allowobfuscation class org.jsoup.Jsoup
 -dontwarn org.jsoup.**
 
-# LaTeX - 允许混淆
--dontwarn ru.noties.jlatexmath.**
 
 # Compose - 允许系统自动处理
 -dontwarn androidx.compose.**
-
-# Markdown 库
--keep class dev.jeziellago.compose.markdowntext.** { *; }
 
 # ===== 关键业务类 (仅保留公共 API) =====
 # 不使用 { *; },允许内部方法被混淆

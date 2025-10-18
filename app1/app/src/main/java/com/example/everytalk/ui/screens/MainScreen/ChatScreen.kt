@@ -679,9 +679,9 @@ private fun UpdateAvailableDialog(
                             .verticalScroll(scrollState)
                             .padding(vertical = scrimHeight)
                     ) {
-                        // 🎯 显示纯文本（移除Markdown标记），使文本可以被正确选择
-                        Text(
-                            text = com.example.everytalk.ui.components.markdownToPlainText(textToDisplay),
+                        // 🎯 显示AI输出的原始格式（保留Markdown标记），使文本可以被正确选择
+                        androidx.compose.material3.Text(
+                            text = textToDisplay,
                             style = MaterialTheme.typography.bodyLarge.copy(
                                 color = MaterialTheme.colorScheme.onSurface
                             ),

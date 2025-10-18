@@ -153,10 +153,16 @@ class ApiHandler(
             }
         }
         jobToCancel?.cancel(CancellationException(specificCancelReason))
+        
+        // 🔧 修复：取消时必须重置所有流式状态，否则UI会继续显示"正在连接"
         if (isImageGeneration) {
             stateHolder.imageApiJob = null
+            stateHolder._isImageApiCalling.value = false
+            stateHolder._currentImageStreamingAiMessageId.value = null
         } else {
             stateHolder.textApiJob = null
+            stateHolder._isTextApiCalling.value = false
+            stateHolder._currentTextStreamingAiMessageId.value = null
         }
     }
 
@@ -474,12 +480,41 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                         android.util.Log.d("ApiHandler", "Event type: ContentFinal")
                         android.util.Log.d("ApiHandler", "Content length: ${processedResult.content.length}")
                         android.util.Log.d("ApiHandler", "Setting contentStarted to: $hasStreamingContent")
+                        android.util.Log.d("ApiHandler", "Current text length: ${currentMessage.text.length}")
 
-                        // ✅ 最终内容到来：一次性写入完整清理后的文本以持久化/回放
+                        // ✅ 最终内容到来：一次性写入“后端确认的最终全文”以持久化/回放
+                        // 关键：直接使用 ContentFinal 的原始文本，避免处理器/缓冲节流造成的尾部缺失
+                        val finalEventText = appEvent.text
+                        android.util.Log.d(
+                            "ApiHandler",
+                            "🔥 Using ContentFinal event text (len=${finalEventText.length}) vs processed=${processedResult.content.length}"
+                        )
                         updatedMessage = updatedMessage.copy(
                             contentStarted = true,
-                            text = processedResult.content
+                            text = finalEventText
                         )
+                        
+                        // 🔥 关键修复：强制标记会话为脏，确保内容被持久化和 UI 刷新
+                        if (isImageGeneration) {
+                            stateHolder.isImageConversationDirty.value = true
+                        } else {
+                            stateHolder.isTextConversationDirty.value = true
+                        }
+                        android.util.Log.d("ApiHandler", "🔥 Marked conversation as dirty after ContentFinal")
+                        
+                        // 🔥 关键修复：同步消息到列表，确保 UI 立即更新
+                        stateHolder.syncStreamingMessageToList(aiMessageId, isImageGeneration)
+                        android.util.Log.d("ApiHandler", "🔥 Synced ContentFinal to message list")
+                        
+                        // 触发完整文本变更回调
+                        if (finalEventText.isNotBlank()) {
+                            try {
+                                onAiMessageFullTextChanged(aiMessageId, finalEventText)
+                                android.util.Log.d("ApiHandler", "🔥 Triggered full text changed callback for ContentFinal (event.text)")
+                            } catch (e: Exception) {
+                                logger.warn("onAiMessageFullTextChanged in ContentFinal handler failed: ${e.message}")
+                            }
+                        }
                     }
                 }
                 is AppStreamEvent.Reasoning -> {
@@ -610,9 +645,8 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     // 处理器会在清理资源时被正确管理，不需要在这里删除
                     logger.debug("Message processor for $aiMessageId retained after stream completion")
                     
-                    // 🔥 核心修复：在事件处理完成后立即清空streaming ID
-                    // 这会触发UI重新组合，isStreaming变为false，WebView重新渲染Markdown
-                    // 修复问题：流式结束后需要切换会话才能看到Markdown格式
+                    // 核心修复：在事件处理完成后立即清空streaming ID
+                    // 这会触发UI重新组合，isStreaming变为false
                     if (isImageGeneration) {
                         if (stateHolder._currentImageStreamingAiMessageId.value == aiMessageId) {
                             stateHolder._currentImageStreamingAiMessageId.value = null

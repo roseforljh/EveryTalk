@@ -8,8 +8,6 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Base64
 import androidx.core.content.FileProvider
-import android.webkit.CookieManager
-import android.webkit.WebView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
@@ -706,36 +704,6 @@ class FileManager(private val context: Context) {
     }
 
     /**
-     * 仅清理 WebView 相关缓存目录与 Cookie（不实例化 WebView，避免需要主线程）
-     * - 目录常见为：cacheDir/webview、dataDir/app_webview（不同 ROM 可能差异）
-     * - 同时清理 CookieManager
-     * @return 删除的文件数量（目录中文件数）
-     */
-    suspend fun clearWebViewCaches(): Int = withContext(Dispatchers.IO) {
-        var deleted = 0
-        // 清 Cookie
-        runCatching {
-            val cm = CookieManager.getInstance()
-            cm.removeAllCookies(null)
-            cm.flush()
-        }
-
-        // 常见 WebView 缓存目录
-        val candidates = buildList {
-            add(File(context.cacheDir, "webview"))
-            // dataDir 仅在 API 24+ 可用；向下兼容使用 packageName 路径尝试
-            runCatching { add(File(context.dataDir, "app_webview")) }
-            val appWebviewFallback = File("/data/data/${context.packageName}/app_webview")
-            add(appWebviewFallback)
-        }
-
-        candidates.forEach { dir ->
-            deleted += deleteRecursivelySafe(dir)
-        }
-        deleted
-    }
-
-    /**
      * 统计聊天附件目录占用大小（字节）
      */
     suspend fun getChatAttachmentsSizeBytes(): Long = withContext(Dispatchers.IO) {
@@ -749,39 +717,18 @@ class FileManager(private val context: Context) {
     }
 
     /**
-     * 统计 WebView 缓存目录占用大小（字节）
-     */
-    suspend fun getWebViewCacheSizeBytes(): Long = withContext(Dispatchers.IO) {
-        fun folderSize(f: File?): Long {
-            if (f == null || !f.exists()) return 0L
-            return if (f.isDirectory) {
-                f.listFiles()?.sumOf { folderSize(it) } ?: 0L
-            } else f.length()
-        }
-        val candidates = buildList {
-            add(File(context.cacheDir, "webview"))
-            runCatching { add(File(context.dataDir, "app_webview")) }
-            add(File("/data/data/${context.packageName}/app_webview"))
-        }
-        candidates.sumOf { folderSize(it) }
-    }
-
-    /**
-     * 一键清空：会话占用存储 + WebView 缓存
+     * 一键清空：会话占用存储
      * 返回释放的总字节数（尽量估算，可能受 ROM/权限影响）
      */
     suspend fun clearAllConversationStorage(): Long = withContext(Dispatchers.IO) {
         // 估算清理前大小
-        val before = runCatching { getChatAttachmentsSizeBytes() }.getOrElse { 0L } +
-                     runCatching { getWebViewCacheSizeBytes() }.getOrElse { 0L }
+        val before = runCatching { getChatAttachmentsSizeBytes() }.getOrElse { 0L }
 
-        // 执行清理（顺序无关）
-        runCatching { clearWebViewCaches() }
+        // 执行清理
         runCatching { clearAllChatAttachments() }
 
         // 估算清理后大小
-        val after = runCatching { getChatAttachmentsSizeBytes() }.getOrElse { 0L } +
-                    runCatching { getWebViewCacheSizeBytes() }.getOrElse { 0L }
+        val after = runCatching { getChatAttachmentsSizeBytes() }.getOrElse { 0L }
 
         val freed = before - after
         if (freed > 0) freed else 0L
