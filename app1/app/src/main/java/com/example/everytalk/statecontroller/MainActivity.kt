@@ -122,12 +122,7 @@ class MainActivity : ComponentActivity() {
                 windowInsetsController.isAppearanceLightNavigationBars = !isDarkTheme
                 windowInsetsController.isAppearanceLightStatusBars = !isDarkTheme
                 
-                var showSplash by remember { mutableStateOf(true) }
-
-                if (showSplash) {
-                    SplashScreen(onAnimationEnd = { showSplash = false })
-                } else {
-                    val snackbarHostState = remember { SnackbarHostState() }
+                val snackbarHostState = remember { SnackbarHostState() }
                     val navController = rememberNavController()
                     val coroutineScope = rememberCoroutineScope()
 
@@ -444,11 +439,11 @@ class MainActivity : ComponentActivity() {
                                }
                             }
                         }
-                    }
                 }
             }
         }
     }
+    
    override fun onPause() {
        super.onPause()
        // 在应用暂停时也保存数据作为额外保护
@@ -478,35 +473,4 @@ class MainActivity : ComponentActivity() {
        }
    }
    
-    @Composable
-    fun SplashScreen(onAnimationEnd: () -> Unit) {
-        var startAnimation by remember { mutableStateOf(false) }
-        val scale by animateFloatAsState(
-            targetValue = if (startAnimation) 1f else 0f,
-            animationSpec = tween(durationMillis = 800),
-            label = "SplashScale"
-        )
-
-        LaunchedEffect(Unit) {
-            startAnimation = true
-            kotlinx.coroutines.delay(1200) // 800ms for anim, 400ms pause
-            onAnimationEnd()
-        }
-
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(MaterialTheme.colorScheme.background),
-            contentAlignment = androidx.compose.ui.Alignment.Center
-        ) {
-            Image(
-                painter = androidx.compose.ui.res.painterResource(
-                    id = if (isSystemInDarkTheme()) com.example.everytalk.R.drawable.logo_dark
-                         else com.example.everytalk.R.drawable.ic_foreground_logo
-                ),
-                contentDescription = "Logo",
-                modifier = Modifier.scale(scale)
-            )
-        }
-    }
 }
