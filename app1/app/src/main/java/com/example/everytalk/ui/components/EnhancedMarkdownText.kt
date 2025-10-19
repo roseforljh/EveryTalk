@@ -21,6 +21,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.statecontroller.AppViewModel
+import com.example.everytalk.ui.components.math.MathAwareText
 
 /**
  * 增强的Markdown文本显示组件
@@ -154,12 +155,12 @@ fun EnhancedMarkdownText(
             parsedParts.forEach { part ->
                 when (part) {
                     is ContentPart.Text -> {
-                        MarkdownRenderer(
-                            markdown = part.content,
+                        MathAwareText(
+                            text = part.content,
                             style = style,
                             color = textColor,
                             modifier = Modifier.fillMaxWidth(),
-                            isStreaming = true // 安全块；流式轻渲染门槛内会转换
+                            isStreaming = true
                         )
                     }
                     is ContentPart.Code -> {
@@ -187,20 +188,22 @@ fun EnhancedMarkdownText(
             }
             // 未闭合的尾巴：稳定起见维持纯文本
             if (retainedTail.isNotEmpty()) {
-                MarkdownRenderer(
-                    markdown = retainedTail,
+                // 将未闭合尾巴也交给数学感知渲染，避免 $$...$$ 在流式阶段显示为裸 $ 行
+                MathAwareText(
+                    text = retainedTail,
                     style = style,
                     color = textColor,
                     modifier = Modifier.fillMaxWidth(),
-                    isStreaming = true // 轻渲染：多数情况会回退纯文本
+                    isStreaming = true
                 )
             }
         }
     } else {
         // 兼容路径：沿用原先逻辑（含短路）
         if (legacyParsedContent.size == 1 && legacyParsedContent[0] is ContentPart.Text) {
-            MarkdownRenderer(
-                markdown = content,
+            // 即便走“兼容路径”，也要进行数学感知渲染，避免 $$ 在流式期间显示为单独 $ 行
+            MathAwareText(
+                text = content,
                 style = style,
                 color = textColor,
                 modifier = modifier.fillMaxWidth(),
@@ -211,8 +214,8 @@ fun EnhancedMarkdownText(
                 legacyParsedContent.forEach { part ->
                     when (part) {
                         is ContentPart.Text -> {
-                            MarkdownRenderer(
-                                markdown = part.content,
+                            MathAwareText(
+                                text = part.content,
                                 style = style,
                                 color = textColor,
                                 modifier = Modifier.fillMaxWidth(),

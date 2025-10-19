@@ -2,6 +2,7 @@ package com.example.everytalk.ui.components
 
 import android.util.Log
 import com.example.everytalk.config.PerformanceConfig
+import com.example.everytalk.ui.components.math.MathParser
 
 /**
  * 内容类型枚举
@@ -241,6 +242,10 @@ object ContentParser {
         if (!isComplete && isInsideUnclosedCodeFence(currentBuffer)) {
             return emptyList<ContentPart>() to currentBuffer
         }
+        // 数学未闭合（$ 或 $$ 奇偶/未闭合），同样暂缓，等待安全闭合点
+        if (!isComplete && MathParser.isInsideUnclosedMath(currentBuffer)) {
+            return emptyList<ContentPart>() to currentBuffer
+        }
 
         // 3) 已完成则全量解析
         if (isComplete) {
@@ -274,6 +279,8 @@ object ContentParser {
         // When an unfinished structure exists, fall back to the latest closed boundary.
         // Compute the nearest safe position based on closed code fences
         val codeFenceSafe = lastSafeEndForFence(text, fence = "```")
+        // 数学闭合切点（最近闭合的 $...$ 或 $$...$$）
+        val mathSafe = MathParser.findSafeMathCut(text).takeIf { it > 0 }
 
         // Natural breakpoints
         val period = text.lastIndexOf('。')
@@ -284,6 +291,7 @@ object ContentParser {
 
         val candidates = listOfNotNull(
             codeFenceSafe,
+            mathSafe,
             period.takeIf { it > 0 },
             newline.takeIf { it > 0 },
             halfPoint.takeIf { it > 0 }

@@ -16,6 +16,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.everytalk.ui.components.math.MathAwareText
 
 /**
  * Markdown 渲染器（支持表格）
@@ -136,12 +137,12 @@ fun TableRenderer(
                     .width(columnWidths[index])
                     .padding(horizontal = 12.dp)
                 if (renderMarkdownInCells) {
-                    MarkdownRenderer(
-                        markdown = header.trim(),
+                    MathAwareText(
+                        text = header.trim(),
                         style = headerStyle,
                         color = MaterialTheme.colorScheme.onSurface,
                         modifier = cellModifier,
-                        isStreaming = false // 表头优先转换MD，避免流式降级
+                        isStreaming = false
                     )
                 } else {
                     Text(
@@ -173,12 +174,12 @@ fun TableRenderer(
                             .padding(horizontal = 12.dp)
                         if (renderMarkdownInCells) {
                             // 在表格单元格内启用 Markdown 渲染（即使处于流式，也优先转换内联标记）
-                            MarkdownRenderer(
-                                markdown = cell.trim(),
+                            MathAwareText(
+                                text = cell.trim(),
                                 style = cellStyle,
                                 color = MaterialTheme.colorScheme.onSurface,
                                 modifier = cellModifier,
-                                isStreaming = false // 单元格内启用转换，确保粗体/行内代码等生效
+                                isStreaming = false
                             )
                         } else {
                             Text(
