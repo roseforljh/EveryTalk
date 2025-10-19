@@ -1,6 +1,7 @@
 package com.example.everytalk.statecontroller
 
 import android.util.Log
+import com.example.everytalk.util.PerformanceMonitor
 import kotlinx.coroutines.*
 
 /**
@@ -144,6 +145,8 @@ class StreamingBuffer(
         
         // 🔍 [STREAM_DEBUG_ANDROID] 每次flush都记录
         Log.i("STREAM_DEBUG", "[StreamingBuffer] ✅ FLUSH #$flushCount: msgId=$messageId, incrementalLen=${incrementalContent.length}, totalLen=${fullContent.length}")
+        // 统一采样与聚合：由 PerformanceMonitor 决定采样输出，避免分散日志
+        PerformanceMonitor.recordBufferFlush(messageId, incrementalContent.length, fullContent.length)
         
         // 🎯 Task 11: Add logging for buffer flush frequency
         // Log every 5th flush to track performance without overwhelming logs

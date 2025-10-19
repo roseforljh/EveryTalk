@@ -14,6 +14,7 @@ import com.example.everytalk.models.SelectedMediaItem.Audio
 import com.example.everytalk.ui.screens.viewmodel.HistoryManager
 import com.example.everytalk.util.AppLogger
 import com.example.everytalk.util.FileManager
+import com.example.everytalk.util.PerformanceMonitor
 import com.example.everytalk.util.messageprocessor.MessageProcessor
 import io.ktor.client.statement.HttpResponse
 import kotlinx.coroutines.CoroutineScope
@@ -152,6 +153,10 @@ class ApiHandler(
                 }
             }
         }
+        // Emit abort summary before cancellation
+        if (messageIdBeingCancelled != null) {
+            PerformanceMonitor.onAbort(messageIdBeingCancelled, reason = specificCancelReason)
+        }
         jobToCancel?.cancel(CancellationException(specificCancelReason))
         
         // 🔧 修复：取消时必须重置所有流式状态，否则UI会继续显示"正在连接"
@@ -202,6 +207,8 @@ class ApiHandler(
             contentStarted = false
         )
         val aiMessageId = newAiMessage.id
+        // Set performance context (mode only; backend/model can be set later if available)
+        PerformanceMonitor.setContext(aiMessageId, mode = if (isImageGeneration) "image" else "text")
 
         // 为新消息创建独立的消息处理器和块管理器
         val newMessageProcessor = MessageProcessor()
@@ -346,9 +353,9 @@ class ApiHandler(
                             android.util.Log.i("STREAM_DEBUG", "[ApiHandler] 🔥 EVENT RECEIVED at $timestamp: ${appEvent::class.simpleName}, msgId=$aiMessageId")
                             
                             val currentJob = if (isImageGeneration) stateHolder.imageApiJob else stateHolder.textApiJob
-                            val currentStreamingId = if (isImageGeneration) 
-                                stateHolder._currentImageStreamingAiMessageId.value 
-                            else 
+                            val currentStreamingId = if (isImageGeneration)
+                                stateHolder._currentImageStreamingAiMessageId.value
+                            else
                                 stateHolder._currentTextStreamingAiMessageId.value
                             if (currentJob != thisJob || currentStreamingId != aiMessageId) {
                                 thisJob?.cancel(CancellationException("API job 或 streaming ID 已更改，停止收集旧数据块"))
@@ -359,6 +366,13 @@ class ApiHandler(
                             // Check memory periodically to detect potential issues
                             // Requirements: 1.4, 3.4
                             stateHolder.checkMemoryUsage()
+                            // Record memory snapshot for session summary
+                            run {
+                                val rt = Runtime.getRuntime()
+                                val usedMB = ((rt.totalMemory() - rt.freeMemory()) / (1024 * 1024)).toInt()
+                                val maxMB = (rt.maxMemory() / (1024 * 1024)).toInt()
+                                PerformanceMonitor.recordMemory(aiMessageId, usedMB, maxMB)
+                            }
                             
                             processStreamEvent(appEvent, aiMessageId, isImageGeneration)
                             newEventChannel.trySend(appEvent)
@@ -444,6 +458,8 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                         val deltaChunk = appEvent.text
                         // 过滤纯空白内容，防止后端发送大量空格导致卡死
                         if (!deltaChunk.isNullOrEmpty() && deltaChunk.isNotBlank()) {
+                            // sampling-based performance record
+                            PerformanceMonitor.recordEvent(aiMessageId, "Content", deltaChunk.length)
                             // 🔍 [STREAM_DEBUG_ANDROID]
                             android.util.Log.i("STREAM_DEBUG", "[ApiHandler] ✅ Content event received: msgId=$aiMessageId, chunkLen=${deltaChunk.length}, preview='${deltaChunk.take(30)}'")
                             stateHolder.appendContentToMessage(aiMessageId, deltaChunk, isImageGeneration)
@@ -461,6 +477,7 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                         val deltaChunk = appEvent.text
                         // 过滤纯空白内容
                         if (!deltaChunk.isNullOrEmpty() && deltaChunk.isNotBlank()) {
+                            PerformanceMonitor.recordEvent(aiMessageId, "Text", deltaChunk.length)
                             stateHolder.appendContentToMessage(aiMessageId, deltaChunk, isImageGeneration)
                             // 🎯 第一个非空文本到来时，标记contentStarted = true
                             if (!currentMessage.contentStarted) {
@@ -478,20 +495,39 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                         android.util.Log.d("ApiHandler", "=== CONTENT FINAL EVENT DEBUG ===")
                         android.util.Log.d("ApiHandler", "Message ID: $aiMessageId")
                         android.util.Log.d("ApiHandler", "Event type: ContentFinal")
-                        android.util.Log.d("ApiHandler", "Content length: ${processedResult.content.length}")
-                        android.util.Log.d("ApiHandler", "Setting contentStarted to: $hasStreamingContent")
-                        android.util.Log.d("ApiHandler", "Current text length: ${currentMessage.text.length}")
+                        android.util.Log.d("ApiHandler", "Event text length: ${appEvent.text.length}")
+                        android.util.Log.d("ApiHandler", "Event text preview: '${appEvent.text.take(100)}'")
+                        android.util.Log.d("ApiHandler", "Processed content length: ${processedResult.content.length}")
+                        android.util.Log.d("ApiHandler", "Current message.text length: ${currentMessage.text.length}")
+                        android.util.Log.d("ApiHandler", "Current message.text preview: '${currentMessage.text.take(100)}'")
 
-                        // ✅ 最终内容到来：一次性写入“后端确认的最终全文”以持久化/回放
-                        // 关键：直接使用 ContentFinal 的原始文本，避免处理器/缓冲节流造成的尾部缺失
-                        val finalEventText = appEvent.text
-                        android.util.Log.d(
-                            "ApiHandler",
-                            "🔥 Using ContentFinal event text (len=${finalEventText.length}) vs processed=${processedResult.content.length}"
-                        )
+                        // ✅ 最终内容到来：使用 MessageProcessor 处理后的内容（已经过验证和合并）
+                        // 🔧 修复：优先使用 processedResult.content，它已经过 ContentFinalValidator 验证
+                        // 只有在 processedResult.content 为空时才使用 event.text
+                        val finalText = when {
+                            processedResult.content.isNotBlank() -> {
+                                android.util.Log.d("ApiHandler", "🔥 Using processed content (validated)")
+                                processedResult.content
+                            }
+                            appEvent.text.isNotBlank() -> {
+                                android.util.Log.d("ApiHandler", "🔥 Using event.text as fallback")
+                                appEvent.text
+                            }
+                            currentMessage.text.isNotBlank() -> {
+                                android.util.Log.w("ApiHandler", "🔥 Using current message.text as last resort")
+                                currentMessage.text
+                            }
+                            else -> {
+                                android.util.Log.e("ApiHandler", "🔥 All text sources are empty!")
+                                ""
+                            }
+                        }
+                        
+                        android.util.Log.d("ApiHandler", "🔥 Final text selected: length=${finalText.length}, preview='${finalText.take(100)}'")
+                        
                         updatedMessage = updatedMessage.copy(
                             contentStarted = true,
-                            text = finalEventText
+                            text = finalText
                         )
                         
                         // 🔥 关键修复：强制标记会话为脏，确保内容被持久化和 UI 刷新
@@ -507,10 +543,10 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                         android.util.Log.d("ApiHandler", "🔥 Synced ContentFinal to message list")
                         
                         // 触发完整文本变更回调
-                        if (finalEventText.isNotBlank()) {
+                        if (finalText.isNotBlank()) {
                             try {
-                                onAiMessageFullTextChanged(aiMessageId, finalEventText)
-                                android.util.Log.d("ApiHandler", "🔥 Triggered full text changed callback for ContentFinal (event.text)")
+                                onAiMessageFullTextChanged(aiMessageId, finalText)
+                                android.util.Log.d("ApiHandler", "🔥 Triggered full text changed callback for ContentFinal")
                             } catch (e: Exception) {
                                 logger.warn("onAiMessageFullTextChanged in ContentFinal handler failed: ${e.message}")
                             }
@@ -528,6 +564,7 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                         if (currentMessage != null) {
                             val deltaReasoning = processedResult.reasoning.removePrefix(currentMessage.reasoning ?: "")
                             if (deltaReasoning.isNotEmpty()) {
+                                PerformanceMonitor.recordEvent(aiMessageId, "Reasoning", deltaReasoning.length)
                                 stateHolder.appendReasoningToMessage(aiMessageId, deltaReasoning, isImageGeneration)
                                 android.util.Log.d("ApiHandler", "🎯 Appended reasoning delta (${deltaReasoning.length} chars) to message $aiMessageId")
                             }
@@ -640,7 +677,7 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     viewModelScope.launch(Dispatchers.IO) {
                         historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration)
                     }
-
+                    
                     // 🔥 正确的修复：不要删除处理器！让它保留在内存中
                     // 处理器会在清理资源时被正确管理，不需要在这里删除
                     logger.debug("Message processor for $aiMessageId retained after stream completion")
@@ -658,9 +695,12 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                             android.util.Log.d("ApiHandler", "🔥 Cleared text streaming ID immediately after Finish for message: $aiMessageId")
                         }
                     }
+                    // Emit single-line session summary
+                    PerformanceMonitor.onFinish(aiMessageId)
                 }
                 is AppStreamEvent.Error -> {
                     // 🎯 错误事件会触发 updateMessageWithError，它会自动刷新和清理 buffer
+                    PerformanceMonitor.recordEvent(aiMessageId, "Error", 0)
                     updateMessageWithError(aiMessageId, IOException(appEvent.message), isImageGeneration)
                 }
                 // 其他事件类型（如ToolCall, ImageGeneration）暂时不直接更新消息UI，由特定逻辑处理
@@ -683,6 +723,8 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
 
     private suspend fun updateMessageWithError(messageId: String, error: Throwable, isImageGeneration: Boolean = false, allowRetry: Boolean = true) {
         logger.error("Updating message with error", error)
+        // Emit abort summary on error
+        PerformanceMonitor.onAbort(messageId, reason = "error:${error.message ?: error.javaClass.simpleName}")
         
         // 🎯 刷新 StreamingBuffer 保留部分内容（Requirements: 7.1, 7.2, 7.5）
         stateHolder.flushStreamingBuffer(messageId)

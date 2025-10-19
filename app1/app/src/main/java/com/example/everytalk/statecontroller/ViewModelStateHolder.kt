@@ -35,6 +35,9 @@ data class ConversationScrollState(
     
     // 🎯 StreamingBuffer mapping (one buffer per message ID)
     private val streamingBuffers = mutableMapOf<String, StreamingBuffer>()
+
+    // 新增：记录每条流式消息已提交到 UI 的长度，用于只追加增量，避免重复全量赋值造成卡顿
+    private val streamingLastLengths = mutableMapOf<String, Int>()
     
     // CoroutineScope for StreamingBuffer operations (will be initialized from AppViewModel)
     private var bufferCoroutineScope: CoroutineScope? = null
@@ -407,27 +410,32 @@ fun addMessage(message: Message, isImageGeneration: Boolean = false) {
         // This allows UI components to observe streaming content efficiently
         // Requirements: 1.4, 3.4
         streamingMessageStateManager.startStreaming(messageId)
-        
-        // Create new buffer with callback that ONLY updates StreamingMessageStateManager
-        // 🎯 核心修复：流式期间不更新message.text，避免LazyColumn item重建
+
+        // 初始化已提交长度为0
+        streamingLastLengths[messageId] = 0
+
+        // Create new buffer with callback -> 仅追加“增量”，避免反复全量赋值
         val buffer = StreamingBuffer(
             messageId = messageId,
-            updateInterval = 16L,  // 🔥 16ms = 60fps，接近实时
-            batchThreshold = 1,    // 🔥 1个字符立即刷新
+            updateInterval = 120L,  // 120ms 合理节流
+            batchThreshold = 30,    // 至少30字符再触发一次
             onUpdate = { content ->
-                // 🎯 流式期间：同时更新 StreamingMessageStateManager 和 message.text
-                // StreamingMessageStateManager 用于高效的 StateFlow 观察
-                streamingMessageStateManager.updateContent(messageId, content)
-                
-                // 关键修复：同时更新 message.text，确保UI能看到变化
-                updateMessageContentDirect(messageId, content, isImageGeneration)
-                
-                // 标记会话为脏，确保内容会被保存
+                // 计算增量并仅追加
+                val lastLen = streamingLastLengths[messageId] ?: 0
+                if (content.length > lastLen) {
+                    val delta = content.substring(lastLen)
+                    if (delta.isNotEmpty()) {
+                        streamingMessageStateManager.appendText(messageId, delta)
+                        streamingLastLengths[messageId] = content.length
+                    }
+                }
+                // 标记会话为脏，持久化逻辑仍可感知到有增量
                 if (isImageGeneration) {
                     isImageConversationDirty.value = true
                 } else {
                     isTextConversationDirty.value = true
                 }
+                // 不在流式期间写回 messages 列表，Finish/ContentFinal 时一次性同步
             },
             coroutineScope = scope
         )
@@ -486,12 +494,13 @@ fun addMessage(message: Message, isImageGeneration: Boolean = false) {
     fun flushStreamingBuffer(messageId: String) {
         streamingBuffers[messageId]?.let { buffer ->
             buffer.flush()
-            
+
             // 🎯 Finish streaming in StreamingMessageStateManager
-            // This marks the message as no longer streaming while keeping the final content
-            // Requirements: 1.4, 3.4
             streamingMessageStateManager.finishStreaming(messageId)
-            
+
+            // 重置增量计数器，避免后续错误计算
+            streamingLastLengths.remove(messageId)
+
             android.util.Log.d("ViewModelStateHolder", "Flushed StreamingBuffer and finished streaming for message: $messageId")
         }
     }
@@ -514,12 +523,13 @@ fun addMessage(message: Message, isImageGeneration: Boolean = false) {
         streamingBuffers.remove(messageId)?.let { buffer ->
             buffer.clear()
         }
-        
+
+        // 清理增量计数器
+        streamingLastLengths.remove(messageId)
+
         // 🎯 Clear streaming state in StreamingMessageStateManager
-        // This removes the StateFlow and cleans up resources
-        // Requirements: 1.4, 3.4
         streamingMessageStateManager.clearStreamingState(messageId)
-        
+
         android.util.Log.d("ViewModelStateHolder", "Cleared StreamingBuffer and streaming state for message: $messageId")
     }
     
@@ -697,20 +707,14 @@ fun addMessage(message: Message, isImageGeneration: Boolean = false) {
      */
     fun appendContentToMessage(messageId: String, text: String, isImageGeneration: Boolean = false) {
         if (text.isEmpty()) return
-        
-        val currentStreamingId = if (isImageGeneration) {
-            _currentImageStreamingAiMessageId.value
-        } else {
-            _currentTextStreamingAiMessageId.value
+
+        // 始终优先走 StreamingBuffer（节流+合并），避免对 SnapshotStateList 频繁全文写回
+        streamingBuffers[messageId]?.let { buffer ->
+            buffer.append(text)
+            return
         }
-        
-        val isCurrentlyStreaming = (messageId == currentStreamingId)
-        
-        // Check if we have a StreamingBuffer for this message
-        val buffer = streamingBuffers[messageId]
-        
-        // 激进修复：绕过 StreamingBuffer，直接更新 message.text
-        // 直接更新，依靠 Compose 重组触发UI更新
+
+        // 仅在没有缓冲的极端回退路径，才直接更新一次（如历史重放/异常场景）
         val messageList = if (isImageGeneration) imageGenerationMessages else messages
         val index = messageList.indexOfFirst { it.id == messageId }
         if (index != -1) {
@@ -720,14 +724,7 @@ fun addMessage(message: Message, isImageGeneration: Boolean = false) {
                 contentStarted = true
             )
             messageList[index] = updatedMessage
-            
-            // 🔥 关键修复：同步更新 StreamingMessageStateManager
-            // 否则 computeBubbleState 会认为 streamingContent 为空，一直停留在 Reasoning 状态
             streamingMessageStateManager.updateContent(messageId, updatedMessage.text)
-            
-            // 🔍 [STREAM_DEBUG_ANDROID]
-            android.util.Log.i("STREAM_DEBUG", "[ViewModelStateHolder] 🔥 DIRECT UPDATE: msgId=$messageId, chunkLen=${text.length}, totalLen=${updatedMessage.text.length}, preview='${text.take(30)}'")
-            
             if (isImageGeneration) {
                 isImageConversationDirty.value = true
             } else {
@@ -742,33 +739,38 @@ fun addMessage(message: Message, isImageGeneration: Boolean = false) {
      */
     fun syncStreamingMessageToList(messageId: String, isImageGeneration: Boolean = false) {
         val finalText = streamingMessageStateManager.finishStreaming(messageId)
-        
+
         android.util.Log.d("ViewModelStateHolder", "🎯 Syncing streaming message $messageId: finalText.length=${finalText.length}")
-        
+
         if (finalText.isEmpty()) {
             android.util.Log.w("ViewModelStateHolder", "syncStreamingMessageToList: empty text for $messageId")
+            // 同步完成后，确保清理长度记录
+            streamingLastLengths.remove(messageId)
             return
         }
-        
+
         val messageList = if (isImageGeneration) imageGenerationMessages else messages
         val index = messageList.indexOfFirst { it.id == messageId }
-        
+
         if (index != -1) {
             val currentMessage = messageList[index]
-            // 🎯 流式结束：将StreamingMessageStateManager的内容同步到message.text
+            // 🎯 流式结束：将 StreamingMessageStateManager 的内容同步到 message.text
             val updatedMessage = currentMessage.copy(
                 text = finalText,
                 contentStarted = true
             )
             messageList[index] = updatedMessage
             android.util.Log.d("ViewModelStateHolder", "🎯 Synced message.text = ${finalText.take(100)}...")
-            
+
             if (isImageGeneration) {
                 isImageConversationDirty.value = true
             } else {
                 isTextConversationDirty.value = true
             }
-            
+
+            // 同步完成后，清理长度记录，避免后续错误增量
+            streamingLastLengths.remove(messageId)
+
             android.util.Log.d("ViewModelStateHolder", "Synced streaming message $messageId, final length: ${finalText.length}")
         }
     }

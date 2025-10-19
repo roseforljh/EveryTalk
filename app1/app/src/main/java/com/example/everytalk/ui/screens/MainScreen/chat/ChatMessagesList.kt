@@ -222,16 +222,15 @@ fun ChatMessagesList(
 
                         is ChatListItem.AiMessageReasoning -> {
                             val reasoningCompleteMap = viewModel.textReasoningCompleteMap
-                            // 修复：主内容开始后不再视为“思考流式中”，避免思考框被延迟到“整条消息结束”才收起
+                            // 放宽显示条件：一旦有推理文本且正文未开始，即显示思考框；
+                            // 完成后由 reasoning_finish 控制收起
                             val isReasoningStreaming = remember(
-                                isApiCalling,
                                 item.message.reasoning,
                                 reasoningCompleteMap[item.message.id],
                                 item.message.contentStarted
                             ) {
-                                isApiCalling &&
-                                item.message.reasoning != null &&
-                                reasoningCompleteMap[item.message.id] != true &&
+                                (item.message.reasoning?.isNotBlank() == true) &&
+                                (reasoningCompleteMap[item.message.id] != true) &&
                                 !item.message.contentStarted
                             }
                             val isReasoningComplete = reasoningCompleteMap[item.message.id] ?: false
@@ -271,68 +270,10 @@ fun ChatMessagesList(
                                         viewModel = viewModel,
                                         showMenuButton = false
                                     )
-                                    // 在气泡下方添加三点按钮
-                                    IconButton(
-                                        onClick = {
-                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            onShowAiMessageOptions(message)
-                                        },
-                                        modifier = Modifier
-                                            .size(32.dp)
-                                            .padding(top = 4.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.MoreVert,
-                                            contentDescription = "消息选项",
-                                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    }
                                 }
                             }
                         }
 
-                        is ChatListItem.AiMessageMath -> {
-                            val message = viewModel.getMessageById(item.messageId)
-                            if (message != null) {
-                                Column(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalAlignment = Alignment.Start
-                                ) {
-                                    AiMessageItem(
-                                        message = message,
-                                        text = item.text,
-                                        maxWidth = bubbleMaxWidth,
-                                        hasReasoning = item.hasReasoning,
-                                        onLongPress = {
-                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            onShowAiMessageOptions(message)
-                                        },
-                                        isStreaming = currentStreamingId == message.id,
-                                        messageOutputType = message.outputType,
-                                        viewModel = viewModel,
-                                        showMenuButton = false
-                                    )
-                                    // 在气泡下方添加三点按钮
-                                    IconButton(
-                                        onClick = {
-                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            onShowAiMessageOptions(message)
-                                        },
-                                        modifier = Modifier
-                                            .size(32.dp)
-                                            .padding(top = 4.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.MoreVert,
-                                            contentDescription = "消息选项",
-                                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    }
-                                }
-                            }
-                        }
                         is ChatListItem.AiMessageCode -> {
                             val message = viewModel.getMessageById(item.messageId)
                             if (message != null) {
@@ -355,23 +296,6 @@ fun ChatMessagesList(
                                         viewModel = viewModel,
                                         showMenuButton = false
                                     )
-                                    // 在气泡下方添加三点按钮
-                                    IconButton(
-                                        onClick = {
-                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            onShowAiMessageOptions(message)
-                                        },
-                                        modifier = Modifier
-                                            .size(32.dp)
-                                            .padding(top = 4.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.MoreVert,
-                                            contentDescription = "消息选项",
-                                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    }
                                 }
                             }
                         }
@@ -405,68 +329,10 @@ fun ChatMessagesList(
                                         viewModel = viewModel,
                                         showMenuButton = false
                                     )
-                                    // 在气泡下方添加三点按钮
-                                    IconButton(
-                                        onClick = {
-                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            onShowAiMessageOptions(message)
-                                        },
-                                        modifier = Modifier
-                                            .size(32.dp)
-                                            .padding(top = 4.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.MoreVert,
-                                            contentDescription = "消息选项",
-                                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    }
                                 }
                             }
                         }
                         
-                        is ChatListItem.AiMessageMathStreaming -> {
-                            val message = viewModel.getMessageById(item.messageId)
-                            if (message != null) {
-                                Column(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalAlignment = Alignment.Start
-                                ) {
-                                    AiMessageItem(
-                                        message = message,
-                                        text = message.text,
-                                        maxWidth = bubbleMaxWidth,
-                                        hasReasoning = item.hasReasoning,
-                                        onLongPress = {
-                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            onShowAiMessageOptions(message)
-                                        },
-                                        isStreaming = true,
-                                        messageOutputType = message.outputType,
-                                        viewModel = viewModel,
-                                        showMenuButton = false
-                                    )
-                                    // 在气泡下方添加三点按钮
-                                    IconButton(
-                                        onClick = {
-                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            onShowAiMessageOptions(message)
-                                        },
-                                        modifier = Modifier
-                                            .size(32.dp)
-                                            .padding(top = 4.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.MoreVert,
-                                            contentDescription = "消息选项",
-                                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    }
-                                }
-                            }
-                        }
                         
                         is ChatListItem.AiMessageCodeStreaming -> {
                             val message = viewModel.getMessageById(item.messageId)
@@ -489,23 +355,6 @@ fun ChatMessagesList(
                                         viewModel = viewModel,
                                         showMenuButton = false
                                     )
-                                    // 在气泡下方添加三点按钮
-                                    IconButton(
-                                        onClick = {
-                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            onShowAiMessageOptions(message)
-                                        },
-                                        modifier = Modifier
-                                            .size(32.dp)
-                                            .padding(top = 4.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.MoreVert,
-                                            contentDescription = "消息选项",
-                                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    }
                                 }
                             }
                         }
@@ -604,11 +453,6 @@ enum class ContentType {
 fun detectContentTypeForPadding(text: String): ContentType {
     // 所有内容都使用正常内边距
     return ContentType.SIMPLE
-}
-
-private fun hasMathContent(text: String): Boolean {
-    // 不再检测数学内容
-    return false
 }
 
 

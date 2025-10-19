@@ -7,6 +7,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.background
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material3.Icon
@@ -25,6 +26,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.RoundedCornerShape
 import android.widget.Toast
 
 /**
@@ -62,10 +65,15 @@ fun CodeBlock(
         onScrollingStateChanged(isScrolling)
     }
 
+    val codeBgColor = if (isDark) Color(0xFF1E1E1E) else Color(0xFFF7F7F7)
+
     Box(
         modifier = modifier
             .fillMaxWidth()
             .heightIn(min = 40.dp, max = maxHeight.dp)
+            // 恢复原先圆角（使用组件参数 cornerRadius）
+            .clip(RoundedCornerShape(cornerRadius.dp))
+            .background(codeBgColor)
             .pointerInput(enableHorizontalScroll) {
                 // 🎯 如果启用水平滚动，捕获水平拖动手势
                 if (enableHorizontalScroll) {

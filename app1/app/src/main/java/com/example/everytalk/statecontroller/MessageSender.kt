@@ -673,14 +673,19 @@ private data class AttachmentProcessingResult(
                         temperature = currentConfig.temperature,
                         topP = currentConfig.topP,
                         maxOutputTokens = null,
-                        thinkingConfig = if (modelIsGeminiType) ThinkingConfig(
-                            includeThoughts = true,
-                            thinkingBudget = if (currentConfig.model.contains(
-                                "flash",
-                                ignoreCase = true
+                        thinkingConfig = if (modelIsGeminiType) {
+                            // 为 2.5 系列明确设置思考预算：Flash≈低、Pro≈中、其他≈高
+                            val modelLower = currentConfig.model.lowercase()
+                            val budget = when {
+                                "flash" in modelLower -> 1024
+                                "pro" in modelLower -> 8192
+                                else -> 24576
+                            }
+                            ThinkingConfig(
+                                includeThoughts = true,
+                                thinkingBudget = budget
                             )
-                            ) 1024 else null
-                        ) else null
+                        } else null
                     ).let { if (it.temperature != null || it.topP != null || it.maxOutputTokens != null || it.thinkingConfig != null) it else null },
                     qwenEnableSearch = if (currentConfig.model.lowercase().contains("qwen")) stateHolder._isWebSearchEnabled.value else null,
                     customModelParameters = if (modelIsGeminiType) {

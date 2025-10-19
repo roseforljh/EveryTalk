@@ -130,7 +130,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                     onHistoryModified = {
                         textConversationPreviewCache.evictAll()
                         imageConversationPreviewCache.evictAll()
-                    }
+                    },
+                    scope = viewModelScope
             )
     
     // 公开的模式管理器 - 供设置界面等外部组件使用
@@ -621,41 +622,33 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             ""
         }
         
-        android.util.Log.d("AppViewModel", "🎯 computeBubbleState: id=${message.id.take(8)}, " +
-            "isStreaming=$isCurrentStreaming, hasReasoning=$hasReasoning, " +
-            "reasoningComplete=$reasoningComplete, streamingContent.length=${streamingContent.length}, " +
-            "message.reasoning=${message.reasoning?.take(20)}")
+        // 降级日志为 Verbose，避免刷屏
+        if (Log.isLoggable("AppViewModelVerbose", Log.VERBOSE)) {
+            Log.v("AppViewModelVerbose", "computeBubbleState: id=${message.id.take(8)}, " +
+                "isStreaming=$isCurrentStreaming, hasReasoning=$hasReasoning, " +
+                "reasoningComplete=$reasoningComplete, streamingContent.length=${streamingContent.length}, " +
+                "message.reasoning=${message.reasoning?.take(20)}")
+        }
         
         return when {
-            // 🎯 仅思考阶段：有reasoning但还没有文本内容
             isCurrentStreaming && hasReasoning && streamingContent.isEmpty() -> {
-                android.util.Log.d("AppViewModel", "🎯 State: Reasoning")
                 com.example.everytalk.ui.state.AiBubbleState.Reasoning(message.reasoning ?: "", isComplete = reasoningComplete)
             }
-
-            // 🎯 流式输出：StreamingMessageStateManager有实际内容了
             isCurrentStreaming && streamingContent.isNotEmpty() -> {
-                android.util.Log.d("AppViewModel", "🎯 State: Streaming")
                 com.example.everytalk.ui.state.AiBubbleState.Streaming(
                     content = message.text,
                     hasReasoning = hasReasoning,
                     reasoningComplete = reasoningComplete
                 )
             }
-            
-            // 🎯 连接中：正在流式，但既没有reasoning也没有内容
             isCurrentStreaming && !hasReasoning && streamingContent.isEmpty() -> {
-                android.util.Log.d("AppViewModel", "🎯 State: Connecting")
                 com.example.everytalk.ui.state.AiBubbleState.Connecting
             }
- 
-             // 完成状态（含历史重载）
              (message.contentStarted || message.text.isNotBlank()) ->
                  com.example.everytalk.ui.state.AiBubbleState.Complete(
                      content = message.text,
                      reasoning = message.reasoning
                  )
- 
              else -> com.example.everytalk.ui.state.AiBubbleState.Idle
          }
      }
@@ -687,13 +680,11 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 // 流式期间：根据开关选择使用 StateFlow 渲染或旧路径
                 val streamingItem: ChatListItem = if (PerformanceConfig.USE_STREAMING_STATEFLOW_RENDERING) {
                     when (message.outputType) {
-                        "math" -> ChatListItem.AiMessageMathStreaming(message.id, state.hasReasoning)
                         "code" -> ChatListItem.AiMessageCodeStreaming(message.id, state.hasReasoning)
                         else -> ChatListItem.AiMessageStreaming(message.id, state.hasReasoning)
                     }
                 } else {
                     when (message.outputType) {
-                        "math" -> ChatListItem.AiMessageMath(message.id, message.text, state.hasReasoning)
                         "code" -> ChatListItem.AiMessageCode(message.id, message.text, state.hasReasoning)
                         else -> ChatListItem.AiMessage(message.id, message.text, state.hasReasoning)
                     }
@@ -709,7 +700,6 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                  if (message.text.isNotBlank()) {
                      items.add(
                          when (message.outputType) {
-                             "math" -> ChatListItem.AiMessageMath(message.id, message.text, !message.reasoning.isNullOrBlank())
                              "code" -> ChatListItem.AiMessageCode(message.id, message.text, !message.reasoning.isNullOrBlank())
                              else -> ChatListItem.AiMessage(message.id, message.text, !message.reasoning.isNullOrBlank())
                          }
@@ -2577,7 +2567,9 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         super.onCleared()
         // 清理缓存管理器
         cacheManager.cleanup()
-        Log.d("AppViewModel", "ViewModel cleared, cache manager cleaned up")
+        // 🔧 修复：清理流式消息状态管理器，防止协程泄漏
+        streamingMessageStateManager.cleanup()
+        Log.d("AppViewModel", "ViewModel cleared, cache manager and streaming state manager cleaned up")
     }
     
     /**

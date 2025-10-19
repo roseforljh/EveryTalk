@@ -483,82 +483,120 @@ object ApiClient {
         try {
             android.util.Log.d("ApiClient", "开始读取流数据通道")
             while (!channel.isClosedForRead) {
-                val line = channel.readUTF8Line()
+                val raw = channel.readUTF8Line()
                 lineCount++
 
                 if (lineCount <= 10) {
-                    android.util.Log.d("ApiClient", "读取行 #$lineCount: '${line ?: "NULL"}'")
+                    android.util.Log.d("ApiClient", "读取行 #$lineCount: '${raw ?: "NULL"}'")
                 } else if (lineCount % 50 == 0) {
                     android.util.Log.d(
                         "ApiClient",
-                        "已读取 $lineCount 行，当前行: '${line?.take(50) ?: "NULL"}'"
+                        "已读取 $lineCount 行，当前行: '${raw?.take(50) ?: "NULL"}'"
                     )
                 }
 
-                if (line.isNullOrEmpty()) {
-                    val chunk = lineBuffer.toString().trim()
-                    if (chunk.isNotEmpty()) {
-                        android.util.Log.d(
-                            "ApiClient",
-                            "处理数据块 (长度=${chunk.length}): '${chunk.take(100)}${if (chunk.length > 100) "..." else ""}'"
-                        )
+                // 严格保留 SSE 一行一帧的语义；禁止把 JSON 内部的 "\\n" 还原为真实换行，避免打断 JSON
+                // 上游会将文本中的换行以转义序列输出（例如 "\\n"），如果这里替换成真实 '\n' 再 split 会把一条 data 事件拆成多行碎片，导致 JSON 解析失败。
+                val normalizedLines: List<String?> = when {
+                    raw == null -> listOf<String?>(null)
+                    else -> listOf(raw)
+                }
 
-                        if (chunk.equals("[DONE]", ignoreCase = true)) {
-                            android.util.Log.d("ApiClient", "收到[DONE]标记，结束流处理")
-                            channel.cancel(CoroutineCancellationException("[DONE] marker received"))
-                            break
-                        }
-                        try {
-                            val appEvent = parseBackendStreamEvent(chunk)
-                            if (appEvent != null) {
-                                eventCount++
-                                when (appEvent) {
-                                    is AppStreamEvent.Content -> android.util.Log.i("ApiClientEvent", "Content len=${appEvent.text.length} preview=${appEvent.text.take(120)}")
-                                    is AppStreamEvent.ContentFinal -> android.util.Log.i("ApiClientEvent", "ContentFinal len=${appEvent.text.length} preview=${appEvent.text.take(120)}")
-                                    is AppStreamEvent.Text -> android.util.Log.i("ApiClientEvent", "Text len=${appEvent.text.length} preview=${appEvent.text.take(120)}")
-                                    is AppStreamEvent.Finish -> android.util.Log.w("ApiClientEvent", "Finish reason=${appEvent.reason}")
-                                    is AppStreamEvent.Error -> android.util.Log.e("ApiClientEvent", "Error upstreamStatus=${appEvent.upstreamStatus} msg=${appEvent.message}")
-                                    else -> android.util.Log.d("ApiClientEvent", "Other event=${appEvent.javaClass.simpleName}")
-                                }
-                                if (eventCount <= 5) {
-                                    android.util.Log.d("ApiClient", "解析到流事件 #$eventCount: ${appEvent.javaClass.simpleName}")
-                                } else if (eventCount % 10 == 0) {
-                                    android.util.Log.d("ApiClient", "已处理 $eventCount 个流事件")
-                                }
-                                trySend(appEvent)
-                            } else {
-                                android.util.Log.w("ApiClient", "无法解析的流数据块: '$chunk'")
-                            }
-                        } catch (e: SerializationException) {
-                            android.util.Log.e("ApiClientStream", "Serialization failed for chunk: '$chunk'", e)
-                        } catch (e: Exception) {
-                            android.util.Log.e("ApiClientStream", "Exception during event processing for chunk: '$chunk'", e)
-                        }
-                    } else {
-                        android.util.Log.d("ApiClient", "遇到空行，但lineBuffer为空")
-                    }
-                    lineBuffer.clear()
-                } else if (line.startsWith("data:")) {
-                    val dataContent = line.substring(5).trim()
-                    android.util.Log.d("ApiClient", "SSE data行: '$dataContent'")
-                    lineBuffer.append(dataContent)
-                } else {
-                    android.util.Log.d("ApiClient", "非SSE格式行，直接处理: '$line'")
-                    if (line.trim().isNotEmpty()) {
-                        try {
-                            val appEvent = parseBackendStreamEvent(line.trim())
-                            if (appEvent != null) {
-                                eventCount++
+                suspend fun handleOneLine(line: String?) {
+                    when {
+                        line.isNullOrEmpty() -> {
+                            // 空行表示一个SSE事件结束，尝试解析累积的 data: 负载
+                            val chunk = lineBuffer.toString().trim()
+                            if (chunk.isNotEmpty()) {
                                 android.util.Log.d(
                                     "ApiClient",
-                                    "非SSE格式解析到事件 #$eventCount: ${appEvent.javaClass.simpleName}"
+                                    "处理数据块 (长度=${chunk.length}): '${chunk.take(100)}${if (chunk.length > 100) "..." else ""}'"
                                 )
-                                trySend(appEvent)
+
+                                if (chunk.equals("[DONE]", ignoreCase = true)) {
+                                    android.util.Log.d("ApiClient", "收到[DONE]标记，结束流处理")
+                                    channel.cancel(CoroutineCancellationException("[DONE] marker received"))
+                                    return
+                                }
+                                try {
+                                    val appEvent = parseBackendStreamEvent(chunk)
+                                    if (appEvent != null) {
+                                        eventCount++
+                                        when (appEvent) {
+                                            is AppStreamEvent.Content -> android.util.Log.i("ApiClientEvent", "Content len=${appEvent.text.length} preview=${appEvent.text.take(120)}")
+                                            is AppStreamEvent.ContentFinal -> android.util.Log.i("ApiClientEvent", "ContentFinal len=${appEvent.text.length} preview=${appEvent.text.take(120)}")
+                                            is AppStreamEvent.Text -> android.util.Log.i("ApiClientEvent", "Text len=${appEvent.text.length} preview=${appEvent.text.take(120)}")
+                                            is AppStreamEvent.Finish -> android.util.Log.w("ApiClientEvent", "Finish reason=${appEvent.reason}")
+                                            is AppStreamEvent.Error -> android.util.Log.e("ApiClientEvent", "Error upstreamStatus=${appEvent.upstreamStatus} msg=${appEvent.message}")
+                                            else -> android.util.Log.d("ApiClientEvent", "Other event=${appEvent.javaClass.simpleName}")
+                                        }
+                                        if (eventCount <= 5) {
+                                            android.util.Log.d("ApiClient", "解析到流事件 #$eventCount: ${appEvent.javaClass.simpleName}")
+                                        } else if (eventCount % 10 == 0) {
+                                            android.util.Log.d("ApiClient", "已处理 $eventCount 个流事件")
+                                        }
+                                        // 顺序挂起发送，确保不丢尾部事件且保持事件顺序
+                                        trySend(appEvent)
+                                    } else {
+                                        android.util.Log.w("ApiClient", "无法解析的流数据块: '$chunk'")
+                                    }
+                                } catch (e: Exception) {
+                                    android.util.Log.e("ApiClientStream", "Exception during event processing for chunk: '$chunk'", e)
+                                    // 在这里添加容错逻辑，而不是让整个流失败
+                                    // 例如，可以发送一个错误事件，或者简单地忽略这个损坏的数据块
+                                    // runBlocking { trySend(AppStreamEvent.Error("无效的数据块: $chunk", null)) }
+                                }
+                            } else {
+                                android.util.Log.d("ApiClient", "遇到空行，但lineBuffer为空")
                             }
-                        } catch (e: Exception) {
-                            android.util.Log.e("ApiClient", "非SSE格式解析失败: '$line'", e)
+                            lineBuffer.clear()
+                        }
+                        line.startsWith(":") -> {
+                            // SSE注释/心跳，忽略（修复 :ok 触发的误解析）
+                            android.util.Log.d("ApiClient", "SSE 注释行（忽略）: '$line'")
+                        }
+                        line.startsWith("data:") -> {
+                            val dataContent = line.substring(5).trim()
+                            android.util.Log.d("ApiClient", "SSE data行: '$dataContent'")
+                            if (lineBuffer.isNotEmpty()) lineBuffer.append('\n')
+                            lineBuffer.append(dataContent)
+                        }
+                        line.startsWith("event:") -> {
+                            // 如需按event类型区分可在此记录，但当前后端仅用 data
+                            android.util.Log.d("ApiClient", "SSE event行: '${line.substring(6).trim()}'")
+                        }
+                        else -> {
+                            // 仅当看起来确为JSON对象/数组时，才尝试非SSE直解析；否则忽略，避免再次因“:ok ...”等抛错
+                            val trimmed = line.trim()
+                            if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+                                android.util.Log.d("ApiClient", "非SSE格式行（JSON回退）: '$trimmed'")
+                                try {
+                                    val appEvent = parseBackendStreamEvent(trimmed)
+                                    if (appEvent != null) {
+                                        eventCount++
+                                        android.util.Log.d(
+                                            "ApiClient",
+                                            "非SSE格式解析到事件 #$eventCount: ${appEvent.javaClass.simpleName}"
+                                        )
+                                        // 顺序挂起发送，确保不丢尾部事件且保持事件顺序
+                                        trySend(appEvent)
+                                    }
+                                } catch (e: Exception) {
+                                    android.util.Log.e("ApiClient", "非SSE格式解析失败: '$trimmed'", e)
+                                }
+                            } else {
+                                // 其他行忽略
+                                android.util.Log.d("ApiClient", "忽略非SSE且非JSON的行: '$line'")
+                            }
                         }
                     }
+                }
+
+                // 逐条子行处理
+                for (sub in normalizedLines) {
+                    handleOneLine(sub)
+                    // 如果上一条在空行时触发了 DONE 并取消了通道，直接退出外层循环
+                    if (channel.isClosedForRead) break
                 }
             }
         } catch (e: IOException) {
@@ -626,15 +664,24 @@ object ApiClient {
             }
             val backendProxyUrl = buildFinalUrl(base, "/chat")
 
+            // 关键修复：若本后端已成功产出任何事件，就视作成功，不再尝试下一个，避免“成功后又因取消而被当失败重试”
+            var anyEventEmitted = false
             try {
                 android.util.Log.d("ApiClient", "尝试连接后端: $backendProxyUrl (原始地址: $raw)")
                 streamChatResponseInternal(backendProxyUrl, request, attachments, applicationContext)
                     .collect { event ->
+                        anyEventEmitted = true
                         send(event)
                     }
                 connected = true
                 break
             } catch (e: Exception) {
+                // 若已经有事件产出（包括 content/content_final/finish），将此次视为成功结束，不再回退到下一个后端
+                if (anyEventEmitted) {
+                    android.util.Log.d("ApiClient", "本后端已产生事件，尽管捕获异常(${e.message})，视为成功完成，不再回退。")
+                    connected = true
+                    break
+                }
                 lastError = if (e is Exception) e else Exception(e)
                 android.util.Log.w("ApiClient", "连接后端失败，尝试下一个: $backendProxyUrl, 错误: ${e.message}")
                 // 继续尝试下一个地址

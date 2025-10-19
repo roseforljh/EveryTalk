@@ -26,35 +26,10 @@ class MessageProcessor {
     }
 
     /**
-     * 轻量级文本清理：处理全角符号转换和基础换行清理
-     * 这个方法设计为高性能，适合在流式处理的每个chunk上调用
-     * 
-     * 清理内容：
-     * - 全角符号转半角
-     * - 统一换行符格式
-     * - 清理行尾空白
-     * - 压缩多余换行（3+ 个换行符 -> 2 个）
+     * 直接返回原始AI输出，不做任何格式清理。
      */
     private fun lightweightCleanup(text: String): String {
-        if (text.isEmpty()) return text
-        
-        // 全角符号转换
-        var result = text
-            .replace('＊', '*')  // 全角星号 -> 半角（列表标记）
-            .replace('＃', '#')  // 全角井号 -> 半角（标题标记）
-            .replace('｀', '`')  // 全角反引号 -> 半角（代码标记）
-        
-        // 🎯 新增：统一换行符格式
-        result = result.replace("\r\n", "\n").replace("\r", "\n")
-        
-        // 🎯 新增：清理行尾空白字符
-        result = result.lines().joinToString("\n") { line -> line.trimEnd() }
-        
-        // 🎯 新增：压缩连续多个换行符（3+ 个换行符 -> 2 个）
-        // 保留最多 2 个连续换行（即一个空行），这样不会破坏段落分隔
-        result = result.replace(Regex("\n{3,}"), "\n\n")
-        
-        return result
+        return text
     }
 
     fun getCurrentText(): String = currentTextBuilder.get().toString()
@@ -151,12 +126,9 @@ class MessageProcessor {
                 message.text
             }
             else -> {
-                // 异常情况：文本丢失，记录错误并抛出异常
-                logger.error("Message ${message.id}: CRITICAL - Both currentText and message.text are empty!")
-                throw IllegalStateException(
-                    "Message text is empty during finalization. This indicates a processing error. " +
-                    "MessageId: ${message.id}, Parts count: ${message.parts.size}"
-                )
+                // 软回退：双空时不再抛出异常，返回空串并记录错误，避免用户侧“无反馈中断”
+                logger.error("Message ${message.id}: CRITICAL - Both currentText and message.text are empty! Soft-fallback to empty string to avoid visible failure.")
+                ""
             }
         }
         

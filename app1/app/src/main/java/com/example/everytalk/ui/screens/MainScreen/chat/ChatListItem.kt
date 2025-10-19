@@ -22,14 +22,6 @@ sealed interface ChatListItem {
         override val stableId: String = messageId
     }
 
-    data class AiMessageMath(
-        val messageId: String,
-        val text: String,
-        val hasReasoning: Boolean
-    ) : ChatListItem {
-        override val stableId: String = "${messageId}_math"
-    }
-
     data class AiMessageCode(
         val messageId: String,
         val text: String,
@@ -45,13 +37,6 @@ sealed interface ChatListItem {
         val hasReasoning: Boolean
     ) : ChatListItem {
         override val stableId: String = "${messageId}_stream"
-    }
-
-    data class AiMessageMathStreaming(
-        val messageId: String,
-        val hasReasoning: Boolean
-    ) : ChatListItem {
-        override val stableId: String = "${messageId}_math_stream"
     }
 
     data class AiMessageCodeStreaming(

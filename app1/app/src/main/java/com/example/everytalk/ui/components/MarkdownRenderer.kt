@@ -25,7 +25,8 @@ fun MarkdownRenderer(
     markdown: String,
     modifier: Modifier = Modifier,
     style: TextStyle = MaterialTheme.typography.bodyMedium,
-    color: Color = Color.Unspecified
+    color: Color = Color.Unspecified,
+    isStreaming: Boolean = false
 ) {
     val isDark = isSystemInDarkTheme()
     val textColor = when {
@@ -34,42 +35,63 @@ fun MarkdownRenderer(
         else -> MaterialTheme.colorScheme.onSurface
     }
 
-    // 先做轻量格式修复（保留 $ 数学语法）
-    val fixedMarkdown = remember(markdown) {
-        MarkdownFormatFixer.fix(markdown, keepMathSyntax = true)
-    }
-    
-    // 检查是否包含数学公式
-    if (hasMathFormulas(fixedMarkdown)) {
-        // 使用数学公式渲染器
-        ContentWithMathFormulas(
-            text = fixedMarkdown,
-            modifier = modifier,
-            style = style,
-            color = textColor
+    // 流式渲染策略（外部库优先）：
+    // - 流式阶段：优先调用外部库 MarkdownText 渲染，跳过重型“格式修复”，仅保留长度兜底；
+    // - 非流式阶段：执行一次格式修复后再用外部库渲染（保持高质量）。
+    // 兜底：极端长文本在流式阶段回退为纯文本，避免阻塞。
+    val isTooLongForStreaming = isStreaming && markdown.length > 1500
+    if (isTooLongForStreaming) {
+        android.util.Log.w(
+            "MarkdownRenderer",
+            "⚠️ Streaming fallback to plain text due to length: ${markdown.length}"
         )
+        Text(
+            text = markdown,
+            style = style.copy(color = textColor),
+            modifier = modifier
+        )
+        return
+    }
+
+    // 🎯 先做格式修复（仅非流式）；流式时直接使用原文交给外部库，降低开销
+    val fixedMarkdown = if (isStreaming) {
+        markdown
     } else {
-        // 使用标准 Markdown 渲染
-        val codeBackgroundColor = if (isDark) {
-            Color(0xFF2D2D2D)
-        } else {
-            Color(0xFFF5F5F5)
-        }
-        
-        val codeTextColor = if (isDark) {
-            Color(0xFFE06C75)
-        } else {
-            Color(0xFFD73A49)
-        }
-        
-        dev.jeziellago.compose.markdowntext.MarkdownText(
-            markdown = fixedMarkdown,
-            style = style,
-            modifier = modifier,
-            syntaxHighlightColor = codeBackgroundColor,
-            syntaxHighlightTextColor = codeTextColor
-        )
+        remember(markdown) {
+            androidx.compose.runtime.derivedStateOf {
+                try {
+                    val fixed = MarkdownFormatFixer.fix(markdown)
+                    android.util.Log.d(
+                        "MarkdownRenderer",
+                        "✅ Fixed: ${markdown.length} -> ${fixed.length} chars"
+                    )
+                    fixed
+                } catch (e: Throwable) {
+                    android.util.Log.e("MarkdownRenderer", "⚠️ Fix failed, fallback to raw text", e)
+                    markdown
+                }
+            }
+        }.value
     }
+
+    
+    // 内联代码样式（仅用于外部库渲染的行内 `code`；围栏代码块使用自定义 CodeBlock，不受此处影响）
+    // 要求：背景纯透明，字体颜色随明暗模式自适配
+    val inlineCodeBackground = Color.Transparent
+    val inlineCodeTextColor = if (isDark) {
+        Color(0xFF9CDCFE) // 夜间：浅蓝（提升可读性）
+    } else {
+        Color(0xFF005CC5) // 白天：深蓝（对比度良好）
+    }
+
+    // 直接交由外部库渲染内联代码（背景透明+按明暗主题的文字颜色）
+    dev.jeziellago.compose.markdowntext.MarkdownText(
+        markdown = fixedMarkdown,
+        style = style.copy(color = textColor),
+        modifier = modifier,
+        syntaxHighlightColor = inlineCodeBackground,
+        syntaxHighlightTextColor = inlineCodeTextColor
+    )
 }
 
 /**
@@ -78,7 +100,11 @@ fun MarkdownRenderer(
 @Composable
 fun TableRenderer(
     lines: List<String>,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    renderMarkdownInCells: Boolean = true,
+    isStreaming: Boolean = false,
+    headerStyle: TextStyle = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold, fontSize = 14.sp),
+    cellStyle: TextStyle = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp)
 ) {
     if (lines.size < 2) return
     
@@ -106,15 +132,26 @@ fun TableRenderer(
                 .padding(vertical = 8.dp)
         ) {
             headers.forEachIndexed { index, header ->
-                Text(
-                    text = header.trim(),
-                    modifier = Modifier
-                        .width(columnWidths[index])
-                        .padding(horizontal = 12.dp),
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
+                val cellModifier = Modifier
+                    .width(columnWidths[index])
+                    .padding(horizontal = 12.dp)
+                if (renderMarkdownInCells) {
+                    MarkdownRenderer(
+                        markdown = header.trim(),
+                        style = headerStyle,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = cellModifier,
+                        isStreaming = false // 表头优先转换MD，避免流式降级
+                    )
+                } else {
+                    Text(
+                        text = header.trim(),
+                        modifier = cellModifier,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
             }
         }
         
@@ -131,14 +168,26 @@ fun TableRenderer(
             ) {
                 row.forEachIndexed { index, cell ->
                     if (index < columnWidths.size) {
-                        Text(
-                            text = cell.trim(),
-                            modifier = Modifier
-                                .width(columnWidths[index])
-                                .padding(horizontal = 12.dp),
-                            fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
+                        val cellModifier = Modifier
+                            .width(columnWidths[index])
+                            .padding(horizontal = 12.dp)
+                        if (renderMarkdownInCells) {
+                            // 在表格单元格内启用 Markdown 渲染（即使处于流式，也优先转换内联标记）
+                            MarkdownRenderer(
+                                markdown = cell.trim(),
+                                style = cellStyle,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = cellModifier,
+                                isStreaming = false // 单元格内启用转换，确保粗体/行内代码等生效
+                            )
+                        } else {
+                            Text(
+                                text = cell.trim(),
+                                modifier = cellModifier,
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
                     }
                 }
             }

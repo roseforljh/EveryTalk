@@ -188,5 +188,4 @@ implementation("com.github.jeziellago:compose-markdown:0.5.7")
 implementation("io.noties.markwon:core:4.6.2")
 implementation("io.noties.markwon:ext-tables:4.6.2")
 
-
     }

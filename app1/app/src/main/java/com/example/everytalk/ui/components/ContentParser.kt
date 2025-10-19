@@ -102,6 +102,49 @@ object ContentParser {
             return listOf(ContentPart.Text(text))
         }
     }
+
+    /**
+     * 仅解析代码块（流式渲染快速路径）
+     * - 跳过表格等复杂结构，降低主线程解析开销
+     * - 非代码部分整体作为文本返回
+     */
+    fun parseCodeBlocksOnly(text: String): List<ContentPart> {
+        if (text.isBlank()) return listOf(ContentPart.Text(text))
+        return try {
+            val parts = mutableListOf<ContentPart>()
+            val lines = text.lines()
+            var currentIndex = 0
+
+            while (currentIndex < lines.size) {
+                val line = lines[currentIndex]
+
+                // 仅识别并提取 ``` 代码块
+                if (line.trimStart().startsWith("```")) {
+                    val (codeBlock, nextIndex) = extractCodeBlock(lines, currentIndex)
+                    if (codeBlock != null) {
+                        parts.add(codeBlock)
+                        currentIndex = nextIndex
+                        continue
+                    }
+                }
+
+                // 聚合为普通文本，直到遇到下一个代码块
+                val textLines = mutableListOf<String>()
+                while (currentIndex < lines.size && !lines[currentIndex].trimStart().startsWith("```")) {
+                    textLines.add(lines[currentIndex])
+                    currentIndex++
+                }
+                if (textLines.isNotEmpty()) {
+                    parts.add(ContentPart.Text(textLines.joinToString("\n")))
+                }
+            }
+
+            if (parts.isEmpty()) listOf(ContentPart.Text(text)) else parts
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in parseCodeBlocksOnly", e)
+            listOf(ContentPart.Text(text))
+        }
+    }
     
     /**
      * 提取代码块
@@ -189,68 +232,102 @@ object ContentParser {
         currentBuffer: String,
         isComplete: Boolean
     ): Pair<List<ContentPart>, String> {
-        // 1. 如果未完成且缓冲区未满，不解析
+        // 1) 未完成且缓冲区未满，直接保留
         if (!isComplete && currentBuffer.length < PARSE_BUFFER_SIZE) {
             return emptyList<ContentPart>() to currentBuffer
         }
-        
-        // 2. 如果已完成，解析全部
+
+        // 2) 若仍未完成，且处于未闭合的数学/代码块中，则暂缓解析，避免半成品闪烁
+        if (!isComplete && isInsideUnclosedCodeFence(currentBuffer)) {
+            return emptyList<ContentPart>() to currentBuffer
+        }
+
+        // 3) 已完成则全量解析
         if (isComplete) {
             return parseCompleteContent(currentBuffer) to ""
         }
-        
-        // 3. 查找安全断句点
+
+        // 4) 根据安全断点切分
         val safeEndIndex = findSafeParsePoint(currentBuffer)
-        
         if (safeEndIndex <= 0) {
-            // 没有找到安全断句点，继续缓冲
             return emptyList<ContentPart>() to currentBuffer
         }
-        
-        // 4. 解析安全部分
+
         val toParse = currentBuffer.substring(0, safeEndIndex)
         val retained = currentBuffer.substring(safeEndIndex)
-        
+
         val parts = parseCompleteContent(toParse)
-        
         Log.d(TAG, "Streaming parse: ${parts.size} parts, retained: ${retained.length} chars")
         return parts to retained
     }
     
     /**
-     * 查找安全解析点（避免截断未完成的结构）
+     * Find a safe parse point to avoid cutting incomplete structures.
      */
     private fun findSafeParsePoint(text: String): Int {
-        // 优先级：
-        // 1. 代码块结束标记```
-        // 2. 数学块结束标记$$
-        // 3. 句号/换行符
-        // 4. 至少一半内容
-        
-        val codeEnd = text.lastIndexOf("```")
-        val mathEnd = text.lastIndexOf("$$")
+        // Priority order:
+        // 1) end of the most recent closed code fence (three backticks)
+        // 2) natural breaks: full-width period (U+3002) or newline
+        // 3) fallback: midpoint to avoid very small slices
+        // If no safe candidates exist, return 0 to keep buffering.
+        //
+        // When an unfinished structure exists, fall back to the latest closed boundary.
+        // Compute the nearest safe position based on closed code fences
+        val codeFenceSafe = lastSafeEndForFence(text, fence = "```")
+
+        // Natural breakpoints
         val period = text.lastIndexOf('。')
         val newline = text.lastIndexOf('\n')
+
+        // Fallback keeps at least half of the content before cutting
         val halfPoint = text.length / 2
-        
-        val candidates = listOf(
-            codeEnd, 
-            mathEnd, 
-            period, 
-            newline, 
-            halfPoint
-        ).filter { it > 0 }
-        
+
+        val candidates = listOfNotNull(
+            codeFenceSafe,
+            period.takeIf { it > 0 },
+            newline.takeIf { it > 0 },
+            halfPoint.takeIf { it > 0 }
+        )
+
         return if (candidates.isNotEmpty()) candidates.maxOrNull()!! else 0
     }
+
+    // ======= Helpers: unfinished structure detection and safe position lookups =======
+
+    private fun isInsideUnclosedCodeFence(text: String): Boolean {
+        // Count code fences composed of three backticks; odd occurrences indicate an unfinished block
+        var idx = 0
+        var count = 0
+        while (true) {
+            val pos = text.indexOf("```", idx)
+            if (pos < 0) break
+            count++
+            idx = pos + 3
+        }
+        return (count % 2) == 1
+    }
+
+    private fun lastSafeEndForFence(text: String, fence: String): Int? {
+        // 返回最近一个“完整对”的结束位置（即闭合围栏后的索引）
+        val idxs = mutableListOf<Int>()
+        var i = 0
+        while (true) {
+            val p = text.indexOf(fence, i)
+            if (p < 0) break
+            idxs.add(p)
+            i = p + fence.length
+        }
+        if (idxs.size < 2) return null
+        // 成对配对，取最后一对的闭合位置之后
+        val pairCount = idxs.size / 2
+        val closePos = idxs[pairCount * 2 - 1] + fence.length
+        return closePos
+    }
+
     
     /**
      * 解析纯文本（简化版，移除数学公式支持）
      */
-    private fun parseTextWithMath(text: String): List<ContentPart> {
-        if (text.isBlank()) return emptyList()
-        return listOf(ContentPart.Text(text))
-    }
     
     /**
      * 内部：内容片段
