@@ -17,7 +17,6 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.everytalk.ui.components.math.MathAwareText
 
 /**
  * 表格渲染器
@@ -41,24 +40,28 @@ fun TableRenderer(
     cellStyle: TextStyle = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp)
 ) {
     if (lines.size < 2) return
-    
+
     // 解析表头
     val headers = TableUtils.parseTableRow(lines[0])
-    
+
     // 跳过分隔行，解析数据行
     val dataRows = lines.drop(2).map { TableUtils.parseTableRow(it) }
-    
+
     // 计算列宽
     val columnWidths = TableUtils.calculateColumnWidths(headers, dataRows)
-    
+
+    // 根据表格规模决定渲染策略：单元格总量大时禁用单元格内Markdown/Math以避免递归渲染
+    val totalCells = headers.size * dataRows.size
+    val usePlainTextCells = totalCells > 40 || isStreaming || !renderMarkdownInCells
+
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
+            .horizontalScroll(rememberScrollState()) // 由外层统一提供水平滚动，保证表头与数据行滚动同步
             .background(MaterialTheme.colorScheme.surface)
             .border(1.dp, MaterialTheme.colorScheme.outline)
     ) {
-        // 渲染表头
+        // 渲染表头（使用轻量Text，避免复杂渲染）
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -69,27 +72,19 @@ fun TableRenderer(
                 val cellModifier = Modifier
                     .width(columnWidths[index])
                     .padding(horizontal = 12.dp)
-                if (renderMarkdownInCells) {
-                    MathAwareText(
-                        text = header.trim(),
-                        style = headerStyle,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = cellModifier,
-                        isStreaming = false
-                    )
-                } else {
-                    Text(
-                        text = header.trim(),
-                        modifier = cellModifier,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
+
+                Text(
+                    text = header.trim(),
+                    modifier = cellModifier,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
             }
         }
-        
-        // 渲染数据行
+
+        // 渲染数据行：避免在嵌套滚动环境中使用 LazyColumn，防止“无限高度约束”崩溃
+        // 依赖外部父级（消息列表）的垂直滚动，这里用普通 Column + forEach 渲染行
         dataRows.forEach { row ->
             Row(
                 modifier = Modifier
@@ -105,23 +100,14 @@ fun TableRenderer(
                         val cellModifier = Modifier
                             .width(columnWidths[index])
                             .padding(horizontal = 12.dp)
-                        if (renderMarkdownInCells) {
-                            // 在表格单元格内启用 Markdown 渲染
-                            MathAwareText(
-                                text = cell.trim(),
-                                style = cellStyle,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                modifier = cellModifier,
-                                isStreaming = false
-                            )
-                        } else {
-                            Text(
-                                text = cell.trim(),
-                                modifier = cellModifier,
-                                fontSize = 13.sp,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
+
+                        // 为稳定与性能，大表格/流式阶段统一使用纯文本单元格，避免递归Markdown/Math
+                        Text(
+                            text = cell.trim(),
+                            modifier = cellModifier,
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
                     }
                 }
             }

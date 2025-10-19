@@ -116,6 +116,13 @@ class StreamingMessageStateManager {
         val buf = pendingBuffers[messageId] ?: return
         if (buf.isEmpty()) return
 
+        // ⛔ 增量解析策略：若整体文本处于未闭合的围栏代码块中，则暂缓刷新，避免半成品导致重解析/重组
+        val combined = stateFlow.value + buf.toString()
+        if (isInsideUnclosedFence(combined) && buf.length < MAX_BUFFER_BEFORE_FORCE) {
+            // 等待更多内容或强制阈值达到
+            return
+        }
+
         // 自适应策略：根据当前内容长度动态调整刷新间隔
         val currentLength = stateFlow.value.length
         contentLengthTracker[messageId] = currentLength
@@ -256,5 +263,18 @@ class StreamingMessageStateManager {
         scope.cancel()
         
         Log.d("StreamingMessageStateManager", "✅ StreamingMessageStateManager cleanup complete")
+    }
+
+    // ===== Helpers =====
+    private fun isInsideUnclosedFence(text: String): Boolean {
+        var idx = 0
+        var count = 0
+        while (true) {
+            val p = text.indexOf("```", idx)
+            if (p < 0) break
+            count++
+            idx = p + 3
+        }
+        return (count % 2) == 1
     }
 }

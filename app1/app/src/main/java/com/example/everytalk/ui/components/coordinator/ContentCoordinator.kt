@@ -10,6 +10,10 @@ import androidx.compose.ui.text.TextStyle
 import com.example.everytalk.ui.components.math.MathAwareText
 import com.example.everytalk.ui.components.table.TableAwareText
 import com.example.everytalk.ui.components.table.TableUtils
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
+import androidx.compose.material3.Text
+import androidx.compose.ui.text.font.FontFamily
 
 /**
  * 内容协调器（搬迁版）
@@ -45,29 +49,26 @@ fun ContentCoordinator(
     val hasCodeBlock = text.contains("```")
     val hasTable = text.contains("|") && text.lines().any { line -> TableUtils.isTableLine(line) }
 
-    // ⚡ 快速止血：流式阶段遇到代码块/表格，改为等宽文本直显，待完成后再完整渲染
-    if (isStreaming && (hasCodeBlock || hasTable)) {
-        androidx.compose.material3.Text(
-            text = text,
-            style = style.copy(
-                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-            ),
-            color = color,
-            modifier = modifier.fillMaxWidth()
-        )
-        return
-    }
-
-    // 🎯 非流式或已完成：走完整渲染
+    // ⚡ 流式阶段：等宽直显；完成后：完整渲染（使用淡入替换动画，避免突兀切换）
     if (hasCodeBlock || hasTable) {
-        TableAwareText(
-            text = text,
-            style = style,
-            color = color,
-            isStreaming = isStreaming,
-            modifier = modifier,
-            recursionDepth = recursionDepth
-        )
+        val showLightweight = isStreaming
+        Crossfade(
+            targetState = showLightweight,
+            animationSpec = tween(durationMillis = 180),
+            modifier = modifier.fillMaxWidth()
+        ) { lightweight ->
+            // 关键修复：
+            // 流式阶段也使用 TableAwareText（其内部在 isStreaming=true 时仅解析代码块、文本部分仍走 MarkdownRenderer），
+            // 避免整段用等宽 Text 直显导致标题/粗体等Markdown语法不被转换。
+            TableAwareText(
+                text = text,
+                style = style,
+                color = color,
+                isStreaming = lightweight, // true=流式轻量解析；false=完成后完整渲染
+                modifier = Modifier.fillMaxWidth(),
+                recursionDepth = recursionDepth
+            )
+        }
         return
     }
     

@@ -5,7 +5,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -14,6 +14,8 @@ import com.example.everytalk.ui.components.CodeBlock
 import com.example.everytalk.ui.components.coordinator.ContentCoordinator
 import com.example.everytalk.ui.components.ContentParser
 import com.example.everytalk.ui.components.ContentPart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * 表格感知文本渲染器
@@ -36,10 +38,20 @@ fun TableAwareText(
     modifier: Modifier = Modifier,
     recursionDepth: Int = 0
 ) {
-    // 解析内容，分离表格、代码块和文本
-    val parts = remember(text) {
-        ContentParser.parseCompleteContent(text)
-    }
+    // 异步解析：流式阶段使用轻量路径（仅代码块），非流式使用完整解析
+    val parts = produceState(initialValue = emptyList<ContentPart>(), text, isStreaming) {
+        value = withContext(Dispatchers.Default) {
+            try {
+                if (isStreaming) {
+                    ContentParser.parseCodeBlocksOnly(text)
+                } else {
+                    ContentParser.parseCompleteContent(text)
+                }
+            } catch (_: Throwable) {
+                listOf(ContentPart.Text(text))
+            }
+        }
+    }.value
     
     // 分段渲染
     Column(modifier = modifier.fillMaxWidth()) {
