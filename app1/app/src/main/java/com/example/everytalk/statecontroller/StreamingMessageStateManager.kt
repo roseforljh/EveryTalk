@@ -47,8 +47,8 @@ class StreamingMessageStateManager {
     private val pendingJobs: MutableMap<String, Job> = ConcurrentHashMap()
 
     // 阈值：最小字符数、最大等待时间（毫秒）
-    private val MIN_CHARS_TO_FLUSH = 30  // 提升到30字符
-    private val DEBOUNCE_MS = 120L  // 提升到120ms
+    private val MIN_CHARS_TO_FLUSH = 80  // 提升到80字符（快速止血：减少刷新频率）
+    private val DEBOUNCE_MS = 180L  // 提升到180ms（快速止血：延长防抖时间）
     private val MAX_BUFFER_BEFORE_FORCE = 1024  // 防止无限累计
 
     // 刷新时间限制：最小刷新间隔，避免主线程高频重组

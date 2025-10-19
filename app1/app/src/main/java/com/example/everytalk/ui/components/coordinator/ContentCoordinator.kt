@@ -14,7 +14,7 @@ import com.example.everytalk.ui.components.table.TableUtils
 /**
  * 内容协调器（搬迁版）
  * 原文件位置：ui/components/ContentCoordinator.kt
- * 说明：统一调度表格/数学/纯文本渲染；提供递归深度保护。
+ * 说明：统一调度表格/数学/代码块/纯文本渲染；提供递归深度保护。
  */
 @Composable
 fun ContentCoordinator(
@@ -41,12 +41,25 @@ fun ContentCoordinator(
         return
     }
     
-    // 🎯 优先级1：检测表格
-    val hasTable = text.contains("|") && text.lines().any { line ->
-        TableUtils.isTableLine(line)
+    // 🎯 轻量检测
+    val hasCodeBlock = text.contains("```")
+    val hasTable = text.contains("|") && text.lines().any { line -> TableUtils.isTableLine(line) }
+
+    // ⚡ 快速止血：流式阶段遇到代码块/表格，改为等宽文本直显，待完成后再完整渲染
+    if (isStreaming && (hasCodeBlock || hasTable)) {
+        androidx.compose.material3.Text(
+            text = text,
+            style = style.copy(
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+            ),
+            color = color,
+            modifier = modifier.fillMaxWidth()
+        )
+        return
     }
-    
-    if (hasTable) {
+
+    // 🎯 非流式或已完成：走完整渲染
+    if (hasCodeBlock || hasTable) {
         TableAwareText(
             text = text,
             style = style,
@@ -58,7 +71,7 @@ fun ContentCoordinator(
         return
     }
     
-    // 🎯 优先级2：检测数学公式（粗略检测，以 $ 为信号）
+    // 🎯 优先级3：检测数学公式（粗略检测，以 $ 为信号）
     val hasMath = text.contains("$")
     if (hasMath) {
         MathAwareText(
@@ -72,7 +85,7 @@ fun ContentCoordinator(
         return
     }
     
-    // 🎯 优先级3：纯文本
+    // 🎯 优先级4：纯文本（无代码块、表格、数学）
     MarkdownRenderer(
         markdown = text,
         style = style,
