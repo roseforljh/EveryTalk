@@ -1,4 +1,5 @@
 package com.example.everytalk.ui.components
+import com.example.everytalk.ui.components.coordinator.ContentCoordinator
 
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.MaterialTheme

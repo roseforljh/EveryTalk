@@ -11,7 +11,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import com.example.everytalk.ui.components.CodeBlock
-import com.example.everytalk.ui.components.ContentCoordinator
+import com.example.everytalk.ui.components.coordinator.ContentCoordinator
 import com.example.everytalk.ui.components.ContentParser
 import com.example.everytalk.ui.components.ContentPart
 

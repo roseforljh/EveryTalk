@@ -1,4 +1,5 @@
 package com.example.everytalk.ui.components.math
+import com.example.everytalk.ui.components.markdown.MarkdownRenderer
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -9,7 +10,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
-import com.example.everytalk.ui.components.MarkdownRenderer
 
 /**
  * 数学感知渲染器

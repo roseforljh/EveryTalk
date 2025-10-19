@@ -1,22 +1,16 @@
-package com.example.everytalk.ui.components
+package com.example.everytalk.ui.components.markdown
 
 /**
- * 简化的 Markdown 工具函数
+ * 简化的 Markdown 工具函数（搬迁版）
+ * 原文件位置：ui/components/MarkdownUtils.kt
+ * 说明：为实现模块化与分类管理，已迁移到 markdown/ 目录。
  */
 
-/**
- * 直接返回原始文本
- */
-fun normalizeMarkdownGlyphs(text: String): String {
-    return text
-}
+// 直接返回原始文本
+fun normalizeMarkdownGlyphs(text: String): String = text
 
-/**
- * 直接返回原始文本
- */
-fun normalizeBasicMarkdown(text: String): String {
-    return text
-}
+// 直接返回原始文本
+fun normalizeBasicMarkdown(text: String): String = text
 
 /**
  * 将 Markdown 文本转换为纯文本，移除所有 Markdown 语法标记
@@ -81,4 +75,3 @@ fun markdownToPlainText(markdown: String): String {
     
     return text
 }
-

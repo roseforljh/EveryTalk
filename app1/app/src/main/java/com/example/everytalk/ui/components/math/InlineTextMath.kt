@@ -6,7 +6,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
-import com.example.everytalk.ui.components.MarkdownRenderer
+import com.example.everytalk.ui.components.markdown.MarkdownRenderer
 
 /**
  * 兼容版的内联数学渲染（不使用 InlineTextContent 占位，避免旧 Compose 版本 API 缺失导致编译错误）。

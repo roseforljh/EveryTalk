@@ -1,4 +1,5 @@
-package com.example.everytalk.ui.components
+package com.example.everytalk.ui.components.coordinator
+import com.example.everytalk.ui.components.markdown.MarkdownRenderer
 
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.MaterialTheme
@@ -11,16 +12,9 @@ import com.example.everytalk.ui.components.table.TableAwareText
 import com.example.everytalk.ui.components.table.TableUtils
 
 /**
- * 内容协调器
- * 
- * 职责：
- * - 统一调度不同类型的内容渲染
- * - 按优先级检测内容类型（表格 > 数学 > 纯文本）
- * - 递归深度保护
- * 
- * 设计原则：
- * - 单一职责：每个模块只处理自己的内容类型
- * - 开闭原则：易于扩展新的内容类型
+ * 内容协调器（搬迁版）
+ * 原文件位置：ui/components/ContentCoordinator.kt
+ * 说明：统一调度表格/数学/纯文本渲染；提供递归深度保护。
  */
 @Composable
 fun ContentCoordinator(
@@ -64,10 +58,8 @@ fun ContentCoordinator(
         return
     }
     
-    // 🎯 优先级2：检测数学公式
-    // 简单检测：包含 $ 符号
+    // 🎯 优先级2：检测数学公式（粗略检测，以 $ 为信号）
     val hasMath = text.contains("$")
-    
     if (hasMath) {
         MathAwareText(
             text = text,
@@ -80,7 +72,7 @@ fun ContentCoordinator(
         return
     }
     
-    // 🎯 优先级3：纯文本，使用 MarkdownRenderer
+    // 🎯 优先级3：纯文本
     MarkdownRenderer(
         markdown = text,
         style = style,

@@ -7,10 +7,15 @@ import android.webkit.ValueCallback
 import android.webkit.WebSettings
 import android.webkit.WebView
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -64,20 +69,28 @@ fun MathBlock(
 ) {
     val density = LocalDensity.current
     val maxHeightPx = with(density) { maxHeight.toPx() }
-    Surface(
+    
+    // 🎯 完美自适应宽度：公式多宽容器就多宽，超出屏幕时启用丝滑滚动
+    Box(
         modifier = modifier
-            .heightIn(max = maxHeight),
-        color = androidx.compose.ui.graphics.Color.Transparent, // 跟随外层背景，不强制底色
-        tonalElevation = 0.dp,
-        shadowElevation = 0.dp
+            .fillMaxWidth()  // 外层占满父容器，提供滚动边界
+            .horizontalScroll(rememberScrollState())  // 超出时启用滚动
+            .heightIn(max = maxHeight)
     ) {
-        MathRenderContainer(
-            latex = latex,
-            inline = false,
-            modifier = Modifier,
-            maxHeightPx = maxHeightPx,
-            timeoutMs = timeoutMs
-        )
+        Surface(
+            modifier = Modifier.wrapContentWidth(),  // 🎯 完全自适应公式实际宽度
+            color = androidx.compose.ui.graphics.Color.Transparent,
+            tonalElevation = 0.dp,
+            shadowElevation = 0.dp
+        ) {
+            MathRenderContainer(
+                latex = latex,
+                inline = false,
+                modifier = Modifier,
+                maxHeightPx = maxHeightPx,
+                timeoutMs = timeoutMs
+            )
+        }
     }
 }
 
@@ -126,7 +139,8 @@ private fun MathRenderContainer(
                 webViewRef = this
                 setBackgroundColor(Color.TRANSPARENT)
                 isVerticalScrollBarEnabled = false
-                isHorizontalScrollBarEnabled = false
+                // 🎯 块级数学启用水平滚动条（由外层 Compose horizontalScroll 控制）
+                isHorizontalScrollBarEnabled = !inline
 
                 settings.javaScriptEnabled = true
                 settings.cacheMode = WebSettings.LOAD_NO_CACHE
@@ -140,6 +154,10 @@ private fun MathRenderContainer(
                 // 缩放禁用
                 settings.displayZoomControls = false
                 settings.builtInZoomControls = false
+                
+                // 🎯 允许内容超出视口宽度（块级数学需要）
+                settings.useWideViewPort = !inline
+                settings.loadWithOverviewMode = false
 
                 // 载入本地 KaTeX 容器页面
                 loadUrl("file:///android_asset/katex/index.html")

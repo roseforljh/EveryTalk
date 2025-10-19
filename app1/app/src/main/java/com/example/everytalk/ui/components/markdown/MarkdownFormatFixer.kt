@@ -1,4 +1,4 @@
-package com.example.everytalk.ui.components
+package com.example.everytalk.ui.components.markdown
 
 /**
  * 🔧 Markdown格式修复工具

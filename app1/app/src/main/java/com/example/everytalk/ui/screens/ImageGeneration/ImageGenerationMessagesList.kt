@@ -91,7 +91,10 @@ import com.example.everytalk.ui.screens.BubbleMain.Main.ImageContextMenu
 import com.example.everytalk.ui.theme.ChatDimensions
 import com.example.everytalk.ui.theme.chatColors
 import com.example.everytalk.ui.components.EnhancedMarkdownText
-import com.example.everytalk.ui.components.normalizeMarkdownGlyphs
+import com.example.everytalk.ui.components.markdown.MarkdownRenderer
+import com.example.everytalk.ui.components.markdown.markdownToPlainText
+import com.example.everytalk.ui.components.markdown.normalizeMarkdownGlyphs
+import com.example.everytalk.ui.components.markdown.normalizeBasicMarkdown
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext

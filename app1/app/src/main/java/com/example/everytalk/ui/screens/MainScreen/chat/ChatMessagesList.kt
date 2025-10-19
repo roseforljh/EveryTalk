@@ -47,8 +47,6 @@ import com.example.everytalk.ui.theme.chatColors
 
 import com.example.everytalk.ui.components.EnhancedMarkdownText
 import com.example.everytalk.ui.components.StableMarkdownText
-import com.example.everytalk.ui.components.normalizeMarkdownGlyphs
-import com.example.everytalk.ui.components.normalizeBasicMarkdown
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
