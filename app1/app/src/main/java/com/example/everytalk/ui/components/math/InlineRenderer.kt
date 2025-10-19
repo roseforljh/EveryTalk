@@ -10,16 +10,21 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import com.example.everytalk.ui.components.MarkdownRenderer
-import com.example.everytalk.ui.components.math.MathInlineText
 
 /**
- * 数学感知渲染（最小侵入）：
+ * 数学感知渲染器
  *
- * 设计目标：
- * - 块级 $$...$$ 使用 WebView+KaTeX 渲染（MathBlock）
- * - 内联 $...$ 暂不使用 WebView（Compose 无法将 AndroidView 内联到段落基线，易造成“断行/错位”）
- *   因此当文本只包含“内联数学”时，整体退回 MarkdownRenderer 以保持段落完整性；
- *   仅当存在“块级数学”时才按片段拆分渲染：Text 段落仍走 Markdown，块级数学用 MathBlock。
+ * 职责：
+ * - 检测并渲染数学公式（块级 $$...$$ 和内联 $...$）
+ * - 块级数学使用 WebView+KaTeX 渲染
+ * - 内联数学使用 MarkdownRenderer 保持段落完整性
+ * 
+ * 设计原则：
+ * - 单一职责：只处理数学公式，不处理表格
+ * - 开闭原则：易于扩展新的数学渲染方式
+ * 
+ * 🛡️ 递归深度保护：
+ * - 由 ContentCoordinator 统一管理，此处不再检查
  */
 @Composable
 fun MathAwareText(
@@ -27,15 +32,13 @@ fun MathAwareText(
     style: TextStyle = MaterialTheme.typography.bodyMedium,
     color: Color = Color.Unspecified,
     isStreaming: Boolean = false,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    recursionDepth: Int = 0  // 保留参数以兼容调用方
 ) {
-    // 原始切分
+    // 🎯 解析数学公式
     val rawSpans = MathParser.splitToSpans(text)
 
-    // 规范化：移除由于上游换行/边界造成的“游离 $ 行”
-    // 症状：在块级公式前/后出现独立一行的 "$"（实为闭合 $$ 被拆成两行）
-    // 策略：删除只包含 "$"（含空白）的 Text 片段，且其前后有块级 Math 的场景；
-    // 同时合并相邻的 Text 片段，避免碎片化。
+    // 规范化：移除由于上游换行/边界造成的"游离 $ 行"
     val spans = run {
         val tmp = mutableListOf<MathParser.Span>()
         // 先合并相邻 Text
@@ -47,11 +50,10 @@ fun MathAwareText(
                 tmp += s
             }
         }
-        // 再清理“游离 $ 行”
+        // 再清理"游离 $ 行"
         val cleaned = mutableListOf<MathParser.Span>()
         fun isLoneDollarLine(t: String): Boolean {
             val trimmed = t.trim()
-            // 精确等于一个 $，或 $ 前后仅有换行/空白
             return trimmed == "$"
         }
         for (i in tmp.indices) {
@@ -63,13 +65,12 @@ fun MathAwareText(
                     (prev is MathParser.Span.Math && !prev.inline) ||
                     (next is MathParser.Span.Math && !next.inline)
                 if (nearBlock) {
-                    // 跳过该“游离 $ 行”
                     continue
                 }
             }
             cleaned += cur
         }
-        // 再次合并相邻 Text（清理后可能相邻）
+        // 再次合并相邻 Text
         val merged = mutableListOf<MathParser.Span>()
         for (s in cleaned) {
             val last = merged.lastOrNull()
@@ -95,7 +96,7 @@ fun MathAwareText(
         return
     }
 
-    // 仅内联数学：使用 Text + inlineContent 做真正“行内”渲染
+    // 仅内联数学：使用 Text + inlineContent 做真正"行内"渲染
     val hasBlock = spans.any { it is MathParser.Span.Math && !it.inline }
     val hasInline = spans.any { it is MathParser.Span.Math && it.inline }
     if (hasInline && !hasBlock) {

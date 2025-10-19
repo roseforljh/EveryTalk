@@ -14,7 +14,6 @@ import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.statecontroller.AppViewModel
-import com.example.everytalk.ui.components.math.MathAwareText
 
 /**
  * 增强的Markdown文本显示组件
@@ -23,13 +22,13 @@ import com.example.everytalk.ui.components.math.MathAwareText
  * - Markdown格式（标题、列表、粗体、斜体等）- 通过外部库实时转换
  * - 代码块（自适应滚动）
  * - 表格渲染
+ * - 数学公式（KaTeX）
  * - 流式实时更新
  * 
- * 🔧 优化说明（终极方案）：
+ * 🔧 架构说明（重构后）：
  * - 使用 collectAsState 订阅流式内容，实现实时更新
+ * - 委托给 ContentCoordinator 统一调度不同类型的内容
  * - 单向数据流：Flow → State → UI（无反向依赖，避免无限重组）
- * - 每次Flow发射新值 → 触发一次重组 → 渲染新内容 → 结束
- * - 让外部库 dev.jeziellago.compose.markdowntext.MarkdownText 自动处理MD转换
  * - 添加重组监控，及时发现潜在问题
  */
 @Composable
@@ -51,12 +50,10 @@ fun EnhancedMarkdownText(
         else -> MaterialTheme.colorScheme.onSurface
     }
     
-    // 🎯 关键改动：使用 collectAsState 订阅流式内容
-    // 这会在每次Flow发射新值时触发重组，实现流式效果
-    // 但不会形成无限循环，因为是单向数据流
+    // 🎯 获取实时流式内容
+    // 使用 collectAsState 订阅Flow，实现流式效果
     val content by if (isStreaming && viewModel != null) {
         // 流式阶段：订阅StateFlow，实时获取增量内容
-        // collectAsState 会在Flow发射新值时触发重组
         viewModel.streamingMessageStateManager
             .getOrCreateStreamingState(message.id)
             .collectAsState(initial = message.text)
@@ -87,18 +84,17 @@ fun EnhancedMarkdownText(
         }
     }
 
-    // 🎯 直接渲染，让 MathAwareText → MarkdownRenderer 处理MD转换
+    // 🎯 委托给 ContentCoordinator 统一调度
     // 优势：
-    // 1. 实时MD转换（外部库自动处理 **粗体**、*斜体*、列表等）
-    // 2. 流式效果（collectAsState 订阅Flow，每次新值触发重组）
-    // 3. 不会无限重组（单向数据流，无状态回写）
-    // 4. 代码简单，维护成本低
-    MathAwareText(
+    // 1. 职责分离：数学、表格、纯文本各自独立
+    // 2. 易于维护：修改某个模块不影响其他模块
+    // 3. 易于扩展：添加新类型（如图表）只需添加新模块
+    ContentCoordinator(
         text = content,
         style = style,
         color = textColor,
-        modifier = modifier.fillMaxWidth(),
-        isStreaming = isStreaming
+        isStreaming = isStreaming,
+        modifier = modifier.fillMaxWidth()
     )
 }
 
