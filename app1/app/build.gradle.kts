@@ -14,6 +14,19 @@ fun loadProperties(project: Project): Properties {
 
 val localProperties = loadProperties(project)
 
+// Sanitize property strings before injecting into BuildConfig fields
+fun sanitizeForBuildConfig(value: String?): String {
+    if (value == null) return ""
+    val trimmed = value.trim()
+    val unquoted = if (trimmed.startsWith("\"") && trimmed.endsWith("\"") && trimmed.length >= 2) {
+        trimmed.substring(1, trimmed.length - 1)
+    } else {
+        trimmed
+    }
+    // Escape backslashes and quotes for Java string literal in BuildConfig.java
+    return unquoted.replace("\\", "\\\\").replace("\"", "\\\"")
+}
+
 // 用于解决 org.jetbrains:annotations 版本冲突 (如果需要)
 configurations.all {
     exclude(group = "org.jetbrains", module = "annotations-java5")
@@ -63,13 +76,15 @@ android {
             }
             signingConfig = signingConfigs.getByName("debug")
             // Inject backend configuration for Release
-            buildConfigField("String", "BACKEND_URLS", "\"${localProperties.getProperty("BACKEND_URLS_RELEASE", "")}\"")
+            val backendUrlsRelease = sanitizeForBuildConfig(localProperties.getProperty("BACKEND_URLS_RELEASE", ""))
+            buildConfigField("String", "BACKEND_URLS", "\"${backendUrlsRelease}\"")
             buildConfigField("boolean", "CONCURRENT_REQUEST_ENABLED", "false")
         }
         debug {
             isProfileable = false // debug 构建也可以设为 profileable,方便测试
             // Inject backend configuration for Debug
-            buildConfigField("String", "BACKEND_URLS", "\"${localProperties.getProperty("BACKEND_URLS_DEBUG", "")}\"")
+            val backendUrlsDebug = sanitizeForBuildConfig(localProperties.getProperty("BACKEND_URLS_DEBUG", ""))
+            buildConfigField("String", "BACKEND_URLS", "\"${backendUrlsDebug}\"")
             buildConfigField("boolean", "CONCURRENT_REQUEST_ENABLED", "false")
         }
         create("benchmark") {

@@ -107,10 +107,9 @@ class SimpleModeManager(
         stateHolder._loadedImageGenerationHistoryIndex.value = null
         Log.d(TAG, "Cleared loaded image history index")
         
-        // 保存消息列表的副本，用于调试
+        // 保留消息列表（不再在模式切换时清空）
         val imageMessagesBeforeClear = stateHolder.imageGenerationMessages.toList()
-        stateHolder.imageGenerationMessages.clear()
-        Log.d(TAG, "Cleared ${imageMessagesBeforeClear.size} image messages")
+        Log.d(TAG, "Preserved ${imageMessagesBeforeClear.size} image messages (no clear on mode switch)")
         
         // 🔥 修复：在清空消息列表后才清理资源，这样不会清理当前文本模式的消息处理器
         val currentImageSessionId = stateHolder._currentImageGenerationConversationId.value
@@ -190,10 +189,9 @@ class SimpleModeManager(
         stateHolder._loadedHistoryIndex.value = null
         Log.d(TAG, "Cleared loaded history index")
         
-        // 保存消息列表的副本，用于调试
+        // 保留文本消息列表（不再在模式切换时清空）
         val messagesBeforeClear = stateHolder.messages.toList()
-        stateHolder.messages.clear()
-        Log.d(TAG, "Cleared ${messagesBeforeClear.size} text messages")
+        Log.d(TAG, "Preserved ${messagesBeforeClear.size} text messages (no clear on mode switch)")
         
         // 🔥 修复：在清空消息列表后才清理资源，这样不会清理当前图像模式的消息处理器
         val currentTextSessionId = stateHolder._currentConversationId.value
@@ -293,8 +291,8 @@ class SimpleModeManager(
             Log.d(TAG, "🔥 Updating state on Main thread...")
             clearTextApiState()
             stateHolder._loadedImageGenerationHistoryIndex.value = null
-            stateHolder.imageGenerationMessages.clear()
-            Log.d(TAG, "🔥 Cleared image generation state.")
+            // 保留图像消息（不在加载文本历史时清空）
+            Log.d(TAG, "🔥 Preserved image generation messages (${stateHolder.imageGenerationMessages.size} messages).")
             
             stateHolder._currentConversationId.value = stableId
             stateHolder.systemPrompts[stableId] = systemPrompt
@@ -350,10 +348,10 @@ class SimpleModeManager(
         
         // 关键修复：强制清除文本模式索引，确保图像模式历史记录选择完全独立
         stateHolder._loadedHistoryIndex.value = null
-        stateHolder.messages.clear()
+        // 保留文本消息（不在加载图像历史时清空）
+        Log.d(TAG, "Preserved text messages (${stateHolder.messages.size} messages).")
         
-        // 清理图像模式状态
-        stateHolder.imageGenerationMessages.clear()
+        // 清理图像模式状态（仅清除加载索引，不清空消息）
         stateHolder._loadedImageGenerationHistoryIndex.value = null
         
         // 4. 加载历史对话

@@ -37,10 +37,21 @@ object BackendConfig {
 
     /**
      * Determines if concurrent requests to multiple backends are enabled.
-     * This value is sourced directly from the build configuration.
+     * Prefer reading from BuildConfig via reflection to avoid compile-time issues
+     * if the field is absent in some build variants. Defaults to false.
      */
     val isConcurrentRequestEnabled: Boolean by lazy {
-        BuildConfig.CONCURRENT_REQUEST_ENABLED
+        try {
+            val field = BuildConfig::class.java.getField("CONCURRENT_REQUEST_ENABLED")
+            field.getBoolean(null)
+        } catch (e: Throwable) {
+            android.util.Log.w(
+                "BackendConfig",
+                "BuildConfig.CONCURRENT_REQUEST_ENABLED 缺失或不可用，使用默认值 false",
+                e
+            )
+            false
+        }
     }
 
     // Default values for other configurations, which were previously in JSON.
