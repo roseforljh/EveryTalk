@@ -17,6 +17,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.everytalk.ui.components.markdown.MarkdownRenderer
 
 /**
  * 表格渲染器
@@ -73,13 +74,24 @@ fun TableRenderer(
                     .width(columnWidths[index])
                     .padding(horizontal = 12.dp)
 
-                Text(
-                    text = header.trim(),
-                    modifier = cellModifier,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
+                if (renderMarkdownInCells) {
+                    // 头部单元格也走轻量 Markdown 渲染，保证 **加粗**、*斜体*、行内代码等能被正确解析
+                    MarkdownRenderer(
+                        markdown = header.trim(),
+                        style = headerStyle,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        isStreaming = false,
+                        modifier = cellModifier
+                    )
+                } else {
+                    Text(
+                        text = header.trim(),
+                        modifier = cellModifier,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
             }
         }
 
@@ -101,13 +113,23 @@ fun TableRenderer(
                             .width(columnWidths[index])
                             .padding(horizontal = 12.dp)
 
-                        // 为稳定与性能，大表格/流式阶段统一使用纯文本单元格，避免递归Markdown/Math
-                        Text(
-                            text = cell.trim(),
-                            modifier = cellModifier,
-                            fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
+                        // 在单元格内启用轻量 Markdown 渲染（不引入额外滚动容器）
+                        if (renderMarkdownInCells) {
+                            MarkdownRenderer(
+                                markdown = cell.trim(),
+                                style = cellStyle,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                isStreaming = false,
+                                modifier = cellModifier
+                            )
+                        } else {
+                            Text(
+                                text = cell.trim(),
+                                modifier = cellModifier,
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
                     }
                 }
             }
