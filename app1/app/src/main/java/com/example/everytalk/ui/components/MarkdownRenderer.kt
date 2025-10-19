@@ -18,6 +18,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.everytalk.ui.components.math.MathAwareText
 
+// 最小长度短路阈值：过短文本不做“格式修复”，直接渲染
+private const val MARKDOWN_FIX_MIN_LEN = 20
+
 /**
  * Markdown 渲染器（支持表格）
  */
@@ -42,10 +45,7 @@ fun MarkdownRenderer(
     // 兜底：极端长文本在流式阶段回退为纯文本，避免阻塞。
     val isTooLongForStreaming = isStreaming && markdown.length > 1500
     if (isTooLongForStreaming) {
-        android.util.Log.w(
-            "MarkdownRenderer",
-            "⚠️ Streaming fallback to plain text due to length: ${markdown.length}"
-        )
+        // 避免极端长文本在流式阶段阻塞
         Text(
             text = markdown,
             style = style.copy(color = textColor),
@@ -54,21 +54,26 @@ fun MarkdownRenderer(
         return
     }
 
-    // 🎯 先做格式修复（仅非流式）；流式时直接使用原文交给外部库，降低开销
-    val fixedMarkdown = if (isStreaming) {
+    // 🎯 先做格式修复（仅非流式）；并对“很短文本”直接短路，减少CPU与日志
+    val fixedMarkdown = if (isStreaming || markdown.length < MARKDOWN_FIX_MIN_LEN) {
         markdown
     } else {
         remember(markdown) {
             androidx.compose.runtime.derivedStateOf {
                 try {
                     val fixed = MarkdownFormatFixer.fix(markdown)
-                    android.util.Log.d(
-                        "MarkdownRenderer",
-                        "✅ Fixed: ${markdown.length} -> ${fixed.length} chars"
-                    )
+                    // 限流日志：仅在 Debug 且文本较长时打印一次
+                    if (com.example.everytalk.BuildConfig.DEBUG && markdown.length >= 80) {
+                        android.util.Log.d(
+                            "MarkdownRenderer",
+                            "Fixed length: ${markdown.length} -> ${fixed.length}"
+                        )
+                    }
                     fixed
                 } catch (e: Throwable) {
-                    android.util.Log.e("MarkdownRenderer", "⚠️ Fix failed, fallback to raw text", e)
+                    if (com.example.everytalk.BuildConfig.DEBUG) {
+                        android.util.Log.e("MarkdownRenderer", "Fix failed, fallback to raw", e)
+                    }
                     markdown
                 }
             }

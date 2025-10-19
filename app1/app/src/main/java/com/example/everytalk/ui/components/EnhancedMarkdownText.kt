@@ -1,24 +1,17 @@
 package com.example.everytalk.ui.components
 
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.unit.dp
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.statecontroller.AppViewModel
 import com.example.everytalk.ui.components.math.MathAwareText
@@ -27,10 +20,17 @@ import com.example.everytalk.ui.components.math.MathAwareText
  * 增强的Markdown文本显示组件
  * 
  * 支持功能：
- * - Markdown格式（标题、列表、粗体、斜体等）
+ * - Markdown格式（标题、列表、粗体、斜体等）- 通过外部库实时转换
  * - 代码块（自适应滚动）
  * - 表格渲染
  * - 流式实时更新
+ * 
+ * 🔧 优化说明（终极方案）：
+ * - 使用 collectAsState 订阅流式内容，实现实时更新
+ * - 单向数据流：Flow → State → UI（无反向依赖，避免无限重组）
+ * - 每次Flow发射新值 → 触发一次重组 → 渲染新内容 → 结束
+ * - 让外部库 dev.jeziellago.compose.markdowntext.MarkdownText 自动处理MD转换
+ * - 添加重组监控，及时发现潜在问题
  */
 @Composable
 fun EnhancedMarkdownText(
@@ -51,203 +51,55 @@ fun EnhancedMarkdownText(
         else -> MaterialTheme.colorScheme.onSurface
     }
     
-    // 🎯 流式内容实时获取 - 使用 derivedStateOf 优化
-    val streamingContent = if (isStreaming && viewModel != null) {
+    // 🎯 关键改动：使用 collectAsState 订阅流式内容
+    // 这会在每次Flow发射新值时触发重组，实现流式效果
+    // 但不会形成无限循环，因为是单向数据流
+    val content by if (isStreaming && viewModel != null) {
+        // 流式阶段：订阅StateFlow，实时获取增量内容
+        // collectAsState 会在Flow发射新值时触发重组
         viewModel.streamingMessageStateManager
             .getOrCreateStreamingState(message.id)
             .collectAsState(initial = message.text)
     } else {
-        null
+        // 非流式：使用remember包装，避免不必要的重组
+        remember(message.text) { mutableStateOf(message.text) }
     }
     
-    // 使用 derivedStateOf 避免内容未真正改变时的重组
-    val content by remember {
-        derivedStateOf {
-            streamingContent?.value ?: message.text
-        }
-    }
-    
-    // === 增量安全解析通道（边流边准，避免全文反复扫描） ===
-    // 说明：
-    // - 不再在流式阶段对“整段全文”做分块解析，而是维护“已提交安全块 + 未闭合尾巴”
-    // - 每次只解析“新增长 + 上次尾巴”，使用 ContentParser.parseStreamingContent 控制安全断点
-    val parsedParts = remember(message.id) { mutableStateListOf<ContentPart>() }
-    var retainedTail by remember(message.id) { mutableStateOf("") }
-    var lastLen by remember(message.id) { mutableStateOf(0) }
-
-    // 计算当前文本源：流式优先使用 streamingContent，否则用 message.text
-    val fullText by remember(isStreaming, content) {
-        derivedStateOf { content }
-    }
-
-    // 增量解析：仅在长度增长时解析“新增 + 尾巴”
-    LaunchedEffect(fullText, isStreaming) {
-        val currentLen = fullText.length
-        if (currentLen < lastLen) {
-            // 文本被回退（如重置/替换），重置解析状态
-            parsedParts.clear()
-            retainedTail = ""
-            lastLen = 0
-        }
-        if (currentLen > lastLen) {
-            val delta = fullText.substring(lastLen)
-            val buffer = retainedTail + delta
-            try {
-                val (newParts, newRetained) = ContentParser.parseStreamingContent(
-                    currentBuffer = buffer,
-                    isComplete = false
-                )
-                if (newParts.isNotEmpty()) {
-                    parsedParts.addAll(newParts)
-                }
-                retainedTail = newRetained
-                lastLen = currentLen
-            } catch (_: Exception) {
-                // 出错时保持安全：不提交块，仅更新lastLen，尾巴按原样展示
-                lastLen = currentLen
-            }
-        }
-
-        // 流结束时（isStreaming=false）做一次最终化（将尾巴消化为块）
-        if (!isStreaming && retainedTail.isNotEmpty()) {
-            try {
-                val (finalParts, finalRetained) = ContentParser.parseStreamingContent(
-                    currentBuffer = retainedTail,
-                    isComplete = true
-                )
-                if (finalParts.isNotEmpty()) {
-                    parsedParts.addAll(finalParts)
-                }
-                retainedTail = finalRetained // 应为空
-            } catch (_: Exception) {
-                // 忽略最终化异常，尾巴依然以纯文本显示
-            }
-        }
-    }
-
-    // 兼容：若增量通道尚未产出任何块，退回旧逻辑（含短路保护）
-    val legacyParsedContent by remember {
-        derivedStateOf {
-            val len = content.length
-            val hasFence = content.contains("```")
-            val fenceCount = if (hasFence) Regex("```").findAll(content).count() else 0
-            val unclosedFence = hasFence && (fenceCount % 2 == 1)
-            val hasMathMarkers = content.contains("$$") || content.count { it == '$' } >= 4
-            val tooLongForStreaming = len > 2000
-
-            if (isStreaming && (unclosedFence || hasMathMarkers || tooLongForStreaming)) {
-                listOf(ContentPart.Text(content))
-            } else {
-                when {
-                    len > 10000 -> listOf(ContentPart.Text(content))
-                    isStreaming -> ContentParser.parseCodeBlocksOnly(content)
-                    else -> ContentParser.parseCompleteContent(content)
-                }
-            }
-        }
-    }
-    
-    // 优先使用“增量安全解析通道”的结果进行双通道渲染
-    val hasIncremental = parsedParts.isNotEmpty() || retainedTail.isNotEmpty()
-    if (hasIncremental) {
-        Column(modifier = modifier.fillMaxWidth()) {
-            // 已提交的安全块
-            parsedParts.forEach { part ->
-                when (part) {
-                    is ContentPart.Text -> {
-                        MathAwareText(
-                            text = part.content,
-                            style = style,
-                            color = textColor,
-                            modifier = Modifier.fillMaxWidth(),
-                            isStreaming = true
-                        )
-                    }
-                    is ContentPart.Code -> {
-                        val shouldScroll = part.content.lines().maxOfOrNull { it.length } ?: 0 > 80
-                        CodeBlock(
-                            code = part.content,
-                            language = part.language,
-                            textColor = textColor,
-                            enableHorizontalScroll = shouldScroll,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp),
-                            maxHeight = 600
-                        )
-                    }
-                    is ContentPart.Table -> {
-                        TableRenderer(
-                            lines = part.lines,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 8.dp)
-                        )
-                    }
-                }
-            }
-            // 未闭合的尾巴：稳定起见维持纯文本
-            if (retainedTail.isNotEmpty()) {
-                // 将未闭合尾巴也交给数学感知渲染，避免 $$...$$ 在流式阶段显示为裸 $ 行
-                MathAwareText(
-                    text = retainedTail,
-                    style = style,
-                    color = textColor,
-                    modifier = Modifier.fillMaxWidth(),
-                    isStreaming = true
-                )
-            }
-        }
-    } else {
-        // 兼容路径：沿用原先逻辑（含短路）
-        if (legacyParsedContent.size == 1 && legacyParsedContent[0] is ContentPart.Text) {
-            // 即便走“兼容路径”，也要进行数学感知渲染，避免 $$ 在流式期间显示为单独 $ 行
-            MathAwareText(
-                text = content,
-                style = style,
-                color = textColor,
-                modifier = modifier.fillMaxWidth(),
-                isStreaming = isStreaming
+    // 🛡️ 重组监控（调试用）
+    // 流式阶段允许多次重组（每次新内容一次），但不应超过合理范围
+    val recompositionCount = remember(message.id) { mutableStateOf(0) }
+    SideEffect {
+        recompositionCount.value++
+        // 流式阶段可能有几十到几百次重组（取决于Flow发射频率）
+        // 如果超过1000次，说明可能有问题
+        if (recompositionCount.value > 1000) {
+            android.util.Log.e(
+                "EnhancedMarkdownText",
+                "⚠️ 异常重组: ${recompositionCount.value} 次，messageId=${message.id}, contentLength=${content.length}"
             )
-        } else {
-            Column(modifier = modifier.fillMaxWidth()) {
-                legacyParsedContent.forEach { part ->
-                    when (part) {
-                        is ContentPart.Text -> {
-                            MathAwareText(
-                                text = part.content,
-                                style = style,
-                                color = textColor,
-                                modifier = Modifier.fillMaxWidth(),
-                                isStreaming = isStreaming
-                            )
-                        }
-                        is ContentPart.Code -> {
-                            val shouldScroll = part.content.lines().maxOfOrNull { it.length } ?: 0 > 80
-                            CodeBlock(
-                                code = part.content,
-                                language = part.language,
-                                textColor = textColor,
-                                enableHorizontalScroll = shouldScroll,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp),
-                                maxHeight = 600
-                            )
-                        }
-                        is ContentPart.Table -> {
-                            TableRenderer(
-                                lines = part.lines,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 8.dp)
-                            )
-                        }
-                    }
-                }
-            }
+        }
+        // 每100次打印一次日志，便于监控
+        if (recompositionCount.value % 100 == 0) {
+            android.util.Log.d(
+                "EnhancedMarkdownText",
+                "重组次数: ${recompositionCount.value}, messageId=${message.id}, isStreaming=$isStreaming"
+            )
         }
     }
+
+    // 🎯 直接渲染，让 MathAwareText → MarkdownRenderer 处理MD转换
+    // 优势：
+    // 1. 实时MD转换（外部库自动处理 **粗体**、*斜体*、列表等）
+    // 2. 流式效果（collectAsState 订阅Flow，每次新值触发重组）
+    // 3. 不会无限重组（单向数据流，无状态回写）
+    // 4. 代码简单，维护成本低
+    MathAwareText(
+        text = content,
+        style = style,
+        color = textColor,
+        modifier = modifier.fillMaxWidth(),
+        isStreaming = isStreaming
+    )
 }
 
 /**
@@ -259,7 +111,7 @@ fun StableMarkdownText(
     style: TextStyle,
     modifier: Modifier = Modifier
 ) {
-    Text(
+    androidx.compose.material3.Text(
         text = markdown,
         modifier = modifier,
         style = style.copy(
