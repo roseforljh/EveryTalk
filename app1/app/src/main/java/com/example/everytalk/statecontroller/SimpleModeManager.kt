@@ -388,10 +388,29 @@ class SimpleModeManager(
         // 6. 处理消息并更新状态
         stateHolder.imageGenerationMessages.clear()
         
-        // 处理消息：设置 contentStarted 状态
+        // 处理消息：设置 contentStarted 状态（包含图像URL）
         val processedMessages = conversationToLoad.map { msg ->
-            val updatedContentStarted = msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || msg.isError
-            msg.copy(contentStarted = updatedContentStarted)
+            // 针对图像模式，若AI消息包含图片URL，应视为已产生内容
+            val hasImages = (msg.imageUrls?.isNotEmpty() == true)
+            val updatedContentStarted = msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || msg.isError || hasImages
+
+            if (msg.sender == com.example.everytalk.data.DataClass.Sender.AI) {
+                if (hasImages && msg.text.isBlank() && msg.parts.isNotEmpty()) {
+                    val rebuiltText = msg.parts
+                        .filterIsInstance<com.example.everytalk.ui.components.MarkdownPart.Text>()
+                        .joinToString("") { it.content }
+                    if (rebuiltText.isNotBlank()) {
+                        android.util.Log.d(TAG, "Rebuilt text for image msg ${msg.id}, images=${msg.imageUrls?.size ?: 0}")
+                        msg.copy(text = rebuiltText, contentStarted = updatedContentStarted)
+                    } else {
+                        msg.copy(contentStarted = updatedContentStarted)
+                    }
+                } else {
+                    msg.copy(contentStarted = updatedContentStarted)
+                }
+            } else {
+                msg.copy(contentStarted = updatedContentStarted)
+            }
         }
         
         stateHolder.imageGenerationMessages.addAll(processedMessages)
