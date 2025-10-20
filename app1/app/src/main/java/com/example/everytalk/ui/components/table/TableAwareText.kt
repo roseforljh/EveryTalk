@@ -5,29 +5,26 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import com.example.everytalk.ui.components.CodeBlock
-import com.example.everytalk.ui.components.coordinator.ContentCoordinator
 import com.example.everytalk.ui.components.ContentParser
 import com.example.everytalk.ui.components.ContentPart
+import com.example.everytalk.ui.components.markdown.MarkdownRenderer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * 表格感知文本渲染器
+ * 表格感知文本渲染器（优化版）
  * 
- * 职责：
- * - 检测并解析包含表格的文本
- * - 分段渲染：表格、代码块、普通文本
- * - 递归调用 ContentCoordinator 处理文本片段
- * 
- * 设计原则：
- * - 单一职责：只处理表格相关逻辑
- * - 依赖倒置：依赖 ContentCoordinator 而不是具体实现
+ * 核心策略：
+ * - 流式阶段：直接用MarkdownRenderer渲染，零解析开销
+ * - 流式结束：延迟异步解析完整内容
  */
 @Composable
 fun TableAwareText(
@@ -38,34 +35,78 @@ fun TableAwareText(
     modifier: Modifier = Modifier,
     recursionDepth: Int = 0
 ) {
-    // 异步解析：流式阶段使用轻量路径（仅代码块），非流式使用完整解析
-    val parts = produceState(initialValue = emptyList<ContentPart>(), text, isStreaming) {
-        value = withContext(Dispatchers.Default) {
-            try {
-                if (isStreaming) {
-                    ContentParser.parseCodeBlocksOnly(text)
-                } else {
-                    ContentParser.parseCompleteContent(text)
-                }
-            } catch (_: Throwable) {
-                listOf(ContentPart.Text(text))
-            }
-        }
-    }.value
+    // ⚡ 流式阶段：直接渲染Markdown，不分段解析（避免递归+性能问题）
+    if (isStreaming) {
+        MarkdownRenderer(
+            markdown = text,
+            style = style,
+            color = color,
+            modifier = modifier.fillMaxWidth(),
+            isStreaming = true
+        )
+        return
+    }
     
-    // 分段渲染
+    // 🎯 流式结束：异步解析，分段渲染
+    val parsedParts = remember { mutableStateOf<List<ContentPart>>(emptyList()) }
+    
+    // 🔥 关键修复：同时监听 isStreaming 和 text，确保拿到最终文本后再解析
+    LaunchedEffect(isStreaming, text) {
+        if (!isStreaming && text.isNotBlank()) {
+            // 🔥 性能优化：大型内容延迟更久，避免流式结束瞬间卡顿
+            val isLargeContent = text.length > 8000
+            val delayMs = if (isLargeContent) 250L else 100L
+            
+            kotlinx.coroutines.delay(delayMs)
+            
+            val startTime = System.currentTimeMillis()
+            val parsed = withContext(Dispatchers.Default) {
+                try {
+                    ContentParser.parseCompleteContent(text)
+                } catch (e: Throwable) {
+                    android.util.Log.e("TableAwareText", "Parse error", e)
+                    listOf(ContentPart.Text(text))
+                }
+            }
+            val parseTime = System.currentTimeMillis() - startTime
+            
+            parsedParts.value = parsed
+            android.util.Log.d("TableAwareText", "✅ Parsed: ${parsed.size} parts, ${text.length} chars, ${parseTime}ms")
+            
+            // 🔥 性能警告：超过500ms记录警告
+            if (parseTime > 500) {
+                android.util.Log.w("TableAwareText", "⚠️ Slow parse: ${parseTime}ms for ${text.length} chars")
+            }
+        } else if (isStreaming) {
+            // 流式开始：重置解析结果
+            parsedParts.value = emptyList()
+        }
+    }
+    
+    // 解析完成前：显示原始Markdown
+    if (parsedParts.value.isEmpty()) {
+        MarkdownRenderer(
+            markdown = text,
+            style = style,
+            color = color,
+            modifier = modifier.fillMaxWidth(),
+            isStreaming = false
+        )
+        return
+    }
+    
+    // 解析完成后：分段渲染
     Column(modifier = modifier.fillMaxWidth()) {
-        parts.forEach { part ->
+        parsedParts.value.forEach { part ->
             when (part) {
                 is ContentPart.Text -> {
-                    // 递归调用协调器处理文本（可能包含数学公式）
-                    ContentCoordinator(
-                        text = part.content,
+                    // 纯文本部分：用MarkdownRenderer渲染（不递归）
+                    MarkdownRenderer(
+                        markdown = part.content,
                         style = style,
                         color = color,
-                        isStreaming = isStreaming,
                         modifier = Modifier.fillMaxWidth(),
-                        recursionDepth = recursionDepth + 1  // 深度+1
+                        isStreaming = false
                     )
                 }
                 is ContentPart.Code -> {
@@ -87,7 +128,7 @@ fun TableAwareText(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 8.dp),
-                        isStreaming = isStreaming
+                        isStreaming = false
                     )
                 }
             }

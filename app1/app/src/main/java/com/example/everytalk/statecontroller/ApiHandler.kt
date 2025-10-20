@@ -488,69 +488,18 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     }
                 }
                 is AppStreamEvent.ContentFinal -> {
-                    if (processedResult is com.example.everytalk.util.messageprocessor.ProcessedEventResult.ContentUpdated) {
-                        // 🎯 最终内容到来时，确保正式内容已显示
-                        val hasStreamingContent = processedResult.content.isNotBlank()
-
-                        android.util.Log.d("ApiHandler", "=== CONTENT FINAL EVENT DEBUG ===")
-                        android.util.Log.d("ApiHandler", "Message ID: $aiMessageId")
-                        android.util.Log.d("ApiHandler", "Event type: ContentFinal")
-                        android.util.Log.d("ApiHandler", "Event text length: ${appEvent.text.length}")
-                        android.util.Log.d("ApiHandler", "Event text preview: '${appEvent.text.take(100)}'")
-                        android.util.Log.d("ApiHandler", "Processed content length: ${processedResult.content.length}")
-                        android.util.Log.d("ApiHandler", "Current message.text length: ${currentMessage.text.length}")
-                        android.util.Log.d("ApiHandler", "Current message.text preview: '${currentMessage.text.take(100)}'")
-
-                        // ✅ 最终内容到来：使用 MessageProcessor 处理后的内容（已经过验证和合并）
-                        // 🔧 修复：优先使用 processedResult.content，它已经过 ContentFinalValidator 验证
-                        // 只有在 processedResult.content 为空时才使用 event.text
-                        val finalText = when {
-                            processedResult.content.isNotBlank() -> {
-                                android.util.Log.d("ApiHandler", "🔥 Using processed content (validated)")
-                                processedResult.content
-                            }
-                            appEvent.text.isNotBlank() -> {
-                                android.util.Log.d("ApiHandler", "🔥 Using event.text as fallback")
-                                appEvent.text
-                            }
-                            currentMessage.text.isNotBlank() -> {
-                                android.util.Log.w("ApiHandler", "🔥 Using current message.text as last resort")
-                                currentMessage.text
-                            }
-                            else -> {
-                                android.util.Log.e("ApiHandler", "🔥 All text sources are empty!")
-                                ""
-                            }
-                        }
-                        
-                        android.util.Log.d("ApiHandler", "🔥 Final text selected: length=${finalText.length}, preview='${finalText.take(100)}'")
-                        
-                        updatedMessage = updatedMessage.copy(
-                            contentStarted = true,
-                            text = finalText
-                        )
-                        
-                        // 🔥 关键修复：强制标记会话为脏，确保内容被持久化和 UI 刷新
-                        if (isImageGeneration) {
-                            stateHolder.isImageConversationDirty.value = true
-                        } else {
-                            stateHolder.isTextConversationDirty.value = true
-                        }
-                        android.util.Log.d("ApiHandler", "🔥 Marked conversation as dirty after ContentFinal")
-                        
-                        // 🔥 关键修复：同步消息到列表，确保 UI 立即更新
-                        stateHolder.syncStreamingMessageToList(aiMessageId, isImageGeneration)
-                        android.util.Log.d("ApiHandler", "🔥 Synced ContentFinal to message list")
-                        
-                        // 触发完整文本变更回调
-                        if (finalText.isNotBlank()) {
-                            try {
-                                onAiMessageFullTextChanged(aiMessageId, finalText)
-                                android.util.Log.d("ApiHandler", "🔥 Triggered full text changed callback for ContentFinal")
-                            } catch (e: Exception) {
-                                logger.warn("onAiMessageFullTextChanged in ContentFinal handler failed: ${e.message}")
-                            }
-                        }
+                    // 🎯 优化：ContentFinal 事件已被废弃（后端不再发送）
+                    // 前端已通过累积 Content 增量事件构建了完整内容
+                    // 保留此分支仅为向后兼容旧版本后端
+                    android.util.Log.d("ApiHandler", "⚡ ContentFinal event received (deprecated, no-op)")
+                    android.util.Log.d("ApiHandler", "   Message ID: $aiMessageId")
+                    android.util.Log.d("ApiHandler", "   Event text length: ${appEvent.text.length}")
+                    android.util.Log.d("ApiHandler", "   Note: Content already accumulated via Content events, skipping redundant processing")
+                    
+                    // 向后兼容：如果旧版本后端仍然发送此事件，确保内容已标记开始
+                    if (!currentMessage.contentStarted && appEvent.text.isNotBlank()) {
+                        updatedMessage = updatedMessage.copy(contentStarted = true)
+                        android.util.Log.d("ApiHandler", "   Marked contentStarted=true for backward compatibility")
                     }
                 }
                 is AppStreamEvent.Reasoning -> {

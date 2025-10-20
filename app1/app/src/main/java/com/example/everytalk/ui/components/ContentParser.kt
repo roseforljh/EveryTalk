@@ -194,32 +194,43 @@ object ContentParser {
         return null to startIndex + 1
     }
     
+    // 缓存编译后的正则（避免重复编译）
+    private val tableSeparatorRegex = Regex("^\\s*\\|?\\s*[-:]+\\s*(\\|\\s*[-:]+\\s*)+\\|?\\s*$")
+    
     /**
-     * 检查是否为表格行
+     * 检查是否为表格行（优化版：减少正则匹配）
      */
     private fun isTableLine(line: String): Boolean {
         val trimmed = line.trim()
         if (trimmed.isEmpty()) return false
         
+        // 快速检查：必须包含 |
+        if (!trimmed.contains('|')) return false
+        
         // 表格行必须包含至少两个 | 符号
         val pipeCount = trimmed.count { it == '|' }
         if (pipeCount < 2) return false
         
-        // 检查是否为分隔行
-        val isSeparator = trimmed.matches(Regex("^\\s*\\|?\\s*[-:]+\\s*(\\|\\s*[-:]+\\s*)+\\|?\\s*$"))
+        // 🎯 优化：先用简单规则判断，减少正则匹配
+        // 分隔行特征：主要包含 - : | 和空格
+        val isLikelySeparator = trimmed.count { it == '-' || it == ':' } >= pipeCount
+        if (isLikelySeparator) {
+            // 精确验证分隔行
+            return tableSeparatorRegex.matches(trimmed)
+        }
         
-        // 检查是否为数据行
-        val isDataRow = trimmed.contains("|") && !trimmed.all { it == '|' || it == '-' || it == ':' || it.isWhitespace() }
+        // 数据行：包含 | 但不全是特殊字符
+        val isDataRow = trimmed.any { it != '|' && it != '-' && it != ':' && !it.isWhitespace() }
         
-        return isSeparator || isDataRow
+        return isDataRow
     }
     
     /**
-     * 检查是否为表格分隔行
+     * 检查是否为表格分隔行（优化版：复用缓存的正则）
      */
     private fun isTableSeparator(line: String): Boolean {
         val trimmed = line.trim()
-        return trimmed.matches(Regex("^\\s*\\|?\\s*[-:]+\\s*(\\|\\s*[-:]+\\s*)+\\|?\\s*$"))
+        return tableSeparatorRegex.matches(trimmed)
     }
     
     /**

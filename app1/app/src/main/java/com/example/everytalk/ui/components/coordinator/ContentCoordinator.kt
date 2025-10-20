@@ -49,26 +49,23 @@ fun ContentCoordinator(
     val hasCodeBlock = text.contains("```")
     val hasTable = text.contains("|") && text.lines().any { line -> TableUtils.isTableLine(line) }
 
-    // ⚡ 流式阶段：等宽直显；完成后：完整渲染（使用淡入替换动画，避免突兀切换）
+    // ⚡ 流式阶段：使用轻量模式，避免频繁解析
+    // 流式结束后：触发完整解析，将代码块转换为CodeBlock组件
+    // 性能保护：
+    //   - TableAwareText 延迟250ms解析大型内容（>8000字符）
+    //   - 使用后台线程（Dispatchers.Default）避免阻塞UI
     if (hasCodeBlock || hasTable) {
-        val showLightweight = isStreaming
-        Crossfade(
-            targetState = showLightweight,
-            animationSpec = tween(durationMillis = 180),
-            modifier = modifier.fillMaxWidth()
-        ) { lightweight ->
-            // 关键修复：
-            // 流式阶段也使用 TableAwareText（其内部在 isStreaming=true 时仅解析代码块、文本部分仍走 MarkdownRenderer），
-            // 避免整段用等宽 Text 直显导致标题/粗体等Markdown语法不被转换。
-            TableAwareText(
-                text = text,
-                style = style,
-                color = color,
-                isStreaming = lightweight, // true=流式轻量解析；false=完成后完整渲染
-                modifier = Modifier.fillMaxWidth(),
-                recursionDepth = recursionDepth
-            )
-        }
+        // 🎯 只根据流式状态判断是否使用轻量模式
+        val shouldUseLightweight = isStreaming
+        
+        TableAwareText(
+            text = text,
+            style = style,
+            color = color,
+            isStreaming = shouldUseLightweight, // true=轻量；false=完整（仅纯表格）
+            modifier = modifier.fillMaxWidth(),
+            recursionDepth = recursionDepth
+        )
         return
     }
     
