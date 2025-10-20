@@ -710,14 +710,21 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                  if (!message.reasoning.isNullOrBlank()) {
                      items.add(ChatListItem.AiMessageReasoning(message))
                  }
-                 if (message.text.isNotBlank()) {
+                 
+                 // 🔥 修复：图像生成模式下，即使text为空，只要有imageUrls也要创建AiMessage项
+                 val hasImageContent = !message.imageUrls.isNullOrEmpty()
+                 val hasTextContent = message.text.isNotBlank()
+                 
+                 if (hasTextContent || (isImageGeneration && hasImageContent)) {
                      items.add(
                          when (message.outputType) {
                              "code" -> ChatListItem.AiMessageCode(message.id, message.text, !message.reasoning.isNullOrBlank())
                              else -> ChatListItem.AiMessage(message.id, message.text, !message.reasoning.isNullOrBlank())
                          }
                      )
+                     android.util.Log.d("AppViewModel", "🖼️ [COMPLETE STATE] Created AiMessage item: hasTextContent=$hasTextContent, hasImageContent=$hasImageContent, imageUrls=${message.imageUrls?.size}")
                  }
+                 
                  if (!message.webSearchResults.isNullOrEmpty()) {
                      items.add(ChatListItem.AiMessageFooter(message))
                  }
