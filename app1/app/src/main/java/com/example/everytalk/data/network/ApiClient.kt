@@ -40,6 +40,9 @@ import kotlinx.serialization.modules.SerializersModule
 import kotlinx.serialization.modules.contextual
 import kotlinx.serialization.modules.polymorphic
 import kotlinx.serialization.modules.subclass
+import android.graphics.Bitmap
+import android.graphics.Bitmap.CompressFormat
+import android.util.Base64
 import kotlinx.coroutines.CancellationException as CoroutineCancellationException
 
 @Serializable
@@ -637,6 +640,10 @@ object ApiClient {
         attachments: List<SelectedMediaItem>,
         applicationContext: Context
     ): Flow<AppStreamEvent> = channelFlow {
+        // 标记是否遇到 Cloudflare 拦截
+        var cloudflareDetected = false
+        var hasContentEmitted = false
+        
         // 尝试按顺序连接所有已配置的后端URL，首个成功即使用，失败则自动回退到下一个
         val backendUrls = BackendConfig.backendUrls
         if (backendUrls.isEmpty()) {
@@ -664,27 +671,109 @@ object ApiClient {
             }
             val backendProxyUrl = buildFinalUrl(base, "/chat")
 
-            // 关键修复：若本后端已成功产出任何事件，就视作成功，不再尝试下一个，避免“成功后又因取消而被当失败重试”
+            // 关键修复：若本后端已成功产出任何事件，就视作成功，不再尝试下一个，避免"成功后又因取消而被当失败重试"
             var anyEventEmitted = false
             try {
                 android.util.Log.d("ApiClient", "尝试连接后端: $backendProxyUrl (原始地址: $raw)")
                 streamChatResponseInternal(backendProxyUrl, request, attachments, applicationContext)
                     .collect { event ->
                         anyEventEmitted = true
+                        
+                        // 🔍 检测 Cloudflare 拦截错误
+                        if (event is AppStreamEvent.Error && 
+                            event.message?.contains("CLOUDFLARE_CHALLENGE_DETECTED") == true) {
+                            android.util.Log.w("ApiClient", "⚠️ 检测到 Cloudflare 拦截，准备自动切换到直连模式")
+                            cloudflareDetected = true
+                            return@collect  // 不发送这个错误事件，准备切换
+                        }
+                        
+                        // 检测是否有 finish 事件且原因是 cloudflare_blocked
+                        if (event is AppStreamEvent.Finish && 
+                            event.reason?.contains("cloudflare") == true) {
+                            android.util.Log.w("ApiClient", "⚠️ 确认 Cloudflare 拦截，触发直连模式")
+                            cloudflareDetected = true
+                            return@collect
+                        }
+                        
+                        // 记录是否已输出内容
+                        if (event is AppStreamEvent.Content || event is AppStreamEvent.Text) {
+                            hasContentEmitted = true
+                        }
+                        
                         send(event)
                     }
                 connected = true
                 break
             } catch (e: Exception) {
                 // 若已经有事件产出（包括 content/content_final/finish），将此次视为成功结束，不再回退到下一个后端
-                if (anyEventEmitted) {
+                if (anyEventEmitted && !cloudflareDetected) {
                     android.util.Log.d("ApiClient", "本后端已产生事件，尽管捕获异常(${e.message})，视为成功完成，不再回退。")
                     connected = true
                     break
                 }
+                
+                // 如果检测到 Cloudflare，跳出循环准备直连
+                if (cloudflareDetected) {
+                    android.util.Log.i("ApiClient", "Cloudflare 拦截已确认，跳出后端尝试循环")
+                    break
+                }
+                
                 lastError = if (e is Exception) e else Exception(e)
                 android.util.Log.w("ApiClient", "连接后端失败，尝试下一个: $backendProxyUrl, 错误: ${e.message}")
                 // 继续尝试下一个地址
+            }
+        }
+
+        // 🚀 自动降级：如果检测到 Cloudflare，切换到直连模式
+        if (cloudflareDetected && !hasContentEmitted && request.apiKey.isNotEmpty()) {
+            val isGeminiRequest = request.provider == "gemini" ||
+                                  request.model.contains("gemini", ignoreCase = true)
+            val isOpenAICompatible = request.provider == "openai" ||
+                                     request.provider == "azure" ||
+                                     request.provider == "openai_compatible"
+
+            // 在进入直连前，将当前消息的图片附件注入为“多模态 parts/content”
+            val requestForDirect = try {
+                buildDirectMultimodalRequest(request, attachments, applicationContext)
+            } catch (e: Exception) {
+                android.util.Log.w("ApiClient", "构建直连多模态请求失败，降级为文本直连: ${e.message}")
+                request
+            }
+            
+            when {
+                isGeminiRequest -> {
+                    try {
+                        android.util.Log.i("ApiClient", "🔄 自动切换到 Gemini 直连模式（静默降级）")
+                        GeminiDirectClient.streamChatDirect(client, requestForDirect)
+                            .collect { directEvent -> send(directEvent) }
+                        connected = true
+                        android.util.Log.i("ApiClient", "✅ Gemini 直连完成")
+                    } catch (directError: Exception) {
+                        android.util.Log.e("ApiClient", "❌ Gemini 直连失败", directError)
+                        send(AppStreamEvent.Error("跳板和直连均失败: ${directError.message}", null))
+                        send(AppStreamEvent.Finish("all_failed"))
+                        connected = true
+                    }
+                }
+                isOpenAICompatible -> {
+                    try {
+                        android.util.Log.i("ApiClient", "🔄 自动切换到 OpenAI 兼容直连模式（静默降级）")
+                        OpenAIDirectClient.streamChatDirect(client, requestForDirect)
+                            .collect { directEvent -> send(directEvent) }
+                        connected = true
+                        android.util.Log.i("ApiClient", "✅ OpenAI 兼容直连完成")
+                    } catch (directError: Exception) {
+                        android.util.Log.e("ApiClient", "❌ OpenAI 兼容直连失败", directError)
+                        send(AppStreamEvent.Error("跳板和直连均失败: ${directError.message}", null))
+                        send(AppStreamEvent.Finish("all_failed"))
+                        connected = true
+                    }
+                }
+                else -> {
+                    android.util.Log.w("ApiClient", "检测到 Cloudflare 拦截，但不支持该渠道的直连")
+                    send(AppStreamEvent.Error("后端被防火墙拦截。建议更换 API 地址", 403))
+                    send(AppStreamEvent.Finish("cloudflare_blocked"))
+                }
             }
         }
 
@@ -1014,6 +1103,7 @@ object ApiClient {
                     header(HttpHeaders.Accept, "application/json")
                     setBody(payload)
                 }
+                
                 if (!response.status.isSuccess()) {
                     val errTxt = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
                     android.util.Log.e("ApiClient", "Image generation HTTP ${response.status.value}: $errTxt")
@@ -1034,4 +1124,115 @@ object ApiClient {
         }
         throw IOException("Image generation failed on all backends: ${lastError?.message}", lastError)
     }
+}
+
+/**
+ * 将“当前会话的最后一条 user 消息”与图片附件整合为“直连可消费的多模态消息”
+ * - Gemini: contents.parts -> text + inline_data
+ * - OpenAI-compat: messages[].content -> [{"type":"text"}, {"type":"image_url"...}]
+ * 实现方式：把最后一条 user SimpleTextApiMessage 升级为 PartsApiMessage 并注入 InlineData
+ */
+private fun buildDirectMultimodalRequest(
+    request: ChatRequest,
+    attachments: List<com.example.everytalk.models.SelectedMediaItem>,
+    context: Context
+): ChatRequest {
+    val imageInlineParts = mutableListOf<com.example.everytalk.data.DataClass.ApiContentPart.InlineData>()
+
+    attachments.forEach { item ->
+        when (item) {
+            is com.example.everytalk.models.SelectedMediaItem.ImageFromUri -> {
+                val mime = context.contentResolver.getType(item.uri) ?: "image/jpeg"
+                val bytes = runCatching {
+                    context.contentResolver.openInputStream(item.uri)?.use { it.readBytes() }
+                }.getOrNull()
+                if (bytes != null && isImageMime(mime)) {
+                    val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                    imageInlineParts.add(
+                        com.example.everytalk.data.DataClass.ApiContentPart.InlineData(
+                            base64Data = b64,
+                            mimeType = mime
+                        )
+                    )
+                }
+            }
+            is com.example.everytalk.models.SelectedMediaItem.ImageFromBitmap -> {
+                val hasAlpha = item.bitmap?.hasAlpha() == true
+                val mime = if (hasAlpha) "image/png" else "image/jpeg"
+                val baos = java.io.ByteArrayOutputStream()
+                val ok = item.bitmap?.compress(
+                    if (hasAlpha) CompressFormat.PNG else CompressFormat.JPEG,
+                    if (hasAlpha) 100 else 85,
+                    baos
+                ) == true
+                if (ok) {
+                    val bytes = baos.toByteArray()
+                    val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                    imageInlineParts.add(
+                        com.example.everytalk.data.DataClass.ApiContentPart.InlineData(
+                            base64Data = b64,
+                            mimeType = mime
+                        )
+                    )
+                }
+            }
+            is com.example.everytalk.models.SelectedMediaItem.GenericFile -> {
+                val mime = item.mimeType ?: "application/octet-stream"
+                if (isImageMime(mime)) {
+                    val bytes = runCatching {
+                        context.contentResolver.openInputStream(item.uri)?.use { it.readBytes() }
+                    }.getOrNull()
+                    if (bytes != null) {
+                        val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                        imageInlineParts.add(
+                            com.example.everytalk.data.DataClass.ApiContentPart.InlineData(
+                                base64Data = b64,
+                                mimeType = mime
+                            )
+                        )
+                    }
+                }
+            }
+            else -> { /* ignore */ }
+        }
+    }
+
+    if (imageInlineParts.isEmpty()) return request
+
+    val msgs = request.messages.toMutableList()
+    val lastUserIdx = msgs.indexOfLast { it.role == "user" }
+    if (lastUserIdx < 0) return request
+
+    val lastMsg = msgs[lastUserIdx]
+    val newParts = when (lastMsg) {
+        is com.example.everytalk.data.DataClass.PartsApiMessage -> {
+            val existing = lastMsg.parts.toMutableList()
+            existing.addAll(imageInlineParts)
+            existing.toList()
+        }
+        is com.example.everytalk.data.DataClass.SimpleTextApiMessage -> {
+            val list = mutableListOf<com.example.everytalk.data.DataClass.ApiContentPart>()
+            if (lastMsg.content.isNotBlank()) {
+                list.add(com.example.everytalk.data.DataClass.ApiContentPart.Text(lastMsg.content))
+            }
+            list.addAll(imageInlineParts)
+            list.toList()
+        }
+        else -> {
+            imageInlineParts.toList()
+        }
+    }
+
+    val upgraded = com.example.everytalk.data.DataClass.PartsApiMessage(
+        role = "user",
+        parts = newParts
+    )
+    msgs[lastUserIdx] = upgraded
+    return request.copy(messages = msgs)
+}
+
+private fun isImageMime(mime: String?): Boolean {
+    if (mime == null) return false
+    val m = mime.lowercase()
+    return m.startsWith("image/")
 }
