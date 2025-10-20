@@ -321,6 +321,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         val outputType: String,
         val hasReasoning: Boolean,
         val imageUrls: List<String>?,  // 🔥 关键修复：添加imageUrls到缓存
+        val contentStarted: Boolean,  // 🔥 修复：添加contentStarted到缓存
         val items: List<ChatListItem>
     )
     
@@ -348,8 +349,9 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                                                 cached.outputType == message.outputType &&
                                                 cached.hasReasoning == hasReasoning &&
                                                 cached.imageUrls == message.imageUrls &&  // 🔥 关键修复：检查imageUrls
+                                                cached.contentStarted == message.contentStarted &&  // 🔥 修复：检查contentStarted状态
                                                 // 关键：流式状态变化时缓存失效
-                                                (isCurrentlyStreaming == (cached.items.any { it is ChatListItem.LoadingIndicator }))
+                                                (isCurrentlyStreaming == (cached.items.any { it is ChatListItem.LoadingIndicator || it is ChatListItem.AiMessageStreaming || it is ChatListItem.AiMessageCodeStreaming }))
                                             
                                             if (cacheValid) {
                                                 // ✅ 缓存命中，直接返回
@@ -358,8 +360,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                                             } else {
                                                 // ❌ 缓存未命中或失效，重新计算
                                                 android.util.Log.d("AppViewModel", "🎯 Cache MISS for ${message.id.take(8)}, " +
-                                                    "text.len=${message.text.length}, reasoning.len=${message.reasoning?.length}, " +
-                                                    "cached.reasoning.len=${cached?.reasoning?.length}")
+                                                    "text.len=${message.text.length}, contentStarted=${message.contentStarted}, " +
+                                                    "cached.contentStarted=${cached?.contentStarted}")
                                                 val newItems = createAiMessageItems(
                                                     message,
                                                     isApiCalling,
@@ -373,6 +375,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                                                     outputType = message.outputType,
                                                     hasReasoning = hasReasoning,
                                                     imageUrls = message.imageUrls,  // 🔥 关键修复：保存imageUrls到缓存
+                                                    contentStarted = message.contentStarted,  // 🔥 修复：保存contentStarted到缓存
                                                     items = newItems
                                                 )
                                                 
@@ -446,6 +449,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                                     outputType = message.outputType,
                                     hasReasoning = hasReasoning,
                                     imageUrls = message.imageUrls,  // 🔥 关键修复：保存imageUrls到缓存
+                                    contentStarted = message.contentStarted,  // 🔥 修复：保存contentStarted到缓存
                                     items = newItems
                                 )
                                 
@@ -623,47 +627,50 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
              return com.example.everytalk.ui.state.AiBubbleState.Idle
          }
  
-         val isCurrentStreaming = isApiCalling && message.id == currentStreamingAiMessageId
-         val hasReasoning = !message.reasoning.isNullOrBlank()
-         val reasoningCompleteMap = if (isImageGeneration) imageReasoningCompleteMap else textReasoningCompleteMap
-         val reasoningComplete = reasoningCompleteMap[message.id] ?: false
- 
-        // 🎯 获取StreamingMessageStateManager的实际内容
-        val streamingContent = if (isCurrentStreaming) {
-            stateHolder.streamingMessageStateManager.getCurrentContent(message.id)
-        } else {
-            ""
-        }
-        
-        // 降级日志为 Verbose，避免刷屏
-        if (Log.isLoggable("AppViewModelVerbose", Log.VERBOSE)) {
-            Log.v("AppViewModelVerbose", "computeBubbleState: id=${message.id.take(8)}, " +
-                "isStreaming=$isCurrentStreaming, hasReasoning=$hasReasoning, " +
-                "reasoningComplete=$reasoningComplete, streamingContent.length=${streamingContent.length}, " +
-                "message.reasoning=${message.reasoning?.take(20)}")
-        }
-        
-        return when {
-            isCurrentStreaming && hasReasoning && streamingContent.isEmpty() -> {
-                com.example.everytalk.ui.state.AiBubbleState.Reasoning(message.reasoning ?: "", isComplete = reasoningComplete)
-            }
-            isCurrentStreaming && streamingContent.isNotEmpty() -> {
-                com.example.everytalk.ui.state.AiBubbleState.Streaming(
+        val isCurrentStreaming = isApiCalling && message.id == currentStreamingAiMessageId
+        val hasReasoning = !message.reasoning.isNullOrBlank()
+        val reasoningCompleteMap = if (isImageGeneration) imageReasoningCompleteMap else textReasoningCompleteMap
+        val reasoningComplete = reasoningCompleteMap[message.id] ?: false
+       
+       // 降级日志为 Verbose，避免刷屏
+       if (Log.isLoggable("AppViewModelVerbose", Log.VERBOSE)) {
+           Log.v("AppViewModelVerbose", "computeBubbleState: id=${message.id.take(8)}, " +
+               "isStreaming=$isCurrentStreaming, hasReasoning=$hasReasoning, " +
+               "reasoningComplete=$reasoningComplete, contentStarted=${message.contentStarted}, " +
+               "message.reasoning=${message.reasoning?.take(20)}")
+       }
+       
+       val state = when {
+           // 🔥 修复：使用 contentStarted 而不是 streamingContent.isNotEmpty()
+           // 原因：getCurrentContent()不是响应式的，不会触发combine重新计算
+           isCurrentStreaming && hasReasoning && !message.contentStarted -> {
+               com.example.everytalk.ui.state.AiBubbleState.Reasoning(message.reasoning ?: "", isComplete = reasoningComplete)
+           }
+           isCurrentStreaming && message.contentStarted -> {
+               com.example.everytalk.ui.state.AiBubbleState.Streaming(
+                   content = message.text,
+                   hasReasoning = hasReasoning,
+                   reasoningComplete = reasoningComplete
+               )
+           }
+           isCurrentStreaming && !hasReasoning && !message.contentStarted -> {
+               com.example.everytalk.ui.state.AiBubbleState.Connecting
+           }
+            (message.contentStarted || message.text.isNotBlank()) ->
+                com.example.everytalk.ui.state.AiBubbleState.Complete(
                     content = message.text,
-                    hasReasoning = hasReasoning,
-                    reasoningComplete = reasoningComplete
+                    reasoning = message.reasoning
                 )
-            }
-            isCurrentStreaming && !hasReasoning && streamingContent.isEmpty() -> {
-                com.example.everytalk.ui.state.AiBubbleState.Connecting
-            }
-             (message.contentStarted || message.text.isNotBlank()) ->
-                 com.example.everytalk.ui.state.AiBubbleState.Complete(
-                     content = message.text,
-                     reasoning = message.reasoning
-                 )
-             else -> com.example.everytalk.ui.state.AiBubbleState.Idle
-         }
+            else -> com.example.everytalk.ui.state.AiBubbleState.Idle
+        }
+        
+        // 🔍 调试日志：记录状态切换
+        if (isCurrentStreaming) {
+            android.util.Log.d("AppViewModel", "🎯 BubbleState for ${message.id.take(8)}: ${state::class.simpleName}, " +
+                "isStreaming=$isCurrentStreaming, contentStarted=${message.contentStarted}, textLen=${message.text.length}")
+        }
+        
+        return state
      }
  
     private fun createAiMessageItems(

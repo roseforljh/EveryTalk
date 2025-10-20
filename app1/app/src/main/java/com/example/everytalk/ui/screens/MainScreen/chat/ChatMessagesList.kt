@@ -309,22 +309,24 @@ fun ChatMessagesList(
                         is ChatListItem.AiMessageStreaming -> {
                             val message = viewModel.getMessageById(item.messageId)
                             if (message != null) {
+                                // 🔥 修复：不在这里订阅StateFlow，而是传递message
+                                // EnhancedMarkdownText内部会根据isStreaming参数自动订阅
                                 Column(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalAlignment = Alignment.Start
                                 ) {
                                     AiMessageItem(
                                         message = message,
-                                        text = message.text,
+                                        text = message.text,  // 传递message.text，由EnhancedMarkdownText内部处理流式订阅
                                         maxWidth = bubbleMaxWidth,
                                         hasReasoning = item.hasReasoning,
                                         onLongPress = {
                                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                             onShowAiMessageOptions(message)
                                         },
-                                        isStreaming = true,
+                                        isStreaming = true,  // ✅ 关键：标记为流式状态
                                         messageOutputType = message.outputType,
-                                        viewModel = viewModel,
+                                        viewModel = viewModel,  // ✅ 传递viewModel用于流式订阅
                                         showMenuButton = false
                                     )
                                 }
@@ -335,22 +337,23 @@ fun ChatMessagesList(
                         is ChatListItem.AiMessageCodeStreaming -> {
                             val message = viewModel.getMessageById(item.messageId)
                             if (message != null) {
+                                // 🔥 修复：不在这里订阅StateFlow，由EnhancedMarkdownText内部处理
                                 Column(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalAlignment = Alignment.Start
                                 ) {
                                     AiMessageItem(
                                         message = message,
-                                        text = message.text,
+                                        text = message.text,  // 传递message.text，由EnhancedMarkdownText内部处理流式订阅
                                         maxWidth = bubbleMaxWidth,
                                         hasReasoning = item.hasReasoning,
                                         onLongPress = {
                                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                             onShowAiMessageOptions(message)
                                         },
-                                        isStreaming = true,
+                                        isStreaming = true,  // ✅ 关键：标记为流式状态
                                         messageOutputType = message.outputType,
-                                        viewModel = viewModel,
+                                        viewModel = viewModel,  // ✅ 传递viewModel用于流式订阅
                                         showMenuButton = false
                                     )
                                 }

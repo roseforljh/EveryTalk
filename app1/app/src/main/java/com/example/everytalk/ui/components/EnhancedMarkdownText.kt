@@ -63,25 +63,12 @@ fun EnhancedMarkdownText(
         remember(message.text) { mutableStateOf(message.text) }
     }
     
-    // 🛡️ 重组监控（调试用）
-    // 流式阶段允许多次重组（每次新内容一次），但不应超过合理范围
-    val recompositionCount = remember(message.id) { mutableStateOf(0) }
-    SideEffect {
-        recompositionCount.value++
-        // 流式阶段可能有几十到几百次重组（取决于Flow发射频率）
-        // 如果超过1000次，说明可能有问题
-        if (recompositionCount.value > 1000) {
-            android.util.Log.e(
-                "EnhancedMarkdownText",
-                "⚠️ 异常重组: ${recompositionCount.value} 次，messageId=${message.id}, contentLength=${content.length}"
-            )
-        }
-        // 每100次打印一次日志，便于监控
-        if (recompositionCount.value % 100 == 0) {
-            android.util.Log.d(
-                "EnhancedMarkdownText",
-                "重组次数: ${recompositionCount.value}, messageId=${message.id}, isStreaming=$isStreaming"
-            )
+    // 🔍 调试：记录content更新
+    if (isStreaming && com.example.everytalk.BuildConfig.DEBUG) {
+        androidx.compose.runtime.SideEffect {
+            // 每次content变化都记录
+            android.util.Log.d("EnhancedMarkdownText", 
+                "📝 Content updated: msgId=${message.id.take(8)}, len=${content.length}, preview=${content.take(30)}")
         }
     }
 
