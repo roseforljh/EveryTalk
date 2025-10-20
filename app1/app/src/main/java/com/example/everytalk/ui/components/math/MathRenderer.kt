@@ -7,17 +7,14 @@ import android.webkit.ValueCallback
 import android.webkit.WebSettings
 import android.webkit.WebView
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.wrapContentWidth
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -70,27 +67,27 @@ fun MathBlock(
     val density = LocalDensity.current
     val maxHeightPx = with(density) { maxHeight.toPx() }
     
-    // 🎯 完美自适应宽度：公式多宽容器就多宽，超出屏幕时启用丝滑滚动
+    // 使用状态记录测量的内容宽度
+    var measuredWidth by remember { mutableStateOf<Int?>(null) }
+    
+    // 🎯 WebView 内部滚动方案：移除外层滚动，让 WebView 自己处理
     Box(
         modifier = modifier
-            .fillMaxWidth()  // 外层占满父容器，提供滚动边界
-            .horizontalScroll(rememberScrollState())  // 超出时启用滚动
+            .fillMaxWidth()  // 外层占满父容器
             .heightIn(max = maxHeight)
     ) {
-        Surface(
-            modifier = Modifier.wrapContentWidth(),  // 🎯 完全自适应公式实际宽度
-            color = androidx.compose.ui.graphics.Color.Transparent,
-            tonalElevation = 0.dp,
-            shadowElevation = 0.dp
-        ) {
-            MathRenderContainer(
-                latex = latex,
-                inline = false,
-                modifier = Modifier,
-                maxHeightPx = maxHeightPx,
-                timeoutMs = timeoutMs
-            )
-        }
+        MathRenderContainer(
+            latex = latex,
+            inline = false,
+            modifier = measuredWidth?.let { 
+                Modifier.width(it.dp)  // 应用测量宽度
+            } ?: Modifier.fillMaxWidth(),  // 初始占满
+            maxHeightPx = maxHeightPx,
+            timeoutMs = timeoutMs,
+            onWidthMeasured = { width ->
+                measuredWidth = width  // 回调设置宽度
+            }
+        )
     }
 }
 
@@ -101,7 +98,8 @@ private fun MathRenderContainer(
     inline: Boolean,
     modifier: Modifier = Modifier,
     maxHeightPx: Float? = null,
-    timeoutMs: Long = PerformanceConfig.MATH_RENDER_TIMEOUT_MS
+    timeoutMs: Long = PerformanceConfig.MATH_RENDER_TIMEOUT_MS,
+    onWidthMeasured: ((Int) -> Unit)? = null  // 新增：宽度测量回调
 ) {
     val context = LocalContext.current
     val isPreview = LocalInspectionMode.current
@@ -139,7 +137,7 @@ private fun MathRenderContainer(
                 webViewRef = this
                 setBackgroundColor(Color.TRANSPARENT)
                 isVerticalScrollBarEnabled = false
-                // 🎯 块级数学启用水平滚动条（由外层 Compose horizontalScroll 控制）
+                // 🎯 块级数学：启用 WebView 自身水平滚动
                 isHorizontalScrollBarEnabled = !inline
 
                 settings.javaScriptEnabled = true
@@ -154,6 +152,7 @@ private fun MathRenderContainer(
                 // 缩放禁用
                 settings.displayZoomControls = false
                 settings.builtInZoomControls = false
+                settings.setSupportZoom(false)
                 
                 // 🎯 允许内容超出视口宽度（块级数学需要）
                 settings.useWideViewPort = !inline
@@ -180,6 +179,15 @@ private fun MathRenderContainer(
                     if (!alive || token != currentToken) return@tryRender
                     if (success) {
                         lastRendered.value = key
+                        
+                        // ✅ 渲染成功后测量宽度（仅块级数学）
+                        if (!inline && onWidthMeasured != null) {
+                            measureContentWidth(view) { width ->
+                                if (alive && token == currentToken) {
+                                    onWidthMeasured(width)
+                                }
+                            }
+                        }
                     } else {
                         loadFailed = true
                     }
@@ -205,6 +213,15 @@ private fun MathRenderContainer(
                                 if (!alive || token != currentToken) return@tryRender
                                 if (success) {
                                     lastRendered.value = key
+                                    
+                                    // ✅ 渲染成功后测量宽度（仅块级数学）
+                                    if (!inline && onWidthMeasured != null) {
+                                        measureContentWidth(view) { width ->
+                                            if (alive && token == currentToken) {
+                                                onWidthMeasured(width)
+                                            }
+                                        }
+                                    }
                                 } else {
                                     loadFailed = true
                                 }
@@ -220,6 +237,15 @@ private fun MathRenderContainer(
                                         if (!alive || token != currentToken) return@tryRender
                                         if (success) {
                                             lastRendered.value = key
+                                            
+                                            // ✅ 渲染成功后测量宽度（仅块级数学）
+                                            if (!inline && onWidthMeasured != null) {
+                                                measureContentWidth(view) { width ->
+                                                    if (alive && token == currentToken) {
+                                                        onWidthMeasured(width)
+                                                    }
+                                                }
+                                            }
                                         } else {
                                             loadFailed = true
                                         }
@@ -247,6 +273,15 @@ private fun MathRenderContainer(
                 if (!alive || token != currentToken) return@tryRender
                 if (success) {
                     lastRendered.value = key
+                    
+                    // ✅ 渲染成功后测量宽度（仅块级数学）
+                    if (!inline && onWidthMeasured != null) {
+                        measureContentWidth(view) { width ->
+                            if (alive && token == currentToken) {
+                                onWidthMeasured(width)
+                            }
+                        }
+                    }
                 } else {
                     loadFailed = true
                 }
@@ -336,6 +371,40 @@ private fun tryRender(
 private fun WebView.isSafeForJs(): Boolean {
     // 附着到窗口且 handler 存在时认为安全
     return this.handler != null && this.isAttachedToWindow
+}
+
+/**
+ * 通过 JavaScript 测量 WebView 内容实际宽度
+ */
+private fun measureContentWidth(
+    webView: WebView,
+    onResult: (Int) -> Unit
+) {
+    if (!webView.isSafeForJs()) {
+        onResult(0)
+        return
+    }
+    
+    // 获取内容滚动宽度（实际内容宽度）
+    val js = """
+        javascript:(function(){
+            var width = Math.max(
+                document.body.scrollWidth,
+                document.documentElement.scrollWidth,
+                document.getElementById('root').scrollWidth
+            );
+            return width;
+        })();
+    """.trimIndent()
+    
+    try {
+        webView.evaluateJavascript(js) { result ->
+            val width = result?.toIntOrNull() ?: 0
+            onResult(if (width > 0) width else 0)
+        }
+    } catch (_: Throwable) {
+        onResult(0)
+    }
 }
 
 @Composable

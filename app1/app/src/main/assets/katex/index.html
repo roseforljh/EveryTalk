@@ -50,6 +50,7 @@
     }
     #root {
       display: inline-block; /* 既支持 inline 也支持 block */
+      min-width: 100%;       /* ✅ 最小宽度占满视口，确保短公式时容器不会太窄 */
       color: var(--fg);
     }
     .fallback {
