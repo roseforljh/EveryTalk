@@ -320,6 +320,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         val reasoning: String?,
         val outputType: String,
         val hasReasoning: Boolean,
+        val imageUrls: List<String>?,  // 🔥 关键修复：添加imageUrls到缓存
         val items: List<ChatListItem>
     )
     
@@ -340,12 +341,13 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                                             // 🔧 修复：缓存验证必须包含流式状态，否则取消后仍显示旧的LoadingIndicator
                                             val isCurrentlyStreaming = isApiCalling && message.id == currentStreamingAiMessageId
                                             
-                                            // 检查缓存是否有效（内容未变化 + 流式状态未变化）
+                                            // 检查缓存是否有效（内容未变化 + 流式状态未变化 + 图片URLs未变化）
                                             val cacheValid = cached != null &&
                                                 cached.text == message.text &&
                                                 cached.reasoning == message.reasoning &&
                                                 cached.outputType == message.outputType &&
                                                 cached.hasReasoning == hasReasoning &&
+                                                cached.imageUrls == message.imageUrls &&  // 🔥 关键修复：检查imageUrls
                                                 // 关键：流式状态变化时缓存失效
                                                 (isCurrentlyStreaming == (cached.items.any { it is ChatListItem.LoadingIndicator }))
                                             
@@ -370,6 +372,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                                                     reasoning = message.reasoning,
                                                     outputType = message.outputType,
                                                     hasReasoning = hasReasoning,
+                                                    imageUrls = message.imageUrls,  // 🔥 关键修复：保存imageUrls到缓存
                                                     items = newItems
                                                 )
                                                 
@@ -399,6 +402,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             isImageApiCalling,
             currentImageStreamingAiMessageId
         ) { messages, isApiCalling, currentStreamingAiMessageId ->
+            android.util.Log.d("AppViewModel", "🖼️ [IMAGE FLOW] Triggered - messages.size=${messages.size}, isApiCalling=$isApiCalling")
             messages
                 .map { message ->
                     when (message.sender) {
@@ -415,12 +419,20 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                                 cached.reasoning == message.reasoning &&
                                 cached.outputType == message.outputType &&
                                 cached.hasReasoning == hasReasoning &&
+                                cached.imageUrls == message.imageUrls &&  // 🔥 关键修复：检查imageUrls
                                 // 关键：流式状态变化时缓存失效
                                 (isCurrentlyStreaming == (cached.items.any { it is ChatListItem.LoadingIndicator }))
                             
+                            android.util.Log.d("AppViewModel", "🖼️ [IMAGE CACHE] messageId=${message.id.take(8)}, " +
+                                "cacheValid=$cacheValid, " +
+                                "cached.imageUrls=${cached?.imageUrls?.size}, " +
+                                "message.imageUrls=${message.imageUrls?.size}")
+                            
                             if (cacheValid) {
+                                android.util.Log.d("AppViewModel", "🖼️ [IMAGE CACHE HIT] Using cached items")
                                 cached!!.items
                             } else {
+                                android.util.Log.d("AppViewModel", "🖼️ [IMAGE CACHE MISS] Recomputing items")
                                 val newItems = createAiMessageItems(
                                     message,
                                     isApiCalling,
@@ -433,6 +445,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                                     reasoning = message.reasoning,
                                     outputType = message.outputType,
                                     hasReasoning = hasReasoning,
+                                    imageUrls = message.imageUrls,  // 🔥 关键修复：保存imageUrls到缓存
                                     items = newItems
                                 )
                                 

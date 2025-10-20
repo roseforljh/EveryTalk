@@ -90,12 +90,14 @@ fun EnhancedMarkdownText(
     // 1. 职责分离：数学、表格、纯文本各自独立
     // 2. 易于维护：修改某个模块不影响其他模块
     // 3. 易于扩展：添加新类型（如图表）只需添加新模块
+    // 4. 缓存机制：使用消息ID作为key，避免LazyColumn回收后重复解析
     ContentCoordinator(
         text = content,
         style = style,
         color = textColor,
         isStreaming = isStreaming,
-        modifier = modifier.fillMaxWidth()
+        modifier = modifier.fillMaxWidth(),
+        contentKey = message.id  // 🎯 传递消息ID作为缓存key
     )
 }
 

@@ -272,20 +272,46 @@ class ApiHandler(
                         val imageUrls = response.images.mapNotNull { it.url.takeIf(String::isNotBlank) }
                         val responseText = response.text
 
+                        logger.debug("[ImageGen] 🖼️ Extracted ${imageUrls.size} image URLs from response")
+                        imageUrls.forEachIndexed { idx, url -> 
+                            logger.debug("[ImageGen] 🖼️ Image[$idx]: ${url.take(100)}...")
+                        }
+
                         if (imageUrls.isNotEmpty()) {
                             // 成功获取图片
                             withContext(Dispatchers.Main.immediate) {
                                 val messageList = stateHolder.imageGenerationMessages
                                 val index = messageList.indexOfFirst { it.id == aiMessageId }
+                                logger.debug("[ImageGen] 🖼️ Looking for message with ID: $aiMessageId, found at index: $index")
+                                
                                 if (index != -1) {
                                     val currentMessage = messageList[index]
+                                    logger.debug("[ImageGen] 🖼️ Current message - ID: ${currentMessage.id}, hasImageUrls: ${currentMessage.imageUrls?.isNotEmpty()}, text: '${currentMessage.text.take(50)}...'")
+                                    
                                     val updatedMessage = currentMessage.copy(
                                         imageUrls = imageUrls,
                                         text = responseText ?: currentMessage.text,
                                         contentStarted = true,
                                         isError = false
                                     )
-                                    messageList[index] = updatedMessage
+                                    
+                                    // 🔥 关键修复：使用removeAt+add替代直接赋值，确保触发Compose重组
+                                    messageList.removeAt(index)
+                                    messageList.add(index, updatedMessage)
+                                    
+                                    logger.debug("[ImageGen] 🖼️ Updated message with ${imageUrls.size} image URLs at index $index")
+                                    logger.debug("[ImageGen] 🖼️ Updated message imageUrls: ${updatedMessage.imageUrls}")
+                                    logger.debug("[ImageGen] 🖼️ Message list size after update: ${messageList.size}")
+                                    
+                                    // 🔥 强制触发状态变化，确保Flow重新计算
+                                    if (isImageGeneration) {
+                                        stateHolder.isImageConversationDirty.value = true
+                                    }
+                                    
+                                    logger.debug("[ImageGen] 🖼️ Marked conversation as dirty to trigger UI update")
+                                } else {
+                                    logger.error("[ImageGen] 🖼️ ERROR: Message with ID $aiMessageId not found in list!")
+                                    logger.debug("[ImageGen] 🖼️ Current message list IDs: ${messageList.map { it.id }}")
                                 }
                             }
                             viewModelScope.launch(Dispatchers.IO) {

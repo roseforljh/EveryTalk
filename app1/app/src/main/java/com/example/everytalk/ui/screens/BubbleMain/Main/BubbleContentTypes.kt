@@ -193,8 +193,14 @@ fun AttachmentsContent(
                 when (attachment) {
                     is SelectedMediaItem.ImageFromUri -> {
                         var imageGlobalPosition by remember { mutableStateOf(Offset.Zero) }
+                        // 🔥 修复：如果是 data URI，直接使用字符串而不是 Uri 对象，Coil 更好地支持字符串形式的 data URI
+                        val imageModel = if (attachment.uri.scheme == "data") {
+                            attachment.uri.toString()
+                        } else {
+                            attachment.uri
+                        }
                         ProportionalAsyncImage(
-                            model = attachment.uri,
+                            model = imageModel,
                             contentDescription = "Image attachment",
                             maxWidth = attachmentsAppliedMax * 0.8f,
                             isAiGenerated = isAiGenerated,

@@ -19,6 +19,7 @@ import androidx.compose.ui.text.font.FontFamily
  * 内容协调器（搬迁版）
  * 原文件位置：ui/components/ContentCoordinator.kt
  * 说明：统一调度表格/数学/代码块/纯文本渲染；提供递归深度保护。
+ * 缓存机制：通过contentKey持久化解析结果，避免LazyColumn回收导致重复解析
  */
 @Composable
 fun ContentCoordinator(
@@ -27,7 +28,8 @@ fun ContentCoordinator(
     color: Color = Color.Unspecified,
     isStreaming: Boolean = false,
     modifier: Modifier = Modifier,
-    recursionDepth: Int = 0
+    recursionDepth: Int = 0,
+    contentKey: String = ""  // 🎯 新增：用于缓存key（通常为消息ID）
 ) {
     // 🛡️ 防止无限递归：超过3层直接渲染
     if (recursionDepth > 3) {
@@ -64,7 +66,8 @@ fun ContentCoordinator(
             color = color,
             isStreaming = shouldUseLightweight, // true=轻量；false=完整（仅纯表格）
             modifier = modifier.fillMaxWidth(),
-            recursionDepth = recursionDepth
+            recursionDepth = recursionDepth,
+            contentKey = contentKey  // 🎯 传递缓存key
         )
         return
     }
@@ -78,7 +81,8 @@ fun ContentCoordinator(
             color = color,
             isStreaming = isStreaming,
             modifier = modifier,
-            recursionDepth = recursionDepth
+            recursionDepth = recursionDepth,
+            contentKey = contentKey  // 🎯 传递缓存key
         )
         return
     }

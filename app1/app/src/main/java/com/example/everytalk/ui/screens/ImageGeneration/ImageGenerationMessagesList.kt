@@ -245,7 +245,12 @@ fun ImageGenerationMessagesList(
                                             onAttachmentClick = { att ->
                                                 when (att) {
                                                     is com.example.everytalk.models.SelectedMediaItem.ImageFromUri -> {
-                                                        imagePreviewModel = att.uri
+                                                        // 🔥 修复：如果是 data URI，使用字符串而不是 Uri 对象
+                                                        imagePreviewModel = if (att.uri.scheme == "data") {
+                                                            att.uri.toString()
+                                                        } else {
+                                                            att.uri
+                                                        }
                                                         isImagePreviewVisible = true
                                                     }
                                                     is com.example.everytalk.models.SelectedMediaItem.ImageFromBitmap -> {
@@ -324,6 +329,7 @@ fun ImageGenerationMessagesList(
 
                         is ChatListItem.AiMessage -> {
                             val message = viewModel.getMessageById(item.messageId)
+                            android.util.Log.d("ImageGenMessagesList", "🖼️ [UI] Rendering AI message: id=${message?.id?.take(8)}, hasImageUrls=${message?.imageUrls?.isNotEmpty()}, imageUrlsCount=${message?.imageUrls?.size}")
                             if (message != null) {
                                 AiMessageItem(
                                     message = message,
@@ -1318,7 +1324,10 @@ private fun AiMessageItem(
                             viewModel = viewModel  // 🎯 传递viewModel以获取实时流式文本
                         )
                     }
+                    android.util.Log.d("AiMessageItem", "🖼️ [RENDER] messageId=${message.id.take(8)}, imageUrls=${message.imageUrls?.size}, text='${text.take(20)}...'")
+                    
                     if (message.imageUrls != null && message.imageUrls.isNotEmpty()) {
+                        android.util.Log.d("AiMessageItem", "🖼️ [RENDER IMAGE] Showing ${message.imageUrls.size} images")
                         // Add a little space between text and image
                         if (text.isNotBlank()) {
                             Spacer(modifier = Modifier.height(8.dp))

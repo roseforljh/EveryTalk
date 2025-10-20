@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -25,6 +26,9 @@ import androidx.compose.ui.unit.dp
  * 
  * 🛡️ 递归深度保护：
  * - 由 ContentCoordinator 统一管理，此处不再检查
+ * 
+ * 🎯 缓存机制：
+ * - 通过contentKey持久化解析结果，避免LazyColumn回收导致重复解析
  */
 @Composable
 fun MathAwareText(
@@ -33,13 +37,17 @@ fun MathAwareText(
     color: Color = Color.Unspecified,
     isStreaming: Boolean = false,
     modifier: Modifier = Modifier,
-    recursionDepth: Int = 0  // 保留参数以兼容调用方
+    recursionDepth: Int = 0,  // 保留参数以兼容调用方
+    contentKey: String = ""  // 🎯 新增：用于缓存key（通常为消息ID）
 ) {
     // 🎯 解析数学公式
-    val rawSpans = MathParser.splitToSpans(text)
+    // 🔥 使用 contentKey 缓存解析结果，避免 LazyColumn 回收后重复解析
+    val rawSpans = remember(contentKey, text) { 
+        MathParser.splitToSpans(text) 
+    }
 
     // 规范化：移除由于上游换行/边界造成的"游离 $ 行"
-    val spans = run {
+    val spans = remember(contentKey, text) { run {
         val tmp = mutableListOf<MathParser.Span>()
         // 先合并相邻 Text
         for (s in rawSpans) {
@@ -81,7 +89,7 @@ fun MathAwareText(
             }
         }
         merged
-    }
+    } }
 
     // 快速路径：没有任何数学，直接 Markdown
     val hasAnyMath = spans.any { it is MathParser.Span.Math }

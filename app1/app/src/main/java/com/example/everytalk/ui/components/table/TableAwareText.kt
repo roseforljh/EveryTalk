@@ -25,6 +25,7 @@ import kotlinx.coroutines.withContext
  * 核心策略：
  * - 流式阶段：直接用MarkdownRenderer渲染，零解析开销
  * - 流式结束：延迟异步解析完整内容
+ * - 缓存机制：通过contentKey持久化解析结果，避免LazyColumn回收导致重复解析
  */
 @Composable
 fun TableAwareText(
@@ -33,7 +34,8 @@ fun TableAwareText(
     color: Color = Color.Unspecified,
     isStreaming: Boolean = false,
     modifier: Modifier = Modifier,
-    recursionDepth: Int = 0
+    recursionDepth: Int = 0,
+    contentKey: String = ""  // 🎯 新增：用于缓存key（通常为消息ID）
 ) {
     // ⚡ 流式阶段：直接渲染Markdown，不分段解析（避免递归+性能问题）
     if (isStreaming) {
@@ -48,11 +50,13 @@ fun TableAwareText(
     }
     
     // 🎯 流式结束：异步解析，分段渲染
-    val parsedParts = remember { mutableStateOf<List<ContentPart>>(emptyList()) }
+    // 🔥 使用 contentKey 作为缓存键，确保 LazyColumn 回收后不丢失解析结果
+    val parsedParts = remember(contentKey, text) { mutableStateOf<List<ContentPart>>(emptyList()) }
     
-    // 🔥 关键修复：同时监听 isStreaming 和 text，确保拿到最终文本后再解析
-    LaunchedEffect(isStreaming, text) {
-        if (!isStreaming && text.isNotBlank()) {
+    // 🔥 关键修复：同时监听 contentKey、isStreaming 和 text，确保拿到最终文本后再解析
+    // 🎯 只在缓存为空且非流式时解析，避免重复解析
+    LaunchedEffect(contentKey, isStreaming, text) {
+        if (!isStreaming && text.isNotBlank() && parsedParts.value.isEmpty()) {
             // 🔥 性能优化：大型内容延迟更久，避免流式结束瞬间卡顿
             val isLargeContent = text.length > 8000
             val delayMs = if (isLargeContent) 250L else 100L
