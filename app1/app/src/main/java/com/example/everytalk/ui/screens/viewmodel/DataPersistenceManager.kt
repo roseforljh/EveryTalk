@@ -15,6 +15,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import coil3.ImageLoader
+import android.util.Base64
+import java.io.FileOutputStream
+import java.util.Locale
 
 class DataPersistenceManager(
     private val context: Context,
@@ -24,6 +27,60 @@ class DataPersistenceManager(
     private val imageLoader: ImageLoader
 ) {
     private val TAG = "PersistenceManager"
+
+    /**
+     * 将消息中的 data:image;base64,... 图片落盘为本地文件，并将 URL 替换为 file:// 或绝对路径
+     * 这样可避免把巨大 Base64 串写入 SharedPreferences 导致超限/丢失，重启后可稳定恢复。
+     */
+    private fun persistDataUriImages(messages: List<Message>): List<Message> {
+        if (messages.isEmpty()) return messages
+        val outDir = File(context.filesDir, "chat_attachments").apply { mkdirs() }
+
+        fun extFromMime(mime: String?): String {
+            val m = (mime ?: "").lowercase(Locale.ROOT)
+            return when {
+                m.contains("png") -> "png"
+                m.contains("jpeg") || m.contains("jpg") -> "jpg"
+                m.contains("webp") -> "webp"
+                else -> "png"
+            }
+        }
+
+        fun saveDataUri(dataUri: String, fileNameHint: String): String? {
+            return try {
+                val mime = dataUri.substringAfter("data:", "").substringBefore(";base64", "")
+                val base64Part = dataUri.substringAfter(";base64,", "")
+                if (base64Part.isBlank()) return null
+                val bytes = Base64.decode(base64Part, Base64.DEFAULT)
+
+                val ext = extFromMime(mime)
+                val file = File(outDir, "${fileNameHint}_${System.currentTimeMillis()}.$ext")
+                FileOutputStream(file).use { it.write(bytes) }
+
+                // 返回绝对路径；渲染端已支持 file:// 与绝对路径两种形式
+                file.absolutePath
+            } catch (e: Exception) {
+                Log.w(TAG, "persistDataUriImages: failed to save data URI image", e)
+                null
+            }
+        }
+
+        return messages.map { msg ->
+            if (msg.imageUrls.isNullOrEmpty()) {
+                msg
+            } else {
+                val newUrls = msg.imageUrls.mapIndexed { idx, url ->
+                    if (url.startsWith("data:image", ignoreCase = true)) {
+                        val saved = saveDataUri(url, "img_${msg.id}_${idx}")
+                        saved ?: url
+                    } else {
+                        url
+                    }
+                }
+                if (newUrls == msg.imageUrls) msg else msg.copy(imageUrls = newUrls)
+            }
+        }
+    }
 
     fun loadInitialData(
         loadLastChat: Boolean = true,
@@ -166,8 +223,18 @@ class DataPersistenceManager(
 
                    // Load image generation history
                    val loadedImageGenHistory = dataSource.loadImageGenerationHistory()
+                   // 将历史中的 data:image 落盘并替换为本地路径（一次性修复旧数据中的内联图）
+                   val convertedImageGenHistory = loadedImageGenHistory.map { conv -> persistDataUriImages(conv) }
+                   // 异步回写修复后的历史，避免后续重复转换
+                   launch(Dispatchers.IO) {
+                       try {
+                           dataSource.saveImageGenerationHistory(convertedImageGenHistory)
+                       } catch (e: Exception) {
+                           Log.w(TAG, "Failed to persist converted image generation history", e)
+                       }
+                   }
                    withContext(Dispatchers.Main.immediate) {
-                       stateHolder._imageGenerationHistoricalConversations.value = loadedImageGenHistory
+                       stateHolder._imageGenerationHistoricalConversations.value = convertedImageGenHistory
                    }
                 }
 
@@ -176,12 +243,22 @@ class DataPersistenceManager(
                     Log.d(TAG, "loadInitialData: Phase 3 - Loading last open chats...")
                     val lastOpenChat = dataSource.loadLastOpenChat()
                     val lastOpenImageGenChat = dataSource.loadLastOpenImageGenerationChat()
+                    // 将“最后打开的图像会话”里的 data:image 转为本地文件并替换
+                    val finalLastOpenImageGen = persistDataUriImages(lastOpenImageGenChat)
+                    // 异步回写，确保下次启动直接使用文件路径
+                    launch(Dispatchers.IO) {
+                        try {
+                            dataSource.saveLastOpenImageGenerationChat(finalLastOpenImageGen)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed to persist converted last-open image chat", e)
+                        }
+                    }
                     withContext(Dispatchers.Main.immediate) {
                         // 恢复消息列表
                         stateHolder.messages.clear()
                         stateHolder.messages.addAll(lastOpenChat)
                         stateHolder.imageGenerationMessages.clear()
-                        stateHolder.imageGenerationMessages.addAll(lastOpenImageGenChat)
+                        stateHolder.imageGenerationMessages.addAll(finalLastOpenImageGen)
 
                         // ✅ 修复：为已恢复的对话补齐推理完成映射，保证“小白点”可见
                         // 文本模式
@@ -269,10 +346,16 @@ class DataPersistenceManager(
     suspend fun saveChatHistory(historyToSave: List<List<Message>>, isImageGeneration: Boolean = false) {
         withContext(Dispatchers.IO) {
             Log.d(TAG, "saveChatHistory: 保存 ${historyToSave.size} 条对话到 dataSource...")
-            if (isImageGeneration) {
-                dataSource.saveImageGenerationHistory(historyToSave)
+            val finalHistory = if (isImageGeneration) {
+                // 将 data:image 的图片先落盘，替换为本地路径，避免SP超限
+                historyToSave.map { conv -> persistDataUriImages(conv) }
             } else {
-                dataSource.saveChatHistory(historyToSave)
+                historyToSave
+            }
+            if (isImageGeneration) {
+                dataSource.saveImageGenerationHistory(finalHistory)
+            } else {
+                dataSource.saveChatHistory(finalHistory)
             }
             Log.i(TAG, "saveChatHistory: 聊天历史已通过 dataSource 保存。")
         }
@@ -357,11 +440,17 @@ class DataPersistenceManager(
        withContext(Dispatchers.IO) {
            Log.d(TAG, "saveLastOpenChat: Saving ${processedMessages.size} messages for isImageGen=$isImageGeneration")
            try {
+               val finalMessages = if (isImageGeneration) {
+                   // 同样对“最后打开的图像会话”进行 data:image 落盘与替换
+                   persistDataUriImages(processedMessages)
+               } else {
+                   processedMessages
+               }
                if (isImageGeneration) {
-                   dataSource.saveLastOpenImageGenerationChat(processedMessages)
+                   dataSource.saveLastOpenImageGenerationChat(finalMessages)
                    android.util.Log.d("DataPersistenceManager", "Image chat saved successfully")
                } else {
-                   dataSource.saveLastOpenChat(processedMessages)
+                   dataSource.saveLastOpenChat(finalMessages)
                    android.util.Log.d("DataPersistenceManager", "Text chat saved successfully")
                }
            } catch (e: Exception) {

@@ -24,13 +24,14 @@ object MarkdownFormatFixer {
      */
     fun fix(markdown: String): String {
         // 🎯 冲突与性能保护（避免与代码块/数学/流式实时渲染冲突）
-        // - 含代码围栏、内联反引号、数学符号或超长文本时，直接返回原文，避免破坏结构或造成重型正则开销
+        // - 含代码围栏、内联反引号、块级数学符号或超长文本时，直接返回原文，避免破坏结构或造成重型正则开销
         // - 表格相关的规范化仅在文本较短时执行（阈值可调）
+        // - 注意：单个 $ 符号（如价格）不应触发跳过，只有 $$ 块级公式才跳过
         val text = markdown
         val len = text.length
         val hasFence = text.contains("```")
         val hasInlineBacktick = text.contains('`')
-        val hasMath = text.contains("$") || text.contains("$$")
+        val hasMath = text.contains("$$")  // 只检测块级公式，允许单个 $ 符号（价格等）
         val isVeryLong = len > 5000
 
         if (isVeryLong || hasFence || hasInlineBacktick || hasMath) {
@@ -380,6 +381,8 @@ object MarkdownFormatFixer {
 
         fun isTableLine(raw: String): Boolean {
             val t = raw.trimStart()
+            // 避免把标题行当成表格（如 "### 实况 | 排行榜 | 模型"）
+            if (t.startsWith("#")) return false
             // 允许首尾有无管道，但至少包含一个管道，且不是水平分隔线
             if (!t.contains("|")) return false
             if (t.matches(Regex("""^[-*_]{3,}\s*$"""))) return false
@@ -490,6 +493,12 @@ object MarkdownFormatFixer {
             // 检测是否可能是表格行（包含 | 但不是水平分隔线）
             if (line.contains("|") && !line.trim().matches(Regex("""^[-*_]{3,}\s*$"""))) {
                 var normalized = line.trim()
+                
+                // 避免将以 # 开头的标题行误判为表格行（包含管道符的标题）
+                if (normalized.startsWith("#")) {
+                    result.add(line)
+                    continue
+                }
                 
                 // 如果是分隔行，跳过规范化（保持原样，避免破坏 --- 结构）
                 if (isSeparatorRow(normalized)) {

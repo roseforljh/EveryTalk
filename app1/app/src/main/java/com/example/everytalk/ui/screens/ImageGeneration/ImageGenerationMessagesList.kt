@@ -661,14 +661,145 @@ fun ImageGenerationMessagesList(
                 }
             }
 
-            // 保存到相册
+            // 无损原始字节与 MIME 提取：基于 data:image、file、content、http(s)
+            suspend fun loadBytesAndMime(model: Any): Pair<ByteArray, String>? = withContext(Dispatchers.IO) {
+                try {
+                    when (model) {
+                        is String -> {
+                            val s = model
+                            if (s.startsWith("data:image", ignoreCase = true)) {
+                                val mime = s.substringAfter("data:", "").substringBefore(";base64", "")
+                                val base64 = s.substringAfter(";base64,", "")
+                                if (base64.isNotBlank()) {
+                                    val bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT)
+                                    return@withContext bytes to (mime.ifBlank { "image/png" })
+                                }
+                                return@withContext null
+                            }
+                            val uri = runCatching { Uri.parse(s) }.getOrNull()
+                            val scheme = uri?.scheme?.lowercase()
+                            return@withContext when (scheme) {
+                                "http", "https" -> {
+                                    val client = OkHttpClient.Builder()
+                                        .followRedirects(true)
+                                        .followSslRedirects(true)
+                                        .build()
+                                    val builder = Request.Builder().url(s)
+                                        .header("User-Agent", "EveryTalk/1.0 (Android)")
+                                        .header("Accept", "image/*")
+                                    authToken?.let { builder.header("Authorization", "Bearer $it") }
+                                    refererHeader?.let { builder.header("Referer", it) }
+                                    client.newCall(builder.build()).execute().use { resp ->
+                                        if (!resp.isSuccessful) return@use null
+                                        val bytes = resp.body?.bytes() ?: return@use null
+                                        val mime = resp.header("Content-Type") ?: "image/png"
+                                        bytes to mime
+                                    }
+                                }
+                                "content" -> {
+                                    val mime = context.contentResolver.getType(uri!!)
+                                        ?: "image/png"
+                                    context.contentResolver.openInputStream(uri)?.use { input ->
+                                        input.readBytes() to mime
+                                    }
+                                }
+                                "file" -> {
+                                    val path = uri?.path ?: return@withContext null
+                                    val file = File(path)
+                                    if (!file.exists()) return@withContext null
+                                    val mime = when (file.extension.lowercase()) {
+                                        "png" -> "image/png"
+                                        "jpg", "jpeg" -> "image/jpeg"
+                                        "webp" -> "image/webp"
+                                        else -> "application/octet-stream"
+                                    }
+                                    file.readBytes() to mime
+                                }
+                                null -> {
+                                    val file = File(s)
+                                    if (!file.exists()) return@withContext null
+                                    val mime = when (file.extension.lowercase()) {
+                                        "png" -> "image/png"
+                                        "jpg", "jpeg" -> "image/jpeg"
+                                        "webp" -> "image/webp"
+                                        else -> "application/octet-stream"
+                                    }
+                                    file.readBytes() to mime
+                                }
+                                else -> null
+                            }
+                        }
+                        is Uri -> {
+                            val scheme = model.scheme?.lowercase()
+                            return@withContext when (scheme) {
+                                "http", "https" -> {
+                                    val client = OkHttpClient.Builder()
+                                        .followRedirects(true)
+                                        .followSslRedirects(true)
+                                        .build()
+                                    val builder = Request.Builder().url(model.toString())
+                                        .header("User-Agent", "EveryTalk/1.0 (Android)")
+                                        .header("Accept", "image/*")
+                                    authToken?.let { builder.header("Authorization", "Bearer $it") }
+                                    refererHeader?.let { builder.header("Referer", it) }
+                                    client.newCall(builder.build()).execute().use { resp ->
+                                        if (!resp.isSuccessful) return@use null
+                                        val bytes = resp.body?.bytes() ?: return@use null
+                                        val mime = resp.header("Content-Type") ?: "image/png"
+                                        bytes to mime
+                                    }
+                                }
+                                "content" -> {
+                                    val mime = context.contentResolver.getType(model)
+                                        ?: "image/png"
+                                    context.contentResolver.openInputStream(model)?.use { input ->
+                                        input.readBytes() to mime
+                                    }
+                                }
+                                "file" -> {
+                                    val path = model.path ?: return@withContext null
+                                    val file = File(path)
+                                    if (!file.exists()) return@withContext null
+                                    val mime = when (file.extension.lowercase()) {
+                                        "png" -> "image/png"
+                                        "jpg", "jpeg" -> "image/jpeg"
+                                        "webp" -> "image/webp"
+                                        else -> "application/octet-stream"
+                                    }
+                                    file.readBytes() to mime
+                                }
+                                else -> null
+                            }
+                        }
+                        is Bitmap -> {
+                            // 内存位图（如编辑结果）选择 PNG 无损导出
+                            val baos = java.io.ByteArrayOutputStream()
+                            model.compress(Bitmap.CompressFormat.PNG, 100, baos)
+                            baos.toByteArray() to "image/png"
+                        }
+                        else -> null
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("ImagePreview", "loadBytesAndMime error: ${e.message}", e)
+                    null
+                }
+            }
+
+            // 保存到相册（无损写入原始字节）
             fun saveToAlbum() {
                 scope.launch {
                     try {
-                        val bmp = loadBitmapFromModel(imagePreviewModel!!)
-                        if (bmp == null) {
+                        val pair = loadBytesAndMime(imagePreviewModel!!)
+                        if (pair == null) {
                             Toast.makeText(context, "无法加载图片", Toast.LENGTH_SHORT).show()
                             return@launch
+                        }
+                        val (bytes, mime) = pair
+                        val ext = when (mime.lowercase()) {
+                            "image/png" -> "png"
+                            "image/jpeg", "image/jpg" -> "jpg"
+                            "image/webp" -> "webp"
+                            else -> "img"
                         }
                         val resolver = context.contentResolver
                         val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
@@ -676,8 +807,8 @@ fun ImageGenerationMessagesList(
                         else
                             MediaStore.Images.Media.EXTERNAL_CONTENT_URI
                         val values = ContentValues().apply {
-                            put(MediaStore.Images.Media.DISPLAY_NAME, "EveryTalk_${System.currentTimeMillis()}.jpg")
-                            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                            put(MediaStore.Images.Media.DISPLAY_NAME, "EveryTalk_${System.currentTimeMillis()}.$ext")
+                            put(MediaStore.Images.Media.MIME_TYPE, mime)
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                                 put(MediaStore.Images.Media.IS_PENDING, 1)
                             }
@@ -688,32 +819,37 @@ fun ImageGenerationMessagesList(
                             return@launch
                         }
                         resolver.openOutputStream(uri)?.use { os ->
-                            bmp.compress(Bitmap.CompressFormat.JPEG, 95, os)
+                            os.write(bytes)
                         }
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                             values.clear()
                             values.put(MediaStore.Images.Media.IS_PENDING, 0)
                             resolver.update(uri, values, null, null)
                         }
-                        Toast.makeText(context, "已保存到相册", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "已保存到相册（无损）", Toast.LENGTH_SHORT).show()
                     } catch (e: Exception) {
                         Toast.makeText(context, "保存失败: ${e.message}", Toast.LENGTH_SHORT).show()
                     }
                 }
             }
 
-            // 将当前模型转为可编辑/可分享的本地缓存文件Uri（FileProvider）
+            // 将当前模型转为可编辑/可分享的本地缓存文件Uri（FileProvider）- 无损写原始字节
             suspend fun ensureCacheFileUri(): Uri? {
-                val bmp = loadBitmapFromModel(imagePreviewModel!!)
-                if (bmp == null) {
+                val pair = loadBytesAndMime(imagePreviewModel!!)
+                if (pair == null) {
                     Toast.makeText(context, "无法加载图片", Toast.LENGTH_SHORT).show()
                     return null
                 }
-                val cacheDir = File(context.cacheDir, "preview_cache").apply { mkdirs() }
-                val file = File(cacheDir, "img_${System.currentTimeMillis()}.jpg")
-                FileOutputStream(file).use { fos ->
-                    bmp.compress(Bitmap.CompressFormat.JPEG, 95, fos)
+                val (bytes, mime) = pair
+                val ext = when (mime.lowercase()) {
+                    "image/png" -> "png"
+                    "image/jpeg", "image/jpg" -> "jpg"
+                    "image/webp" -> "webp"
+                    else -> "img"
                 }
+                val cacheDir = File(context.cacheDir, "preview_cache").apply { mkdirs() }
+                val file = File(cacheDir, "img_${System.currentTimeMillis()}.$ext")
+                FileOutputStream(file).use { fos -> fos.write(bytes) }
                 return FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
             }
 
@@ -730,23 +866,28 @@ fun ImageGenerationMessagesList(
                 }
             }
 
-            // 系统分享
+            // 系统分享（无损写原始字节）
             fun shareImage() {
                 scope.launch {
                     try {
-                        val bmp = loadBitmapFromModel(imagePreviewModel!!)
-                        if (bmp == null) {
+                        val pair = loadBytesAndMime(imagePreviewModel!!)
+                        if (pair == null) {
                             Toast.makeText(context, "无法加载图片", Toast.LENGTH_SHORT).show()
                             return@launch
                         }
-                        val cacheDir = File(context.cacheDir, "share_images").apply { mkdirs() }
-                        val file = File(cacheDir, "share_${System.currentTimeMillis()}.jpg")
-                        FileOutputStream(file).use { fos ->
-                            bmp.compress(Bitmap.CompressFormat.JPEG, 95, fos)
+                        val (bytes, mime) = pair
+                        val ext = when (mime.lowercase()) {
+                            "image/png" -> "png"
+                            "image/jpeg", "image/jpg" -> "jpg"
+                            "image/webp" -> "webp"
+                            else -> "img"
                         }
+                        val cacheDir = File(context.cacheDir, "share_images").apply { mkdirs() }
+                        val file = File(cacheDir, "share_${System.currentTimeMillis()}.$ext")
+                        FileOutputStream(file).use { fos -> fos.write(bytes) }
                         val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
                         val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                            type = "image/jpeg"
+                            type = mime
                             putExtra(android.content.Intent.EXTRA_STREAM, uri)
                             addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
                             // 提高兼容性：通过 ClipData 传递并显式授权
@@ -1333,7 +1474,20 @@ private fun AiMessageItem(
                             Spacer(modifier = Modifier.height(8.dp))
                         }
                         AttachmentsContent(
-                            attachments = message.imageUrls.map { SelectedMediaItem.ImageFromUri(Uri.parse(it), UUID.randomUUID().toString()) },
+                            attachments = message.imageUrls.map { urlStr ->
+                                val safeUri = try {
+                                    when {
+                                        urlStr.startsWith("data:image", ignoreCase = true) -> Uri.parse(urlStr)
+                                        urlStr.startsWith("file://", ignoreCase = true) -> Uri.parse(urlStr)
+                                        urlStr.startsWith("/", ignoreCase = true) -> Uri.fromFile(File(urlStr))
+                                        else -> Uri.parse(urlStr)
+                                    }
+                                } catch (_: Exception) {
+                                    // 回退：尽量解析为 file 路径
+                                    if (urlStr.startsWith("/")) Uri.fromFile(File(urlStr)) else Uri.parse(urlStr)
+                                }
+                                SelectedMediaItem.ImageFromUri(safeUri, UUID.randomUUID().toString())
+                            },
                             onAttachmentClick = { _ ->
                                 // 单击直接走“长按-查看图片”的同一路径（使用消息里的 URL）
                                 val firstUrl = message.imageUrls.firstOrNull()
