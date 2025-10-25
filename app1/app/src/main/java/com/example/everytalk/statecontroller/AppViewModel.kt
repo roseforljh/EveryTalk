@@ -18,6 +18,7 @@ import coil3.disk.DiskCache
 import coil3.util.DebugLogger
 import okio.Path.Companion.toPath
 import com.example.everytalk.data.DataClass.ApiConfig
+import com.example.everytalk.util.FileManager
 import com.example.everytalk.data.DataClass.GithubRelease
 import com.example.everytalk.data.DataClass.Message
 import com.example.everytalk.data.DataClass.Sender
@@ -94,6 +95,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
 
     // 高级缓存管理器
     private val cacheManager by lazy { CacheManager.getInstance(application.applicationContext) }
+    // 原图文件管理器（用于原样字节落地与下载）
+    private val fileManager by lazy { FileManager(application.applicationContext) }
     
     private val messagesMutex = Mutex()
     private val historyMutex = Mutex()
@@ -1537,81 +1540,47 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
 
     fun downloadImageFromMessage(message: Message) {
         viewModelScope.launch {
-            val imageUrl = message.imageUrls?.firstOrNull() ?: run {
+            val source = message.imageUrls?.firstOrNull() ?: run {
                 showSnackbar("没有可下载的图片")
                 return@launch
             }
-
             try {
-                // 兼容多种来源：http(s)、content://、file://、本地绝对路径、data:image;base64
-                val bitmap: Bitmap? = withContext(Dispatchers.IO) {
-                    val s = imageUrl
-                    val uri = try { Uri.parse(s) } catch (_: Exception) { null }
-                    val scheme = uri?.scheme?.lowercase()
-
-                    fun decodeHttp(url: String): Bitmap? {
-                        val client = OkHttpClient()
-                        val request = Request.Builder().url(url).build()
-                        client.newCall(request).execute().use { response ->
-                            if (!response.isSuccessful) throw Exception("HTTP ${response.code}")
-                            val body = response.body ?: return null
-                            val bytes = body.bytes()
-                            return BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                        }
-                    }
-
-                    fun decodeContent(u: Uri): Bitmap? {
-                        val cr = getApplication<Application>().contentResolver
-                        val input = cr.openInputStream(u) ?: return null
-                        input.use { stream ->
-                            return BitmapFactory.decodeStream(stream)
-                        }
-                    }
-
-                    fun decodeFile(path: String?): Bitmap? {
-                        if (path.isNullOrBlank()) return null
-                        val f = File(path)
-                        if (!f.exists()) return null
-                        return BitmapFactory.decodeFile(path)
-                    }
-
-                    return@withContext when {
-                        s.startsWith("data:image", ignoreCase = true) -> {
-                            val base64Part = s.substringAfter(",", missingDelimiterValue = "")
-                            if (base64Part.isNotBlank()) {
-                                val bytes = Base64.decode(base64Part, Base64.DEFAULT)
-                                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                            } else null
-                        }
-                        scheme == "http" || scheme == "https" -> {
-                            decodeHttp(s)
-                        }
-                        scheme == "content" -> {
-                            decodeContent(uri!!)
-                        }
-                        scheme == "file" -> {
-                            decodeFile(uri?.path)
-                        }
-                        uri?.scheme.isNullOrBlank() -> {
-                            // 无 scheme，当作本地绝对路径
-                            decodeFile(s)
-                        }
-                        else -> {
-                            // 兜底：尝试 content，再尝试文件路径
-                            (uri?.let { decodeContent(it) }) ?: decodeFile(uri?.path)
-                        }
-                    }
+                // 原样字节读取（支持 data:image;base64 / http(s) / content:// / file:// / 绝对路径）
+                val loaded = fileManager.loadBytesFromFlexibleSource(source)
+                if (loaded == null) {
+                    showSnackbar("无法获取原始图片数据")
+                    return@launch
                 }
+                val (bytes, mime) = loaded
 
-                if (bitmap != null) {
-                    saveBitmapToDownloads(bitmap)
-                    showSnackbar("图片已保存到相册")
+                // 1) 首先落地到应用内部存储（会话占用空间，原样保存，不重编码）
+                val internalPath = fileManager.saveBytesToInternalImages(
+                    bytes = bytes,
+                    mime = mime,
+                    baseName = "EveryTalk_Image",
+                    messageIdHint = message.id.takeLast(6),
+                    index = 0
+                )
+
+                // 2) 同步保存到系统媒体库（用户下载到相册/下载目录，仍保持原 MIME 与扩展名）
+                val savedUri = fileManager.saveBytesToMediaStore(
+                    bytes = bytes,
+                    mime = mime,
+                    displayNameBase = "EveryTalk_Image"
+                )
+
+                if (!internalPath.isNullOrBlank() && savedUri != null) {
+                    showSnackbar("原图已保存：应用空间与相册")
+                } else if (savedUri != null) {
+                    showSnackbar("原图已保存到相册")
+                } else if (!internalPath.isNullOrBlank()) {
+                    showSnackbar("原图已保存到应用空间")
                 } else {
-                    showSnackbar("无法加载图片，请重试")
+                    showSnackbar("保存失败：无法写入存储")
                 }
             } catch (e: Exception) {
-                Log.e("DownloadImage", "下载图片失败", e)
-                showSnackbar("下载失败: ${e.message}")
+                Log.e("DownloadImage", "原图保存失败", e)
+                showSnackbar("保存失败: ${e.message}")
             }
         }
     }

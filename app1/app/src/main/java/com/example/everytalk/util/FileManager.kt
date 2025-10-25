@@ -43,6 +43,17 @@ class FileManager(private val context: Context) {
         private const val JPEG_COMPRESSION_QUALITY = 80
     }
 
+    private fun guessExtensionFromMime(mime: String?): String {
+        return when ((mime ?: "").lowercase()) {
+            "image/png" -> "png"
+            "image/jpeg", "image/jpg" -> "jpg"
+            "image/webp" -> "webp"
+            "image/heic" -> "heic"
+            "image/heif" -> "heif"
+            else -> "bin"
+        }
+    }
+
     /**
      * 获取聊天附件目录
      * @return 聊天附件目录
@@ -732,5 +743,150 @@ class FileManager(private val context: Context) {
 
         val freed = before - after
         if (freed > 0) freed else 0L
+    }
+
+    // ===================== 原图字节级读写（不重新编码） =====================
+
+    /**
+     * 从多种来源加载原始字节与 MIME：
+     * - data:image/...;base64,XXXX
+     * - http(s)://
+     * - content://
+     * - file:// 或 绝对路径
+     */
+    suspend fun loadBytesFromFlexibleSource(source: String): Pair<ByteArray, String>? = withContext(Dispatchers.IO) {
+        try {
+            if (source.startsWith("data:image", ignoreCase = true)) {
+                val headerEnd = source.indexOf(";base64,")
+                if (headerEnd > 5) {
+                    val mime = source.substring(5, headerEnd)
+                    val base64Part = source.substringAfter(",", "")
+                    if (base64Part.isNotBlank()) {
+                        val bytes = Base64.decode(base64Part, Base64.DEFAULT)
+                        return@withContext bytes to mime
+                    }
+                }
+                return@withContext null
+            }
+
+            val uri = runCatching { Uri.parse(source) }.getOrNull()
+            val scheme = uri?.scheme?.lowercase()
+
+            fun readAllBytesFromContent(u: Uri): Pair<ByteArray, String>? {
+                val cr = context.contentResolver
+                val mime = cr.getType(u) ?: "application/octet-stream"
+                val bytes = cr.openInputStream(u)?.use { it.readBytes() } ?: return null
+                return bytes to mime
+            }
+
+            fun readAllBytesFromFile(path: String): Pair<ByteArray, String>? {
+                val f = File(path)
+                if (!f.exists()) return null
+                val bytes = f.readBytes()
+                val mime = when {
+                    path.endsWith(".png", true) -> "image/png"
+                    path.endsWith(".jpg", true) || path.endsWith(".jpeg", true) -> "image/jpeg"
+                    path.endsWith(".webp", true) -> "image/webp"
+                    path.endsWith(".heic", true) -> "image/heic"
+                    path.endsWith(".heif", true) -> "image/heif"
+                    else -> "application/octet-stream"
+                }
+                return bytes to mime
+            }
+
+            if (scheme == "http" || scheme == "https") {
+                val conn = (URL(source).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 30000
+                    readTimeout = 30000
+                    instanceFollowRedirects = true
+                }
+                conn.connect()
+                if (conn.responseCode !in 200..299) return@withContext null
+                val mime = conn.contentType ?: "application/octet-stream"
+                val bytes = conn.inputStream.use { it.readBytes() }
+                return@withContext bytes to mime
+            } else if (scheme == "content") {
+                return@withContext readAllBytesFromContent(uri!!)
+            } else if (scheme == "file") {
+                return@withContext readAllBytesFromFile(uri?.path ?: return@withContext null)
+            } else if (scheme.isNullOrBlank()) {
+                // 绝对路径
+                return@withContext readAllBytesFromFile(source)
+            }
+
+            null
+        } catch (e: Exception) {
+            logger.error("Failed to load original bytes from source: $source", e)
+            null
+        }
+    }
+
+    /**
+     * 将原始字节保存到应用内部存储（不重新编码），返回绝对路径
+     */
+    suspend fun saveBytesToInternalImages(
+        bytes: ByteArray,
+        mime: String,
+        baseName: String,
+        messageIdHint: String,
+        index: Int
+    ): String? = withContext(Dispatchers.IO) {
+        try {
+            val ext = guessExtensionFromMime(mime)
+            val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+            val safeBase = baseName.replace("[^a-zA-Z0-9._-]".toRegex(), "_").take(30)
+            val uniqueName = "${safeBase}_${messageIdHint}_${index}_${timeStamp}_${UUID.randomUUID().toString().take(4)}.$ext"
+
+            val dir = getChatAttachmentsDir()
+            val file = File(dir, uniqueName)
+            FileOutputStream(file).use { it.write(bytes) }
+            if (file.exists() && file.length() > 0) file.absolutePath else null
+        } catch (e: Exception) {
+            logger.error("Failed to save original bytes to internal storage", e)
+            null
+        }
+    }
+
+    /**
+     * 将原始字节保存到媒体库（相册/下载），保留原 MIME 与扩展名
+     */
+    suspend fun saveBytesToMediaStore(
+        bytes: ByteArray,
+        mime: String,
+        displayNameBase: String
+    ): Uri? = withContext(Dispatchers.IO) {
+        try {
+            val resolver = context.contentResolver
+            val collection = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                android.provider.MediaStore.Images.Media.getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            } else {
+                android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            }
+            val ext = guessExtensionFromMime(mime)
+            val name = "${displayNameBase}_${System.currentTimeMillis()}.$ext"
+            val values = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, name)
+                put(android.provider.MediaStore.Images.Media.MIME_TYPE, mime)
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    put(android.provider.MediaStore.Images.Media.IS_PENDING, 1)
+                }
+            }
+            val uri = resolver.insert(collection, values) ?: return@withContext null
+            try {
+                resolver.openOutputStream(uri)?.use { it.write(bytes) } ?: return@withContext null
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    values.clear()
+                    values.put(android.provider.MediaStore.Images.Media.IS_PENDING, 0)
+                    resolver.update(uri, values, null, null)
+                }
+                uri
+            } catch (e: Exception) {
+                runCatching { resolver.delete(uri, null, null) }
+                throw e
+            }
+        } catch (e: Exception) {
+            logger.error("Failed to save original bytes to MediaStore", e)
+            null
+        }
     }
 }

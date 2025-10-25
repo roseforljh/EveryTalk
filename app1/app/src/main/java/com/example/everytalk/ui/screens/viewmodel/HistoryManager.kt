@@ -59,7 +59,9 @@ class HistoryManager(
             val hasText = msg.text.isNotBlank()
             val hasReasoning = !msg.reasoning.isNullOrBlank()
             val hasParts = hasValidParts(msg.parts)
-            return hasText || hasReasoning || hasParts
+            // 🔥 关键修复：图像模式下，即使没有文本，只要有图片URL也应该保存
+            val hasImages = !msg.imageUrls.isNullOrEmpty()
+            return hasText || hasReasoning || hasParts || hasImages
         }
         return messagesToFilter
             .filter { msg ->
