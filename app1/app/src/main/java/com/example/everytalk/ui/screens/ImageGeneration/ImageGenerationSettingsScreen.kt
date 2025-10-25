@@ -251,7 +251,8 @@ fun ImageGenerationSettingsScreen(
             },
            onConfirm = { provider, address, key, channel, imageSize, numInferenceSteps, guidanceScale ->
                val providerTrim = provider.trim()
-               val isDefaultProvider = providerTrim.lowercase() in listOf("默认","default")
+               val pLower = providerTrim.lowercase()
+               val isDefaultProvider = pLower in listOf("默认","default")
                if (isDefaultProvider) {
                    // 选择“默认”时，直接添加 Kolors 配置并关闭弹窗
                    val config = ApiConfig(
@@ -261,6 +262,23 @@ fun ImageGenerationSettingsScreen(
                        address = "",
                        key = "",
                        model = "Kwai-Kolors/Kolors",
+                       modalityType = ModalityType.IMAGE,
+                       channel = channel,
+                       isValid = true
+                   )
+                   viewModel.addConfig(config, isImageGen = true)
+                   showAddFullConfigDialog = false
+                   viewModel.clearFetchedModels()
+               } else if (pLower in listOf("硅基流动","siliconflow") && key.isBlank() && address.isBlank()) {
+                   // 新增：硅基流动默认配置（使用预设地址，便于快速添加）
+                   val defaultAddr = SettingsDefaults.imageDefaultApiAddresses[pLower] ?: "https://api.siliconflow.cn/v1/images/generations"
+                   val config = ApiConfig(
+                       id = java.util.UUID.randomUUID().toString(),
+                       name = "SiliconFlow (默认)",
+                       provider = providerTrim,
+                       address = defaultAddr,
+                       key = "",
+                       model = "",
                        modalityType = ModalityType.IMAGE,
                        channel = channel,
                        isValid = true

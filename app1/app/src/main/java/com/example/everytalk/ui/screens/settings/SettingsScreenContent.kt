@@ -196,6 +196,11 @@ private fun ApiKeyItemGroup(
     }
     val providerName =
         configsInGroup.firstOrNull()?.provider?.ifBlank { null } ?: "综合平台"
+    // 图像模式的“默认”配置组标识
+    val firstCfg = configsInGroup.firstOrNull()
+    val isDefaultImageGroup = firstCfg != null
+            && firstCfg.modalityType == ModalityType.IMAGE
+            && firstCfg.provider.trim().lowercase() in listOf("默认","default")
     val isDarkMode = isSystemInDarkTheme()
     val cardContainerColor = if (isDarkMode) {
         Color.Black
@@ -228,18 +233,14 @@ private fun ApiKeyItemGroup(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable(
-                        onClick = {
-                            // 禁止“默认”图像配置打开编辑弹窗（provider=默认 且 模态=IMAGE）
-                            val firstCfg = configsInGroup.firstOrNull()
-                            val isDefaultImageGroup = firstCfg != null
-                                    && firstCfg.modalityType == ModalityType.IMAGE
-                                    && firstCfg.provider.trim().lowercase() in listOf("默认","default")
-                            if (!isDefaultImageGroup) {
-                                onEditConfigClick()
-                            }
-                        }
-                    )
+                    .let { base ->
+                        // 图像模式“默认”卡片：完全禁用点击与按压效果
+                        if (isDefaultImageGroup) base
+                        else base.clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { onEditConfigClick() }
+                    }
                     .padding(vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -253,12 +254,15 @@ private fun ApiKeyItemGroup(
                         overflow = TextOverflow.Ellipsis
                     )
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Key: ${maskApiKey(apiKey)}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontWeight = FontWeight.Normal
-                    )
+                    // 图像模式“默认”配置卡片内不显示 Key 信息
+                    if (!isDefaultImageGroup) {
+                        Text(
+                            text = "Key: ${maskApiKey(apiKey)}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = FontWeight.Normal
+                        )
+                    }
                 }
                 IconButton(
                     onClick = { showConfirmDeleteGroupDialog = true },
@@ -278,12 +282,20 @@ private fun ApiKeyItemGroup(
                 color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
             )
 
-            // 模型列表标题行
+            // 模型列表标题行（图像模式“默认”卡片不可点击，且无点击效果）
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(8.dp))
-                    .clickable { expandedModels = !expandedModels }
+                    .clickable(
+                        enabled = !isDefaultImageGroup,
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        if (!isDefaultImageGroup) {
+                            expandedModels = !expandedModels
+                        }
+                    }
                     .padding(vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -326,16 +338,19 @@ private fun ApiKeyItemGroup(
                             }
                         }
                     }
-                    IconButton(
-                        onClick = onAddModelForApiKeyClick,
-                        modifier = Modifier.size(36.dp)
-                    ) {
-                        Icon(
-                            Icons.Filled.Add,
-                            contentDescription = "为此Key和类型添加模型",
-                            tint = Color(0xFF4CAF50),
-                            modifier = Modifier.size(20.dp)
-                        )
+                    // 图像模式“默认”卡片不显示“添加模型”按钮
+                    if (!isDefaultImageGroup) {
+                        IconButton(
+                            onClick = onAddModelForApiKeyClick,
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                Icons.Filled.Add,
+                                contentDescription = "为此Key和类型添加模型",
+                                tint = Color(0xFF4CAF50),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
                     }
                 }
             }

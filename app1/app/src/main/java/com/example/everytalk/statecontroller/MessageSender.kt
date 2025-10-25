@@ -657,9 +657,47 @@ private data class AttachmentProcessingResult(
                     return@withContext
                 }
 
-                // 规范化图像尺寸：为空或包含占位符时回退到 1024x1024
-                val sanitizedImageSize = currentConfig.imageSize?.takeIf { it.isNotBlank() && !it.contains("<") } ?: "1024x1024"
+                // 规范化图像尺寸：为空或包含占位符时回退到 1024x1024（基础兜底）
+                val baseSanitizedImageSize = currentConfig.imageSize?.takeIf { it.isNotBlank() && !it.contains("<") } ?: "1024x1024"
                 
+                // 根据模型家族 + 所选比例，推导 Kolors/Qwen 的精确分辨率（image_size）
+                // - Kolors: 使用映射表或精确选择（含 3:4 的两个选项）
+                // - Qwen-Image: 必须指定推荐分辨率；Qwen-Image-Edit 不支持 image_size（保持 null）
+                val detectedFamilyForImage = com.example.everytalk.ui.components.ImageGenCapabilities.detectFamily(
+                    modelName = currentConfig.model,
+                    provider = currentConfig.provider,
+                    apiAddress = currentConfig.address
+                )
+                val isQwenEditModel = currentConfig.model.contains("Image-Edit", ignoreCase = true)
+                val selectedRatioForImage = stateHolder._selectedImageRatio.value
+                
+                val familyBasedImageSize: String? = when (detectedFamilyForImage) {
+                    com.example.everytalk.ui.components.ImageGenCapabilities.ModelFamily.KOLORS -> {
+                        val labelFromRatio = "${selectedRatioForImage.width}x${selectedRatioForImage.height}"
+                        val mapped = com.example.everytalk.ui.components.ImageGenCapabilities
+                            .getKolorsSizesByRatio(selectedRatioForImage.displayName)
+                            .firstOrNull()?.label
+                        if (mapped.isNullOrBlank()) labelFromRatio else mapped
+                    }
+                    com.example.everytalk.ui.components.ImageGenCapabilities.ModelFamily.QWEN -> {
+                        if (isQwenEditModel) {
+                            null // 按文档：Qwen-Image-Edit 不支持 image_size
+                        } else {
+                            val mapped = com.example.everytalk.ui.components.ImageGenCapabilities
+                                .getQwenSizesByRatio(selectedRatioForImage.displayName)
+                            (mapped.firstOrNull()?.label ?: "1328x1328")
+                        }
+                    }
+                    else -> null
+                }
+                
+                val finalImageSize = familyBasedImageSize ?: baseSanitizedImageSize
+                // 最终用于请求的 image_size（Qwen-Image-Edit 必须禁用）
+                val imageSizeForRequest: String? = if (detectedFamilyForImage == com.example.everytalk.ui.components.ImageGenCapabilities.ModelFamily.QWEN && isQwenEditModel) {
+                    null
+                } else {
+                    finalImageSize
+                }
                 // 检查是否包含图像生成关键词
                 if (isImageGeneration && hasImageGenerationKeywords(textToActuallySend)) {
                     // 重置重试计数
@@ -761,7 +799,7 @@ private data class AttachmentProcessingResult(
                         ImageGenRequest(
                             model = currentConfig.model,
                             prompt = textToActuallySend,
-                            imageSize = sanitizedImageSize, // 兼容旧后端字段
+                            imageSize = imageSizeForRequest, // Kolors/Qwen 生效；Qwen-Image-Edit 禁用
                             batchSize = 1,
                             numInferenceSteps = currentConfig.numInferenceSteps,
                             guidanceScale = currentConfig.guidanceScale,

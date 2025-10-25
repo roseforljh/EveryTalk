@@ -421,10 +421,17 @@ internal fun AddNewFullConfigDialog(
         },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                // 仅图像模式下限制平台列表为：默认、即梦、Nano Banana
-                val imageModeProviders = listOf("默认", "即梦", "Nano Banana")
+                // 仅图像模式下限制平台列表为：默认、即梦、硅基流动、Nano Banana
+                val imageModeProviders = listOf("默认", "即梦", "硅基流动", "Nano Banana")
                 val providersToShow = if (isImageMode) imageModeProviders else allProviders
                 val isDefaultSel = isImageMode && provider.trim().lowercase() in listOf("默认","default")
+                val isGoogleProvider = provider.trim().lowercase() in listOf("google","谷歌")
+                // 当平台为 Google 时，通道锁定为 Gemini
+                LaunchedEffect(provider) {
+                    if (isGoogleProvider) {
+                        selectedChannel = "Gemini"
+                    }
+                }
 
                 ExposedDropdownMenuBox(
                     expanded = providerMenuExpanded && providersToShow.isNotEmpty(),
@@ -485,7 +492,7 @@ internal fun AddNewFullConfigDialog(
                                             )
                                             // 图像模式下固定三项且不可删除，隐藏右侧删除按钮
                                             val lower = providerItem.lowercase().trim()
-                                            val imageModeLocked = isImageMode && listOf("默认","即梦","nano banana").contains(lower)
+                                            val imageModeLocked = isImageMode && listOf("默认","即梦","硅基流动","nano banana").contains(lower)
                                             val nonDeletableProviders = listOf(
                                                 "openai compatible",
                                                 "google",
@@ -513,6 +520,11 @@ internal fun AddNewFullConfigDialog(
                                         }
                                     },
                                     onClick = {
+                                        // 选平台时若为 Google/谷歌，则锁定渠道为 Gemini
+                                        val low = providerItem.trim().lowercase()
+                                        if (low == "google" || low == "谷歌") {
+                                            selectedChannel = "Gemini"
+                                        }
                                         onProviderChange(providerItem)
                                         providerMenuExpanded = false
                                     },
@@ -529,13 +541,20 @@ internal fun AddNewFullConfigDialog(
                 if (!isDefaultSel) {
                     ExposedDropdownMenuBox(
                         expanded = channelMenuExpanded,
-                        onExpandedChange = { channelMenuExpanded = !channelMenuExpanded },
+                        onExpandedChange = {
+                            if (!isGoogleProvider) {
+                                channelMenuExpanded = !channelMenuExpanded
+                            } else {
+                                channelMenuExpanded = false
+                            }
+                        },
                         modifier = Modifier.padding(bottom = 12.dp)
                     ) {
                         OutlinedTextField(
                             value = selectedChannel,
                             onValueChange = {},
                             readOnly = true,
+                            enabled = !isGoogleProvider, // Google 平台时禁用手动切换
                             label = { Text("渠道") },
                             modifier = Modifier
                                 .menuAnchor()
@@ -550,21 +569,23 @@ internal fun AddNewFullConfigDialog(
                             colors = DialogTextFieldColors
                         )
 
-                        CustomStyledDropdownMenu(
-                            transitionState = channelMenuTransitionState,
-                            onDismissRequest = {
-                                channelMenuExpanded = false
-                            },
-                            anchorBounds = channelTextFieldAnchorBounds
-                        ) {
-                            channels.forEach { channel ->
-                                DropdownMenuItem(
-                                    text = { Text(channel) },
-                                    onClick = {
-                                        selectedChannel = channel
-                                        channelMenuExpanded = false
-                                    }
-                                )
+                        if (!isGoogleProvider) {
+                            CustomStyledDropdownMenu(
+                                transitionState = channelMenuTransitionState,
+                                onDismissRequest = {
+                                    channelMenuExpanded = false
+                                },
+                                anchorBounds = channelTextFieldAnchorBounds
+                            ) {
+                                channels.forEach { channel ->
+                                    DropdownMenuItem(
+                                        text = { Text(channel) },
+                                        onClick = {
+                                            selectedChannel = channel
+                                            channelMenuExpanded = false
+                                        }
+                                    )
+                                }
                             }
                         }
                     }

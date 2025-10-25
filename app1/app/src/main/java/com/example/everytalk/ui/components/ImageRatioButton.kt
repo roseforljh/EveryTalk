@@ -17,6 +17,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.everytalk.data.DataClass.ImageRatio
+import com.example.everytalk.ui.components.ImageGenCapabilities.ModelFamily
+import com.example.everytalk.ui.components.ImageGenCapabilities.QualityTier
 
 /**
  * 胶囊形状的比例选择按钮
@@ -62,13 +64,20 @@ fun ImageRatioButton(
 }
 
 /**
- * 带状态管理的比例选择按钮组合
+ * 带状态管理的比例选择按钮组合（支持按模型家族动态限制候选与 Seedream 清晰度）
  */
 @Composable
 fun ImageRatioSelector(
     selectedRatio: ImageRatio,
     onRatioChanged: (ImageRatio) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    // 新增：允许的比例名（例如 ["1:1","16:9"]），为空则沿用默认
+    allowedRatioNames: List<String>? = null,
+    // 新增：模型家族（用于决定是否展示清晰度分段）
+    family: ModelFamily? = null,
+    // 新增：仅 Seedream 有效的清晰度状态与回调
+    seedreamQuality: QualityTier = QualityTier.Q2K,
+    onQualityChange: ((QualityTier) -> Unit)? = null
 ) {
     var showDialog by remember { mutableStateOf(false) }
     
@@ -84,7 +93,11 @@ fun ImageRatioSelector(
         ImageRatioSelectionDialog(
             selectedRatio = selectedRatio,
             onRatioSelected = onRatioChanged,
-            onDismiss = { showDialog = false }
+            onDismiss = { showDialog = false },
+            allowedRatioNames = allowedRatioNames,
+            family = family,
+            seedreamQuality = seedreamQuality,
+            onQualityChange = onQualityChange
         )
     }
 }

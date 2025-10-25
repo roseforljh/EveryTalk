@@ -66,6 +66,9 @@ import com.example.everytalk.data.DataClass.ImageRatio
 import com.example.everytalk.models.ImageSourceOption
 import com.example.everytalk.models.SelectedMediaItem
 import com.example.everytalk.ui.components.ImageRatioSelector
+import com.example.everytalk.ui.components.ImageGenCapabilities
+import com.example.everytalk.ui.components.ImageGenCapabilities.ModelFamily
+import com.example.everytalk.ui.components.ImageGenCapabilities.QualityTier
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
@@ -279,10 +282,49 @@ fun ImageGenerationInputArea(
     editingMessage: Message?,
     onCancelEdit: () -> Unit,
     selectedImageRatio: ImageRatio = ImageRatio.DEFAULT_SELECTED,
-    onImageRatioChanged: (ImageRatio) -> Unit = {}
+    onImageRatioChanged: (ImageRatio) -> Unit = {},
+    // 在选择比例后，把解析出的最终分辨率（如 "960x1280"）回传给上层；无法解析时传 null
+    onResolvedImageSize: (String?) -> Unit = {}
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+
+    // 计算最终分辨率字符串（仅对 Kolors/Qwen 生效），其余家族返回 null（由后端/其它逻辑处理）
+    fun resolveFinalImageSizeForFamily(ratio: ImageRatio, family: ModelFamily?): String? {
+        return when (family) {
+            ModelFamily.KOLORS -> {
+                // 若弹窗展开了两个 3:4 分辨率，则 ratio.width/height 已是具体值；否则按映射取第一个推荐值
+                val labelFromRatio = "${ratio.width}x${ratio.height}"
+                val kolorsMapped = ImageGenCapabilities.getKolorsSizesByRatio(ratio.displayName).firstOrNull()?.label
+                // 优先使用更精确的 ratio 宽高；若为默认比例（非精确推荐），回退映射表
+                if (kolorsMapped.isNullOrBlank()) labelFromRatio else kolorsMapped
+            }
+            ModelFamily.QWEN -> {
+                // 按文档比例→推荐分辨率，取第一个（官方推荐集中只有一个匹配）
+                ImageGenCapabilities.getQwenSizesByRatio(ratio.displayName).firstOrNull()?.label
+            }
+            else -> null
+        }
+    }
+
+    // 基于当前配置检测模型家族，并派生“可用比例候选”与（Seedream专属）清晰度
+    val detectedFamily: ModelFamily? = remember(selectedApiConfig) {
+        ImageGenCapabilities.detectFamily(
+            modelName = selectedApiConfig?.model,
+            provider = selectedApiConfig?.provider,
+            apiAddress = selectedApiConfig?.address
+        )
+    }
+    val familyCapabilities = remember(detectedFamily) {
+        detectedFamily?.let { ImageGenCapabilities.getCapabilities(it) }
+    }
+    val allowedRatioNames: List<String>? = remember(familyCapabilities) {
+        val r = familyCapabilities?.ratios.orEmpty()
+        if (r.isEmpty()) null else r.map { it.ratio }
+    }
+    var seedreamQuality by remember(detectedFamily) {
+        mutableStateOf(QualityTier.Q2K)
+    }
 
     var showImageSelectionPanel by remember { mutableStateOf(false) }
     // 记录外点关闭的时间戳，用于忽略随后紧邻的按钮抬起点击，避免“先关后又开”
@@ -519,11 +561,15 @@ fun ImageGenerationInputArea(
                             )
                         }
                         
-                        // 比例选择按钮
+                        // 比例选择按钮（按家族动态候选；仅 Seedream 显示 2K/4K 清晰度）
                         ImageRatioSelector(
                             selectedRatio = selectedImageRatio,
                             onRatioChanged = onImageRatioChanged,
-                            modifier = Modifier.padding(start = 4.dp)
+                            modifier = Modifier.padding(start = 4.dp),
+                            allowedRatioNames = allowedRatioNames,
+                            family = detectedFamily,
+                            seedreamQuality = seedreamQuality,
+                            onQualityChange = { seedreamQuality = it }
                         )
                     }
 

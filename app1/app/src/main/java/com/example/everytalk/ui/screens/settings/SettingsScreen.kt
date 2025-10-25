@@ -19,15 +19,31 @@ import com.example.everytalk.statecontroller.AppViewModel
 import com.example.everytalk.statecontroller.SimpleModeManager
 import java.util.UUID
 
-// 平台默认地址映射（仅用于图像模式）
+// 平台默认地址映射
 object SettingsDefaults {
+    // 图像模式默认地址
     val imageDefaultApiAddresses: Map<String, String> = mapOf(
         "即梦" to "https://ark.cn-beijing.volces.com/api/v3/images/generations",
         "seedream" to "https://ark.cn-beijing.volces.com/api/v3/images/generations",
         "doubao" to "https://ark.cn-beijing.volces.com/api/v3/images/generations",
+        // 硅基流动（SiliconFlow）图像生成默认地址
+        "硅基流动" to "https://api.siliconflow.cn/v1/images/generations",
+        "siliconflow" to "https://api.siliconflow.cn/v1/images/generations",
         "默认" to "",
         "default" to "",
         "nano banana" to ""
+    )
+    // 文本模式默认地址
+    val textDefaultApiAddresses: Map<String, String> = mapOf(
+        "硅基流动" to "https://api.siliconflow.cn",
+        "siliconflow" to "https://api.siliconflow.cn",
+        "google" to "https://generativelanguage.googleapis.com",
+        "谷歌" to "https://generativelanguage.googleapis.com",
+        "阿里云百炼" to "https://dashscope.aliyuncs.com/compatible-mode",
+        "火山引擎" to "https://ark.cn-beijing.volces.com/api/v3/chat/completions#",
+        "深度求索" to "https://api.deepseek.com",
+        "openrouter" to "https://openrouter.ai/api",
+        "openrouter.ai" to "https://openrouter.ai/api"
     )
 }
 
@@ -232,7 +248,10 @@ fun SettingsScreen(
                 newFullConfigProvider = initialProvider
                 newFullConfigKey = ""
                 val providerKey = initialProvider.lowercase().trim()
-                newFullConfigAddress = SettingsDefaults.imageDefaultApiAddresses[providerKey] ?: ""
+                newFullConfigAddress = if (isInImageMode)
+                    SettingsDefaults.imageDefaultApiAddresses[providerKey] ?: ""
+                else
+                    SettingsDefaults.textDefaultApiAddresses[providerKey] ?: ""
                 showAddFullConfigDialog = true
             },
             onSelectConfig = { configToSelect ->
@@ -271,7 +290,10 @@ fun SettingsScreen(
             onProviderChange = { selectedProvider ->
                 newFullConfigProvider = selectedProvider
                 val providerKey = selectedProvider.lowercase().trim()
-                newFullConfigAddress = SettingsDefaults.imageDefaultApiAddresses[providerKey] ?: ""
+                newFullConfigAddress = if (isInImageMode)
+                    SettingsDefaults.imageDefaultApiAddresses[providerKey] ?: ""
+                else
+                    SettingsDefaults.textDefaultApiAddresses[providerKey] ?: ""
             },
             allProviders = allProviders,
             onShowAddCustomProviderDialog = { showAddCustomProviderDialog = true },

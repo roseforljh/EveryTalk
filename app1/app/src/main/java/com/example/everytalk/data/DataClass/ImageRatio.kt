@@ -50,9 +50,10 @@ data class ImageRatio(
             AUTO,                               // 自动模式
             ImageRatio("1:1", 1024, 1024),      // 正方形
             ImageRatio("2:3", 832, 1248),       // 竖向
-            ImageRatio("3:2", 1248, 832),       // 横向  
+            ImageRatio("3:2", 1248, 832),       // 横向
             ImageRatio("3:4", 864, 1184),       // 竖向
             ImageRatio("4:3", 1184, 864),       // 横向
+            ImageRatio("1:2", 720, 1440),       // 竖向（Kolors 文档推荐分辨率之一）
             ImageRatio("4:5", 896, 1152),       // 竖向
             ImageRatio("5:4", 1152, 896),       // 横向
             ImageRatio("9:16", 768, 1344),      // 手机竖屏

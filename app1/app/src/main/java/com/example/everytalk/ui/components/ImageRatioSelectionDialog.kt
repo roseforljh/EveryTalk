@@ -24,17 +24,69 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.everytalk.data.DataClass.ImageRatio
+import com.example.everytalk.ui.components.ImageGenCapabilities.ModelFamily
+import com.example.everytalk.ui.components.ImageGenCapabilities.QualityTier
 
 /**
- * 图像比例选择弹窗
+ * 图像比例选择弹窗（可按模型家族与候选比列动态展示）
  */
 @Composable
 fun ImageRatioSelectionDialog(
     selectedRatio: ImageRatio,
     onRatioSelected: (ImageRatio) -> Unit,
     onDismiss: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    // 动态参数（可选）：允许展示的比例名称（如 ["1:1","16:9"]），为空则沿用默认集合
+    allowedRatioNames: List<String>? = null,
+    // 若为 Seedream 家族可显示清晰度（2K/4K）
+    family: ModelFamily? = null,
+    seedreamQuality: QualityTier = QualityTier.Q2K,
+    onQualityChange: ((QualityTier) -> Unit)? = null
 ) {
+    // 依据 allowedRatioNames 过滤默认比例集合（始终保留 AUTO）
+    val allRatios = remember { ImageRatio.DEFAULT_RATIOS.filter { !it.isAuto } }
+    val filteredRatios = remember(allowedRatioNames, allRatios) {
+        if (allowedRatioNames.isNullOrEmpty()) {
+            allRatios
+        } else {
+            val names = allowedRatioNames.map { it.trim() }.toSet()
+            allRatios.filter { r ->
+                val name = r.displayName.trim()
+                name in names
+            }
+        }
+    }
+ 
+    // Kolors 专属：将 3:4 比例在展示时展开为两个具体分辨率选项（960×1280 与 768×1024）
+    val displayRatios = remember(filteredRatios, family) {
+        if (family == ModelFamily.KOLORS) {
+            buildList {
+                filteredRatios.forEach { r ->
+                    if (r.displayName.trim() == "3:4") {
+                        add(
+                            ImageRatio(
+                                displayName = "3:4",
+                                width = 960,
+                                height = 1280
+                            )
+                        )
+                        add(
+                            ImageRatio(
+                                displayName = "3:4",
+                                width = 768,
+                                height = 1024
+                            )
+                        )
+                    } else {
+                        add(r)
+                    }
+                }
+            }
+        } else {
+            filteredRatios
+        }
+    }
+ 
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(
@@ -45,7 +97,7 @@ fun ImageRatioSelectionDialog(
         Surface(
             modifier = modifier
                 .fillMaxWidth()
-                .height(380.dp) // 稍微减少对话框总高度
+                .height(420.dp) // 略增高度，容纳清晰度分段控件
                 .padding(horizontal = 16.dp),
             shape = RoundedCornerShape(20.dp),
             color = MaterialTheme.colorScheme.surface,
@@ -61,7 +113,47 @@ fun ImageRatioSelectionDialog(
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp)
                 )
-                
+
+                // 仅 Seedream 家族显示 2K / 4K 清晰度选择（使用 Button 组合以兼容旧版 Material3）
+                if (family == ModelFamily.SEEDREAM) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp)
+                            .heightIn(min = 40.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val is2K = seedreamQuality == QualityTier.Q2K
+                        val is4K = seedreamQuality == QualityTier.Q4K
+
+                        if (is2K) {
+                            FilledTonalButton(
+                                onClick = { /* no-op when already selected */ },
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                            ) { Text("2K") }
+                        } else {
+                            OutlinedButton(
+                                onClick = { onQualityChange?.invoke(QualityTier.Q2K) },
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                            ) { Text("2K") }
+                        }
+
+                        if (is4K) {
+                            FilledTonalButton(
+                                onClick = { /* no-op when already selected */ },
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                            ) { Text("4K") }
+                        } else {
+                            OutlinedButton(
+                                onClick = { onQualityChange?.invoke(QualityTier.Q4K) },
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                            ) { Text("4K") }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
                 // 可滚动的内容区域（使用单一 LazyVerticalGrid，使 AUTO 与其他选项同级并一起滚动）
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(2),
@@ -83,18 +175,20 @@ fun ImageRatioSelectionDialog(
                                 onDismiss()
                             },
                             modifier = Modifier.fillMaxWidth(),
-                            fixedHeight = 44.dp
+                            fixedHeight = 44.dp,
+                            family = family
                         )
                     }
-                    // 其它比例两列展示
-                    items(ImageRatio.DEFAULT_RATIOS.filter { !it.isAuto }) { ratio ->
+                    // 其它比例两列展示（Kolors 下 3:4 展开为两个分辨率）
+                    items(displayRatios) { ratio ->
                         ImageRatioItem(
                             ratio = ratio,
                             isSelected = ratio == selectedRatio,
                             onClick = {
                                 onRatioSelected(ratio)
                                 onDismiss()
-                            }
+                            },
+                            family = family
                         )
                     }
                 }
@@ -124,7 +218,8 @@ private fun ImageRatioItem(
     isSelected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    fixedHeight: Dp? = null
+    fixedHeight: Dp? = null,
+    family: ModelFamily? = null
 ) {
     val backgroundColor = if (isSelected) {
         MaterialTheme.colorScheme.primaryContainer
@@ -179,6 +274,17 @@ private fun ImageRatioItem(
                 color = textColor,
                 textAlign = TextAlign.Center
             )
+
+            // Kolors 家族下对 3:4 比例的尺寸区分提示：在每个 3:4 条目下显示其具体分辨率
+            if (family == ModelFamily.KOLORS && ratio.displayName.trim() == "3:4") {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "${ratio.width}×${ratio.height}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+            }
             
             Spacer(modifier = Modifier.height(8.dp))
             
