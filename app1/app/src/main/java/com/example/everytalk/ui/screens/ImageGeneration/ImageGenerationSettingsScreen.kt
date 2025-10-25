@@ -25,9 +25,9 @@ import com.example.everytalk.ui.screens.settings.ConfirmDeleteDialog
 import com.example.everytalk.ui.screens.settings.EditConfigDialog
 import com.example.everytalk.ui.screens.settings.ImportExportDialog
 import com.example.everytalk.ui.screens.settings.SettingsScreenContent
-import com.example.everytalk.ui.screens.settings.defaultApiAddresses
 import java.util.UUID
 import com.example.everytalk.ui.screens.settings.DialogTextFieldColors
+import com.example.everytalk.ui.screens.settings.SettingsDefaults
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -189,11 +189,12 @@ fun ImageGenerationSettingsScreen(
             paddingValues = paddingValues,
             apiConfigsByApiKeyAndModality = apiConfigsByApiKeyAndModality,
             onAddFullConfigClick = {
-                val initialProvider = allProviders.firstOrNull() ?: "openai compatible"
+                // 图像模式新增时默认即为“默认”
+                val initialProvider = "默认"
                 newFullConfigProvider = initialProvider
                 newFullConfigKey = ""
                 val providerKey = initialProvider.lowercase().trim()
-                newFullConfigAddress = defaultApiAddresses[providerKey] ?: ""
+                newFullConfigAddress = SettingsDefaults.imageDefaultApiAddresses[providerKey] ?: ""
                 showAddFullConfigDialog = true
             },
             onSelectConfig = { configToSelect ->
@@ -232,7 +233,7 @@ fun ImageGenerationSettingsScreen(
             onProviderChange = { selectedProvider ->
                 newFullConfigProvider = selectedProvider
                 val providerKey = selectedProvider.lowercase().trim()
-                newFullConfigAddress = defaultApiAddresses[providerKey] ?: ""
+                newFullConfigAddress = SettingsDefaults.imageDefaultApiAddresses[providerKey] ?: ""
             },
             allProviders = allProviders,
             onShowAddCustomProviderDialog = { showAddCustomProviderDialog = true },
@@ -249,12 +250,30 @@ fun ImageGenerationSettingsScreen(
                 viewModel.clearFetchedModels()
             },
            onConfirm = { provider, address, key, channel, imageSize, numInferenceSteps, guidanceScale ->
-               if (key.isNotBlank() && provider.isNotBlank() && address.isNotBlank()) {
+               val providerTrim = provider.trim()
+               val isDefaultProvider = providerTrim.lowercase() in listOf("默认","default")
+               if (isDefaultProvider) {
+                   // 选择“默认”时，直接添加 Kolors 配置并关闭弹窗
+                   val config = ApiConfig(
+                       id = java.util.UUID.randomUUID().toString(),
+                       name = "Kwai-Kolors/Kolors",
+                       provider = providerTrim,
+                       address = "",
+                       key = "",
+                       model = "Kwai-Kolors/Kolors",
+                       modalityType = ModalityType.IMAGE,
+                       channel = channel,
+                       isValid = true
+                   )
+                   viewModel.addConfig(config, isImageGen = true)
+                   showAddFullConfigDialog = false
+                   viewModel.clearFetchedModels()
+               } else if (key.isNotBlank() && providerTrim.isNotBlank() && address.isNotBlank()) {
                    pendingFullConfig = ApiConfig(
                        address = address,
                        key = key,
                        model = "",
-                       provider = provider,
+                       provider = providerTrim,
                        name = "",
                        channel = channel,
                        modalityType = ModalityType.IMAGE,
@@ -266,7 +285,8 @@ fun ImageGenerationSettingsScreen(
                    showAddModelNameDialog = true
                    viewModel.clearFetchedModels()
                }
-           }
+           },
+           isImageMode = true
         )
     }
 
@@ -328,7 +348,9 @@ fun ImageGenerationSettingsScreen(
                     if (showAddFullConfigDialog) {
                         newFullConfigProvider = trimmedName
                         val providerKey = trimmedName.lowercase().trim()
-                        newFullConfigAddress = defaultApiAddresses[providerKey] ?: (defaultApiAddresses[providerKey.replace(" ", "")] ?: "")
+                        newFullConfigAddress = SettingsDefaults.imageDefaultApiAddresses[providerKey]
+                            ?: SettingsDefaults.imageDefaultApiAddresses[providerKey.replace(" ", "")]
+                            ?: ""
                     }
                     showAddCustomProviderDialog = false
                     newCustomProviderNameInput = ""
@@ -367,7 +389,7 @@ fun ImageGenerationSettingsScreen(
                     val nextDefaultProvider = viewModel.allProviders.value.firstOrNull() ?: "openai compatible"
                     newFullConfigProvider = nextDefaultProvider
                     val providerKey = nextDefaultProvider.lowercase().trim()
-                    newFullConfigAddress = defaultApiAddresses[providerKey] ?: ""
+                    newFullConfigAddress = SettingsDefaults.imageDefaultApiAddresses[providerKey] ?: ""
                 }
                 showConfirmDeleteProviderDialog = false
                 providerToDelete = null

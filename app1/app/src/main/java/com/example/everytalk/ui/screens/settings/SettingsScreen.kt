@@ -19,6 +19,18 @@ import com.example.everytalk.statecontroller.AppViewModel
 import com.example.everytalk.statecontroller.SimpleModeManager
 import java.util.UUID
 
+// 平台默认地址映射（仅用于图像模式）
+object SettingsDefaults {
+    val imageDefaultApiAddresses: Map<String, String> = mapOf(
+        "即梦" to "https://ark.cn-beijing.volces.com/api/v3/images/generations",
+        "seedream" to "https://ark.cn-beijing.volces.com/api/v3/images/generations",
+        "doubao" to "https://ark.cn-beijing.volces.com/api/v3/images/generations",
+        "默认" to "",
+        "default" to "",
+        "nano banana" to ""
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -216,11 +228,11 @@ fun SettingsScreen(
             paddingValues = paddingValues,
             apiConfigsByApiKeyAndModality = apiConfigsByApiKeyAndModality,
             onAddFullConfigClick = {
-                val initialProvider = allProviders.firstOrNull() ?: "openai compatible"
+                val initialProvider = if (isInImageMode) "默认" else (allProviders.firstOrNull() ?: "openai compatible")
                 newFullConfigProvider = initialProvider
                 newFullConfigKey = ""
                 val providerKey = initialProvider.lowercase().trim()
-                newFullConfigAddress = defaultApiAddresses[providerKey] ?: ""
+                newFullConfigAddress = SettingsDefaults.imageDefaultApiAddresses[providerKey] ?: ""
                 showAddFullConfigDialog = true
             },
             onSelectConfig = { configToSelect ->
@@ -259,7 +271,7 @@ fun SettingsScreen(
             onProviderChange = { selectedProvider ->
                 newFullConfigProvider = selectedProvider
                 val providerKey = selectedProvider.lowercase().trim()
-                newFullConfigAddress = defaultApiAddresses[providerKey] ?: ""
+                newFullConfigAddress = SettingsDefaults.imageDefaultApiAddresses[providerKey] ?: ""
             },
             allProviders = allProviders,
             onShowAddCustomProviderDialog = { showAddCustomProviderDialog = true },
@@ -277,12 +289,32 @@ fun SettingsScreen(
                 viewModel.clearFetchedModels()
             },
             onConfirm = { provider, address, key, channel, _, _, _ ->
-                if (key.isNotBlank() && provider.isNotBlank() && address.isNotBlank()) {
-                    viewModel.createConfigAndFetchModels(provider, address, key, channel, isInImageMode)
+                val providerTrim = provider.trim()
+                val pLower = providerTrim.lowercase()
+                val isDefaultProvider = pLower in listOf("默认", "default")
+                if (isDefaultProvider && isInImageMode) {
+                    // 图像模式下的“默认”平台：直接创建 Kolors 配置（地址/Key 由后端隐藏注入）
+                    val config = ApiConfig(
+                        id = UUID.randomUUID().toString(),
+                        name = "Kwai-Kolors/Kolors",
+                        provider = providerTrim,
+                        address = "",
+                        key = "",
+                        model = "Kwai-Kolors/Kolors",
+                        modalityType = ModalityType.IMAGE,
+                        channel = channel,
+                        isValid = true
+                    )
+                    viewModel.addConfig(config, isImageGen = true)
+                    showAddFullConfigDialog = false
+                    viewModel.clearFetchedModels()
+                } else if (key.isNotBlank() && providerTrim.isNotBlank() && address.isNotBlank()) {
+                    viewModel.createConfigAndFetchModels(providerTrim, address, key, channel, isInImageMode)
                     showAddFullConfigDialog = false
                     viewModel.clearFetchedModels()
                 }
-            }
+            },
+            isImageMode = isInImageMode
         )
     }
 
@@ -351,7 +383,9 @@ fun SettingsScreen(
                     if (showAddFullConfigDialog) {
                         newFullConfigProvider = trimmedName
                         val providerKey = trimmedName.lowercase().trim()
-                        newFullConfigAddress = defaultApiAddresses[providerKey] ?: (defaultApiAddresses[providerKey.replace(" ", "")] ?: "")
+                        newFullConfigAddress = SettingsDefaults.imageDefaultApiAddresses[providerKey]
+                            ?: SettingsDefaults.imageDefaultApiAddresses[providerKey.replace(" ", "")]
+                            ?: ""
                     }
                     showAddCustomProviderDialog = false
                     newCustomProviderNameInput = ""
@@ -389,7 +423,7 @@ fun SettingsScreen(
                     val nextDefaultProvider = viewModel.allProviders.value.firstOrNull() ?: "openai compatible"
                     newFullConfigProvider = nextDefaultProvider
                     val providerKey = nextDefaultProvider.lowercase().trim()
-                    newFullConfigAddress = defaultApiAddresses[providerKey] ?: ""
+                    newFullConfigAddress = SettingsDefaults.imageDefaultApiAddresses[providerKey] ?: ""
                 }
                 showConfirmDeleteProviderDialog = false
                 providerToDelete = null

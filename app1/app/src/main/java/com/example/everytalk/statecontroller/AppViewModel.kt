@@ -1,8 +1,6 @@
 package com.example.everytalk.statecontroller
 
 import android.app.Application
-import android.content.ClipboardManager
-import android.content.Context
 import android.util.Log
 import androidx.annotation.Keep
 import androidx.collection.LruCache
@@ -76,6 +74,32 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import com.example.everytalk.config.PerformanceConfig
+import com.example.everytalk.statecontroller.SimpleModeManager
+import com.example.everytalk.statecontroller.MessageSender
+import com.example.everytalk.statecontroller.viewmodel.DialogManager
+import com.example.everytalk.statecontroller.viewmodel.DrawerManager
+import com.example.everytalk.statecontroller.viewmodel.ProviderManager
+import com.example.everytalk.statecontroller.viewmodel.ExportManager
+import com.example.everytalk.statecontroller.viewmodel.ModelFetchManager
+import com.example.everytalk.statecontroller.viewmodel.UpdateManager
+import com.example.everytalk.statecontroller.ui.MessageItemsController
+import com.example.everytalk.statecontroller.controller.SystemPromptController
+import com.example.everytalk.statecontroller.controller.SettingsController
+import com.example.everytalk.statecontroller.controller.HistoryController
+import com.example.everytalk.statecontroller.controller.MediaController
+import com.example.everytalk.statecontroller.controller.MessageContentController
+import com.example.everytalk.statecontroller.controller.ConversationPreviewController
+import com.example.everytalk.statecontroller.controller.ModelAndConfigController
+import com.example.everytalk.statecontroller.controller.RegenerateController
+import com.example.everytalk.statecontroller.controller.StreamingControls
+import com.example.everytalk.statecontroller.ui.UiStateFacade
+import com.example.everytalk.statecontroller.controller.LifecycleCoordinator
+import com.example.everytalk.statecontroller.controller.ScrollStateController
+import com.example.everytalk.statecontroller.controller.AnimationStateController
+import com.example.everytalk.statecontroller.controller.EditMessageController
+import com.example.everytalk.statecontroller.controller.ClipboardController
+import com.example.everytalk.statecontroller.controller.ConfigFacade
+import com.example.everytalk.statecontroller.controller.ProviderController
 
 class AppViewModel(application: Application, private val dataSource: SharedPreferencesDataSource) :
         AndroidViewModel(application) {
@@ -140,6 +164,11 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     // 公开的模式管理器 - 供设置界面等外部组件使用
     val simpleModeManager = SimpleModeManager(stateHolder, historyManager, viewModelScope)
 
+    // 只读 UI 状态门面（逐步替换直接暴露的 StateFlow/Snapshot 访问）
+    private val uiStateFacade by lazy { UiStateFacade(stateHolder, simpleModeManager) }
+    val ui: UiStateFacade
+        get() = uiStateFacade
+
     // 向UI层公开“意图模式”StateFlow，避免基于内容态推断造成的短暂不一致
     val uiModeFlow: StateFlow<SimpleModeManager.ModeType>
         get() = simpleModeManager.uiModeFlow
@@ -156,6 +185,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     private val configManager: ConfigManager by lazy {
         ConfigManager(stateHolder, persistenceManager, apiHandler, viewModelScope)
     }
+    private val configFacade by lazy { ConfigFacade(configManager) }
 
     private val messageSender: MessageSender by lazy {
         MessageSender(
@@ -244,43 +274,60 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     val systemPromptExpandedState: SnapshotStateMap<String, Boolean>
         get() = stateHolder.systemPromptExpandedState
 
-    private val _exportRequest = Channel<Pair<String, String>>(Channel.BUFFERED)
-    val exportRequest: Flow<Pair<String, String>> = _exportRequest.receiveAsFlow()
+    // 🎯 重构：使用管理器类来组织代码
+    private val exportManager = ExportManager()
+    val exportRequest: Flow<Pair<String, String>> = exportManager.exportRequest
+    val settingsExportRequest: Flow<Pair<String, String>> = exportManager.settingsExportRequest
 
-    private val _settingsExportRequest = Channel<Pair<String, String>>(Channel.BUFFERED)
-    val settingsExportRequest: Flow<Pair<String, String>> = _settingsExportRequest.receiveAsFlow()
-
-    private val _showEditDialog = MutableStateFlow(false)
-    val showEditDialog: StateFlow<Boolean> = _showEditDialog.asStateFlow()
-    private val _editingMessageId = MutableStateFlow<String?>(null)
-    private val _editingMessage = MutableStateFlow<Message?>(null)
-    val editingMessage: StateFlow<Message?> = _editingMessage.asStateFlow()
+    private val dialogManager = DialogManager()
+    private val editMessageController = EditMessageController(
+        stateHolder = stateHolder,
+        dialogManager = dialogManager,
+        historyManager = historyManager,
+        scope = viewModelScope,
+        messagesMutex = messagesMutex
+    )
+    val showEditDialog: StateFlow<Boolean> = dialogManager.showEditDialog
+    val editingMessage: StateFlow<Message?> = dialogManager.editingMessage
+    val showSelectableTextDialog: StateFlow<Boolean> = dialogManager.showSelectableTextDialog
+    val textForSelectionDialog: StateFlow<String> = dialogManager.textForSelectionDialog
+    val showSystemPromptDialog: StateFlow<Boolean> = dialogManager.showSystemPromptDialog
+    val showAboutDialog: StateFlow<Boolean> = dialogManager.showAboutDialog
+    val showClearImageHistoryDialog: StateFlow<Boolean> = dialogManager.showClearImageHistoryDialog
     val editDialogInputText: StateFlow<String>
         get() = stateHolder._editDialogInputText.asStateFlow()
-    private val _isSearchActiveInDrawer = MutableStateFlow(false)
-    val isSearchActiveInDrawer: StateFlow<Boolean> = _isSearchActiveInDrawer.asStateFlow()
     
-    private val _expandedDrawerItemIndex = MutableStateFlow<Int?>(null)
-    val expandedDrawerItemIndex: StateFlow<Int?> = _expandedDrawerItemIndex.asStateFlow()
-    
-    private val _searchQueryInDrawer = MutableStateFlow("")
-    val searchQueryInDrawer: StateFlow<String> = _searchQueryInDrawer.asStateFlow()
-
-    private val predefinedPlatformsList =
-            listOf("openai compatible", "google", "硅基流动", "阿里云百炼", "火山引擎", "深度求索", "OpenRouter")
-
-    private val _customProviders = MutableStateFlow<Set<String>>(emptySet())
-    val customProviders: StateFlow<Set<String>> = _customProviders.asStateFlow()
-
-    val allProviders: StateFlow<List<String>> = combine(
-        _customProviders
-    ) { customProvidersArray ->
-        predefinedPlatformsList + customProvidersArray[0].toList()
-    }.stateIn(
+    // 剪贴板/导出 控制器
+    private val clipboardController = ClipboardController(
+        application = getApplication(),
+        exportManager = exportManager,
         scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
-        initialValue = predefinedPlatformsList
+        showSnackbar = ::showSnackbar
     )
+    
+    private val drawerManager = DrawerManager()
+    val isSearchActiveInDrawer: StateFlow<Boolean> = drawerManager.isSearchActiveInDrawer
+    val expandedDrawerItemIndex: StateFlow<Int?> = drawerManager.expandedDrawerItemIndex
+    val searchQueryInDrawer: StateFlow<String> = drawerManager.searchQueryInDrawer
+
+    // 滚动状态控制器
+    private val scrollStateController = ScrollStateController(stateHolder)
+    // 动画状态控制器
+    private val animationStateController = AnimationStateController(stateHolder) { simpleModeManager.isInImageMode() }
+
+    private val providerManager = ProviderManager(viewModelScope)
+    val customProviders: StateFlow<Set<String>> = providerManager.customProviders
+    val allProviders: StateFlow<List<String>> = providerManager.allProviders
+    
+    private val providerController = ProviderController(
+        stateHolder = stateHolder,
+        providerManager = providerManager,
+        configManager = configManager,
+        dataSource = dataSource,
+        scope = viewModelScope
+    )
+    
+    
     val isWebSearchEnabled: StateFlow<Boolean>
         get() = stateHolder._isWebSearchEnabled.asStateFlow()
     val showSourcesDialog: StateFlow<Boolean>
@@ -290,14 +337,6 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     val isStreamingPaused: StateFlow<Boolean>
         get() = stateHolder._isStreamingPaused.asStateFlow()
 
-    private val _showSelectableTextDialog = MutableStateFlow(false)
-    val showSelectableTextDialog: StateFlow<Boolean> = _showSelectableTextDialog.asStateFlow()
-    private val _textForSelectionDialog = MutableStateFlow("")
-    val textForSelectionDialog: StateFlow<String> = _textForSelectionDialog.asStateFlow()
-
-    private val _showSystemPromptDialog = MutableStateFlow(false)
-    val showSystemPromptDialog: StateFlow<Boolean> = _showSystemPromptDialog.asStateFlow()
-
     val systemPrompt: StateFlow<String> = stateHolder._currentConversationId.flatMapLatest { id ->
         snapshotFlow { stateHolder.systemPrompts[id] ?: "" }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
@@ -305,184 +344,164 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     val isSystemPromptEngaged: StateFlow<Boolean> = stateHolder._currentConversationId.flatMapLatest { id ->
         snapshotFlow { stateHolder.systemPromptEngagedState[id] ?: false }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
-    private var originalSystemPrompt: String? = null
+    // SystemPrompt moved to SystemPromptController
  
-   private val _showAboutDialog = MutableStateFlow(false)
-   val showAboutDialog: StateFlow<Boolean> = _showAboutDialog.asStateFlow()
- 
-   private val _latestReleaseInfo = MutableStateFlow<GithubRelease?>(null)
-   val latestReleaseInfo: StateFlow<GithubRelease?> = _latestReleaseInfo.asStateFlow()
+   private val updateManager = UpdateManager(
+       application = getApplication(),
+       scope = viewModelScope,
+       showSnackbar = ::showSnackbar
+   )
+   val latestReleaseInfo: StateFlow<GithubRelease?> = updateManager.latestReleaseInfo
+   // 控制器：系统提示
+   private val systemPromptController = SystemPromptController(stateHolder, dialogManager, historyManager, viewModelScope)
+   // 委托到 MessageItemsController，减少 AppViewModel 体积
+   private val messageItemsController = MessageItemsController(stateHolder, viewModelScope)
+   val chatListItems: StateFlow<List<ChatListItem>> get() = messageItemsController.chatListItems
+   val imageGenerationChatListItems: StateFlow<List<ChatListItem>> get() = messageItemsController.imageGenerationChatListItems
+   private val modelFetchManager = com.example.everytalk.statecontroller.viewmodel.ModelFetchManager()
+   val isFetchingModels: StateFlow<Boolean> = modelFetchManager.isFetchingModels
+   val fetchedModels: StateFlow<List<String>> = modelFetchManager.fetchedModels
+   val isRefreshingModels: StateFlow<Set<String>> = modelFetchManager.isRefreshingModels
 
-   private val _showClearImageHistoryDialog = MutableStateFlow(false)
-   val showClearImageHistoryDialog: StateFlow<Boolean> = _showClearImageHistoryDialog.asStateFlow()
-    // 🎯 优化：添加缓存，避免重复计算相同消息的 ChatListItem
-    private val chatListItemCache = mutableMapOf<String, CacheEntry>()
-    
-    private data class CacheEntry(
-        val text: String,
-        val reasoning: String?,
-        val outputType: String,
-        val hasReasoning: Boolean,
-        val imageUrls: List<String>?,  // 🔥 关键修复：添加imageUrls到缓存
-        val contentStarted: Boolean,  // 🔥 修复：添加contentStarted到缓存
-        val items: List<ChatListItem>
-    )
-    
-    val chatListItems: StateFlow<List<ChatListItem>> =
-            combine(
-                            snapshotFlow { messages.toList() },
-                           isTextApiCalling,
-                           currentTextStreamingAiMessageId
-                    ) { messages, isApiCalling, currentStreamingAiMessageId ->
-                        messages
-                                .map { message ->
-                                    when (message.sender) {
-                                        Sender.AI -> {
-                                            // 🎯 优化：检查缓存，避免重复计算
-                                            val cached = chatListItemCache[message.id]
-                                            val hasReasoning = !message.reasoning.isNullOrBlank()
-                                            
-                                            // 🔧 修复：缓存验证必须包含流式状态，否则取消后仍显示旧的LoadingIndicator
-                                            val isCurrentlyStreaming = isApiCalling && message.id == currentStreamingAiMessageId
-                                            
-                                            // 检查缓存是否有效（内容未变化 + 流式状态未变化 + 图片URLs未变化）
-                                            val cacheValid = cached != null &&
-                                                cached.text == message.text &&
-                                                cached.reasoning == message.reasoning &&
-                                                cached.outputType == message.outputType &&
-                                                cached.hasReasoning == hasReasoning &&
-                                                cached.imageUrls == message.imageUrls &&  // 🔥 关键修复：检查imageUrls
-                                                cached.contentStarted == message.contentStarted &&  // 🔥 修复：检查contentStarted状态
-                                                // 关键：流式状态变化时缓存失效
-                                                (isCurrentlyStreaming == (cached.items.any { it is ChatListItem.LoadingIndicator || it is ChatListItem.AiMessageStreaming || it is ChatListItem.AiMessageCodeStreaming }))
-                                            
-                                            if (cacheValid) {
-                                                // ✅ 缓存命中，直接返回
-                                                android.util.Log.d("AppViewModel", "🎯 Cache HIT for ${message.id.take(8)}, items=${cached!!.items.map { it::class.simpleName }}")
-                                                cached.items
-                                            } else {
-                                                // ❌ 缓存未命中或失效，重新计算
-                                                android.util.Log.d("AppViewModel", "🎯 Cache MISS for ${message.id.take(8)}, " +
-                                                    "text.len=${message.text.length}, contentStarted=${message.contentStarted}, " +
-                                                    "cached.contentStarted=${cached?.contentStarted}")
-                                                val newItems = createAiMessageItems(
-                                                    message,
-                                                    isApiCalling,
-                                                    currentStreamingAiMessageId
-                                                )
-                                                
-                                                // 更新缓存
-                                                chatListItemCache[message.id] = CacheEntry(
-                                                    text = message.text,
-                                                    reasoning = message.reasoning,
-                                                    outputType = message.outputType,
-                                                    hasReasoning = hasReasoning,
-                                                    imageUrls = message.imageUrls,  // 🔥 关键修复：保存imageUrls到缓存
-                                                    contentStarted = message.contentStarted,  // 🔥 修复：保存contentStarted到缓存
-                                                    items = newItems
-                                                )
-                                                
-                                                android.util.Log.d("AppViewModel", "🎯 Generated items: ${newItems.map { it::class.simpleName }}")
-                                                newItems
-                                            }
-                                        }
-                                        else -> createOtherMessageItems(message)
-                                    }
-                                }
-                                .flatten()
-                    }
-                    .flowOn(Dispatchers.Default)
-                    .distinctUntilChanged()  // 🎯 优化：避免相同内容重复发射
-                    .stateIn(
-                            scope = viewModelScope,
-                            started = SharingStarted.WhileSubscribed(5000),
-                            initialValue = emptyList()
-                    )
+   // 控制器：设置导入/导出
+   private val settingsController = SettingsController(
+       stateHolder = stateHolder,
+       persistenceManager = persistenceManager,
+       providerManager = providerManager,
+       dataSource = dataSource,
+       exportManager = exportManager,
+       json = json,
+       showSnackbar = ::showSnackbar,
+       scope = viewModelScope
+   )
 
-    // 🎯 优化：图像生成消息也使用缓存
-    private val imageGenerationChatListItemCache = mutableMapOf<String, CacheEntry>()
-    
-    val imageGenerationChatListItems: StateFlow<List<ChatListItem>> =
-        combine(
-            snapshotFlow { imageGenerationMessages.toList() },
-            isImageApiCalling,
-            currentImageStreamingAiMessageId
-        ) { messages, isApiCalling, currentStreamingAiMessageId ->
-            android.util.Log.d("AppViewModel", "🖼️ [IMAGE FLOW] Triggered - messages.size=${messages.size}, isApiCalling=$isApiCalling")
-            messages
-                .map { message ->
-                    when (message.sender) {
-                        Sender.AI -> {
-                            // 🎯 优化：检查缓存
-                            val cached = imageGenerationChatListItemCache[message.id]
-                            val hasReasoning = !message.reasoning.isNullOrBlank()
-                            
-                            // 🔧 修复：图像生成也需要验证流式状态
-                            val isCurrentlyStreaming = isApiCalling && message.id == currentStreamingAiMessageId
-                            
-                            val cacheValid = cached != null &&
-                                cached.text == message.text &&
-                                cached.reasoning == message.reasoning &&
-                                cached.outputType == message.outputType &&
-                                cached.hasReasoning == hasReasoning &&
-                                cached.imageUrls == message.imageUrls &&  // 🔥 关键修复：检查imageUrls
-                                // 关键：流式状态变化时缓存失效
-                                (isCurrentlyStreaming == (cached.items.any { it is ChatListItem.LoadingIndicator }))
-                            
-                            android.util.Log.d("AppViewModel", "🖼️ [IMAGE CACHE] messageId=${message.id.take(8)}, " +
-                                "cacheValid=$cacheValid, " +
-                                "cached.imageUrls=${cached?.imageUrls?.size}, " +
-                                "message.imageUrls=${message.imageUrls?.size}")
-                            
-                            if (cacheValid) {
-                                android.util.Log.d("AppViewModel", "🖼️ [IMAGE CACHE HIT] Using cached items")
-                                cached!!.items
-                            } else {
-                                android.util.Log.d("AppViewModel", "🖼️ [IMAGE CACHE MISS] Recomputing items")
-                                val newItems = createAiMessageItems(
-                                    message,
-                                    isApiCalling,
-                                    currentStreamingAiMessageId,
-                                    isImageGeneration = true
-                                )
-                                
-                                imageGenerationChatListItemCache[message.id] = CacheEntry(
-                                    text = message.text,
-                                    reasoning = message.reasoning,
-                                    outputType = message.outputType,
-                                    hasReasoning = hasReasoning,
-                                    imageUrls = message.imageUrls,  // 🔥 关键修复：保存imageUrls到缓存
-                                    contentStarted = message.contentStarted,  // 🔥 修复：保存contentStarted到缓存
-                                    items = newItems
-                                )
-                                
-                                newItems
-                            }
-                        }
-                        else -> createOtherMessageItems(message)
-                    }
-                }
-                .flatten()
-        }
-        .flowOn(Dispatchers.Default)
-        .distinctUntilChanged()  // 🎯 优化：避免重复发射
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000),
-            initialValue = emptyList()
-        )
-    private val _isFetchingModels = MutableStateFlow(false)
-    val isFetchingModels: StateFlow<Boolean> = _isFetchingModels.asStateFlow()
+   // 适配器：供 HistoryController 切换/加载模式
+   private val simpleModeBridge = object : HistoryController.SimpleModeSwitcher {
+       override fun switchToTextMode(forceNew: Boolean, skipSavingTextChat: Boolean) {
+           viewModelScope.launch {
+               simpleModeManager.switchToTextMode(forceNew, skipSavingTextChat)
+           }
+       }
+       override fun switchToImageMode(forceNew: Boolean, skipSavingImageChat: Boolean) {
+           viewModelScope.launch {
+               simpleModeManager.switchToImageMode(forceNew, skipSavingImageChat)
+           }
+       }
+       override suspend fun loadTextHistory(index: Int) {
+           simpleModeManager.loadTextHistory(index)
+       }
+       override suspend fun loadImageHistory(index: Int) {
+           simpleModeManager.loadImageHistory(index)
+       }
+       override fun isInImageMode(): Boolean = simpleModeManager.isInImageMode()
+   }
 
-    private val _fetchedModels = MutableStateFlow<List<String>>(emptyList())
-    val fetchedModels: StateFlow<List<String>> = _fetchedModels.asStateFlow()
-    private val _isRefreshingModels = MutableStateFlow<Set<String>>(emptySet())
-    val isRefreshingModels: StateFlow<Set<String>> = _isRefreshingModels.asStateFlow()
-    init {
+   // 控制器：历史与会话管理
+   private val historyController = HistoryController(
+       stateHolder = stateHolder,
+       historyManager = historyManager,
+       cacheManager = cacheManager,
+       apiHandler = apiHandler,
+       scope = viewModelScope,
+       showSnackbar = ::showSnackbar,
+       shouldAutoScroll = { stateHolder.shouldAutoScroll() },
+       triggerScrollToBottom = { triggerScrollToBottom() },
+       simpleModeSwitcher = simpleModeBridge
+   )
+
+   // 控制器：媒体下载/保存
+   private val mediaController = MediaController(
+       application = getApplication(),
+       fileManager = fileManager,
+       scope = viewModelScope,
+       showSnackbar = ::showSnackbar
+   )
+
+   // 控制器：消息内容/流式追加
+   private val messageContentController = MessageContentController(
+       stateHolder = stateHolder,
+       scope = viewModelScope,
+       messagesMutex = messagesMutex,
+       triggerScrollToBottom = { triggerScrollToBottom() }
+   )
+
+   // 控制器：会话预览/命名
+   private val conversationPreviewController = ConversationPreviewController(
+       stateHolder = stateHolder,
+       cacheManager = cacheManager,
+       scope = viewModelScope,
+       textConversationPreviewCache = textConversationPreviewCache,
+       imageConversationPreviewCache = imageConversationPreviewCache
+   )
+
+   // 控制器：模型/配置 管理
+   private val modelAndConfigController = ModelAndConfigController(
+       stateHolder = stateHolder,
+       persistenceManager = persistenceManager,
+       modelFetchManager = modelFetchManager,
+       configManager = configManager,
+       scope = viewModelScope,
+       showSnackbar = ::showSnackbar,
+       emitManualModelInputRequest = { provider, address, key, channel, isImageGen ->
+           // 控制器请求显示“手动输入模型”对话框时，通过 SharedFlow 通知 UI
+           viewModelScope.launch {
+               _showManualModelInputRequest.emit(
+                   ManualModelInputRequest(provider, address, key, channel, isImageGen)
+               )
+           }
+       }
+   )
+
+   // 控制器：从用户消息点重新生成流程
+   private val regenerateController = RegenerateController(
+       stateHolder = stateHolder,
+       apiHandler = apiHandler,
+       historyManager = historyManager,
+       scope = viewModelScope,
+       messagesMutex = messagesMutex,
+       persistenceDeleteMediaFor = { lists ->
+           withContext(Dispatchers.IO) {
+               // 删除被裁剪消息关联的媒体文件
+               persistenceManager.deleteMediaFilesForMessages(lists)
+           }
+       },
+       showSnackbar = ::showSnackbar,
+       shouldAutoScroll = { stateHolder.shouldAutoScroll() },
+       triggerScrollToBottom = { triggerScrollToBottom() },
+       sendMessage = { messageText, isFromRegeneration, attachments, isImageGeneration ->
+           messageSender.sendMessage(
+               messageText = messageText,
+               isFromRegeneration = isFromRegeneration,
+               attachments = attachments,
+               isImageGeneration = isImageGeneration
+           )
+       }
+   )
+
+   // 控制器：统一流式暂停/恢复/flush
+   private val streamingControls = StreamingControls(
+       stateHolder = stateHolder,
+       apiHandler = apiHandler,
+       scope = viewModelScope,
+       isImageModeProvider = { simpleModeManager.isInImageMode() },
+       triggerScrollToBottom = { triggerScrollToBottom() },
+       showSnackbar = ::showSnackbar
+   )
+
+   // 生命周期协调器：统一 save/clear/low-memory 策略
+   private val lifecycleCoordinator = LifecycleCoordinator(
+       stateHolder = stateHolder,
+       historyManager = historyManager,
+       cacheManager = cacheManager,
+       conversationPreviewController = conversationPreviewController,
+       scope = viewModelScope
+   )
+
+  init {
         // 加载自定义提供商
         viewModelScope.launch(Dispatchers.IO) {
             val loadedCustomProviders = dataSource.loadCustomProviders()
-            _customProviders.value = loadedCustomProviders
+            providerManager.setCustomProviders(loadedCustomProviders)
         }
 
         // 优化：分阶段初始化，优先加载关键配置
@@ -552,47 +571,30 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
      * @return StateFlow of the message content (streaming or final)
      */
     fun getStreamingContent(messageId: String): StateFlow<String> {
-        return stateHolder.streamingMessageStateManager.getOrCreateStreamingState(messageId)
+        return messageContentController.getStreamingContent(messageId)
     }
     
     /**
      * Alias for getStreamingContent for backward compatibility
      */
     fun getStreamingText(messageId: String): StateFlow<String> {
-        return getStreamingContent(messageId)
+        return messageContentController.getStreamingText(messageId)
     }
 
     fun showAboutDialog() {
-        _showAboutDialog.value = true
+        dialogManager.showAboutDialog()
     }
 
     fun dismissAboutDialog() {
-        _showAboutDialog.value = false
+        dialogManager.dismissAboutDialog()
     }
 
      fun checkForUpdates() {
-         viewModelScope.launch(Dispatchers.IO) {
-             try {
-                 val latestRelease = ApiClient.getLatestRelease()
-                 val currentVersion = getApplication<Application>().packageManager.getPackageInfo(getApplication<Application>().packageName, 0).versionName
-                if (currentVersion != null && VersionChecker.isNewVersionAvailable(currentVersion, latestRelease.tagName)) {
-                     _latestReleaseInfo.value = latestRelease
-                } else {
-                    withContext(Dispatchers.Main) {
-                        showSnackbar("当前已是最新版本")
-                    }
-                 }
-             } catch (e: Exception) {
-                 Log.e("AppViewModel", "Failed to check for updates", e)
-                withContext(Dispatchers.Main) {
-                    showSnackbar("检查更新失败: ${e.message}")
-                }
-             }
-         }
+         updateManager.checkForUpdates()
      }
 
     fun clearUpdateInfo() {
-        _latestReleaseInfo.value = null
+        updateManager.clearUpdateInfo()
     }
     
     // 模式状态检测方法 - 供设置界面等外部组件使用
@@ -608,162 +610,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         return simpleModeManager.isInTextMode()
     }
 
-     // 采用轻量状态机统一驱动“连接中/思考/流式/完成/错误”的展示
-     private val bubbleStateMachines = mutableMapOf<String, com.example.everytalk.ui.state.AiBubbleStateMachine>()
- 
-     private fun getBubbleStateMachine(messageId: String): com.example.everytalk.ui.state.AiBubbleStateMachine {
-         return bubbleStateMachines.getOrPut(messageId) {
-             com.example.everytalk.ui.state.AiBubbleStateMachine()
-         }
-     }
- 
-     private fun computeBubbleState(
-         message: Message,
-         isApiCalling: Boolean,
-         currentStreamingAiMessageId: String?,
-         isImageGeneration: Boolean
-     ): com.example.everytalk.ui.state.AiBubbleState {
-         if (message.isError) return com.example.everytalk.ui.state.AiBubbleState.Error(message.text)
- 
-         // 🔧 修复：全局暂停时不应显示“正在连接”/任何流式占位，直接让 UI 维持当前画面
-         if (stateHolder._isStreamingPaused.value) {
-             return com.example.everytalk.ui.state.AiBubbleState.Idle
-         }
- 
-        val isCurrentStreaming = isApiCalling && message.id == currentStreamingAiMessageId
-        val hasReasoning = !message.reasoning.isNullOrBlank()
-        val reasoningCompleteMap = if (isImageGeneration) imageReasoningCompleteMap else textReasoningCompleteMap
-        val reasoningComplete = reasoningCompleteMap[message.id] ?: false
-       
-       // 降级日志为 Verbose，避免刷屏
-       if (Log.isLoggable("AppViewModelVerbose", Log.VERBOSE)) {
-           Log.v("AppViewModelVerbose", "computeBubbleState: id=${message.id.take(8)}, " +
-               "isStreaming=$isCurrentStreaming, hasReasoning=$hasReasoning, " +
-               "reasoningComplete=$reasoningComplete, contentStarted=${message.contentStarted}, " +
-               "message.reasoning=${message.reasoning?.take(20)}")
-       }
-       
-       val state = when {
-           // 🔥 修复：使用 contentStarted 而不是 streamingContent.isNotEmpty()
-           // 原因：getCurrentContent()不是响应式的，不会触发combine重新计算
-           isCurrentStreaming && hasReasoning && !message.contentStarted -> {
-               com.example.everytalk.ui.state.AiBubbleState.Reasoning(message.reasoning ?: "", isComplete = reasoningComplete)
-           }
-           isCurrentStreaming && message.contentStarted -> {
-               com.example.everytalk.ui.state.AiBubbleState.Streaming(
-                   content = message.text,
-                   hasReasoning = hasReasoning,
-                   reasoningComplete = reasoningComplete
-               )
-           }
-           isCurrentStreaming && !hasReasoning && !message.contentStarted -> {
-               com.example.everytalk.ui.state.AiBubbleState.Connecting
-           }
-            (message.contentStarted || message.text.isNotBlank()) ->
-                com.example.everytalk.ui.state.AiBubbleState.Complete(
-                    content = message.text,
-                    reasoning = message.reasoning
-                )
-            else -> com.example.everytalk.ui.state.AiBubbleState.Idle
-        }
-        
-        // 🔍 调试日志：记录状态切换
-        if (isCurrentStreaming) {
-            android.util.Log.d("AppViewModel", "🎯 BubbleState for ${message.id.take(8)}: ${state::class.simpleName}, " +
-                "isStreaming=$isCurrentStreaming, contentStarted=${message.contentStarted}, textLen=${message.text.length}")
-        }
-        
-        return state
-     }
- 
-    private fun createAiMessageItems(
-            message: Message,
-            isApiCalling: Boolean,
-            currentStreamingAiMessageId: String?,
-            isImageGeneration: Boolean = false
-    ): List<ChatListItem> {
-        val sm = getBubbleStateMachine(message.id)
-        val state = computeBubbleState(message, isApiCalling, currentStreamingAiMessageId, isImageGeneration)
-
-        val result = when (state) {
-            is com.example.everytalk.ui.state.AiBubbleState.Connecting -> {
-                android.util.Log.d("AppViewModel", "🎯 createAiMessageItems: Connecting -> LoadingIndicator")
-                listOf(ChatListItem.LoadingIndicator(message.id))
-            }
-            is com.example.everytalk.ui.state.AiBubbleState.Reasoning -> {
-                android.util.Log.d("AppViewModel", "🎯 createAiMessageItems: Reasoning -> AiMessageReasoning, reasoning=${message.reasoning?.take(30)}")
-                listOf(ChatListItem.AiMessageReasoning(message))
-            }
-            is com.example.everytalk.ui.state.AiBubbleState.Streaming -> {
-                val items = mutableListOf<ChatListItem>()
-                if (state.hasReasoning && state.reasoningComplete && !message.reasoning.isNullOrBlank()) {
-                    items.add(ChatListItem.AiMessageReasoning(message))
-                }
-                
-                // 流式期间：根据开关选择使用 StateFlow 渲染或旧路径
-                val streamingItem: ChatListItem = if (PerformanceConfig.USE_STREAMING_STATEFLOW_RENDERING) {
-                    when (message.outputType) {
-                        "code" -> ChatListItem.AiMessageCodeStreaming(message.id, state.hasReasoning)
-                        else -> ChatListItem.AiMessageStreaming(message.id, state.hasReasoning)
-                    }
-                } else {
-                    when (message.outputType) {
-                        "code" -> ChatListItem.AiMessageCode(message.id, message.text, state.hasReasoning)
-                        else -> ChatListItem.AiMessage(message.id, message.text, state.hasReasoning)
-                    }
-                }
-                items.add(streamingItem)
-                items
-            }
-             is com.example.everytalk.ui.state.AiBubbleState.Complete -> {
-                 val items = mutableListOf<ChatListItem>()
-                 if (!message.reasoning.isNullOrBlank()) {
-                     items.add(ChatListItem.AiMessageReasoning(message))
-                 }
-                 
-                 // 🔥 修复：图像生成模式下，即使text为空，只要有imageUrls也要创建AiMessage项
-                 val hasImageContent = !message.imageUrls.isNullOrEmpty()
-                 val hasTextContent = message.text.isNotBlank()
-                 
-                 if (hasTextContent || (isImageGeneration && hasImageContent)) {
-                     items.add(
-                         when (message.outputType) {
-                             "code" -> ChatListItem.AiMessageCode(message.id, message.text, !message.reasoning.isNullOrBlank())
-                             else -> ChatListItem.AiMessage(message.id, message.text, !message.reasoning.isNullOrBlank())
-                         }
-                     )
-                     android.util.Log.d("AppViewModel", "🖼️ [COMPLETE STATE] Created AiMessage item: hasTextContent=$hasTextContent, hasImageContent=$hasImageContent, imageUrls=${message.imageUrls?.size}")
-                 }
-                 
-                 if (!message.webSearchResults.isNullOrEmpty()) {
-                     items.add(ChatListItem.AiMessageFooter(message))
-                 }
-                 items
-             }
-             is com.example.everytalk.ui.state.AiBubbleState.Error -> {
-                 listOf(ChatListItem.ErrorMessage(message.id, message.text))
-             }
-             else -> emptyList()
-         }
-         
-         return result
-     }
-
-    private fun createOtherMessageItems(message: Message): List<ChatListItem> {
-        return when {
-            message.sender == Sender.User ->
-                    listOf(
-                            ChatListItem.UserMessage(
-                                    messageId = message.id,
-                                    text = message.text,
-                                    attachments = message.attachments
-                            )
-                    )
-            message.isError ->
-                    listOf(ChatListItem.ErrorMessage(messageId = message.id, text = message.text))
-            else -> emptyList()
-        }
-    }
+    // 气泡状态与 ChatListItem 构建已委托到 MessageItemsController
 
     private suspend fun areMessageListsEffectivelyEqual(
         list1: List<Message>?,
@@ -835,16 +682,15 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     }
 
     fun setSearchActiveInDrawer(isActive: Boolean) {
-        _isSearchActiveInDrawer.value = isActive
-        if (!isActive) _searchQueryInDrawer.value = ""
+        drawerManager.setSearchActive(isActive)
     }
 
     fun setExpandedDrawerItemIndex(index: Int?) {
-        _expandedDrawerItemIndex.value = index
+        drawerManager.setExpandedItemIndex(index)
     }
 
     fun onDrawerSearchQueryChange(query: String) {
-        _searchQueryInDrawer.value = query
+        drawerManager.onSearchQueryChange(query)
     }
 
     fun onTextChange(newText: String) {
@@ -859,7 +705,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         mimeType: String? = null,
         isImageGeneration: Boolean = false
     ) {
-        if (_editingMessage.value != null && isImageGeneration) {
+        if (editingMessage.value != null && isImageGeneration) {
             confirmImageGenerationMessageEdit(messageText)
         } else {
             // 仅在“接入系统提示”开启时，才把系统提示注入到本次会话
@@ -919,243 +765,43 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     }
 
     fun onEditDialogTextChanged(newText: String) {
-        stateHolder._editDialogInputText.value = newText
+        editMessageController.onEditDialogTextChanged(newText)
     }
 
     fun requestEditMessage(message: Message, isImageGeneration: Boolean = false) {
-        if (message.sender == Sender.User) {
-            if (isImageGeneration) {
-                _editingMessage.value = message
-                stateHolder._text.value = message.text
-            } else {
-                _editingMessageId.value = message.id
-                // Get the current version of the message to ensure we have the latest edited text
-                val currentMessage = getMessageById(message.id)
-                stateHolder._editDialogInputText.value = currentMessage?.text ?: message.text
-                _showEditDialog.value = true
-            }
-        }
+        editMessageController.requestEditMessage(message, isImageGeneration)
     }
 
     fun confirmMessageEdit() {
-        val messageIdToEdit = _editingMessageId.value ?: return
-        val updatedText = stateHolder._editDialogInputText.value.trim()
-        viewModelScope.launch {
-            var needsHistorySave = false
-            messagesMutex.withLock {
-                val messageIndex = stateHolder.messages.indexOfFirst { it.id == messageIdToEdit }
-                if (messageIndex != -1) {
-                    val originalMessage = stateHolder.messages[messageIndex]
-                    if (originalMessage.text != updatedText) {
-                        val updatedMessage =
-                                originalMessage.copy(
-                                        text = updatedText,
-                                        timestamp = System.currentTimeMillis()
-                                )
-                        
-                        // 创建一个新的列表，而不是在原地修改
-                        val newMessages = stateHolder.messages.toMutableList()
-                        newMessages[messageIndex] = updatedMessage
-                        stateHolder.messages.clear()
-                        stateHolder.messages.addAll(newMessages)
-
-                        if (stateHolder.textMessageAnimationStates[updatedMessage.id] != true)
-                        {
-                            stateHolder.textMessageAnimationStates[updatedMessage.id] = true
-                        }
-                        needsHistorySave = true
-                    }
-                }
-            }
-            stateHolder.isTextConversationDirty.value = true
-            if (needsHistorySave) {
-                viewModelScope.launch(Dispatchers.IO) { historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true) }
-            }
-            withContext(Dispatchers.Main.immediate) { dismissEditDialog() }
-        }
+        editMessageController.confirmMessageEdit()
     }
 
     fun confirmImageGenerationMessageEdit(updatedText: String) {
-        val messageToEdit = _editingMessage.value ?: return
-        viewModelScope.launch {
-            var needsHistorySave = false
-            messagesMutex.withLock {
-                val messageIndex = imageGenerationMessages.indexOfFirst { it.id == messageToEdit.id }
-                if (messageIndex != -1) {
-                    val originalMessage = imageGenerationMessages[messageIndex]
-                    if (originalMessage.text != updatedText) {
-                        val updatedMessage = originalMessage.copy(
-                            text = updatedText,
-                            timestamp = System.currentTimeMillis()
-                        )
-                        imageGenerationMessages[messageIndex] = updatedMessage
-                        needsHistorySave = true
-                    }
-                }
-            }
-            if (needsHistorySave) {
-                historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = true)
-            }
-            stateHolder.isImageConversationDirty.value = true
-            _editingMessage.value = null
-            stateHolder._text.value = ""
-        }
+        editMessageController.confirmImageGenerationMessageEdit(updatedText)
     }
 
     fun dismissEditDialog() {
-        _showEditDialog.value = false
-        _editingMessageId.value = null
-        stateHolder._editDialogInputText.value = ""
+        editMessageController.dismissEditDialog()
     }
 
     fun cancelEditing() {
-        _editingMessage.value = null
-        stateHolder._text.value = ""
+        editMessageController.cancelEditing()
     }
 
     fun regenerateAiResponse(message: Message, isImageGeneration: Boolean = false) {
-        val messageList = if (isImageGeneration) imageGenerationMessages else messages
-        val messageToRegenerateFrom =
-            (if (message.sender == Sender.AI) {
-                val aiMessageIndex = messageList.indexOfFirst { it.id == message.id }
-                if (aiMessageIndex > 0) {
-                    messageList.subList(0, aiMessageIndex).findLast { it.sender == Sender.User }
-                } else {
-                    null
-                }
-            } else {
-                messageList.find { it.id == message.id }
-            })
-
-        if (messageToRegenerateFrom == null || messageToRegenerateFrom.sender != Sender.User) {
-            showSnackbar("无法找到对应的用户消息来重新生成回答")
-            return
-        }
-
-        if (stateHolder._selectedApiConfig.value == null) {
-            showSnackbar("请先选择 API 配置")
-            return
-        }
-
-        val originalUserMessageText = messageToRegenerateFrom.text
-        val originalUserMessageId = messageToRegenerateFrom.id
-
-        val originalAttachments =
-                messageToRegenerateFrom.attachments.mapNotNull {
-                    // We need to create new instances with new UUIDs because the underlying
-                    // LazyColumn uses the ID as a key.
-                    // If we reuse the same ID, Compose might not recompose the item correctly.
-                    when (it) {
-                        is SelectedMediaItem.ImageFromUri ->
-                            it.copy(id = UUID.randomUUID().toString())
-                        is SelectedMediaItem.GenericFile ->
-                            it.copy(id = UUID.randomUUID().toString())
-                        is SelectedMediaItem.ImageFromBitmap ->
-                            it.copy(id = UUID.randomUUID().toString())
-                        is SelectedMediaItem.Audio ->
-                            it.copy(id = UUID.randomUUID().toString())
-                    }
-                }
-                        ?: emptyList()
-
-        viewModelScope.launch {
-            val success =
-                    withContext(Dispatchers.Default) {
-                        val userMessageIndex =
-                                messageList.indexOfFirst { it.id == originalUserMessageId }
-                        if (userMessageIndex == -1) {
-                            withContext(Dispatchers.Main) {
-                                showSnackbar("无法重新生成：原始用户消息在当前列表中未找到。")
-                            }
-                            return@withContext false
-                        }
-
-                        val messagesToRemove = mutableListOf<Message>()
-                        var currentIndexToInspect = userMessageIndex + 1
-                        while (currentIndexToInspect < messageList.size) {
-                            val message = messageList[currentIndexToInspect]
-                            if (message.sender == Sender.AI) {
-                                messagesToRemove.add(message)
-                                currentIndexToInspect++
-                            } else {
-                                break
-                            }
-                        }
-
-                        messagesMutex.withLock {
-                            withContext(Dispatchers.Main.immediate) {
-                                val idsToRemove = messagesToRemove.map { it.id }.toSet()
-                                idsToRemove.forEach { id ->
-                                    if (stateHolder._currentTextStreamingAiMessageId.value == id) {
-                                        apiHandler.cancelCurrentApiJob(
-                                                "为消息 '${originalUserMessageId.take(4)}' 重新生成回答，取消旧AI流",
-                                                isNewMessageSend = true
-                                        )
-                                    }
-                                }
-                                stateHolder.textReasoningCompleteMap.keys.removeAll(idsToRemove)
-                                stateHolder.textExpandedReasoningStates.keys.removeAll(idsToRemove)
-                                stateHolder.textMessageAnimationStates.keys.removeAll(idsToRemove)
-
-                                // 删除旧消息之前，先删除关联的媒体文件
-                                viewModelScope.launch(Dispatchers.IO) {
-                                    persistenceManager.deleteMediaFilesForMessages(listOf(messagesToRemove))
-                                }
-
-                                messageList.removeAll(messagesToRemove.toSet())
- 
-                                val finalUserMessageIndex =
-                                        messageList.indexOfFirst {
-                                            it.id == originalUserMessageId
-                                        }
-                                if (finalUserMessageIndex != -1) {
-                                    stateHolder.textMessageAnimationStates.remove(originalUserMessageId)
-                                    messageList.removeAt(finalUserMessageIndex)
-                                }
-                            }
-                        }
-                        true
-                    }
-
-            if (success) {
-                if (isImageGeneration) {
-                    stateHolder.isImageConversationDirty.value = true
-                } else {
-                    stateHolder.isTextConversationDirty.value = true
-                }
-                viewModelScope.launch(Dispatchers.IO) { historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration) }
-                onSendMessage(
-                        messageText = originalUserMessageText,
-                        isFromRegeneration = true,
-                        attachments = originalAttachments,
-                        isImageGeneration = isImageGeneration
-                )
-                if (stateHolder.shouldAutoScroll()) {
-                    triggerScrollToBottom()
-                }
-            }
-        }
+        regenerateController.regenerateFrom(message, isImageGeneration)
     }
 
    fun showSystemPromptDialog() {
-       originalSystemPrompt = systemPrompt.value
-       _showSystemPromptDialog.value = true
+       systemPromptController.showSystemPromptDialog(systemPrompt.value)
    }
 
    fun dismissSystemPromptDialog() {
-       _showSystemPromptDialog.value = false
-       originalSystemPrompt?.let {
-           val conversationId = stateHolder._currentConversationId.value
-           stateHolder.systemPrompts[conversationId] = it
-       }
-       originalSystemPrompt = null
-       val conversationId = stateHolder._currentConversationId.value
-       stateHolder.systemPromptExpandedState[conversationId] = false
+       systemPromptController.dismissSystemPromptDialog()
    }
 
    fun onSystemPromptChange(newPrompt: String) {
-       val conversationId = stateHolder._currentConversationId.value
-       stateHolder.systemPrompts[conversationId] = newPrompt
+       systemPromptController.onSystemPromptChange(newPrompt)
    }
 
    /**
@@ -1163,96 +809,25 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
      * 这个方法专门用于处理系统提示的清空操作，确保originalSystemPrompt也被正确设置
      */
     fun clearSystemPrompt() {
-        val conversationId = stateHolder._currentConversationId.value
-        stateHolder.systemPrompts[conversationId] = ""
-        originalSystemPrompt = "" // 特别设置originalSystemPrompt为空字符串，防止dismiss时恢复
-        saveSystemPrompt()
+        systemPromptController.clearSystemPrompt()
     }
 
     fun saveSystemPrompt() {
-         val conversationId = stateHolder._currentConversationId.value
-         val newPrompt = stateHolder.systemPrompts[conversationId] ?: ""
-
-         _showSystemPromptDialog.value = false
-         originalSystemPrompt = null
-         stateHolder.systemPromptExpandedState[conversationId] = false
-
-         viewModelScope.launch {
-             historyMutex.withLock {
-                 var modifiedMessages: List<Message>? = null
-                 messagesMutex.withLock {
-                     val currentMessages = stateHolder.messages.toMutableList()
-                     val systemMessageIndex =
-                         currentMessages.indexOfFirst { it.sender == Sender.System && !it.isPlaceholderName }
-
-                     var changed = false
-                     if (systemMessageIndex != -1) {
-                         val oldPrompt = currentMessages[systemMessageIndex].text
-                         if (newPrompt.isNotBlank()) {
-                             if (oldPrompt != newPrompt) {
-                                 currentMessages[systemMessageIndex] =
-                                     currentMessages[systemMessageIndex].copy(text = newPrompt)
-                                 changed = true
-                             }
-                         } else {
-                             currentMessages.removeAt(systemMessageIndex)
-                             changed = true
-                         }
-                     } else if (newPrompt.isNotBlank()) {
-                         val systemMessage = Message(
-                             id = "system_${conversationId}",
-                             text = newPrompt,
-                             sender = Sender.System,
-                             timestamp = System.currentTimeMillis(),
-                             contentStarted = true
-                         )
-                         currentMessages.add(0, systemMessage)
-                         changed = true
-                     }
-
-                     if (changed) {
-                         modifiedMessages = currentMessages.toList()
-                         stateHolder.messages.clear()
-                         stateHolder.messages.addAll(modifiedMessages!!)
-                     }
-                     stateHolder.isTextConversationDirty.value = true
-                 }
-
-                 if (modifiedMessages != null) {
-                     val loadedIndex = stateHolder._loadedHistoryIndex.value
-                     if (loadedIndex != null) {
-                         val currentHistory = stateHolder._historicalConversations.value.toMutableList()
-                         if (loadedIndex >= 0 && loadedIndex < currentHistory.size) {
-                             currentHistory[loadedIndex] = modifiedMessages!!
-                             stateHolder._historicalConversations.value = currentHistory.toList()
-                             textConversationPreviewCache.remove(loadedIndex)
-                         }
-                     }
-                     historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
-                 }
-             }
-         }
+        systemPromptController.saveSystemPrompt()
     }
 
    fun toggleSystemPromptExpanded() {
-       val conversationId = stateHolder._currentConversationId.value
-       val currentState = stateHolder.systemPromptExpandedState[conversationId] ?: false
-       stateHolder.systemPromptExpandedState[conversationId] = !currentState
+       systemPromptController.toggleSystemPromptExpanded()
    }
    
    // 切换“系统提示接入”状态（开始/暂停）
    fun toggleSystemPromptEngaged() {
-       val conversationId = stateHolder._currentConversationId.value
-       val current = stateHolder.systemPromptEngagedState[conversationId] ?: false
-       stateHolder.systemPromptEngagedState[conversationId] = !current
-       // 轻提示
-       
+       systemPromptController.toggleSystemPromptEngaged()
    }
    
    // 显式设置接入状态
    fun setSystemPromptEngaged(enabled: Boolean) {
-       val conversationId = stateHolder._currentConversationId.value
-       stateHolder.systemPromptEngagedState[conversationId] = enabled
+       systemPromptController.setSystemPromptEngaged(enabled)
    }
 
     fun triggerScrollToBottom() {
@@ -1270,20 +845,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
      * 暂停：仍然接收并解析后端数据，但不更新UI；
      * 继续：一次性将暂停期间累积的文本刷新到UI。
      */
-    fun toggleStreamingPause() {
-        val newState = !stateHolder._isStreamingPaused.value
-        stateHolder._isStreamingPaused.value = newState
-        if (newState) {
-            // 进入暂停
-            showSnackbar("已暂停显示")
-        } else {
-            // 恢复显示：将当前流式消息的累积文本一次性刷新
-            val isImageMode = simpleModeManager.isInImageMode()
-            apiHandler.flushPausedStreamingUpdate(isImageGeneration = isImageMode)
-            triggerScrollToBottom()
-            showSnackbar("已继续")
-        }
-    }
+    fun toggleStreamingPause() = streamingControls.togglePause()
 
     fun startNewChat() {
         dismissEditDialog()
@@ -1298,7 +860,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                     if (stateHolder.shouldAutoScroll()) {
                         triggerScrollToBottom()
                     }
-                    if (_isSearchActiveInDrawer.value) setSearchActiveInDrawer(false)
+                    if (isSearchActiveInDrawer.value) setSearchActiveInDrawer(false)
                 }
             } catch (e: Exception) {
                 Log.e("AppViewModel", "Error starting new chat", e)
@@ -1320,7 +882,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                     if (stateHolder.shouldAutoScroll()) {
                         triggerScrollToBottom()
                     }
-                    if (_isSearchActiveInDrawer.value) setSearchActiveInDrawer(false)
+                    if (isSearchActiveInDrawer.value) setSearchActiveInDrawer(false)
                 }
             } catch (e: Exception) {
                 Log.e("AppViewModel", "Error starting new image generation", e)
@@ -1330,175 +892,49 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     }
 
     fun loadConversationFromHistory(index: Int) {
-        Log.d("AppViewModel", "🚀 [START] loadConversationFromHistory called with index: $index")
         dismissEditDialog()
         dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("加载文本模式历史索引 $index", isNewMessageSend = false, isImageGeneration = false)
-
-        viewModelScope.launch {
-            stateHolder._isLoadingHistory.value = true
-            try {
-                // 完全委托给 SimpleModeManager
-                simpleModeManager.loadTextHistory(index)
-
-                Log.d("AppViewModel", "✅ History loading delegated to SimpleModeManager.")
-                if (_isSearchActiveInDrawer.value) {
-                    withContext(Dispatchers.Main.immediate) { setSearchActiveInDrawer(false) }
-                }
-            } catch (e: Exception) {
-                Log.e("AppViewModel", "🚨 Error loading text history", e)
-                showSnackbar("加载文本历史对话失败: ${e.message}")
-            } finally {
-                stateHolder._isLoadingHistory.value = false
-            }
-        }
+        historyController.loadTextHistory(index)
     }
 
     fun loadImageGenerationConversationFromHistory(index: Int) {
         dismissEditDialog()
         dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("加载图像模式历史索引 $index", isNewMessageSend = false, isImageGeneration = true)
-
-        viewModelScope.launch {
-            stateHolder._isLoadingImageHistory.value = true
-
-            try {
-                // 完全委托给 SimpleModeManager，使用独立的图像模式逻辑
-                Log.d("AppViewModel", "🖼️ [IMAGE] Delegating to SimpleModeManager...")
-                simpleModeManager.loadImageHistory(index)
-
-                // Step 2: 主动处理和修复AI消息的parts - 解决表格渲染问题
-                val processedMessages = processLoadedMessages(stateHolder.imageGenerationMessages.toList())
-                val repairedMessages = repairHistoryMessageParts(processedMessages)
-                stateHolder.imageGenerationMessages.clear()
-                stateHolder.imageGenerationMessages.addAll(repairedMessages)
-
-                Log.d("AppViewModel", "🖼️ [IMAGE] SimpleModeManager completed successfully")
-
-                if (_isSearchActiveInDrawer.value) {
-                    withContext(Dispatchers.Main.immediate) { setSearchActiveInDrawer(false) }
-                }
-                
-            } catch (e: Exception) {
-                Log.e("AppViewModel", "🖼️ [IMAGE ERROR] Error loading image history", e)
-                showSnackbar("加载图像历史失败: ${e.message}")
-            } finally {
-                stateHolder._isLoadingImageHistory.value = false
-            }
-        }
+        historyController.loadImageHistory(index)
     }
 
     fun deleteConversation(indexToDelete: Int) {
-        val currentLoadedIndex = stateHolder._loadedHistoryIndex.value
-        val historicalConversations = stateHolder._historicalConversations.value
-        if (indexToDelete < 0 || indexToDelete >= historicalConversations.size) {
-            showSnackbar("无法删除：无效的索引")
-            return
-        }
-        viewModelScope.launch {
-            val wasCurrentChatDeleted = (currentLoadedIndex == indexToDelete)
-            val idsInDeletedConversation =
-                    historicalConversations.getOrNull(indexToDelete)?.map { it.id } ?: emptyList()
-    
-            // HistoryManager.deleteConversation 已经包含了媒体文件清理逻辑
-            withContext(Dispatchers.IO) { historyManager.deleteConversation(indexToDelete) }
-    
-            if (wasCurrentChatDeleted) {
-                simpleModeManager.switchToTextMode(forceNew = true, skipSavingTextChat = true)
-                apiHandler.cancelCurrentApiJob("当前聊天(#$indexToDelete)被删除，开始新聊天")
-            }
-            // 🔧 修复：及时清理与已删除消息相关的UI状态映射，避免需要重入页面才恢复
-            if (idsInDeletedConversation.isNotEmpty()) {
-                stateHolder.textReasoningCompleteMap.keys.removeAll(idsInDeletedConversation)
-                stateHolder.textExpandedReasoningStates.keys.removeAll(idsInDeletedConversation)
-                stateHolder.textMessageAnimationStates.keys.removeAll(idsInDeletedConversation)
-            }
-            // 🔧 修复：同步修正抽屉中当前展开的历史索引，保持选择稳定
-            val expandedIndex = _expandedDrawerItemIndex.value
-            if (expandedIndex != null) {
-                when {
-                    expandedIndex == indexToDelete -> _expandedDrawerItemIndex.value = null
-                    expandedIndex > indexToDelete -> _expandedDrawerItemIndex.value = expandedIndex - 1
-                }
-            }
-            textConversationPreviewCache.evictAll()
-            // 🔧 修复：强制触发 StateFlow 更新，确保UI在删除后能彻底重组
-            stateHolder._historicalConversations.value = stateHolder._historicalConversations.value.toList()
-        }
+        historyController.deleteConversation(indexToDelete, isImageGeneration = false)
     }
     fun deleteImageGenerationConversation(indexToDelete: Int) {
-        val currentLoadedIndex = stateHolder._loadedImageGenerationHistoryIndex.value
-        val historicalConversations = stateHolder._imageGenerationHistoricalConversations.value
-        if (indexToDelete < 0 || indexToDelete >= historicalConversations.size) {
-            showSnackbar("无法删除：无效的索引")
-            return
-        }
-        viewModelScope.launch {
-            val wasCurrentChatDeleted = (currentLoadedIndex == indexToDelete)
-            val idsInDeletedConversation =
-                historicalConversations.getOrNull(indexToDelete)?.map { it.id } ?: emptyList()
-            withContext(Dispatchers.IO) { historyManager.deleteConversation(indexToDelete, isImageGeneration = true) }
-    
-            if (wasCurrentChatDeleted) {
-                simpleModeManager.switchToImageMode(forceNew = true, skipSavingImageChat = true)
-                apiHandler.cancelCurrentApiJob("当前图像生成聊天(#$indexToDelete)被删除，开始新聊天")
-            }
-            // 🔧 修复：清理图像模式的UI状态映射，避免残留状态影响UI
-            if (idsInDeletedConversation.isNotEmpty()) {
-                stateHolder.imageReasoningCompleteMap.keys.removeAll(idsInDeletedConversation)
-                stateHolder.imageExpandedReasoningStates.keys.removeAll(idsInDeletedConversation)
-                stateHolder.imageMessageAnimationStates.keys.removeAll(idsInDeletedConversation)
-            }
-            imageConversationPreviewCache.evictAll()
-            // 🔧 修复：强制触发 StateFlow 更新，确保UI在删除后能彻底重组
-            stateHolder._imageGenerationHistoricalConversations.value = stateHolder._imageGenerationHistoricalConversations.value.toList()
-        }
+        historyController.deleteConversation(indexToDelete, isImageGeneration = true)
     }
 
     fun clearAllConversations() {
         dismissEditDialog()
         dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("清除所有历史记录")
-        viewModelScope.launch {
-            // HistoryManager.clearAllHistory 已经包含了媒体文件清理逻辑
-            withContext(Dispatchers.IO) { historyManager.clearAllHistory() }
-
-            messagesMutex.withLock {
-                stateHolder.clearForNewTextChat()
-                if (stateHolder.shouldAutoScroll()) {
-                    triggerScrollToBottom()
-                }
-            }
-            showSnackbar("所有对话已清除")
-            textConversationPreviewCache.evictAll()
-            imageConversationPreviewCache.evictAll()
-        }
+        historyController.clearAllConversations(isImageGeneration = false)
+        conversationPreviewController.clearAllCaches()
     }
 
     fun clearAllImageGenerationConversations() {
         dismissEditDialog()
         dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("清除所有图像生成历史记录")
-        viewModelScope.launch {
-            withContext(Dispatchers.IO) { historyManager.clearAllHistory(isImageGeneration = true) }
-            messagesMutex.withLock {
-                stateHolder.clearForNewImageChat()
-                if (stateHolder.shouldAutoScroll()) {
-                    triggerScrollToBottom()
-                }
-            }
-            showSnackbar("所有图像生成对话已清除")
-            imageConversationPreviewCache.evictAll()
-        }
+        historyController.clearAllConversations(isImageGeneration = true)
+        conversationPreviewController.clearAllCaches()
     }
 
     fun showClearImageHistoryDialog() {
-       _showClearImageHistoryDialog.value = true
-   }
+        dialogManager.showClearImageHistoryDialog()
+    }
 
-   fun dismissClearImageHistoryDialog() {
-       _showClearImageHistoryDialog.value = false
-   }
+    fun dismissClearImageHistoryDialog() {
+        dialogManager.dismissClearImageHistoryDialog()
+    }
     fun showSourcesDialog(sources: List<WebSearchResult>) {
         viewModelScope.launch {
             stateHolder._sourcesForDialog.value = sources
@@ -1513,308 +949,85 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     }
 
     fun showSelectableTextDialog(text: String) {
-        _textForSelectionDialog.value = text
-        _showSelectableTextDialog.value = true
+        dialogManager.showSelectableTextDialog(text)
     }
 
     fun dismissSelectableTextDialog() {
-        _showSelectableTextDialog.value = false
-        _textForSelectionDialog.value = ""
+        dialogManager.dismissSelectableTextDialog()
     }
 
     fun copyToClipboard(text: String) {
-        val clipboard =
-                getApplication<Application>().getSystemService(Context.CLIPBOARD_SERVICE) as
-                        ClipboardManager
-        val clip = android.content.ClipData.newPlainText("Copied Text", text)
-        clipboard.setPrimaryClip(clip)
-        showSnackbar("已复制到剪贴板")
+        clipboardController.copyToClipboard(text)
     }
 
     fun exportMessageText(text: String) {
-        viewModelScope.launch {
-            val fileName = "conversation_export.md"
-            _exportRequest.send(fileName to text)
-        }
+        clipboardController.exportMessageText(text)
     }
 
     fun downloadImageFromMessage(message: Message) {
-        viewModelScope.launch {
-            val source = message.imageUrls?.firstOrNull() ?: run {
-                showSnackbar("没有可下载的图片")
-                return@launch
-            }
-            try {
-                // 原样字节读取（支持 data:image;base64 / http(s) / content:// / file:// / 绝对路径）
-                val loaded = fileManager.loadBytesFromFlexibleSource(source)
-                if (loaded == null) {
-                    showSnackbar("无法获取原始图片数据")
-                    return@launch
-                }
-                val (bytes, mime) = loaded
-
-                // 1) 首先落地到应用内部存储（会话占用空间，原样保存，不重编码）
-                val internalPath = fileManager.saveBytesToInternalImages(
-                    bytes = bytes,
-                    mime = mime,
-                    baseName = "EveryTalk_Image",
-                    messageIdHint = message.id.takeLast(6),
-                    index = 0
-                )
-
-                // 2) 同步保存到系统媒体库（用户下载到相册/下载目录，仍保持原 MIME 与扩展名）
-                val savedUri = fileManager.saveBytesToMediaStore(
-                    bytes = bytes,
-                    mime = mime,
-                    displayNameBase = "EveryTalk_Image"
-                )
-
-                if (!internalPath.isNullOrBlank() && savedUri != null) {
-                    showSnackbar("原图已保存：应用空间与相册")
-                } else if (savedUri != null) {
-                    showSnackbar("原图已保存到相册")
-                } else if (!internalPath.isNullOrBlank()) {
-                    showSnackbar("原图已保存到应用空间")
-                } else {
-                    showSnackbar("保存失败：无法写入存储")
-                }
-            } catch (e: Exception) {
-                Log.e("DownloadImage", "原图保存失败", e)
-                showSnackbar("保存失败: ${e.message}")
-            }
-        }
+        mediaController.downloadImageFromMessage(message)
     }
 
     private fun saveBitmapToDownloads(bitmap: Bitmap) {
-        val context = getApplication<Application>()
-        val contentResolver = context.contentResolver
-        val imageCollection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-        } else {
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-        }
-
-        val contentDetails = ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, "EveryTalk_Image_${System.currentTimeMillis()}.jpg")
-            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                put(MediaStore.Images.Media.IS_PENDING, 1)
-            }
-        }
-
-        val imageUri = contentResolver.insert(imageCollection, contentDetails)
-        imageUri?.let {
-            try {
-                contentResolver.openOutputStream(it).use { outputStream ->
-                    if (outputStream != null) {
-                        bitmap.compress(Bitmap.CompressFormat.JPEG, 100, outputStream)
-                    } else {
-                        throw Exception("无法打开输出流")
-                    }
-                }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    contentDetails.clear()
-                    contentDetails.put(MediaStore.Images.Media.IS_PENDING, 0)
-                    contentResolver.update(it, contentDetails, null, null)
-                }
-            } catch (e: Exception) {
-                Log.e("SaveBitmap", "保存图片失败", e)
-                contentResolver.delete(it, null, null) // 清理失败的条目
-                throw e
-            }
-        } ?: throw Exception("无法创建MediaStore条目")
+        mediaController.saveBitmapToDownloads(bitmap)
     }
  
-    fun addConfig(config: ApiConfig, isImageGen: Boolean = false) = configManager.addConfig(config, isImageGen)
+    fun addConfig(config: ApiConfig, isImageGen: Boolean = false) = configFacade.addConfig(config, isImageGen)
 
     fun addMultipleConfigs(configs: List<ApiConfig>) {
         viewModelScope.launch {
-            val distinctConfigs = configs.distinctBy { it.model }
-            distinctConfigs.forEach { config ->
-                configManager.addConfig(config)
-            }
+            configFacade.addMultipleConfigs(configs)
         }
     }
-    fun updateConfig(config: ApiConfig, isImageGen: Boolean = false) = configManager.updateConfig(config, isImageGen)
-    fun deleteConfig(config: ApiConfig, isImageGen: Boolean = false) = configManager.deleteConfig(config, isImageGen)
+    fun updateConfig(config: ApiConfig, isImageGen: Boolean = false) = configFacade.updateConfig(config, isImageGen)
+    fun deleteConfig(config: ApiConfig, isImageGen: Boolean = false) = configFacade.deleteConfig(config, isImageGen)
     fun deleteConfigGroup(
             representativeConfig: ApiConfig,
             isImageGen: Boolean = false
     ) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val originalConfigs = if (isImageGen) stateHolder._imageGenApiConfigs.value else stateHolder._apiConfigs.value
-            val configsToKeep = originalConfigs.filterNot {
-                            it.key == representativeConfig.key &&
-                            it.provider == representativeConfig.provider &&
-                            it.address == representativeConfig.address &&
-                            it.channel == representativeConfig.channel
-                        }
-
-            if (originalConfigs.size != configsToKeep.size) {
-                if (isImageGen) {
-                    stateHolder._imageGenApiConfigs.value = configsToKeep
-                    persistenceManager.saveApiConfigs(configsToKeep, isImageGen = true)
-                } else {
-                    stateHolder._apiConfigs.value = configsToKeep
-                    persistenceManager.saveApiConfigs(configsToKeep)
-                }
-            }
-        }
+        configFacade.deleteConfigGroup(representativeConfig, isImageGen)
     }
     
     fun deleteImageGenConfigGroup(
             representativeConfig: ApiConfig
     ) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val originalConfigs = stateHolder._imageGenApiConfigs.value
-            val configsToKeep = originalConfigs.filterNot {
-                            it.key == representativeConfig.key &&
-                            it.provider == representativeConfig.provider &&
-                            it.address == representativeConfig.address &&
-                            it.channel == representativeConfig.channel
-                        }
-
-            if (originalConfigs.size != configsToKeep.size) {
-                stateHolder._imageGenApiConfigs.value = configsToKeep
-                persistenceManager.saveApiConfigs(configsToKeep, isImageGen = true)
-            }
-        }
+        configFacade.deleteConfigGroup(representativeConfig, isImageGen = true)
     }
     
-    fun clearAllConfigs(isImageGen: Boolean = false) = configManager.clearAllConfigs(isImageGen)
-    fun selectConfig(config: ApiConfig, isImageGen: Boolean = false) = configManager.selectConfig(config, isImageGen)
+    fun clearAllConfigs(isImageGen: Boolean = false) = configFacade.clearAllConfigs(isImageGen)
+    fun selectConfig(config: ApiConfig, isImageGen: Boolean = false) = configFacade.selectConfig(config, isImageGen)
     fun clearSelectedConfig(isImageGen: Boolean = false) {
-        stateHolder._selectedApiConfig.value = null
-        viewModelScope.launch(Dispatchers.IO) { persistenceManager.saveSelectedConfigIdentifier(null) }
+        configFacade.clearSelectedConfig(isImageGen)
     }
 
     fun saveApiConfigs() {
-        viewModelScope.launch(Dispatchers.IO) {
-            persistenceManager.saveApiConfigs(stateHolder._apiConfigs.value)
-        }
+        configFacade.saveApiConfigs()
     }
 
     fun addProvider(providerName: String) {
-        val trimmedName = providerName.trim()
-        if (trimmedName.isNotBlank() && !predefinedPlatformsList.contains(trimmedName)) {
-            val currentCustomProviders = _customProviders.value
-            if (!currentCustomProviders.contains(trimmedName)) {
-                _customProviders.value = currentCustomProviders + trimmedName
-                viewModelScope.launch(Dispatchers.IO) {
-                    dataSource.saveCustomProviders(_customProviders.value)
-                }
-            }
-        }
+        providerController.addProvider(providerName)
     }
 
     fun deleteProvider(providerName: String) {
-        val currentCustomProviders = _customProviders.value
-        if (currentCustomProviders.contains(providerName)) {
-            // 删除使用此提供商的所有配置
-            val configsToDelete = stateHolder._apiConfigs.value.filter { it.provider == providerName }
-            configsToDelete.forEach { config ->
-                configManager.deleteConfig(config)
-            }
-            
-            // 从自定义提供商列表中移除
-            _customProviders.value = currentCustomProviders - providerName
-            viewModelScope.launch(Dispatchers.IO) {
-                dataSource.saveCustomProviders(_customProviders.value)
-            }
-        }
+        providerController.deleteProvider(providerName)
     }
 
-    fun updateConfigGroup(representativeConfig: ApiConfig, newAddress: String, newKey: String, providerToKeep: String, newChannel: String, isImageGen: Boolean? = null) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val trimmedAddress = newAddress.trim()
-            val trimmedKey = newKey.trim()
-            val trimmedChannel = newChannel.trim()
-
-            val originalKey = representativeConfig.key
-            val originalProvider = representativeConfig.provider
-            val originalAddress = representativeConfig.address
-            val originalChannel = representativeConfig.channel
-            val modality = representativeConfig.modalityType
-            
-            // 根据模态类型选择正确的配置列表和保存方法
-            val useImageGen = isImageGen ?: (modality == com.example.everytalk.data.DataClass.ModalityType.IMAGE)
-            
-            Log.d("AppViewModel", "=== UPDATE CONFIG GROUP DEBUG ===")
-            Log.d("AppViewModel", "Original config - Provider: $originalProvider, Address: $originalAddress, Channel: $originalChannel, Key: ${originalKey.take(10)}...")
-            Log.d("AppViewModel", "New values - Address: $trimmedAddress, Key: ${trimmedKey.take(10)}..., Provider: $providerToKeep, Channel: $trimmedChannel")
-            Log.d("AppViewModel", "IsImageGen: $useImageGen, Modality: $modality")
-            
-            if (useImageGen) {
-                // 图像生成配置
-                val currentConfigs = stateHolder._imageGenApiConfigs.value
-                Log.d("AppViewModel", "Current image configs count: ${currentConfigs.size}")
-                val newConfigs =
-                        currentConfigs.map { config ->
-                            if (config.key == originalKey &&
-                                                            config.provider == originalProvider &&
-                                                            config.address == originalAddress &&
-                                                            config.channel == originalChannel) {
-                                val updatedConfig = config.copy(address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
-                                Log.d("AppViewModel", "Updated config - Model: ${updatedConfig.model}, Provider: ${updatedConfig.provider}, Channel: ${updatedConfig.channel}")
-                                updatedConfig
-                            } else {
-                                config
-                            }
-                        }
-                if (currentConfigs != newConfigs) {
-                    stateHolder._imageGenApiConfigs.value = newConfigs
-                    persistenceManager.saveApiConfigs(newConfigs, isImageGen = true)
-
-                    val currentSelectedConfig = stateHolder._selectedImageGenApiConfig.value
-                    Log.d("AppViewModel", "Current selected config: ${currentSelectedConfig?.model}, Channel: ${currentSelectedConfig?.channel}")
-                    if (currentSelectedConfig != null &&
-                                                        currentSelectedConfig.key == originalKey &&
-                                                        currentSelectedConfig.provider == originalProvider &&
-                                                        currentSelectedConfig.address == originalAddress &&
-                                                        currentSelectedConfig.channel == originalChannel
-                                        ) {
-                        val newSelectedConfig =
-                                currentSelectedConfig.copy(address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
-                        stateHolder._selectedImageGenApiConfig.value = newSelectedConfig
-                        Log.d("AppViewModel", "Updated selected config - Model: ${newSelectedConfig.model}, Channel: ${newSelectedConfig.channel}")
-                    }
-
-                    withContext(Dispatchers.Main) { showSnackbar("图像配置已更新") }
-                }
-            } else {
-                // 文本生成配置
-                val currentConfigs = stateHolder._apiConfigs.value
-                val newConfigs =
-                                        currentConfigs.map { config ->
-                                            if (config.key == originalKey &&
-                                                config.provider == originalProvider &&
-                                                config.address == originalAddress &&
-                                                config.channel == originalChannel) {
-                                                config.copy(address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
-                                            } else {
-                                                config
-                                            }
-                                        }
-                if (currentConfigs != newConfigs) {
-                    stateHolder._apiConfigs.value = newConfigs
-                    persistenceManager.saveApiConfigs(newConfigs)
-
-                    val currentSelectedConfig = stateHolder._selectedApiConfig.value
-                                        if (currentSelectedConfig != null &&
-                                                        currentSelectedConfig.key == originalKey &&
-                                                        currentSelectedConfig.provider == originalProvider &&
-                                                        currentSelectedConfig.address == originalAddress &&
-                                                        currentSelectedConfig.channel == originalChannel
-                                        ) {
-                                            val newSelectedConfig =
-                                                    currentSelectedConfig.copy(address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
-                                            stateHolder._selectedApiConfig.value = newSelectedConfig
-                                        }
-
-                    withContext(Dispatchers.Main) { showSnackbar("配置已更新") }
-                }
-            }
-        }
+    fun updateConfigGroup(
+        representativeConfig: ApiConfig,
+        newAddress: String,
+        newKey: String,
+        providerToKeep: String,
+        newChannel: String,
+        isImageGen: Boolean? = null
+    ) {
+        // providerToKeep 仅为兼容保留，不参与字段更新
+        configFacade.updateConfigGroup(
+            representativeConfig = representativeConfig,
+            newAddress = newAddress,
+            newKey = newKey,
+            newChannel = newChannel,
+            isImageGen = isImageGen
+        )
     }
     
     fun updateConfigGroup(representativeConfig: ApiConfig, newAddress: String, newKey: String, providerToKeep: String, newChannel: String) {
@@ -1823,438 +1036,56 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
 
     fun onAnimationComplete(messageId: String) {
         viewModelScope.launch(Dispatchers.Main.immediate) {
-            val animationMap = if (simpleModeManager.isInImageMode()) stateHolder.imageMessageAnimationStates else stateHolder.textMessageAnimationStates
-            if (animationMap[messageId] != true) {
-                animationMap[messageId] = true
-            }
+            animationStateController.onAnimationComplete(messageId)
         }
     }
 
     fun hasAnimationBeenPlayed(messageId: String): Boolean {
-        val animationMap = if (simpleModeManager.isInImageMode()) stateHolder.imageMessageAnimationStates else stateHolder.textMessageAnimationStates
-        return animationMap[messageId] ?: false
+        return animationStateController.hasAnimationBeenPlayed(messageId)
     }
 
     fun getConversationPreviewText(index: Int, isImageGeneration: Boolean = false): String {
-        val conversationList = if (isImageGeneration) {
-            stateHolder._imageGenerationHistoricalConversations.value
-        } else {
-            stateHolder._historicalConversations.value
-        }
-        
-        val conversation = conversationList.getOrNull(index) ?: return getDefaultConversationName(index, isImageGeneration)
-        
-        // 生成唯一的缓存键
-        val cacheKey = "${if (isImageGeneration) "img" else "txt"}_$index"
-        val cache = if (isImageGeneration) imageConversationPreviewCache else textConversationPreviewCache
-        
-        // 先检查缓存
-        cache.get(index)?.let { cachedPreview ->
-            return cachedPreview
-        }
-        
-        // 同步生成预览文本（避免异步导致的显示延迟）
-        val preview = generateQuickPreview(conversation, isImageGeneration, index)
-        cache.put(index, preview)
-        
-        // 异步更新高质量预览
-        viewModelScope.launch {
-            try {
-                val conversationId = cacheKey
-                val highQualityPreview = cacheManager.getConversationPreview(conversationId, conversation, isImageGeneration)
-                if (highQualityPreview != preview) {
-                    cache.put(index, highQualityPreview)
-                }
-            } catch (e: Exception) {
-                // 静默处理异常，避免影响UI
-            }
-        }
-        
-        return preview
+        return conversationPreviewController.getConversationPreviewText(index, isImageGeneration)
     }
     
-    private fun generateQuickPreview(conversation: List<Message>, isImageGeneration: Boolean, index: Int): String {
-        val firstUserMessage = conversation.firstOrNull { 
-            it.sender == com.example.everytalk.data.DataClass.Sender.User && 
-            it.text.isNotBlank() 
-        }
-        
-        val rawText = firstUserMessage?.text?.trim()
-        if (rawText.isNullOrBlank()) {
-            return getDefaultConversationName(index, isImageGeneration)
-        }
-        
-        // 使用工具类进行快速清理和截断
-        return com.example.everytalk.util.ConversationNameHelper.cleanAndTruncateText(rawText, 40)
-    }
-    
-    private fun getDefaultConversationName(index: Int, isImageGeneration: Boolean): String {
-        return com.example.everytalk.util.ConversationNameHelper.getDefaultConversationName(index, isImageGeneration)
-    }
 
     fun getConversationFullText(index: Int, isImageGeneration: Boolean = false): String {
-        val conversationList = if (isImageGeneration) {
-            stateHolder._imageGenerationHistoricalConversations.value
-        } else {
-            stateHolder._historicalConversations.value
-        }
-        
-        val conversation = conversationList.getOrNull(index) ?: return getDefaultConversationName(index, isImageGeneration)
-        
-        val firstUserMessage = conversation.firstOrNull { 
-            it.sender == com.example.everytalk.data.DataClass.Sender.User && 
-            it.text.isNotBlank() 
-        }
-        
-        val rawText = firstUserMessage?.text?.trim()
-        if (rawText.isNullOrBlank()) {
-            return getDefaultConversationName(index, isImageGeneration)
-        }
-        
-        // 返回清理后的完整文本（用于重命名对话框）
-        return com.example.everytalk.util.ConversationNameHelper.cleanAndTruncateText(rawText, 100)
+        return historyController.getConversationFullText(index, isImageGeneration)
     }
 
     fun renameConversation(index: Int, newName: String, isImageGeneration: Boolean = false) {
-        val trimmedNewName = newName.trim()
-        if (trimmedNewName.isBlank()) {
-            showSnackbar("新名称不能为空")
-            return
-        }
-        viewModelScope.launch {
-            val success =
-                    withContext(Dispatchers.Default) {
-                        val currentHistoricalConvos = if (isImageGeneration)
-                            stateHolder._imageGenerationHistoricalConversations.value
-                        else
-                            stateHolder._historicalConversations.value
-                        if (index < 0 || index >= currentHistoricalConvos.size) {
-                            withContext(Dispatchers.Main) { showSnackbar("无法重命名：对话索引错误") }
-                            return@withContext false
-                        }
-    
-                        val originalConversationAtIndex =
-                                currentHistoricalConvos[index].toMutableList()
-                        var titleMessageUpdatedOrAdded = false
-                        val existingTitleIndex =
-                                originalConversationAtIndex.indexOfFirst {
-                                    it.sender == Sender.System && it.isPlaceholderName
-                                }
-    
-                        if (existingTitleIndex != -1) {
-                            originalConversationAtIndex[existingTitleIndex] =
-                                    originalConversationAtIndex[existingTitleIndex].copy(
-                                            text = trimmedNewName,
-                                            timestamp = System.currentTimeMillis()
-                                    )
-                            titleMessageUpdatedOrAdded = true
-                        }
-    
-                        if (!titleMessageUpdatedOrAdded) {
-                            val titleMessage =
-                                    Message(
-                                            id = "title_${UUID.randomUUID()}",
-                                            text = trimmedNewName,
-                                            sender = Sender.System,
-                                            timestamp = System.currentTimeMillis() - 1,
-                                            contentStarted = true,
-                                            isPlaceholderName = true
-                                    )
-                            originalConversationAtIndex.add(0, titleMessage)
-                        }
-    
-                        val updatedHistoricalConversationsList =
-                                currentHistoricalConvos.toMutableList().apply {
-                                    this[index] = originalConversationAtIndex.toList()
-                                 }
-    
-                        withContext(Dispatchers.Main.immediate) {
-                            if (isImageGeneration) {
-                                stateHolder._imageGenerationHistoricalConversations.value =
-                                    updatedHistoricalConversationsList.toList()
-                            } else {
-                                stateHolder._historicalConversations.value =
-                                    updatedHistoricalConversationsList.toList()
-                            }
-                            // 关键修复：立即更新缓存以触发UI刷新
-                            val cache = if (isImageGeneration) imageConversationPreviewCache else textConversationPreviewCache
-                            cache.remove(index)
-                            cache.put(index, trimmedNewName)
-                        }
-    
-                        withContext(Dispatchers.IO) {
-                            persistenceManager.saveChatHistory(
-                                    if (isImageGeneration)
-                                        stateHolder._imageGenerationHistoricalConversations.value
-                                    else
-                                        stateHolder._historicalConversations.value,
-                                    isImageGeneration = isImageGeneration
-                            )
-                        }
-    
-                        val loadedIndex =
-                            if (isImageGeneration) stateHolder._loadedImageGenerationHistoryIndex.value
-                            else stateHolder._loadedHistoryIndex.value
-                        if (loadedIndex == index) {
-                            val reloadedConversation =
-                                    originalConversationAtIndex.toList().map { msg ->
-                                        val updatedContentStarted =
-                                                msg.text.isNotBlank() ||
-                                                        !msg.reasoning.isNullOrBlank() ||
-                                                        msg.isError
-                                        msg.copy(contentStarted = updatedContentStarted)
-                                    }
-                            messagesMutex.withLock {
-                                withContext(Dispatchers.Main.immediate) {
-                                    if (isImageGeneration) {
-                                        stateHolder.imageGenerationMessages.clear()
-                                        stateHolder.imageGenerationMessages.addAll(reloadedConversation)
-                                    } else {
-                                        stateHolder.messages.clear()
-                                        stateHolder.messages.addAll(reloadedConversation)
-                                    }
-                                    reloadedConversation.forEach { msg ->
-                                        val hasContentOrError = msg.contentStarted || msg.isError
-                                        val hasReasoning = !msg.reasoning.isNullOrBlank()
-                                        if (msg.sender == Sender.AI && hasReasoning) {
-                                            if (isImageGeneration) {
-                                                stateHolder.imageReasoningCompleteMap[msg.id] = true
-                                            } else {
-                                                stateHolder.textReasoningCompleteMap[msg.id] = true
-                                            }
-                                        }
-                                        val animationPlayedCondition =
-                                                hasContentOrError ||
-                                                        (msg.sender == Sender.AI && hasReasoning)
-                                        if (animationPlayedCondition) {
-                                            if (isImageGeneration) {
-                                                stateHolder.imageMessageAnimationStates[msg.id] = true
-                                            } else {
-                                                stateHolder.textMessageAnimationStates[msg.id] = true
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        true
-                    }
-            if (success) {
-                withContext(Dispatchers.Main) { showSnackbar("对话已重命名") }
-            }
-        }
+        historyController.renameConversation(index, newName, isImageGeneration)
+        // 通过控制器更新本地预览缓存，避免在 VM 内直接操作 LruCache
+        conversationPreviewController.setCachedTitle(index, isImageGeneration, newName)
     }
 
     private fun onAiMessageFullTextChanged(messageId: String, currentFullText: String) {
-        // Debouncer removed to ensure immediate UI updates for each chunk.
-        // This prevents missed updates and ensures the UI reflects the true message state during streaming.
-        viewModelScope.launch(Dispatchers.Main.immediate) {
-            messagesMutex.withLock {
-                val messageIndex = stateHolder.messages.indexOfFirst { it.id == messageId }
-                if (messageIndex != -1) {
-                    val messageToUpdate = stateHolder.messages[messageIndex]
-                    // We still check if the text is different to avoid unnecessary recompositions.
-                    if (messageToUpdate.text != currentFullText) {
-                        // 🎯 添加调试日志
-                        com.example.everytalk.util.MessageDebugUtil.logStreamingUpdate(
-                            messageId, 
-                            currentFullText.takeLast(50), 
-                            currentFullText.length
-                        )
-                        
-                        val updatedMessage = messageToUpdate.copy(text = currentFullText)
-                        stateHolder.messages[messageIndex] = updatedMessage
-                        // 核心修复：一旦AI消息文本发生变化，立即将会话标记为“脏”，确保它能被保存
-                        stateHolder.isTextConversationDirty.value = true
-                        
-                        // 检查消息完整性
-                        val issues = com.example.everytalk.util.MessageDebugUtil.checkMessageIntegrity(updatedMessage)
-                        if (issues.isNotEmpty()) {
-                            android.util.Log.w("AppViewModel", "⚠️ Message integrity issues for $messageId: ${issues.joinToString(", ")}")
-                        }
-
-                        if (stateHolder.shouldAutoScroll()) {
-                            triggerScrollToBottom()
-                        }
-                    }
-                }
-            }
-        }
+        messageContentController.onAiMessageFullTextChanged(messageId, currentFullText)
     }
 
     fun exportSettings(isImageGen: Boolean = false) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val settingsToExport = if (isImageGen) {
-                ExportedSettings(
-                    apiConfigs = stateHolder._imageGenApiConfigs.value
-                )
-            } else {
-                ExportedSettings(
-                    apiConfigs = stateHolder._apiConfigs.value
-                )
-            }
-            val finalJson = json.encodeToString(settingsToExport)
-            val fileName = if (isImageGen) "eztalk_image_settings" else "eztalk_settings"
-            _settingsExportRequest.send(fileName to finalJson)
-        }
+        settingsController.exportSettings(isImageGen)
     }
 
     fun importSettings(jsonContent: String, isImageGen: Boolean = false) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                // Try parsing the new format first
-                try {
-                    val parsedNewSettings = json.decodeFromString<ExportedSettings>(jsonContent)
-                    if (parsedNewSettings.apiConfigs.none {
-                                it.id.isBlank() || it.provider.isBlank()
-                            }
-                    ) {
-                        if (isImageGen) {
-                            stateHolder._imageGenApiConfigs.value = parsedNewSettings.apiConfigs
-                            val firstConfig = parsedNewSettings.apiConfigs.firstOrNull()
-                            stateHolder._selectedImageGenApiConfig.value = firstConfig
-                            persistenceManager.saveApiConfigs(parsedNewSettings.apiConfigs, isImageGen = true)
-                            persistenceManager.saveSelectedConfigIdentifier(firstConfig?.id, isImageGen = true)
-                        } else {
-                            stateHolder._apiConfigs.value = parsedNewSettings.apiConfigs
-                            _customProviders.value = parsedNewSettings.customProviders
-                            val firstConfig = parsedNewSettings.apiConfigs.firstOrNull()
-                            stateHolder._selectedApiConfig.value = firstConfig
-                            persistenceManager.saveApiConfigs(parsedNewSettings.apiConfigs)
-                            dataSource.saveCustomProviders(parsedNewSettings.customProviders)
-                            persistenceManager.saveSelectedConfigIdentifier(firstConfig?.id)
-                        }
-
-                        withContext(Dispatchers.Main) { showSnackbar("配置已成功导入") }
-                        return@launch
-                    }
-                } catch (e: Exception) {
-                    // Fall through to try the old format
-                }
-
-                // Try parsing the old format (List<ApiConfig>)
-                try {
-                    val parsedOldConfigs = json.decodeFromString<List<ApiConfig>>(jsonContent)
-                    if (parsedOldConfigs.none { it.id.isBlank() || it.provider.isBlank() }) {
-                        if (isImageGen) {
-                            stateHolder._imageGenApiConfigs.value = parsedOldConfigs
-                            val firstConfig = parsedOldConfigs.firstOrNull()
-                            stateHolder._selectedImageGenApiConfig.value = firstConfig
-                            persistenceManager.saveApiConfigs(parsedOldConfigs, isImageGen = true)
-                            persistenceManager.saveSelectedConfigIdentifier(firstConfig?.id, isImageGen = true)
-                        } else {
-                            stateHolder._apiConfigs.value = parsedOldConfigs
-                            _customProviders.value = emptySet() // Old format has no custom providers
-                            val firstConfig = parsedOldConfigs.firstOrNull()
-                            stateHolder._selectedApiConfig.value = firstConfig
-                            persistenceManager.saveApiConfigs(parsedOldConfigs)
-                            persistenceManager.saveSelectedConfigIdentifier(firstConfig?.id)
-                        }
-                        dataSource.saveCustomProviders(emptySet())
-                        val firstConfig = parsedOldConfigs.firstOrNull()
-                        persistenceManager.saveSelectedConfigIdentifier(firstConfig?.id)
-
-                        withContext(Dispatchers.Main) { showSnackbar("旧版配置已成功导入") }
-                        return@launch
-                    }
-                } catch (e: Exception) {
-                    // Fall through to the final error
-                }
-
-                // If both fail, show error
-                throw IllegalStateException("JSON content does not match any known valid format.")
-            } catch (e: Exception) {
-                Log.e("AppViewModel", "Settings import failed", e)
-                withContext(Dispatchers.Main) { showSnackbar("导入失败: 文件内容或格式无效") }
-            }
-        }
+        settingsController.importSettings(jsonContent, isImageGen)
     }
 
     // 应用暂停或停止时保存当前对话状态
     fun onAppStop() {
-        viewModelScope.launch {
-            try {
-                // 保存当前的文本和图像模式对话
-                // ✅ 根因修复：使用 forceSave=true，确保“仅推理更新”也被落盘（否则 reasoning 未持久化导致重启后小白点消失）
-                withContext(Dispatchers.IO) {
-                    historyManager.saveCurrentChatToHistoryIfNeeded(
-                        isImageGeneration = false,
-                        forceSave = true
-                    )
-                    historyManager.saveCurrentChatToHistoryIfNeeded(
-                        isImageGeneration = true,
-                        forceSave = true
-                    )
-                }
-                Log.d("AppViewModel", "App state saved on stop/pause")
-            } catch (e: Exception) {
-                Log.e("AppViewModel", "Failed to save app state on stop", e)
-            }
-        }
+        lifecycleCoordinator.saveOnStop()
     }
 
     fun fetchModels(apiUrl: String, apiKey: String) {
-        viewModelScope.launch {
-            _isFetchingModels.value = true
-            _fetchedModels.value = emptyList()
-            try {
-                val models = withContext(Dispatchers.IO) {
-                    ApiClient.getModels(apiUrl, apiKey)
-                }
-                _fetchedModels.value = models
-                withContext(Dispatchers.Main) { showSnackbar("获取到 ${models.size} 个模型") }
-            } catch (e: Exception) {
-                Log.e("AppViewModel", "Failed to fetch models", e)
-                withContext(Dispatchers.Main) { showSnackbar("获取模型失败: ${e.message}") }
-            } finally {
-                _isFetchingModels.value = false
-            }
-        }
+        modelAndConfigController.fetchModels(apiUrl, apiKey)
     }
 
     fun clearFetchedModels() {
-        _fetchedModels.value = emptyList()
-        _isFetchingModels.value = false
+        modelAndConfigController.clearFetchedModels()
     }
 
     fun createMultipleConfigs(provider: String, address: String, key: String, modelNames: List<String>) {
-        if (modelNames.isEmpty()) {
-            showSnackbar("请至少选择一个模型")
-            return
-        }
-        
-        viewModelScope.launch {
-            val successfulConfigs = mutableListOf<String>()
-            val failedConfigs = mutableListOf<String>()
-            
-            modelNames.forEach { modelName ->
-                try {
-                    val config = ApiConfig(
-                        address = address.trim(),
-                        key = key.trim(),
-                        model = modelName,
-                        provider = provider,
-                        name = modelName, // 使用模型名作为配置名
-                        id = java.util.UUID.randomUUID().toString(),
-                        isValid = true,
-                        modalityType = com.example.everytalk.data.DataClass.ModalityType.TEXT
-                    )
-                    configManager.addConfig(config)
-                    successfulConfigs.add(modelName)
-                } catch (e: Exception) {
-                    Log.e("AppViewModel", "Failed to create config for model: $modelName", e)
-                    failedConfigs.add(modelName)
-                }
-            }
-            
-            // 显示创建结果
-            if (successfulConfigs.isNotEmpty()) {
-                showSnackbar("成功创建 ${successfulConfigs.size} 个配置")
-            }
-            if (failedConfigs.isNotEmpty()) {
-                showSnackbar("${failedConfigs.size} 个配置创建失败")
-            }
-        }
+        modelAndConfigController.createMultipleConfigs(provider, address, key, modelNames)
     }
 
     // 新增：用于通知UI显示添加模型对话框的 Flow
@@ -2270,46 +1101,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     )
 
     fun createConfigAndFetchModels(provider: String, address: String, key: String, channel: String, isImageGen: Boolean = false) {
-        viewModelScope.launch {
-            // 不再创建临时配置，直接尝试获取模型
-            try {
-                val models = withContext(Dispatchers.IO) {
-                    ApiClient.getModels(address, key)
-                }
-                
-                // 添加获取到的新配置
-                if (models.isNotEmpty()) {
-                    val newConfigs = models.map { modelName ->
-                        ApiConfig(
-                            address = address.trim(),
-                            key = key.trim(),
-                            model = modelName,
-                            provider = provider,
-                            name = modelName,
-                            id = UUID.randomUUID().toString(),
-                            isValid = true,
-                            modalityType = if (isImageGen) com.example.everytalk.data.DataClass.ModalityType.IMAGE else com.example.everytalk.data.DataClass.ModalityType.TEXT,
-                            channel = channel
-                        )
-                    }
-                    newConfigs.forEach { config ->
-                        configManager.addConfig(config, isImageGen)
-                    }
-                    showSnackbar("成功添加 ${models.size} 个模型")
-                } else {
-                    // 🔧 修复：如果没有获取到模型，直接触发手动输入对话框，不显示Snackbar
-                    _showManualModelInputRequest.emit(
-                        ManualModelInputRequest(provider, address, key, channel, isImageGen)
-                    )
-                }
-            } catch (e: Exception) {
-                Log.e("AppViewModel", "获取模型失败", e)
-                // 🔧 修复：获取失败时，直接触发手动输入对话框，不显示Snackbar
-                _showManualModelInputRequest.emit(
-                    ManualModelInputRequest(provider, address, key, channel, isImageGen)
-                )
-            }
-        }
+        modelAndConfigController.createConfigAndFetchModels(provider, address, key, channel, isImageGen)
     }
     
     fun createConfigAndFetchModels(provider: String, address: String, key: String, channel: String) {
@@ -2317,19 +1109,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     }
 
     fun addModelToConfigGroup(apiKey: String, provider: String, address: String, modelName: String, channel: String, isImageGen: Boolean = false) {
-        viewModelScope.launch {
-            val newConfig = ApiConfig(
-                id = UUID.randomUUID().toString(),
-                name = modelName,
-                provider = provider,
-                address = address,
-                key = apiKey,
-                model = modelName,
-                modalityType = if (isImageGen) com.example.everytalk.data.DataClass.ModalityType.IMAGE else com.example.everytalk.data.DataClass.ModalityType.TEXT,
-                channel = channel
-            )
-            configManager.addConfig(newConfig, isImageGen)
-        }
+        modelAndConfigController.addModelToConfigGroup(apiKey, provider, address, modelName, channel, isImageGen)
     }
     
     fun addModelToConfigGroup(apiKey: String, provider: String, address: String, modelName: String) {
@@ -2337,71 +1117,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     }
 
     fun refreshModelsForConfig(config: ApiConfig) {
-        val refreshId = "${config.key}-${config.modalityType}"
-        viewModelScope.launch {
-            _isRefreshingModels.update { it + refreshId }
-            try {
-                val models = withContext(Dispatchers.IO) {
-                    ApiClient.getModels(config.address, config.key)
-                }
-
-                // 1. 删除与此API密钥和模态类型匹配的所有现有配置
-                val currentConfigs = stateHolder._apiConfigs.value
-                val configsToKeep = currentConfigs.filterNot {
-                                    it.key == config.key &&
-                                    it.provider == config.provider &&
-                                    it.address == config.address &&
-                                    it.channel == config.channel
-                                }
-
-                // 2. 根据获取的模型创建新配置
-                val newConfigs = models.map { modelName ->
-                    ApiConfig(
-                        address = config.address,
-                        key = config.key,
-                        model = modelName,
-                        provider = config.provider,
-                        name = modelName,
-                        id = UUID.randomUUID().toString(),
-                        isValid = true,
-                        modalityType = config.modalityType,
-                        channel = config.channel
-                    )
-                }
-
-                val finalConfigs = configsToKeep + newConfigs
-
-                // 3. 更新配置状态并保存
-                stateHolder._apiConfigs.value = finalConfigs
-                persistenceManager.saveApiConfigs(finalConfigs)
-
-                // 4. 更新选中的配置（如果需要）
-                val currentSelectedConfig = stateHolder._selectedApiConfig.value
-                                if (currentSelectedConfig != null &&
-                                    currentSelectedConfig.key == config.key &&
-                                    currentSelectedConfig.provider == config.provider &&
-                                    currentSelectedConfig.address == config.address &&
-                                    currentSelectedConfig.channel == config.channel &&
-                                    !finalConfigs.any { it.id == currentSelectedConfig.id }
-                                ) {
-                                    val newSelection = finalConfigs.firstOrNull {
-                                        it.key == config.key &&
-                                        it.provider == config.provider &&
-                                        it.address == config.address &&
-                                        it.channel == config.channel
-                                    }
-                                    stateHolder._selectedApiConfig.value = newSelection
-                                    persistenceManager.saveSelectedConfigIdentifier(newSelection?.id)
-                                }
-
-                showSnackbar("刷新成功，获取到 ${models.size} 个模型")
-            } catch (e: Exception) {
-                Log.e("AppViewModel", "刷新模型失败", e)
-                showSnackbar("刷新模型失败: ${e.message}")
-            } finally {
-                _isRefreshingModels.update { it - refreshId }
-            }
-        }
+        modelAndConfigController.refreshModelsForConfig(config)
     }
 
     fun getMessageById(id: String): Message? {
@@ -2409,28 +1125,19 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     }
 
     fun saveScrollState(conversationId: String, scrollState: ConversationScrollState) {
-        if (scrollState.firstVisibleItemIndex >= 0) {
-            stateHolder.conversationScrollStates[conversationId] = scrollState
-        }
+        scrollStateController.saveScrollState(conversationId, scrollState)
     }
 
     fun appendReasoningToMessage(messageId: String, text: String, isImageGeneration: Boolean = false) {
-        viewModelScope.launch(Dispatchers.Main.immediate) {
-            stateHolder.appendReasoningToMessage(messageId, text, isImageGeneration)
-        }
+        messageContentController.appendReasoningToMessage(messageId, text, isImageGeneration)
     }
 
     fun appendContentToMessage(messageId: String, text: String, isImageGeneration: Boolean = false) {
-        viewModelScope.launch(Dispatchers.Main.immediate) {
-            stateHolder.appendContentToMessage(messageId, text, isImageGeneration)
-            val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
-            onAiMessageFullTextChanged(messageId, messageList.find { it.id == messageId }?.text ?: "")
-        }
+        messageContentController.appendContentToMessage(messageId, text, isImageGeneration)
     }
 
     fun getScrollState(conversationId: String): ConversationScrollState? {
-        // 删除有问题的代码
-        return null  // 临时返回，避免编译错误
+        return scrollStateController.getScrollState(conversationId)
     }
     
     /**
@@ -2452,61 +1159,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     /**
      * 🎯 处理加载的消息列表，确保完整性
      */
-    private fun processLoadedMessages(messages: List<Message>): List<Message> {
-        return messages.map { message ->
-            // 确保消息的完整性处理
-            if (message.sender == Sender.AI && message.text.isNotBlank()) {
-                message.copy(contentStarted = true)
-            } else {
-                message
-            }
-        }
-    }
-    
-    /**
-     * 🎯 修复历史消息的 parts 属性 - 解决表格渲染问题
-     * 主要解决：切换历史记录时，表格从正常显示变成原始 AI 输出样式的问题
-     */
-    private fun repairHistoryMessageParts(messages: List<Message>): List<Message> {
-        return messages.map { message ->
-            if (message.sender == Sender.AI && 
-                message.text.isNotBlank() && 
-                (message.parts.isEmpty() || !hasValidParts(message.parts))) {
-                
-                Log.d("AppViewModel", "🔧 Repairing message parts for messageId=${message.id}")
-                
-                try {
-                    // 使用 MessageProcessor 重新解析消息
-                    val sessionId = stateHolder._currentConversationId.value
-                    val tempProcessor = com.example.everytalk.util.messageprocessor.MessageProcessor().apply {
-                        initialize(sessionId, message.id)
-                    }
-                    val repairedMessage = tempProcessor.finalizeMessageProcessing(message)
-                    
-                    Log.d("AppViewModel", "🚀 Successfully repaired message parts: ${repairedMessage.parts.size} parts")
-                    repairedMessage
-                } catch (e: Exception) {
-                    Log.w("AppViewModel", "Failed to repair message parts for ${message.id}: ${e.message}")
-                    message
-                }
-            } else {
-                message
-            }
-        }
-    }
-    
-    /**
-     * 检查消息是否具有有效的 parts
-     */
-    private fun hasValidParts(parts: List<com.example.everytalk.ui.components.MarkdownPart>): Boolean {
-        return parts.any { part ->
-            when (part) {
-                is com.example.everytalk.ui.components.MarkdownPart.Text -> part.content.isNotBlank()
-                is com.example.everytalk.ui.components.MarkdownPart.CodeBlock -> part.content.isNotBlank()
-                else -> true
-            }
-        }
-    }
+    // 历史消息的完整性修复已移至 HistoryController
     
     /**
      * 初始化缓存预热
@@ -2547,25 +1200,15 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
      * 清理所有缓存
      */
     fun clearAllCaches() {
-        viewModelScope.launch {
-            cacheManager.clearAllCaches()
-            com.example.everytalk.ui.performance.OptimizedTextProcessor.clearCache()
-            
-            // 清理原有的预览缓存
-            textConversationPreviewCache.evictAll()
-            imageConversationPreviewCache.evictAll()
-            
-            Log.d("AppViewModel", "所有缓存已清理")
-        }
+        lifecycleCoordinator.clearAllCaches()
     }
     
     override fun onCleared() {
         super.onCleared()
-        // 清理缓存管理器
-        cacheManager.cleanup()
-        // 🔧 修复：清理流式消息状态管理器，防止协程泄漏
-        streamingMessageStateManager.cleanup()
-        Log.d("AppViewModel", "ViewModel cleared, cache manager and streaming state manager cleaned up")
+        // 清理消息内容控制器（若未来扩展内部资源）
+        messageContentController.cleanup()
+        // 统一的生命周期清理
+        lifecycleCoordinator.onCleared()
     }
     
     /**
@@ -2573,12 +1216,6 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
      * 在MainActivity的onTrimMemory中调用
      */
     fun onLowMemory() {
-        Log.w("AppViewModel", "Low memory detected, clearing caches")
-        
-        // 清理缓存
-        textConversationPreviewCache.evictAll()
-        imageConversationPreviewCache.evictAll()
-        
-        Log.i("AppViewModel", "Low memory caches cleared")
+        lifecycleCoordinator.onLowMemory()
     }
 }

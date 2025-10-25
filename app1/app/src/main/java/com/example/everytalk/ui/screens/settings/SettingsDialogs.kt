@@ -354,7 +354,8 @@ internal fun AddNewFullConfigDialog(
     apiKey: String,
     onApiKeyChange: (String) -> Unit,
     onDismissRequest: () -> Unit,
-    onConfirm: (String, String, String, String, String?, Int?, Float?) -> Unit
+    onConfirm: (String, String, String, String, String?, Int?, Float?) -> Unit,
+    isImageMode: Boolean
 ) {
     var providerMenuExpanded by remember { mutableStateOf(false) }
     var channelMenuExpanded by remember { mutableStateOf(false) }
@@ -420,17 +421,22 @@ internal fun AddNewFullConfigDialog(
         },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                // 仅图像模式下限制平台列表为：默认、即梦、Nano Banana
+                val imageModeProviders = listOf("默认", "即梦", "Nano Banana")
+                val providersToShow = if (isImageMode) imageModeProviders else allProviders
+                val isDefaultSel = isImageMode && provider.trim().lowercase() in listOf("默认","default")
+
                 ExposedDropdownMenuBox(
-                    expanded = providerMenuExpanded && allProviders.isNotEmpty(),
+                    expanded = providerMenuExpanded && providersToShow.isNotEmpty(),
                     onExpandedChange = {
-                        if (allProviders.isNotEmpty()) {
+                        if (providersToShow.isNotEmpty()) {
                             providerMenuExpanded = !providerMenuExpanded
                         }
                     },
                     modifier = Modifier.padding(bottom = 12.dp)
                 ) {
                     OutlinedTextField(
-                        value = provider,
+                        value = provider.ifBlank { if (isImageMode) "默认" else provider },
                         onValueChange = {},
                         readOnly = true,
                         label = { Text("模型平台") },
@@ -441,20 +447,23 @@ internal fun AddNewFullConfigDialog(
                                 textFieldAnchorBounds = coordinates.boundsInWindow()
                             },
                         trailingIcon = {
-                            IconButton(onClick = {
-                                if (providerMenuExpanded && allProviders.isNotEmpty()) {
-                                    providerMenuExpanded = false
+                            // 图像模式下不允许新增/自定义平台（仅显示三项），隐藏右侧加号
+                            if (!isImageMode) {
+                                IconButton(onClick = {
+                                    if (providerMenuExpanded && allProviders.isNotEmpty()) {
+                                        providerMenuExpanded = false
+                                    }
+                                    onShowAddCustomProviderDialog()
+                                }) {
+                                    Icon(Icons.Outlined.Add, "添加自定义平台")
                                 }
-                                onShowAddCustomProviderDialog()
-                            }) {
-                                Icon(Icons.Outlined.Add, "添加自定义平台")
                             }
                         },
                         shape = DialogShape,
                         colors = DialogTextFieldColors
                     )
 
-                    if (allProviders.isNotEmpty()) {
+                    if (providersToShow.isNotEmpty()) {
                         CustomStyledDropdownMenu(
                             transitionState = providerMenuTransitionState,
                             onDismissRequest = {
@@ -462,7 +471,7 @@ internal fun AddNewFullConfigDialog(
                             },
                             anchorBounds = textFieldAnchorBounds
                         ) {
-                            allProviders.forEach { providerItem ->
+                            providersToShow.forEach { providerItem ->
                                 DropdownMenuItem(
                                     text = {
                                         Row(
@@ -474,6 +483,9 @@ internal fun AddNewFullConfigDialog(
                                                 color = MaterialTheme.colorScheme.onSurface,
                                                 modifier = Modifier.weight(1f)
                                             )
+                                            // 图像模式下固定三项且不可删除，隐藏右侧删除按钮
+                                            val lower = providerItem.lowercase().trim()
+                                            val imageModeLocked = isImageMode && listOf("默认","即梦","nano banana").contains(lower)
                                             val nonDeletableProviders = listOf(
                                                 "openai compatible",
                                                 "google",
@@ -483,7 +495,8 @@ internal fun AddNewFullConfigDialog(
                                                 "深度求索",
                                                 "openrouter"
                                             )
-                                            if (!nonDeletableProviders.contains(providerItem.lowercase().trim())) {
+                                            val canDelete = !imageModeLocked && !nonDeletableProviders.contains(lower)
+                                            if (canDelete) {
                                                 IconButton(
                                                     onClick = {
                                                         onDeleteProvider(providerItem)
@@ -511,134 +524,122 @@ internal fun AddNewFullConfigDialog(
                         }
                     }
                 }
-                ExposedDropdownMenuBox(
-                    expanded = channelMenuExpanded,
-                    onExpandedChange = { channelMenuExpanded = !channelMenuExpanded },
-                    modifier = Modifier.padding(bottom = 12.dp)
-                ) {
-                    OutlinedTextField(
-                        value = selectedChannel,
-                        onValueChange = {},
-                        readOnly = true,
-                        label = { Text("渠道") },
-                        modifier = Modifier
-                            .menuAnchor()
-                            .fillMaxWidth()
-                            .onGloballyPositioned { coordinates ->
-                                channelTextFieldAnchorBounds = coordinates.boundsInWindow()
+
+                // 当选择“默认”时隐藏渠道/地址/密钥等输入
+                if (!isDefaultSel) {
+                    ExposedDropdownMenuBox(
+                        expanded = channelMenuExpanded,
+                        onExpandedChange = { channelMenuExpanded = !channelMenuExpanded },
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = selectedChannel,
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("渠道") },
+                            modifier = Modifier
+                                .menuAnchor()
+                                .fillMaxWidth()
+                                .onGloballyPositioned { coordinates ->
+                                    channelTextFieldAnchorBounds = coordinates.boundsInWindow()
+                                },
+                            trailingIcon = {
+                                ExposedDropdownMenuDefaults.TrailingIcon(expanded = channelMenuExpanded)
                             },
-                        trailingIcon = {
-                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = channelMenuExpanded)
-                        },
+                            shape = DialogShape,
+                            colors = DialogTextFieldColors
+                        )
+
+                        CustomStyledDropdownMenu(
+                            transitionState = channelMenuTransitionState,
+                            onDismissRequest = {
+                                channelMenuExpanded = false
+                            },
+                            anchorBounds = channelTextFieldAnchorBounds
+                        ) {
+                            channels.forEach { channel ->
+                                DropdownMenuItem(
+                                    text = { Text(channel) },
+                                    onClick = {
+                                        selectedChannel = channel
+                                        channelMenuExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = apiAddress,
+                        onValueChange = onApiAddressChange,
+                        label = { Text("API接口地址") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Next),
                         shape = DialogShape,
                         colors = DialogTextFieldColors
                     )
-
-                    CustomStyledDropdownMenu(
-                        transitionState = channelMenuTransitionState,
-                        onDismissRequest = {
-                            channelMenuExpanded = false
-                        },
-                        anchorBounds = channelTextFieldAnchorBounds
-                    ) {
-                        channels.forEach { channel ->
-                            DropdownMenuItem(
-                                text = { Text(channel) },
-                                onClick = {
-                                    selectedChannel = channel
-                                    channelMenuExpanded = false
-                                }
+                    // 实时预览 + 固定使用说明
+                    if (selectedChannel != "Gemini") {
+                        val fullUrlPreview = remember(apiAddress, provider, selectedChannel) {
+                            buildFullEndpointPreview(apiAddress, provider, selectedChannel)
+                        }
+                        if (fullUrlPreview.isNotEmpty()) {
+                            Text(
+                                text = "预览: $fullUrlPreview",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(start = 12.dp, bottom = 4.dp)
+                            )
+                        }
+                        if (selectedChannel == "OpenAI兼容") {
+                            Text(
+                                text = "用法: 末尾#：直连 ； 末尾/：不加v1 ； 仅域名自动加v1",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 12.dp, bottom = 12.dp)
                             )
                         }
                     }
+
+                    OutlinedTextField(
+                        value = apiKey,
+                        onValueChange = onApiKeyChange,
+                        label = { Text("API密钥") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp)
+                            .focusRequester(focusRequesterApiKey),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = {
+                            val isDefaultProvider = provider.trim().lowercase() in listOf("默认", "default")
+                            val canSubmitInImageDefault = isImageMode && isDefaultProvider && provider.isNotBlank()
+                            val canSubmitNormal = !isDefaultProvider && apiKey.isNotBlank() && provider.isNotBlank() && apiAddress.isNotBlank()
+                            if (canSubmitInImageDefault || canSubmitNormal) {
+                               onConfirm(provider, apiAddress, apiKey, selectedChannel, imageSize, numInferenceSteps.toIntOrNull(), guidanceScale.toFloatOrNull())
+                            }
+                        }),
+                        shape = DialogShape,
+                        colors = DialogTextFieldColors
+                    )
                 }
-                OutlinedTextField(
-                    value = apiAddress,
-                    onValueChange = onApiAddressChange,
-                    label = { Text("API接口地址") },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 12.dp),
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Next),
-                    shape = DialogShape,
-                    colors = DialogTextFieldColors
-                )
-                // 实时预览 + 固定使用说明
-                if (selectedChannel != "Gemini") {
-                    val fullUrlPreview = remember(apiAddress, provider, selectedChannel) {
-                        buildFullEndpointPreview(apiAddress, provider, selectedChannel)
-                    }
-                    if (fullUrlPreview.isNotEmpty()) {
-                        Text(
-                            text = "预览: $fullUrlPreview",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(start = 12.dp, bottom = 4.dp)
-                        )
-                    }
-                    if (selectedChannel == "OpenAI兼容") {
-                        Text(
-                            text = "用法: 末尾#：直连 ； 末尾/：不加v1 ； 仅域名自动加v1",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(start = 12.dp, bottom = 12.dp)
-                        )
-                    }
-                }
-                OutlinedTextField(
-                    value = apiKey,
-                    onValueChange = onApiKeyChange,
-                    label = { Text("API密钥") },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 12.dp)
-                        .focusRequester(focusRequesterApiKey),
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(onDone = {
-                        if (apiKey.isNotBlank() && provider.isNotBlank() && apiAddress.isNotBlank()) {
-                           onConfirm(provider, apiAddress, apiKey, selectedChannel, imageSize, numInferenceSteps.toIntOrNull(), guidanceScale.toFloatOrNull())
-                        }
-                    }),
-                    shape = DialogShape,
-                    colors = DialogTextFieldColors
-                )
-               if (selectedChannel == "Image") {
-                   OutlinedTextField(
-                       value = imageSize,
-                       onValueChange = { imageSize = it },
-                       label = { Text("Image Size") },
-                       modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                       singleLine = true,
-                       shape = DialogShape,
-                       colors = DialogTextFieldColors
-                   )
-                   OutlinedTextField(
-                       value = numInferenceSteps,
-                       onValueChange = { numInferenceSteps = it },
-                       label = { Text("Num Inference Steps") },
-                       modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                       singleLine = true,
-                       shape = DialogShape,
-                       colors = DialogTextFieldColors
-                   )
-                   OutlinedTextField(
-                       value = guidanceScale,
-                       onValueChange = { guidanceScale = it },
-                       label = { Text("Guidance Scale") },
-                       modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                       singleLine = true,
-                       shape = DialogShape,
-                       colors = DialogTextFieldColors
-                   )
-               }
             }
         },
         confirmButton = {
+            val isDefaultSel = isImageMode && provider.trim().lowercase() in listOf("默认","default")
             FilledTonalButton(
                 onClick = { onConfirm(provider, apiAddress, apiKey, selectedChannel, imageSize, numInferenceSteps.toIntOrNull(), guidanceScale.toFloatOrNull()) },
-                enabled = apiKey.isNotBlank() && provider.isNotBlank() && apiAddress.isNotBlank(),
+                enabled = run {
+                    val p = provider.trim().lowercase()
+                    val isDefaultProvider = p in listOf("默认", "default")
+                    // 图像模式下“默认”无需任何参数，直接可确定；其余仍按原必填
+                    val allowInImageDefault = isImageMode && isDefaultProvider
+                    val allowNormal = !isDefaultProvider && apiKey.isNotBlank() && provider.isNotBlank() && apiAddress.isNotBlank()
+                    allowInImageDefault || allowNormal
+                },
                 shape = RoundedCornerShape(20.dp),
                 modifier = Modifier.height(52.dp).padding(horizontal = 4.dp),
                 colors = ButtonDefaults.filledTonalButtonColors(
@@ -653,7 +654,7 @@ internal fun AddNewFullConfigDialog(
                     contentDescription = null,
                     modifier = Modifier.size(20.dp).padding(end = 4.dp)
                 )
-                Text("确定添加", fontWeight = FontWeight.Bold)
+                Text(if (isDefaultSel) "确定" else "确定添加", fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {

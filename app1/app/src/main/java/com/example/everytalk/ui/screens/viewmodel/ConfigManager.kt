@@ -225,4 +225,143 @@ class ConfigManager(
             stateHolder._showSettingsDialog.value = false
         }
     }
+
+    /**
+     * 成组删除：按 key/provider/address/channel 删除同组配置
+     */
+    fun deleteConfigGroup(representativeConfig: ApiConfig, isImageGen: Boolean = false) {
+        viewModelScope.launch {
+            val originalConfigs = if (isImageGen) stateHolder._imageGenApiConfigs.value else stateHolder._apiConfigs.value
+            val configsToKeep = originalConfigs.filterNot {
+                it.key == representativeConfig.key &&
+                it.provider == representativeConfig.provider &&
+                it.address == representativeConfig.address &&
+                it.channel == representativeConfig.channel
+            }
+
+            if (configsToKeep.size != originalConfigs.size) {
+                if (isImageGen) {
+                    stateHolder._imageGenApiConfigs.value = configsToKeep
+                    persistenceManager.saveApiConfigs(configsToKeep, isImageGen = true)
+                    val sel = stateHolder._selectedImageGenApiConfig.value
+                    if (sel != null &&
+                        sel.key == representativeConfig.key &&
+                        sel.provider == representativeConfig.provider &&
+                        sel.address == representativeConfig.address &&
+                        sel.channel == representativeConfig.channel) {
+                        val newSel = configsToKeep.firstOrNull()
+                        stateHolder._selectedImageGenApiConfig.value = newSel
+                        persistenceManager.saveSelectedConfigIdentifier(newSel?.id, isImageGen = true)
+                    }
+                } else {
+                    stateHolder._apiConfigs.value = configsToKeep
+                    persistenceManager.saveApiConfigs(configsToKeep)
+                    val sel = stateHolder._selectedApiConfig.value
+                    if (sel != null &&
+                        sel.key == representativeConfig.key &&
+                        sel.provider == representativeConfig.provider &&
+                        sel.address == representativeConfig.address &&
+                        sel.channel == representativeConfig.channel) {
+                        apiHandler.cancelCurrentApiJob("Selected config group removed")
+                        val newSel = configsToKeep.firstOrNull()
+                        stateHolder._selectedApiConfig.value = newSel
+                        persistenceManager.saveSelectedConfigIdentifier(newSel?.id)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 成组更新：按 key/provider/address/channel 匹配后，批量更新 address/key/channel
+     * isImageGen 若为 null，则根据 representativeConfig.modalityType 自动判断
+     */
+    fun updateConfigGroup(
+        representativeConfig: ApiConfig,
+        newAddress: String,
+        newKey: String,
+        newChannel: String,
+        isImageGen: Boolean? = null
+    ) {
+        viewModelScope.launch {
+            val trimmedAddress = newAddress.trim()
+            val trimmedKey = newKey.trim()
+            val trimmedChannel = newChannel.trim()
+
+            val useImageGen = isImageGen
+                ?: (representativeConfig.modalityType == com.example.everytalk.data.DataClass.ModalityType.IMAGE)
+
+            if (useImageGen) {
+                val currentConfigs = stateHolder._imageGenApiConfigs.value
+                val newConfigs = currentConfigs.map { cfg ->
+                    if (cfg.key == representativeConfig.key &&
+                        cfg.provider == representativeConfig.provider &&
+                        cfg.address == representativeConfig.address &&
+                        cfg.channel == representativeConfig.channel) {
+                        cfg.copy(address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
+                    } else cfg
+                }
+                if (newConfigs != currentConfigs) {
+                    stateHolder._imageGenApiConfigs.value = newConfigs
+                    persistenceManager.saveApiConfigs(newConfigs, isImageGen = true)
+
+                    val selected = stateHolder._selectedImageGenApiConfig.value
+                    if (selected != null &&
+                        selected.key == representativeConfig.key &&
+                        selected.provider == representativeConfig.provider &&
+                        selected.address == representativeConfig.address &&
+                        selected.channel == representativeConfig.channel) {
+                        stateHolder._selectedImageGenApiConfig.value =
+                            selected.copy(address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
+                    }
+                }
+            } else {
+                val currentConfigs = stateHolder._apiConfigs.value
+                val newConfigs = currentConfigs.map { cfg ->
+                    if (cfg.key == representativeConfig.key &&
+                        cfg.provider == representativeConfig.provider &&
+                        cfg.address == representativeConfig.address &&
+                        cfg.channel == representativeConfig.channel) {
+                        cfg.copy(address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
+                    } else cfg
+                }
+                if (newConfigs != currentConfigs) {
+                    stateHolder._apiConfigs.value = newConfigs
+                    persistenceManager.saveApiConfigs(newConfigs)
+
+                    val selected = stateHolder._selectedApiConfig.value
+                    if (selected != null &&
+                        selected.key == representativeConfig.key &&
+                        selected.provider == representativeConfig.provider &&
+                        selected.address == representativeConfig.address &&
+                        selected.channel == representativeConfig.channel) {
+                        stateHolder._selectedApiConfig.value =
+                            selected.copy(address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 清空当前选中的配置
+     */
+    fun clearSelectedConfig(isImageGen: Boolean = false) {
+        if (isImageGen) {
+            stateHolder._selectedImageGenApiConfig.value = null
+            viewModelScope.launch { persistenceManager.saveSelectedConfigIdentifier(null, isImageGen = true) }
+        } else {
+            stateHolder._selectedApiConfig.value = null
+            viewModelScope.launch { persistenceManager.saveSelectedConfigIdentifier(null) }
+        }
+    }
+
+    /**
+     * 将当前内存中的文本配置落库
+     */
+    fun saveApiConfigs() {
+        viewModelScope.launch {
+            persistenceManager.saveApiConfigs(stateHolder._apiConfigs.value)
+        }
+    }
 }

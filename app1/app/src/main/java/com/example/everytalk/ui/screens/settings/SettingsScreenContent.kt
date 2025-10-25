@@ -228,7 +228,18 @@ private fun ApiKeyItemGroup(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable(onClick = onEditConfigClick)
+                    .clickable(
+                        onClick = {
+                            // 禁止“默认”图像配置打开编辑弹窗（provider=默认 且 模态=IMAGE）
+                            val firstCfg = configsInGroup.firstOrNull()
+                            val isDefaultImageGroup = firstCfg != null
+                                    && firstCfg.modalityType == ModalityType.IMAGE
+                                    && firstCfg.provider.trim().lowercase() in listOf("默认","default")
+                            if (!isDefaultImageGroup) {
+                                onEditConfigClick()
+                            }
+                        }
+                    )
                     .padding(vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {

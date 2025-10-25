@@ -484,10 +484,24 @@ private data class AttachmentProcessingResult(
             viewModelScope.launch { showSnackbar("请输入消息内容或选择项目") }
             return
         }
+        
+        // 🔥 关键调试：检查配置状态
+        Log.d("MessageSender", "=== SEND MESSAGE DEBUG ===")
+        Log.d("MessageSender", "isImageGeneration: $isImageGeneration")
+        Log.d("MessageSender", "selectedImageGenApiConfig: ${stateHolder._selectedImageGenApiConfig.value}")
+        Log.d("MessageSender", "selectedApiConfig: ${stateHolder._selectedApiConfig.value}")
+        Log.d("MessageSender", "imageGenerationMessages.size: ${stateHolder.imageGenerationMessages.size}")
+        Log.d("MessageSender", "messages.size: ${stateHolder.messages.size}")
+        
         val currentConfig = (if (isImageGeneration) stateHolder._selectedImageGenApiConfig.value else stateHolder._selectedApiConfig.value) ?: run {
+            Log.e("MessageSender", "❌ No API config selected! isImageGeneration=$isImageGeneration")
             viewModelScope.launch { showSnackbar(if (isImageGeneration) "请先选择 图像生成 的API配置" else "请先选择 API 配置") }
             return
         }
+        
+        Log.d("MessageSender", "✅ Using config: ${currentConfig.model} (${currentConfig.provider})")
+        Log.d("MessageSender", "=== END SEND MESSAGE DEBUG ===")
+
         
         // 详细调试配置信息
         if (isImageGeneration) {
@@ -505,6 +519,7 @@ private data class AttachmentProcessingResult(
             val modelIsGeminiType = currentConfig.model.lowercase().startsWith("gemini")
             val shouldUsePartsApiMessage = modelIsGeminiType
             val providerForRequestBackend = currentConfig.provider
+            val isDefaultProvider = currentConfig.provider.trim().lowercase() in listOf("默认", "default")
 
             // 自动注入“上一轮AI出图”作为参考，以支持“在上一张基础上修改”等编辑语义
             if (isImageGeneration && allAttachments.isEmpty()) {
@@ -707,12 +722,16 @@ private data class AttachmentProcessingResult(
                         // 调试信息：检查发送的配置
                         Log.d("MessageSender", "Image generation config - model: ${currentConfig.model}, channel: ${currentConfig.channel}, provider: ${currentConfig.provider}")
                         
-                        // 计算上游完整图片生成端点
-                        val upstreamBase = currentConfig.address.trim().trimEnd('/')
-                        val upstreamApiForImageGen = if (upstreamBase.endsWith("/v1/images/generations")) {
-                            upstreamBase
+                        // 计算上游完整图片生成端点（默认平台交由后端注入，避免相对路径）
+                        val upstreamApiForImageGen = if (isDefaultProvider) {
+                            ""
                         } else {
-                            "$upstreamBase/v1/images/generations"
+                            val upstreamBase = currentConfig.address.trim().trimEnd('/')
+                            if (upstreamBase.endsWith("/v1/images/generations")) {
+                                upstreamBase
+                            } else {
+                                "$upstreamBase/v1/images/generations"
+                            }
                         }
 
                         // 构建“无状态历史摘要”，保证每个会话自带记忆（即使后端会话未命中）
@@ -746,9 +765,11 @@ private data class AttachmentProcessingResult(
                             batchSize = 1,
                             numInferenceSteps = currentConfig.numInferenceSteps,
                             guidanceScale = currentConfig.guidanceScale,
-                            apiAddress = upstreamApiForImageGen,
-                            apiKey = currentConfig.key,
-                            provider = currentConfig.channel,
+                            // 默认平台：apiAddress/apiKey 留空，由后端从 .env 注入
+                            apiAddress = if (isDefaultProvider) "" else upstreamApiForImageGen,
+                            apiKey = if (isDefaultProvider) "" else currentConfig.key,
+                            // 渠道控制路由：默认平台传“默认”，非默认按“渠道”字段（OpenAI兼容/Gemini）
+                            provider = if (isDefaultProvider) currentConfig.provider else currentConfig.channel,
                             responseModalities = listOf("Image"),
                             aspectRatio = stateHolder._selectedImageRatio.value.let { r ->
                                 if (r.isAuto) null else r.displayName
