@@ -81,55 +81,52 @@ class SimpleModeManager(
             stateHolder.abandonEmptyPendingConversation()
         }
         
-        // 🔥 关键修复：保存当前图像会话的历史索引，避免重复创建会话
+        // 🔥 关键修复1：在保存前记录图像会话的状态
         val imageHistoryIndexBeforeSave = stateHolder._loadedImageGenerationHistoryIndex.value
-        Log.d(TAG, "Image history index before mode switch: $imageHistoryIndexBeforeSave")
+        val imageMessagesBeforeSave = stateHolder.imageGenerationMessages.toList()
+        val hasImageContent = imageMessagesBeforeSave.isNotEmpty()
         
-        // 1. 同步保存两种模式的当前状态 - 确保状态切换的原子性
-        // 1. 保存当前会话，这是关键的第一步
-        withContext(Dispatchers.IO) {
+        Log.d(TAG, "Image state before save: index=$imageHistoryIndexBeforeSave, messages=${imageMessagesBeforeSave.size}, hasContent=$hasImageContent")
+        
+        // 🔥 关键修复2：同步等待保存完成，并获取保存后的实际索引
+        val savedImageIndex = withContext(Dispatchers.IO) {
             if (!skipSavingTextChat) {
                 historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = false, forceSave = true)
             }
-            historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true, forceSave = true)
+            
+            // 保存图像会话，并返回保存后的索引
+            if (hasImageContent) {
+                historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true, forceSave = true)
+                // 保存后重新读取索引（可能从null变为0）
+                stateHolder._loadedImageGenerationHistoryIndex.value
+            } else {
+                imageHistoryIndexBeforeSave
+            }
         }
         
-        // 2. 然后再清理状态
+        Log.d(TAG, "Image index after save: $savedImageIndex")
+        
+        // 🔥 关键修复3：清理状态
         clearImageApiState()
         
-        // 🔥 添加调试日志，诊断会话切换问题
-        Log.d(TAG, "=== MODE SWITCH DEBUG (TO TEXT) ===")
-        Log.d(TAG, "Current image messages before clear: ${stateHolder.imageGenerationMessages.map { "ID:${it.id}, Text:'${it.text.take(20)}...', ContentStarted:${it.contentStarted}" }}")
-        Log.d(TAG, "Current loaded image history index before clear: ${stateHolder._loadedImageGenerationHistoryIndex.value}")
-        Log.d(TAG, "Current image conversation ID before clear: ${stateHolder._currentImageGenerationConversationId.value}")
-        
-        // 🔥 修复：移到清空消息列表之后调用，避免清理正在使用的处理器
-        // val currentImageSessionId = stateHolder._currentImageGenerationConversationId.value
-        // stateHolder.getApiHandler().clearImageChatResources(currentImageSessionId)
-        
-        // 🔥 关键修复：如果图像会话已经在历史记录中，保留历史索引，避免重复保存
-        // 只有在 forceNew 或者没有历史索引时才清除索引
-        if (imageHistoryIndexBeforeSave != null && !forceNew) {
-            // 保留历史索引，表示这个会话已经在历史记录中
-            stateHolder._loadedImageGenerationHistoryIndex.value = imageHistoryIndexBeforeSave
-            Log.d(TAG, "Preserved image history index: $imageHistoryIndexBeforeSave (避免重复创建会话)")
-        } else {
-            // 清除索引，表示这是新会话或强制新建
+        // 🔥 关键修复4：根据实际保存结果设置历史索引
+        if (forceNew) {
+            // 强制新建：完全清除图像历史索引
             stateHolder._loadedImageGenerationHistoryIndex.value = null
-            Log.d(TAG, "Cleared loaded image history index (forceNew=$forceNew)")
+            Log.d(TAG, "Force new: cleared image history index")
+        } else {
+            // 非强制新建：使用保存后的实际索引
+            stateHolder._loadedImageGenerationHistoryIndex.value = savedImageIndex
+            Log.d(TAG, "Preserved image history index: $savedImageIndex")
         }
         
-        // 保留消息列表（不再在模式切换时清空）
-        val imageMessagesBeforeClear = stateHolder.imageGenerationMessages.toList()
-        Log.d(TAG, "Preserved ${imageMessagesBeforeClear.size} image messages (no clear on mode switch)")
+        // 保留图像消息（不清空）
+        Log.d(TAG, "Preserved ${stateHolder.imageGenerationMessages.size} image messages")
         
-        // 🔥 修复：在清空消息列表后才清理资源，这样不会清理当前文本模式的消息处理器
         val currentImageSessionId = stateHolder._currentImageGenerationConversationId.value
-        Log.d(TAG, "Calling clearImageChatResources with session ID: $currentImageSessionId")
         stateHolder.getApiHandler().clearImageChatResources(currentImageSessionId)
-        Log.d(TAG, "=== END MODE SWITCH DEBUG ===")
         
-        // 4. 如果强制新建，清除文本模式状态
+        // 如果强制新建，清除文本模式状态
         if (forceNew) {
             stateHolder.messages.clear()
             stateHolder._loadedHistoryIndex.value = null
@@ -140,10 +137,10 @@ class SimpleModeManager(
             // 不为新会话自动回填会话参数，保持默认关闭
         }
         
-        // 5. 重置输入框
+        // 重置输入框
         stateHolder._text.value = ""
         
-        // 6. 验证状态切换完成 - 确保模式切换的原子性
+        // 验证状态切换完成 - 确保模式切换的原子性
         val currentMode = getCurrentMode()
         Log.d(TAG, "State validation - currentMode: $currentMode, isInTextMode: ${isInTextMode()}, isInImageMode: ${isInImageMode()}")
         
@@ -166,74 +163,68 @@ class SimpleModeManager(
             stateHolder.abandonEmptyPendingConversation()
         }
         
-        // 🔥 关键修复：保存当前文本会话的历史索引，避免重复创建会话
+        // 🔥 关键修复1：在保存前记录文本会话的状态
         val textHistoryIndexBeforeSave = stateHolder._loadedHistoryIndex.value
-        Log.d(TAG, "Text history index before mode switch: $textHistoryIndexBeforeSave")
+        val textMessagesBeforeSave = stateHolder.messages.toList()
+        val hasTextContent = textMessagesBeforeSave.isNotEmpty()
         
-        // 1. 同步保存两种模式的当前状态 - 确保状态切换的原子性
-        withContext(Dispatchers.IO) {
-            // 保存文本模式的当前会话
-            historyManager.saveCurrentChatToHistoryIfNeeded(
-                isImageGeneration = false,
-                forceSave = true
-            )
-            // 如果forceNew为true，也要保存图像模式的当前会话
+        Log.d(TAG, "Text state before save: index=$textHistoryIndexBeforeSave, messages=${textMessagesBeforeSave.size}, hasContent=$hasTextContent")
+        
+        // 🔥 关键修复2：同步等待保存完成，并获取保存后的实际索引
+        val savedTextIndex = withContext(Dispatchers.IO) {
+            // 保存文本会话
+            if (hasTextContent) {
+                historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = false, forceSave = true)
+                // 保存后重新读取索引
+                stateHolder._loadedHistoryIndex.value
+            } else {
+                textHistoryIndexBeforeSave
+            }
+            
+            // 如果需要，保存图像会话
             if (!skipSavingImageChat) {
                 if (forceNew && stateHolder.imageGenerationMessages.isNotEmpty()) {
-                    historyManager.saveCurrentChatToHistoryIfNeeded(
-                        isImageGeneration = true,
-                        forceSave = true
-                    )
+                    historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true, forceSave = true)
                 }
             }
+            
+            // 返回文本索引
+            stateHolder._loadedHistoryIndex.value
         }
         
-        // 2. 清理文本模式状态
+        Log.d(TAG, "Text index after save: $savedTextIndex")
+        
+        // 🔥 关键修复3：清理状态
         clearTextApiState()
         
-        // 🔥 添加调试日志，诊断会话切换问题
-        Log.d(TAG, "=== MODE SWITCH DEBUG (TO IMAGE) ===")
-        Log.d(TAG, "Current text messages before clear: ${stateHolder.messages.map { "ID:${it.id}, Text:'${it.text.take(20)}...', ContentStarted:${it.contentStarted}" }}")
-        Log.d(TAG, "Current loaded history index before clear: ${stateHolder._loadedHistoryIndex.value}")
-        Log.d(TAG, "Current conversation ID before clear: ${stateHolder._currentConversationId.value}")
-        
-        // 🔥 修复：移到清空消息列表之后调用，避免清理正在使用的处理器
-        // val currentTextSessionId = stateHolder._currentConversationId.value
-        // stateHolder.getApiHandler().clearTextChatResources(currentTextSessionId)
-        
-        // 🔥 关键修复：如果文本会话已经在历史记录中，保留历史索引，避免重复保存
-        // 只有在 forceNew 或者没有历史索引时才清除索引
-        if (textHistoryIndexBeforeSave != null && !forceNew) {
-            // 保留历史索引，表示这个会话已经在历史记录中
-            stateHolder._loadedHistoryIndex.value = textHistoryIndexBeforeSave
-            Log.d(TAG, "Preserved text history index: $textHistoryIndexBeforeSave (避免重复创建会话)")
-        } else {
-            // 清除索引，表示这是新会话或强制新建
+        // 🔥 关键修复4：根据实际保存结果设置历史索引
+        if (forceNew) {
+            // 强制新建：完全清除文本历史索引
             stateHolder._loadedHistoryIndex.value = null
-            Log.d(TAG, "Cleared loaded history index (forceNew=$forceNew)")
+            Log.d(TAG, "Force new: cleared text history index")
+        } else {
+            // 非强制新建：使用保存后的实际索引
+            stateHolder._loadedHistoryIndex.value = savedTextIndex
+            Log.d(TAG, "Preserved text history index: $savedTextIndex")
         }
         
-        // 保留文本消息列表（不再在模式切换时清空）
-        val messagesBeforeClear = stateHolder.messages.toList()
-        Log.d(TAG, "Preserved ${messagesBeforeClear.size} text messages (no clear on mode switch)")
+        // 保留文本消息（不清空）
+        Log.d(TAG, "Preserved ${stateHolder.messages.size} text messages")
         
-        // 🔥 修复：在清空消息列表后才清理资源，这样不会清理当前图像模式的消息处理器
         val currentTextSessionId = stateHolder._currentConversationId.value
-        Log.d(TAG, "Calling clearTextChatResources with session ID: $currentTextSessionId")
         stateHolder.getApiHandler().clearTextChatResources(currentTextSessionId)
-        Log.d(TAG, "=== END MODE SWITCH DEBUG ===")
         
-        // 4. 如果强制新建，清除图像模式状态
+        // 如果强制新建，清除图像模式状态
         if (forceNew) {
             stateHolder.imageGenerationMessages.clear()
             stateHolder._loadedImageGenerationHistoryIndex.value = null
             stateHolder._currentImageGenerationConversationId.value = "image_generation_${UUID.randomUUID()}"
         }
         
-        // 5. 重置输入框
+        // 重置输入框
         stateHolder._text.value = ""
         
-        // 6. 验证状态切换完成 - 确保模式切换的原子性
+        // 验证状态切换完成 - 确保模式切换的原子性
         val currentMode = getCurrentMode()
         Log.d(TAG, "State validation - currentMode: $currentMode, isInTextMode: ${isInTextMode()}, isInImageMode: ${isInImageMode()}")
         

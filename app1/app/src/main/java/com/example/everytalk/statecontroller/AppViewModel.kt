@@ -618,6 +618,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     ): Boolean = withContext(Dispatchers.Default) {
         if (list1 == null && list2 == null) return@withContext true
         if (list1 == null || list2 == null) return@withContext false
+
+        // 统一规范化：完全忽略所有 System 消息，仅比较 User/AI 的“实质内容”
         val filteredList1 = filterMessagesForComparison(list1)
         val filteredList2 = filterMessagesForComparison(list2)
         if (filteredList1.size != filteredList2.size) return@withContext false
@@ -627,31 +629,38 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             val msg2 = filteredList2[i]
 
             val textMatch = msg1.text.trim() == msg2.text.trim()
-            val reasoningMatch = msg1.reasoning?.trim() == msg2.reasoning?.trim()
+            val reasoningMatch = (msg1.reasoning ?: "").trim() == (msg2.reasoning ?: "").trim()
             val attachmentsMatch = msg1.attachments.size == msg2.attachments.size &&
-                    msg1.attachments.map {
-                        when (it) {
-                            is SelectedMediaItem.ImageFromUri -> it.uri
-                            is SelectedMediaItem.GenericFile -> it.uri
-                            else -> null
-                        }
-                    }.filterNotNull().toSet() == msg2.attachments.map {
-                        when (it) {
-                            is SelectedMediaItem.ImageFromUri -> it.uri
-                            is SelectedMediaItem.GenericFile -> it.uri
-                            else -> null
-                        }
-                    }.filterNotNull().toSet()
+                msg1.attachments.map {
+                    when (it) {
+                        is SelectedMediaItem.ImageFromUri -> it.uri
+                        is SelectedMediaItem.GenericFile -> it.uri
+                        is SelectedMediaItem.Audio -> it.data
+                        is SelectedMediaItem.ImageFromBitmap -> it.filePath
+                    }
+                }.filterNotNull().toSet() ==
+                msg2.attachments.map {
+                    when (it) {
+                        is SelectedMediaItem.ImageFromUri -> it.uri
+                        is SelectedMediaItem.GenericFile -> it.uri
+                        is SelectedMediaItem.Audio -> it.data
+                        is SelectedMediaItem.ImageFromBitmap -> it.filePath
+                    }
+                }.filterNotNull().toSet()
 
-            // 重要修复：忽略消息ID差异，仅比较“内容等效性”
-            // 由于系统提示消息ID会随会话ID迁移（例如从 new_chat_* 迁到首条用户消息ID），
-            // 严格比较 id 会导致同一会话被判为不相等，从而在历史顶部重复插入一条“看起来完全一样”的会话。
+            // 图像内容等效性：仅比较是否存在及数量，不比较签名参数等易变部分
+            val imagesCount1 = msg1.imageUrls?.size ?: 0
+            val imagesCount2 = msg2.imageUrls?.size ?: 0
+            val imagesMatch = imagesCount1 == imagesCount2
+
+            // 忽略 id/timestamp/动画/占位等不稳定字段，仅对“角色 + 内容”判等
             if (
                 msg1.sender != msg2.sender ||
+                msg1.isError != msg2.isError ||
                 !textMatch ||
                 !reasoningMatch ||
-                msg1.isError != msg2.isError ||
-                !attachmentsMatch
+                !attachmentsMatch ||
+                !imagesMatch
             ) {
                 return@withContext false
             }
@@ -660,16 +669,22 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     }
 
     private fun filterMessagesForComparison(messagesToFilter: List<Message>): List<Message> {
-        return messagesToFilter
-                .filter { msg ->
-                    (!msg.isError) &&
-                    (
-                        (msg.sender == Sender.User) ||
-                        (msg.sender == Sender.AI && (msg.contentStarted || msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank())) ||
-                        (msg.sender == Sender.System)
-                    )
+        return messagesToFilter.asSequence()
+            .filter { !it.isError }
+            .filter { msg ->
+                when (msg.sender) {
+                    Sender.User -> true
+                    // 仅当AI具有“实际内容”时参与比较：文本/推理/图片三者任一存在
+                    Sender.AI -> msg.text.isNotBlank() ||
+                                 !(msg.reasoning ?: "").isBlank() ||
+                                 ((msg.imageUrls?.isNotEmpty()) == true)
+                    // 完全忽略 System（含占位标题与真实系统提示），避免系统提示差异导致的误判
+                    Sender.System -> false
+                    else -> true
                 }
-                .toList()
+            }
+            .map { it.copy(text = it.text.trim(), reasoning = it.reasoning?.trim()) }
+            .toList()
     }
 
     fun toggleWebSearchMode(enabled: Boolean) {

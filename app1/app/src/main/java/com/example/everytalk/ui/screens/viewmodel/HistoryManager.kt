@@ -29,6 +29,38 @@ class HistoryManager(
     private var debouncedSaveJob: Job? = null
     private val DEBOUNCE_SAVE_MS = 1800L
 
+    // 去重稳态：最近一次插入的指纹与时间，用于吸收 forceSave + debounce 双触发
+    private var lastInsertFingerprint: String? = null
+    private var lastInsertAtMs: Long = 0L
+
+    // 生成单条消息的稳定指纹（忽略 id/timestamp/动画状态/占位标题）
+    private fun messageFingerprint(msg: Message): String {
+        val senderTag = when (msg.sender) {
+            Sender.User -> "U"
+            Sender.AI -> "A"
+            Sender.System -> if (msg.isPlaceholderName) "S_PLACEHOLDER" else "S"
+            else -> "O"
+        }
+        val text = msg.text.trim()
+        val reasoning = (msg.reasoning ?: "").trim()
+        val hasImages = if (msg.imageUrls.isNullOrEmpty()) 0 else msg.imageUrls!!.size
+        val attachmentsSet = msg.attachments.mapNotNull {
+            when (it) {
+                is com.example.everytalk.models.SelectedMediaItem.ImageFromUri -> it.uri.toString()
+                is com.example.everytalk.models.SelectedMediaItem.GenericFile -> it.uri.toString()
+                is com.example.everytalk.models.SelectedMediaItem.Audio -> it.data ?: ""
+                is com.example.everytalk.models.SelectedMediaItem.ImageFromBitmap -> it.filePath ?: ""
+            }
+        }.toSet().sorted().joinToString("|")
+        return listOf(senderTag, text, reasoning, "img=$hasImages", "att={$attachmentsSet}").joinToString("::")
+    }
+
+    // 会话稳定指纹：为判重目的，忽略一切 System 消息（标题/提示均不计入）
+    private fun conversationFingerprint(messages: List<Message>): String {
+        val filtered = filterMessagesForSaving(messages).filter { it.sender != Sender.System }
+        return filtered.joinToString("||") { messageFingerprint(it) }
+    }
+
     init {
         scope.launch(Dispatchers.IO) {
             for (req in saveRequestChannel) {
@@ -59,18 +91,20 @@ class HistoryManager(
             val hasText = msg.text.isNotBlank()
             val hasReasoning = !msg.reasoning.isNullOrBlank()
             val hasParts = hasValidParts(msg.parts)
-            // 🔥 关键修复：图像模式下，即使没有文本，只要有图片URL也应该保存
             val hasImages = !msg.imageUrls.isNullOrEmpty()
             return hasText || hasReasoning || hasParts || hasImages
         }
         return messagesToFilter
             .filter { msg ->
-                !msg.isError && when (msg.sender) {
-                    Sender.User, Sender.System -> true
+                if (msg.isError) return@filter false
+                when (msg.sender) {
+                    Sender.User -> true
+                    Sender.System -> !msg.isPlaceholderName // 排除占位标题，避免去重误判
                     Sender.AI -> hasAiSubstance(msg)
                     else -> true
                 }
             }
+            .map { it.copy(text = it.text.trim(), reasoning = it.reasoning?.trim()) }
             .toList()
     }
 
@@ -150,6 +184,9 @@ class HistoryManager(
 
         var finalNewLoadedIndex: Int? = loadedHistoryIndex
         var needsPersistenceSaveOfHistoryList = false
+        var addedNewConversation = false
+        val newConversationFingerprint = conversationFingerprint(messagesToSave)
+        val nowMs = System.currentTimeMillis()
 
         val historicalConversations = if (isImageGeneration) stateHolder._imageGenerationHistoricalConversations else stateHolder._historicalConversations
         historicalConversations.update { currentHistory ->
@@ -167,6 +204,7 @@ class HistoryManager(
                         mutableHistory[currentLoadedIdx] = messagesToSave
                         historyListModified = true
                         needsPersistenceSaveOfHistoryList = true
+                        Log.d(TAG_HM, "Updated existing history at index=$currentLoadedIdx, fp=${newConversationFingerprint.take(64)}")
                     } else {
                         Log.d(
                             TAG_HM,
@@ -178,24 +216,50 @@ class HistoryManager(
                 }
             } else {
                 if (messagesToSave.isNotEmpty()) {
-                    val duplicateIndex = mutableHistory.indexOfFirst { historyChat ->
-                        runBlocking { compareMessageLists(filterMessagesForSaving(historyChat), messagesToSave) }
-                    }
-                    if (duplicateIndex == -1) {
-                        Log.d(
-                            TAG_HM,
-                            "Adding new conversation to start of history. Message count: ${messagesToSave.size}"
-                        )
-                        mutableHistory.add(0, messagesToSave)
+                    // 先与头部会话比较稳定指纹，幂等保护
+                    val headFingerprint = if (mutableHistory.isNotEmpty()) conversationFingerprint(mutableHistory.first()) else null
+                    if (headFingerprint != null && headFingerprint == newConversationFingerprint) {
+                        Log.i(TAG_HM, "Skip insert: head fingerprint equals new conversation (idempotent head guard)")
                         finalNewLoadedIndex = 0
-                        historyListModified = true
-                        needsPersistenceSaveOfHistoryList = true
+                    } else if (lastInsertFingerprint == newConversationFingerprint && (nowMs - lastInsertAtMs) < 3000L) {
+                        Log.i(TAG_HM, "Skip insert: same conversation within 3s window (force+debounce guard)")
+                        // 保持 loadedIndex 不变（仍然为空表示新会话未入库）
                     } else {
-                        Log.d(
-                            TAG_HM,
-                            "Current conversation is a duplicate of history index $duplicateIndex. Setting loadedIndex to it."
-                        )
-                        finalNewLoadedIndex = duplicateIndex
+                        // 先用“无System指纹”快速判重，再回退到深比较
+                        var duplicateIndex = mutableHistory.indexOfFirst { historyChat ->
+                            conversationFingerprint(historyChat) == newConversationFingerprint
+                        }
+                        if (duplicateIndex == -1) {
+                            duplicateIndex = mutableHistory.indexOfFirst { historyChat ->
+                                runBlocking { compareMessageLists(filterMessagesForSaving(historyChat), messagesToSave) }
+                            }
+                        }
+                        if (duplicateIndex == -1) {
+                            Log.d(
+                                TAG_HM,
+                                "Adding new conversation to start of history. Message count: ${messagesToSave.size}, fp=${newConversationFingerprint.take(64)}"
+                            )
+                            mutableHistory.add(0, messagesToSave)
+                            finalNewLoadedIndex = 0
+                            historyListModified = true
+                            needsPersistenceSaveOfHistoryList = true
+                            addedNewConversation = true
+                            // 相邻去重兜底（防极端竞态）
+                            if (mutableHistory.size >= 2) {
+                                val fp0 = conversationFingerprint(mutableHistory[0])
+                                val fp1 = conversationFingerprint(mutableHistory[1])
+                                if (fp0 == fp1) {
+                                    Log.w(TAG_HM, "Adjacent duplicate detected after insert. Removing the second one to dedup.")
+                                    mutableHistory.removeAt(1)
+                                }
+                            }
+                        } else {
+                            Log.d(
+                                TAG_HM,
+                                "Current conversation is a duplicate of history index $duplicateIndex. Setting loadedIndex to it."
+                            )
+                            finalNewLoadedIndex = duplicateIndex
+                        }
                     }
                 } else {
                     Log.d(
@@ -205,7 +269,24 @@ class HistoryManager(
                     return@update currentHistory
                 }
             }
-            mutableHistory
+            // 全局去重（按稳定指纹，忽略所有 System），保留首次出现顺序
+            val seen = mutableSetOf<String>()
+            val deduped = mutableListOf<List<Message>>()
+            var removed = 0
+            for (conv in mutableHistory) {
+                val fp = conversationFingerprint(conv)
+                if (fp.isEmpty() || seen.add(fp)) {
+                    deduped.add(conv)
+                } else {
+                    removed++
+                }
+            }
+            if (removed > 0) {
+                Log.w(TAG_HM, "Global dedup removed $removed duplicate conversations (fingerprint-based)")
+                historyListModified = true
+                needsPersistenceSaveOfHistoryList = true
+            }
+            deduped
         }
  
         if (loadedHistoryIndex != finalNewLoadedIndex) {
@@ -226,6 +307,13 @@ class HistoryManager(
                 stateHolder.isTextConversationDirty.value = false
             }
             Log.d(TAG_HM, "Chat history list persisted and dirty flag reset.")
+        }
+
+        // 更新最近一次插入指纹/时间（仅当本次实际新增时）
+        if (addedNewConversation) {
+            lastInsertFingerprint = newConversationFingerprint
+            lastInsertAtMs = nowMs
+            Log.d(TAG_HM, "Recorded last insert fingerprint (len=${newConversationFingerprint.length}) at=$nowMs")
         }
         
         if (!isImageGeneration) {
