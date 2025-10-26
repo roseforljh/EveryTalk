@@ -17,6 +17,28 @@ import androidx.compose.ui.text.TextStyle
  */
 private const val MARKDOWN_FIX_MIN_LEN = 20
 
+// 兼容性预处理：
+// 某些解析器在 ** 开头紧跟全角引号（“『「等）时无法识别粗体。
+// 将 **“文本”** 规范化为 “**文本**”，以及 **『文本』** -> 『**文本**』 等。
+private fun normalizeCjkQuoteBold(input: String): String {
+    var s = input
+    val pairs = listOf(
+        '“' to '”',
+        '‘' to '’',
+        '「' to '」',
+        '『' to '』'
+    )
+    for ((l, r) in pairs) {
+        // 匹配 **“xxx”** -> “**xxx**”
+        val regex = Regex("""\*\*\Q$l\E(.*?)\Q$r\E\*\*""", RegexOption.DOT_MATCHES_ALL)
+        s = s.replace(regex) { m ->
+            val inner = m.groupValues[1]
+            "$l**$inner**$r"
+        }
+    }
+    return s
+}
+
 @Composable
 fun MarkdownRenderer(
     markdown: String,
@@ -32,11 +54,14 @@ fun MarkdownRenderer(
         else -> MaterialTheme.colorScheme.onSurface
     }
 
+    // 先做安全的 CJK 引号 + 粗体 规范化（不会影响代码块/数学）
+    val preNormalized = remember(markdown) { normalizeCjkQuoteBold(markdown) }
+
     // 极长文本在流式阶段直接展示原文，避免阻塞
-    val isTooLongForStreaming = isStreaming && markdown.length > 1500
+    val isTooLongForStreaming = isStreaming && preNormalized.length > 1500
     if (isTooLongForStreaming) {
         Text(
-            text = markdown,
+            text = preNormalized,
             style = style.copy(color = textColor),
             modifier = modifier
         )
@@ -44,17 +69,17 @@ fun MarkdownRenderer(
     }
 
     // 非流式执行一次修复；短文本和流式跳过修复
-    val fixedMarkdown = if (isStreaming || markdown.length < MARKDOWN_FIX_MIN_LEN) {
-        markdown
+    val fixedMarkdown = if (isStreaming || preNormalized.length < MARKDOWN_FIX_MIN_LEN) {
+        preNormalized
     } else {
-        remember(markdown) {
+        remember(preNormalized) {
             androidx.compose.runtime.derivedStateOf {
                 try {
-                    val fixed = MarkdownFormatFixer.fix(markdown)
-                    if (com.example.everytalk.BuildConfig.DEBUG && markdown.length >= 80) {
+                    val fixed = MarkdownFormatFixer.fix(preNormalized)
+                    if (com.example.everytalk.BuildConfig.DEBUG && preNormalized.length >= 80) {
                         android.util.Log.d(
                             "MarkdownRenderer",
-                            "Fixed length: ${markdown.length} -> ${fixed.length}"
+                            "Fixed length: ${preNormalized.length} -> ${fixed.length}"
                         )
                     }
                     fixed
@@ -62,7 +87,7 @@ fun MarkdownRenderer(
                     if (com.example.everytalk.BuildConfig.DEBUG) {
                         android.util.Log.e("MarkdownRenderer", "Fix failed, fallback to raw", e)
                     }
-                    markdown
+                    preNormalized
                 }
             }
         }.value

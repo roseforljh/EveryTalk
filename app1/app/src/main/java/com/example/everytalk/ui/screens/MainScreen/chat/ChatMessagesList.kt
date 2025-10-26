@@ -47,6 +47,7 @@ import com.example.everytalk.ui.theme.chatColors
 
 import com.example.everytalk.ui.components.EnhancedMarkdownText
 import com.example.everytalk.ui.components.StableMarkdownText
+import com.example.everytalk.ui.components.markdown.MarkdownRenderer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -506,15 +507,15 @@ fun AiMessageItem(
                         vertical = if (needsZeroPadding) 0.dp else ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL
                     )
             ) {
-                // 回滚：按原逻辑渲染
-                // 如果传入的 text 与 message.text 不同（如包含 ```lang 包裹等），走 StableMarkdownText 直出
+                // 确保 Markdown 始终被解析渲染：
+                // 若传入的 text 与 message.text 不同（例如经过前置加工），也用 MarkdownRenderer 正确解析。
                 if (text != message.text) {
-                    StableMarkdownText(
+                    MarkdownRenderer(
                         markdown = text,
-                        style = MaterialTheme.typography.bodyLarge.copy(
-                            color = MaterialTheme.colorScheme.onSurface
-                        ),
-                        modifier = Modifier.fillMaxWidth()
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.fillMaxWidth(),
+                        isStreaming = false
                     )
                 } else {
                     EnhancedMarkdownText(
