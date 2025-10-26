@@ -16,13 +16,13 @@
 -dontnote kotlinx.serialization.AnnotationsKt
 
 # 只保留序列化器,不保留整个包
--keep,includedescriptorclasses class com.example.everytalk.data.DataClass.**$$serializer { *; }
--keep,includedescriptorclasses class com.example.everytalk.models.**$$serializer { *; }
+-keep,includedescriptorclasses class com.android.everytalk.data.DataClass.**$$serializer { *; }
+-keep,includedescriptorclasses class com.android.everytalk.models.**$$serializer { *; }
 
--keepclassmembers class com.example.everytalk.data.DataClass.** {
+-keepclassmembers class com.android.everytalk.data.DataClass.** {
     *** Companion;
 }
--keepclassmembers class com.example.everytalk.models.** {
+-keepclassmembers class com.android.everytalk.models.** {
     *** Companion;
 }
 
@@ -33,17 +33,17 @@
 
 # ===== 项目数据类 (仅保留序列化相关) =====
 # 只保留字段名,允许混淆方法
--keepclassmembers class com.example.everytalk.data.DataClass.** {
+-keepclassmembers class com.android.everytalk.data.DataClass.** {
     <fields>;
 }
--keepclassmembers class com.example.everytalk.models.** {
+-keepclassmembers class com.android.everytalk.models.** {
     <fields>;
 }
 
 # 自定义序列化器 - 必须完整保留
--keep class com.example.everytalk.data.network.AnySerializer { *; }
--keep class com.example.everytalk.data.network.ApiMessageSerializer { *; }
--keep class com.example.everytalk.util.*Serializer { *; }
+-keep class com.android.everytalk.data.network.AnySerializer { *; }
+-keep class com.android.everytalk.data.network.ApiMessageSerializer { *; }
+-keep class com.android.everytalk.util.*Serializer { *; }
 
 # ===== Ktor Client (精简版) =====
 # 不完全保留,只保留必要的接口和类
@@ -101,13 +101,13 @@
 
 # ===== 关键业务类 (仅保留公共 API) =====
 # 不使用 { *; },允许内部方法被混淆
--keep,allowobfuscation class com.example.everytalk.statecontroller.ApiHandler {
+-keep,allowobfuscation class com.android.everytalk.statecontroller.ApiHandler {
     public <methods>;
 }
--keep,allowobfuscation class com.example.everytalk.statecontroller.MessageSender {
+-keep,allowobfuscation class com.android.everytalk.statecontroller.MessageSender {
     public <methods>;
 }
--keep,allowobfuscation class com.example.everytalk.statecontroller.AppViewModel {
+-keep,allowobfuscation class com.android.everytalk.statecontroller.AppViewModel {
     public <methods>;
 }
 

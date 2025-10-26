@@ -45,21 +45,34 @@ plugins {
 }
 
 android {
-    namespace = "com.example.everytalk"
+    namespace = "com.android.everytalk"
     compileSdk = 36
     // 建议与 targetSdk 和 Compose BOM 推荐的 SDK 版本对齐
 
     defaultConfig {
-        applicationId = "com.example.everytalk"
+        applicationId = "com.android.everytalk"
         minSdk = 27
         //noinspection OldTargetApi
-        targetSdk = 35 // 通常与 compileSdk 一致
+        targetSdk = 36 // 通常与 compileSdk 一致
         versionCode = 5949
-        versionName = "1.5.9"
+        versionName = "1.6.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true
+        }
+    }
+    // Signing configs for release build; values come from local.properties
+    signingConfigs {
+        create("release") {
+            val props = localProperties
+            val storeFilePath = props.getProperty("storeFile") ?: ""
+            if (storeFilePath.isNotBlank()) {
+                storeFile = file(storeFilePath)
+            }
+            storePassword = props.getProperty("storePassword") ?: ""
+            keyAlias = props.getProperty("keyAlias") ?: ""
+            keyPassword = props.getProperty("keyPassword") ?: ""
         }
     }
 
@@ -74,7 +87,7 @@ android {
                 proguardFiles.clear()
                 proguardFile("proguard-rules.pro")
             }
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
             // Inject backend configuration for Release
             val backendUrlsRelease = sanitizeForBuildConfig(localProperties.getProperty("BACKEND_URLS_RELEASE", ""))
             buildConfigField("String", "BACKEND_URLS", "\"${backendUrlsRelease}\"")
@@ -86,6 +99,8 @@ android {
             val backendUrlsDebug = sanitizeForBuildConfig(localProperties.getProperty("BACKEND_URLS_DEBUG", ""))
             buildConfigField("String", "BACKEND_URLS", "\"${backendUrlsDebug}\"")
             buildConfigField("boolean", "CONCURRENT_REQUEST_ENABLED", "false")
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
         }
         create("benchmark") {
             initWith(buildTypes.getByName("release"))

@@ -11,3 +11,5 @@ BACKEND_URLS_RELEASE="你的生产环境URL_1,你的生产环境URL_2"
 # 用于 Debug (调试) 构建，请提供您本地或测试环境的后端 URL。
 # 示例: BACKEND_URLS_DEBUG="http://127.0.0.1:XXXX/chat"
 BACKEND_URLS_DEBUG="你的调试环境URL"
+
+storeFile=C:\Users\33039\Desktop\EveryTalk\everytalk-release.jks storePassword=你的_keystore_口令 keyAlias=everytalk_release keyPassword=你的_key_口令

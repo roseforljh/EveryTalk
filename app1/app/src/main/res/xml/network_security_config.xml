@@ -1,10 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- 允许所有HTTP流量，包括明文传输 -->
-    <base-config cleartextTrafficPermitted="true">
+    <!-- 禁止明文传输；发布版仅信任系统证书 -->
+    <base-config cleartextTrafficPermitted="false">
         <trust-anchors>
             <certificates src="system"/>
-            <certificates src="user"/>
         </trust-anchors>
     </base-config>
     
