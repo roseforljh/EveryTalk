@@ -134,6 +134,21 @@ class HistoryManager(
             }
         }
     }
+    /**
+     * 同步保存当前会话并返回“最终索引”（避免上层读取瞬时旧值导致的重复插入）
+     */
+    suspend fun saveCurrentChatToHistoryNow(
+        forceSave: Boolean = false,
+        isImageGeneration: Boolean = false
+    ): Int? {
+        // 直接调用内部保存逻辑（同步），确保本次保存完成后再读取索引
+        saveCurrentChatToHistoryIfNeededInternal(forceSave = forceSave, isImageGeneration = isImageGeneration)
+        return if (isImageGeneration) {
+            stateHolder._loadedImageGenerationHistoryIndex.value
+        } else {
+            stateHolder._loadedHistoryIndex.value
+        }
+    }
 
     private suspend fun saveCurrentChatToHistoryIfNeededInternal(forceSave: Boolean = false, isImageGeneration: Boolean = false): Boolean {
         val currentMessagesSnapshot = if (isImageGeneration) stateHolder.imageGenerationMessages.toList() else stateHolder.messages.toList()
@@ -216,49 +231,73 @@ class HistoryManager(
                 }
             } else {
                 if (messagesToSave.isNotEmpty()) {
-                    // 先与头部会话比较稳定指纹，幂等保护
-                    val headFingerprint = if (mutableHistory.isNotEmpty()) conversationFingerprint(mutableHistory.first()) else null
-                    if (headFingerprint != null && headFingerprint == newConversationFingerprint) {
-                        Log.i(TAG_HM, "Skip insert: head fingerprint equals new conversation (idempotent head guard)")
+                    // 先与头部会话比较（指纹 + 深比较）双重护栏，幂等保护更强
+                    val headExists = mutableHistory.isNotEmpty()
+                    val headFingerprint = if (headExists) conversationFingerprint(mutableHistory.first()) else null
+                    val headDeepEqual = if (headExists) {
+                        runBlocking {
+                            compareMessageLists(
+                                filterMessagesForSaving(mutableHistory.first()),
+                                messagesToSave
+                            )
+                        }
+                    } else false
+
+                    if ((headFingerprint != null && headFingerprint == newConversationFingerprint) || headDeepEqual) {
+                        Log.i(TAG_HM, "Skip insert: head equals new conversation (fingerprint/deep head guard)")
                         finalNewLoadedIndex = 0
                     } else if (lastInsertFingerprint == newConversationFingerprint && (nowMs - lastInsertAtMs) < 3000L) {
                         Log.i(TAG_HM, "Skip insert: same conversation within 3s window (force+debounce guard)")
                         // 保持 loadedIndex 不变（仍然为空表示新会话未入库）
                     } else {
-                        // 先用“无System指纹”快速判重，再回退到深比较
-                        var duplicateIndex = mutableHistory.indexOfFirst { historyChat ->
-                            conversationFingerprint(historyChat) == newConversationFingerprint
-                        }
-                        if (duplicateIndex == -1) {
-                            duplicateIndex = mutableHistory.indexOfFirst { historyChat ->
-                                runBlocking { compareMessageLists(filterMessagesForSaving(historyChat), messagesToSave) }
+                        // 插入前最后防线：基于现有查找API的精确匹配检索
+                        val preInsertFound = runBlocking {
+                            try {
+                                findChatInHistory(messagesToSave, isImageGeneration)
+                            } catch (e: Exception) {
+                                Log.w(TAG_HM, "pre-insert findChatInHistory failed: ${e.message}")
+                                -1
                             }
                         }
-                        if (duplicateIndex == -1) {
-                            Log.d(
-                                TAG_HM,
-                                "Adding new conversation to start of history. Message count: ${messagesToSave.size}, fp=${newConversationFingerprint.take(64)}"
-                            )
-                            mutableHistory.add(0, messagesToSave)
-                            finalNewLoadedIndex = 0
-                            historyListModified = true
-                            needsPersistenceSaveOfHistoryList = true
-                            addedNewConversation = true
-                            // 相邻去重兜底（防极端竞态）
-                            if (mutableHistory.size >= 2) {
-                                val fp0 = conversationFingerprint(mutableHistory[0])
-                                val fp1 = conversationFingerprint(mutableHistory[1])
-                                if (fp0 == fp1) {
-                                    Log.w(TAG_HM, "Adjacent duplicate detected after insert. Removing the second one to dedup.")
-                                    mutableHistory.removeAt(1)
+                        if (preInsertFound >= 0) {
+                            Log.i(TAG_HM, "Pre-insert duplicate found by findChatInHistory at index=$preInsertFound. Reusing instead of inserting.")
+                            finalNewLoadedIndex = preInsertFound
+                        } else {
+                            // 全量判重：先“无System指纹”快速判重，再回退到深比较
+                            var duplicateIndex = mutableHistory.indexOfFirst { historyChat ->
+                                conversationFingerprint(historyChat) == newConversationFingerprint
+                            }
+                            if (duplicateIndex == -1) {
+                                duplicateIndex = mutableHistory.indexOfFirst { historyChat ->
+                                    runBlocking { compareMessageLists(filterMessagesForSaving(historyChat), messagesToSave) }
                                 }
                             }
-                        } else {
-                            Log.d(
-                                TAG_HM,
-                                "Current conversation is a duplicate of history index $duplicateIndex. Setting loadedIndex to it."
-                            )
-                            finalNewLoadedIndex = duplicateIndex
+                            if (duplicateIndex == -1) {
+                                Log.d(
+                                    TAG_HM,
+                                    "Adding new conversation to start of history. Message count: ${messagesToSave.size}, fp=${newConversationFingerprint.take(64)}"
+                                )
+                                mutableHistory.add(0, messagesToSave)
+                                finalNewLoadedIndex = 0
+                                historyListModified = true
+                                needsPersistenceSaveOfHistoryList = true
+                                addedNewConversation = true
+                                // 相邻去重兜底（防极端竞态）
+                                if (mutableHistory.size >= 2) {
+                                    val fp0 = conversationFingerprint(mutableHistory[0])
+                                    val fp1 = conversationFingerprint(mutableHistory[1])
+                                    if (fp0 == fp1) {
+                                        Log.w(TAG_HM, "Adjacent duplicate detected after insert. Removing the second one to dedup.")
+                                        mutableHistory.removeAt(1)
+                                    }
+                                }
+                            } else {
+                                Log.d(
+                                    TAG_HM,
+                                    "Current conversation is a duplicate of history index $duplicateIndex. Setting loadedIndex to it."
+                                )
+                                finalNewLoadedIndex = duplicateIndex
+                            }
                         }
                     }
                 } else {
@@ -342,8 +381,9 @@ class HistoryManager(
             }
         }
 
+        // 使用“本次保存后的最终索引”决策 last-open，避免首次入库与瞬时旧值导致的双源重复
         if (messagesToSave.isNotEmpty()) {
-            if (loadedHistoryIndex == null) {
+            if (finalNewLoadedIndex == null) {
                 persistenceManager.saveLastOpenChat(messagesToSave, isImageGeneration)
                 Log.d(TAG_HM, "Current conversation saved as last open chat for recovery.")
             } else {

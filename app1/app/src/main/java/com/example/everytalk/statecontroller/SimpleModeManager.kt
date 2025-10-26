@@ -88,19 +88,28 @@ class SimpleModeManager(
         
         Log.d(TAG, "Image state before save: index=$imageHistoryIndexBeforeSave, messages=${imageMessagesBeforeSave.size}, hasContent=$hasImageContent")
         
-        // 🔥 关键修复2：同步等待保存完成，并获取保存后的实际索引
-        val savedImageIndex = withContext(Dispatchers.IO) {
+        // 🔥 关键修复2：只在必要时保存，避免重复保存已加载的历史记录
+        // 🔥 关键修复2：优先用“指纹查找”回填索引；找不到则不插入，仅保持为 last-open（避免切换时新增历史）
+        val savedImageIndex = run {
             if (!skipSavingTextChat) {
-                historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = false, forceSave = true)
+                // 切换到文本模式时，如有文本索引会在其自身路径保存；这里不强制保存，避免误插入
+                historyManager.saveCurrentChatToHistoryNow(forceSave = false, isImageGeneration = false)
             }
-            
-            // 保存图像会话，并返回保存后的索引
-            if (hasImageContent) {
-                historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true, forceSave = true)
-                // 保存后重新读取索引（可能从null变为0）
-                stateHolder._loadedImageGenerationHistoryIndex.value
-            } else {
+            if (imageHistoryIndexBeforeSave != null) {
+                Log.d(TAG, "Skipping save: image conversation already in history at index $imageHistoryIndexBeforeSave")
                 imageHistoryIndexBeforeSave
+            } else if (hasImageContent) {
+                // 先尝试指纹查找，避免重复插入
+                val foundIdx = historyManager.findChatInHistory(imageMessagesBeforeSave, isImageGeneration = true)
+                if (foundIdx >= 0) {
+                    Log.d(TAG, "Reuse existing IMAGE conversation by fingerprint at index $foundIdx")
+                    foundIdx
+                } else {
+                    Log.i(TAG, "Mode switch: no IMAGE history index and no fingerprint match; skip insert and keep as last-open")
+                    null
+                }
+            } else {
+                null
             }
         }
         
@@ -109,16 +118,10 @@ class SimpleModeManager(
         // 🔥 关键修复3：清理状态
         clearImageApiState()
         
-        // 🔥 关键修复4：根据实际保存结果设置历史索引
-        if (forceNew) {
-            // 强制新建：完全清除图像历史索引
-            stateHolder._loadedImageGenerationHistoryIndex.value = null
-            Log.d(TAG, "Force new: cleared image history index")
-        } else {
-            // 非强制新建：使用保存后的实际索引
-            stateHolder._loadedImageGenerationHistoryIndex.value = savedImageIndex
-            Log.d(TAG, "Preserved image history index: $savedImageIndex")
-        }
+        // 🔥 关键修复4：保持图像历史索引不变（不要因为切换模式而清空）
+        // 只有在明确要求新建图像对话时才清空索引
+        stateHolder._loadedImageGenerationHistoryIndex.value = savedImageIndex
+        Log.d(TAG, "Preserved image history index: $savedImageIndex")
         
         // 保留图像消息（不清空）
         Log.d(TAG, "Preserved ${stateHolder.imageGenerationMessages.size} image messages")
@@ -170,26 +173,30 @@ class SimpleModeManager(
         
         Log.d(TAG, "Text state before save: index=$textHistoryIndexBeforeSave, messages=${textMessagesBeforeSave.size}, hasContent=$hasTextContent")
         
-        // 🔥 关键修复2：同步等待保存完成，并获取保存后的实际索引
-        val savedTextIndex = withContext(Dispatchers.IO) {
-            // 保存文本会话
-            if (hasTextContent) {
-                historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = false, forceSave = true)
-                // 保存后重新读取索引
-                stateHolder._loadedHistoryIndex.value
-            } else {
+        // 🔥 关键修复2：优先“指纹找回索引”；找不到则不插入历史，仅保持为 last-open，避免切换时产生新项
+        val savedTextIndex = run {
+            if (textHistoryIndexBeforeSave != null) {
+                Log.d(TAG, "Skipping save: conversation already in history at index $textHistoryIndexBeforeSave")
                 textHistoryIndexBeforeSave
-            }
-            
-            // 如果需要，保存图像会话
-            if (!skipSavingImageChat) {
-                if (forceNew && stateHolder.imageGenerationMessages.isNotEmpty()) {
-                    historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true, forceSave = true)
+            } else if (hasTextContent) {
+                val foundIdx = historyManager.findChatInHistory(textMessagesBeforeSave, isImageGeneration = false)
+                if (foundIdx >= 0) {
+                    Log.d(TAG, "Reuse existing TEXT conversation by fingerprint at index $foundIdx")
+                    foundIdx
+                } else {
+                    Log.i(TAG, "Mode switch: no TEXT history index and no fingerprint match; skip insert and keep as last-open")
+                    null
+                }
+            } else {
+                null
+            }.also {
+                // 如需，同时处理图像会话保存（少见分支，保持原意），同样同步执行以避免竞态
+                if (!skipSavingImageChat) {
+                    if (forceNew && stateHolder.imageGenerationMessages.isNotEmpty()) {
+                        historyManager.saveCurrentChatToHistoryNow(forceSave = true, isImageGeneration = true)
+                    }
                 }
             }
-            
-            // 返回文本索引
-            stateHolder._loadedHistoryIndex.value
         }
         
         Log.d(TAG, "Text index after save: $savedTextIndex")
@@ -197,16 +204,10 @@ class SimpleModeManager(
         // 🔥 关键修复3：清理状态
         clearTextApiState()
         
-        // 🔥 关键修复4：根据实际保存结果设置历史索引
-        if (forceNew) {
-            // 强制新建：完全清除文本历史索引
-            stateHolder._loadedHistoryIndex.value = null
-            Log.d(TAG, "Force new: cleared text history index")
-        } else {
-            // 非强制新建：使用保存后的实际索引
-            stateHolder._loadedHistoryIndex.value = savedTextIndex
-            Log.d(TAG, "Preserved text history index: $savedTextIndex")
-        }
+        // 🔥 关键修复4：保持文本历史索引不变（不要因为切换模式而清空）
+        // 只有在明确要求新建文本对话时才清空索引
+        stateHolder._loadedHistoryIndex.value = savedTextIndex
+        Log.d(TAG, "Preserved text history index: $savedTextIndex")
         
         // 保留文本消息（不清空）
         Log.d(TAG, "Preserved ${stateHolder.messages.size} text messages")
@@ -304,6 +305,7 @@ class SimpleModeManager(
 
         withContext(Dispatchers.Main.immediate) {
             Log.d(TAG, "🔥 Updating state on Main thread...")
+            
             clearTextApiState()
             stateHolder._loadedImageGenerationHistoryIndex.value = null
             // 保留图像消息（不在加载文本历史时清空）
@@ -325,6 +327,7 @@ class SimpleModeManager(
             }
             Log.d(TAG, "🔥 Set reasoning and animation states.")
             
+            // 🔥 关键修复：在所有状态更新完成后设置索引，确保不会被清空
             stateHolder._loadedHistoryIndex.value = index
             stateHolder._text.value = ""
             Log.d(TAG, "🔥 Set loaded history index to $index and cleared text input.")
