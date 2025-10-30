@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- 继承基础配置 (例如 release 版本的 HTTPS 强制策略) -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    
+    <!-- 仅在 Debug 模式下，允许连接本地 IP 地址 -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">127.0.0.1</domain>
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">10.0.2.2</domain> <!-- Android 模拟器访问宿主机 -->
+        <domain includeSubdomains="true">192.168.0.101</domain> <!-- 你的本地 IP -->
+        <!-- 在这里可以添加其他你需要调试的本地 IP -->
+    </domain-config>
+</network-security-config>

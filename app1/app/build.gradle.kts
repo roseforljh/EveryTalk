@@ -55,7 +55,7 @@ android {
         //noinspection OldTargetApi
         targetSdk = 36 // 通常与 compileSdk 一致
         versionCode = 5949
-        versionName = "1.6.0"
+        versionName = "1.6.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
