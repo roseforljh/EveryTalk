@@ -15,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import coil3.ImageLoader
+import com.android.everytalk.util.FileManager
 import android.util.Base64
 import java.io.FileOutputStream
 import java.util.Locale
@@ -27,40 +28,60 @@ class DataPersistenceManager(
     private val imageLoader: ImageLoader
 ) {
     private val TAG = "PersistenceManager"
+    private val fileManager = FileManager(context)
+
 
     /**
-     * 将消息中的 data:image;base64,... 图片落盘为本地文件，并将 URL 替换为 file:// 或绝对路径
-     * 这样可避免把巨大 Base64 串写入 SharedPreferences 导致超限/丢失，重启后可稳定恢复。
+     * 将消息中的图片统一落盘并替换为本地绝对路径：
+     * - data:image;base64,... → 解码后保存
+     * - http/https → 下载原始字节后保存
+     * - file:// 或绝对路径保持不变
+     *
+     * 保存目录统一为 filesDir/chat_attachments，通过“保留期”实现几天内不清理。
      */
-    private fun persistDataUriImages(messages: List<Message>): List<Message> {
+    private fun persistInlineAndRemoteImages(messages: List<Message>): List<Message> {
         if (messages.isEmpty()) return messages
-        val outDir = File(context.filesDir, "chat_attachments").apply { mkdirs() }
-
+        val tempDir = File(context.filesDir, "chat_attachments").apply { mkdirs() }
+ 
         fun extFromMime(mime: String?): String {
             val m = (mime ?: "").lowercase(Locale.ROOT)
             return when {
                 m.contains("png") -> "png"
                 m.contains("jpeg") || m.contains("jpg") -> "jpg"
                 m.contains("webp") -> "webp"
+                m.contains("heic") -> "heic"
+                m.contains("heif") -> "heif"
                 else -> "png"
             }
         }
-
-        fun saveDataUri(dataUri: String, fileNameHint: String): String? {
+ 
+        fun saveBytes(bytes: ByteArray, mime: String?, fileNameHint: String, targetDir: File): String? {
             return try {
-                val mime = dataUri.substringAfter("data:", "").substringBefore(";base64", "")
-                val base64Part = dataUri.substringAfter(";base64,", "")
-                if (base64Part.isBlank()) return null
-                val bytes = Base64.decode(base64Part, Base64.DEFAULT)
-
                 val ext = extFromMime(mime)
-                val file = File(outDir, "${fileNameHint}_${System.currentTimeMillis()}.$ext")
+                val file = File(targetDir, "${fileNameHint}_${System.currentTimeMillis()}.$ext")
                 FileOutputStream(file).use { it.write(bytes) }
-
-                // 返回绝对路径；渲染端已支持 file:// 与绝对路径两种形式
-                file.absolutePath
+                if (file.exists() && file.length() > 0) file.absolutePath else null
             } catch (e: Exception) {
-                Log.w(TAG, "persistDataUriImages: failed to save data URI image", e)
+                Log.w(TAG, "persistImages: failed to save bytes for $fileNameHint", e)
+                null
+            }
+        }
+
+        fun tryDownload(url: String): Pair<ByteArray, String?>? {
+            return try {
+                val conn = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
+                    connectTimeout = 30000
+                    readTimeout = 30000
+                    instanceFollowRedirects = true
+                }
+                conn.connect()
+                if (conn.responseCode !in 200..299) return null
+                val mime = conn.contentType
+                val bytes = conn.inputStream.use { it.readBytes() }
+                conn.disconnect()
+                bytes to mime
+            } catch (e: Exception) {
+                Log.w(TAG, "persistImages: download failed for $url", e)
                 null
             }
         }
@@ -69,12 +90,44 @@ class DataPersistenceManager(
             if (msg.imageUrls.isNullOrEmpty()) {
                 msg
             } else {
+                // 统一保存到 chat_attachments，通过保留期控制清理时机
+                val currentDir = tempDir
+                currentDir.mkdirs()
+
                 val newUrls = msg.imageUrls.mapIndexed { idx, url ->
-                    if (url.startsWith("data:image", ignoreCase = true)) {
-                        val saved = saveDataUri(url, "img_${msg.id}_${idx}")
-                        saved ?: url
-                    } else {
-                        url
+                    val lower = url.lowercase(Locale.ROOT)
+                    when {
+                        // 已是本地路径或 file://
+                        lower.startsWith("file://") || lower.startsWith("/") -> url
+
+                        // data:image;base64
+                        lower.startsWith("data:image") -> {
+                            val mime = url.substringAfter("data:", "").substringBefore(";base64", "")
+                            val base64Part = url.substringAfter(";base64,", "")
+                            if (base64Part.isBlank()) url
+                            else {
+                                try {
+                                    val bytes = Base64.decode(base64Part, Base64.DEFAULT)
+                                    saveBytes(bytes, mime, "img_${msg.id}_${idx}", currentDir) ?: url
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "persistImages: data URL decode failed", e)
+                                    url
+                                }
+                            }
+                        }
+
+                        // http/https → 下载后保存
+                        lower.startsWith("http://") || lower.startsWith("https://") -> {
+                            val downloaded = tryDownload(url)
+                            if (downloaded != null) {
+                                val (bytes, mime) = downloaded
+                                saveBytes(bytes, mime, "img_${msg.id}_${idx}", currentDir) ?: url
+                            } else {
+                                url
+                            }
+                        }
+
+                        else -> url
                     }
                 }
                 if (newUrls == msg.imageUrls) msg else msg.copy(imageUrls = newUrls)
@@ -223,8 +276,8 @@ class DataPersistenceManager(
 
                    // Load image generation history
                    val loadedImageGenHistory = dataSource.loadImageGenerationHistory()
-                   // 将历史中的 data:image 落盘并替换为本地路径（一次性修复旧数据中的内联图）
-                   val convertedImageGenHistory = loadedImageGenHistory.map { conv -> persistDataUriImages(conv) }
+                   // 将历史中的 data:image 与 http(s) 图片统一落盘并替换为本地路径（一次性修复旧数据）
+                   val convertedImageGenHistory = loadedImageGenHistory.map { conv -> persistInlineAndRemoteImages(conv) }
                    // 异步回写修复后的历史，避免后续重复转换
                    launch(Dispatchers.IO) {
                        try {
@@ -243,8 +296,8 @@ class DataPersistenceManager(
                     Log.d(TAG, "loadInitialData: Phase 3 - Loading last open chats...")
                     val lastOpenChat = dataSource.loadLastOpenChat()
                     val lastOpenImageGenChat = dataSource.loadLastOpenImageGenerationChat()
-                    // 将“最后打开的图像会话”里的 data:image 转为本地文件并替换
-                    val finalLastOpenImageGen = persistDataUriImages(lastOpenImageGenChat)
+                    // 将“最后打开的图像会话”里的 data:image 与 http(s) 转为本地文件并替换
+                    val finalLastOpenImageGen = persistInlineAndRemoteImages(lastOpenImageGenChat)
                     // 异步回写，确保下次启动直接使用文件路径
                     launch(Dispatchers.IO) {
                         try {
@@ -347,8 +400,8 @@ class DataPersistenceManager(
         withContext(Dispatchers.IO) {
             Log.d(TAG, "saveChatHistory: 保存 ${historyToSave.size} 条对话到 dataSource...")
             val finalHistory = if (isImageGeneration) {
-                // 将 data:image 的图片先落盘，替换为本地路径，避免SP超限
-                historyToSave.map { conv -> persistDataUriImages(conv) }
+                // 将 data:image 与 http(s) 图片先落盘，替换为本地路径，避免SP超限与远端URL过期
+                historyToSave.map { conv -> persistInlineAndRemoteImages(conv) }
             } else {
                 historyToSave
             }
@@ -441,8 +494,8 @@ class DataPersistenceManager(
            Log.d(TAG, "saveLastOpenChat: Saving ${processedMessages.size} messages for isImageGen=$isImageGeneration")
            try {
                val finalMessages = if (isImageGeneration) {
-                   // 同样对“最后打开的图像会话”进行 data:image 落盘与替换
-                   persistDataUriImages(processedMessages)
+                   // 对“最后打开的图像会话”统一进行 data:image 与 http(s) 落盘与替换
+                   persistInlineAndRemoteImages(processedMessages)
                } else {
                    processedMessages
                }
@@ -476,6 +529,7 @@ class DataPersistenceManager(
            var deletedFilesCount = 0
            val allFilePathsToDelete = mutableSetOf<String>()
            val allHttpUrisToClearFromCache = mutableSetOf<String>()
+           val chatAttachmentsDirPath = File(context.filesDir, "chat_attachments").absolutePath
 
            conversations.forEach { conversation ->
                conversation.forEach { message ->
@@ -487,6 +541,7 @@ class DataPersistenceManager(
                            is SelectedMediaItem.ImageFromBitmap -> attachment.filePath
                        }
                        if (!path.isNullOrBlank()) {
+                           // 用户触发删除：始终释放占用空间
                            allFilePathsToDelete.add(path)
                        }
                    }
@@ -500,6 +555,7 @@ class DataPersistenceManager(
                            } else {
                                val path = uri.path
                                if (path != null) {
+                                   // 用户触发删除：始终释放占用空间
                                    allFilePathsToDelete.add(path)
                                }
                            }
@@ -507,6 +563,7 @@ class DataPersistenceManager(
                            // Fallback for non-URI strings that might be file paths
                            val file = File(urlString)
                            if (file.exists()) {
+                               // 用户触发删除：始终释放占用空间
                                allFilePathsToDelete.add(urlString)
                            }
                        }
@@ -518,8 +575,9 @@ class DataPersistenceManager(
                    localFilePattern.findAll(message.text).forEach { match ->
                        val filePath = match.value.removePrefix("file://")
                        val file = File(filePath)
-                       if (file.exists() && (file.name.contains("chat_attachments") || 
+                       if (file.exists() && (file.name.contains("chat_attachments") ||
                            filePath.contains(context.filesDir.absolutePath))) {
+                           // 用户触发删除：始终释放占用空间
                            allFilePathsToDelete.add(filePath)
                        }
                    }
@@ -565,10 +623,12 @@ class DataPersistenceManager(
     * 清理孤立的附件文件与临时缓存（已删除会话但文件仍存在的情况），并回收图片缓存
     *
     * 覆盖范围：
-    * - filesDir/chat_attachments 下不再被任何会话引用的文件
     * - cacheDir/preview_cache 预览生成的临时文件
     * - cacheDir/share_images 分享生成的临时文件
     * - Coil 内存/磁盘缓存（在清空历史或大批删除后统一清理，防止残留占用）
+    *
+    * 注意：不再自动删除 filesDir/chat_attachments 下的文件（包括AI生成图片）。
+    * 这些文件仅在“用户删除会话/历史”时释放，以符合“仅手动删除才清理”的预期。
     */
    suspend fun cleanupOrphanedAttachments() {
        withContext(Dispatchers.IO) {
@@ -606,21 +666,11 @@ class DataPersistenceManager(
                    Log.w(TAG, "Failed to collect active file paths for orphan cleanup", e)
                }
 
-               // 2) 清理 chat_attachments 中的孤立文件
+               // 2) 跳过 chat_attachments 的自动删除：仅在“用户删除会话/历史”时释放占用
                var orphanedCount = 0
                if (chatAttachmentsDir.exists()) {
-                   chatAttachmentsDir.listFiles()?.forEach { file ->
-                       if (file.isFile && !allActiveFilePaths.contains(file.absolutePath)) {
-                           try {
-                               if (file.delete()) {
-                                   Log.d(TAG, "Deleted orphaned file: ${file.absolutePath}")
-                                   orphanedCount++
-                               }
-                           } catch (e: Exception) {
-                               Log.w(TAG, "Failed to delete orphaned file: ${file.absolutePath}", e)
-                           }
-                       }
-                   }
+                   val skipped = chatAttachmentsDir.listFiles()?.count { it.isFile && !allActiveFilePaths.contains(it.absolutePath) } ?: 0
+                   Log.i(TAG, "Skip auto-deletion for $skipped attachment file(s) in chat_attachments by policy (manual deletion only).")
                }
 
                // 3) 清空预览/分享产生的临时缓存（cacheDir），这些文件不持久化引用，直接安全删除

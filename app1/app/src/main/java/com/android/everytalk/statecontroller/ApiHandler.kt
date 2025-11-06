@@ -1,6 +1,9 @@
 package com.android.everytalk.statecontroller
 
 import android.content.Context
+import com.android.everytalk.util.FileManager
+import java.io.File
+import java.util.Locale
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.ChatRequest
@@ -42,6 +45,7 @@ class ApiHandler(
     private val onAiMessageFullTextChanged: (messageId: String, currentFullText: String) -> Unit,
     private val triggerScrollToBottom: () -> Unit
 ) {
+    // Note: Do not hold a FileManager with appContext here; pass Context when needed
     private val logger = AppLogger.forComponent("ApiHandler")
     private val jsonParserForError = Json { ignoreUnknownKeys = true }
     // 为每个会话创建独立的MessageProcessor实例，确保会话隔离
@@ -122,10 +126,11 @@ class ApiHandler(
         }
 
         if (messageIdBeingCancelled != null) {
+            // 修复：取消回答时立即标记推理完成，确保思考框收起
             if (isImageGeneration) {
-                stateHolder.imageReasoningCompleteMap.remove(messageIdBeingCancelled)
+                stateHolder.imageReasoningCompleteMap[messageIdBeingCancelled] = true
             } else {
-                stateHolder.textReasoningCompleteMap.remove(messageIdBeingCancelled)
+                stateHolder.textReasoningCompleteMap[messageIdBeingCancelled] = true
             }
             if (!isNewMessageSend) {
                 viewModelScope.launch(Dispatchers.Main.immediate) {
@@ -134,6 +139,7 @@ class ApiHandler(
                         messageList.indexOfFirst { it.id == messageIdBeingCancelled }
                     if (index != -1) {
                         val msg = messageList[index]
+                        // 如仍为占位消息则移除；否则仅触发重组以刷新思考框可见性
                         val isPlaceholder = msg.sender == Sender.AI && msg.text.isBlank() &&
                                 msg.reasoning.isNullOrBlank() && msg.webSearchResults.isNullOrEmpty() &&
                                 msg.currentWebSearchStage.isNullOrEmpty() && !msg.contentStarted && !msg.isError
@@ -141,6 +147,9 @@ class ApiHandler(
                         if (isPlaceholder && !isHistoryLoaded) {
                             logger.debug("Removing placeholder message: ${msg.id}")
                             messageList.removeAt(index)
+                        } else {
+                            // 触发一次轻微更新，确保 Compose 根据 reasoningCompleteMap 重新计算
+                            messageList[index] = msg.copy(timestamp = System.currentTimeMillis())
                         }
                     }
                 }
@@ -266,12 +275,12 @@ class ApiHandler(
                         val responseText = response.text
 
                         logger.debug("[ImageGen] 🖼️ Extracted ${imageUrls.size} image URLs from response")
-                        imageUrls.forEachIndexed { idx, url -> 
+                        imageUrls.forEachIndexed { idx, url ->
                             logger.debug("[ImageGen] 🖼️ Image[$idx]: ${url.take(100)}...")
                         }
 
                         if (imageUrls.isNotEmpty()) {
-                            // 成功获取图片
+                            // 成功获取图片，先更新消息为远端URL
                             withContext(Dispatchers.Main.immediate) {
                                 val messageList = stateHolder.imageGenerationMessages
                                 val index = messageList.indexOfFirst { it.id == aiMessageId }
@@ -307,8 +316,33 @@ class ApiHandler(
                                     logger.debug("[ImageGen] 🖼️ Current message list IDs: ${messageList.map { it.id }}")
                                 }
                             }
+
+                            // ⚙️ 后台归档：将 http/https 或 data:image 统一落盘为本地文件并替换消息中的链接
                             viewModelScope.launch(Dispatchers.IO) {
-                                historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true)
+                                try {
+                                    val archived = archiveImageUrlsForMessage(applicationContextForApiClient, aiMessageId, imageUrls)
+                                    if (archived.isNotEmpty()) {
+                                        withContext(Dispatchers.Main.immediate) {
+                                            val messageList = stateHolder.imageGenerationMessages
+                                            val idx = messageList.indexOfFirst { it.id == aiMessageId }
+                                            if (idx != -1) {
+                                                val cur = messageList[idx]
+                                                val newMsg = cur.copy(imageUrls = archived)
+                                                messageList.removeAt(idx)
+                                                messageList.add(idx, newMsg)
+                                                stateHolder.isImageConversationDirty.value = true
+                                            }
+                                        }
+                                        // 归档完成后立即保存一次历史，确保路径持久
+                                        historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = true)
+                                    } else {
+                                        // 若归档失败，至少保存当前状态
+                                        historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true)
+                                    }
+                                } catch (e: Exception) {
+                                    logger.warn("[ImageGen] Archive image urls failed: ${e.message}")
+                                    historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true)
+                                }
                             }
                         } else {
                             // 后端已完成所有重试但仍无图片，将返回的文本作为错误消息处理
@@ -794,7 +828,45 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
             logger.debug("Cleared StreamingBuffer after error for message: $messageId")
         }
     }
-
+ 
+    /**
+     * Archive image URLs (http/https or data:image) to internal storage and return local absolute paths.
+     * Keeps original URL on failure for each item to avoid breaking UI.
+     */
+    private suspend fun archiveImageUrlsForMessage(
+        applicationContext: Context,
+        messageId: String,
+        urls: List<String>
+    ): List<String> {
+        if (urls.isEmpty()) return emptyList()
+        val fm = com.android.everytalk.util.FileManager(applicationContext)
+        val out = mutableListOf<String>()
+        for ((idx, url) in urls.withIndex()) {
+            val lower = url.lowercase(java.util.Locale.ROOT)
+            // Already a local path or file://
+            if (lower.startsWith("file://") || lower.startsWith("/")) {
+                out.add(url)
+                continue
+            }
+            // Load original bytes from flexible source
+            val pair = try { fm.loadBytesFromFlexibleSource(url) } catch (_: Exception) { null }
+            if (pair == null) {
+                out.add(url)
+                continue
+            }
+            val bytes = pair.first
+            val mime = pair.second ?: "application/octet-stream"
+            val baseName = "img_${messageId}_${idx}"
+            val saved = try { fm.saveBytesToInternalImages(bytes, mime, baseName, messageId, idx) } catch (_: Exception) { null }
+            if (!saved.isNullOrBlank()) {
+                out.add(saved)
+            } else {
+                out.add(url)
+            }
+        }
+        return out
+    }
+ 
     private fun parseBackendError(response: HttpResponse, errorBody: String): String {
         return try {
             val errorJson = jsonParserForError.decodeFromString<BackendErrorContent>(errorBody)
@@ -959,13 +1031,9 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
         retryCountMap.remove(messageId)
     }
     
-    private companion object {
-        private const val ERROR_VISUAL_PREFIX = "⚠️ "
-    }
-    
     /**
      * 清理文本聊天相关的资源，确保会话间完全隔离
-     * 
+     *
      * 🎯 优化策略（Requirements: 6.1, 6.2, 6.3）：
      * - 只清理不在当前消息列表中的处理器（inactive processors）
      * - 保留当前活跃会话的所有处理器
@@ -1154,6 +1222,7 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                 messageProcessorMap.remove(messageId)?.let {
                     removedCount++
                 }
+                // (removed) local archiveImageUrlsForMessage() definitions moved to class scope
             }
             
             // 清理已处理的消息ID集合

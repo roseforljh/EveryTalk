@@ -125,7 +125,12 @@ private fun applyCjkBoldCompatHeuristics(block: String): String {
         setOf(RegexOption.DOT_MATCHES_ALL)
     )
     val colonTail = Regex("\\*\\*(.+?)\\*\\*(?=[:：](\\s|$))")
-
+ 
+    // 新增规则：修复“左侧残留 **”的场景（如 ——**SNI** / 开头 **HOSTS**）
+    // 仅在内容内部包含至少一个 CJK 字符时启用，避免误伤纯英文粗体
+    val emDashOrBracketLeft = Regex("([ \\t\\u2013\\u2014\\u2015\\-–—\\(\\[（【《「『])\\*\\*([^*]*?[\\p{IsHan}][^*]*?)\\*\\*")
+    val lineStartLeft = Regex("^\\*\\*([^*]*?[\\p{IsHan}][^*]*?)\\*\\*")
+ 
     for (line in lines) {
         if (shouldSkipLine(line)) {
             sb.append(line)
@@ -135,6 +140,10 @@ private fun applyCjkBoldCompatHeuristics(block: String): String {
             s = s.replace(colonTail) { m -> "<strong>${m.groupValues[1]}</strong>" }
             // 再处理 CJK 邻接
             s = s.replace(common) { m -> "<strong>${m.groupValues[1]}</strong>" }
+            // 处理“破折号/括号/空白后紧跟 **词**（含CJK）” → 保留左界定符并整体替换为 <strong>
+            s = s.replace(emDashOrBracketLeft) { m -> "${m.groupValues[1]}<strong>${m.groupValues[2]}</strong>" }
+            // 处理“行首 **词**（含CJK）” → <strong>词</strong>
+            s = s.replace(lineStartLeft) { m -> "<strong>${m.groupValues[1]}</strong>" }
             sb.append(s)
         }
         sb.append('\n')

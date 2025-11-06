@@ -39,6 +39,12 @@ fun markdownToPlainText(markdown: String): String {
     text = text.replace(Regex("\\*([^*]+)\\*"), "$1") // 斜体
     text = text.replace(Regex("_([^_]+)_"), "$1") // 斜体
     
+    // 4.1 移除孤立的 ** 和 * 标记（不成对的）
+    text = text.replace(Regex("\\*\\*"), "") // 移除所有剩余的 **
+    text = text.replace(Regex("\\*"), "") // 移除所有剩余的 *
+    text = text.replace(Regex("__"), "") // 移除所有剩余的 __
+    text = text.replace(Regex("_"), "") // 移除所有剩余的 _
+    
     // 5. 移除删除线
     text = text.replace(Regex("~~([^~]+)~~"), "$1")
     

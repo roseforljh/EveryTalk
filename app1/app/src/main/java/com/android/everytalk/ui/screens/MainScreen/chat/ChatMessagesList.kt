@@ -3,11 +3,14 @@ package com.android.everytalk.ui.screens.MainScreen.chat
 import com.android.everytalk.R
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -17,10 +20,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.*
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -157,8 +163,11 @@ fun ChatMessagesList(
                                         )
                                     }
                                     if (item.text.isNotBlank()) {
-                                        // 用户气泡：右对齐 + 自适应宽度
-                                        var bubbleGlobalPosition by remember { mutableStateOf(Offset.Zero) }
+                                        // 用户气泡：右对齐 + 自适应宽度 + 垂直滚动（无展开按钮）
+                                        val SCROLLABLE_MAX_HEIGHT = 220.dp
+                                        var bubbleGlobalPosition by remember(message.id) { mutableStateOf(Offset.Zero) }
+                                        val innerScroll = rememberScrollState()
+
                                         Surface(
                                             modifier = Modifier
                                                 .wrapContentWidth()
@@ -187,17 +196,55 @@ fun ChatMessagesList(
                                             shadowElevation = 0.dp
                                         ) {
                                             Box(
-                                                modifier = Modifier.padding(
-                                                    horizontal = ChatDimensions.BUBBLE_INNER_PADDING_HORIZONTAL,
-                                                    vertical = ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL
-                                                )
+                                                modifier = Modifier
+                                                    .padding(
+                                                        horizontal = ChatDimensions.BUBBLE_INNER_PADDING_HORIZONTAL,
+                                                        vertical = ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL
+                                                    )
                                             ) {
-                                                Text(
-                                                    text = item.text,
-                                                    style = MaterialTheme.typography.bodyLarge,
-                                                    color = MaterialTheme.colorScheme.onSurface,
-                                                    textAlign = TextAlign.Start
-                                                )
+                                                // 限高 + 内部垂直滚动，并拦截惯性/滚动以防外层被带动
+                                                val innerScrollBlocker = remember {
+                                                    object : NestedScrollConnection {
+                                                        override fun onPreScroll(
+                                                            available: Offset,
+                                                            source: NestedScrollSource
+                                                        ): Offset {
+                                                            // 消耗用户手势产生的垂直滚动，阻止向外层传递
+                                                            return if (source == NestedScrollSource.UserInput) {
+                                                                Offset(x = 0f, y = available.y)
+                                                            } else Offset.Zero
+                                                        }
+                                                        override fun onPostScroll(
+                                                            consumed: Offset,
+                                                            available: Offset,
+                                                            source: NestedScrollSource
+                                                        ): Offset {
+                                                            // 吞掉剩余的滚动量，避免外层获得“余量”
+                                                            return Offset(x = 0f, y = available.y)
+                                                        }
+                                                        override suspend fun onPreFling(available: Velocity): Velocity {
+                                                            // 吞掉即将开始的惯性，防止交给父级
+                                                            return available
+                                                        }
+                                                        override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                                                            // 吞掉剩余惯性，不让父级承接
+                                                            return available
+                                                        }
+                                                    }
+                                                }
+                                                Box(
+                                                    modifier = Modifier
+                                                        .heightIn(max = SCROLLABLE_MAX_HEIGHT)
+                                                        .verticalScroll(innerScroll)
+                                                        .nestedScroll(innerScrollBlocker)
+                                                ) {
+                                                    Text(
+                                                        text = item.text,
+                                                        style = MaterialTheme.typography.bodyLarge,
+                                                        color = MaterialTheme.colorScheme.onSurface,
+                                                        textAlign = TextAlign.Start
+                                                    )
+                                                }
                                             }
                                         }
                                     }
@@ -291,56 +338,51 @@ fun ChatMessagesList(
                                 viewModel = viewModel,
                             )
                         }
-                        
-                        // 🔥 新增：流式渲染专用分支
+
                         is ChatListItem.AiMessageStreaming -> {
                             val message = viewModel.getMessageById(item.messageId)
                             if (message != null) {
-                                // 🔥 修复：不在这里订阅StateFlow，而是传递message
-                                // EnhancedMarkdownText内部会根据isStreaming参数自动订阅
                                 Column(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalAlignment = Alignment.Start
                                 ) {
                                     AiMessageItem(
                                         message = message,
-                                        text = message.text,  // 传递message.text，由EnhancedMarkdownText内部处理流式订阅
+                                        text = message.text,
                                         maxWidth = bubbleMaxWidth,
                                         hasReasoning = item.hasReasoning,
                                         onLongPress = {
                                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                             onShowAiMessageOptions(message)
                                         },
-                                        isStreaming = true,  // ✅ 关键：标记为流式状态
+                                        isStreaming = true,
                                         messageOutputType = message.outputType,
-                                        viewModel = viewModel,  // ✅ 传递viewModel用于流式订阅
+                                        viewModel = viewModel,
                                         showMenuButton = false
                                     )
                                 }
                             }
                         }
-                        
-                        
+
                         is ChatListItem.AiMessageCodeStreaming -> {
                             val message = viewModel.getMessageById(item.messageId)
                             if (message != null) {
-                                // 🔥 修复：不在这里订阅StateFlow，由EnhancedMarkdownText内部处理
                                 Column(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalAlignment = Alignment.Start
                                 ) {
                                     AiMessageItem(
                                         message = message,
-                                        text = message.text,  // 传递message.text，由EnhancedMarkdownText内部处理流式订阅
+                                        text = message.text,
                                         maxWidth = bubbleMaxWidth,
                                         hasReasoning = item.hasReasoning,
                                         onLongPress = {
                                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                             onShowAiMessageOptions(message)
                                         },
-                                        isStreaming = true,  // ✅ 关键：标记为流式状态
+                                        isStreaming = true,
                                         messageOutputType = message.outputType,
-                                        viewModel = viewModel,  // ✅ 传递viewModel用于流式订阅
+                                        viewModel = viewModel,
                                         showMenuButton = false
                                     )
                                 }
@@ -392,6 +434,7 @@ fun ChatMessagesList(
                                 )
                             }
                         }
+                        else -> { /* no-op */ }
                     }
                 }
             }
