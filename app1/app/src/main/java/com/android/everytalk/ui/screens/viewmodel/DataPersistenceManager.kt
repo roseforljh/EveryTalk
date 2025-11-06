@@ -15,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import coil3.ImageLoader
+import com.android.everytalk.util.FileManager
 import android.util.Base64
 import java.io.FileOutputStream
 import java.util.Locale
@@ -27,12 +28,15 @@ class DataPersistenceManager(
     private val imageLoader: ImageLoader
 ) {
     private val TAG = "PersistenceManager"
+    private val fileManager = FileManager(context)
 
     /**
-     * 将消息中的 data:image;base64,... 图片落盘为本地文件，并将 URL 替换为 file:// 或绝对路径
-     * 这样可避免把巨大 Base64 串写入 SharedPreferences 导致超限/丢失，重启后可稳定恢复。
+     * 将消息中的图片统一落盘并替换为本地绝对路径：
+     * - data:image;base64,... → 解码后保存
+     * - http/https → 下载原始字节后保存
+     * - file:// 或绝对路径保持不变
      */
-    private fun persistDataUriImages(messages: List<Message>): List<Message> {
+    private fun persistInlineAndRemoteImages(messages: List<Message>): List<Message> {
         if (messages.isEmpty()) return messages
         val outDir = File(context.filesDir, "chat_attachments").apply { mkdirs() }
 
@@ -42,25 +46,39 @@ class DataPersistenceManager(
                 m.contains("png") -> "png"
                 m.contains("jpeg") || m.contains("jpg") -> "jpg"
                 m.contains("webp") -> "webp"
+                m.contains("heic") -> "heic"
+                m.contains("heif") -> "heif"
                 else -> "png"
             }
         }
 
-        fun saveDataUri(dataUri: String, fileNameHint: String): String? {
+        fun saveBytes(bytes: ByteArray, mime: String?, fileNameHint: String): String? {
             return try {
-                val mime = dataUri.substringAfter("data:", "").substringBefore(";base64", "")
-                val base64Part = dataUri.substringAfter(";base64,", "")
-                if (base64Part.isBlank()) return null
-                val bytes = Base64.decode(base64Part, Base64.DEFAULT)
-
                 val ext = extFromMime(mime)
                 val file = File(outDir, "${fileNameHint}_${System.currentTimeMillis()}.$ext")
                 FileOutputStream(file).use { it.write(bytes) }
-
-                // 返回绝对路径；渲染端已支持 file:// 与绝对路径两种形式
-                file.absolutePath
+                if (file.exists() && file.length() > 0) file.absolutePath else null
             } catch (e: Exception) {
-                Log.w(TAG, "persistDataUriImages: failed to save data URI image", e)
+                Log.w(TAG, "persistImages: failed to save bytes for $fileNameHint", e)
+                null
+            }
+        }
+
+        fun tryDownload(url: String): Pair<ByteArray, String?>? {
+            return try {
+                val conn = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
+                    connectTimeout = 30000
+                    readTimeout = 30000
+                    instanceFollowRedirects = true
+                }
+                conn.connect()
+                if (conn.responseCode !in 200..299) return null
+                val mime = conn.contentType
+                val bytes = conn.inputStream.use { it.readBytes() }
+                conn.disconnect()
+                bytes to mime
+            } catch (e: Exception) {
+                Log.w(TAG, "persistImages: download failed for $url", e)
                 null
             }
         }
@@ -70,11 +88,39 @@ class DataPersistenceManager(
                 msg
             } else {
                 val newUrls = msg.imageUrls.mapIndexed { idx, url ->
-                    if (url.startsWith("data:image", ignoreCase = true)) {
-                        val saved = saveDataUri(url, "img_${msg.id}_${idx}")
-                        saved ?: url
-                    } else {
-                        url
+                    val lower = url.lowercase(Locale.ROOT)
+                    when {
+                        // 已是本地路径或 file://
+                        lower.startsWith("file://") || lower.startsWith("/") -> url
+
+                        // data:image;base64
+                        lower.startsWith("data:image") -> {
+                            val mime = url.substringAfter("data:", "").substringBefore(";base64", "")
+                            val base64Part = url.substringAfter(";base64,", "")
+                            if (base64Part.isBlank()) url
+                            else {
+                                try {
+                                    val bytes = Base64.decode(base64Part, Base64.DEFAULT)
+                                    saveBytes(bytes, mime, "img_${msg.id}_${idx}") ?: url
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "persistImages: data URL decode failed", e)
+                                    url
+                                }
+                            }
+                        }
+
+                        // http/https → 下载后保存
+                        lower.startsWith("http://") || lower.startsWith("https://") -> {
+                            val downloaded = tryDownload(url)
+                            if (downloaded != null) {
+                                val (bytes, mime) = downloaded
+                                saveBytes(bytes, mime, "img_${msg.id}_${idx}") ?: url
+                            } else {
+                                url
+                            }
+                        }
+
+                        else -> url
                     }
                 }
                 if (newUrls == msg.imageUrls) msg else msg.copy(imageUrls = newUrls)
@@ -223,8 +269,8 @@ class DataPersistenceManager(
 
                    // Load image generation history
                    val loadedImageGenHistory = dataSource.loadImageGenerationHistory()
-                   // 将历史中的 data:image 落盘并替换为本地路径（一次性修复旧数据中的内联图）
-                   val convertedImageGenHistory = loadedImageGenHistory.map { conv -> persistDataUriImages(conv) }
+                   // 将历史中的 data:image 与 http(s) 图片统一落盘并替换为本地路径（一次性修复旧数据）
+                   val convertedImageGenHistory = loadedImageGenHistory.map { conv -> persistInlineAndRemoteImages(conv) }
                    // 异步回写修复后的历史，避免后续重复转换
                    launch(Dispatchers.IO) {
                        try {
@@ -243,8 +289,8 @@ class DataPersistenceManager(
                     Log.d(TAG, "loadInitialData: Phase 3 - Loading last open chats...")
                     val lastOpenChat = dataSource.loadLastOpenChat()
                     val lastOpenImageGenChat = dataSource.loadLastOpenImageGenerationChat()
-                    // 将“最后打开的图像会话”里的 data:image 转为本地文件并替换
-                    val finalLastOpenImageGen = persistDataUriImages(lastOpenImageGenChat)
+                    // 将“最后打开的图像会话”里的 data:image 与 http(s) 转为本地文件并替换
+                    val finalLastOpenImageGen = persistInlineAndRemoteImages(lastOpenImageGenChat)
                     // 异步回写，确保下次启动直接使用文件路径
                     launch(Dispatchers.IO) {
                         try {
@@ -347,8 +393,8 @@ class DataPersistenceManager(
         withContext(Dispatchers.IO) {
             Log.d(TAG, "saveChatHistory: 保存 ${historyToSave.size} 条对话到 dataSource...")
             val finalHistory = if (isImageGeneration) {
-                // 将 data:image 的图片先落盘，替换为本地路径，避免SP超限
-                historyToSave.map { conv -> persistDataUriImages(conv) }
+                // 将 data:image 与 http(s) 图片先落盘，替换为本地路径，避免SP超限与远端URL过期
+                historyToSave.map { conv -> persistInlineAndRemoteImages(conv) }
             } else {
                 historyToSave
             }
@@ -441,8 +487,8 @@ class DataPersistenceManager(
            Log.d(TAG, "saveLastOpenChat: Saving ${processedMessages.size} messages for isImageGen=$isImageGeneration")
            try {
                val finalMessages = if (isImageGeneration) {
-                   // 同样对“最后打开的图像会话”进行 data:image 落盘与替换
-                   persistDataUriImages(processedMessages)
+                   // 对“最后打开的图像会话”统一进行 data:image 与 http(s) 落盘与替换
+                   persistInlineAndRemoteImages(processedMessages)
                } else {
                    processedMessages
                }
