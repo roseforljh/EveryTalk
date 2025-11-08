@@ -3,6 +3,7 @@ package com.android.everytalk.ui.screens.MainScreen.chat
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -20,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -342,17 +344,49 @@ fun OptimizedControlButtonsRow(
                 }
                 Spacer(Modifier.width(4.dp))
             }
+            val hasContent = text.isNotEmpty() || selectedMediaItems.isNotEmpty()
+            val isDarkTheme = isSystemInDarkTheme()
+
+            val buttonBackgroundColor by animateColorAsState(
+                targetValue = if (isDarkTheme) Color(0xFFB3B3B3) else Color.Black,
+                animationSpec = tween(durationMillis = 200),
+                label = "SendButtonBackground"
+            )
+            val iconColor by animateColorAsState(
+                targetValue = if (isDarkTheme) Color.Black else Color.White,
+                animationSpec = tween(durationMillis = 200),
+                label = "SendButtonIcon"
+            )
+
+            val buttonScale = remember { androidx.compose.animation.core.Animatable(1f) }
+            LaunchedEffect(hasContent, isApiCalling) {
+                buttonScale.animateTo(0.8f, animationSpec = tween(100))
+                buttonScale.animateTo(1f, animationSpec = tween(100))
+            }
+
             FilledIconButton(
                 onClick = onSendClick,
                 shape = CircleShape,
                 colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary
-                )
+                    containerColor = buttonBackgroundColor,
+                    contentColor = iconColor
+                ),
+                modifier = Modifier.graphicsLayer {
+                    scaleX = buttonScale.value
+                    scaleY = buttonScale.value
+                }
             ) {
                 Icon(
-                    if (isApiCalling) Icons.Filled.Stop else Icons.AutoMirrored.Filled.Send,
-                    if (isApiCalling) "停止" else "发送"
+                    imageVector = when {
+                        isApiCalling -> Icons.Filled.Stop
+                        hasContent -> Icons.Filled.KeyboardArrowUp
+                        else -> Icons.Filled.GraphicEq
+                    },
+                    contentDescription = when {
+                        isApiCalling -> "停止"
+                        hasContent -> "发送"
+                        else -> "语音输入"
+                    }
                 )
             }
         }

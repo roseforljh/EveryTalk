@@ -422,12 +422,15 @@ class MainActivity : ComponentActivity() {
                                        navController = navController
                                    )
                                }
-                            }
-                        }
-                }
-            }
-        }
-    }
+                               composable(Screen.VOICE_INPUT_SCREEN) {
+                                   com.android.everytalk.ui.screens.MainScreen.chat.VoiceInputScreen(onClose = { navController.popBackStack() })
+                               }
+                           }
+                       }
+               }
+           }
+       }
+   }
     
    override fun onPause() {
        super.onPause()

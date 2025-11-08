@@ -393,7 +393,8 @@ fun ChatScreen(
                         mimeType = mimeType
                     )
                 },
-                viewModel = viewModel
+                viewModel = viewModel,
+                onShowVoiceInput = { navController.navigate(Screen.VOICE_INPUT_SCREEN) }
             )
         }
 

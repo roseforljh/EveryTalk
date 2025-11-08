@@ -197,7 +197,8 @@ fun ChatInputArea(
     keyboardController: SoftwareKeyboardController?,
     onFocusChange: (isFocused: Boolean) -> Unit,
     onSendMessage: (messageText: String, isFromRegeneration: Boolean, attachments: List<SelectedMediaItem>, audioBase64: String?, mimeType: String?) -> Unit,
-    viewModel: com.android.everytalk.statecontroller.AppViewModel
+    viewModel: com.android.everytalk.statecontroller.AppViewModel,
+    onShowVoiceInput: () -> Unit
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -388,7 +389,9 @@ fun ChatInputArea(
                 try {
                     if (isApiCalling) {
                         onStopApiCall()
-                    } else if ((text.isNotBlank() || selectedMediaItems.isNotEmpty()) && selectedApiConfig != null) {
+                    } else if (text.isBlank() && selectedMediaItems.isEmpty()) {
+                        onShowVoiceInput()
+                    } else if (selectedApiConfig != null) {
                         val audioItem = selectedMediaItems.firstOrNull { it is SelectedMediaItem.Audio } as? SelectedMediaItem.Audio
                         val mimeType = audioItem?.mimeType
                         onSendMessageRequest(text, false, selectedMediaItems.toList(), mimeType)
@@ -398,12 +401,9 @@ fun ChatInputArea(
                         if (imeInsets.getBottom(density) > 0) {
                             keyboardController?.hide()
                         }
-                    } else if (selectedApiConfig == null) {
+                    } else {
                         Log.w("SendMessage", "请先选择 API 配置")
                         onShowSnackbar("请先选择 API 配置")
-                    } else {
-                        Log.w("SendMessage", "请输入消息内容或选择项目")
-                        onShowSnackbar("请输入消息内容或选择项目")
                     }
                 } catch (e: Exception) {
                     Log.e("SendMessage", "发送消息时发生错误", e)
@@ -430,18 +430,21 @@ fun ChatInputArea(
                 // 外层已统一处理 ime 与导航栏内边距
                 .onSizeChanged { intSize -> chatInputContentHeightPx = intSize.height }
         ) {
-            val borderColor = if (isSystemInDarkTheme()) Color.Gray.copy(alpha = 0.3f) else Color.Gray.copy(alpha = 0.2f)
+            val borderColor = if (isSystemInDarkTheme()) Color.Gray.copy(alpha = 0.6f) else Color.Black.copy(alpha = 0.2f)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(0.5.dp)
+                    .height(if (isSystemInDarkTheme()) 1.dp else 0.5.dp)
                     .background(
                         brush = Brush.horizontalGradient(
                             colors = listOf(
                                 Color.Transparent,
                                 borderColor,
+                                borderColor,
                                 Color.Transparent
-                            )
+                            ),
+                            startX = 0f,
+                            endX = Float.POSITIVE_INFINITY
                         )
                     )
             )
