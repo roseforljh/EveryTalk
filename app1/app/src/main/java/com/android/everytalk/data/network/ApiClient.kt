@@ -1077,6 +1077,8 @@ object ApiClient {
             }
             // 顶层也传递 aspect_ratio，便于后端直接取用
             imgReq.aspectRatio?.let { ar -> put("aspect_ratio", ar) }
+            // 强制后端将 http(s) 转为 data:image，避免前端鉴权/过期问题
+            put("forceDataUri", true)
             // 将上游地址与密钥交由后端代理转发与规范化
             put("apiAddress", imgReq.apiAddress)
             put("apiKey", imgReq.apiKey)
