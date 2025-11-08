@@ -62,7 +62,18 @@ fun VoiceInputScreen(
     val startRecordingSession = remember(selectedApiConfig) {
         {
             val baseUrl = (selectedApiConfig?.address ?: selectedApiConfig?.provider ?: "").ifBlank { "http://127.0.0.1:8000" }
-            val apiKey = (selectedApiConfig?.key ?: "").trim()
+            var apiKey = (selectedApiConfig?.key ?: "").trim()
+            // 覆盖为“语音设置”里按平台保存的Key（若存在）
+            try {
+                val prefs = context.getSharedPreferences("voice_settings", android.content.Context.MODE_PRIVATE)
+                val platform = prefs.getString("voice_platform", selectedApiConfig?.provider ?: "Gemini") ?: "Gemini"
+                val keyOverride = prefs.getString("voice_key_${platform}", null)?.trim()
+                if (!keyOverride.isNullOrEmpty()) {
+                    apiKey = keyOverride
+                }
+            } catch (_: Throwable) {
+                // 忽略本地读取异常，回退到 selectedApiConfig.key
+            }
             if (apiKey.isEmpty()) {
                 android.util.Log.w("VoiceInputScreen", "Gemini API Key is empty, cannot start live session.")
             } else {
@@ -198,8 +209,28 @@ private fun VoiceSettingsDialog(
     selectedApiConfig: ApiConfig?,
     onDismiss: () -> Unit
 ) {
-    var selectedPlatform by remember { mutableStateOf(selectedApiConfig?.provider ?: "Gemini") }
-    var apiKey by remember { mutableStateOf("") }
+    // 本地持久化：voice_settings
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("voice_settings", android.content.Context.MODE_PRIVATE) }
+    val savedPlatform = remember { prefs.getString("voice_platform", null) }
+    val savedKeyGemini = remember { prefs.getString("voice_key_Gemini", "") ?: "" }
+    val savedKeyOpenAI = remember { prefs.getString("voice_key_OpenAI", "") ?: "" }
+
+    // 根据平台解析Key的函数：仅从本地保存中读取，首次安装时为空
+    fun resolveKeyFor(platform: String): String {
+        val fromPrefs = when (platform) {
+            "OpenAI" -> savedKeyOpenAI
+            else -> savedKeyGemini
+        }.trim()
+        return fromPrefs
+    }
+
+    var selectedPlatform by remember {
+        mutableStateOf(savedPlatform ?: "Gemini")
+    }
+    var apiKey by remember {
+        mutableStateOf(resolveKeyFor(selectedPlatform))
+    }
     var expanded by remember { mutableStateOf(false) }
     val platforms = listOf("Gemini", "OpenAI")
     
@@ -281,6 +312,8 @@ private fun VoiceSettingsDialog(
                                     text = { Text(platform) },
                                     onClick = {
                                         selectedPlatform = platform
+                                        // 实时切换到对应平台的Key（优先本地；否则回退到selectedApiConfig；否则空）
+                                        apiKey = resolveKeyFor(platform)
                                         expanded = false
                                     }
                                 )
@@ -346,7 +379,17 @@ private fun VoiceSettingsDialog(
                     // 确定按钮
                     Button(
                         onClick = {
-                            // TODO: 保存设置
+                            // 保存用户选择的平台和对应Key
+                            runCatching {
+                                val editor = prefs.edit()
+                                editor.putString("voice_platform", selectedPlatform)
+                                if (selectedPlatform == "OpenAI") {
+                                    editor.putString("voice_key_OpenAI", apiKey)
+                                } else {
+                                    editor.putString("voice_key_Gemini", apiKey)
+                                }
+                                editor.apply()
+                            }
                             onDismiss()
                         },
                         modifier = Modifier
