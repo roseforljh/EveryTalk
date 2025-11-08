@@ -51,9 +51,28 @@ class DataPersistenceManager(
 
         fun saveDataUri(dataUri: String, fileNameHint: String): String? {
             return try {
+                // 解析形如 data:image/png;base64,AAAA... 的数据
+                val commaIndex = dataUri.indexOf(',')
+                if (commaIndex <= 0) return null
+                // 跳过前缀 "data:"
+                val header = dataUri.substring(5, commaIndex)
+                val mimePart = header.substringBefore(';', "")
+                val mime = if (mimePart.isNotBlank()) mimePart else "image/png"
+                val isBase64 = header.contains("base64", ignoreCase = true)
+                val payload = dataUri.substring(commaIndex + 1)
+
+                val bytes: ByteArray = if (isBase64) {
+                    Base64.decode(payload, Base64.DEFAULT)
+                } else {
+                    // 非 base64 的 data:payload（较少见），按 URL 编码处理
+                    Uri.decode(payload).toByteArray()
+                }
+
                 val ext = extFromMime(mime)
-                val file = File(targetDir, "${fileNameHint}_${System.currentTimeMillis()}.$ext")
-                FileOutputStream(file).use { it.write(bytes) }
+                val file = File(tempDir, "${fileNameHint}_${System.currentTimeMillis()}.$ext")
+                FileOutputStream(file).use { fos ->
+                    fos.write(bytes)
+                }
                 if (file.exists() && file.length() > 0) file.absolutePath else null
             } catch (e: Exception) {
                 Log.w(TAG, "persistImages: failed to save bytes for $fileNameHint", e)
