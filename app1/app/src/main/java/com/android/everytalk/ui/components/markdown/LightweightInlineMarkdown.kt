@@ -7,6 +7,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import kotlin.math.min
 
@@ -32,7 +33,8 @@ object LightweightInlineMarkdown {
 
     data class Options(
         val maxSegments: Int = INLINE_SEGMENT_BUDGET_DEFAULT,
-        val maxSpanChars: Int = INLINE_MAX_SPAN_CHARS_DEFAULT
+        val maxSpanChars: Int = INLINE_MAX_SPAN_CHARS_DEFAULT,
+        val extended: Boolean = true // 启用行级标题/列表/链接的最小化样式与链接注解
     )
 
     private enum class State { TEXT, BOLD, ITALIC, CODE }
@@ -273,16 +275,111 @@ object LightweightInlineMarkdown {
 
         // 构建 AnnotatedString
         val plain = out.toString()
-        return buildAnnotatedString {
-            append(plain)
-            for (r in spans) {
-                // 安全边界
-                val s = r.start.coerceIn(0, length)
-                val e = r.end.coerceIn(s, length)
-                if (e > s) {
-                    addStyle(r.style, s, e)
+
+        // 构建 AnnotatedString.Builder 并附加初始内联样式
+        val builder = AnnotatedString.Builder()
+        builder.append(plain)
+        for (r in spans) {
+            val s = r.start.coerceIn(0, builder.length)
+            val e = r.end.coerceIn(s, builder.length)
+            if (e > s) builder.addStyle(r.style, s, e)
+        }
+
+        // 扩展：行级标题/列表/链接（预算受限，匹配失败则按文本退化）
+        if (opts.extended && maxSegments > 0) {
+            var used = spans.size
+            val budget = maxSegments
+
+            fun canUse(extra: Int = 1): Boolean = used + extra <= budget
+
+            // 标题：^#{1,3}\s+(.+)$
+            if (canUse()) {
+                val headingRe = Regex("(?m)^(#{1,3})\\s+(.+)$")
+                for (m in headingRe.findAll(plain)) {
+                    val g = m.groups[2] ?: continue
+                    if (!canUse()) break
+                    val s = g.range.first.coerceIn(0, builder.length)
+                    val e = (g.range.last + 1).coerceIn(s, builder.length)
+                    if (e > s) {
+                        builder.addStyle(
+                            SpanStyle(fontWeight = FontWeight.SemiBold, color = baseStyleColor),
+                            s, e
+                        )
+                        used++
+                        if (!canUse()) break
+                    }
+                }
+            }
+
+            // 无序列表：^(\s*[-*+])\s+(.+)$
+            if (canUse()) {
+                val ulRe = Regex("(?m)^[ \\t]*([\\-\\*\\+])\\s+(.+)$")
+                for (m in ulRe.findAll(plain)) {
+                    val g = m.groups[2] ?: continue
+                    if (!canUse()) break
+                    val s = g.range.first.coerceIn(0, builder.length)
+                    val e = (g.range.last + 1).coerceIn(s, builder.length)
+                    if (e > s) {
+                        builder.addStyle(
+                            SpanStyle(color = baseStyleColor),
+                            s, e
+                        )
+                        used++
+                        if (!canUse()) break
+                    }
+                }
+            }
+
+            // 有序列表：^(\s*[0-9]{1,3}\.)\s+(.+)$
+            if (canUse()) {
+                val olRe = Regex("(?m)^[ \\t]*([0-9]{1,3}\\.)\\s+(.+)$")
+                for (m in olRe.findAll(plain)) {
+                    val g = m.groups[2] ?: continue
+                    if (!canUse()) break
+                    val s = g.range.first.coerceIn(0, builder.length)
+                    val e = (g.range.last + 1).coerceIn(s, builder.length)
+                    if (e > s) {
+                        builder.addStyle(
+                            SpanStyle(color = baseStyleColor),
+                            s, e
+                        )
+                        used++
+                        if (!canUse()) break
+                    }
+                }
+            }
+
+            // 链接：[text](url) —— 仅高亮 text 并添加 URL 注解（不改动原文）
+            if (canUse()) {
+                val linkRe = Regex("\\[([^\\]]+)\\]\\(([^)]+)\\)")
+                for (m in linkRe.findAll(plain)) {
+                    val tg = m.groups[1] ?: continue
+                    val ug = m.groups[2] ?: continue
+                    if (!canUse(2)) break
+                    val ts = tg.range.first.coerceIn(0, builder.length)
+                    val te = (tg.range.last + 1).coerceIn(ts, builder.length)
+                    val url = plain.substring(ug.range)
+                    if (te > ts) {
+                        builder.addStyle(
+                            SpanStyle(
+                                color = Color(0xFF2986CC),
+                                textDecoration = TextDecoration.Underline
+                            ),
+                            ts, te
+                        )
+                        builder.addStringAnnotation(
+                            tag = "URL",
+                            annotation = url,
+                            start = ts,
+                            end = te
+                        )
+                        used += 2
+                        if (!canUse()) break
+                    }
                 }
             }
         }
+
+        return builder.toAnnotatedString()
     }
 }

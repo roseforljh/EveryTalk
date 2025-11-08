@@ -200,16 +200,22 @@ fun MarkdownRenderer(
         }
     }
 
-    // 流式阶段的轻量渲染触发条件：
-    // 1) 文本很长（>1500），避免重型解析；或
-    // 2) 文本中包含 Markdown 内联标记（如 ** 或 _ 或 `），即使不长也用轻量渲染，
-    //    以避免“流式未成对/上下文不完整”导致第三方解析器失效的情况。
-    val triggerLightweightInStream = isStreaming && (
-        preNormalized.length > 1500 ||
-        preNormalized.contains("**") ||
-        preNormalized.contains('_') ||
-        preNormalized.contains('`')
-    )
+    // 判定文本是否“看起来已完结”，用于在仍处于流式时也切换到完整渲染
+    fun looksFinalized(text: String): Boolean {
+        // 代码围栏是否成对（``` 次数为偶数）
+        val fenceCount = Regex("```").findAll(text).count()
+        val fencesBalanced = fenceCount % 2 == 0
+        // 表格是否具备 header 与分隔线（GFM）
+        val hasTableHeader = Regex("(?m)^\\|.+\\|\\s*$").containsMatchIn(text)
+        val hasTableSep = Regex("(?m)^\\|[ :\\-\\|]+\\|\\s*$").containsMatchIn(text)
+        val tablesComplete = !hasTableHeader || hasTableSep
+        return fencesBalanced && tablesComplete
+    }
+    // 非流式天然为最终；流式中若“看起来已完结”也视为最终
+    val finalLike = (!isStreaming) || looksFinalized(preNormalized)
+
+    // 仅当处于流式且“未完结”时才采用轻量渲染；一旦“看起来完结”，直接走完整渲染（无需切 isStreaming=false）
+    val triggerLightweightInStream = isStreaming && !finalLike
     if (triggerLightweightInStream) {
         val annotated = remember(preNormalized, isDark, textColor) {
             LightweightInlineMarkdown.renderInlineAnnotated(
@@ -226,8 +232,11 @@ fun MarkdownRenderer(
         return
     }
 
-    // 非流式执行一次修复；短文本和流式跳过修复
-    val fixedMarkdown = if (isStreaming || compatSource.length < MARKDOWN_FIX_MIN_LEN) {
+    // 修复策略：
+    // - 非流式：执行一次修复
+    // - 流式但“看起来已完结”（finalLike=true）：也执行一次修复，确保最后一块与AI结束同步为最终渲染
+    // - 其他情况或短文本：跳过修复以保证性能与稳定
+    val fixedMarkdown = if (!finalLike || compatSource.length < MARKDOWN_FIX_MIN_LEN) {
         compatSource
     } else {
         remember(compatSource) {

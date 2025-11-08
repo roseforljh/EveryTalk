@@ -684,20 +684,11 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     // 处理器会在清理资源时被正确管理，不需要在这里删除
                     logger.debug("Message processor for $aiMessageId retained after stream completion")
                     
-                    // 核心修复：在事件处理完成后立即清空streaming ID
-                    // 这会触发UI重新组合，isStreaming变为false
-                    if (isImageGeneration) {
-                        if (stateHolder._currentImageStreamingAiMessageId.value == aiMessageId) {
-                            stateHolder._currentImageStreamingAiMessageId.value = null
-                            android.util.Log.d("ApiHandler", "🔥 Cleared image streaming ID immediately after Finish for message: $aiMessageId")
-                        }
-                    } else {
-                        if (stateHolder._currentTextStreamingAiMessageId.value == aiMessageId) {
-                            stateHolder._currentTextStreamingAiMessageId.value = null
-                            android.util.Log.d("ApiHandler", "🔥 Cleared text streaming ID immediately after Finish for message: $aiMessageId")
-                        }
-                    }
-                    // Emit single-line session summary
+                    // 按用户期望：不要在 finish 事件处强制切 isStreaming=false
+                    // 说明：
+                    // - 是否呈现“最终渲染”由渲染层的 looksFinalized 判定决定（MarkdownRenderer）
+                    // - 流程收尾的 isApiCalling 状态与 streamingId 归位交由上游 onCompletion 分支处理
+                    // - 此处仅记录会话摘要，避免二次清空引发 UI 抖动
                     PerformanceMonitor.onFinish(aiMessageId)
                 }
                 is AppStreamEvent.Error -> {

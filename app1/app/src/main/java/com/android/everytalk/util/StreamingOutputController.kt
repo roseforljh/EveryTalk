@@ -9,8 +9,8 @@ import java.util.concurrent.atomic.AtomicLong
  */
 class StreamingOutputController(
     private val onUpdate: (String) -> Unit,
-    private val updateIntervalMs: Long = 100L,
-    private val minCharsToUpdate: Int = 10,
+    private val updateIntervalMs: Long = 60L,
+    private val minCharsToUpdate: Int = 6,
     private val maxAccumulatedChars: Int = 500_000 // 500KB 最大累积限制
 ) {
     private val logger = AppLogger.forComponent("StreamingOutputController")
@@ -131,8 +131,8 @@ object StreamingOutputManager {
     fun createController(
         messageId: String,
         onUpdate: (String) -> Unit,
-        updateIntervalMs: Long = 100L,
-        minCharsToUpdate: Int = 10,
+        updateIntervalMs: Long = 60L,
+        minCharsToUpdate: Int = 6,
         maxAccumulatedChars: Int = 500_000
     ): StreamingOutputController {
         val controller = StreamingOutputController(onUpdate, updateIntervalMs, minCharsToUpdate, maxAccumulatedChars)
