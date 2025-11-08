@@ -49,6 +49,13 @@ class VoiceChatSession(
 
     companion object {
         private const val TAG = "VoiceChatSession"
+        // 接口路径（编译时混淆）
+        private val API_PATH = buildString {
+            append("/gemini")
+            append("/voice")
+            append("-chat")
+            append("/complete")
+        }
     }
 
     /**
@@ -178,12 +185,15 @@ class VoiceChatSession(
                 .addFormDataPart("voice_name", voiceName)
                 .build()
 
+            // 使用配置的URL和混淆的路径
+            val apiUrl = baseUrl + API_PATH
+            
             val request = Request.Builder()
-                .url("$baseUrl/gemini/voice-chat/complete")
+                .url(apiUrl)
                 .post(requestBody)
                 .build()
 
-            Log.i(TAG, "Sending voice chat request to $baseUrl/gemini/voice-chat/complete")
+            Log.i(TAG, "Sending voice chat request...")
 
             val response = client.newCall(request).execute()
 

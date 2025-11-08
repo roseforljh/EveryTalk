@@ -90,14 +90,18 @@ android {
             signingConfig = signingConfigs.getByName("release")
             // Inject backend configuration for Release
             val backendUrlsRelease = sanitizeForBuildConfig(localProperties.getProperty("BACKEND_URLS_RELEASE", ""))
+            val voiceBackendUrlRelease = sanitizeForBuildConfig(localProperties.getProperty("VOICE_BACKEND_URL_RELEASE", "https://nzc.kuz7.com"))
             buildConfigField("String", "BACKEND_URLS", "\"${backendUrlsRelease}\"")
+            buildConfigField("String", "VOICE_BACKEND_URL", "\"${voiceBackendUrlRelease}\"")
             buildConfigField("boolean", "CONCURRENT_REQUEST_ENABLED", "false")
         }
         debug {
             isProfileable = false // debug 构建也可以设为 profileable,方便测试
             // Inject backend configuration for Debug
             val backendUrlsDebug = sanitizeForBuildConfig(localProperties.getProperty("BACKEND_URLS_DEBUG", ""))
+            val voiceBackendUrlDebug = sanitizeForBuildConfig(localProperties.getProperty("VOICE_BACKEND_URL_DEBUG", "http://192.168.0.101:7860"))
             buildConfigField("String", "BACKEND_URLS", "\"${backendUrlsDebug}\"")
+            buildConfigField("String", "VOICE_BACKEND_URL", "\"${voiceBackendUrlDebug}\"")
             buildConfigField("boolean", "CONCURRENT_REQUEST_ENABLED", "false")
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"

@@ -79,9 +79,8 @@ fun VoiceInputScreen(
     // 启动录音会话（新版：使用VoiceChatSession）
     val startRecordingSession = remember(selectedApiConfig, viewModel) {
         {
-            // 🔧 调试模式：强制使用本地地址
-            val baseUrl = "http://192.168.0.101:7860"  // 你的本地后端地址
-            // val baseUrl = (selectedApiConfig?.address ?: selectedApiConfig?.provider ?: "").ifBlank { "http://127.0.0.1:8000" }
+            // 从 BuildConfig 读取语音模式后端地址
+            val baseUrl = com.android.everytalk.BuildConfig.VOICE_BACKEND_URL
             var apiKey = (selectedApiConfig?.key ?: "").trim()
             
             // 覆盖为"语音设置"里按平台保存的Key（若存在）
