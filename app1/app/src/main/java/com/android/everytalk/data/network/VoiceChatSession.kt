@@ -165,11 +165,19 @@ class VoiceChatSession(
                 })
             }
 
-            // 构建多部分表单请求
+            // 构建HTTP客户端（优化：连接池+更短超时）
             val client = OkHttpClient.Builder()
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(60, TimeUnit.SECONDS)
-                .writeTimeout(60, TimeUnit.SECONDS)
+                .connectTimeout(10, TimeUnit.SECONDS)  // 连接超时缩短
+                .readTimeout(45, TimeUnit.SECONDS)     // 读取超时缩短
+                .writeTimeout(15, TimeUnit.SECONDS)    // 写入超时缩短
+                .retryOnConnectionFailure(false)        // 禁用重试，加快失败响应
+                .connectionPool(
+                    okhttp3.ConnectionPool(
+                        maxIdleConnections = 5,
+                        keepAliveDuration = 5,
+                        TimeUnit.MINUTES
+                    )
+                )
                 .build()
 
             val requestBody = MultipartBody.Builder()
@@ -208,7 +216,7 @@ class VoiceChatSession(
 
             val userText = jsonResponse.getString("user_text")
             val assistantText = jsonResponse.getString("assistant_text")
-            val audioBase64 = jsonResponse.getString("audio_base64")
+            val audioBase64 = jsonResponse.optString("audio_base64", "")
             val audioFormat = jsonResponse.optString("audio_format", "wav")
             val sampleRate = jsonResponse.optInt("sample_rate", 24000)
 
@@ -222,11 +230,21 @@ class VoiceChatSession(
                 onResponseReceived?.invoke(assistantText)
             }
 
-            // 解码音频数据
-            val audioData = android.util.Base64.decode(audioBase64, android.util.Base64.DEFAULT)
-
-            // 播放音频
-            playAudio(audioData, sampleRate)
+            // 解码并播放音频数据（如果有）
+            val audioData = if (audioBase64.isNotEmpty()) {
+                try {
+                    val decoded = android.util.Base64.decode(audioBase64, android.util.Base64.DEFAULT)
+                    // 播放音频
+                    playAudio(decoded, sampleRate)
+                    decoded
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to decode/play audio (TTS quota exhausted?)", e)
+                    ByteArray(0)
+                }
+            } else {
+                Log.w(TAG, "No audio data (TTS quota exhausted), text-only mode")
+                ByteArray(0)
+            }
 
             VoiceChatResult(
                 userText = userText,

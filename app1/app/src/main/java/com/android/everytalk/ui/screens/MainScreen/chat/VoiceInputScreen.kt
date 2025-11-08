@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.outlined.ClosedCaption
 import androidx.compose.material.icons.outlined.VolumeUp
 import androidx.compose.material3.*
@@ -71,6 +72,7 @@ fun VoiceInputScreen(
     var userText by remember { mutableStateOf("") }
     var assistantText by remember { mutableStateOf("") }
     var isProcessing by remember { mutableStateOf(false) }
+    var showTtsQuotaWarning by remember { mutableStateOf(false) }
 
     // 语音会话：点击左下角麦克风后启动/停止
     val coroutineScope = rememberCoroutineScope()
@@ -100,10 +102,10 @@ fun VoiceInputScreen(
             if (apiKey.isEmpty()) {
                 android.util.Log.w("VoiceInputScreen", "API Key is empty, cannot start voice chat session.")
             } else {
-                // 获取当前对话历史（用于上下文）
+                // 获取当前对话历史（优化：只取最近3轮，减少处理时间）
                 val chatHistory = mutableListOf<Pair<String, String>>()
                 viewModel?.stateHolder?.let { holder ->
-                    holder.messages.takeLast(10).forEach { msg ->
+                    holder.messages.takeLast(6).forEach { msg ->  // 3轮对话=6条消息
                         when (msg.sender) {
                             Sender.User -> chatHistory.add("user" to msg.text)
                             Sender.AI -> chatHistory.add("assistant" to msg.text)
@@ -260,15 +262,27 @@ fun VoiceInputScreen(
                                                     // 标记对话为已修改
                                                     vm.stateHolder.isTextConversationDirty.value = true
                                                     
-                                                    android.util.Log.i("VoiceInputScreen", "Voice messages added: User='${result.userText}', AI='${result.assistantText}'")
-                                                    android.util.Log.i("VoiceInputScreen", "Current messages count: ${vm.stateHolder.messages.size}, loadedHistoryIndex: ${vm.stateHolder._loadedHistoryIndex.value}")
+                                                    // 检查是否有音频
+                                                    val hasAudio = result.audioData.isNotEmpty()
+                                                    android.util.Log.i("VoiceInputScreen", "Voice chat completed - User: '${result.userText}', AI: '${result.assistantText}', HasAudio: $hasAudio")
+                                                    
+                                                    // 如果没有音频，显示TTS配额警告
+                                                    if (!hasAudio) {
+                                                        showTtsQuotaWarning = true
+                                                    }
                                                     
                                                     // 立即保存到历史记录
                                                     vm.saveCurrentChatToHistory(forceSave = true, isImageGeneration = false)
                                                 }
                                             }
                                             
-                                            android.util.Log.i("VoiceInputScreen", "Voice chat completed successfully")
+                                            android.util.Log.i("VoiceInputScreen", "Voice chat saved to history")
+                                            
+                                            // 如果显示了配额警告，3秒后自动隐藏
+                                            if (showTtsQuotaWarning) {
+                                                kotlinx.coroutines.delay(3000)
+                                                showTtsQuotaWarning = false
+                                            }
                                         } catch (t: Throwable) {
                                             android.util.Log.e("VoiceInputScreen", "Voice chat failed", t)
                                             userText = ""
@@ -358,6 +372,41 @@ fun VoiceInputScreen(
                         color = contentColor,
                         style = MaterialTheme.typography.bodyMedium
                     )
+                }
+                
+                // TTS配额警告提示
+                if (showTtsQuotaWarning) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth(0.85f)
+                            .padding(horizontal = 16.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color(0xFFFF9800).copy(alpha = 0.9f)
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = androidx.compose.material.icons.Icons.Default.Info,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                text = "TTS配额已用完，仅显示文字",
+                                color = Color.White,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
                 }
                 
                 // 显示识别的文字和AI回复
