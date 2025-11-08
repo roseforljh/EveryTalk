@@ -741,6 +741,17 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         }
     }
     
+    // 供外部调用的保存历史记录方法（用于语音模式等）
+    fun saveCurrentChatToHistory(forceSave: Boolean = true, isImageGeneration: Boolean = false) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = forceSave, isImageGeneration = isImageGeneration)
+            } catch (e: Exception) {
+                Log.e("AppViewModel", "Failed to save chat to history", e)
+            }
+        }
+    }
+    
     // 获取当前会话的生成参数
     fun getCurrentConversationParameters(): GenerationConfig? {
         // 严格按会话返回；新会话默认无配置（maxTokens 关闭）

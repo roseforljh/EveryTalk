@@ -39,6 +39,7 @@ import com.android.everytalk.data.network.VoiceChatSession
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
@@ -236,28 +237,35 @@ fun VoiceInputScreen(
                                             // 停止录音并处理（STT → Chat → TTS）
                                             val result = session.stopRecordingAndProcess()
                                             
-                                            // 保存对话到历史记录
-                                            viewModel?.stateHolder?.let { holder ->
-                                                // 添加用户消息
-                                                val userMessage = Message(
-                                                    text = result.userText,
-                                                    sender = Sender.User,
-                                                    timestamp = System.currentTimeMillis()
-                                                )
-                                                holder.messages.add(userMessage)
-                                                
-                                                // 添加AI回复
-                                                val aiMessage = Message(
-                                                    text = result.assistantText,
-                                                    sender = Sender.AI,
-                                                    timestamp = System.currentTimeMillis()
-                                                )
-                                                holder.messages.add(aiMessage)
-                                                
-                                                // 标记对话为已修改，触发保存
-                                                holder.isTextConversationDirty.value = true
-                                                
-                                                android.util.Log.i("VoiceInputScreen", "Voice chat saved to history")
+                                            // 保存对话到当前会话消息列表
+                                            viewModel?.let { vm ->
+                                                withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                                    // 添加用户消息
+                                                    val userMessage = Message(
+                                                        text = result.userText,
+                                                        sender = Sender.User,
+                                                        timestamp = System.currentTimeMillis()
+                                                    )
+                                                    vm.stateHolder.messages.add(userMessage)
+                                                    
+                                                    // 添加AI回复
+                                                    val aiMessage = Message(
+                                                        text = result.assistantText,
+                                                        sender = Sender.AI,
+                                                        timestamp = System.currentTimeMillis(),
+                                                        contentStarted = true  // 标记内容已完成
+                                                    )
+                                                    vm.stateHolder.messages.add(aiMessage)
+                                                    
+                                                    // 标记对话为已修改
+                                                    vm.stateHolder.isTextConversationDirty.value = true
+                                                    
+                                                    android.util.Log.i("VoiceInputScreen", "Voice messages added: User='${result.userText}', AI='${result.assistantText}'")
+                                                    android.util.Log.i("VoiceInputScreen", "Current messages count: ${vm.stateHolder.messages.size}, loadedHistoryIndex: ${vm.stateHolder._loadedHistoryIndex.value}")
+                                                    
+                                                    // 立即保存到历史记录
+                                                    vm.saveCurrentChatToHistory(forceSave = true, isImageGeneration = false)
+                                                }
                                             }
                                             
                                             android.util.Log.i("VoiceInputScreen", "Voice chat completed successfully")
@@ -301,7 +309,8 @@ fun VoiceInputScreen(
                         onClick = {
                             if (!isClosing) {
                                 isClosing = true
-                                // 直接调用关闭，移除延迟以避免与主页面按钮动画冲突
+                                
+                                // 直接调用关闭（保存逻辑由ViewModel的生命周期管理）
                                 onClose()
                             }
                         },
