@@ -27,11 +27,20 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.android.everytalk.data.DataClass.ApiConfig
+import com.android.everytalk.data.network.GeminiLiveSession
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.random.Random
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -43,7 +52,47 @@ fun VoiceInputScreen(
     var isClosing by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
     var isRecording by remember { mutableStateOf(false) }
-    
+
+    // 语音会话：点击左下角麦克风后启动/停止
+    val coroutineScope = rememberCoroutineScope()
+    var liveSession by remember { mutableStateOf<GeminiLiveSession?>(null) }
+    val context = LocalContext.current
+
+    // 启动录音会话（已含 API Key 判空保护）
+    val startRecordingSession = remember(selectedApiConfig) {
+        {
+            val baseUrl = (selectedApiConfig?.address ?: selectedApiConfig?.provider ?: "").ifBlank { "http://127.0.0.1:8000" }
+            val apiKey = (selectedApiConfig?.key ?: "").trim()
+            if (apiKey.isEmpty()) {
+                android.util.Log.w("VoiceInputScreen", "Gemini API Key is empty, cannot start live session.")
+            } else {
+                val session = GeminiLiveSession(baseUrl = baseUrl, apiKey = apiKey)
+                liveSession = session
+                isRecording = true
+                coroutineScope.launch {
+                    try {
+                        session.start()
+                    } catch (t: Throwable) {
+                        android.util.Log.e("VoiceInputScreen", "Failed to start recording/session", t)
+                        isRecording = false
+                        liveSession = null
+                    }
+                }
+            }
+        }
+    }
+
+    // 录音权限请求
+    val requestAudioPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            startRecordingSession()
+        } else {
+            android.util.Log.w("VoiceInputScreen", "RECORD_AUDIO permission denied by user.")
+        }
+    }
+     
     // 主题适配
     val isDarkTheme = isSystemInDarkTheme()
     val backgroundColor = if (isDarkTheme) Color.Black else MaterialTheme.colorScheme.background
@@ -71,7 +120,33 @@ fun VoiceInputScreen(
             ) {
                 IconButton(
                     onClick = {
-                        isRecording = !isRecording
+                        // 单击左下角麦克风：开始/结束语音模式（先校验运行时权限）
+                        if (!isRecording) {
+                            val granted = ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.RECORD_AUDIO
+                            ) == PackageManager.PERMISSION_GRANTED
+                            if (granted) {
+                                startRecordingSession()
+                            } else {
+                                requestAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            }
+                        } else {
+                            // 停止录音并发送给后端，然后播放返回的24k音频
+                            val session = liveSession
+                            isRecording = false
+                            if (session != null) {
+                                coroutineScope.launch {
+                                    try {
+                                        session.stopAndSendAndPlay()
+                                    } catch (t: Throwable) {
+                                        android.util.Log.e("VoiceInputScreen", "Failed to stop/send/play", t)
+                                    } finally {
+                                        liveSession = null
+                                    }
+                                }
+                            }
+                        }
                     }
                 ) {
                     Icon(
