@@ -40,7 +40,8 @@ import java.util.concurrent.TimeUnit
 class GeminiLiveSession(
     private val baseUrl: String,  // 例如 "https://your-proxy-host"
     private val apiKey: String,
-    private val model: String = "gemini-2.5-flash-native-audio-preview-09-2025"
+    private val model: String = "gemini-2.5-flash-native-audio-preview-09-2025",
+    private val onVolumeChanged: ((Float) -> Unit)? = null  // 🎤 音量变化回调
 ) {
     private var audioRecord: AudioRecord? = null
     private var isRecording: Boolean = false
@@ -81,11 +82,44 @@ class GeminiLiveSession(
 
         // 启动读取循环（调用方控制生命周期，stopAndSendAndPlay 会将 isRecording=false）
         val readBuf = ByteArray(2048)
+        var lastVolumeUpdateTime = 0L // 🎤 限流：避免频繁回调
+        
         try {
             while (isRecording) {
                 val n = recorder.read(readBuf, 0, readBuf.size)
                 if (n > 0) {
                     pcmBuffer.write(readBuf, 0, n)
+                    
+                    // 🎤 计算音量（RMS）并回调给UI（限制频率：每50ms更新一次）
+                    val currentTime = System.currentTimeMillis()
+                    if (onVolumeChanged != null && currentTime - lastVolumeUpdateTime >= 50) {
+                        lastVolumeUpdateTime = currentTime
+                        
+                        // readBuf 是 ByteArray，需要转换为 ShortArray 来计算音量
+                        var sum = 0.0
+                        var i = 0
+                        while (i < n - 1) {
+                            // 16-bit PCM: 两个字节组成一个 short (little-endian)
+                            val sample = (readBuf[i].toInt() and 0xFF) or (readBuf[i + 1].toInt() shl 8)
+                            val shortValue = sample.toShort()
+                            sum += shortValue * shortValue
+                            i += 2
+                        }
+                        val sampleCount = n / 2
+                        if (sampleCount > 0) {
+                            val rms = kotlin.math.sqrt(sum / sampleCount)
+                            // 归一化到 0~1，使用对数缩放
+                            val normalizedVolume = (rms / 3000.0).coerceIn(0.0, 1.0).toFloat()
+                            
+                            // 🔍 调试日志
+                            Log.d("VoiceVolume", "RMS: $rms, Normalized: $normalizedVolume")
+                            
+                            // 切换到主线程更新UI
+                            withContext(Dispatchers.Main) {
+                                onVolumeChanged?.invoke(normalizedVolume)
+                            }
+                        }
+                    }
                 } else if (n == AudioRecord.ERROR_INVALID_OPERATION || n == AudioRecord.ERROR_BAD_VALUE) {
                     // 轻微错误，跳过继续
                 }
@@ -352,7 +386,6 @@ object GeminiLiveClient {
             playStream(input, sampleRateOut)
         }
     }
-
     private fun playStream(input: InputStream, sampleRateOut: Int) {
         val minBuf = AudioTrack.getMinBufferSize(
             sampleRateOut,

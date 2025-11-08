@@ -34,18 +34,12 @@ import kotlinx.coroutines.delay
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
-import kotlin.random.Random
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
-import android.media.AudioFormat
-import android.media.AudioRecord
-import android.media.MediaRecorder
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -60,7 +54,6 @@ fun VoiceInputScreen(
     
     // 🎤 实时音量状态（0.0 ~ 1.0）
     var currentVolume by remember { mutableStateOf(0f) }
-    var audioRecord by remember { mutableStateOf<AudioRecord?>(null) }
 
     // 语音会话：点击左下角麦克风后启动/停止
     val coroutineScope = rememberCoroutineScope()
@@ -86,55 +79,19 @@ fun VoiceInputScreen(
             if (apiKey.isEmpty()) {
                 android.util.Log.w("VoiceInputScreen", "Gemini API Key is empty, cannot start live session.")
             } else {
-                val session = GeminiLiveSession(baseUrl = baseUrl, apiKey = apiKey)
+                // 🎤 创建会话时传递音量回调
+                val session = GeminiLiveSession(
+                    baseUrl = baseUrl, 
+                    apiKey = apiKey,
+                    onVolumeChanged = { volume ->
+                        android.util.Log.d("VoiceInputScreen", "🎤 Volume received: $volume")
+                        currentVolume = volume
+                    }
+                )
                 liveSession = session
                 isRecording = true
                 
-                // 🎤 启动音量监听
-                coroutineScope.launch(Dispatchers.IO) {
-                    try {
-                        val sampleRate = 44100
-                        val channelConfig = AudioFormat.CHANNEL_IN_MONO
-                        val audioFormat = AudioFormat.ENCODING_PCM_16BIT
-                        val bufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
-                        
-                        val recorder = AudioRecord(
-                            MediaRecorder.AudioSource.MIC,
-                            sampleRate,
-                            channelConfig,
-                            audioFormat,
-                            bufferSize
-                        )
-                        audioRecord = recorder
-                        recorder.startRecording()
-                        
-                        val buffer = ShortArray(bufferSize)
-                        while (isRecording) {
-                            val readSize = recorder.read(buffer, 0, bufferSize)
-                            if (readSize > 0) {
-                                // 计算音量（RMS）
-                                var sum = 0.0
-                                for (i in 0 until readSize) {
-                                    sum += buffer[i] * buffer[i]
-                                }
-                                val rms = kotlin.math.sqrt(sum / readSize)
-                                // 归一化到 0~1，使用对数缩放
-                                val normalizedVolume = (rms / 3000.0).coerceIn(0.0, 1.0).toFloat()
-                                withContext(Dispatchers.Main) {
-                                    currentVolume = normalizedVolume
-                                }
-                                // 🔍 调试日志：每秒输出一次音量
-                                if (System.currentTimeMillis() % 1000 < 100) {
-                                    android.util.Log.d("VoiceVolume", "RMS: $rms, Normalized: $normalizedVolume")
-                                }
-                            }
-                            delay(50) // 每50ms更新一次
-                        }
-                    } catch (t: Throwable) {
-                        android.util.Log.e("VoiceInputScreen", "Failed to monitor audio volume", t)
-                    }
-                }
-                
+                // 启动录音会话
                 coroutineScope.launch {
                     try {
                         session.start()
@@ -214,17 +171,6 @@ fun VoiceInputScreen(
                                 val session = liveSession
                                 isRecording = false
                                 currentVolume = 0f
-                                
-                                // 🎤 停止音量监听
-                                audioRecord?.let { recorder ->
-                                    try {
-                                        recorder.stop()
-                                        recorder.release()
-                                    } catch (e: Exception) {
-                                        android.util.Log.e("VoiceInputScreen", "Failed to stop AudioRecord", e)
-                                    }
-                                    audioRecord = null
-                                }
                                 
                                 if (session != null) {
                                     coroutineScope.launch {
@@ -544,6 +490,9 @@ fun VoiceWaveAnimation(
         label = "volumeScaleSmoothing"
     )
     
+    // 🔍 使用 rememberUpdatedState 获取最新的 currentVolume 值
+    val latestVolume by rememberUpdatedState(currentVolume)
+    
     // 连续帧驱动：形变振幅 + 音量缩放
     LaunchedEffect(isRecording) {
         if (isRecording) {
@@ -560,8 +509,12 @@ fun VoiceWaveAnimation(
                 val env = ((a + b) * 0.5f * 0.5f) + 0.5f // 归一到 0..1 并压缩
                 amplitudeTarget = 0.55f + 0.45f * env
 
-                // 🎤 音量缩放：根据实时麦克风音量调整（1.0 ~ 1.5，最小为默认大小）
-                volumeScaleTarget = 1f + currentVolume * 0.5f
+                // 🎤 音量缩放：根据实时麦克风音量调整（1.0 ~ 1.3，最小为默认大小）
+                val newScale = 1f + latestVolume * 0.3f
+                if (volumeScaleTarget != newScale) {
+                    android.util.Log.d("VoiceWaveAnimation", "🎨 Scale update: volume=$latestVolume, scale=$newScale")
+                }
+                volumeScaleTarget = newScale
 
                 // 匀速相位推进（不重启），保持连续
                 val omega = 0.8f // rad/s
