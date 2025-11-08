@@ -10,15 +10,19 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.ClosedCaption
 import androidx.compose.material.icons.outlined.VolumeUp
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun VoiceInputScreen(onClose: () -> Unit) {
+    // 防抖状态：防止快速连点导致二次 popBackStack 黑屏
+    var isClosing by remember { mutableStateOf(false) }
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         containerColor = Color.Black,
@@ -48,7 +52,14 @@ fun VoiceInputScreen(onClose: () -> Unit) {
                     Icon(Icons.Default.Mic, contentDescription = "Record", modifier = Modifier.size(32.dp))
                 }
                 Spacer(modifier = Modifier.weight(1f))
-                IconButton(onClick = onClose) {
+                IconButton(
+                    onClick = {
+                        if (!isClosing) {
+                            isClosing = true
+                            onClose()
+                        }
+                    }
+                ) {
                     Icon(Icons.Default.Close, contentDescription = "Close", modifier = Modifier.size(32.dp))
                 }
             }
