@@ -1,7 +1,7 @@
 # EveryTalk - 您的私密、多功能、强大的 AI 伴侣
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/roseforljh/EveryTalk/main/EveryTalk/app1/app/src/main/res/mipmap-xxxhdpi/ic_launcher.webp" alt="EveryTalk Logo" width="200"/>
+  <img src="https://qone.kuz7.com/uploads/images/2025/11/09/28553c13-29b3-4ab4-87a8-e72ad4be8568.png" alt="EveryTalk Logo" width="200"/>
 </p>
 
 <p align="center">
