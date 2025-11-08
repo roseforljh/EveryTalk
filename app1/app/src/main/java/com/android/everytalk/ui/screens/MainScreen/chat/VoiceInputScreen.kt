@@ -41,6 +41,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -52,18 +57,22 @@ fun VoiceInputScreen(
     var isClosing by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
     var isRecording by remember { mutableStateOf(false) }
+    
+    // 🎤 实时音量状态（0.0 ~ 1.0）
+    var currentVolume by remember { mutableStateOf(0f) }
+    var audioRecord by remember { mutableStateOf<AudioRecord?>(null) }
 
     // 语音会话：点击左下角麦克风后启动/停止
     val coroutineScope = rememberCoroutineScope()
     var liveSession by remember { mutableStateOf<GeminiLiveSession?>(null) }
     val context = LocalContext.current
 
-    // 启动录音会话（已含 API Key 判空保护）
+    // 启动录音会话（已含 API Key 判空保护）+ 音量监听
     val startRecordingSession = remember(selectedApiConfig) {
         {
             val baseUrl = (selectedApiConfig?.address ?: selectedApiConfig?.provider ?: "").ifBlank { "http://127.0.0.1:8000" }
             var apiKey = (selectedApiConfig?.key ?: "").trim()
-            // 覆盖为“语音设置”里按平台保存的Key（若存在）
+            // 覆盖为"语音设置"里按平台保存的Key（若存在）
             try {
                 val prefs = context.getSharedPreferences("voice_settings", android.content.Context.MODE_PRIVATE)
                 val platform = prefs.getString("voice_platform", selectedApiConfig?.provider ?: "Gemini") ?: "Gemini"
@@ -80,6 +89,52 @@ fun VoiceInputScreen(
                 val session = GeminiLiveSession(baseUrl = baseUrl, apiKey = apiKey)
                 liveSession = session
                 isRecording = true
+                
+                // 🎤 启动音量监听
+                coroutineScope.launch(Dispatchers.IO) {
+                    try {
+                        val sampleRate = 44100
+                        val channelConfig = AudioFormat.CHANNEL_IN_MONO
+                        val audioFormat = AudioFormat.ENCODING_PCM_16BIT
+                        val bufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
+                        
+                        val recorder = AudioRecord(
+                            MediaRecorder.AudioSource.MIC,
+                            sampleRate,
+                            channelConfig,
+                            audioFormat,
+                            bufferSize
+                        )
+                        audioRecord = recorder
+                        recorder.startRecording()
+                        
+                        val buffer = ShortArray(bufferSize)
+                        while (isRecording) {
+                            val readSize = recorder.read(buffer, 0, bufferSize)
+                            if (readSize > 0) {
+                                // 计算音量（RMS）
+                                var sum = 0.0
+                                for (i in 0 until readSize) {
+                                    sum += buffer[i] * buffer[i]
+                                }
+                                val rms = kotlin.math.sqrt(sum / readSize)
+                                // 归一化到 0~1，使用对数缩放
+                                val normalizedVolume = (rms / 3000.0).coerceIn(0.0, 1.0).toFloat()
+                                withContext(Dispatchers.Main) {
+                                    currentVolume = normalizedVolume
+                                }
+                                // 🔍 调试日志：每秒输出一次音量
+                                if (System.currentTimeMillis() % 1000 < 100) {
+                                    android.util.Log.d("VoiceVolume", "RMS: $rms, Normalized: $normalizedVolume")
+                                }
+                            }
+                            delay(50) // 每50ms更新一次
+                        }
+                    } catch (t: Throwable) {
+                        android.util.Log.e("VoiceInputScreen", "Failed to monitor audio volume", t)
+                    }
+                }
+                
                 coroutineScope.launch {
                     try {
                         session.start()
@@ -127,56 +182,104 @@ fun VoiceInputScreen(
         bottomBar = {
             BottomAppBar(
                 containerColor = Color.Transparent,
-                contentColor = contentColor
+                contentColor = contentColor,
+                modifier = Modifier.padding(bottom = 16.dp)
             ) {
-                IconButton(
-                    onClick = {
-                        // 单击左下角麦克风：开始/结束语音模式（先校验运行时权限）
-                        if (!isRecording) {
-                            val granted = ContextCompat.checkSelfPermission(
-                                context,
-                                Manifest.permission.RECORD_AUDIO
-                            ) == PackageManager.PERMISSION_GRANTED
-                            if (granted) {
-                                startRecordingSession()
+                // 左侧麦克风按钮 - 圆形背景
+                Box(
+                    modifier = Modifier
+                        .padding(start = 16.dp)
+                        .size(56.dp)
+                        .background(
+                            color = if (isRecording) Color(0xFF8B4545) else Color(0xFF3A3A3A),
+                            shape = CircleShape
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    IconButton(
+                        onClick = {
+                            // 单击左下角麦克风：开始/结束语音模式（先校验运行时权限）
+                            if (!isRecording) {
+                                val granted = ContextCompat.checkSelfPermission(
+                                    context,
+                                    Manifest.permission.RECORD_AUDIO
+                                ) == PackageManager.PERMISSION_GRANTED
+                                if (granted) {
+                                    startRecordingSession()
+                                } else {
+                                    requestAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                }
                             } else {
-                                requestAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                            }
-                        } else {
-                            // 停止录音并发送给后端，然后播放返回的24k音频
-                            val session = liveSession
-                            isRecording = false
-                            if (session != null) {
-                                coroutineScope.launch {
+                                // 停止录音并发送给后端，然后播放返回的24k音频
+                                val session = liveSession
+                                isRecording = false
+                                currentVolume = 0f
+                                
+                                // 🎤 停止音量监听
+                                audioRecord?.let { recorder ->
                                     try {
-                                        session.stopAndSendAndPlay()
-                                    } catch (t: Throwable) {
-                                        android.util.Log.e("VoiceInputScreen", "Failed to stop/send/play", t)
-                                    } finally {
-                                        liveSession = null
+                                        recorder.stop()
+                                        recorder.release()
+                                    } catch (e: Exception) {
+                                        android.util.Log.e("VoiceInputScreen", "Failed to stop AudioRecord", e)
+                                    }
+                                    audioRecord = null
+                                }
+                                
+                                if (session != null) {
+                                    coroutineScope.launch {
+                                        try {
+                                            session.stopAndSendAndPlay()
+                                        } catch (t: Throwable) {
+                                            android.util.Log.e("VoiceInputScreen", "Failed to stop/send/play", t)
+                                        } finally {
+                                            liveSession = null
+                                        }
                                     }
                                 }
                             }
-                        }
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Mic,
+                            contentDescription = if (isRecording) "停止录音" else "开始录音",
+                            modifier = Modifier.size(28.dp),
+                            tint = if (isRecording) Color(0xFFFF8A8A) else Color.White
+                        )
                     }
-                ) {
-                    Icon(
-                        if (isRecording) Icons.Default.Mic else Icons.Default.Mic,
-                        contentDescription = if (isRecording) "停止录音" else "开始录音",
-                        modifier = Modifier.size(32.dp),
-                        tint = if (isRecording) Color.Red else contentColor
-                    )
                 }
+                
                 Spacer(modifier = Modifier.weight(1f))
-                IconButton(
-                    onClick = {
-                        if (!isClosing) {
-                            isClosing = true
-                            onClose()
-                        }
-                    }
+                
+                // 右侧关闭按钮 - 圆形背景
+                Box(
+                    modifier = Modifier
+                        .padding(end = 16.dp)
+                        .size(56.dp)
+                        .background(
+                            color = Color(0xFF3A3A3A),
+                            shape = CircleShape
+                        ),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Icon(Icons.Default.Close, contentDescription = "关闭", modifier = Modifier.size(32.dp))
+                    IconButton(
+                        onClick = {
+                            if (!isClosing) {
+                                isClosing = true
+                                // 直接调用关闭，移除延迟以避免与主页面按钮动画冲突
+                                onClose()
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "关闭",
+                            modifier = Modifier.size(28.dp),
+                            tint = Color.White
+                        )
+                    }
                 }
             }
         }
@@ -189,7 +292,8 @@ fun VoiceInputScreen(
         ) {
             VoiceWaveAnimation(
                 isRecording = isRecording,
-                color = waveCircleColor
+                color = waveCircleColor,
+                currentVolume = currentVolume
             )
         }
     }
@@ -418,9 +522,10 @@ private fun VoiceSettingsDialog(
 fun VoiceWaveAnimation(
     isRecording: Boolean,
     color: Color,
+    currentVolume: Float = 0f,
     modifier: Modifier = Modifier
 ) {
-    // 模拟音频振幅（实际应用中应从麦克风获取）—使用平滑动画避免跳变卡顿
+    // 形变振幅：用于波形的不规则形变（保持原有逻辑）
     var amplitudeTarget by remember { mutableStateOf(0.5f) }
     val amplitude by animateFloatAsState(
         targetValue = amplitudeTarget,
@@ -428,33 +533,47 @@ fun VoiceWaveAnimation(
         label = "amplitudeSmoothing"
     )
     
-    // 连续相位：基于帧时间推进，不重启，避免周期性“卡顿”
+    // 连续相位：基于帧时间推进，不重启，避免周期性"卡顿"
     var phase by remember { mutableStateOf(0f) }
     
-    // 连续帧驱动振幅（每帧更新），消除跳变带来的“卡顿”观感
+    // 🎤 音量缩放：根据实时音量大小控制整体缩放（新增）
+    var volumeScaleTarget by remember { mutableStateOf(1f) }
+    val volumeScale by animateFloatAsState(
+        targetValue = volumeScaleTarget,
+        animationSpec = tween(durationMillis = 150, easing = FastOutSlowInEasing),
+        label = "volumeScaleSmoothing"
+    )
+    
+    // 连续帧驱动：形变振幅 + 音量缩放
     LaunchedEffect(isRecording) {
         if (isRecording) {
             var last = withFrameNanos { it }
-            while (true) {
+            while (isRecording) {  // 改为检查 isRecording 状态
                 val now = withFrameNanos { it }
                 val dt = (now - last) / 1_000_000_000f // s
                 last = now
 
-                // 叠加两个缓慢正弦作为包络，避免机械感与重复感（不取模，持续推进）
+                // 形变振幅：叠加两个缓慢正弦作为包络（保持原有逻辑）
                 val tSec = now / 1_000_000_000f
                 val a = kotlin.math.sin(2f * PI.toFloat() * (tSec / 6f))
                 val b = kotlin.math.sin(2f * PI.toFloat() * (tSec / 7.8f))
                 val env = ((a + b) * 0.5f * 0.5f) + 0.5f // 归一到 0..1 并压缩
                 amplitudeTarget = 0.55f + 0.45f * env
 
+                // 🎤 音量缩放：根据实时麦克风音量调整（1.0 ~ 1.5，最小为默认大小）
+                volumeScaleTarget = 1f + currentVolume * 0.5f
+
                 // 匀速相位推进（不重启），保持连续
                 val omega = 0.8f // rad/s
                 phase += omega * dt
             }
-        } else {
-            // 平滑回落到默认值（~0.3s）
-            val start = amplitudeTarget
-            val duration = 0.3f
+        }
+        
+        // 退场动画：无论如何都执行（录音停止后）
+        if (!isRecording) {
+            val startAmplitude = amplitudeTarget
+            val startVolumeScale = volumeScaleTarget
+            val duration = 0.5f
             var acc = 0f
             var last = withFrameNanos { it }
             while (acc < duration) {
@@ -462,29 +581,25 @@ fun VoiceWaveAnimation(
                 val dt = (now - last) / 1_000_000_000f
                 last = now
                 acc += dt
-                val p = (acc / duration).coerceIn(0f, 1f)
-                amplitudeTarget = start + (0.5f - start) * p
+                // 使用缓动函数使过渡更自然
+                val rawProgress = (acc / duration).coerceIn(0f, 1f)
+                val easedProgress = rawProgress * rawProgress * (3f - 2f * rawProgress) // smoothstep
+                amplitudeTarget = startAmplitude + (0.5f - startAmplitude) * easedProgress
+                volumeScaleTarget = startVolumeScale + (1f - startVolumeScale) * easedProgress
             }
         }
     }
     
-    // 基础大小和缩放
+    // 基础大小和最终缩放：整体大小 = 基础大小 × 音量缩放
     val baseSize = 120.dp
-    val scale by animateFloatAsState(
-        targetValue = if (isRecording) 1f + amplitude * 0.3f else 1f,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioLowBouncy,
-            stiffness = Spring.StiffnessVeryLow
-        ),
-        label = "scaleAnimation"
-    )
+    val finalScale = if (isRecording) volumeScale else 1f
     
     Canvas(
         modifier = modifier.size(baseSize * 1.5f)
     ) {
         val centerX = size.width / 2
         val centerY = size.height / 2
-        val radius = (baseSize.toPx() / 2) * scale
+        val radius = (baseSize.toPx() / 2) * finalScale
         
         if (isRecording) {
             // 绘制不规则波形圆

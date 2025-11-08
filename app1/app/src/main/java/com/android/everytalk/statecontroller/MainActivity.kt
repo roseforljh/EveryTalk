@@ -422,7 +422,41 @@ class MainActivity : ComponentActivity() {
                                        navController = navController
                                    )
                                }
-                               composable(Screen.VOICE_INPUT_SCREEN) {
+                               composable(
+                                   route = Screen.VOICE_INPUT_SCREEN,
+                                   enterTransition = {
+                                       androidx.compose.animation.fadeIn(
+                                           animationSpec = tween(
+                                               durationMillis = 200,
+                                               easing = FastOutSlowInEasing
+                                           )
+                                       )
+                                   },
+                                   exitTransition = {
+                                       androidx.compose.animation.fadeOut(
+                                           animationSpec = tween(
+                                               durationMillis = 150,
+                                               easing = FastOutSlowInEasing
+                                           )
+                                       )
+                                   },
+                                   popEnterTransition = {
+                                       androidx.compose.animation.fadeIn(
+                                           animationSpec = tween(
+                                               durationMillis = 200,
+                                               easing = FastOutSlowInEasing
+                                           )
+                                       )
+                                   },
+                                   popExitTransition = {
+                                       androidx.compose.animation.fadeOut(
+                                           animationSpec = tween(
+                                               durationMillis = 150,
+                                               easing = FastOutSlowInEasing
+                                           )
+                                       )
+                                   }
+                               ) {
                                    val selectedApiConfig by appViewModel.selectedApiConfig.collectAsState()
                                    com.android.everytalk.ui.screens.MainScreen.chat.VoiceInputScreen(
                                        onClose = { navController.popBackStack() },

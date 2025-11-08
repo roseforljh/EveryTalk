@@ -359,9 +359,17 @@ fun OptimizedControlButtonsRow(
             )
 
             val buttonScale = remember { androidx.compose.animation.core.Animatable(1f) }
+            // 记住上一次的状态，只在真正改变时播放动画
+            val previousState = remember { mutableStateOf(Pair(hasContent, isApiCalling)) }
+            
             LaunchedEffect(hasContent, isApiCalling) {
-                buttonScale.animateTo(0.8f, animationSpec = tween(100))
-                buttonScale.animateTo(1f, animationSpec = tween(100))
+                val currentState = Pair(hasContent, isApiCalling)
+                // 只有当状态真正改变时才播放动画（避免页面重组时误触发）
+                if (currentState != previousState.value) {
+                    previousState.value = currentState
+                    buttonScale.animateTo(0.8f, animationSpec = tween(100))
+                    buttonScale.animateTo(1f, animationSpec = tween(100))
+                }
             }
 
             FilledIconButton(
