@@ -423,7 +423,11 @@ class MainActivity : ComponentActivity() {
                                    )
                                }
                                composable(Screen.VOICE_INPUT_SCREEN) {
-                                   com.android.everytalk.ui.screens.MainScreen.chat.VoiceInputScreen(onClose = { navController.popBackStack() })
+                                   val selectedApiConfig by appViewModel.selectedApiConfig.collectAsState()
+                                   com.android.everytalk.ui.screens.MainScreen.chat.VoiceInputScreen(
+                                       onClose = { navController.popBackStack() },
+                                       selectedApiConfig = selectedApiConfig
+                                   )
                                }
                            }
                        }
