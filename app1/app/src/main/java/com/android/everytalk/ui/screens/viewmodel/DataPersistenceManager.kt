@@ -28,16 +28,10 @@ class DataPersistenceManager(
     private val imageLoader: ImageLoader
 ) {
     private val TAG = "PersistenceManager"
-    private val fileManager = FileManager(context)
-
 
     /**
-     * 将消息中的图片统一落盘并替换为本地绝对路径：
-     * - data:image;base64,... → 解码后保存
-     * - http/https → 下载原始字节后保存
-     * - file:// 或绝对路径保持不变
-     *
-     * 保存目录统一为 filesDir/chat_attachments，通过“保留期”实现几天内不清理。
+     * 将消息中的 data:image;base64,... 图片落盘为本地文件，并将 URL 替换为 file:// 或绝对路径
+     * 这样可避免把巨大 Base64 串写入 SharedPreferences 导致超限/丢失，重启后可稳定恢复。
      */
     private fun persistInlineAndRemoteImages(messages: List<Message>): List<Message> {
         if (messages.isEmpty()) return messages
@@ -54,8 +48,8 @@ class DataPersistenceManager(
                 else -> "png"
             }
         }
- 
-        fun saveBytes(bytes: ByteArray, mime: String?, fileNameHint: String, targetDir: File): String? {
+
+        fun saveDataUri(dataUri: String, fileNameHint: String): String? {
             return try {
                 val ext = extFromMime(mime)
                 val file = File(targetDir, "${fileNameHint}_${System.currentTimeMillis()}.$ext")
@@ -95,39 +89,11 @@ class DataPersistenceManager(
                 currentDir.mkdirs()
 
                 val newUrls = msg.imageUrls.mapIndexed { idx, url ->
-                    val lower = url.lowercase(Locale.ROOT)
-                    when {
-                        // 已是本地路径或 file://
-                        lower.startsWith("file://") || lower.startsWith("/") -> url
-
-                        // data:image;base64
-                        lower.startsWith("data:image") -> {
-                            val mime = url.substringAfter("data:", "").substringBefore(";base64", "")
-                            val base64Part = url.substringAfter(";base64,", "")
-                            if (base64Part.isBlank()) url
-                            else {
-                                try {
-                                    val bytes = Base64.decode(base64Part, Base64.DEFAULT)
-                                    saveBytes(bytes, mime, "img_${msg.id}_${idx}", currentDir) ?: url
-                                } catch (e: Exception) {
-                                    Log.w(TAG, "persistImages: data URL decode failed", e)
-                                    url
-                                }
-                            }
-                        }
-
-                        // http/https → 下载后保存
-                        lower.startsWith("http://") || lower.startsWith("https://") -> {
-                            val downloaded = tryDownload(url)
-                            if (downloaded != null) {
-                                val (bytes, mime) = downloaded
-                                saveBytes(bytes, mime, "img_${msg.id}_${idx}", currentDir) ?: url
-                            } else {
-                                url
-                            }
-                        }
-
-                        else -> url
+                    if (url.startsWith("data:image", ignoreCase = true)) {
+                        val saved = saveDataUri(url, "img_${msg.id}_${idx}")
+                        saved ?: url
+                    } else {
+                        url
                     }
                 }
                 if (newUrls == msg.imageUrls) msg else msg.copy(imageUrls = newUrls)
