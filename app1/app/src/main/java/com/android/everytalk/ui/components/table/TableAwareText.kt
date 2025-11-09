@@ -18,6 +18,7 @@ import com.android.everytalk.ui.components.ContentPart
 import com.android.everytalk.ui.components.markdown.MarkdownRenderer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.android.everytalk.util.ContentParseCache
 
 /**
  * 表格感知文本渲染器（优化版）
@@ -50,40 +51,54 @@ fun TableAwareText(
     }
     
     // 🎯 流式结束：异步解析，分段渲染
-    // 🔥 使用 contentKey 作为缓存键，确保 LazyColumn 回收后不丢失解析结果
-    val parsedParts = remember(contentKey, text) { mutableStateOf<List<ContentPart>>(emptyList()) }
-    
+    // 🔥 使用 contentKey 作为缓存键，确保 LazyColumn 回收后不丢失解析结果（结合全局 LRU 缓存）
+    val parsedParts = remember(contentKey) {
+        mutableStateOf<List<ContentPart>>(ContentParseCache.get(contentKey) ?: emptyList())
+    }
+
     // 🔥 关键修复：同时监听 contentKey、isStreaming 和 text，确保拿到最终文本后再解析
-    // 🎯 只在缓存为空且非流式时解析，避免重复解析
+    // 🎯 优先命中全局缓存；仅在未命中且非流式时解析并写回缓存，避免重复解析
     LaunchedEffect(contentKey, isStreaming, text) {
-        if (!isStreaming && text.isNotBlank() && parsedParts.value.isEmpty()) {
-            // 🔥 性能优化：大型内容延迟更久，避免流式结束瞬间卡顿
-            val isLargeContent = text.length > 8000
-            val delayMs = if (isLargeContent) 250L else 100L
-            
-            kotlinx.coroutines.delay(delayMs)
-            
-            val startTime = System.currentTimeMillis()
-            val parsed = withContext(Dispatchers.Default) {
-                try {
-                    ContentParser.parseCompleteContent(text)
-                } catch (e: Throwable) {
-                    android.util.Log.e("TableAwareText", "Parse error", e)
-                    listOf(ContentPart.Text(text))
-                }
-            }
-            val parseTime = System.currentTimeMillis() - startTime
-            
-            parsedParts.value = parsed
-            android.util.Log.d("TableAwareText", "✅ Parsed: ${parsed.size} parts, ${text.length} chars, ${parseTime}ms")
-            
-            // 🔥 性能警告：超过500ms记录警告
-            if (parseTime > 500) {
-                android.util.Log.w("TableAwareText", "⚠️ Slow parse: ${parseTime}ms for ${text.length} chars")
-            }
-        } else if (isStreaming) {
-            // 流式开始：重置解析结果
+        if (isStreaming) {
+            // 流式开始：仅清空本地渲染态，不清理全局缓存（等待最终文本）
             parsedParts.value = emptyList()
+            return@LaunchedEffect
+        }
+
+        if (text.isBlank()) return@LaunchedEffect
+
+        // 先尝试读取全局缓存
+        ContentParseCache.get(contentKey)?.let { cached ->
+            if (cached.isNotEmpty()) {
+                parsedParts.value = cached
+                android.util.Log.d("TableAwareText", "✅ Cache hit for key=$contentKey (parts=${cached.size})")
+                return@LaunchedEffect
+            }
+        }
+
+        // 缓存未命中：触发解析（后台线程），并在完成后写入缓存
+        val isLargeContent = text.length > 8000
+        val delayMs = if (isLargeContent) 250L else 100L
+        kotlinx.coroutines.delay(delayMs)
+
+        val startTime = System.currentTimeMillis()
+        val parsed = withContext(Dispatchers.Default) {
+            try {
+                ContentParser.parseCompleteContent(text)
+            } catch (e: Throwable) {
+                android.util.Log.e("TableAwareText", "Parse error", e)
+                listOf(ContentPart.Text(text))
+            }
+        }
+        val parseTime = System.currentTimeMillis() - startTime
+
+        parsedParts.value = parsed
+        ContentParseCache.put(contentKey, parsed)
+        android.util.Log.d("TableAwareText", "✅ Parsed & cached: parts=${parsed.size}, len=${text.length}, ${parseTime}ms (key=$contentKey)")
+
+        // 🔥 性能警告：超过500ms记录警告
+        if (parseTime > 500) {
+            android.util.Log.w("TableAwareText", "⚠️ Slow parse: ${parseTime}ms for ${text.length} chars (key=$contentKey)")
         }
     }
     

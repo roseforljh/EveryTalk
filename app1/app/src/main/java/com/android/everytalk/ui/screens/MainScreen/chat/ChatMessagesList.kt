@@ -97,6 +97,9 @@ fun ChatMessagesList(
             top = 8.dp,
             bottom = 10.dp  // 增加底部padding以确保内容完全显示在输入框上方
         ),
+        // ⚡ 提升滚动稳定性：在可视区域外保留一定数量的项，降低回收/重组频率
+        // 需要 @OptIn(ExperimentalFoundationApi::class)
+        
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         itemsIndexed(
