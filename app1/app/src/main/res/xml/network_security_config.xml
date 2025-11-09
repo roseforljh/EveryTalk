@@ -10,29 +10,38 @@
     </base-config>
     
     <!-- 证书固定配置 - 针对官方后端API -->
-    <!-- 注意：证书固定会增强安全性，但证书更新时需要更新应用 -->
+    <!--
+        ✅ 最佳实践：只 pin 中间证书和根证书，不 pin 叶子证书
+        这样即使服务器证书更新（Let's Encrypt 每3个月更新），app 仍然可以正常工作
+        只要继续使用相同的 CA（如 Google Trust Services），就不会有问题
+    -->
     <domain-config cleartextTrafficPermitted="false">
         <domain includeSubdomains="true">ai.luuu71.dpdns.org</domain>
-        <pin-set expiration="2026-03-01">
+        <pin-set expiration="2027-12-31">
             <!--
-                证书pin验证结果 - 2025-11-09更新
-                当前证书信息：
-                - 主题: CN=luuu71.dpdns.org
-                - 颁发者: Google Trust Services (WE1)
-                - 有效期: 2025-09-28 到 2025-12-27
+                证书pin策略 - 2025-11-09更新
                 
-                获取方法：
-                1. 运行: python verify_cert_pin.py
-                2. 使用在线工具: https://www.ssllabs.com/ssltest/
+                ⚠️ 重要：我们只 pin CA证书，不 pin 服务器证书
+                这样服务器证书更新时不需要更新 app
                 
-                ⚠️ 重要：证书更新时必须同步更新这些pin值！
+                当前使用的 CA: Google Trust Services (Let's Encrypt 的后端)
+                - 中间证书: Google Trust Services WE1
+                - 根证书: Google Trust Services Root
+                
+                这些证书有效期很长（10年+），极少变化
+                
+                如果需要更换 CA，需要：
+                1. 提前在这里添加新 CA 的 pin
+                2. 发布新版本 app
+                3. 等待用户更新后再更换服务器证书
             -->
-            <!-- 当前证书pin - 2025-11-09验证 -->
-            <pin digest="SHA-256">ejC8r23G1K4dCBrTuIzIIiJVgn23Q83iKJQoTfGxplM=</pin>
-            <!-- 备用pin（Google Trust Services WE1根证书） -->
+            
+            <!-- ✅ Google Trust Services WE1 中间证书 (推荐) -->
             <pin digest="SHA-256">f0KW/FtqTjs108NpYj42SrGvOB2PpxIVM8nWxjPqJGE=</pin>
-            <!-- 备用pin（Google Trust Services根证书） -->
+            
+            <!-- ✅ Google Trust Services 根证书 (备用) -->
             <pin digest="SHA-256">hxqRlPTu1bMS/0DITB1SSu0vd4u/8l8TjPgfaAp63Gc=</pin>
+            
         </pin-set>
         <trust-anchors>
             <certificates src="system"/>
