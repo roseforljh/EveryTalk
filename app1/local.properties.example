@@ -1,15 +1,18 @@
-# EveryTalk 应用的后端 URL 配置
-#
-# **重要提示**: 请将此文件复制为同目录下的 "local.properties" 文件，
-# 并填入您真实的后端 URL。
-# "local.properties" 文件默认被 Git 忽略，绝不应该被提交到版本库。
+## SDK 路径（Gradle自动生成）
+sdk.dir=C\:\\Users\\YourUsername\\AppData\\Local\\Android\\Sdk
 
-# 用于 Release (生产) 构建，请提供一个用逗号分隔的生产环境后端 URL 列表。
-# 示例: BACKEND_URLS_RELEASE="http://prod1.example.com/chat,http://prod2.example.com/chat"
-BACKEND_URLS_RELEASE="你的生产环境URL_1,你的生产环境URL_2"
+## 调试环境后端地址
+BACKEND_URLS_DEBUG="http://your-local-ip:7860/chat"
 
-# 用于 Debug (调试) 构建，请提供您本地或测试环境的后端 URL。
-# 示例: BACKEND_URLS_DEBUG="http://127.0.0.1:XXXX/chat"
-BACKEND_URLS_DEBUG="你的调试环境URL"
+## 生产环境后端地址（多个地址用逗号分隔）
+BACKEND_URLS_RELEASE="https://your-backend-1.com/chat,https://your-backend-2.com/chat"
 
-storeFile=C:\Users\33039\Desktop\EveryTalk\everytalk-release.jks storePassword=你的_keystore_口令 keyAlias=everytalk_release keyPassword=你的_key_口令
+## 语音模式后端地址
+VOICE_BACKEND_URL_DEBUG="http://your-local-ip:7860"
+VOICE_BACKEND_URL_RELEASE="https://your-backend-1.com,https://your-backend-2.com"
+
+## 签名配置（生产环境）
+storeFile=/path/to/your/keystore.jks
+storePassword=your_store_password
+keyAlias=your_key_alias
+keyPassword=your_key_password

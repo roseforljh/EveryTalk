@@ -10,6 +10,7 @@ import com.android.everytalk.data.DataClass.ImageGenerationResponse
 import com.android.everytalk.data.DataClass.GithubRelease
 import com.android.everytalk.data.local.SharedPreferencesDataSource
 import com.android.everytalk.models.SelectedMediaItem
+import com.android.everytalk.util.RequestSignatureUtil
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.plugins.*
@@ -381,6 +382,21 @@ object ApiClient {
             
             android.util.Log.d("ApiClient", "开始执行POST请求到: $backendProxyUrl")
             
+            // 🔐 生成请求签名
+            // 注意: 对于 multipart/form-data 请求,我们使用空字符串作为 body
+            // 因为 multipart 的边界和编码在客户端和服务端可能不同
+            val requestPath = try {
+                java.net.URI(backendProxyUrl).path
+            } catch (e: Exception) {
+                "/chat"  // 默认路径
+            }
+            val signatureHeaders = RequestSignatureUtil.generateSignatureHeaders(
+                method = "POST",
+                path = requestPath,
+                body = ""  // multipart 请求使用空字符串
+            )
+            android.util.Log.d("ApiClient", "🔐 已生成签名头 (multipart): X-Signature=${signatureHeaders["X-Signature"]?.take(20)}..., X-Timestamp=${signatureHeaders["X-Timestamp"]}")
+            
             client.preparePost(backendProxyUrl) {
                 accept(ContentType.Text.EventStream)
                 timeout {
@@ -388,6 +404,9 @@ object ApiClient {
                     connectTimeoutMillis = 60_000  // 增加连接超时到60秒
                     socketTimeoutMillis = HttpTimeout.INFINITE_TIMEOUT_MS
                 }
+                // 🔐 添加签名头
+                header("X-Signature", signatureHeaders["X-Signature"]!!)
+                header("X-Timestamp", signatureHeaders["X-Timestamp"]!!)
                 setBody(multiPartData)
 
             }.execute { receivedResponse ->
@@ -1102,10 +1121,28 @@ object ApiClient {
                 android.util.Log.d("ApiClient", "Image generation request - Model: ${imgReq.model}")
                 android.util.Log.d("ApiClient", "Image generation request - API Key: ${imgReq.apiKey.take(10)}...")
                 android.util.Log.d("ApiClient", "Image generation request - Payload: ${payload.toString().take(200)}...")
+                
+                // 🔐 生成图像生成请求的签名
+                val imagePath = try {
+                    java.net.URI(url).path
+                } catch (e: Exception) {
+                    "/v1/images/generations"
+                }
+                val payloadString = payload.toString()
+                val imageSignatureHeaders = RequestSignatureUtil.generateSignatureHeaders(
+                    method = "POST",
+                    path = imagePath,
+                    body = payloadString
+                )
+                android.util.Log.d("ApiClient", "🔐 图像生成签名: X-Signature=${imageSignatureHeaders["X-Signature"]?.take(20)}...")
+                
                 val response = client.post(url) {
                     contentType(ContentType.Application.Json)
                     header(HttpHeaders.Authorization, "Bearer ${imgReq.apiKey}")
                     header(HttpHeaders.Accept, "application/json")
+                    // 🔐 添加签名头
+                    header("X-Signature", imageSignatureHeaders["X-Signature"]!!)
+                    header("X-Timestamp", imageSignatureHeaders["X-Timestamp"]!!)
                     setBody(payload)
                 }
                 

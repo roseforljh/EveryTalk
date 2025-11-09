@@ -8,4 +8,34 @@
             <certificates src="user"/> <!-- 支持用户安装的证书，方便企业内网使用 -->
         </trust-anchors>
     </base-config>
+    
+    <!-- 证书固定配置 - 针对官方后端API -->
+    <!-- 注意：证书固定会增强安全性，但证书更新时需要更新应用 -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">ai.luuu71.dpdns.org</domain>
+        <pin-set expiration="2026-03-01">
+            <!--
+                证书pin验证结果 - 2025-11-09更新
+                当前证书信息：
+                - 主题: CN=luuu71.dpdns.org
+                - 颁发者: Google Trust Services (WE1)
+                - 有效期: 2025-09-28 到 2025-12-27
+                
+                获取方法：
+                1. 运行: python verify_cert_pin.py
+                2. 使用在线工具: https://www.ssllabs.com/ssltest/
+                
+                ⚠️ 重要：证书更新时必须同步更新这些pin值！
+            -->
+            <!-- 当前证书pin - 2025-11-09验证 -->
+            <pin digest="SHA-256">ejC8r23G1K4dCBrTuIzIIiJVgn23Q83iKJQoTfGxplM=</pin>
+            <!-- 备用pin（Google Trust Services WE1根证书） -->
+            <pin digest="SHA-256">f0KW/FtqTjs108NpYj42SrGvOB2PpxIVM8nWxjPqJGE=</pin>
+            <!-- 备用pin（Google Trust Services根证书） -->
+            <pin digest="SHA-256">hxqRlPTu1bMS/0DITB1SSu0vd4u/8l8TjPgfaAp63Gc=</pin>
+        </pin-set>
+        <trust-anchors>
+            <certificates src="system"/>
+        </trust-anchors>
+    </domain-config>
 </network-security-config>
