@@ -845,7 +845,7 @@ object ApiClient {
         throw IOException("从所有可用源检查更新失败。可能的原因：网络连接问题、VPN干扰、或服务器不可达。", lastException)
     }
 
-    suspend fun getModels(apiUrl: String, apiKey: String): List<String> {
+    suspend fun getModels(apiUrl: String, apiKey: String, channel: String? = null): List<String> {
         if (!isInitialized) {
             throw IllegalStateException("ApiClient not initialized. Call initialize() first.")
         }
@@ -856,16 +856,24 @@ object ApiClient {
         val hostLower = parsedUri?.host?.lowercase()
         val scheme = parsedUri?.scheme ?: "https"
     
-        // 优化：当为 Google Gemini 官方域名时，使用官方的 models 列表端点，而不是 OpenAI 兼容的 /v1/models
-        val isGoogleOfficial = hostLower == "generativelanguage.googleapis.com" ||
+        // 优化：当渠道为Gemini或为Google Gemini官方域名时，使用Gemini格式的API
+        val isGeminiChannel = channel?.lowercase()?.trim() == "gemini"
+        val isGoogleOfficialDomain = hostLower == "generativelanguage.googleapis.com" ||
                 (hostLower?.endsWith("googleapis.com") == true &&
                  baseForModels.contains("generativelanguage", ignoreCase = true))
     
         val url = when {
-            isGoogleOfficial -> {
+            // 只有当是Google官方域名时才强制使用官方地址
+            isGoogleOfficialDomain -> {
                 val googleUrl = "$scheme://generativelanguage.googleapis.com/v1beta/models?key=$apiKey"
-                android.util.Log.i("ApiClient", "检测到 Google Gemini 官方API，改用官方模型列表端点: $googleUrl")
+                android.util.Log.i("ApiClient", "检测到 Google Gemini 官方域名，使用官方模型列表端点: $googleUrl")
                 googleUrl
+            }
+            // Gemini渠道但非官方域名(如反代),使用用户提供的地址 + Gemini路径
+            isGeminiChannel -> {
+                val geminiProxyUrl = "$baseForModels/v1beta/models?key=$apiKey"
+                android.util.Log.i("ApiClient", "检测到 Gemini 渠道(反代)，使用代理地址: $geminiProxyUrl")
+                geminiProxyUrl
             }
             // 智谱 BigModel 官方特判
             hostLower?.contains("open.bigmodel.cn") == true -> {
@@ -882,8 +890,8 @@ object ApiClient {
         return try {
             val response = client.get {
                 url(url)
-                // Google 官方端点使用 ?key=API_KEY，不需要 Authorization 头；其余保持 Bearer 头
-                if (!isGoogleOfficial) {
+                // Gemini格式(官方或反代)使用 ?key=API_KEY，不需要 Authorization 头；其余保持 Bearer 头
+                if (!isGoogleOfficialDomain && !isGeminiChannel) {
                     header(HttpHeaders.Authorization, "Bearer $apiKey")
                 }
                 header(HttpHeaders.Accept, "application/json")
@@ -892,8 +900,8 @@ object ApiClient {
     
             val responseBody = response.bodyAsText()
     
-            // Google 官方响应优先解析：{"models":[{"name":"models/gemini-1.5-pro", ...}, ...]}
-            if (isGoogleOfficial) {
+            // Gemini格式响应优先解析(官方或反代)：{"models":[{"name":"models/gemini-1.5-pro", ...}, ...]}
+            if (isGoogleOfficialDomain || isGeminiChannel) {
                 try {
                     val root = jsonParser.parseToJsonElement(responseBody)
                     if (root is JsonObject && root["models"] is JsonArray) {

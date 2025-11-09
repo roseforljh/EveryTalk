@@ -33,13 +33,13 @@ class ModelAndConfigController(
     val fetchedModels: StateFlow<List<String>> get() = modelFetchManager.fetchedModels
     val isRefreshingModels: StateFlow<Set<String>> get() = modelFetchManager.isRefreshingModels
 
-    fun fetchModels(apiUrl: String, apiKey: String) {
+    fun fetchModels(apiUrl: String, apiKey: String, channel: String? = null) {
         scope.launch {
             modelFetchManager.setFetching(true)
             modelFetchManager.setFetchedModels(emptyList())
             try {
                 val models = withContext(Dispatchers.IO) {
-                    ApiClient.getModels(apiUrl, apiKey)
+                    ApiClient.getModels(apiUrl, apiKey, channel)
                 }
                 modelFetchManager.setFetchedModels(models)
                 withContext(Dispatchers.Main) { showSnackbar("获取到 ${models.size} 个模型") }
@@ -101,7 +101,7 @@ class ModelAndConfigController(
         scope.launch {
             try {
                 val models = withContext(Dispatchers.IO) {
-                    ApiClient.getModels(address, key)
+                    ApiClient.getModels(address, key, channel)
                 }
 
                 if (models.isNotEmpty()) {
@@ -156,7 +156,7 @@ class ModelAndConfigController(
             modelFetchManager.addRefreshingModel(refreshId)
             try {
                 val models = withContext(Dispatchers.IO) {
-                    ApiClient.getModels(config.address, config.key)
+                    ApiClient.getModels(config.address, config.key, config.channel)
                 }
 
                 // 1. 删除与此API密钥和模态类型匹配的所有现有配置

@@ -1,18 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- 禁止明文传输；发布版仅信任系统证书 -->
-    <base-config cleartextTrafficPermitted="false">
+    <!-- 允许HTTP和HTTPS，方便用户使用各种反代服务器 -->
+    <!-- ⚠️ 注意：用户应该了解HTTP传输的安全风险 -->
+    <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system"/>
+            <certificates src="user"/> <!-- 支持用户安装的证书，方便企业内网使用 -->
         </trust-anchors>
     </base-config>
-    
-    <!-- 调试配置：允许所有本地和私有IP地址 -->
-    <debug-overrides>
-        <trust-anchors>
-            <certificates src="system"/>
-            <certificates src="user"/>
-        </trust-anchors>
-    </debug-overrides>
-    
 </network-security-config>
