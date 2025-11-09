@@ -132,13 +132,45 @@ class DataPersistenceManager(
             try {
                 // 第一阶段：快速加载API配置（优先级最高）
                 Log.d(TAG, "loadInitialData: 阶段1 - 加载API配置...")
-                val loadedConfigs: List<ApiConfig> = if (stateHolder._apiConfigs.value.isEmpty()) {
+                var loadedConfigs: List<ApiConfig> = if (stateHolder._apiConfigs.value.isEmpty()) {
                     Log.d(TAG, "loadInitialData: API配置缓存未命中。从dataSource加载...")
                     dataSource.loadApiConfigs()
                 } else {
                     Log.d(TAG, "loadInitialData: API配置缓存命中。使用现有数据。")
                     stateHolder._apiConfigs.value
                 }
+                
+                // 🆕 自动创建默认文本配置（如果不存在）
+                val hasDefaultTextConfig = loadedConfigs.any {
+                    it.provider.trim().lowercase() in listOf("默认", "default") &&
+                    it.modalityType == com.android.everytalk.data.DataClass.ModalityType.TEXT
+                }
+                if (!hasDefaultTextConfig) {
+                    Log.i(TAG, "loadInitialData: 未找到默认文本配置，自动创建...")
+                    val defaultTextModels = listOf(
+                        "gemini-2.5-pro-1M",
+                        "gemini-2.5-flash",
+                        "gemini-flash-lite-latest"
+                    )
+                    val newDefaultConfigs = defaultTextModels.map { modelName ->
+                        ApiConfig(
+                            id = java.util.UUID.randomUUID().toString(),
+                            name = modelName,
+                            provider = "默认",
+                            address = "",
+                            key = "",
+                            model = modelName,
+                            modalityType = com.android.everytalk.data.DataClass.ModalityType.TEXT,
+                            channel = "",
+                            isValid = true
+                        )
+                    }
+                    loadedConfigs = loadedConfigs + newDefaultConfigs
+                    // 立即保存到持久化存储
+                    dataSource.saveApiConfigs(loadedConfigs)
+                    Log.i(TAG, "loadInitialData: 已创建并保存 ${newDefaultConfigs.size} 个默认文本配置")
+                }
+                
                 initialConfigPresent = loadedConfigs.isNotEmpty()
 
                 Log.d(TAG, "loadInitialData: 调用 dataSource.loadSelectedConfigId()...")
@@ -167,7 +199,32 @@ class DataPersistenceManager(
                 }
 
                 // Load image generation configs
-                val loadedImageGenConfigs: List<ApiConfig> = dataSource.loadImageGenApiConfigs()
+                var loadedImageGenConfigs: List<ApiConfig> = dataSource.loadImageGenApiConfigs()
+                
+                // 🆕 自动创建默认图像配置（如果不存在）
+                val hasDefaultImageConfig = loadedImageGenConfigs.any {
+                    it.provider.trim().lowercase() in listOf("默认", "default") &&
+                    it.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE
+                }
+                if (!hasDefaultImageConfig) {
+                    Log.i(TAG, "loadInitialData: 未找到默认图像配置，自动创建...")
+                    val defaultImageConfig = ApiConfig(
+                        id = java.util.UUID.randomUUID().toString(),
+                        name = "Kwai-Kolors/Kolors",
+                        provider = "默认",
+                        address = "",
+                        key = "",
+                        model = "Kwai-Kolors/Kolors",
+                        modalityType = com.android.everytalk.data.DataClass.ModalityType.IMAGE,
+                        channel = "",
+                        isValid = true
+                    )
+                    loadedImageGenConfigs = loadedImageGenConfigs + listOf(defaultImageConfig)
+                    // 立即保存到持久化存储
+                    dataSource.saveImageGenApiConfigs(loadedImageGenConfigs)
+                    Log.i(TAG, "loadInitialData: 已创建并保存默认图像配置")
+                }
+                
                 val selectedImageGenConfigId: String? = dataSource.loadSelectedImageGenConfigId()
                 var selectedImageGenConfig: ApiConfig? = null
                 if (selectedImageGenConfigId != null) {

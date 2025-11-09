@@ -44,7 +44,9 @@ object SettingsDefaults {
         "火山引擎" to "https://ark.cn-beijing.volces.com/api/v3/chat/completions#",
         "深度求索" to "https://api.deepseek.com",
         "openrouter" to "https://openrouter.ai/api",
-        "openrouter.ai" to "https://openrouter.ai/api"
+        "openrouter.ai" to "https://openrouter.ai/api",
+        "默认" to "",
+        "default" to ""
     )
 }
 
@@ -246,8 +248,10 @@ fun SettingsScreen(
         SettingsScreenContent(
             paddingValues = paddingValues,
             apiConfigsByApiKeyAndModality = apiConfigsByApiKeyAndModality,
+            isImageMode = isInImageMode,
             onAddFullConfigClick = {
-                val initialProvider = if (isInImageMode) "默认" else (allProviders.firstOrNull() ?: "openai compatible")
+                // 🆕 文本和图像模式都默认选择"默认"
+                val initialProvider = "默认"
                 newFullConfigProvider = initialProvider
                 newFullConfigKey = ""
                 val providerKey = initialProvider.lowercase().trim()
@@ -318,7 +322,7 @@ fun SettingsScreen(
                 val pLower = providerTrim.lowercase()
                 val isDefaultProvider = pLower in listOf("默认", "default")
                 if (isDefaultProvider && isInImageMode) {
-                    // 图像模式下的“默认”平台：直接创建 Kolors 配置（地址/Key 由后端隐藏注入）
+                    // 图像模式下的"默认"平台：直接创建 Kolors 配置（地址/Key 由后端隐藏注入）
                     val config = ApiConfig(
                         id = UUID.randomUUID().toString(),
                         name = "Kwai-Kolors/Kolors",
@@ -333,8 +337,33 @@ fun SettingsScreen(
                     viewModel.addConfig(config, isImageGen = true)
                     showAddFullConfigDialog = false
                     viewModel.clearFetchedModels()
+                } else if (isDefaultProvider && !isInImageMode) {
+                    // 🆕 文本模式下的"默认"平台：创建多个默认模型配置
+                    // 确保所有配置使用相同的 provider、address、key 和 channel，以便在UI上聚合为一个卡片
+                    val defaultModels = listOf(
+                        "gemini-2.5-pro-1M",
+                        "gemini-2.5-flash",
+                        "gemini-flash-lite-latest"
+                    )
+                    
+                    defaultModels.forEach { modelName ->
+                        val config = ApiConfig(
+                            id = UUID.randomUUID().toString(),
+                            name = modelName,
+                            provider = providerTrim,  // "默认"
+                            address = "",  // 空,由后端注入
+                            key = "",      // 空,由后端注入
+                            model = modelName,
+                            modalityType = ModalityType.TEXT,
+                            channel = "",  // 使用空字符串确保所有默认配置聚合在一起
+                            isValid = true
+                        )
+                        viewModel.addConfig(config, isImageGen = false)
+                    }
+                    showAddFullConfigDialog = false
+                    viewModel.clearFetchedModels()
                 } else if (key.isNotBlank() && providerTrim.isNotBlank() && address.isNotBlank()) {
-                    // 改为启动“是否自动获取模型列表”的流程
+                    // 改为启动"是否自动获取模型列表"的流程
                     viewModel.startAddConfigFlow(providerTrim, address, key, channel, isInImageMode)
                     showAddFullConfigDialog = false
                 }

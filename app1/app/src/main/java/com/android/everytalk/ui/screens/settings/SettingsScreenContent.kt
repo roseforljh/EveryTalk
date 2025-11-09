@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.Cancel
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
@@ -40,6 +41,102 @@ import com.android.everytalk.data.DataClass.ModalityType
 
 @SuppressLint("ConfigurationScreenWidthHeight")
 @OptIn(ExperimentalMaterial3Api::class)
+
+// 顶层默认配置卡片（供空列表时调用）
+@Composable
+private fun DefaultPinnedCard(
+    onActivate: () -> Unit,
+    isImageMode: Boolean = false
+) {
+    val isDark = isSystemInDarkTheme()
+    val container = if (isDark) Color.Black else MaterialTheme.colorScheme.surfaceColorAtElevation(2.dp)
+    val border = if (isDark) Color.White.copy(alpha = 0.45f) else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+
+    OutlinedCard(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.outlinedCardColors(containerColor = container),
+        elevation = CardDefaults.outlinedCardElevation(defaultElevation = if (isDark) 6.dp else 2.dp),
+        border = androidx.compose.foundation.BorderStroke(2.dp, border)
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "默认配置",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "一键启用平台“默认”配置。密钥与地址由后端安全注入。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Icon(
+                    imageVector = Icons.Filled.PushPin,
+                    contentDescription = "默认配置(固定)",
+                    tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+                    modifier = Modifier.size(40.dp).padding(8.dp)
+                )
+            }
+
+            HorizontalDivider(
+                modifier = Modifier.padding(vertical = 12.dp),
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+            )
+
+            Column(modifier = Modifier.fillMaxWidth()) {
+                if (isImageMode) {
+                    Text(
+                        text = "将自动添加以下图像模型：",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = "• Kwai-Kolors/Kolors",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    Text(
+                        text = "将自动添加以下文本模型：",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    val models = listOf("gemini-2.5-pro-1M", "gemini-2.5-flash", "gemini-flash-lite-latest")
+                    models.forEach {
+                        Text(
+                            text = "• $it",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            Button(
+                onClick = onActivate,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth().height(48.dp)
+            ) {
+                Text("启用默认配置", fontWeight = FontWeight.SemiBold)
+            }
+        }
+    }
+}
+
 @Composable
 internal fun SettingsScreenContent(
     paddingValues: PaddingValues,
@@ -52,7 +149,8 @@ internal fun SettingsScreenContent(
     onEditConfigClick: (config: ApiConfig) -> Unit,
     onDeleteConfigGroup: (representativeConfig: ApiConfig) -> Unit,
     onRefreshModelsClick: (config: ApiConfig) -> Unit,
-    isRefreshingModels: Set<String>
+    isRefreshingModels: Set<String>,
+    isImageMode: Boolean = false
 ) {
     Column(
         modifier = Modifier
@@ -95,37 +193,50 @@ internal fun SettingsScreenContent(
 
         if (apiConfigsByApiKeyAndModality.isEmpty()) {
             // 空状态提示 - 更友好的设计
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 40.dp),
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Column(
-                    modifier = Modifier.padding(32.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 20.dp),
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                 ) {
-                    Icon(
-                        Icons.Filled.Add,
-                        contentDescription = null,
-                        modifier = Modifier.size(48.dp),
-                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        "暂无API配置",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        "点击上方按钮添加您的第一个配置",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                    )
+                    Column(
+                        modifier = Modifier.padding(32.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(
+                            Icons.Filled.Add,
+                            contentDescription = null,
+                            modifier = Modifier.size(48.dp),
+                            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            "暂无API配置",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            "点击上方按钮添加您的第一个配置",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        )
+                    }
                 }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // 默认配置卡片（空列表时展示，点击一键启用“默认”配置）
+                DefaultPinnedCard(
+                    onActivate = { onAddFullConfigClick() },
+                    isImageMode = isImageMode
+                )
             }
         } else {
             apiConfigsByApiKeyAndModality.forEach { (apiKey, configsByModality) ->
@@ -193,10 +304,9 @@ private fun ApiKeyItemGroup(
     }
     val providerName =
         configsInGroup.firstOrNull()?.provider?.ifBlank { null } ?: "综合平台"
-    // 图像模式的“默认”配置组标识
+    // 默认配置组标识(支持文本和图像模式)
     val firstCfg = configsInGroup.firstOrNull()
-    val isDefaultImageGroup = firstCfg != null
-            && firstCfg.modalityType == ModalityType.IMAGE
+    val isDefaultGroup = firstCfg != null
             && firstCfg.provider.trim().lowercase() in listOf("默认","default")
     val isDarkMode = isSystemInDarkTheme()
     val cardContainerColor = if (isDarkMode) {
@@ -232,7 +342,7 @@ private fun ApiKeyItemGroup(
                     .fillMaxWidth()
                     .let { base ->
                         // 图像模式“默认”卡片：完全禁用点击与按压效果
-                        if (isDefaultImageGroup) base
+                        if (isDefaultGroup) base
                         else base.clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null
@@ -252,7 +362,7 @@ private fun ApiKeyItemGroup(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     // 图像模式“默认”配置卡片内不显示 Key 信息
-                    if (!isDefaultImageGroup) {
+                    if (!isDefaultGroup) {
                         Text(
                             text = "Key: ${maskApiKey(apiKey)}",
                             style = MaterialTheme.typography.bodyMedium,
@@ -261,16 +371,29 @@ private fun ApiKeyItemGroup(
                         )
                     }
                 }
-                IconButton(
-                    onClick = { showConfirmDeleteGroupDialog = true },
-                    modifier = Modifier.size(40.dp)
-                ) {
+                // 图像模式"默认"配置显示钉子图标,表示固定不可删除
+                if (isDefaultGroup) {
                     Icon(
-                        Icons.Outlined.Cancel,
-                        contentDescription = "删除配置组",
-                        tint = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.size(22.dp)
+                        imageVector = Icons.Filled.PushPin,
+                        contentDescription = "默认配置(固定)",
+                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+                        modifier = Modifier
+                            .size(40.dp)
+                            .padding(8.dp)
                     )
+                } else {
+                    // 其他配置显示删除按钮
+                    IconButton(
+                        onClick = { showConfirmDeleteGroupDialog = true },
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Icon(
+                            Icons.Outlined.Cancel,
+                            contentDescription = "删除配置组",
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
                 }
             }
 
@@ -285,11 +408,11 @@ private fun ApiKeyItemGroup(
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(8.dp))
                     .clickable(
-                        enabled = !isDefaultImageGroup,
+                        enabled = !isDefaultGroup,
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
                     ) {
-                        if (!isDefaultImageGroup) {
+                        if (!isDefaultGroup) {
                             expandedModels = !expandedModels
                         }
                     }
@@ -314,7 +437,8 @@ private fun ApiKeyItemGroup(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    if (modalityType != ModalityType.IMAGE) {
+                    // 默认配置和图像模式都不显示刷新按钮
+                    if (modalityType != ModalityType.IMAGE && !isDefaultGroup) {
                         if (isRefreshing) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(20.dp),
@@ -336,7 +460,7 @@ private fun ApiKeyItemGroup(
                         }
                     }
                     // 图像模式“默认”卡片不显示“添加模型”按钮
-                    if (!isDefaultImageGroup) {
+                    if (!isDefaultGroup) {
                         IconButton(
                             onClick = onAddModelForApiKeyClick,
                             modifier = Modifier.size(36.dp)
@@ -390,6 +514,7 @@ private fun ApiKeyItemGroup(
             }
         }
     }
+    
 
     if (showConfirmDeleteGroupDialog) {
         ConfirmDeleteDialog(

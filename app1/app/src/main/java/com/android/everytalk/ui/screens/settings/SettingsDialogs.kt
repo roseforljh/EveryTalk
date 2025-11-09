@@ -413,10 +413,10 @@ internal fun AddNewFullConfigDialog(
         },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                // 仅图像模式下限制平台列表为：默认、即梦、硅基流动、Nano Banana
-                val imageModeProviders = listOf("默认", "即梦", "硅基流动", "Nano Banana")
+                // 仅图像模式下限制平台列表为：即梦、硅基流动、Nano Banana
+                val imageModeProviders = listOf("即梦", "硅基流动", "Nano Banana")
                 val providersToShow = if (isImageMode) imageModeProviders else allProviders
-                val isDefaultSel = isImageMode && provider.trim().lowercase() in listOf("默认","default")
+                val isDefaultSel = false // 移除默认选项，此变量保持为 false
                 val isGoogleProvider = provider.trim().lowercase() in listOf("google","谷歌")
                 // 当平台为 Google 时，通道锁定为 Gemini
                 LaunchedEffect(provider) {
@@ -435,7 +435,7 @@ internal fun AddNewFullConfigDialog(
                     modifier = Modifier.padding(bottom = 12.dp)
                 ) {
                     OutlinedTextField(
-                        value = provider.ifBlank { if (isImageMode) "默认" else provider },
+                        value = provider,
                         onValueChange = {},
                         readOnly = true,
                         label = { Text("模型平台") },
@@ -484,7 +484,7 @@ internal fun AddNewFullConfigDialog(
                                             )
                                             // 图像模式下固定三项且不可删除，隐藏右侧删除按钮
                                             val lower = providerItem.lowercase().trim()
-                                            val imageModeLocked = isImageMode && listOf("默认","即梦","硅基流动","nano banana").contains(lower)
+                                            val imageModeLocked = isImageMode && listOf("即梦","硅基流动","nano banana").contains(lower)
                                             val nonDeletableProviders = listOf(
                                                 "openai compatible",
                                                 "google",
@@ -628,10 +628,7 @@ internal fun AddNewFullConfigDialog(
                         singleLine = true,
                         keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
                         keyboardActions = KeyboardActions(onDone = {
-                            val isDefaultProvider = provider.trim().lowercase() in listOf("默认", "default")
-                            val canSubmitInImageDefault = isImageMode && isDefaultProvider && provider.isNotBlank()
-                            val canSubmitNormal = !isDefaultProvider && apiKey.isNotBlank() && provider.isNotBlank() && apiAddress.isNotBlank()
-                            if (canSubmitInImageDefault || canSubmitNormal) {
+                            if (apiKey.isNotBlank() && provider.isNotBlank() && apiAddress.isNotBlank()) {
                                onConfirm(provider, apiAddress, apiKey, selectedChannel, imageSize, numInferenceSteps.toIntOrNull(), guidanceScale.toFloatOrNull())
                             }
                         }),
@@ -642,17 +639,9 @@ internal fun AddNewFullConfigDialog(
             }
         },
         confirmButton = {
-            val isDefaultSel = isImageMode && provider.trim().lowercase() in listOf("默认","default")
             FilledTonalButton(
                 onClick = { onConfirm(provider, apiAddress, apiKey, selectedChannel, imageSize, numInferenceSteps.toIntOrNull(), guidanceScale.toFloatOrNull()) },
-                enabled = run {
-                    val p = provider.trim().lowercase()
-                    val isDefaultProvider = p in listOf("默认", "default")
-                    // 图像模式下“默认”无需任何参数，直接可确定；其余仍按原必填
-                    val allowInImageDefault = isImageMode && isDefaultProvider
-                    val allowNormal = !isDefaultProvider && apiKey.isNotBlank() && provider.isNotBlank() && apiAddress.isNotBlank()
-                    allowInImageDefault || allowNormal
-                },
+                enabled = apiKey.isNotBlank() && provider.isNotBlank() && apiAddress.isNotBlank(),
                 shape = RoundedCornerShape(20.dp),
                 modifier = Modifier.height(52.dp).padding(horizontal = 4.dp),
                 colors = ButtonDefaults.filledTonalButtonColors(
@@ -667,7 +656,7 @@ internal fun AddNewFullConfigDialog(
                     contentDescription = null,
                     modifier = Modifier.size(20.dp).padding(end = 4.dp)
                 )
-                Text(if (isDefaultSel) "确定" else "确定添加", fontWeight = FontWeight.Bold)
+                Text("确定添加", fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {

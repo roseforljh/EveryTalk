@@ -37,11 +37,17 @@ class SettingsController(
 
     fun exportSettings(isImageGen: Boolean = false) {
         scope.launch(Dispatchers.IO) {
-            val settingsToExport = if (isImageGen) {
-                ExportedSettings(apiConfigs = stateHolder._imageGenApiConfigs.value)
+            // 过滤掉默认配置（provider 为"默认"或"default"的配置）
+            val configsToExport = if (isImageGen) {
+                stateHolder._imageGenApiConfigs.value.filter {
+                    it.provider.trim().lowercase() !in listOf("默认", "default")
+                }
             } else {
-                ExportedSettings(apiConfigs = stateHolder._apiConfigs.value)
+                stateHolder._apiConfigs.value.filter {
+                    it.provider.trim().lowercase() !in listOf("默认", "default")
+                }
             }
+            val settingsToExport = ExportedSettings(apiConfigs = configsToExport)
             val finalJson = json.encodeToString(settingsToExport)
             val fileName = if (isImageGen) "eztalk_image_settings" else "eztalk_settings"
             exportManager.requestSettingsExport(fileName, finalJson)
@@ -54,15 +60,27 @@ class SettingsController(
                 // 先尝试新格式
                 try {
                     val parsedNew = json.decodeFromString<ExportedSettings>(jsonContent)
-                    if (parsedNew.apiConfigs.none { it.id.isBlank() || it.provider.isBlank() }) {
+                    // 过滤掉导入的默认配置
+                    val filteredConfigs = parsedNew.apiConfigs.filter {
+                        it.provider.trim().lowercase() !in listOf("默认", "default")
+                    }
+                    if (filteredConfigs.none { it.id.isBlank() || it.provider.isBlank() }) {
                         if (isImageGen) {
-                            stateHolder._imageGenApiConfigs.value = parsedNew.apiConfigs
+                            // 保留现有的默认配置，只添加导入的非默认配置
+                            val existingDefaults = stateHolder._imageGenApiConfigs.value.filter {
+                                it.provider.trim().lowercase() in listOf("默认", "default")
+                            }
+                            stateHolder._imageGenApiConfigs.value = existingDefaults + filteredConfigs
                             val firstConfig = parsedNew.apiConfigs.firstOrNull()
                             stateHolder._selectedImageGenApiConfig.value = firstConfig
                             persistenceManager.saveApiConfigs(parsedNew.apiConfigs, isImageGen = true)
                             persistenceManager.saveSelectedConfigIdentifier(firstConfig?.id, isImageGen = true)
                         } else {
-                            stateHolder._apiConfigs.value = parsedNew.apiConfigs
+                            // 保留现有的默认配置，只添加导入的非默认配置
+                            val existingDefaults = stateHolder._apiConfigs.value.filter {
+                                it.provider.trim().lowercase() in listOf("默认", "default")
+                            }
+                            stateHolder._apiConfigs.value = existingDefaults + filteredConfigs
                             providerManager.setCustomProviders(parsedNew.customProviders)
                             val firstConfig = parsedNew.apiConfigs.firstOrNull()
                             stateHolder._selectedApiConfig.value = firstConfig
@@ -80,15 +98,27 @@ class SettingsController(
                 // 旧格式：仅 List<ApiConfig>
                 try {
                     val parsedOld = json.decodeFromString<List<ApiConfig>>(jsonContent)
-                    if (parsedOld.none { it.id.isBlank() || it.provider.isBlank() }) {
+                    // 过滤掉导入的默认配置
+                    val filteredOldConfigs = parsedOld.filter {
+                        it.provider.trim().lowercase() !in listOf("默认", "default")
+                    }
+                    if (filteredOldConfigs.none { it.id.isBlank() || it.provider.isBlank() }) {
                         if (isImageGen) {
-                            stateHolder._imageGenApiConfigs.value = parsedOld
+                            // 保留现有的默认配置，只添加导入的非默认配置
+                            val existingDefaults = stateHolder._imageGenApiConfigs.value.filter {
+                                it.provider.trim().lowercase() in listOf("默认", "default")
+                            }
+                            stateHolder._imageGenApiConfigs.value = existingDefaults + filteredOldConfigs
                             val firstConfig = parsedOld.firstOrNull()
                             stateHolder._selectedImageGenApiConfig.value = firstConfig
                             persistenceManager.saveApiConfigs(parsedOld, isImageGen = true)
                             persistenceManager.saveSelectedConfigIdentifier(firstConfig?.id, isImageGen = true)
                         } else {
-                            stateHolder._apiConfigs.value = parsedOld
+                            // 保留现有的默认配置，只添加导入的非默认配置
+                            val existingDefaults = stateHolder._apiConfigs.value.filter {
+                                it.provider.trim().lowercase() in listOf("默认", "default")
+                            }
+                            stateHolder._apiConfigs.value = existingDefaults + filteredOldConfigs
                             providerManager.setCustomProviders(emptySet())
                             val firstConfig = parsedOld.firstOrNull()
                             stateHolder._selectedApiConfig.value = firstConfig

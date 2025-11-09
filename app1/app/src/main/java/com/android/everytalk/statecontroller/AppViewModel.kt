@@ -1331,4 +1331,5 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     fun onLowMemory() {
         lifecycleCoordinator.onLowMemory()
     }
+    
 }
