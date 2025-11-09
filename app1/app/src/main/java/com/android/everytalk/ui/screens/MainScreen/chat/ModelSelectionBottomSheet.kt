@@ -111,9 +111,18 @@ fun ModelSelectionBottomSheet(
     
     val platforms = allApiConfigs.map { it.provider }.distinct()
 
-    val filteredModels = availableModels.filter {
-        it.name.contains(searchText, ignoreCase = true) || it.model.contains(searchText, ignoreCase = true)
-    }
+    // 🆕 过滤并排序模型：默认配置的模型置顶
+    val filteredModels = availableModels
+        .filter {
+            it.name.contains(searchText, ignoreCase = true) || it.model.contains(searchText, ignoreCase = true)
+        }
+        .sortedWith(compareBy(
+            { config ->
+                // 默认配置排在最前面（返回0），其他配置返回1
+                if (config.provider.trim().lowercase() in listOf("默认", "default")) 0 else 1
+            },
+            { it.name } // 同类配置内部按名称排序
+        ))
     
     // 检查是否有足够的内容需要滚动
     val hasScrollableContent by remember {
@@ -422,6 +431,11 @@ fun PlatformSelectionDialog(
     currentPlatform: String?,
     onConfirm: (String) -> Unit
 ) {
+    // 🆕 将"默认"平台置顶
+    val sortedPlatforms = platforms.sortedWith(compareBy { platform ->
+        if (platform.trim().lowercase() in listOf("默认", "default")) 0 else 1
+    })
+    
     var tempSelectedPlatform by remember { mutableStateOf(currentPlatform) }
 
     val alpha = remember { Animatable(0f) }
@@ -451,7 +465,7 @@ fun PlatformSelectionDialog(
             LazyColumn(
                 modifier = Modifier.height(300.dp) // 固定高度，可滚动
             ) {
-                items(platforms) { platform ->
+                items(sortedPlatforms) { platform ->
                     ListItem(
                         headlineContent = { Text(platform, color = MaterialTheme.colorScheme.onSurface) },
                         modifier = Modifier.clickable { tempSelectedPlatform = platform },
