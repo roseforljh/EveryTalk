@@ -499,6 +499,7 @@ fun AiMessageItem(
     onLongPress: () -> Unit,
     modifier: Modifier = Modifier,
     isStreaming: Boolean,
+    isFastScroll: Boolean = false,
     messageOutputType: String,
     viewModel: AppViewModel,
     showMenuButton: Boolean = true

@@ -260,4 +260,46 @@ object PerformanceMonitor {
         }
         Log.i(tag, "$label ${fields.joinToString(" ")}")
     }
+
+    // ===== Generic lightweight perf markers (component-level) =====
+
+    /**
+     * 解析耗时埋点（无需会话上下文）
+     */
+    fun recordParsing(component: String, durationMs: Long, inputSize: Int) {
+        if (!enabled) return
+        Log.i(tag, "PARSING component=$component durationMs=$durationMs inputSize=$inputSize")
+    }
+
+    /**
+     * 缓存命中埋点（无需会话上下文）
+     */
+    fun recordCacheHit(component: String, durationMs: Long, key: String? = null) {
+        if (!enabled) return
+        if (key.isNullOrBlank()) {
+            Log.i(tag, "CACHE_HIT component=$component durationMs=$durationMs")
+        } else {
+            Log.i(tag, "CACHE_HIT component=$component durationMs=$durationMs key=$key")
+        }
+    }
+
+    /**
+     * 缓存未命中埋点（无需会话上下文）
+     */
+    fun recordCacheMiss(component: String, durationMs: Long, key: String? = null) {
+        if (!enabled) return
+        if (key.isNullOrBlank()) {
+            Log.i(tag, "CACHE_MISS component=$component durationMs=$durationMs")
+        } else {
+            Log.i(tag, "CACHE_MISS component=$component durationMs=$durationMs key=$key")
+        }
+    }
+
+    /**
+     * 虚拟化渲染埋点（行数/阈值）
+     */
+    fun recordVirtualizedRender(component: String, lines: Int, threshold: Int) {
+        if (!enabled) return
+        Log.i(tag, "VIRTUALIZED_RENDER component=$component lines=$lines threshold=$threshold")
+    }
 }

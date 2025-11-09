@@ -193,32 +193,48 @@ fun CodeBlock(
             }
         }
 
-        // 🎯 完美自适应宽度 + 丝滑水平滚动（与数学公式/表格一致）
-        // 移除高度限制，让代码完整显示
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()  // 外层占满父容器，提供滚动边界
-                .then(
-                    if (enableHorizontalScroll) {
-                        Modifier.horizontalScroll(rememberScrollState())  // 超出时启用滚动
-                    } else {
-                        Modifier
-                    }
-                )
-                // 不再限制最大高度，代码可以完整显示
-        ) {
-            Text(
-                text = code,
-                modifier = Modifier
-                    .wrapContentWidth()  // 🎯 完全自适应代码实际宽度
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                style = MaterialTheme.typography.bodySmall.copy(
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 13.sp,
-                    lineHeight = 18.sp
-                ),
-                color = resolvedTextColor
+        // 🎯 选择渲染策略：超大代码块使用虚拟化，常规走原渲染
+        val lines = remember(code) { code.split('\n') }
+        val lineCount = lines.size
+        val longest = remember(code) { lines.maxOfOrNull { it.length } ?: 0 }
+
+        // 收敛触发条件：行数 ≥ 220 或 最长行 ≥ 320（减少误触发）
+        val virtualize = lineCount >= 220 || longest >= 320
+
+        if (virtualize) {
+            VirtualizedCodeBlock(
+                code = code,
+                // 恢复更高的可视高度，尽量贴近原体验
+                maxHeightDp = 600,
+                textColor = resolvedTextColor
             )
+        } else {
+            // 🎯 完美自适应宽度 + 丝滑水平滚动（与数学公式/表格一致）
+            // 移除高度限制，让代码完整显示
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()  // 外层占满父容器，提供滚动边界
+                    .then(
+                        if (enableHorizontalScroll) {
+                            Modifier.horizontalScroll(rememberScrollState())  // 超出时启用滚动
+                        } else {
+                            Modifier
+                        }
+                    )
+            ) {
+                Text(
+                    text = code,
+                    modifier = Modifier
+                        .wrapContentWidth()  // 🎯 完全自适应代码实际宽度
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 13.sp,
+                        lineHeight = 18.sp
+                    ),
+                    color = resolvedTextColor
+                )
+            }
         }
 
         // 🔎 预览区域（内联展开，非全屏/底部抽屉）- 带平滑过渡动画

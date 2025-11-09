@@ -19,6 +19,7 @@ import com.android.everytalk.ui.components.markdown.MarkdownRenderer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.android.everytalk.util.ContentParseCache
+import com.android.everytalk.util.PerformanceMonitor
 
 /**
  * 表格感知文本渲染器（优化版）
@@ -71,10 +72,14 @@ fun TableAwareText(
         ContentParseCache.get(contentKey)?.let { cached ->
             if (cached.isNotEmpty()) {
                 parsedParts.value = cached
+                // 埋点：缓存命中
+                PerformanceMonitor.recordCacheHit(component = "ContentParse", durationMs = 0, key = contentKey)
                 android.util.Log.d("TableAwareText", "✅ Cache hit for key=$contentKey (parts=${cached.size})")
                 return@LaunchedEffect
             }
         }
+        // 埋点：缓存未命中
+        PerformanceMonitor.recordCacheMiss(component = "ContentParse", durationMs = 0, key = contentKey)
 
         // 缓存未命中：触发解析（后台线程），并在完成后写入缓存
         val isLargeContent = text.length > 8000
@@ -91,6 +96,8 @@ fun TableAwareText(
             }
         }
         val parseTime = System.currentTimeMillis() - startTime
+        // 埋点：解析耗时
+        PerformanceMonitor.recordParsing(component = "ContentParse", durationMs = parseTime, inputSize = text.length)
 
         parsedParts.value = parsed
         ContentParseCache.put(contentKey, parsed)
