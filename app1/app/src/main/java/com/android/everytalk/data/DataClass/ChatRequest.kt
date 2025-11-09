@@ -85,5 +85,9 @@ data class ChatRequest(
     val customExtraBody: Map<String, @Contextual Any>? = null,
 
     @SerialName("imageGenRequest")
-    val imageGenRequest: ImageGenRequest? = null
+    val imageGenRequest: ImageGenRequest? = null,
+
+    // 设备唯一标识符（用于速率限制）
+    @SerialName("device_id")
+    val deviceId: String? = null
 )
