@@ -717,6 +717,7 @@ private data class AttachmentProcessingResult(
                     apiAddress = currentConfig.address,
                     apiKey = currentConfig.key,
                     model = currentConfig.model,
+                    deviceId = com.android.everytalk.util.DeviceIdManager.getDeviceId(application),
                     useWebSearch = stateHolder._isWebSearchEnabled.value,
                     // 新会话未设置时，只回落温度/TopP；maxTokens 一律保持关闭（null）
                     generationConfig = stateHolder.getCurrentConversationConfig() ?: GenerationConfig(
