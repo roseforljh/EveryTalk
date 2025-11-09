@@ -64,11 +64,11 @@ EveryTalk 不仅仅是一个聊天应用,它是一个集成了前沿技术的全
 
 |                                 主聊天界面                                 |                                 侧边栏/模型切换                                 |                                 设置界面                                 |
 | :------------------------------------------------------------------------: | :-----------------------------------------------------------------------------: | :------------------------------------------------------------------------: |
-| <img src="https://qone.kuz7.com/uploads/images/2025/11/10/fbe91690-d33f-414d-b600-43fdfdce4d92.png" alt="主聊天界面" width="280"/> | <img src="https://qone.kuz7.com/uploads/images/2025/10/01/7c4a347f-7104-40a5-8c49-e321b03ca447.png" alt="侧边栏/模型切换" width="280"/> | <img src="https://qone.kuz7.com/uploads/images/2025/10/01/284aecfe-dba9-49f6-9abb-10a73c889155.png" alt="设置界面" width="280"/> |
+| <img src="https://qone.kuz7.com/uploads/images/2025/11/10/fbe91690-d33f-414d-b600-43fdfdce4d92.png" alt="主聊天界面" width="280"/> | <img src="https://qone.kuz7.com/uploads/images/2025/11/10/c679a95d-b671-4b9c-a582-4c18b1280206.png" alt="侧边栏/模型切换" width="280"/> | <img src="https://qone.kuz7.com/uploads/images/2025/11/10/b4af6d5f-8537-4888-bb08-7b2bbba530ef.png" alt="设置界面" width="280"/> |
 
 |                                 图像生成界面                                 |                                 关于                                 |
 | :------------------------------------------------------------------------: | :-----------------------------------------------------------------------------: |
-| <img src="https://qone.kuz7.com/uploads/images/2025/10/01/7f1327b6-2242-4cda-8ee7-7ecf4ea06212.png" alt="图像生成界面" width="280"/> | <img src="https://qone.kuz7.com/uploads/images/2025/10/01/cc3e08e2-3a60-4ab9-9b2d-0e8c01765bb7.png" alt="关于" width="280"/> |
+| <img src="https://qone.kuz7.com/uploads/images/2025/11/10/bd4f5a89-a4cb-4554-9d98-15135b97adaf.png" alt="图像生成界面" width="280"/> | <img src="https://qone.kuz7.com/uploads/images/2025/11/10/2656afa4-7af1-4f42-8ace-d53c38a16b02.png" alt="关于" width="280"/> |
 
 ### 浅色模式
 
