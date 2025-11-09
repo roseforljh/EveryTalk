@@ -60,10 +60,16 @@ fun ModelSelectionDialog(
         title = { 
             Column {
                 Text(
-                    "选择模型 (${models.size}个可用)",
+                    "选择模型",
                     style = MaterialTheme.typography.titleLarge
                 )
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    "${models.size} 个可用",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
                 // 搜索框
                 OutlinedTextField(
                     value = searchText,
@@ -79,7 +85,7 @@ fun ModelSelectionDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(400.dp)
+                    .height(320.dp)
             ) {
                 // 全选按钮
                 Row(
@@ -206,16 +212,6 @@ fun ModelSelectionDialog(
             Column(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                TextButton(
-                    onClick = {
-                        onManualInput()
-                        onDismiss()
-                    },
-                    shape = RoundedCornerShape(20.dp),
-                    modifier = Modifier.height(52.dp).padding(horizontal = 4.dp)
-                ) {
-                    Text("手动输入", fontWeight = FontWeight.Medium)
-                }
                 TextButton(
                     onClick = onDismiss,
                     shape = RoundedCornerShape(20.dp),
