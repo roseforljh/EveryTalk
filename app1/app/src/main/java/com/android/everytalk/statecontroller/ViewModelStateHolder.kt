@@ -23,6 +23,18 @@ data class ConversationScrollState(
     val firstVisibleItemScrollOffset: Int = 0,
     val userScrolledAway: Boolean = false
 )
+
+/**
+ * 待处理的配置参数
+ * 用于在添加配置流程中临时保存用户输入的参数
+ */
+data class PendingConfigParams(
+    val provider: String,
+    val address: String,
+    val key: String,
+    val channel: String,
+    val isImageGen: Boolean
+)
  
  class ViewModelStateHolder {
     // 🎯 Streaming message state manager for efficient UI updates
@@ -338,6 +350,11 @@ val _isStreamingPaused = MutableStateFlow(false)
     val _editDialogInputText = MutableStateFlow("")
 
     val _showSettingsDialog = MutableStateFlow(false)
+    
+    // 🎯 新增：添加配置流程相关的对话框状态
+    val _showAutoFetchConfirmDialog = MutableStateFlow(false)
+    val _showModelSelectionDialog = MutableStateFlow(false)
+    val _pendingConfigParams = MutableStateFlow<PendingConfigParams?>(null)
 
     val _isWebSearchEnabled = MutableStateFlow(false)
 

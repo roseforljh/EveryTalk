@@ -16,6 +16,8 @@ import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.statecontroller.SimpleModeManager
+import com.android.everytalk.ui.screens.settings.dialogs.AutoFetchModelsConfirmDialog
+import com.android.everytalk.ui.screens.settings.dialogs.ModelSelectionDialog
 import java.util.UUID
 
 // 平台默认地址映射
@@ -69,6 +71,8 @@ fun SettingsScreen(
     val isFetchingModels by viewModel.isFetchingModels.collectAsState()
     val fetchedModels by viewModel.fetchedModels.collectAsState()
     val isRefreshingModels by viewModel.isRefreshingModels.collectAsState()
+    val showAutoFetchConfirm by viewModel.showAutoFetchConfirmDialog.collectAsState()
+    val showModelSelection by viewModel.showModelSelectionDialog.collectAsState()
 
     val apiConfigsByApiKeyAndModality = remember(textConfigs, imageConfigs, isInImageMode) {
         val configsToShow = if (isInImageMode) {
@@ -330,9 +334,9 @@ fun SettingsScreen(
                     showAddFullConfigDialog = false
                     viewModel.clearFetchedModels()
                 } else if (key.isNotBlank() && providerTrim.isNotBlank() && address.isNotBlank()) {
-                    viewModel.createConfigAndFetchModels(providerTrim, address, key, channel, isInImageMode)
+                    // 改为启动“是否自动获取模型列表”的流程
+                    viewModel.startAddConfigFlow(providerTrim, address, key, channel, isInImageMode)
                     showAddFullConfigDialog = false
-                    viewModel.clearFetchedModels()
                 }
             },
             isImageMode = isInImageMode
@@ -384,6 +388,28 @@ fun SettingsScreen(
                     manualModelInputName = ""
                 }
             }
+        )
+    }
+
+    // 自动获取模型：确认对话框
+    if (showAutoFetchConfirm) {
+        AutoFetchModelsConfirmDialog(
+            showDialog = true,
+            onDismiss = { viewModel.dismissAutoFetchConfirmDialog() },
+            onConfirmAutoFetch = { viewModel.onConfirmAutoFetch() },
+            onManualInput = { viewModel.onManualInput() }
+        )
+    }
+
+    // 模型选择对话框（支持“全部添加/手动选择/改为手动输入”）
+    if (showModelSelection) {
+        ModelSelectionDialog(
+            showDialog = true,
+            models = fetchedModels,
+            onDismiss = { viewModel.dismissModelSelectionDialog() },
+            onSelectAll = { viewModel.onSelectAllModels() },
+            onSelectModels = { selected -> viewModel.onSelectModels(selected) },
+            onManualInput = { viewModel.onManualInput() }
         )
     }
 

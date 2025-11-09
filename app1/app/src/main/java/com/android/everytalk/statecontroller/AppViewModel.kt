@@ -38,6 +38,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -264,6 +266,14 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     val showClearImageHistoryDialog: StateFlow<Boolean> = dialogManager.showClearImageHistoryDialog
     val editDialogInputText: StateFlow<String>
         get() = stateHolder._editDialogInputText.asStateFlow()
+    
+    // 🎯 新增:添加配置流程相关的对话框状态
+    val showAutoFetchConfirmDialog: StateFlow<Boolean>
+        get() = stateHolder._showAutoFetchConfirmDialog.asStateFlow()
+    val showModelSelectionDialog: StateFlow<Boolean>
+        get() = stateHolder._showModelSelectionDialog.asStateFlow()
+    val pendingConfigParams: StateFlow<PendingConfigParams?>
+        get() = stateHolder._pendingConfigParams.asStateFlow()
     
     // 剪贴板/导出 控制器
     private val clipboardController = ClipboardController(
@@ -1197,6 +1207,115 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         lifecycleCoordinator.clearAllCaches()
     }
     
+    // ===== 配置添加流程：交互逻辑 =====
+    fun startAddConfigFlow(
+        provider: String,
+        address: String,
+        key: String,
+        channel: String,
+        isImageGen: Boolean = false
+    ) {
+        stateHolder._pendingConfigParams.value = PendingConfigParams(
+            provider = provider,
+            address = address,
+            key = key,
+            channel = channel,
+            isImageGen = isImageGen
+        )
+        stateHolder._showAutoFetchConfirmDialog.value = true
+    }
+
+    fun onConfirmAutoFetch() {
+        stateHolder._showAutoFetchConfirmDialog.value = false
+        val params = stateHolder._pendingConfigParams.value ?: return
+
+        // 触发拉取
+        fetchModels(params.address, params.key)
+
+        // 等待结果并分支处理
+        viewModelScope.launch {
+            isFetchingModels
+                .flatMapLatest { fetching ->
+                    // 简单等待到false，再读取结果
+                    kotlinx.coroutines.flow.flow { if (!fetching) emit(Unit) }
+                }
+                .first()
+
+            val models = fetchedModels.value
+            if (models.isNotEmpty()) {
+                stateHolder._showModelSelectionDialog.value = true
+            } else {
+                showSnackbar("获取模型列表失败,请手动输入模型名称")
+                onManualInput()
+            }
+        }
+    }
+
+    fun onManualInput() {
+        stateHolder._showAutoFetchConfirmDialog.value = false
+        stateHolder._showModelSelectionDialog.value = false
+
+        val params = stateHolder._pendingConfigParams.value ?: return
+        // 通知UI显示手动输入对话框（项目中已存在该Flow）
+        viewModelScope.launch {
+            _showManualModelInputRequest.emit(
+                ManualModelInputRequest(
+                    provider = params.provider,
+                    address = params.address,
+                    key = params.key,
+                    channel = params.channel,
+                    isImageGen = params.isImageGen
+                )
+            )
+        }
+        // 不清理pending，等用户真正提交或取消后清理；保持上下文
+    }
+
+    fun dismissAutoFetchConfirmDialog() {
+        stateHolder._showAutoFetchConfirmDialog.value = false
+    }
+
+    fun dismissModelSelectionDialog() {
+        stateHolder._showModelSelectionDialog.value = false
+    }
+
+    fun onSelectAllModels() {
+        val params = stateHolder._pendingConfigParams.value ?: return
+        val models = fetchedModels.value
+        if (models.isEmpty()) {
+            showSnackbar("没有可用的模型")
+            return
+        }
+
+        createMultipleConfigs(
+            provider = params.provider,
+            address = params.address,
+            key = params.key,
+            modelNames = models
+        )
+        stateHolder._showModelSelectionDialog.value = false
+        stateHolder._pendingConfigParams.value = null
+        showSnackbar("已添加 ${models.size} 个模型配置")
+    }
+
+    fun onSelectModels(selectedModels: List<String>) {
+        val params = stateHolder._pendingConfigParams.value ?: return
+        if (selectedModels.isEmpty()) {
+            showSnackbar("请至少选择一个模型")
+            return
+        }
+
+        createMultipleConfigs(
+            provider = params.provider,
+            address = params.address,
+            key = params.key,
+            modelNames = selectedModels
+        )
+        stateHolder._showModelSelectionDialog.value = false
+        stateHolder._pendingConfigParams.value = null
+        showSnackbar("已添加 ${selectedModels.size} 个模型配置")
+    }
+
     override fun onCleared() {
         super.onCleared()
         // 清理消息内容控制器（若未来扩展内部资源）
