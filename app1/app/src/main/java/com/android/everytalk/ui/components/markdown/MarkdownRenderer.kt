@@ -64,6 +64,121 @@ private fun normalizeCjkQuoteBold(input: String): String {
     return s
 }
 
+/**
+ * 行首单星号安全处理（仅最终渲染态使用的预处理）
+ * 将形如 "*结论" 这种“单星号紧跟非空白且该行无配对星号”的场景，转换为 "* 结论"
+ * 目的：用户常见书写错误不会被误当作斜体/粗体，同时让其按列表项渲染，避免裸露的星号。
+ * 规则：
+ * - 仅处理行首的单个 '*'，且后面紧接 CJK/字母/数字（非空白）
+ * - 若该行包含第二个 '*'（可能是配对），则不处理，避免误修复
+ * - 代码围栏中的内容不处理
+ */
+private fun fixLeadingSingleAsterisk(input: String): String {
+    // 同时兼容全角星号 '＊'
+    if (!input.contains('*') && !input.contains('＊')) return input
+    val lines = input.lines()
+    val out = StringBuilder(input.length + 32)
+    var inFence = false
+    var prevWasBlank = true
+    for ((i, rawLine) in lines.withIndex()) {
+        var line = rawLine
+        val trimmedStart = line.trimStart()
+        // 代码围栏开关
+        if (trimmedStart.startsWith("```")) {
+            inFence = !inFence
+            if (i > 0) out.append('\n')
+            out.append(line)
+            prevWasBlank = false
+            continue
+        }
+        if (!inFence) {
+            // 计算行首空白
+            val wsCount = line.indexOfFirst { !it.isWhitespace() }.let { if (it < 0) 0 else it }
+            val afterLeading = if (wsCount < line.length) line.substring(wsCount) else ""
+            // 仅处理行首单星号后直接跟非空白字符的情况（'*结论' / '＊结论'）
+            val startsWithStar = afterLeading.startsWith("*") || afterLeading.startsWith("＊")
+            val nextChar = afterLeading.drop(1).firstOrNull()
+            val nextIsNonSpace = nextChar != null && !nextChar.isWhitespace()
+            if (startsWithStar && nextIsNonSpace) {
+                // 若该行存在可能的配对星号（'*...*' / '＊...＊'），则不修改，避免误伤强调语法
+                val rest = afterLeading.drop(1)
+                val hasClosingAscii = rest.contains('*')
+                val hasClosingFull = rest.contains('＊')
+                val hasClosing = hasClosingAscii || hasClosingFull
+                if (!hasClosing) {
+                    // 一律在转换前补一个空行，提升不同 Markdown 实现的兼容性
+                    if (i > 0) {
+                        if (!prevWasBlank) out.append('\n')
+                        out.append('\n')
+                    }
+                    val prefix = if (wsCount > 0) line.substring(0, wsCount) else ""
+                    val body = afterLeading.drop(1)
+                    val converted = "$prefix* $body"
+                    // 调试日志（仅 Debug 生效）：帮助确认是否触发了转换
+                    if (com.android.everytalk.BuildConfig.DEBUG) {
+                        android.util.Log.d(
+                            "MarkdownRenderer",
+                            "fixLeadingSingleAsterisk: converted='$converted'"
+                        )
+                    }
+                    line = converted
+                    out.append(line)
+                    prevWasBlank = line.isBlank()
+                    continue
+                }
+            }
+        }
+        if (i > 0) out.append('\n')
+        out.append(line)
+        prevWasBlank = line.isBlank()
+    }
+    return out.toString()
+}
+// 将整行“强调语句”提升为三级标题（兼容 *结论* / ＊结论＊ / *结论 到行尾）
+// 仅在非代码围栏中生效，避免破坏代码内容。
+private fun promoteStandaloneEmphasisToHeading(input: String): String {
+    if (input.isBlank()) return input
+    val lines = input.lines()
+    val out = StringBuilder(input.length + 16)
+    var inFence = false
+    for ((i, raw) in lines.withIndex()) {
+        val trimmedStart = raw.trimStart()
+        if (trimmedStart.startsWith("```")) {
+            inFence = !inFence
+            if (i > 0) out.append('\n')
+            out.append(raw)
+            continue
+        }
+        if (!inFence) {
+            val t = raw.trim()
+            val mEmAscii = Regex("^\\*([^*]+)\\*\$").matchEntire(t)
+            val mEmFull  = Regex("^＊([^＊]+)＊\$").matchEntire(t)
+            // "*结论" / "* 结论" 以及全角 "＊结论" / "＊ 结论"
+            val mOpenNoSpace      = Regex("^\\*([^*].*)\\s*\$").matchEntire(t)
+            val mOpenSpaced       = Regex("^\\*\\s+(.+?)\\s*\$").matchEntire(t)
+            val mOpenFullNoSpace  = Regex("^＊([^＊].*)\\s*\$").matchEntire(t)
+            val mOpenFullSpaced   = Regex("^＊\\s+(.+?)\\s*\$").matchEntire(t)
+            val heading = when {
+                mEmAscii != null         -> mEmAscii.groupValues[1]
+                mEmFull  != null         -> mEmFull.groupValues[1]
+                mOpenNoSpace != null     -> mOpenNoSpace.groupValues[1]
+                mOpenSpaced  != null     -> mOpenSpaced.groupValues[1]
+                mOpenFullNoSpace != null -> mOpenFullNoSpace.groupValues[1]
+                mOpenFullSpaced  != null -> mOpenFullSpaced.groupValues[1]
+                else -> null
+            }
+            if (heading != null) {
+                if (i > 0) out.append('\n')
+                out.append("### ").append(heading.trim())
+                continue
+            }
+        }
+        if (i > 0) out.append('\n')
+        out.append(raw)
+    }
+    return out.toString()
+}
+
 // ========== CJK 粗体启发式局部修复（仅非流式、且开启开关时生效） ==========
 
 // 跳过区域：``` 代码围栏内不做替换
@@ -186,9 +301,14 @@ fun MarkdownRenderer(
         else -> MaterialTheme.colorScheme.onSurface
     }
 
-    // 先做字符级清洗（零宽/全角/CRLF 等），再做 CJK 引号粗体规范化
+    // 先做字符级清洗（零宽/全角/CRLF 等），再做 CJK 引号粗体规范化 + 标题提升后兜底处理单星号
     val preNormalized = remember(markdown) {
-        normalizeCjkQuoteBold(sanitizeInvisibleAndWidthChars(markdown))
+        val basic = sanitizeInvisibleAndWidthChars(markdown)
+        val cjk = normalizeCjkQuoteBold(basic)
+        // 先尝试将 "*结论"/"* 结论"/"＊结论＊" 等提升为标题
+        val promoted = promoteStandaloneEmphasisToHeading(cjk)
+        // 再兜底处理行首孤立星号列表化（若仍未被识别为标题）
+        fixLeadingSingleAsterisk(promoted)
     }
 
     // CJK 粗体兼容（可开关 + 启发式 + 局部修复，仅非流式）
