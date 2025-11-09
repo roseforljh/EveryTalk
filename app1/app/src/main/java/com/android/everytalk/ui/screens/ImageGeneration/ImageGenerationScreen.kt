@@ -37,6 +37,9 @@ import com.android.everytalk.ui.screens.MainScreen.chat.ModelSelectionBottomShee
 import com.android.everytalk.ui.screens.MainScreen.chat.rememberChatScrollStateManager
 import kotlinx.coroutines.launch
 import com.android.everytalk.ui.components.ScrollToBottomButton
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -340,27 +343,27 @@ private fun AboutDialog(
             Button(
                 onClick = {
                     viewModel.checkForUpdates()
-                    onDismiss() // Immediately close the about dialog
+                    onDismiss()
                 },
                 shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                 )
             ) {
-                Text("检查更新")
+                Text("检查更新", fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
-            Button(
+            TextButton(
                 onClick = onDismiss,
                 shape = RoundedCornerShape(20.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.secondary,
-                    contentColor = MaterialTheme.colorScheme.onSecondary
-                )
+                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp)
             ) {
-                Text("关闭")
+                Text("关闭", fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.error)
             }
         },
         shape = RoundedCornerShape(28.dp),

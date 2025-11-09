@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -475,25 +476,28 @@ fun PlatformSelectionDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismissRequest) {
-                Text("取消", color = MaterialTheme.colorScheme.error)
+            TextButton(
+                onClick = onDismissRequest,
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp)
+            ) {
+                Text("取消", fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.error)
             }
         },
         confirmButton = {
             Button(
-                onClick = {
-                    tempSelectedPlatform?.let { onConfirm(it) }
-                },
+                onClick = { tempSelectedPlatform?.let { onConfirm(it) } },
                 enabled = tempSelectedPlatform != null && tempSelectedPlatform != currentPlatform,
-                shape = CircleShape,
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                    disabledContainerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
-                    disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                 )
             ) {
-                Text("确定切换")
+                Text("确定切换", fontWeight = FontWeight.Bold)
             }
         }
     )

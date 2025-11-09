@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.text.selection.TextSelectionColors
@@ -538,27 +539,27 @@ private fun AboutDialog(
             Button(
                 onClick = {
                     viewModel.checkForUpdates()
-                    onDismiss() // Immediately close the about dialog
+                    onDismiss()
                 },
-                shape = RoundedCornerShape(32.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp),
+                colors = ButtonDefaults.filledTonalButtonColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                 )
             ) {
-                Text("检查更新")
+                Text("检查更新", fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
-            Button(
+            TextButton(
                 onClick = onDismiss,
-                shape = RoundedCornerShape(32.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.secondary,
-                    contentColor = MaterialTheme.colorScheme.onSecondary
-                )
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp)
             ) {
-                Text("关闭")
+                Text("关闭", fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.error)
             }
         },
         shape = RoundedCornerShape(32.dp),
@@ -583,8 +584,8 @@ private fun UpdateAvailableDialog(
                 onClick = { onUpdate(releaseInfo.htmlUrl) },
                 shape = RoundedCornerShape(32.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
                 )
             ) {
                 Text("立即更新")
