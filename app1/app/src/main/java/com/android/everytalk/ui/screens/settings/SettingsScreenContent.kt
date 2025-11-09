@@ -239,34 +239,70 @@ internal fun SettingsScreenContent(
                 )
             }
         } else {
-            apiConfigsByApiKeyAndModality.forEach { (apiKey, configsByModality) ->
-                configsByModality.forEach { (modalityType, configsForKeyAndModality) ->
-                    if (configsForKeyAndModality.isNotEmpty()) {
-                        ApiKeyItemGroup(
-                            apiKey = apiKey,
-                            modalityType = modalityType,
-                            configsInGroup = configsForKeyAndModality,
-                            onSelectConfig = onSelectConfig,
-                            selectedConfigIdInApp = selectedConfigIdInApp,
-                            onAddModelForApiKeyClick = {
-                                val representativeConfig = configsForKeyAndModality.first()
-                                onAddModelForApiKeyClick(
-                                    representativeConfig.key,
-                                    representativeConfig.provider,
-                                    representativeConfig.address,
-                                    representativeConfig.channel,
-                                    representativeConfig.modalityType
-                                )
-                            },
-                            onDeleteModelForApiKey = onDeleteModelForApiKey,
-                            onEditConfigClick = { onEditConfigClick(configsForKeyAndModality.first()) },
-                            onDeleteGroup = { onDeleteConfigGroup(configsForKeyAndModality.first()) },
-                            onRefreshModelsClick = { onRefreshModelsClick(configsForKeyAndModality.first()) },
-                            isRefreshing = isRefreshingModels.contains("$apiKey-${modalityType}")
-                        )
-                        Spacer(Modifier.height(16.dp))
-                    }
+            // 🆕 将配置分为默认配置和其他配置，确保默认配置始终置顶
+            val allGroups = apiConfigsByApiKeyAndModality.flatMap { (apiKey, configsByModality) ->
+                configsByModality.map { (modalityType, configsForKeyAndModality) ->
+                    Triple(apiKey, modalityType, configsForKeyAndModality)
                 }
+            }.filter { it.third.isNotEmpty() }
+            
+            val (defaultGroups, otherGroups) = allGroups.partition { (_, _, configs) ->
+                val firstCfg = configs.firstOrNull()
+                firstCfg != null && firstCfg.provider.trim().lowercase() in listOf("默认", "default")
+            }
+            
+            // 先渲染默认配置组（置顶）
+            defaultGroups.forEach { (apiKey, modalityType, configsForKeyAndModality) ->
+                ApiKeyItemGroup(
+                    apiKey = apiKey,
+                    modalityType = modalityType,
+                    configsInGroup = configsForKeyAndModality,
+                    onSelectConfig = onSelectConfig,
+                    selectedConfigIdInApp = selectedConfigIdInApp,
+                    onAddModelForApiKeyClick = {
+                        val representativeConfig = configsForKeyAndModality.first()
+                        onAddModelForApiKeyClick(
+                            representativeConfig.key,
+                            representativeConfig.provider,
+                            representativeConfig.address,
+                            representativeConfig.channel,
+                            representativeConfig.modalityType
+                        )
+                    },
+                    onDeleteModelForApiKey = onDeleteModelForApiKey,
+                    onEditConfigClick = { onEditConfigClick(configsForKeyAndModality.first()) },
+                    onDeleteGroup = { onDeleteConfigGroup(configsForKeyAndModality.first()) },
+                    onRefreshModelsClick = { onRefreshModelsClick(configsForKeyAndModality.first()) },
+                    isRefreshing = isRefreshingModels.contains("$apiKey-${modalityType}")
+                )
+                Spacer(Modifier.height(16.dp))
+            }
+            
+            // 再渲染其他配置组
+            otherGroups.forEach { (apiKey, modalityType, configsForKeyAndModality) ->
+                ApiKeyItemGroup(
+                    apiKey = apiKey,
+                    modalityType = modalityType,
+                    configsInGroup = configsForKeyAndModality,
+                    onSelectConfig = onSelectConfig,
+                    selectedConfigIdInApp = selectedConfigIdInApp,
+                    onAddModelForApiKeyClick = {
+                        val representativeConfig = configsForKeyAndModality.first()
+                        onAddModelForApiKeyClick(
+                            representativeConfig.key,
+                            representativeConfig.provider,
+                            representativeConfig.address,
+                            representativeConfig.channel,
+                            representativeConfig.modalityType
+                        )
+                    },
+                    onDeleteModelForApiKey = onDeleteModelForApiKey,
+                    onEditConfigClick = { onEditConfigClick(configsForKeyAndModality.first()) },
+                    onDeleteGroup = { onDeleteConfigGroup(configsForKeyAndModality.first()) },
+                    onRefreshModelsClick = { onRefreshModelsClick(configsForKeyAndModality.first()) },
+                    isRefreshing = isRefreshingModels.contains("$apiKey-${modalityType}")
+                )
+                Spacer(Modifier.height(16.dp))
             }
         }
     }
