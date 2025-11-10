@@ -11,6 +11,9 @@ import androidx.compose.foundation.gestures.GestureCancellationException
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -51,6 +54,8 @@ internal fun DrawerConversationListItem(
     onConversationClick: (Int) -> Unit,
     onRenameRequest: (Int) -> Unit,
     onDeleteTriggered: (Int) -> Unit,
+    onTogglePin: (Int) -> Unit,
+    isPinned: Boolean,
     expandedItemIndex: Int?,
     onExpandItem: (index: Int, position: Offset) -> Unit,
     onCollapseMenu: () -> Unit,
@@ -179,8 +184,19 @@ internal fun DrawerConversationListItem(
                     style = MaterialTheme.typography.bodyLarge,
                     modifier = Modifier
                         .weight(1f)
-                        .padding(start = if (isActuallyActive) 0.dp else 32.dp, end = 16.dp)
+                        .padding(start = if (isActuallyActive) 0.dp else 32.dp, end = 48.dp)
                 )
+                if (isPinned) {
+                    Icon(
+                        imageVector = Icons.Filled.PushPin,
+                        contentDescription = "已置顶",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .size(20.dp)
+                            .graphicsLayer { rotationZ = 45f }
+                    )
+                    Spacer(Modifier.width(16.dp))
+                }
             }
 
             val currentLongPressPosition = longPressPositionForMenu
@@ -190,6 +206,8 @@ internal fun DrawerConversationListItem(
                     onDismissRequest = { onCollapseMenu() },
                     onRenameClick = { onRenameRequest(originalIndex) },
                     onDeleteClick = { onDeleteTriggered(originalIndex) },
+                    onTogglePinClick = { onTogglePin(originalIndex) },
+                    isPinned = isPinned,
                     popupPositionProvider = object :
                         PopupPositionProvider {
                         override fun calculatePosition(

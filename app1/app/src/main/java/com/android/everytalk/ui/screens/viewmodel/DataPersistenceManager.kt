@@ -753,4 +753,35 @@ class DataPersistenceManager(
            }
        }
    }
+
+   // ========= 置顶集合：文本与图像 =========
+   suspend fun savePinnedIds(ids: Set<String>, isImageGeneration: Boolean) {
+       withContext(Dispatchers.IO) {
+           try {
+               if (isImageGeneration) {
+                   dataSource.savePinnedImageIds(ids)
+               } else {
+                   dataSource.savePinnedTextIds(ids)
+               }
+               Log.d(TAG, "savePinnedIds: saved ${ids.size} ids for isImageGen=$isImageGeneration")
+           } catch (e: Exception) {
+               Log.e(TAG, "savePinnedIds failed", e)
+           }
+       }
+   }
+
+   suspend fun loadPinnedIds(isImageGeneration: Boolean): Set<String> {
+       return withContext(Dispatchers.IO) {
+           try {
+               if (isImageGeneration) {
+                   dataSource.loadPinnedImageIds()
+               } else {
+                   dataSource.loadPinnedTextIds()
+               }
+           } catch (e: Exception) {
+               Log.e(TAG, "loadPinnedIds failed", e)
+               emptySet()
+           }
+       }
+   }
 }

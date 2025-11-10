@@ -63,6 +63,10 @@ data class PendingConfigParams(
     lateinit var scrollController: ScrollController
      val drawerState: DrawerState = DrawerState(initialValue = DrawerValue.Closed)
     
+    // 置顶集合状态：文本与图像各自独立
+    val pinnedTextConversationIds = MutableStateFlow<Set<String>>(emptySet())
+    val pinnedImageConversationIds = MutableStateFlow<Set<String>>(emptySet())
+    
     // DataSource for persistent storage - will be initialized from AppViewModel
     private var dataSource: com.android.everytalk.data.local.SharedPreferencesDataSource? = null
     

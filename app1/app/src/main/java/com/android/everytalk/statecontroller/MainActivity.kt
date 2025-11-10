@@ -181,6 +181,13 @@ class MainActivity : ComponentActivity() {
                                 val navBackStackEntry by navController.currentBackStackEntryAsState()
                                 val currentRoute = navBackStackEntry?.destination?.route
                                 val isImageGenerationMode = currentRoute == Screen.IMAGE_GENERATION_SCREEN
+                                
+                                // 置顶集合状态
+                                val pinnedIds = if (isImageGenerationMode) {
+                                    appViewModel.stateHolder.pinnedImageConversationIds.collectAsState().value
+                                } else {
+                                    appViewModel.stateHolder.pinnedTextConversationIds.collectAsState().value
+                                }
 
                                 AppDrawerContent(
                                     historicalConversations = if (isImageGenerationMode) appViewModel.imageGenerationHistoricalConversations.collectAsState().value else appViewModel.historicalConversations.collectAsState().value,
@@ -314,7 +321,11 @@ class MainActivity : ComponentActivity() {
                                     isLoadingHistoryData = isLoadingHistoryData,
                                     isImageGenerationMode = isImageGenerationMode,
                                     expandedItemIndex = expandedDrawerItemIndex,
-                                    onExpandItem = { index -> appViewModel.setExpandedDrawerItemIndex(index) }
+                                    onExpandItem = { index -> appViewModel.setExpandedDrawerItemIndex(index) },
+                                    pinnedIds = pinnedIds,
+                                    onTogglePin = { index ->
+                                        appViewModel.togglePinForConversation(index, isImageGenerationMode)
+                                    }
                                 )
                             }
                         ) {

@@ -483,7 +483,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         }
 
         // 优化：分阶段初始化，优先加载关键配置
-        // 调整：启用“上次打开会话”的恢复，保证多轮上下文在重启后延续（含图像模式）
+        // 调整：启用"上次打开会话"的恢复，保证多轮上下文在重启后延续（含图像模式）
         persistenceManager.loadInitialData(loadLastChat = true) {
                 initialConfigPresent,
                 initialHistoryPresent ->
@@ -501,6 +501,19 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 viewModelScope.launch(Dispatchers.Default) {
                     delay(1000) // 延迟预热，避免影响启动性能
                     initializeCacheWarmup()
+                }
+            }
+            
+            // 加载置顶集合
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    val pinnedTextIds = persistenceManager.loadPinnedIds(isImageGeneration = false)
+                    val pinnedImageIds = persistenceManager.loadPinnedIds(isImageGeneration = true)
+                    stateHolder.pinnedTextConversationIds.value = pinnedTextIds
+                    stateHolder.pinnedImageConversationIds.value = pinnedImageIds
+                    Log.d("AppViewModel", "置顶集合已加载 - 文本: ${pinnedTextIds.size}, 图像: ${pinnedImageIds.size}")
+                } catch (e: Exception) {
+                    Log.e("AppViewModel", "加载置顶集合失败", e)
                 }
             }
         }
@@ -911,9 +924,13 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
 
     fun deleteConversation(indexToDelete: Int) {
         historyController.deleteConversation(indexToDelete, isImageGeneration = false)
+        // 删除后清理置顶集合中已不存在的会话ID
+        cleanupPinnedIds(isImageGeneration = false)
     }
     fun deleteImageGenerationConversation(indexToDelete: Int) {
         historyController.deleteConversation(indexToDelete, isImageGeneration = true)
+        // 删除后清理置顶集合中已不存在的会话ID
+        cleanupPinnedIds(isImageGeneration = true)
     }
 
     fun clearAllConversations() {
@@ -922,6 +939,11 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         apiHandler.cancelCurrentApiJob("清除所有历史记录")
         historyController.clearAllConversations(isImageGeneration = false)
         conversationPreviewController.clearAllCaches()
+        // 清空所有文本置顶
+        stateHolder.pinnedTextConversationIds.value = emptySet()
+        viewModelScope.launch(Dispatchers.IO) {
+            persistenceManager.savePinnedIds(emptySet(), isImageGeneration = false)
+        }
     }
 
     fun clearAllImageGenerationConversations() {
@@ -930,6 +952,11 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         apiHandler.cancelCurrentApiJob("清除所有图像生成历史记录")
         historyController.clearAllConversations(isImageGeneration = true)
         conversationPreviewController.clearAllCaches()
+        // 清空所有图像置顶
+        stateHolder.pinnedImageConversationIds.value = emptySet()
+        viewModelScope.launch(Dispatchers.IO) {
+            persistenceManager.savePinnedIds(emptySet(), isImageGeneration = true)
+        }
     }
 
     fun showClearImageHistoryDialog() {
@@ -1330,6 +1357,122 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
      */
     fun onLowMemory() {
         lifecycleCoordinator.onLowMemory()
+    }
+    
+    // ========= 置顶功能 API =========
+    
+    /**
+     * 解析会话的稳定ID（用于置顶标识）
+     * 优先使用首条User消息ID，其次非占位System消息ID，最后使用首条消息ID
+     */
+    private fun resolveStableConversationId(conversation: List<Message>?): String? {
+        if (conversation.isNullOrEmpty()) return null
+        return conversation.firstOrNull { it.sender == Sender.User }?.id
+            ?: conversation.firstOrNull { it.sender == Sender.System && !it.isPlaceholderName }?.id
+            ?: conversation.firstOrNull()?.id
+    }
+    
+    /**
+     * 判断指定索引的会话是否已置顶
+     */
+    fun isConversationPinned(index: Int, isImageGeneration: Boolean): Boolean {
+        val history = if (isImageGeneration) {
+            stateHolder._imageGenerationHistoricalConversations.value
+        } else {
+            stateHolder._historicalConversations.value
+        }
+        
+        val conversation = history.getOrNull(index) ?: return false
+        val stableId = resolveStableConversationId(conversation) ?: return false
+        
+        val pinnedSet = if (isImageGeneration) {
+            stateHolder.pinnedImageConversationIds.value
+        } else {
+            stateHolder.pinnedTextConversationIds.value
+        }
+        
+        return pinnedSet.contains(stableId)
+    }
+    
+    /**
+     * 切换指定索引会话的置顶状态
+     */
+    fun togglePinForConversation(index: Int, isImageGeneration: Boolean) {
+        val history = if (isImageGeneration) {
+            stateHolder._imageGenerationHistoricalConversations.value
+        } else {
+            stateHolder._historicalConversations.value
+        }
+        
+        val conversation = history.getOrNull(index)
+        val stableId = resolveStableConversationId(conversation)
+        
+        if (stableId == null) {
+            Log.w("AppViewModel", "togglePin: 无法解析会话稳定ID, index=$index")
+            return
+        }
+        
+        val flow = if (isImageGeneration) {
+            stateHolder.pinnedImageConversationIds
+        } else {
+            stateHolder.pinnedTextConversationIds
+        }
+        
+        val newSet = flow.value.toMutableSet().apply {
+            if (!add(stableId)) {
+                remove(stableId)
+            }
+        }.toSet()
+        
+        flow.value = newSet
+        
+        // 持久化
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                persistenceManager.savePinnedIds(newSet, isImageGeneration)
+                Log.d("AppViewModel", "置顶状态已更新: id=$stableId, pinned=${newSet.contains(stableId)}, mode=${if (isImageGeneration) "IMAGE" else "TEXT"}")
+            } catch (e: Exception) {
+                Log.e("AppViewModel", "保存置顶状态失败", e)
+            }
+        }
+    }
+    
+    /**
+     * 清理置顶集合中已不存在的会话ID
+     * 在删除会话后调用
+     */
+    private fun cleanupPinnedIds(isImageGeneration: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val history = if (isImageGeneration) {
+                    stateHolder._imageGenerationHistoricalConversations.value
+                } else {
+                    stateHolder._historicalConversations.value
+                }
+                
+                // 收集所有现存会话的稳定ID
+                val existingIds = history.mapNotNull { conversation ->
+                    resolveStableConversationId(conversation)
+                }.toSet()
+                
+                val flow = if (isImageGeneration) {
+                    stateHolder.pinnedImageConversationIds
+                } else {
+                    stateHolder.pinnedTextConversationIds
+                }
+                
+                // 仅保留仍存在的ID
+                val cleanedSet = flow.value.intersect(existingIds)
+                
+                if (cleanedSet.size != flow.value.size) {
+                    flow.value = cleanedSet
+                    persistenceManager.savePinnedIds(cleanedSet, isImageGeneration)
+                    Log.d("AppViewModel", "置顶集合已清理: 移除 ${flow.value.size - cleanedSet.size} 个无效ID")
+                }
+            } catch (e: Exception) {
+                Log.e("AppViewModel", "清理置顶集合失败", e)
+            }
+        }
     }
     
 }

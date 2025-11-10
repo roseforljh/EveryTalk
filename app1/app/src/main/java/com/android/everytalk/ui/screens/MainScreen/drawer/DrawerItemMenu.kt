@@ -10,6 +10,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -37,6 +38,8 @@ internal fun ConversationItemMenu(
     onDismissRequest: () -> Unit,
     onRenameClick: () -> Unit,
     onDeleteClick: () -> Unit,
+    onTogglePinClick: () -> Unit,
+    isPinned: Boolean,
     popupPositionProvider: PopupPositionProvider,
     isRenameEnabled: Boolean = true // 默认重命名可用
 ) {
@@ -77,6 +80,35 @@ internal fun ConversationItemMenu(
                             horizontal = 8.dp
                         )
                     ) {
+                        // 置顶/取消置顶选项
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 12.dp)
+                                .clickable(
+                                    onClick = {
+                                        onTogglePinClick()
+                                        onDismissRequest()
+                                    },
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Filled.PushPin,
+                                "置顶图标",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(20.dp).graphicsLayer { rotationZ = 45f }
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Text(
+                                if (isPinned) "取消置顶" else "置顶",
+                                color = MaterialTheme.colorScheme.onSurface,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
                         // 重命名选项
                         Row(
                             modifier = Modifier

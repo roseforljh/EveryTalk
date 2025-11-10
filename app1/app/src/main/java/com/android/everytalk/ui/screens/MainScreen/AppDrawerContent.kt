@@ -17,6 +17,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -28,15 +29,17 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
-import com.android.everytalk.data.DataClass.Message // 假设 Message 和 FilteredConversationItem 在这里
+import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.ui.screens.MainScreen.drawer.* // 导入抽屉子包下的所有内容
 import kotlinx.coroutines.delay
+
 
 // --- 常量定义 ---
 private val DEFAULT_DRAWER_WIDTH = 320.dp
@@ -76,6 +79,8 @@ fun AppDrawerContent(
     isImageGenerationMode: Boolean,
     expandedItemIndex: Int?, // 新增：展开项状态
     onExpandItem: (index: Int?) -> Unit, // 新增：展开项回调
+    pinnedIds: Set<String>, // 新增：置顶集合
+    onTogglePin: (Int) -> Unit, // 新增：置顶切换回调
     modifier: Modifier = Modifier
 ) {
     val selectedSet = remember { mutableStateListOf<Int>() }
@@ -114,10 +119,17 @@ fun AppDrawerContent(
         }
     }
 
-    // 优化：使用 derivedStateOf 和分页加载来提升性能
-    val filteredItems = remember(currentSearchQuery, historicalConversations, isSearchActive) {
+    // 解析会话稳定ID的辅助函数（与 AppViewModel 中的逻辑一致）
+    fun resolveStableId(conversation: List<Message>): String? {
+        return conversation.firstOrNull { it.sender == com.android.everytalk.data.DataClass.Sender.User }?.id
+            ?: conversation.firstOrNull { it.sender == com.android.everytalk.data.DataClass.Sender.System && !it.isPlaceholderName }?.id
+            ?: conversation.firstOrNull()?.id
+    }
+    
+    // 优化：使用 derivedStateOf 和分页加载来提升性能，并支持置顶排序
+    val filteredItems = remember(currentSearchQuery, historicalConversations, isSearchActive, pinnedIds) {
         derivedStateOf {
-            if (!isSearchActive || currentSearchQuery.isBlank()) {
+            val baseItems = if (!isSearchActive || currentSearchQuery.isBlank()) {
                 // 非搜索模式：只显示前50个对话，实现懒加载
                 val itemsToShow = if (historicalConversations.size > 50) {
                     historicalConversations.take(50)
@@ -138,6 +150,18 @@ fun AppDrawerContent(
                     if (matches) FilteredConversationItem(index, conversation) else null
                 }
             }
+            
+            // 置顶排序：将置顶项移到前面，保持相对顺序
+            val itemsWithPinStatus = baseItems.map { item ->
+                val stableId = resolveStableId(item.conversation)
+                val isPinned = stableId != null && pinnedIds.contains(stableId)
+                item to isPinned
+            }
+            
+            val (pinnedItems, unpinnedItems) = itemsWithPinStatus.partition { it.second }
+            
+            // 置顶项在前，非置顶项在后，各自保持原有顺序
+            pinnedItems.map { it.first } + unpinnedItems.map { it.first }
         }
     }.value
 
@@ -527,6 +551,10 @@ fun AppDrawerContent(
                                 key = { item -> if (isImageGenerationMode) "image_conversation_${item.originalIndex}" else "text_conversation_${item.originalIndex}" }, // 跨模式唯一key，避免复用
                                 contentType = { "conversation_item" } // 添加内容类型以优化回收
                             ) { itemData ->
+                                // 判断当前项是否置顶
+                                val stableId = resolveStableId(itemData.conversation)
+                                val isPinned = stableId != null && pinnedIds.contains(stableId)
+                                
                                 // --- 用 Box 包裹并设置最小高度 ---
                                 Box(
                                     modifier = Modifier
@@ -558,6 +586,10 @@ fun AppDrawerContent(
                                             )
                                             showDeleteConfirm = true
                                         },
+                                        onTogglePin = { index ->
+                                            onTogglePin(index)
+                                        },
+                                        isPinned = isPinned,
                                         expandedItemIndex = expandedItemIndex,
                                         onExpandItem = { index, position ->
                                             val newIndex = if (expandedItemIndex == index) null else index

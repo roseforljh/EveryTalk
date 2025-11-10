@@ -26,6 +26,9 @@ private const val KEY_SYSTEM_PROMPT = "system_prompt_v1"
 private const val KEY_LAST_OPEN_IMAGE_GENERATION = "last_open_image_generation_v1"
 private const val KEY_CONVERSATION_PARAMETERS = "conversation_parameters_v1"
 private const val KEY_GLOBAL_CONVERSATION_DEFAULTS = "global_conversation_defaults_v1"
+// 新增：置顶集合持久化键
+private const val KEY_PINNED_TEXT_IDS = "pinned_text_ids_v1"
+private const val KEY_PINNED_IMAGE_IDS = "pinned_image_ids_v1"
 
 
 private val json = Json {
@@ -49,6 +52,9 @@ class SharedPreferencesDataSource(context: Context) {
         SetSerializer(String.serializer())
     private val conversationParametersSerializer: KSerializer<Map<String, GenerationConfig>> =
         MapSerializer(String.serializer(), GenerationConfig.serializer())
+    // 新增：置顶集合序列化器（Set<String>）
+    private val pinnedIdsSerializer: KSerializer<Set<String>> =
+        SetSerializer(String.serializer())
 
     private fun <T> saveData(key: String, value: T, serializer: KSerializer<T>) {
         try {
@@ -182,4 +188,17 @@ fun clearImageGenerationHistory() = remove(KEY_IMAGE_GENERATION_HISTORY)
            null
        }
    }
+
+   // ========= 置顶集合：文本与图像 =========
+   fun savePinnedTextIds(ids: Set<String>) =
+       saveData(KEY_PINNED_TEXT_IDS, ids, pinnedIdsSerializer)
+
+   fun loadPinnedTextIds(): Set<String> =
+       loadData(KEY_PINNED_TEXT_IDS, pinnedIdsSerializer, emptySet())
+
+   fun savePinnedImageIds(ids: Set<String>) =
+       saveData(KEY_PINNED_IMAGE_IDS, ids, pinnedIdsSerializer)
+
+   fun loadPinnedImageIds(): Set<String> =
+       loadData(KEY_PINNED_IMAGE_IDS, pinnedIdsSerializer, emptySet())
 }
