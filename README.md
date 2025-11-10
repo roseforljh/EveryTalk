@@ -64,21 +64,11 @@ EveryTalk 不仅仅是一个聊天应用,它是一个集成了前沿技术的全
 
 |                                 主聊天界面                                 |                                 侧边栏/模型切换                                 |                                 设置界面                                 |
 | :------------------------------------------------------------------------: | :-----------------------------------------------------------------------------: | :------------------------------------------------------------------------: |
-| <img src="https://qone.kuz7.com/uploads/images/2025/10/02/e901a896-323a-4f27-9ee2-1c2919d2ef7a.png" alt="主聊天界面" width="280"/> | <img src="https://qone.kuz7.com/uploads/images/2025/10/01/7c4a347f-7104-40a5-8c49-e321b03ca447.png" alt="侧边栏/模型切换" width="280"/> | <img src="https://qone.kuz7.com/uploads/images/2025/10/01/284aecfe-dba9-49f6-9abb-10a73c889155.png" alt="设置界面" width="280"/> |
+| <img src="https://qone.kuz7.com/uploads/images/2025/11/10/fbe91690-d33f-414d-b600-43fdfdce4d92.png" alt="主聊天界面" width="280"/> | <img src="https://qone.kuz7.com/uploads/images/2025/11/10/c679a95d-b671-4b9c-a582-4c18b1280206.png" alt="侧边栏/模型切换" width="280"/> | <img src="https://qone.kuz7.com/uploads/images/2025/11/10/b4af6d5f-8537-4888-bb08-7b2bbba530ef.png" alt="设置界面" width="280"/> |
 
 |                                 图像生成界面                                 |                                 关于                                 |
 | :------------------------------------------------------------------------: | :-----------------------------------------------------------------------------: |
-| <img src="https://qone.kuz7.com/uploads/images/2025/10/01/7f1327b6-2242-4cda-8ee7-7ecf4ea06212.png" alt="图像生成界面" width="280"/> | <img src="https://qone.kuz7.com/uploads/images/2025/10/01/cc3e08e2-3a60-4ab9-9b2d-0e8c01765bb7.png" alt="关于" width="280"/> |
-
-### 浅色模式
-
-|                                 主聊天界面                                 |                                 侧边栏/模型切换                                 |                                 设置界面                                 |
-| :------------------------------------------------------------------------: | :-----------------------------------------------------------------------------: | :------------------------------------------------------------------------: |
-| <img src="https://qone.kuz7.com/uploads/images/2025/10/01/9473c866-0de7-4b2d-b0ed-3181e4e40669.png" alt="主聊天界面" width="280"/> | <img src="https://qone.kuz7.com/uploads/images/2025/10/01/36c25d31-8a61-4eca-9f4a-f28e3f6b7e0d.png" alt="侧边栏/模型切换" width="280"/> | <img src="https://qone.kuz7.com/uploads/images/2025/10/01/9fa3097c-9bab-49b0-8a70-ce37d8d4f224.png" alt="设置界面" width="280"/> |
-
-|                                 图像生成界面                                 |                                 关于                                 |
-| :------------------------------------------------------------------------: | :-----------------------------------------------------------------------------: |
-| <img src="https://qone.kuz7.com/uploads/images/2025/10/01/ed57cda3-3269-48d9-b827-24131c59c478.png" alt="图像生成界面" width="280"/> | <img src="https://qone.kuz7.com/uploads/images/2025/10/01/1f3917fe-e0dd-43b4-b5db-6e8d5bddd522.png" alt="关于" width="280"/> |
+| <img src="https://qone.kuz7.com/uploads/images/2025/11/10/bd4f5a89-a4cb-4554-9d98-15135b97adaf.png" alt="图像生成界面" width="280"/> | <img src="https://qone.kuz7.com/uploads/images/2025/11/10/2656afa4-7af1-4f42-8ace-d53c38a16b02.png" alt="关于" width="280"/> 
 
 ---
 
