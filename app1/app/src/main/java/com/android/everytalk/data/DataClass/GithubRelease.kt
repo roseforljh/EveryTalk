@@ -10,5 +10,11 @@ data class GithubRelease(
     @SerialName("html_url")
     val htmlUrl: String,
     @SerialName("body")
-    val body: String
+    val body: String? = null,
+    @SerialName("name")
+    val name: String? = null,
+    @SerialName("published_at")
+    val publishedAt: String? = null,
+    @SerialName("prerelease")
+    val prerelease: Boolean = false
 )

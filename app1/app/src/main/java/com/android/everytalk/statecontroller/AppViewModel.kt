@@ -330,6 +330,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
        showSnackbar = ::showSnackbar
    )
    val latestReleaseInfo: StateFlow<GithubRelease?> = updateManager.latestReleaseInfo
+   val updateInfo: StateFlow<com.android.everytalk.data.DataClass.VersionUpdateInfo?> = updateManager.updateInfo
    // 控制器：系统提示
    private val systemPromptController = SystemPromptController(stateHolder, dialogManager, historyManager, viewModelScope)
    // 委托到 MessageItemsController，减少 AppViewModel 体积
@@ -598,6 +599,10 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
 
      fun checkForUpdates() {
          updateManager.checkForUpdates()
+     }
+     
+     fun checkForUpdatesSilently() {
+         updateManager.checkForUpdatesSilently()
      }
 
     fun clearUpdateInfo() {
