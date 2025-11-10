@@ -502,16 +502,25 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                     delay(1000) // 延迟预热，避免影响启动性能
                     initializeCacheWarmup()
                 }
-                
-                // 加载分组信息
-                viewModelScope.launch(Dispatchers.IO) {
-                    try {
-                        val groups = persistenceManager.loadConversationGroups()
+            }
+            
+            // 🔧 修复：始终加载分组信息，不依赖历史数据是否存在
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    val groups = persistenceManager.loadConversationGroups()
+                    withContext(Dispatchers.Main) {
                         stateHolder.conversationGroups.value = groups
-                        Log.d("AppViewModel", "分组信息已加载 - 共 ${groups.size} 个分组")
-                    } catch (e: Exception) {
-                        Log.e("AppViewModel", "加载分组信息失败", e)
                     }
+                    Log.d("AppViewModel", "分组信息已加载 - 共 ${groups.size} 个分组")
+                    
+                    // 加载分组展开状态
+                    val expandedKeys = persistenceManager.loadExpandedGroupKeys()
+                    withContext(Dispatchers.Main) {
+                        stateHolder.expandedGroups.value = expandedKeys
+                    }
+                    Log.d("AppViewModel", "分组展开状态已加载 - 共 ${expandedKeys.size} 个展开的分组")
+                } catch (e: Exception) {
+                    Log.e("AppViewModel", "加载分组信息失败", e)
                 }
             }
             
@@ -527,17 +536,18 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                     Log.e("AppViewModel", "加载置顶集合失败", e)
                 }
             }
+
+            // 在所有数据加载完成后，检查是否需要开启一个新聊天
+            if (stateHolder.messages.isEmpty() && stateHolder.imageGenerationMessages.isEmpty()) {
+                startNewChat()
+            }
         }
 
-        // 延迟初始化非关键组件
-        viewModelScope.launch(Dispatchers.IO) {
-            // 确保API配置加载完成后再初始化这些组件
-            delay(100) // 给UI一些时间渲染
-            apiHandler
-            configManager
-            messageSender
-            stateHolder.setApiHandler(apiHandler)
-        }
+        // 同步初始化处理器，确保在后续调用前可用
+        apiHandler
+        configManager
+        messageSender
+        stateHolder.setApiHandler(apiHandler)
         
         // 启动缓存维护任务
         viewModelScope.launch {
@@ -546,11 +556,6 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 cacheManager.smartCleanup()
             }
         }
-
-        // 清理任务
-       if (messages.isEmpty() && imageGenerationMessages.isEmpty()) {
-           startNewChat()
-       }
        
        // Initialize buffer scope for StreamingBuffer operations
        stateHolder.initializeBufferScope(viewModelScope)
@@ -1489,37 +1494,52 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     // ========= 分组功能 API =========
     
     fun createGroup(groupName: String) {
-        val currentGroups = stateHolder.conversationGroups.value.toMutableMap()
-        if (!currentGroups.containsKey(groupName)) {
-            currentGroups[groupName] = emptyList()
-            stateHolder.conversationGroups.value = currentGroups
-            viewModelScope.launch(Dispatchers.IO) {
-                persistenceManager.saveConversationGroups(currentGroups)
+        viewModelScope.launch(Dispatchers.IO) {
+            val updatedGroups = persistenceManager.updateConversationGroups { currentGroups ->
+                val mutableGroups = currentGroups.toMutableMap()
+                if (!mutableGroups.containsKey(groupName)) {
+                    mutableGroups[groupName] = emptyList()
+                }
+                mutableGroups
+            }
+            // 在 IO 线程中更新 UI 状态
+            withContext(Dispatchers.Main) {
+                stateHolder.conversationGroups.value = updatedGroups
             }
         }
     }
 
     fun renameGroup(oldName: String, newName: String) {
-        val currentGroups = stateHolder.conversationGroups.value.toMutableMap()
-        if (currentGroups.containsKey(oldName) && !currentGroups.containsKey(newName)) {
-            val items = currentGroups.remove(oldName)
-            if (items != null) {
-                currentGroups[newName] = items
-                stateHolder.conversationGroups.value = currentGroups
-                viewModelScope.launch(Dispatchers.IO) {
-                    persistenceManager.saveConversationGroups(currentGroups)
+        viewModelScope.launch(Dispatchers.IO) {
+            val updatedGroups = persistenceManager.updateConversationGroups { currentGroups ->
+                val mutableGroups = currentGroups.toMutableMap()
+                if (mutableGroups.containsKey(oldName) && !mutableGroups.containsKey(newName)) {
+                    val items = mutableGroups.remove(oldName)
+                    if (items != null) {
+                        mutableGroups[newName] = items
+                    }
                 }
+                mutableGroups
+            }
+            // 在 IO 线程中更新 UI 状态
+            withContext(Dispatchers.Main) {
+                stateHolder.conversationGroups.value = updatedGroups
             }
         }
     }
 
     fun deleteGroup(groupName: String) {
-        val currentGroups = stateHolder.conversationGroups.value.toMutableMap()
-        if (currentGroups.containsKey(groupName)) {
-            currentGroups.remove(groupName)
-            stateHolder.conversationGroups.value = currentGroups
-            viewModelScope.launch(Dispatchers.IO) {
-                persistenceManager.saveConversationGroups(currentGroups)
+        viewModelScope.launch(Dispatchers.IO) {
+            val updatedGroups = persistenceManager.updateConversationGroups { currentGroups ->
+                val mutableGroups = currentGroups.toMutableMap()
+                if (mutableGroups.containsKey(groupName)) {
+                    mutableGroups.remove(groupName)
+                }
+                mutableGroups
+            }
+            // 在 IO 线程中更新 UI 状态
+            withContext(Dispatchers.Main) {
+                stateHolder.conversationGroups.value = updatedGroups
             }
         }
     }
@@ -1532,28 +1552,35 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         }
         val stableId = resolveStableConversationId(conversation) ?: return
 
-        val currentGroups = stateHolder.conversationGroups.value.toMutableMap()
-        
-        // 从所有分组中移除
-        currentGroups.keys.forEach { key ->
-            val items = currentGroups[key]?.toMutableList()
-            if (items != null && items.remove(stableId)) {
-                currentGroups[key] = items
-            }
-        }
-
-        // 添加到新分组
-        if (groupName != null) {
-            val items = currentGroups[groupName]?.toMutableList() ?: mutableListOf()
-            if (!items.contains(stableId)) {
-                items.add(stableId)
-                currentGroups[groupName] = items
-            }
-        }
-        
-        stateHolder.conversationGroups.value = currentGroups
+        // 所有逻辑都在 persistenceManager.updateConversationGroups 内部执行，确保原子性
         viewModelScope.launch(Dispatchers.IO) {
-            persistenceManager.saveConversationGroups(currentGroups)
+            val updatedGroups = persistenceManager.updateConversationGroups { currentGroups ->
+                val mutableGroups = currentGroups.toMutableMap()
+
+                // 从所有分组中移除
+                mutableGroups.keys.forEach { key ->
+                    val items = mutableGroups[key]?.toMutableList()
+                    if (items != null && items.remove(stableId)) {
+                        mutableGroups[key] = items
+                    }
+                }
+
+                // 添加到新分组
+                if (groupName != null) {
+                    val items = mutableGroups[groupName]?.toMutableList() ?: mutableListOf()
+                    if (!items.contains(stableId)) {
+                        items.add(stableId)
+                        mutableGroups[groupName] = items
+                    }
+                }
+                
+                mutableGroups
+            }
+            
+            // 在 IO 线程中更新 UI 状态
+            withContext(Dispatchers.Main) {
+                stateHolder.conversationGroups.value = updatedGroups
+            }
         }
     }
     
@@ -1567,6 +1594,16 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             currentExpanded.add(groupKey)
         }
         stateHolder.expandedGroups.value = currentExpanded
+        
+        // 持久化展开状态
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                persistenceManager.saveExpandedGroupKeys(currentExpanded)
+                Log.d("AppViewModel", "分组展开状态已保存: groupKey=$groupKey, totalExpanded=${currentExpanded.size}")
+            } catch (e: Exception) {
+                Log.e("AppViewModel", "保存分组展开状态失败", e)
+            }
+        }
     }
     
     fun isGroupExpanded(groupKey: String): Boolean {

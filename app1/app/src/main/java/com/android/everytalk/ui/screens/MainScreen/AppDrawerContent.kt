@@ -21,6 +21,8 @@ import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
@@ -104,6 +106,7 @@ fun AppDrawerContent(
     var renamingIndex by remember { mutableStateOf<Int?>(null) }
     var showCreateGroupDialog by remember { mutableStateOf(false) }
     var showMoveToGroupDialog by remember { mutableStateOf<Int?>(null) }
+    var isAddGroupButtonVisible by remember { mutableStateOf(false) } // 控制“创建分组”按钮的可见性
 
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -561,23 +564,41 @@ fun AppDrawerContent(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 16.dp, end = 8.dp, top = 16.dp, bottom = 8.dp),
+                    .padding(start = 16.dp, end = 8.dp, top = 16.dp, bottom = 8.dp)
+                    .clickable { isAddGroupButtonVisible = !isAddGroupButtonVisible }, // 使整行可点击以切换按钮可见性
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "分组",
+                    text = "会话",
                     style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                // 使用 animateFloatAsState 为 alpha 值添加动画，避免布局跳动
+                val addGroupButtonAlpha by animateFloatAsState(
+                    targetValue = if (isAddGroupButtonVisible) 1f else 0f,
+                    animationSpec = tween(durationMillis = 200), // 可以调整动画时长
+                    label = "addGroupButtonAlpha"
+                )
                 IconButton(
-                    onClick = { showCreateGroupDialog = true },
-                    modifier = Modifier.size(32.dp)
+                    onClick = {
+                        // 只有在按钮可见时才响应点击
+                        if (isAddGroupButtonVisible) {
+                            showCreateGroupDialog = true
+                        }
+                    },
+                    enabled = isAddGroupButtonVisible, // 当按钮不可见时，直接禁用整个 IconButton
+                    modifier = Modifier
+                        .size(32.dp)
+                        .graphicsLayer { // 应用 alpha 动画
+                            alpha = addGroupButtonAlpha
+                        }
                 ) {
                     Icon(
                         Icons.Filled.Add,
                         "创建分组",
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(16.dp), // 调整图标大小为 16.dp
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = addGroupButtonAlpha) // 图标颜色也跟随 alpha 变化
                     )
                 }
             }

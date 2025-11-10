@@ -30,6 +30,8 @@ private const val KEY_CONVERSATION_GROUPS = "conversation_groups_v1"
 // 新增：置顶集合持久化键
 private const val KEY_PINNED_TEXT_IDS = "pinned_text_ids_v1"
 private const val KEY_PINNED_IMAGE_IDS = "pinned_image_ids_v1"
+// 新增：分组展开状态持久化键
+private const val KEY_EXPANDED_GROUP_KEYS = "expanded_group_keys_v1"
 
 
 private val json = Json {
@@ -62,7 +64,7 @@ class SharedPreferencesDataSource(context: Context) {
     private fun <T> saveData(key: String, value: T, serializer: KSerializer<T>) {
         try {
             val jsonString = json.encodeToString(serializer, value)
-            sharedPrefs.edit { putString(key, jsonString) }
+            sharedPrefs.edit(commit = true) { putString(key, jsonString) }
         } catch (e: SerializationException) {
             android.util.Log.e("DataSource", "Failed to serialize data for key: $key", e)
         } catch (e: Exception) {
@@ -88,7 +90,7 @@ class SharedPreferencesDataSource(context: Context) {
     }
 
     fun saveString(key: String, value: String?) {
-        sharedPrefs.edit { putString(key, value) }
+        sharedPrefs.edit(commit = true) { putString(key, value) }
     }
 
     fun getString(key: String, defaultValue: String?): String? {
@@ -96,7 +98,7 @@ class SharedPreferencesDataSource(context: Context) {
     }
 
     fun remove(key: String) {
-        sharedPrefs.edit { remove(key) }
+        sharedPrefs.edit(commit = true) { remove(key) }
     }
 
     fun loadApiConfigs(): List<ApiConfig> =
@@ -170,7 +172,7 @@ fun clearImageGenerationHistory() = remove(KEY_IMAGE_GENERATION_HISTORY)
    fun saveGlobalConversationDefaults(config: GenerationConfig) {
        try {
            val jsonString = json.encodeToString(GenerationConfig.serializer(), config)
-           sharedPrefs.edit { putString(KEY_GLOBAL_CONVERSATION_DEFAULTS, jsonString) }
+           sharedPrefs.edit(commit = true) { putString(KEY_GLOBAL_CONVERSATION_DEFAULTS, jsonString) }
        } catch (e: SerializationException) {
            android.util.Log.e("DataSource", "Failed to serialize global conversation defaults", e)
        } catch (e: Exception) {
@@ -210,4 +212,11 @@ fun clearImageGenerationHistory() = remove(KEY_IMAGE_GENERATION_HISTORY)
 
    fun loadPinnedImageIds(): Set<String> =
        loadData(KEY_PINNED_IMAGE_IDS, pinnedIdsSerializer, emptySet())
+
+   // ========= 分组展开状态 =========
+   fun saveExpandedGroupKeys(keys: Set<String>) =
+       saveData(KEY_EXPANDED_GROUP_KEYS, keys, pinnedIdsSerializer)
+
+   fun loadExpandedGroupKeys(): Set<String> =
+       loadData(KEY_EXPANDED_GROUP_KEYS, pinnedIdsSerializer, emptySet())
 }

@@ -14,6 +14,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import coil3.ImageLoader
 import com.android.everytalk.util.FileManager
 import android.util.Base64
@@ -28,6 +30,7 @@ class DataPersistenceManager(
     private val imageLoader: ImageLoader
 ) {
     private val TAG = "PersistenceManager"
+    private val conversationGroupsSaveMutex = kotlinx.coroutines.sync.Mutex()
 
     /**
      * 将消息中的 data:image;base64,... 图片落盘为本地文件，并将 URL 替换为 file:// 或绝对路径
@@ -770,15 +773,40 @@ class DataPersistenceManager(
        }
    }
    
+   /**
+    * 保存分组信息。使用 Mutex 确保并发安全。
+    */
    suspend fun saveConversationGroups(groups: Map<String, List<String>>) {
-       withContext(Dispatchers.IO) {
-           dataSource.saveConversationGroups(groups)
+       conversationGroupsSaveMutex.withLock {
+           withContext(Dispatchers.IO) {
+               dataSource.saveConversationGroups(groups)
+           }
        }
    }
 
+   /**
+    * 加载分组信息。
+    */
    suspend fun loadConversationGroups(): Map<String, List<String>> {
        return withContext(Dispatchers.IO) {
            dataSource.loadConversationGroups()
+       }
+   }
+
+   /**
+    * 原子性地更新分组信息。
+    * 此方法确保更新操作是串行的，避免并发修改导致的数据丢失。
+    * @param updateLambda 一个接收当前分组 Map 并返回新分组 Map 的函数。
+    * @return 更新后的分组 Map。
+    */
+   suspend fun updateConversationGroups(updateLambda: (Map<String, List<String>>) -> Map<String, List<String>>): Map<String, List<String>> {
+       return conversationGroupsSaveMutex.withLock {
+           val currentGroups = loadConversationGroups()
+           val updatedGroups = updateLambda(currentGroups)
+           withContext(Dispatchers.IO) {
+               dataSource.saveConversationGroups(updatedGroups)
+           }
+           updatedGroups
        }
    }
 
@@ -792,6 +820,36 @@ class DataPersistenceManager(
                }
            } catch (e: Exception) {
                Log.e(TAG, "loadPinnedIds failed", e)
+               emptySet()
+           }
+       }
+   }
+
+   // ========= 分组展开状态 =========
+   
+   /**
+    * 保存分组展开状态
+    */
+   suspend fun saveExpandedGroupKeys(keys: Set<String>) {
+       withContext(Dispatchers.IO) {
+           try {
+               dataSource.saveExpandedGroupKeys(keys)
+               Log.d(TAG, "saveExpandedGroupKeys: saved ${keys.size} expanded group keys")
+           } catch (e: Exception) {
+               Log.e(TAG, "saveExpandedGroupKeys failed", e)
+           }
+       }
+   }
+   
+   /**
+    * 加载分组展开状态
+    */
+   suspend fun loadExpandedGroupKeys(): Set<String> {
+       return withContext(Dispatchers.IO) {
+           try {
+               dataSource.loadExpandedGroupKeys()
+           } catch (e: Exception) {
+               Log.e(TAG, "loadExpandedGroupKeys failed", e)
                emptySet()
            }
        }
