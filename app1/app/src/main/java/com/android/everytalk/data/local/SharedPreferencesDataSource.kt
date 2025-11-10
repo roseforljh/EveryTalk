@@ -26,6 +26,7 @@ private const val KEY_SYSTEM_PROMPT = "system_prompt_v1"
 private const val KEY_LAST_OPEN_IMAGE_GENERATION = "last_open_image_generation_v1"
 private const val KEY_CONVERSATION_PARAMETERS = "conversation_parameters_v1"
 private const val KEY_GLOBAL_CONVERSATION_DEFAULTS = "global_conversation_defaults_v1"
+private const val KEY_CONVERSATION_GROUPS = "conversation_groups_v1"
 // 新增：置顶集合持久化键
 private const val KEY_PINNED_TEXT_IDS = "pinned_text_ids_v1"
 private const val KEY_PINNED_IMAGE_IDS = "pinned_image_ids_v1"
@@ -52,6 +53,8 @@ class SharedPreferencesDataSource(context: Context) {
         SetSerializer(String.serializer())
     private val conversationParametersSerializer: KSerializer<Map<String, GenerationConfig>> =
         MapSerializer(String.serializer(), GenerationConfig.serializer())
+    private val conversationGroupsSerializer: KSerializer<Map<String, List<String>>> =
+        MapSerializer(String.serializer(), ListSerializer(String.serializer()))
     // 新增：置顶集合序列化器（Set<String>）
     private val pinnedIdsSerializer: KSerializer<Set<String>> =
         SetSerializer(String.serializer())
@@ -174,6 +177,12 @@ fun clearImageGenerationHistory() = remove(KEY_IMAGE_GENERATION_HISTORY)
            android.util.Log.e("DataSource", "Unexpected error saving global conversation defaults", e)
        }
    }
+   
+   fun saveConversationGroups(groups: Map<String, List<String>>) =
+       saveData(KEY_CONVERSATION_GROUPS, groups, conversationGroupsSerializer)
+
+   fun loadConversationGroups(): Map<String, List<String>> =
+       loadData(KEY_CONVERSATION_GROUPS, conversationGroupsSerializer, emptyMap())
 
    fun loadGlobalConversationDefaults(): GenerationConfig? {
        val jsonString = sharedPrefs.getString(KEY_GLOBAL_CONVERSATION_DEFAULTS, null)

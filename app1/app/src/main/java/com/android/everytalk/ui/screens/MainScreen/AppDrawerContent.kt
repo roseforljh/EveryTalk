@@ -39,7 +39,14 @@ import androidx.compose.ui.unit.dp
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.ui.screens.MainScreen.drawer.* // 导入抽屉子包下的所有内容
 import kotlinx.coroutines.delay
+import androidx.compose.foundation.clickable
 
+// Helper data class for processed items
+internal data class ProcessedDrawerItems(
+    val pinned: List<FilteredConversationItem>,
+    val custom: Map<String, List<FilteredConversationItem>>,
+    val ungrouped: List<FilteredConversationItem>
+)
 
 // --- 常量定义 ---
 private val DEFAULT_DRAWER_WIDTH = 320.dp
@@ -81,6 +88,13 @@ fun AppDrawerContent(
     onExpandItem: (index: Int?) -> Unit, // 新增：展开项回调
     pinnedIds: Set<String>, // 新增：置顶集合
     onTogglePin: (Int) -> Unit, // 新增：置顶切换回调
+    conversationGroups: Map<String, List<String>>,
+    onCreateGroup: (String) -> Unit,
+    onRenameGroup: (String, String) -> Unit,
+    onDeleteGroup: (String) -> Unit,
+    onMoveConversationToGroup: (Int, String?, Boolean) -> Unit,
+    expandedGroups: Set<String>,
+    onToggleGroup: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val selectedSet = remember { mutableStateListOf<Int>() }
@@ -88,6 +102,8 @@ fun AppDrawerContent(
     var showClearAllConfirm by remember { mutableStateOf(false) }
     var longPressPosition by remember { mutableStateOf<Offset?>(null) } // 长按位置，用于定位弹出菜单
     var renamingIndex by remember { mutableStateOf<Int?>(null) }
+    var showCreateGroupDialog by remember { mutableStateOf(false) }
+    var showMoveToGroupDialog by remember { mutableStateOf<Int?>(null) }
 
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -126,23 +142,14 @@ fun AppDrawerContent(
             ?: conversation.firstOrNull()?.id
     }
     
-    // 优化：使用 derivedStateOf 和分页加载来提升性能，并支持置顶排序
-    val filteredItems = remember(currentSearchQuery, historicalConversations, isSearchActive, pinnedIds) {
+    val processedItems = remember(currentSearchQuery, historicalConversations, isSearchActive, pinnedIds, conversationGroups) {
         derivedStateOf {
             val baseItems = if (!isSearchActive || currentSearchQuery.isBlank()) {
-                // 非搜索模式：只显示前50个对话，实现懒加载
-                val itemsToShow = if (historicalConversations.size > 50) {
-                    historicalConversations.take(50)
-                } else {
-                    historicalConversations
-                }
-                itemsToShow.mapIndexed { index, conversation ->
+                historicalConversations.mapIndexed { index, conversation ->
                     FilteredConversationItem(index, conversation)
                 }
             } else {
-                // 搜索模式：异步搜索，避免阻塞UI
                 historicalConversations.mapIndexedNotNull { index, conversation ->
-                    // 优化搜索：只搜索前几条消息，避免搜索整个对话
                     val searchableMessages = conversation.take(3)
                     val matches = searchableMessages.any { message ->
                         message.text.contains(currentSearchQuery, ignoreCase = true)
@@ -150,18 +157,30 @@ fun AppDrawerContent(
                     if (matches) FilteredConversationItem(index, conversation) else null
                 }
             }
-            
-            // 置顶排序：将置顶项移到前面，保持相对顺序
-            val itemsWithPinStatus = baseItems.map { item ->
+
+            val pinned = baseItems.filter {
+                val stableId = resolveStableId(it.conversation)
+                stableId != null && pinnedIds.contains(stableId)
+            }
+
+            val custom = mutableMapOf<String, MutableList<FilteredConversationItem>>()
+            val ungrouped = mutableListOf<FilteredConversationItem>()
+
+            baseItems.forEach { item ->
                 val stableId = resolveStableId(item.conversation)
-                val isPinned = stableId != null && pinnedIds.contains(stableId)
-                item to isPinned
+                val groupName = conversationGroups.entries.find { it.value.contains(stableId) }?.key
+                
+                if (groupName != null) {
+                    custom.getOrPut(groupName) { mutableListOf() }.add(item)
+                } else {
+                    // 如果一个项目同时被置顶，它也会出现在“对话”中
+                    if (!pinned.any { p -> p.originalIndex == item.originalIndex}) {
+                        ungrouped.add(item)
+                    }
+                }
             }
             
-            val (pinnedItems, unpinnedItems) = itemsWithPinStatus.partition { it.second }
-            
-            // 置顶项在前，非置顶项在后，各自保持原有顺序
-            pinnedItems.map { it.first } + unpinnedItems.map { it.first }
+            ProcessedDrawerItems(pinned, custom, ungrouped)
         }
     }.value
 
@@ -171,6 +190,65 @@ fun AppDrawerContent(
         animationSpec = tween(durationMillis = EXPAND_ANIMATION_DURATION_MS),
         label = "drawerWidthAnimation"
     )
+
+    @Composable
+    fun ConversationItem(itemData: FilteredConversationItem) {
+        val stableId = resolveStableId(itemData.conversation)
+        val isPinned = stableId != null && pinnedIds.contains(stableId)
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .defaultMinSize(minHeight = LIST_ITEM_MIN_HEIGHT)
+        ) {
+            DrawerConversationListItem(
+                itemData = itemData,
+                isSearchActive = isSearchActive,
+                currentSearchQuery = currentSearchQuery,
+                loadedHistoryIndex = loadedHistoryIndex,
+                getPreviewForIndex = getPreviewForIndex,
+                onConversationClick = { index ->
+                    selectedSet.clear()
+                    if (isImageGenerationMode) {
+                        onImageGenerationConversationClick(index)
+                    } else {
+                        onConversationClick(index)
+                    }
+                },
+                onRenameRequest = { index ->
+                    renamingIndex = index
+                },
+                onDeleteTriggered = { index ->
+                    if (!selectedSet.contains(index)) selectedSet.add(index)
+                    else if (selectedSet.isEmpty() && expandedItemIndex == index) selectedSet.add(index)
+                    showDeleteConfirm = true
+                },
+                onTogglePin = { index ->
+                    onTogglePin(index)
+                },
+                isPinned = isPinned,
+                expandedItemIndex = expandedItemIndex,
+                onExpandItem = { index, position ->
+                    val newIndex = if (expandedItemIndex == index) null else index
+                    onExpandItem(newIndex)
+                    if (newIndex != null) {
+                        longPressPosition = position
+                    }
+                },
+                onCollapseMenu = {
+                    onExpandItem(null)
+                },
+                longPressPositionForMenu = longPressPosition,
+                groups = conversationGroups.keys.toList(),
+                onMoveToGroup = { index, group ->
+                    onMoveConversationToGroup(index, group, isImageGenerationMode)
+                },
+                onMoveToGroupClick = { index ->
+                    showMoveToGroupDialog = index
+                }
+            )
+        }
+    }
 
     BackHandler(enabled = isSearchActive) {
         onSearchActiveChange(false)
@@ -480,14 +558,28 @@ fun AppDrawerContent(
             }
 
             // --- "聊天" 列表标题 ---
-            Column {
-                Spacer(Modifier.height(16.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 8.dp, top = 16.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
                 Text(
-                    text = if (isImageGenerationMode) "图像生成历史" else "聊天",
+                    text = "分组",
                     style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                    modifier = Modifier.padding(start = 24.dp, top = 8.dp, bottom = 8.dp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                IconButton(
+                    onClick = { showCreateGroupDialog = true },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        Icons.Filled.Add,
+                        "创建分组",
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
 
             // --- 列表显示区域 ---
@@ -529,7 +621,7 @@ fun AppDrawerContent(
                         }
                     }
 
-                    isSearchActive && currentSearchQuery.isNotBlank() && filteredItems.isEmpty() -> {
+                    isSearchActive && currentSearchQuery.isNotBlank() && processedItems.pinned.isEmpty() && processedItems.custom.isEmpty() && processedItems.ungrouped.isEmpty() -> {
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -543,83 +635,64 @@ fun AppDrawerContent(
                     else -> {
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
-                            // 添加性能优化配置
                             contentPadding = PaddingValues(vertical = 4.dp)
                         ) {
-                            items(
-                                items = filteredItems,
-                                key = { item -> if (isImageGenerationMode) "image_conversation_${item.originalIndex}" else "text_conversation_${item.originalIndex}" }, // 跨模式唯一key，避免复用
-                                contentType = { "conversation_item" } // 添加内容类型以优化回收
-                            ) { itemData ->
-                                // 判断当前项是否置顶
-                                val stableId = resolveStableId(itemData.conversation)
-                                val isPinned = stableId != null && pinnedIds.contains(stableId)
-                                
-                                // --- 用 Box 包裹并设置最小高度 ---
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .defaultMinSize(minHeight = LIST_ITEM_MIN_HEIGHT)
-                                ) {
-                                    DrawerConversationListItem(
-                                        itemData = itemData,
-                                        isSearchActive = isSearchActive,
-                                        currentSearchQuery = currentSearchQuery,
-                                        loadedHistoryIndex = loadedHistoryIndex,
-                                        getPreviewForIndex = getPreviewForIndex,
-                                        onConversationClick = { index ->
-                                            selectedSet.clear() // 清空之前的选择
-                                            // 关键修复：根据当前模式调用正确的加载方法
-                                            if (isImageGenerationMode) {
-                                                onImageGenerationConversationClick(index)
-                                            } else {
-                                                onConversationClick(index)
-                                            }
-                                        },
-                                        onRenameRequest = { index ->
-                                            renamingIndex = index
-                                        },
-                                        onDeleteTriggered = { index ->
-                                            if (!selectedSet.contains(index)) selectedSet.add(index)
-                                            else if (selectedSet.isEmpty() && expandedItemIndex == index) selectedSet.add(
-                                                index
-                                            )
-                                            showDeleteConfirm = true
-                                        },
-                                        onTogglePin = { index ->
-                                            onTogglePin(index)
-                                        },
-                                        isPinned = isPinned,
-                                        expandedItemIndex = expandedItemIndex,
-                                        onExpandItem = { index, position ->
-                                            val newIndex = if (expandedItemIndex == index) null else index
-                                            onExpandItem(newIndex)
-                                            if (newIndex != null) { // 只有当要展开时才记录位置
-                                                longPressPosition = position
-                                            }
-                                        },
-                                        onCollapseMenu = {
-                                            onExpandItem(null)
-                                        },
-                                        longPressPositionForMenu = longPressPosition
+                            // "已置顶" 分组
+                            if (processedItems.pinned.isNotEmpty()) {
+                                item(key = "pinned_header") {
+                                    CollapsibleGroupHeader(
+                                        groupName = "已置顶",
+                                        isExpanded = expandedGroups.contains("pinned"),
+                                        onToggleExpand = { onToggleGroup("pinned") },
+                                        isPinnedGroup = true
                                     )
                                 }
+                                if (expandedGroups.contains("pinned")) {
+                                    items(
+                                        items = processedItems.pinned,
+                                        key = { item -> "pinned_${item.originalIndex}" }
+                                    ) { itemData ->
+                                        ConversationItem(itemData)
+                                    }
+                                }
                             }
-                            
-                            // 添加加载更多项（如果有更多数据）
-                            if (!isSearchActive && historicalConversations.size > 50) {
-                                item(key = "load_more_indicator") {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(16.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = "显示前50条对话，共${historicalConversations.size}条",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
+
+                            // 自定义分组
+                            processedItems.custom.forEach { (groupName, items) ->
+                                item(key = "group_header_$groupName") {
+                                    CollapsibleGroupHeader(
+                                        groupName = groupName,
+                                        isExpanded = expandedGroups.contains(groupName),
+                                        onToggleExpand = { onToggleGroup(groupName) },
+                                        onRename = { newName -> onRenameGroup(groupName, newName) },
+                                        onDelete = { onDeleteGroup(groupName) }
+                                    )
+                                }
+                                if (expandedGroups.contains(groupName)) {
+                                    items(
+                                        items = items,
+                                        key = { item -> "group_${groupName}_${item.originalIndex}" }
+                                    ) { itemData ->
+                                        ConversationItem(itemData)
+                                    }
+                                }
+                            }
+
+                            // "对话" (未分组)
+                            if (processedItems.ungrouped.isNotEmpty()) {
+                                item(key = "ungrouped_header") {
+                                    CollapsibleGroupHeader(
+                                        groupName = "对话",
+                                        isExpanded = expandedGroups.contains("ungrouped"),
+                                        onToggleExpand = { onToggleGroup("ungrouped") }
+                                    )
+                                }
+                                if (expandedGroups.contains("ungrouped")) {
+                                    items(
+                                        items = processedItems.ungrouped,
+                                        key = { item -> "ungrouped_${item.originalIndex}" }
+                                    ) { itemData ->
+                                        ConversationItem(itemData)
                                     }
                                 }
                             }
@@ -754,6 +827,162 @@ fun AppDrawerContent(
                     containerColor = MaterialTheme.colorScheme.surface
                 )
             }
+            
+            if (showCreateGroupDialog) {
+                CreateGroupDialog(
+                    onDismiss = { showCreateGroupDialog = false },
+                    onConfirm = { groupName ->
+                        onCreateGroup(groupName)
+                        showCreateGroupDialog = false
+                    }
+                )
+            }
+
+            if (showMoveToGroupDialog != null) {
+                val conversationIndex = showMoveToGroupDialog!!
+                val conversation = historicalConversations.getOrNull(conversationIndex)
+                val stableId = conversation?.let { resolveStableId(it) }
+                val isCurrentlyGrouped = stableId?.let { id ->
+                    conversationGroups.any { it.value.contains(id) }
+                } ?: false
+
+                MoveToGroupDialog(
+                    groups = conversationGroups.keys.toList().filter { groupName ->
+                        val members = conversationGroups[groupName]
+                        !members.orEmpty().contains(stableId)
+                    },
+                    isCurrentlyGrouped = isCurrentlyGrouped,
+                    onDismiss = { showMoveToGroupDialog = null },
+                    onConfirm = { group ->
+                        onMoveConversationToGroup(conversationIndex, group, isImageGenerationMode)
+                        showMoveToGroupDialog = null
+                    }
+                )
+            }
         }
+    }
+}
+
+@Composable
+fun CollapsibleGroupHeader(
+    groupName: String,
+    isExpanded: Boolean,
+    onToggleExpand: () -> Unit,
+    onRename: ((String) -> Unit)? = null,
+    onDelete: (() -> Unit)? = null,
+    isPinnedGroup: Boolean = false
+) {
+    var showRenameDialog by remember { mutableStateOf(false) }
+    var newName by remember { mutableStateOf(groupName) }
+    var showMenu by remember { mutableStateOf(false) }
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        onClick = onToggleExpand,
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLowest
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = if (isExpanded) Icons.Filled.KeyboardArrowDown else Icons.Filled.KeyboardArrowRight,
+                contentDescription = if (isExpanded) "收起" else "展开",
+                tint = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(Modifier.width(12.dp))
+            Text(
+                text = groupName,
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f)
+            )
+            
+            // 只有非置顶分组才显示菜单按钮
+            if (!isPinnedGroup && (onRename != null || onDelete != null)) {
+                Box {
+                    IconButton(
+                        onClick = { showMenu = true },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            Icons.Filled.MoreVert,
+                            "更多选项",
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false }
+                    ) {
+                        if (onRename != null) {
+                            DropdownMenuItem(
+                                text = { Text("重命名") },
+                                onClick = {
+                                    showMenu = false
+                                    showRenameDialog = true
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Filled.Edit, "重命名")
+                                }
+                            )
+                        }
+                        if (onDelete != null) {
+                            DropdownMenuItem(
+                                text = { Text("删除") },
+                                onClick = {
+                                    showMenu = false
+                                    onDelete()
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Filled.Delete, "删除")
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    if (showRenameDialog && onRename != null) {
+        AlertDialog(
+            onDismissRequest = { showRenameDialog = false },
+            title = { Text("重命名分组") },
+            text = {
+                OutlinedTextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    label = { Text("新名称") },
+                    shape = RoundedCornerShape(8.dp)
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (newName.isNotBlank()) {
+                            onRename(newName)
+                        }
+                        showRenameDialog = false
+                    },
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("重命名")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRenameDialog = false }) {
+                    Text("取消")
+                }
+            },
+            shape = RoundedCornerShape(16.dp)
+        )
     }
 }

@@ -246,7 +246,7 @@ fun ChatMessagesList(
                                                         markdown = item.text,
                                                         style = MaterialTheme.typography.bodyLarge,
                                                         color = MaterialTheme.colorScheme.onSurface,
-                                                        modifier = Modifier.fillMaxWidth(),
+                                                        modifier = Modifier.wrapContentWidth(),
                                                         isStreaming = false
                                                     )
                                                 }

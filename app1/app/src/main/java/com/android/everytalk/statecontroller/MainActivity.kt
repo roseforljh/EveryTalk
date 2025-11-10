@@ -325,7 +325,14 @@ class MainActivity : ComponentActivity() {
                                     pinnedIds = pinnedIds,
                                     onTogglePin = { index ->
                                         appViewModel.togglePinForConversation(index, isImageGenerationMode)
-                                    }
+                                    },
+                                    conversationGroups = appViewModel.stateHolder.conversationGroups.collectAsState().value,
+                                    onCreateGroup = { groupName -> appViewModel.createGroup(groupName) },
+                                    onRenameGroup = { oldName, newName -> appViewModel.renameGroup(oldName, newName) },
+                                    onDeleteGroup = { groupName -> appViewModel.deleteGroup(groupName) },
+                                    onMoveConversationToGroup = { index, groupName, isImageGen -> appViewModel.moveConversationToGroup(index, groupName, isImageGen) },
+                                    expandedGroups = appViewModel.stateHolder.expandedGroups.collectAsState().value,
+                                    onToggleGroup = { groupKey -> appViewModel.toggleGroupExpanded(groupKey) }
                                 )
                             }
                         ) {

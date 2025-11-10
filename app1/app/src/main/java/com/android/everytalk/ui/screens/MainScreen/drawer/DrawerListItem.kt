@@ -60,6 +60,9 @@ internal fun DrawerConversationListItem(
     onExpandItem: (index: Int, position: Offset) -> Unit,
     onCollapseMenu: () -> Unit,
     longPressPositionForMenu: Offset?,
+    groups: List<String>,
+    onMoveToGroup: (Int, String?) -> Unit,
+    onMoveToGroupClick: (Int) -> Unit
 ) {
     val originalIndex = itemData.originalIndex
     val definitivePreviewText = getPreviewForIndex(originalIndex)
@@ -222,7 +225,10 @@ internal fun DrawerConversationListItem(
                             val finalY = y.coerceIn(0, windowSize.height - popupContentSize.height)
                             return IntOffset(finalX, finalY)
                         }
-                    }
+                    },
+                    groups = groups,
+                    onMoveToGroup = { group -> onMoveToGroup(originalIndex, group) },
+                    onMoveToGroupClick = { onMoveToGroupClick(originalIndex) }
                 )
             }
         }

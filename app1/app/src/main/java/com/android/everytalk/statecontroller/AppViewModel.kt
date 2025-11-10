@@ -502,6 +502,17 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                     delay(1000) // 延迟预热，避免影响启动性能
                     initializeCacheWarmup()
                 }
+                
+                // 加载分组信息
+                viewModelScope.launch(Dispatchers.IO) {
+                    try {
+                        val groups = persistenceManager.loadConversationGroups()
+                        stateHolder.conversationGroups.value = groups
+                        Log.d("AppViewModel", "分组信息已加载 - 共 ${groups.size} 个分组")
+                    } catch (e: Exception) {
+                        Log.e("AppViewModel", "加载分组信息失败", e)
+                    }
+                }
             }
             
             // 加载置顶集合
@@ -1473,6 +1484,93 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 Log.e("AppViewModel", "清理置顶集合失败", e)
             }
         }
+    }
+    
+    // ========= 分组功能 API =========
+    
+    fun createGroup(groupName: String) {
+        val currentGroups = stateHolder.conversationGroups.value.toMutableMap()
+        if (!currentGroups.containsKey(groupName)) {
+            currentGroups[groupName] = emptyList()
+            stateHolder.conversationGroups.value = currentGroups
+            viewModelScope.launch(Dispatchers.IO) {
+                persistenceManager.saveConversationGroups(currentGroups)
+            }
+        }
+    }
+
+    fun renameGroup(oldName: String, newName: String) {
+        val currentGroups = stateHolder.conversationGroups.value.toMutableMap()
+        if (currentGroups.containsKey(oldName) && !currentGroups.containsKey(newName)) {
+            val items = currentGroups.remove(oldName)
+            if (items != null) {
+                currentGroups[newName] = items
+                stateHolder.conversationGroups.value = currentGroups
+                viewModelScope.launch(Dispatchers.IO) {
+                    persistenceManager.saveConversationGroups(currentGroups)
+                }
+            }
+        }
+    }
+
+    fun deleteGroup(groupName: String) {
+        val currentGroups = stateHolder.conversationGroups.value.toMutableMap()
+        if (currentGroups.containsKey(groupName)) {
+            currentGroups.remove(groupName)
+            stateHolder.conversationGroups.value = currentGroups
+            viewModelScope.launch(Dispatchers.IO) {
+                persistenceManager.saveConversationGroups(currentGroups)
+            }
+        }
+    }
+
+    fun moveConversationToGroup(conversationIndex: Int, groupName: String?, isImageGeneration: Boolean) {
+        val conversation = if (isImageGeneration) {
+            stateHolder._imageGenerationHistoricalConversations.value.getOrNull(conversationIndex)
+        } else {
+            stateHolder._historicalConversations.value.getOrNull(conversationIndex)
+        }
+        val stableId = resolveStableConversationId(conversation) ?: return
+
+        val currentGroups = stateHolder.conversationGroups.value.toMutableMap()
+        
+        // 从所有分组中移除
+        currentGroups.keys.forEach { key ->
+            val items = currentGroups[key]?.toMutableList()
+            if (items != null && items.remove(stableId)) {
+                currentGroups[key] = items
+            }
+        }
+
+        // 添加到新分组
+        if (groupName != null) {
+            val items = currentGroups[groupName]?.toMutableList() ?: mutableListOf()
+            if (!items.contains(stableId)) {
+                items.add(stableId)
+                currentGroups[groupName] = items
+            }
+        }
+        
+        stateHolder.conversationGroups.value = currentGroups
+        viewModelScope.launch(Dispatchers.IO) {
+            persistenceManager.saveConversationGroups(currentGroups)
+        }
+    }
+    
+    // ========= 分组展开/折叠状态管理 =========
+    
+    fun toggleGroupExpanded(groupKey: String) {
+        val currentExpanded = stateHolder.expandedGroups.value.toMutableSet()
+        if (currentExpanded.contains(groupKey)) {
+            currentExpanded.remove(groupKey)
+        } else {
+            currentExpanded.add(groupKey)
+        }
+        stateHolder.expandedGroups.value = currentExpanded
+    }
+    
+    fun isGroupExpanded(groupKey: String): Boolean {
+        return stateHolder.expandedGroups.value.contains(groupKey)
     }
     
 }

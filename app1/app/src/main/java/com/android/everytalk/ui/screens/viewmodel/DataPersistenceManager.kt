@@ -769,6 +769,18 @@ class DataPersistenceManager(
            }
        }
    }
+   
+   suspend fun saveConversationGroups(groups: Map<String, List<String>>) {
+       withContext(Dispatchers.IO) {
+           dataSource.saveConversationGroups(groups)
+       }
+   }
+
+   suspend fun loadConversationGroups(): Map<String, List<String>> {
+       return withContext(Dispatchers.IO) {
+           dataSource.loadConversationGroups()
+       }
+   }
 
    suspend fun loadPinnedIds(isImageGeneration: Boolean): Set<String> {
        return withContext(Dispatchers.IO) {

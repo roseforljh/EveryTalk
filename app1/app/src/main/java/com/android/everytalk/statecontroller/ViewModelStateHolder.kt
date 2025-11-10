@@ -67,6 +67,12 @@ data class PendingConfigParams(
     val pinnedTextConversationIds = MutableStateFlow<Set<String>>(emptySet())
     val pinnedImageConversationIds = MutableStateFlow<Set<String>>(emptySet())
     
+    // 分组状态
+    val conversationGroups = MutableStateFlow<Map<String, List<String>>>(emptyMap())
+    
+    // 分组展开/折叠状态（默认全部折叠）
+    val expandedGroups = MutableStateFlow<Set<String>>(emptySet())
+    
     // DataSource for persistent storage - will be initialized from AppViewModel
     private var dataSource: com.android.everytalk.data.local.SharedPreferencesDataSource? = null
     

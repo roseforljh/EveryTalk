@@ -10,11 +10,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
@@ -41,7 +40,10 @@ internal fun ConversationItemMenu(
     onTogglePinClick: () -> Unit,
     isPinned: Boolean,
     popupPositionProvider: PopupPositionProvider,
-    isRenameEnabled: Boolean = true // 默认重命名可用
+    isRenameEnabled: Boolean = true, // 默认重命名可用
+    groups: List<String>,
+    onMoveToGroup: (String?) -> Unit,
+    onMoveToGroupClick: () -> Unit
 ) {
     if (expanded) {
         Popup(
@@ -72,106 +74,83 @@ internal fun ConversationItemMenu(
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceDim,
                     shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.widthIn(max = 120.dp)
+                    modifier = Modifier.width(IntrinsicSize.Max)
                 ) {
                     Column(
-                        modifier = Modifier.padding(
-                            vertical = 4.dp,
-                            horizontal = 8.dp
-                        )
+                        modifier = Modifier.padding(vertical = 4.dp)
                     ) {
-                        // 置顶/取消置顶选项
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 12.dp)
-                                .clickable(
-                                    onClick = {
-                                        onTogglePinClick()
-                                        onDismissRequest()
-                                    },
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null
-                                ),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                Icons.Filled.PushPin,
-                                "置顶图标",
-                                tint = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.size(20.dp).graphicsLayer { rotationZ = 45f }
-                            )
-                            Spacer(Modifier.width(12.dp))
-                            Text(
-                                if (isPinned) "取消置顶" else "置顶",
-                                color = MaterialTheme.colorScheme.onSurface,
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                        }
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
-                        // 重命名选项
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 12.dp)
-                                .clickable(
-                                    enabled = isRenameEnabled,
-                                    onClick = {
-                                        if (isRenameEnabled) {
-                                            onRenameClick()
-                                            onDismissRequest()
-                                        }
-                                    },
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null
-                                ),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                Icons.Filled.DriveFileRenameOutline,
-                                "重命名图标",
-                                tint = if (isRenameEnabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(Modifier.width(12.dp))
-                            Text(
-                                "重命名",
-                                color = if (isRenameEnabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                        }
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
-                        // 删除选项
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 12.dp)
-                                .clickable(
-                                    onClick = {
-                                        onDeleteClick()
-                                        onDismissRequest()
-                                    },
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null
-                                ),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                Icons.Filled.Delete,
-                                "删除图标",
-                                tint = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(Modifier.width(12.dp))
-                            Text(
-                                "删除",
-                                color = MaterialTheme.colorScheme.onSurface,
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                        }
+                        MenuItem(
+                            text = if (isPinned) "取消置顶" else "置顶",
+                            icon = Icons.Filled.PushPin,
+                            onClick = {
+                                onTogglePinClick()
+                                onDismissRequest()
+                            }
+                        )
+                        MenuItem(
+                            text = "重命名",
+                            icon = Icons.Filled.DriveFileRenameOutline,
+                            enabled = isRenameEnabled,
+                            onClick = {
+                                if (isRenameEnabled) {
+                                    onRenameClick()
+                                    onDismissRequest()
+                                }
+                            }
+                        )
+                        MenuItem(
+                            text = "删除",
+                            icon = Icons.Filled.Delete,
+                            onClick = {
+                                onDeleteClick()
+                                onDismissRequest()
+                            }
+                        )
+                        MenuItem(
+                            text = "移动到",
+                            icon = Icons.Filled.Folder,
+                            onClick = {
+                                onMoveToGroupClick()
+                                onDismissRequest()
+                            }
+                        )
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun MenuItem(
+    text: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(
+                enabled = enabled,
+                onClick = onClick,
+                interactionSource = remember { MutableInteractionSource() },
+                indication = androidx.compose.material3.ripple()
+            )
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = text,
+            tint = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(Modifier.width(12.dp))
+        Text(
+            text = text,
+            color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            style = MaterialTheme.typography.bodyMedium
+        )
     }
 }
