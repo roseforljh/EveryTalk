@@ -43,7 +43,6 @@ import com.android.everytalk.ui.screens.MainScreen.AppDrawerContent
 import com.android.everytalk.ui.screens.MainScreen.ChatScreen
 import com.android.everytalk.ui.screens.ImageGeneration.ImageGenerationScreen
 import com.android.everytalk.ui.screens.settings.SettingsScreen
-import com.android.everytalk.ui.screens.settings.dialogs.UpdateDialog
 import com.android.everytalk.ui.theme.App1Theme
 import kotlinx.coroutines.flow.collectLatest
 
@@ -120,33 +119,10 @@ class MainActivity : ComponentActivity() {
                             SharedPreferencesDataSource(applicationContext)
                         )
                     )
-                    
-                    // 🎯 版本更新检查 - 在应用启动时静默检查
+
+                    // 应用启动：静默检查更新，UI 侧监听 latestReleaseInfo/updateInfo 后弹出统一更新对话卡
                     LaunchedEffect(Unit) {
                         appViewModel.checkForUpdatesSilently()
-                    }
-                    
-                    // 🎯 显示更新对话框
-                    val updateInfo by appViewModel.updateInfo.collectAsState()
-                    updateInfo?.let { info ->
-                        if (info.hasUpdate()) {
-                            UpdateDialog(
-                                updateInfo = info,
-                                onUpdateNow = {
-                                    // 打开GitHub Releases页面
-                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(info.releaseUrl))
-                                    startActivity(intent)
-                                    // 如果不是强制更新，关闭对话框
-                                    if (!info.isForceUpdate) {
-                                        appViewModel.clearUpdateInfo()
-                                    }
-                                },
-                                onUpdateLater = {
-                                    // 稍后更新 - 仅在非强制更新时可用
-                                    appViewModel.clearUpdateInfo()
-                                }
-                            )
-                        }
                     }
 
                     val isSearchActiveInDrawer by appViewModel.isSearchActiveInDrawer.collectAsState()

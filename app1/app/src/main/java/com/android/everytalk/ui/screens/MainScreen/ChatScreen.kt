@@ -82,6 +82,7 @@ fun ChatScreen(
     val isLoadingHistoryData by viewModel.isLoadingHistoryData.collectAsState()
     val conversationId by viewModel.currentConversationId.collectAsState()
     val latestReleaseInfo by viewModel.latestReleaseInfo.collectAsState()
+    val updateInfo by viewModel.updateInfo.collectAsState()
     val systemPrompt by viewModel.systemPrompt.collectAsState()
     val isSystemPromptEngaged by viewModel.isSystemPromptEngaged.collectAsState()
     val isSystemPromptExpanded by remember(conversationId) {
@@ -477,13 +478,17 @@ fun ChatScreen(
 
     if (latestReleaseInfo != null) {
         val uriHandler = LocalUriHandler.current
-        UpdateAvailableDialog(
-            releaseInfo = latestReleaseInfo!!,
+        com.android.everytalk.ui.screens.settings.dialogs.UpdateDialog(
+            showDialog = true,
+            latestVersion = latestReleaseInfo!!.tagName,
+            changelog = latestReleaseInfo!!.body,
+            force = (updateInfo?.isForceUpdate == true),
             onDismiss = { viewModel.clearUpdateInfo() },
-            onUpdate = {
-                uriHandler.openUri(it)
+            onUpdateNow = {
+                uriHandler.openUri(latestReleaseInfo!!.htmlUrl)
                 viewModel.clearUpdateInfo()
-            }
+            },
+            onRemindLater = { viewModel.clearUpdateInfo() }
         )
     }
    val showSystemPromptDialog by viewModel.showSystemPromptDialog.collectAsState()
@@ -560,47 +565,6 @@ private fun AboutDialog(
                 modifier = Modifier.height(52.dp).padding(horizontal = 4.dp)
             ) {
                 Text("关闭", fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.error)
-            }
-        },
-        shape = RoundedCornerShape(32.dp),
-        containerColor = MaterialTheme.colorScheme.surface
-    )
-}
-
- @Composable
-private fun UpdateAvailableDialog(
-     releaseInfo: com.android.everytalk.data.DataClass.GithubRelease,
-     onDismiss: () -> Unit,
-     onUpdate: (String) -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("发现新版本: ${releaseInfo.tagName}") },
-        text = {
-            Text("有新的更新可用。建议您更新到最新版本以获得最佳体验。\n\n更新日志:\n${releaseInfo.body}")
-        },
-        confirmButton = {
-            Button(
-                onClick = { onUpdate(releaseInfo.htmlUrl) },
-                shape = RoundedCornerShape(32.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-            ) {
-                Text("立即更新")
-            }
-        },
-        dismissButton = {
-            Button(
-                onClick = onDismiss,
-                shape = RoundedCornerShape(32.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.secondary,
-                    contentColor = MaterialTheme.colorScheme.onSecondary
-                )
-            ) {
-                Text("稍后")
             }
         },
         shape = RoundedCornerShape(32.dp),

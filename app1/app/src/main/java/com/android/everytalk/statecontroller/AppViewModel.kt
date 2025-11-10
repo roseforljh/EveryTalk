@@ -14,7 +14,7 @@ import coil3.ImageLoader
 import coil3.util.DebugLogger
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.util.FileManager
-import com.android.everytalk.data.DataClass.GithubRelease
+import com.android.everytalk.data.DataClass.GitHubRelease
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.WebSearchResult
@@ -329,7 +329,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
        scope = viewModelScope,
        showSnackbar = ::showSnackbar
    )
-   val latestReleaseInfo: StateFlow<GithubRelease?> = updateManager.latestReleaseInfo
+   val latestReleaseInfo: StateFlow<GitHubRelease?> = updateManager.latestReleaseInfo
    val updateInfo: StateFlow<com.android.everytalk.data.DataClass.VersionUpdateInfo?> = updateManager.updateInfo
    // 控制器：系统提示
    private val systemPromptController = SystemPromptController(stateHolder, dialogManager, historyManager, viewModelScope)
@@ -597,13 +597,22 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         dialogManager.dismissAboutDialog()
     }
 
-     fun checkForUpdates() {
-         updateManager.checkForUpdates()
-     }
-     
-     fun checkForUpdatesSilently() {
-         updateManager.checkForUpdatesSilently()
-     }
+    fun checkForUpdates() {
+        // 需求变更：当用户手动点击检查更新时，
+        // 如果已有自动弹出的更新对话在显示，先关闭它，再以“手动检查”的对话替换显示。
+        if (updateManager.isUpdateDialogActive()) {
+            updateManager.clearUpdateInfo() // 关闭前一个（丑的）对话
+        }
+        updateManager.checkForUpdates() // 重新以手动检查流程弹出（保留你想要的后者样式）
+    }
+
+    fun checkForUpdatesSilently() {
+        // 启动静默检查前先确认无对话激活，避免与手动检查叠加
+        if (updateManager.isUpdateDialogActive()) {
+            return
+        }
+        updateManager.checkForUpdatesSilently()
+    }
 
     fun clearUpdateInfo() {
         updateManager.clearUpdateInfo()

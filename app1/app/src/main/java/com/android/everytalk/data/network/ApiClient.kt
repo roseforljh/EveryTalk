@@ -7,7 +7,7 @@ import android.provider.OpenableColumns
 import com.android.everytalk.config.BackendConfig
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.ImageGenerationResponse
-import com.android.everytalk.data.DataClass.GithubRelease
+import com.android.everytalk.data.DataClass.GitHubRelease
 import com.android.everytalk.data.local.SharedPreferencesDataSource
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.util.RequestSignatureUtil
@@ -808,7 +808,7 @@ object ApiClient {
         )
     }
 
-    suspend fun getLatestRelease(): GithubRelease {
+    suspend fun getLatestRelease(): GitHubRelease {
         if (!isInitialized) {
             throw IllegalStateException("ApiClient not initialized. Call initialize() first.")
         }
@@ -835,7 +835,7 @@ object ApiClient {
                             connectTimeoutMillis = 30_000
                             socketTimeoutMillis = 60_000
                         }
-                    }.body<GithubRelease>()
+                    }.body<GitHubRelease>()
                     
                     android.util.Log.d("ApiClient", "成功获取更新信息从: $url")
                     return response
