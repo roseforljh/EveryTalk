@@ -106,7 +106,8 @@ fun AppDrawerContent(
     var renamingIndex by remember { mutableStateOf<Int?>(null) }
     var showCreateGroupDialog by remember { mutableStateOf(false) }
     var showMoveToGroupDialog by remember { mutableStateOf<Int?>(null) }
-    var isAddGroupButtonVisible by remember { mutableStateOf(false) } // 控制“创建分组”按钮的可见性
+    var isAddGroupButtonVisible by remember { mutableStateOf(false) } // 控制"创建分组"按钮的可见性（默认隐藏）
+    var isGroupSectionExpanded by remember { mutableStateOf(false) } // 控制分组区域的展开/收起（默认收起）
 
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -560,24 +561,27 @@ fun AppDrawerContent(
                 }
             }
 
-            // --- "聊天" 列表标题 ---
+            // --- "分组" 标题行 ---
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(start = 16.dp, end = 8.dp, top = 16.dp, bottom = 8.dp)
-                    .clickable { isAddGroupButtonVisible = !isAddGroupButtonVisible }, // 使整行可点击以切换按钮可见性
+                    .clickable {
+                        isAddGroupButtonVisible = !isAddGroupButtonVisible
+                        isGroupSectionExpanded = !isGroupSectionExpanded
+                    }, // 使整行可点击以切换按钮可见性和展开状态
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "会话",
+                    text = "分组",
                     style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 // 使用 animateFloatAsState 为 alpha 值添加动画，避免布局跳动
                 val addGroupButtonAlpha by animateFloatAsState(
                     targetValue = if (isAddGroupButtonVisible) 1f else 0f,
-                    animationSpec = tween(durationMillis = 200), // 可以调整动画时长
+                    animationSpec = tween(durationMillis = 200),
                     label = "addGroupButtonAlpha"
                 )
                 IconButton(
@@ -587,23 +591,110 @@ fun AppDrawerContent(
                             showCreateGroupDialog = true
                         }
                     },
-                    enabled = isAddGroupButtonVisible, // 当按钮不可见时，直接禁用整个 IconButton
+                    enabled = isAddGroupButtonVisible,
                     modifier = Modifier
                         .size(32.dp)
-                        .graphicsLayer { // 应用 alpha 动画
+                        .graphicsLayer {
                             alpha = addGroupButtonAlpha
                         }
                 ) {
                     Icon(
                         Icons.Filled.Add,
                         "创建分组",
-                        modifier = Modifier.size(16.dp), // 调整图标大小为 16.dp
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = addGroupButtonAlpha) // 图标颜色也跟随 alpha 变化
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = addGroupButtonAlpha)
                     )
                 }
             }
 
-            // --- 列表显示区域 ---
+            // --- 分组列表显示区域 ---
+            AnimatedVisibility(
+                visible = isGroupSectionExpanded,
+                enter = expandVertically(animationSpec = tween(durationMillis = 200)),
+                exit = shrinkVertically(animationSpec = tween(durationMillis = 200))
+            ) {
+                if (conversationGroups.isNotEmpty()) {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 200.dp), // 限制分组区域的最大高度
+                        contentPadding = PaddingValues(vertical = 4.dp)
+                    ) {
+                        // 显示所有分组(包括空分组)
+                        conversationGroups.keys.forEach { groupName ->
+                            item(key = "group_header_$groupName") {
+                                CollapsibleGroupHeader(
+                                    groupName = groupName,
+                                    isExpanded = expandedGroups.contains(groupName),
+                                    onToggleExpand = { onToggleGroup(groupName) },
+                                    onRename = { newName -> onRenameGroup(groupName, newName) },
+                                    onDelete = { onDeleteGroup(groupName) }
+                                )
+                            }
+                            if (expandedGroups.contains(groupName)) {
+                                val groupItems = processedItems.custom[groupName] ?: emptyList()
+                                if (groupItems.isNotEmpty()) {
+                                    items(
+                                        items = groupItems,
+                                        key = { item -> "group_${groupName}_${item.originalIndex}" }
+                                    ) { itemData ->
+                                        ConversationItem(itemData)
+                                    }
+                                } else {
+                                    // 空分组显示提示
+                                    item(key = "group_empty_$groupName") {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(vertical = 12.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                "暂无分组",
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // 如果没有分组，显示提示文本
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 12.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "暂无分组",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+
+            // --- "会话" 标题行 ---
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "会话",
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            // --- 会话列表显示区域 ---
             Box(modifier = Modifier.weight(1f)) {
                 when {
                     isLoadingHistoryData -> {
@@ -668,6 +759,7 @@ fun AppDrawerContent(
                                         isPinnedGroup = true
                                     )
                                 }
+                                // 修复: 直接使用 items,不需要 AnimatedVisibility 包装
                                 if (expandedGroups.contains("pinned")) {
                                     items(
                                         items = processedItems.pinned,
@@ -678,43 +770,13 @@ fun AppDrawerContent(
                                 }
                             }
 
-                            // 自定义分组
-                            processedItems.custom.forEach { (groupName, items) ->
-                                item(key = "group_header_$groupName") {
-                                    CollapsibleGroupHeader(
-                                        groupName = groupName,
-                                        isExpanded = expandedGroups.contains(groupName),
-                                        onToggleExpand = { onToggleGroup(groupName) },
-                                        onRename = { newName -> onRenameGroup(groupName, newName) },
-                                        onDelete = { onDeleteGroup(groupName) }
-                                    )
-                                }
-                                if (expandedGroups.contains(groupName)) {
-                                    items(
-                                        items = items,
-                                        key = { item -> "group_${groupName}_${item.originalIndex}" }
-                                    ) { itemData ->
-                                        ConversationItem(itemData)
-                                    }
-                                }
-                            }
-
-                            // "对话" (未分组)
+                            // "对话" (未分组和未置顶) - 始终显示,不需要展开/收起
                             if (processedItems.ungrouped.isNotEmpty()) {
-                                item(key = "ungrouped_header") {
-                                    CollapsibleGroupHeader(
-                                        groupName = "对话",
-                                        isExpanded = expandedGroups.contains("ungrouped"),
-                                        onToggleExpand = { onToggleGroup("ungrouped") }
-                                    )
-                                }
-                                if (expandedGroups.contains("ungrouped")) {
-                                    items(
-                                        items = processedItems.ungrouped,
-                                        key = { item -> "ungrouped_${item.originalIndex}" }
-                                    ) { itemData ->
-                                        ConversationItem(itemData)
-                                    }
+                                items(
+                                    items = processedItems.ungrouped,
+                                    key = { item -> "ungrouped_${item.originalIndex}" }
+                                ) { itemData ->
+                                    ConversationItem(itemData)
                                 }
                             }
                         }
@@ -855,6 +917,9 @@ fun AppDrawerContent(
                     onConfirm = { groupName ->
                         onCreateGroup(groupName)
                         showCreateGroupDialog = false
+                        // 创建分组后自动展开分组区域
+                        isGroupSectionExpanded = true
+                        isAddGroupButtonVisible = true
                     }
                 )
             }
@@ -897,6 +962,13 @@ fun CollapsibleGroupHeader(
     var newName by remember { mutableStateOf(groupName) }
     var showMenu by remember { mutableStateOf(false) }
 
+    // 为箭头图标添加旋转动画
+    val arrowRotation by animateFloatAsState(
+        targetValue = if (isExpanded) 90f else 0f,
+        animationSpec = tween(durationMillis = 200),
+        label = "arrowRotation"
+    )
+
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -912,10 +984,14 @@ fun CollapsibleGroupHeader(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
-                imageVector = if (isExpanded) Icons.Filled.KeyboardArrowDown else Icons.Filled.KeyboardArrowRight,
+                imageVector = Icons.Filled.KeyboardArrowRight,
                 contentDescription = if (isExpanded) "收起" else "展开",
                 tint = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.size(20.dp)
+                modifier = Modifier
+                    .size(20.dp)
+                    .graphicsLayer {
+                        rotationZ = arrowRotation
+                    }
             )
             Spacer(Modifier.width(12.dp))
             Text(
