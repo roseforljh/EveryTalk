@@ -241,11 +241,13 @@ fun ChatMessagesList(
                                                         .verticalScroll(innerScroll)
                                                         .nestedScroll(innerScrollBlocker)
                                                 ) {
-                                                    Text(
-                                                        text = item.text,
+                                                    // 将用户消息也按 Markdown 渲染，确保 "* **注册新账号**" 等语法被正确解析
+                                                    MarkdownRenderer(
+                                                        markdown = item.text,
                                                         style = MaterialTheme.typography.bodyLarge,
                                                         color = MaterialTheme.colorScheme.onSurface,
-                                                        textAlign = TextAlign.Start
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        isStreaming = false
                                                     )
                                                 }
                                             }

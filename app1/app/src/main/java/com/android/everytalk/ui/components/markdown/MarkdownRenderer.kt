@@ -16,6 +16,9 @@ import androidx.compose.ui.text.TextStyle
  * - 流式阶段跳过格式修复，保证实时性
  */
 private const val MARKDOWN_FIX_MIN_LEN = 20
+// 针对“列表可视化仍不生效”的兜底开关：在流式阶段也始终使用完整 Markdown 渲染
+// 开启后将跳过轻量通道，直接走外部库（更稳但可能略降流式性能）
+private const val FORCE_FULL_MARKDOWN_IN_STREAM = true
 
 // 可开关：CJK 连写粗体兼容（默认关闭，按需灰度开启）
 private const val ENABLE_CJK_BOLD_COMPAT = true
@@ -134,8 +137,8 @@ private fun fixLeadingSingleAsterisk(input: String): String {
     }
     return out.toString()
 }
-// 将整行“强调语句”提升为三级标题（兼容 *结论* / ＊结论＊ / *结论 到行尾）
-// 仅在非代码围栏中生效，避免破坏代码内容。
+// 将整行“强调语句”提升为三级标题（仅当整行为 *词* / ＊词＊）
+// 明确排除正常 Markdown 列表（^\s*[*＊]\s+）与不闭合的 "*词" 形式，避免把项目符号误升为标题。
 private fun promoteStandaloneEmphasisToHeading(input: String): String {
     if (input.isBlank()) return input
     val lines = input.lines()
@@ -151,20 +154,18 @@ private fun promoteStandaloneEmphasisToHeading(input: String): String {
         }
         if (!inFence) {
             val t = raw.trim()
+            // 直接排除真正的列表行：* 空格... / ＊ 空格...
+            if (t.startsWith("* ") || t.startsWith("＊ ")) {
+                if (i > 0) out.append('\n')
+                out.append(raw)
+                continue
+            }
+            // 仅当整行完全被成对星号包裹时才提升为标题
             val mEmAscii = Regex("^\\*([^*]+)\\*\$").matchEntire(t)
             val mEmFull  = Regex("^＊([^＊]+)＊\$").matchEntire(t)
-            // "*结论" / "* 结论" 以及全角 "＊结论" / "＊ 结论"
-            val mOpenNoSpace      = Regex("^\\*([^*].*)\\s*\$").matchEntire(t)
-            val mOpenSpaced       = Regex("^\\*\\s+(.+?)\\s*\$").matchEntire(t)
-            val mOpenFullNoSpace  = Regex("^＊([^＊].*)\\s*\$").matchEntire(t)
-            val mOpenFullSpaced   = Regex("^＊\\s+(.+?)\\s*\$").matchEntire(t)
             val heading = when {
-                mEmAscii != null         -> mEmAscii.groupValues[1]
-                mEmFull  != null         -> mEmFull.groupValues[1]
-                mOpenNoSpace != null     -> mOpenNoSpace.groupValues[1]
-                mOpenSpaced  != null     -> mOpenSpaced.groupValues[1]
-                mOpenFullNoSpace != null -> mOpenFullNoSpace.groupValues[1]
-                mOpenFullSpaced  != null -> mOpenFullSpaced.groupValues[1]
+                mEmAscii != null -> mEmAscii.groupValues[1]
+                mEmFull  != null -> mEmFull.groupValues[1]
                 else -> null
             }
             if (heading != null) {
@@ -177,6 +178,67 @@ private fun promoteStandaloneEmphasisToHeading(input: String): String {
         out.append(raw)
     }
     return out.toString()
+}
+
+// 将“孤立的列表标记行”与下一行合并，修复
+// 形如：
+//   *
+//   **下载并安装应用**
+// 组合为：
+//   * **下载并安装应用**
+// 同时兼容 "-", "+" 以及前导缩进；跳过 ``` 围栏与表格行（含两个以上管道符）。
+private fun fixOrphanListMarkers(input: String): String {
+    val lines = input.split('\n')
+    if (lines.isEmpty()) return input
+    val sb = StringBuilder(input.length + 16)
+    var inFence = false
+    val fenceRe = Regex("^\\s*```")
+    val markerOnlyRe = Regex("^\\s*([-*+])\\s*$")
+    val tableLike: (String) -> Boolean = { it.count { ch -> ch == '|' } >= 2 }
+
+    var i = 0
+    while (i < lines.size) {
+        val line = lines[i]
+        val trimmed = line.trimStart()
+
+        if (fenceRe.containsMatchIn(trimmed)) {
+            inFence = !inFence
+            sb.append(line)
+            i++
+            if (i < lines.size) sb.append('\n')
+            continue
+        }
+        if (inFence) {
+            sb.append(line)
+            i++
+            if (i < lines.size) sb.append('\n')
+            continue
+        }
+
+        if (tableLike(line)) {
+            sb.append(line)
+            i++
+            if (i < lines.size) sb.append('\n')
+            continue
+        }
+
+        if (markerOnlyRe.matches(line) && i + 1 < lines.size) {
+            val next = lines[i + 1]
+            // 下一行不是继续的标记/不是空白/不是表格/不是围栏
+            if (next.isNotBlank() && !markerOnlyRe.matches(next) && !tableLike(next) && !fenceRe.containsMatchIn(next.trimStart())) {
+                val indent = line.takeWhile { it.isWhitespace() }
+                sb.append(indent).append("• ").append(next.trimStart())
+                i += 2
+                if (i < lines.size) sb.append('\n')
+                continue
+            }
+        }
+
+        sb.append(line)
+        i++
+        if (i < lines.size) sb.append('\n')
+    }
+    return sb.toString()
 }
 
 // ========== CJK 粗体启发式局部修复（仅非流式、且开启开关时生效） ==========
@@ -307,8 +369,10 @@ fun MarkdownRenderer(
         val cjk = normalizeCjkQuoteBold(basic)
         // 先尝试将 "*结论"/"* 结论"/"＊结论＊" 等提升为标题
         val promoted = promoteStandaloneEmphasisToHeading(cjk)
-        // 再兜底处理行首孤立星号列表化（若仍未被识别为标题）
-        fixLeadingSingleAsterisk(promoted)
+        // 兜底1：行首孤立星号 → "* 结论"
+        val fixedAsterisk = fixLeadingSingleAsterisk(promoted)
+        // 兜底2：合并“孤立的标记行 + 下一行文本” → "• 文本"
+        fixOrphanListMarkers(fixedAsterisk)
     }
 
     // CJK 粗体兼容（可开关 + 启发式 + 局部修复，仅非流式）
@@ -335,11 +399,72 @@ fun MarkdownRenderer(
     val finalLike = (!isStreaming) || looksFinalized(preNormalized)
 
     // 仅当处于流式且“未完结”时才采用轻量渲染；一旦“看起来完结”，直接走完整渲染（无需切 isStreaming=false）
-    val triggerLightweightInStream = isStreaming && !finalLike
+    val triggerLightweightInStream = false && isStreaming && !finalLike
     if (triggerLightweightInStream) {
-        val annotated = remember(preNormalized, isDark, textColor) {
+
+        // 针对流式轻量通道：在进入轻量渲染器前做一次“行首列表可视化”预处理
+        // 规则与 LightweightInlineMarkdown.preTransformListVisual 一致，且包含“*无空格容错”
+        fun preTransformListVisualForStreaming(text: String): String {
+            val lines = text.split('\n')
+            val sb = StringBuilder(text.length + 16)
+            var inFence = false
+            val fenceRe = Regex("^\\s*```")
+            val ulRe = Regex("^(\\s*)([-*+])\\s+(\\S.*)$")
+            val ulNoSpaceRe = Regex("^(\\s*)\\*(\\S.*)$")
+            val olRe = Regex("^(\\s*)(\\d{1,3})\\.\\s+(\\S.*)$")
+
+            for ((idx, line) in lines.withIndex()) {
+                val trimmedStart = line.trimStart()
+                if (fenceRe.containsMatchIn(trimmedStart)) {
+                    inFence = !inFence
+                    sb.append(line)
+                } else if (!inFence) {
+                    if (line.count { it == '|' } >= 2) {
+                        sb.append(line)
+                    } else {
+                        var handled = false
+                        val m1 = ulRe.matchEntire(line)
+                        if (m1 != null) {
+                            val indent = m1.groupValues[1]
+                            val rest = m1.groupValues[3]
+                            sb.append(indent).append("• ").append(rest)
+                            handled = true
+                        } else {
+                            val m0 = ulNoSpaceRe.matchEntire(line)
+                            if (m0 != null) {
+                                val indent = m0.groupValues[1]
+                                val rest = m0.groupValues[2]
+                                if (!rest.contains('*')) {
+                                    sb.append(indent).append("• ").append(rest)
+                                    handled = true
+                                }
+                            }
+                            if (!handled) {
+                                val m2 = olRe.matchEntire(line)
+                                if (m2 != null) {
+                                    val indent = m2.groupValues[1]
+                                    val num = m2.groupValues[2]
+                                    val rest = m2.groupValues[3]
+                                    sb.append(indent).append(num).append(". ").append(rest)
+                                    handled = true
+                                }
+                            }
+                        }
+                        if (!handled) sb.append(line)
+                    }
+                } else {
+                    sb.append(line)
+                }
+                if (idx < lines.size - 1) sb.append('\n')
+            }
+            return sb.toString()
+        }
+
+        val preForList = remember(preNormalized) { preTransformListVisualForStreaming(preNormalized) }
+
+        val annotated = remember(preForList, isDark, textColor) {
             LightweightInlineMarkdown.renderInlineAnnotated(
-                markdown = preNormalized,
+                markdown = preForList,
                 baseStyleColor = textColor,
                 isDark = isDark
             )

@@ -16,6 +16,9 @@ object MarkdownFormatFixer {
     // 当为 true 时，将 Markdown 表格转换为等宽代码块；默认关闭以允许外部库原生渲染表格
     var forceTableAsCodeBlock: Boolean = false
 
+    // 关闭“将 * 列表替换为 • 纯文本”的兜底，以保留 Markdown 列表语义
+    var enableAsteriskListToBullet: Boolean = false
+
     /**
      * 修复Markdown格式
      * 
@@ -121,7 +124,12 @@ object MarkdownFormatFixer {
         if (forceTableAsCodeBlock) {
             fixed = convertTablesToMonospaceCodeBlock(fixed)
         }
-        
+
+        // 保留 Markdown 语义：默认不再把 "* " 列表改成 "• "
+        if (enableAsteriskListToBullet) {
+            fixed = convertAsteriskListToBullet(fixed)
+        }
+
         return fixed
     }
     
@@ -538,6 +546,42 @@ object MarkdownFormatFixer {
         return result.joinToString("\n")
     }
     
+}
+
+/**
+ * 将以“* + 空白 + 文本”开头的列表行转换为“• 文本”，保留缩进与后续内容。
+ * - 跳过代码围栏与表格行（含两个及以上管道符）
+ * - 支持任意数量空白：`*   文本`、`*    **粗体**`
+ */
+private fun convertAsteriskListToBullet(text: String): String {
+    val lines = text.split("\n")
+    if (lines.isEmpty()) return text
+
+    val sb = StringBuilder(text.length + 16)
+    var inFence = false
+    val fenceRe = Regex("^\\s*```")
+    val starListRe = Regex("^(\\s*)\\*\\s+(\\S.*)$")
+
+    for ((idx, raw) in lines.withIndex()) {
+        val t = raw.trimStart()
+        if (fenceRe.containsMatchIn(t)) {
+            inFence = !inFence
+            sb.append(raw)
+        } else if (!inFence && raw.count { it == '|' } < 2) {
+            val m = starListRe.matchEntire(raw)
+            if (m != null) {
+                val indent = m.groupValues[1]
+                val body = m.groupValues[2]
+                sb.append(indent).append("• ").append(body)
+            } else {
+                sb.append(raw)
+            }
+        } else {
+            sb.append(raw)
+        }
+        if (idx < lines.size - 1) sb.append('\n')
+    }
+    return sb.toString()
 }
 
 

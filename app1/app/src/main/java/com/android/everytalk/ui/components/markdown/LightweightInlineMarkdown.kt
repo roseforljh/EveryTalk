@@ -34,7 +34,8 @@ object LightweightInlineMarkdown {
     data class Options(
         val maxSegments: Int = INLINE_SEGMENT_BUDGET_DEFAULT,
         val maxSpanChars: Int = INLINE_MAX_SPAN_CHARS_DEFAULT,
-        val extended: Boolean = true // 启用行级标题/列表/链接的最小化样式与链接注解
+        val extended: Boolean = true, // 启用行级标题/列表/链接的最小化样式与链接注解
+        val extendedListVisual: Boolean = true // 将行首列表标记可视化为圆点/规范化序号
     )
 
     private enum class State { TEXT, BOLD, ITALIC, CODE }
@@ -55,7 +56,7 @@ object LightweightInlineMarkdown {
     ): AnnotatedString {
         if (markdown.isEmpty()) return AnnotatedString("")
         // 预规范化：兼容 AI 输出中的不可见字符/全角符号/CRLF
-        val source: String = markdown
+        var source: String = markdown
             .replace("\r\n", "\n")
             .replace('\u00A0', ' ')          // NBSP -> 空格
             .replace('\u2007', ' ')          // FIGURE SPACE -> 空格
@@ -73,6 +74,108 @@ object LightweightInlineMarkdown {
             .replace('\u066D', '*')          // ٭ -> *
             // 常见中文标点的半/全角差异归一，避免被当作分隔导致匹配失败
             .replace('\u3000', ' ')          // 全角空格 -> 半角
+
+        // 列表可视化预处理函数（跳过围栏代码/表格行）
+        fun preTransformListVisual(text: String): String {
+            val lines = text.split('\n')
+            val sb = StringBuilder(text.length + 16)
+            var inFence = false
+            val fenceRe = Regex("^\\s*```")
+            val ulRe = Regex("^(\\s*)([-*+])\\s+(\\S.*)$")
+            val olRe = Regex("^(\\s*)(\\d{1,3})\\.\\s+(\\S.*)$")
+            // 行首“*紧跟非空白且无配对星号”的容错（如 "*下载并安装应用"）
+            val ulNoSpaceRe = Regex("^(\\s*)\\*(\\S.*)$")
+            // 仅有标记行（下一行才是内容）的容错（如单独一行 "*" 或 "-"）
+            val markerOnlyRe = Regex("^\\s*([-*+])\\s*$")
+
+            var i = 0
+            while (i < lines.size) {
+                val line = lines[i]
+                val trimmedStart = line.trimStart()
+
+                // 围栏开关：行首 ``` 视为 fence 切换
+                if (fenceRe.containsMatchIn(trimmedStart)) {
+                    inFence = !inFence
+                    sb.append(line)
+                    i++
+                    if (i < lines.size) sb.append('\n')
+                    continue
+                }
+
+                if (inFence) {
+                    sb.append(line)
+                    i++
+                    if (i < lines.size) sb.append('\n')
+                    continue
+                }
+
+                // 表格保护：含两个及以上竖线，跳过
+                if (line.count { it == '|' } >= 2) {
+                    sb.append(line)
+                    i++
+                    if (i < lines.size) sb.append('\n')
+                    continue
+                }
+
+                var handled = false
+
+                // A) “仅标记行”+ 下一行文本 合并为项目符号
+                if (markerOnlyRe.matches(line) && i + 1 < lines.size) {
+                    val next = lines[i + 1]
+                    // 下一行不是继续的标记/不是空行
+                    if (next.isNotBlank() && !ulRe.matches(next) && !markerOnlyRe.matches(next) && !olRe.matches(next)) {
+                        val indent = line.takeWhile { it.isWhitespace() }
+                        sb.append(indent).append("• ").append(next.trimStart())
+                        handled = true
+                        i += 2
+                        if (i < lines.size) sb.append('\n')
+                        continue
+                    }
+                }
+
+                // B) 正常无序列表（有空格）
+                val m1 = ulRe.matchEntire(line)
+                if (m1 != null) {
+                    val indent = m1.groupValues[1]
+                    val rest = m1.groupValues[3]
+                    sb.append(indent).append("• ").append(rest)
+                    handled = true
+                } else {
+                    // C) 无空格容错：形如 "*下载并安装应用" 且本行内不再出现配对星号
+                    val m0 = ulNoSpaceRe.matchEntire(line)
+                    if (m0 != null) {
+                        val indent = m0.groupValues[1]
+                        val rest = m0.groupValues[2]
+                        if (!rest.contains('*')) {
+                            sb.append(indent).append("• ").append(rest)
+                            handled = true
+                        }
+                    }
+                    if (!handled) {
+                        // D) 有序列表
+                        val m2 = olRe.matchEntire(line)
+                        if (m2 != null) {
+                            val indent = m2.groupValues[1]
+                            val num = m2.groupValues[2]
+                            val rest = m2.groupValues[3]
+                            // 规范化为“序号. 空格 + 文本”
+                            sb.append(indent).append(num).append(". ").append(rest)
+                            handled = true
+                        }
+                    }
+                }
+
+                if (!handled) sb.append(line)
+                i++
+                if (i < lines.size) sb.append('\n')
+            }
+            return sb.toString()
+        }
+
+        // 可视化列表预处理：将行首的列表标记渲染为 • ，跳过代码围栏/表格
+        if (opts.extendedListVisual) {
+            source = preTransformListVisual(source)
+        }
 
         // 状态机
 
