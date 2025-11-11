@@ -156,7 +156,7 @@ internal fun SettingsScreenContent(
         modifier = Modifier
             .fillMaxSize()
             .padding(paddingValues)
-            .background(MaterialTheme.colorScheme.background)
+            .background(Color.Transparent) // 设置为完全透明，实现沉浸式效果
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp, vertical = 20.dp)
     ) {
