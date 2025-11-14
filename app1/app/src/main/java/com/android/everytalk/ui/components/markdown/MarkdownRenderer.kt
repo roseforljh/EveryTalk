@@ -68,6 +68,208 @@ private fun normalizeCjkQuoteBold(input: String): String {
 }
 
 /**
+ * 规范化引用与列表行的空格：
+ * - 将 \">**文本\" → \"> **文本\"
+ * - 将 \">>**文本\" → \">> **文本\"
+ * - 将 \"-**文本\"、\"+**文本\"、\"***文本\" → \"- **文本\" 等
+ * - 跳过 ``` 代码围栏
+ */
+private fun normalizeBlockQuoteAndListSpacing(input: String): String {
+    val lines = input.split('\n')
+    if (lines.isEmpty()) return input
+    val sb = StringBuilder(input.length + 16)
+    var inFence = false
+    val fenceRe = Regex("^\\s*```")
+    val quoteRe = Regex("^(\\s*>+)(\\S)(.*)$")
+    val listRe  = Regex("^(\\s*)([-+*])(\\S)(.*)$")
+    for ((i, line) in lines.withIndex()) {
+        val trimmedStart = line.trimStart()
+        val outLine = if (fenceRe.containsMatchIn(trimmedStart)) {
+            inFence = !inFence
+            line
+        } else if (!inFence) {
+            // 处理引用：> 后必须有空格
+            val mq = quoteRe.matchEntire(line)
+            if (mq != null) {
+                val prefix = mq.groupValues[1]
+                val first  = mq.groupValues[2]
+                val rest   = mq.groupValues[3]
+                // 若 '>' 后直接是非空白则补一个空格
+                "$prefix $first$rest"
+            } else {
+                // 处理列表：-, +, * 后必须有空格
+                val ml = listRe.matchEntire(line)
+                if (ml != null) {
+                    val indent = ml.groupValues[1]
+                    val marker = ml.groupValues[2]
+                    val first  = ml.groupValues[3]
+                    val rest   = ml.groupValues[4]
+                    "$indent$marker $first$rest"
+                } else {
+                    line
+                }
+            }
+        } else {
+            line
+        }
+        if (i > 0) sb.append('\n')
+        sb.append(outLine)
+    }
+    return sb.toString()
+}
+
+/**
+ * 调试：在 Debug 构建下记录每个规范化阶段是否改变了文本，以及长度差异
+ */
+private fun debugLogTransform(stage: String, before: String, after: String) {
+    if (com.android.everytalk.BuildConfig.DEBUG && before !== after && before != after) {
+        android.util.Log.d(
+            "MarkdownRenderer",
+            "stage='$stage' changed length: ${before.length} -> ${after.length}"
+        )
+    }
+}
+
+/**
+ * 规范化粗体标记内的多余空格，修复 "** 文本 **" 未被识别为粗体的问题
+ * - 仅处理 fence 外文本；不进入 ``` 代码块中
+ * - 三步修正（从最具体到最宽松）：
+ *   1) "** 词 **" -> "**词**"
+ *   2) "** 词**"  -> "**词**"
+ *   3) "**词 **"  -> "**词**"
+ * - 谨慎匹配：避免跨越到下一个 '**'，不处理空内容
+ */
+private fun normalizeBoldInnerSpaces(input: String): String {
+    // 快速跳过
+    if (!input.contains("**")) return input
+
+    fun fixOneSegment(seg: String): String {
+        var s = seg
+        // 仅删除粗体**边界**的空格，不删除内部空格/换行
+        // 使用 (?!\*) 负向前瞻确保不匹配到内部的空格
+        // 1) 开头有空格："** 词" -> "**词"
+        val leftPattern = Regex("\\*\\*\\s+(?=\\S)")
+        s = s.replace(leftPattern, "**")
+        // 2) 结尾有空格："词 **" -> "词**"
+        val rightPattern = Regex("(?<=\\S)\\s+\\*\\*")
+        s = s.replace(rightPattern, "**")
+        return s
+    }
+
+    // 按 ``` fence 切分，仅处理 fence 外
+    val segments = splitByCodeFence(input)
+    if (segments.size == 1 && !segments[0].first) {
+        return fixOneSegment(segments[0].second)
+    }
+    val out = StringBuilder(input.length)
+    for ((inFence, seg) in segments) {
+        if (inFence) {
+            out.append("```").append(seg).append("```")
+        } else {
+            out.append(fixOneSegment(seg))
+        }
+    }
+    return out.toString()
+}
+
+/**
+ * 合并粗体内部的软换行：处理 "** 文本\n更多 **" 这类跨行粗体，转为单行 "**文本 更多**"
+ * - 仅对 fence 外文本生效
+ * - 不改变普通换行，仅替换粗体对内部的换行为单空格并去掉首尾多余空白
+ */
+private fun normalizeSoftBreaksInsideBold(input: String): String {
+    if (!input.contains("**")) return input
+    fun compact(seg: String): String {
+        val pattern = Regex("\\*\\*((?:.|\\n)+?)\\*\\*", setOf(RegexOption.DOT_MATCHES_ALL))
+        return seg.replace(pattern) { m ->
+            val inner = m.groupValues[1]
+                .replace(Regex("[ \\t]*\\n[ \\t]*"), " ")
+                .trim()
+            "**$inner**"
+        }
+    }
+    val segments = splitByCodeFence(input)
+    if (segments.size == 1 && !segments[0].first) return compact(segments[0].second)
+    val out = StringBuilder(input.length + 16)
+    for ((inFence, seg) in segments) {
+        if (inFence) out.append("```").append(seg).append("```") else out.append(compact(seg))
+    }
+    return out.toString()
+}
+
+/**
+ * 折叠粗体边界处的所有空白（含换行）：
+ * 处理 "**  内容\n  **"、"**\n内容  **" 等，归一为 "**内容**"
+ * - 仅对 ``` 围栏外生效
+ * - 不改变粗体内部普通换行（该逻辑已在 normalizeSoftBreaksInsideBold 里处理）
+ */
+private fun normalizeBoldBoundaryWhitespace(input: String): String {
+    if (!input.contains("**")) return input
+
+    fun collapse(seg: String): String {
+        // 在开头 ** 之后与结尾 ** 之前允许存在任意空白（含换行），统一折叠去除
+        val pattern = Regex("\\*\\*\\s*((?:.|\\n)*?\\S)\\s*\\*\\*", setOf(RegexOption.DOT_MATCHES_ALL))
+        return seg.replace(pattern) { m -> "**${m.groupValues[1]}**" }
+    }
+
+    val segments = splitByCodeFence(input)
+    if (segments.size == 1 && !segments[0].first) return collapse(segments[0].second)
+
+    val out = StringBuilder(input.length + 16)
+    for ((inFence, seg) in segments) {
+        if (inFence) out.append("```").append(seg).append("```") else out.append(collapse(seg))
+    }
+    return out.toString()
+}
+
+/**
+ * 引用行首“**词**：”专用修复：
+ * - 目标：把 `> **简单比喻**：` 规范为 `> <strong>简单比喻</strong>：`
+ * - 仅处理代码围栏外的行；不影响其它行/结构
+ */
+private fun fixBlockquoteLeadingBoldWithColon(input: String): String {
+    // 快速跳过
+    if (!input.contains("**")) return input
+
+    fun transformBlock(block: String): String {
+        val lines = block.split('\n')
+        val out = StringBuilder(block.length + 16)
+        // ^\s*>\s*\*\*\s*(.+?)\s*\*\*(?=[:：])
+        val re = Regex("^\\s*>\\s*\\*\\*\\s*(.+?)\\s*\\*\\*(?=[:：])")
+        for ((i, line) in lines.withIndex()) {
+            val replaced = re.replace(line) { m ->
+                val inner = m.groupValues[1]
+                // 保留原有的前导空白与 '>'，只替换 **…**
+                val prefix = line.substring(0, line.indexOf('>') + 1)
+                // 在 '>' 后至少保留一个空格
+                val after = line.substring(line.indexOf('>') + 1)
+                val afterReplaced = re.replace(after) { mm -> "**${mm.groupValues[1]}**" }
+                // 如果不是以空格开头，补一个空格
+                val normalized = if (afterReplaced.startsWith(" ")) afterReplaced else " $afterReplaced"
+                prefix + normalized
+            }
+            if (i > 0) out.append('\n')
+            out.append(replaced)
+        }
+        return out.toString()
+    }
+
+    val segments = splitByCodeFence(input)
+    if (segments.size == 1 && !segments[0].first) {
+        val res = transformBlock(segments[0].second)
+        if (com.android.everytalk.BuildConfig.DEBUG && res != segments[0].second) {
+            android.util.Log.d("MarkdownRenderer", "fixBlockquoteLeadingBoldWithColon: changed")
+        }
+        return res
+    }
+    val out = StringBuilder(input.length + 16)
+    for ((inFence, seg) in segments) {
+        if (inFence) out.append("```").append(seg).append("```") else out.append(transformBlock(seg))
+    }
+    return out.toString()
+}
+
+/**
  * 行首单星号安全处理（仅最终渲染态使用的预处理）
  * 将形如 "*结论" 这种“单星号紧跟非空白且该行无配对星号”的场景，转换为 "* 结论"
  * 目的：用户常见书写错误不会被误当作斜体/粗体，同时让其按列表项渲染，避免裸露的星号。
@@ -296,9 +498,9 @@ private fun applyCjkBoldCompatHeuristics(block: String): String {
     val sb = StringBuilder(block.length + 16)
     val lines = block.split("\n")
     val common = Regex(
-        "(?:(?<=^[\\u0000])|(?<=[\\p{IsHan}\\p{IsHiragana}\\p{IsKatakana}\\p{IsHangul}“”‘’「」『』《》、，。；：！？…\\s]))" +
+        "(?:(?<=^[\\u0000])|(?<=[\\p{IsHan}\\p{IsHiragana}\\p{IsKatakana}\\p{IsHangul}“”‘’「」『』《》（）、，。；：！？…\\s]))" +
         "\\*\\*(.+?)\\*\\*" +
-        "(?=(?:$)|(?=[\\p{IsHan}\\p{IsHiragana}\\p{IsKatakana}\\p{IsHangul}”’」』》、，。；：！？…\\s]))",
+        "(?=(?:$)|(?=[\\p{IsHan}\\p{IsHiragana}\\p{IsKatakana}\\p{IsHangul}”’」』》） 、，。；：！？…\\s]))",
         setOf(RegexOption.DOT_MATCHES_ALL)
     )
     val colonTail = Regex("\\*\\*(.+?)\\*\\*(?=[:：](\\s|$))")
@@ -309,18 +511,21 @@ private fun applyCjkBoldCompatHeuristics(block: String): String {
     val lineStartLeft = Regex("^\\*\\*([^*]*?[\\p{IsHan}][^*]*?)\\*\\*")
  
     for (line in lines) {
-        if (shouldSkipLine(line)) {
+        // 对标题/列表等仍然跳过，但“引用行 > ”允许做 CJK/冒号修正
+        val isBlockQuote = line.trimStart().startsWith(">")
+        val shouldSkip = shouldSkipLine(line) && !isBlockQuote
+        if (shouldSkip) {
             sb.append(line)
         } else {
             var s = line
-            // 先处理冒号收尾
-            s = s.replace(colonTail) { m -> "<strong>${m.groupValues[1]}</strong>" }
-            // 再处理 CJK 邻接
-            s = s.replace(common) { m -> "<strong>${m.groupValues[1]}</strong>" }
-            // 处理“破折号/括号/空白后紧跟 **词**（含CJK）” → 保留左界定符并整体替换为 <strong>
-            s = s.replace(emDashOrBracketLeft) { m -> "${m.groupValues[1]}<strong>${m.groupValues[2]}</strong>" }
-            // 处理“行首 **词**（含CJK）” → <strong>词</strong>
-            s = s.replace(lineStartLeft) { m -> "<strong>${m.groupValues[1]}</strong>" }
+            // 先处理冒号收尾（支持“：”） → 保持 Markdown 语法
+            s = s.replace(colonTail) { m -> "**${m.groupValues[1]}**" }
+            // 再处理 CJK 邻接（含全角括号等） → 保持 Markdown 语法
+            s = s.replace(common) { m -> "**${m.groupValues[1]}**" }
+            // 处理“破折号/括号/空白后紧跟 **词**（含CJK）” → 左界定符 + **词**
+            s = s.replace(emDashOrBracketLeft) { m -> "${m.groupValues[1]}**${m.groupValues[2]}**" }
+            // 处理“行首 **词**（含CJK）” → **词**
+            s = s.replace(lineStartLeft) { m -> "**${m.groupValues[1]}**" }
             sb.append(s)
         }
         sb.append('\n')
@@ -331,9 +536,16 @@ private fun applyCjkBoldCompatHeuristics(block: String): String {
 
 // 对全文进行 fence 分段，仅对 fence 外的普通段落应用启发式
 private fun cjkBoldCompatProcess(text: String): String {
+    if (com.android.everytalk.BuildConfig.DEBUG) {
+        android.util.Log.d("MarkdownRenderer", "cjkBoldCompatProcess: input.length=${text.length}, contains(**=${text.contains("**")})")
+    }
     val segments = splitByCodeFence(text)
     if (segments.size == 1 && !segments[0].first) {
-        return applyCjkBoldCompatHeuristics(segments[0].second)
+        val result = applyCjkBoldCompatHeuristics(segments[0].second)
+        if (com.android.everytalk.BuildConfig.DEBUG && result != segments[0].second) {
+            android.util.Log.d("MarkdownRenderer", "cjkBoldCompatProcess: single segment changed, before=${segments[0].second.length}, after=${result.length}")
+        }
+        return result
     }
     val out = StringBuilder(text.length + 16)
     for ((inFence, seg) in segments) {
@@ -342,7 +554,11 @@ private fun cjkBoldCompatProcess(text: String): String {
             out.append(seg)
             out.append("```")
         } else {
-            out.append(applyCjkBoldCompatHeuristics(seg))
+            val processed = applyCjkBoldCompatHeuristics(seg)
+            if (com.android.everytalk.BuildConfig.DEBUG && processed != seg) {
+                android.util.Log.d("MarkdownRenderer", "cjkBoldCompatProcess: segment changed, before=${seg.length}, after=${processed.length}")
+            }
+            out.append(processed)
         }
     }
     return out.toString()
@@ -363,21 +579,56 @@ fun MarkdownRenderer(
         else -> MaterialTheme.colorScheme.onSurface
     }
 
-    // 先做字符级清洗（零宽/全角/CRLF 等），再做 CJK 引号粗体规范化 + 标题提升后兜底处理单星号
+    // 先做字符级清洗（零宽/全角/CRLF 等），再做 引用/列表补空格 → 粗体跨行软换行合并 → CJK 引号粗体规范化
+    // → 粗体内空格修复 → 标题提升 → 行首单星号兜底 → 孤立标记合并
     val preNormalized = remember(markdown) {
+        // 1) 字符级清洗
         val basic = sanitizeInvisibleAndWidthChars(markdown)
-        val cjk = normalizeCjkQuoteBold(basic)
-        // 先尝试将 "*结论"/"* 结论"/"＊结论＊" 等提升为标题
-        val promoted = promoteStandaloneEmphasisToHeading(cjk)
-        // 兜底1：行首孤立星号 → "* 结论"
+        debugLogTransform("sanitizeInvisibleAndWidthChars", markdown, basic)
+
+        // 2) 引用/列表补空格
+        val quoteListSpaced = normalizeBlockQuoteAndListSpacing(basic)
+        debugLogTransform("normalizeBlockQuoteAndListSpacing", basic, quoteListSpaced)
+
+        // 3) 合并粗体内部软换行（关键：跨行 **...**）
+        val boldSoftMerged = normalizeSoftBreaksInsideBold(quoteListSpaced)
+        debugLogTransform("normalizeSoftBreaksInsideBold", quoteListSpaced, boldSoftMerged)
+
+        // 4) 折叠粗体边界空白（含换行），保障 "** 文本 （换行）**" 可解析
+        val boldBoundaryCollapsed = normalizeBoldBoundaryWhitespace(boldSoftMerged)
+        debugLogTransform("normalizeBoldBoundaryWhitespace", boldSoftMerged, boldBoundaryCollapsed)
+
+        // 5) 引用行首 **词**： → <strong>词</strong>： 专用修复（只在 fence 外）
+        val quoteBoldColon = fixBlockquoteLeadingBoldWithColon(boldBoundaryCollapsed)
+        debugLogTransform("fixBlockquoteLeadingBoldWithColon", boldBoundaryCollapsed, quoteBoldColon)
+
+        // 6) CJK 引号粗体规范化（**“词”** -> “**词**”）
+        val cjk = normalizeCjkQuoteBold(quoteBoldColon)
+        debugLogTransform("normalizeCjkQuoteBold", quoteBoldColon, cjk)
+
+        // 7) 修复粗体内首尾空格（"** 词 **" 等）
+        val boldTrimmed = normalizeBoldInnerSpaces(cjk)
+        debugLogTransform("normalizeBoldInnerSpaces", cjk, boldTrimmed)
+
+        // 6) 将整行强调提升为标题
+        val promoted = promoteStandaloneEmphasisToHeading(boldTrimmed)
+        debugLogTransform("promoteStandaloneEmphasisToHeading", boldTrimmed, promoted)
+
+        // 7) 行首孤立星号兜底
         val fixedAsterisk = fixLeadingSingleAsterisk(promoted)
-        // 兜底2：合并“孤立的标记行 + 下一行文本” → "• 文本"
-        fixOrphanListMarkers(fixedAsterisk)
+        debugLogTransform("fixLeadingSingleAsterisk", promoted, fixedAsterisk)
+
+        // 8) 孤立标记行与下一行合并
+        val finalText = fixOrphanListMarkers(fixedAsterisk)
+        debugLogTransform("fixOrphanListMarkers", fixedAsterisk, finalText)
+
+        finalText
     }
 
-    // CJK 粗体兼容（可开关 + 启发式 + 局部修复，仅非流式）
+    // CJK 粗体兼容（可开关 + 启发式 + 局部修复）
+    // 修改：流式和非流式均启用，确保引用行和括号场景的粗体正常转换
     val compatSource = remember(preNormalized, isStreaming) {
-        if (!isStreaming && ENABLE_CJK_BOLD_COMPAT) {
+        if (ENABLE_CJK_BOLD_COMPAT) {
             cjkBoldCompatProcess(preNormalized)
         } else {
             preNormalized
