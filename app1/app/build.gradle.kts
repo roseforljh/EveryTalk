@@ -213,12 +213,8 @@ android {
 
         // ===== 网络 - OkHttp =====
         implementation("com.squareup.okhttp3:okhttp:5.3.0")
-// ===== Markdown渲染 - compose-markdown =====
-implementation("com.github.jeziellago:compose-markdown:0.5.8")
-
-// ===== Markdown渲染（表格支持）- Markwon =====
-// 用于当检测到 GFM 表格时，回退到 Markwon（支持 TablesPlugin）
-implementation("io.noties.markwon:core:4.6.2")
-implementation("io.noties.markwon:ext-tables:4.6.2")
+// ===== Rich Text Editor - Compose Rich Editor =====
+// 支持 Markdown 和 HTML 的富文本编辑器，适用于 Compose Multiplatform
+implementation("com.mohamedrejeb.richeditor:richeditor-compose:1.0.0-rc13")
 
     }

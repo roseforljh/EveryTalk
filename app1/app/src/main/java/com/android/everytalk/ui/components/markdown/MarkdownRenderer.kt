@@ -4,10 +4,13 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import com.mohamedrejeb.richeditor.model.rememberRichTextState
+import com.mohamedrejeb.richeditor.ui.material3.RichText
 
 /**
  * 纯文本 Markdown 渲染器（不含表格与代码块组件，职责单一）
@@ -774,12 +777,27 @@ fun MarkdownRenderer(
     val inlineCodeTextColor = Color(0xFFABABAB)
 
 
-    // 交由外部库渲染基础 Markdown（非仅行内代码的场景）
-    dev.jeziellago.compose.markdowntext.MarkdownText(
-        markdown = fixedMarkdown,
+    // 使用 Compose Rich Editor 渲染 Markdown
+    val richTextState = rememberRichTextState()
+    
+    // 配置样式
+    LaunchedEffect(Unit) {
+        richTextState.config.apply {
+            linkColor = Color(0xFF2196F3)
+            codeSpanColor = inlineCodeTextColor
+            codeSpanBackgroundColor = inlineCodeBackground
+        }
+    }
+    
+    // 设置 Markdown 内容
+    LaunchedEffect(fixedMarkdown) {
+        richTextState.setMarkdown(fixedMarkdown)
+    }
+    
+    // 渲染富文本
+    RichText(
+        state = richTextState,
         style = style.copy(color = textColor),
-        modifier = modifier,
-        syntaxHighlightColor = inlineCodeBackground,
-        syntaxHighlightTextColor = inlineCodeTextColor
+        modifier = modifier
     )
 }
