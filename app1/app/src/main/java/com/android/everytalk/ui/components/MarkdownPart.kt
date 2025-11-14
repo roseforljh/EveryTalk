@@ -40,4 +40,3 @@ object MarkdownPartSerializer : KSerializer<List<MarkdownPart>> {
         return delegateSerializer.deserialize(decoder)
     }
 }
-

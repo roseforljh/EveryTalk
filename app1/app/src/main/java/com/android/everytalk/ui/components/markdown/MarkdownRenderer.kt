@@ -1,7 +1,7 @@
 package com.android.everytalk.ui.components.markdown
 
-import android.text.method.LinkMovementMethod
 import android.util.TypedValue
+import android.view.MotionEvent
 import android.widget.TextView
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -101,13 +101,19 @@ fun MarkdownRenderer(
                 setTextColor(finalColor.toArgb())
                 // 稳定基线，减少跳动
                 setIncludeFontPadding(false)
-                // 链接点击仍可用，但确保长按不被吞掉
-                movementMethod = LinkMovementMethod.getInstance()
-                linksClickable = true
-                isClickable = true
+                
+                // 🔒 禁用文本选择但保留长按功能
+                setTextIsSelectable(false)
+                highlightColor = android.graphics.Color.TRANSPARENT
+                movementMethod = null
+                linksClickable = false
+                isFocusable = false
+                isFocusableInTouchMode = false
+                
+                // ✅ 保留长按功能（用于弹出底部对话框）
                 isLongClickable = true
-
-                // 设置长按监听器（返回 true 明确消费，避免下传）
+                
+                // 设置长按监听器
                 onLongPress?.let { callback ->
                     setOnLongClickListener {
                         callback()
@@ -121,14 +127,6 @@ fun MarkdownRenderer(
         update = { tv ->
             val processed = preprocessAiMarkdown(markdown)
             markwon.setMarkdown(tv, processed)
-            // 禁用文本选择 & 点击高亮，避免出现系统高亮底色
-            tv.setTextIsSelectable(false)
-            tv.highlightColor = android.graphics.Color.TRANSPARENT
-
-            // 确保点击/长按能力开启
-            tv.linksClickable = true
-            tv.isClickable = true
-            tv.isLongClickable = true
 
             // 更新长按监听器
             if (onLongPress != null) {
