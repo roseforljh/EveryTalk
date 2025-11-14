@@ -92,7 +92,7 @@ fun CodeBlock(
             modifier = Modifier
                 .fillMaxWidth()
                 .verticalScroll(vScroll)
-                .padding(start = 4.dp, end = 4.dp, top = 32.dp, bottom = 4.dp)
+                .padding(start = 4.dp, end = 4.dp, top = 28.dp, bottom = 4.dp)
         ) {
             SelectionContainer {
                 // 🎯 根据enableHorizontalScroll决定是否可以水平滚动
@@ -107,9 +107,9 @@ fun CodeBlock(
                         text = code,
                         style = MaterialTheme.typography.bodyMedium.copy(
                             fontFamily = FontFamily.Monospace,
-                            fontSize = 13.sp,
-                            lineHeight = 18.sp,
-                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp,
+                            fontWeight = FontWeight.Normal,
                             color = codeColor,
                             letterSpacing = 0.sp
                         ),
@@ -123,7 +123,7 @@ fun CodeBlock(
             modifier = Modifier
                 .fillMaxWidth()
                 .align(Alignment.TopStart)
-                .padding(horizontal = 4.dp, vertical = 4.dp),
+                .padding(horizontal = 4.dp, vertical = 2.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -132,7 +132,7 @@ fun CodeBlock(
                 text = langText.lowercase(),
                 style = MaterialTheme.typography.labelSmall.copy(
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp,
+                    fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
                     color = topBarColor,
                     letterSpacing = 0.3.sp
