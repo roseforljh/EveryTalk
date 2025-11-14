@@ -1,17 +1,17 @@
 [versions]
 agp = "8.13.0"
-kotlin = "2.0.0"
-coreKtx = "1.16.0"
+kotlin = "2.2.21"
+coreKtx = "1.17.0"
 junit = "4.13.2"
 junitVersion = "1.2.1"
 espressoCore = "3.6.1"
 lifecycleRuntimeKtx = "2.8.7"
-activityCompose = "1.10.1"
-composeBom = "2024.12.01"
+activityCompose = "1.11.0"
+composeBom = "2025.11.05"
 uiautomator = "2.2.0"
 benchmarkMacroJunit4 = "1.2.0-beta01"
-androidxJunit = "1.1.5" # 或者你选择的版本
-androidxBenchmarkMacro = "1.2.4" # 或者你选择的版本
+androidxJunit = "1.2.1"
+androidxBenchmarkMacro = "1.2.4"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -31,7 +31,7 @@ androidx-material3 = { group = "androidx.compose.material3", name = "material3"}
 androidx-uiautomator = { group = "androidx.test.uiautomator", name = "uiautomator", version.ref = "uiautomator" }
 androidx-benchmark-macro-junit4 = { group = "androidx.benchmark", name = "benchmark-macro-junit4", version.ref = "benchmarkMacroJunit4" }
 # profileinstaller 应该在 app 模块的依赖中，但版本可以放这里管理
-androidx-profileinstaller = { group = "androidx.profileinstaller", name = "profileinstaller", version = "1.3.1" } # 或者你选择的版本
+androidx-profileinstaller = { group = "androidx.profileinstaller", name = "profileinstaller", version = "1.3.1" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

@@ -38,10 +38,9 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
-    // Kotlin Serialization 插件,版本与项目 Kotlin 版本一致
+    // Kotlin Serialization 插件，版本与 Kotlin 2.2.21 对齐
     id("org.jetbrains.kotlin.plugin.serialization") version libs.versions.kotlin.get()
-    // KSP 插件,版本与项目 Kotlin 版本 (2.0.0) 匹配
-    id("com.google.devtools.ksp") version "2.0.0-1.0.21"
+    // 已移除 KSP（工程内未使用 ksp 配置/符号处理器，避免阻塞 Kotlin 2.2.21 升级）
 }
 
 android {
@@ -178,14 +177,14 @@ android {
         implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
         // ===== Ktor Client (网络请求) =====
-        implementation("io.ktor:ktor-client-core:2.3.11")
-        implementation("io.ktor:ktor-client-okhttp:2.3.11")
-        implementation("io.ktor:ktor-client-content-negotiation:2.3.11")
-        implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.11")
-        implementation("io.ktor:ktor-client-logging:2.3.11")
+        implementation("io.ktor:ktor-client-core:3.3.2")
+        implementation("io.ktor:ktor-client-okhttp:3.3.2")
+        implementation("io.ktor:ktor-client-content-negotiation:3.3.2")
+        implementation("io.ktor:ktor-serialization-kotlinx-json:3.3.2")
+        implementation("io.ktor:ktor-client-logging:3.3.2")
 
         // SLF4J - Ktor logging 的间接依赖,必须保留
-        implementation("org.slf4j:slf4j-nop:2.0.12")
+        implementation("org.slf4j:slf4j-nop:2.0.17")
 
         // ===== Testing =====
         testImplementation(libs.junit)
@@ -195,17 +194,17 @@ android {
         debugImplementation(libs.androidx.ui.test.manifest)
 
         // ===== Navigation =====
-        implementation("androidx.navigation:navigation-compose:2.7.7")
+        implementation("androidx.navigation:navigation-compose:2.9.6")
         
         // ===== AppCompat & Material =====
-        implementation("androidx.appcompat:appcompat:1.7.0")
-        implementation("com.google.android.material:material:1.12.0")
+        implementation("androidx.appcompat:appcompat:1.7.1")
+        implementation("com.google.android.material:material:1.13.0")
 
         // ===== Profile Installer =====
         implementation(libs.androidx.profileinstaller)
 
         // ===== HTML 解析 - JSoup =====
-        implementation("org.jsoup:jsoup:1.17.2")
+        implementation("org.jsoup:jsoup:1.21.2")
 
         // ===== 图片加载 - Coil =====
         implementation("io.coil-kt.coil3:coil-compose:3.2.0")
@@ -213,9 +212,9 @@ android {
         implementation("io.coil-kt.coil3:coil-video:3.2.0")
 
         // ===== 网络 - OkHttp =====
-        implementation("com.squareup.okhttp3:okhttp:4.12.0")
+        implementation("com.squareup.okhttp3:okhttp:5.3.0")
 // ===== Markdown渲染 - compose-markdown =====
-implementation("com.github.jeziellago:compose-markdown:0.5.7")
+implementation("com.github.jeziellago:compose-markdown:0.5.8")
 
 // ===== Markdown渲染（表格支持）- Markwon =====
 // 用于当检测到 GFM 表格时，回退到 Markwon（支持 TablesPlugin）

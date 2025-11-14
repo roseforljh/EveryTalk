@@ -102,9 +102,9 @@ object OpenAIDirectClient {
                 header("X-Accel-Buffering", "no")
 
                 timeout {
-                    requestTimeoutMillis = HttpTimeout.INFINITE_TIMEOUT_MS
+                    requestTimeoutMillis = Long.MAX_VALUE
                     connectTimeoutMillis = 60_000
-                    socketTimeoutMillis = HttpTimeout.INFINITE_TIMEOUT_MS
+                    socketTimeoutMillis = Long.MAX_VALUE
                 }
             }.execute { response ->
                 if (!response.status.isSuccess()) {

@@ -65,9 +65,9 @@ object GeminiDirectClient {
 
                 // 与代理流一致的超时配置：保持长连接与持续读取
                 timeout {
-                    requestTimeoutMillis = HttpTimeout.INFINITE_TIMEOUT_MS
+                    requestTimeoutMillis = Long.MAX_VALUE
                     connectTimeoutMillis = 60_000
-                    socketTimeoutMillis = HttpTimeout.INFINITE_TIMEOUT_MS
+                    socketTimeoutMillis = Long.MAX_VALUE
                 }
             }.execute { response ->
                 if (!response.status.isSuccess()) {

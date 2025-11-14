@@ -400,9 +400,9 @@ object ApiClient {
             client.preparePost(backendProxyUrl) {
                 accept(ContentType.Text.EventStream)
                 timeout {
-                    requestTimeoutMillis = HttpTimeout.INFINITE_TIMEOUT_MS
+                    requestTimeoutMillis = Long.MAX_VALUE
                     connectTimeoutMillis = 60_000  // 增加连接超时到60秒
-                    socketTimeoutMillis = HttpTimeout.INFINITE_TIMEOUT_MS
+                    socketTimeoutMillis = Long.MAX_VALUE
                 }
                 // 🔐 添加签名头
                 header("X-Signature", signatureHeaders["X-Signature"]!!)
