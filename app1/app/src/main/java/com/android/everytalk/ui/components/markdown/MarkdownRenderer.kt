@@ -506,10 +506,10 @@ fun MarkdownRenderer(
     }
 
     // 行内代码配色（围栏代码块另由 CodeBlock 组件承担）
-    // 要求：暗色背景纯黑，亮色纯白；字体颜色 #008ACF
-    val inlineCodeBackground = if (isDark) Color(0xFF000000) else Color(0xFFFFFFFF)
+    // 背景透明（不可见），文字颜色保持 #008ACF
+    val inlineCodeBackground = Color(0x00000000) // ARGB 全透明
     val inlineCodeTextColor = Color(0xFF008ACF)
-
+    
     // 交由外部库渲染基础 Markdown
     dev.jeziellago.compose.markdowntext.MarkdownText(
         markdown = fixedMarkdown,

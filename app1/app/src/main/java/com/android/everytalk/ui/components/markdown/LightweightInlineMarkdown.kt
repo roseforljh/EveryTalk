@@ -202,7 +202,7 @@ object LightweightInlineMarkdown {
         val codeStyle = SpanStyle(
             fontFamily = FontFamily.Monospace,
             color = Color(0xFF008ACF),
-            background = if (isDark) Color(0xFF000000) else Color(0xFFFFFFFF)
+            background = Color(0x00000000) // 全透明背景
         )
 
         // 输出缓冲
