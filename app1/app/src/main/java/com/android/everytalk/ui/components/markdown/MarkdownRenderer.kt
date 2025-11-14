@@ -2,7 +2,9 @@ package com.android.everytalk.ui.components.markdown
 
 import android.util.TypedValue
 import android.view.MotionEvent
+import android.view.Gravity
 import android.widget.TextView
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -22,6 +24,7 @@ import org.commonmark.node.Code
 import android.graphics.Typeface
 import android.text.style.StyleSpan
 import android.text.style.ForegroundColorSpan
+import com.android.everytalk.data.DataClass.Sender
 
 /**
  * 使用 Markwon 渲染 Markdown（TextView + Spannable）
@@ -56,7 +59,8 @@ fun MarkdownRenderer(
     style: TextStyle = MaterialTheme.typography.bodyMedium,
     color: Color = Color.Unspecified,
     isStreaming: Boolean = false,
-    onLongPress: (() -> Unit)? = null
+    onLongPress: (() -> Unit)? = null,
+    sender: Sender = Sender.AI
 ) {
     val context = LocalContext.current
     val markwon = remember {
@@ -95,8 +99,15 @@ fun MarkdownRenderer(
         else -> MaterialTheme.colorScheme.onSurface
     }
 
+    // 🎯 根据发送者决定AndroidView的宽度策略
+    val viewModifier = if (sender == Sender.User) {
+        modifier.wrapContentWidth()
+    } else {
+        modifier
+    }
+    
     AndroidView(
-        modifier = modifier,
+        modifier = viewModifier,
         factory = {
             TextView(it).apply {
                 // 统一文本样式（字号）
@@ -106,26 +117,46 @@ fun MarkdownRenderer(
                 // 稳定基线，减少跳动
                 setIncludeFontPadding(false)
                 
-                // 🎯 增加TextView内部padding，让文字更舒适
-                val paddingPx = TypedValue.applyDimension(
-                    TypedValue.COMPLEX_UNIT_DIP,
-                    6f,
-                    resources.displayMetrics
-                ).toInt()
-                setPadding(paddingPx, paddingPx, paddingPx, paddingPx)
+                // 🎯 TextView内部padding - 用户气泡使用相等的上下padding实现垂直居中
+                if (sender == Sender.User) {
+                    // 用户气泡：使用相等的上下padding，减小水平padding
+                    val horizontalPaddingPx = TypedValue.applyDimension(
+                        TypedValue.COMPLEX_UNIT_DIP,
+                        1f,  // 减小水平padding
+                        resources.displayMetrics
+                    ).toInt()
+                    val verticalPaddingPx = TypedValue.applyDimension(
+                        TypedValue.COMPLEX_UNIT_DIP,
+                        4f,  // 增加垂直padding以实现视觉居中
+                        resources.displayMetrics
+                    ).toInt()
+                    setPadding(horizontalPaddingPx, verticalPaddingPx, horizontalPaddingPx, verticalPaddingPx)
+                } else {
+                    // AI气泡
+                    val paddingPx = TypedValue.applyDimension(
+                        TypedValue.COMPLEX_UNIT_DIP,
+                        3f,
+                        resources.displayMetrics
+                    ).toInt()
+                    setPadding(paddingPx, paddingPx, paddingPx, paddingPx)
+                }
                 
-                // 🎯 增加行间距，让文字不那么拥挤
+                // 🎯 行间距 - 更小的行间距
+                val lineSpacingDp = if (sender == Sender.User) 2f else 3f
                 setLineSpacing(
                     TypedValue.applyDimension(
                         TypedValue.COMPLEX_UNIT_DIP,
-                        6f,
+                        lineSpacingDp,
                         resources.displayMetrics
                     ),
                     1.0f
                 )
                 
-                // 🎯 增加字符间距，让文字左右距离更大
-                letterSpacing = 0.05f
+                // 🎯 字符间距 - 更小的字符间距
+                letterSpacing = if (sender == Sender.User) 0.02f else 0.03f
+                
+                // 🎯 设置居中对齐 - 对多行文本有效
+                gravity = Gravity.CENTER_VERTICAL
                 
                 // 🔒 禁用文本选择但保留长按功能
                 setTextIsSelectable(false)

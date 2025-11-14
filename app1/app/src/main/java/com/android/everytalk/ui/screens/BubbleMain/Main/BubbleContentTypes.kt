@@ -77,9 +77,9 @@ internal fun UserOrErrorMessageContent(
     val haptic = LocalHapticFeedback.current
     var globalPosition by remember { mutableStateOf(Offset.Zero) }
 
-    // 基于发送者动态计算最大宽度：用户60%，AI80%
+    // 基于发送者动态计算最大宽度：用户71%，AI80%
     val screenDp = LocalConfiguration.current.screenWidthDp.dp
-    val roleMax = if (message.sender == Sender.User) screenDp * 0.7f else screenDp * 0.8f
+    val roleMax = if (message.sender == Sender.User) screenDp * 0.71f else screenDp * 0.8f
     val appliedMax = roleMax.coerceAtMost(maxWidth)
 
     Box(
@@ -99,7 +99,7 @@ internal fun UserOrErrorMessageContent(
             tonalElevation = if (isError) 0.dp else 1.dp,
             modifier = Modifier
                 .wrapContentWidth()                 // 以内容宽度为准
-                .widthIn(max = appliedMax)          // 根据角色限制最大宽度（用户70%/AI80%）
+                .widthIn(max = appliedMax)          // 用户气泡最大71%，AI气泡最大80%
                 .onGloballyPositioned { coordinates ->
                     // 存储组件在屏幕中的全局位置
                     globalPosition = coordinates.localToRoot(Offset.Zero)
@@ -108,7 +108,10 @@ internal fun UserOrErrorMessageContent(
             // 外层包一层容器，内部保持原内容，叠加一个全覆盖的透明手势层，确保父层优先捕获长按
             Box(
                 modifier = Modifier
-                    .padding(horizontal = 20.dp, vertical = 16.dp)
+                    .padding(
+                        horizontal = if (message.sender == Sender.User) 10.dp else 20.dp,
+                        vertical = if (message.sender == Sender.User) 6.dp else 16.dp
+                    )
                     .wrapContentWidth()
                     .defaultMinSize(minHeight = 28.dp)
             ) {

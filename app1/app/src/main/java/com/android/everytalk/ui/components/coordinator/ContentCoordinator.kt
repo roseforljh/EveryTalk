@@ -2,6 +2,7 @@ package com.android.everytalk.ui.components.coordinator
 import com.android.everytalk.ui.components.markdown.MarkdownRenderer
 
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.material3.MaterialTheme
@@ -12,6 +13,7 @@ import androidx.compose.ui.text.TextStyle
 import com.android.everytalk.ui.components.math.MathAwareText
 import com.android.everytalk.ui.components.table.TableAwareText
 import com.android.everytalk.ui.components.table.TableUtils
+import com.android.everytalk.data.DataClass.Sender
 
 /**
  * 内容协调器（搬迁版）
@@ -29,8 +31,16 @@ fun ContentCoordinator(
     modifier: Modifier = Modifier,
     recursionDepth: Int = 0,
     contentKey: String = "",  // 🎯 新增：用于缓存key（通常为消息ID）
-    onLongPress: (() -> Unit)? = null
+    onLongPress: (() -> Unit)? = null,
+    sender: Sender = Sender.AI  // 🎯 新增：发送者信息，默认为AI
 ) {
+    // 🎯 根据发送者决定宽度策略
+    val widthModifier = if (sender == Sender.User) {
+        Modifier.wrapContentWidth()
+    } else {
+        Modifier.fillMaxWidth()
+    }
+    
     // 🛡️ 防止无限递归：超过3层直接渲染
     if (recursionDepth > 3) {
         android.util.Log.w(
@@ -48,10 +58,11 @@ fun ContentCoordinator(
             style = style,
             color = color,
             modifier = modifier
-                .fillMaxWidth()
+                .then(widthModifier)
                 .then(longPressWrapperModifier),
             isStreaming = isStreaming,
-            onLongPress = onLongPress
+            onLongPress = onLongPress,
+            sender = sender
         )
         return
     }
@@ -83,7 +94,7 @@ fun ContentCoordinator(
             color = color,
             isStreaming = shouldUseLightweight, // true=轻量；false=完整（仅纯表格）
             modifier = modifier
-                .fillMaxWidth()
+                .then(widthModifier)
                 .then(longPressWrapperModifier),
             recursionDepth = recursionDepth,
             contentKey = contentKey,  // 🎯 传递缓存key
@@ -123,9 +134,10 @@ fun ContentCoordinator(
         style = style,
         color = color,
         modifier = modifier
-            .fillMaxWidth()
+            .then(widthModifier)
             .then(longPressWrapperModifier),
         isStreaming = isStreaming,
-        onLongPress = onLongPress
+        onLongPress = onLongPress,
+        sender = sender
     )
 }

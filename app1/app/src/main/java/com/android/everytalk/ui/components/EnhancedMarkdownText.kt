@@ -2,6 +2,7 @@ package com.android.everytalk.ui.components
 import com.android.everytalk.ui.components.coordinator.ContentCoordinator
 
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.input.pointer.pointerInput
@@ -19,6 +20,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.statecontroller.AppViewModel
 
 /**
@@ -86,9 +88,15 @@ fun EnhancedMarkdownText(
     // 2. 易于维护：修改某个模块不影响其他模块
     // 3. 易于扩展：添加新类型（如图表）只需添加新模块
     // 4. 缓存机制：使用消息ID作为key，避免LazyColumn回收后重复解析
+    // 🎯 根据发送者决定宽度策略
+    val widthModifier = if (message.sender == Sender.User) {
+        Modifier.wrapContentWidth()
+    } else {
+        Modifier.fillMaxWidth()
+    }
+    
     Box(
-        modifier = modifier
-            .fillMaxWidth()
+        modifier = modifier.then(widthModifier)
     ) {
         // 实际内容
         ContentCoordinator(
@@ -96,9 +104,10 @@ fun EnhancedMarkdownText(
             style = style,
             color = textColor,
             isStreaming = isStreaming,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = widthModifier,
             contentKey = message.id,  // 🎯 传递消息ID作为缓存key
-            onLongPress = onLongPress
+            onLongPress = onLongPress,
+            sender = message.sender  // 🎯 传递发送者信息
         )
 
         // 覆盖层（放在最后，位于最上层，确保捕获任何区域的长按）
