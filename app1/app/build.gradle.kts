@@ -213,8 +213,9 @@ android {
 
         // ===== 网络 - OkHttp =====
         implementation("com.squareup.okhttp3:okhttp:5.3.0")
-// ===== Rich Text Editor - Compose Rich Editor =====
-// 支持 Markdown 和 HTML 的富文本编辑器，适用于 Compose Multiplatform
-implementation("com.mohamedrejeb.richeditor:richeditor-compose:1.0.0-rc13")
 
+        // ===== Markdown 渲染 - Markwon =====
+        // 核心 + 表格扩展（如不需要可只保留 core）
+        implementation("io.noties.markwon:core:4.6.2")
+        implementation("io.noties.markwon:ext-tables:4.6.2")
     }

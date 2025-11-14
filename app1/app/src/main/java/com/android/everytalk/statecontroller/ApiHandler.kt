@@ -522,6 +522,13 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                                 updatedMessage = updatedMessage.copy(contentStarted = true)
                                 logger.debug("First content chunk received for message $aiMessageId, setting contentStarted=true")
                             }
+                            // 🛡️ 持久化保护：实时流式期间也触发一次“可合流”的保存（内部1.8s防抖+CONFLATED）
+                            // 目的：即使用户立刻切换会话，当前内容也能落入“最后打开”或历史
+                            viewModelScope.launch(Dispatchers.IO) {
+                                try {
+                                    historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = isImageGeneration)
+                                } catch (_: Exception) { }
+                            }
                         }
                     }
                 }
@@ -536,6 +543,12 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                             if (!currentMessage.contentStarted) {
                                 updatedMessage = updatedMessage.copy(contentStarted = true)
                                 logger.debug("First text chunk received for message $aiMessageId, setting contentStarted=true")
+                            }
+                            // 🛡️ 持久化保护：实时保存（可被防抖合并），防止切会话导致未落盘
+                            viewModelScope.launch(Dispatchers.IO) {
+                                try {
+                                    historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = isImageGeneration)
+                                } catch (_: Exception) { }
                             }
                         }
                     }

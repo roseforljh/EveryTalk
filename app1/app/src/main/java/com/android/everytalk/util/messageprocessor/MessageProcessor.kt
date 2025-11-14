@@ -66,26 +66,7 @@ class MessageProcessor {
                     ProcessedEventResult.ContentUpdated(currentTextBuilder.get().toString())
                 }
                 is AppStreamEvent.ContentFinal -> {
-                    if (event.text.isNotEmpty()) {
-                        val currentContent = currentTextBuilder.get().toString()
-                        val finalContent = event.text
-
-                        val shouldReplace = ContentFinalValidator.shouldReplaceCurrent(currentContent, finalContent)
-                        if (shouldReplace) {
-                            currentTextBuilder.set(StringBuilder(finalContent))
-                            logger.debug("ContentFinal: replaced current content with validated final.")
-                        } else {
-                            val merged = ContentFinalValidator.mergeContent(currentContent, finalContent)
-                            if (merged != currentContent) {
-                                currentTextBuilder.set(StringBuilder(merged))
-                                logger.debug("ContentFinal: applied conservative merge.")
-                            } else {
-                                logger.debug("ContentFinal: kept current content; final not suitable for replace/merge.")
-                            }
-                        }
-                    } else {
-                        logger.warn("ContentFinal event received but text is empty")
-                    }
+                    // 不对已有内容做任何替换/合并处理，保持已累积文本原样
                     ProcessedEventResult.ContentUpdated(currentTextBuilder.get().toString())
                 }
                 is AppStreamEvent.Reasoning -> {
@@ -110,31 +91,17 @@ class MessageProcessor {
     fun finalizeMessageProcessing(message: Message): Message {
         val currentText = getCurrentText()
         val currentReasoning = getCurrentReasoning()
-        
+
         logger.debug("Finalizing message ${message.id}: currentText=${currentText.length} chars, reasoning=${currentReasoning?.length ?: 0} chars")
-        
-        // 简化逻辑：优先使用 currentText，只在为空时才使用 message.text 作为 fallback
-        val finalText = when {
-            currentText.isNotBlank() -> {
-                // 正常情况：流式处理累积的文本
-                currentText
-            }
-            message.text.isNotBlank() -> {
-                // Fallback 1：使用原消息文本（可能是非流式或已完成的消息）
-                logger.warn("Message ${message.id}: Using original text as fallback (currentText is empty)")
-                message.text
-            }
-            else -> {
-                // 软回退：双空时不再抛出异常，返回空串并记录错误，避免用户侧“无反馈中断”
-                logger.error("Message ${message.id}: CRITICAL - Both currentText and message.text are empty! Soft-fallback to empty string to avoid visible failure.")
-                ""
-            }
-        }
-        
+
+        // 不做“整体重组/替换”。若本地缓冲为空，保留既有 message 字段，避免覆盖已持久化/已加载的文本。
+        val finalText = if (currentText.isNotEmpty()) currentText else message.text
+        val finalReasoning = currentReasoning ?: message.reasoning
+
         return message.copy(
             text = finalText,
-            reasoning = currentReasoning,
-            contentStarted = true
+            reasoning = finalReasoning,
+            contentStarted = message.contentStarted || finalText.isNotBlank() || !finalReasoning.isNullOrBlank()
         )
     }
 
