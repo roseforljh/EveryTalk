@@ -228,35 +228,45 @@ private fun normalizeBoldBoundaryWhitespace(input: String): String {
  * - 仅处理代码围栏外的行；不影响其它行/结构
  */
 private fun fixBlockquoteLeadingBoldWithColon(input: String): String {
-    // 快速跳过
     if (!input.contains("**")) return input
 
-    fun transformBlock(block: String): String {
+    fun fixOneBlock(block: String): String {
         val lines = block.split('\n')
         val out = StringBuilder(block.length + 16)
-        // ^\s*>\s*\*\*\s*(.+?)\s*\*\*(?=[:：])
-        val re = Regex("^\\s*>\\s*\\*\\*\\s*(.+?)\\s*\\*\\*(?=[:：])")
-        for ((i, line) in lines.withIndex()) {
-            val replaced = re.replace(line) { m ->
-                val inner = m.groupValues[1]
-                // 保留原有的前导空白与 '>'，只替换 **…**
-                val prefix = line.substring(0, line.indexOf('>') + 1)
-                // 在 '>' 后至少保留一个空格
-                val after = line.substring(line.indexOf('>') + 1)
-                val afterReplaced = re.replace(after) { mm -> "**${mm.groupValues[1]}**" }
-                // 如果不是以空格开头，补一个空格
-                val normalized = if (afterReplaced.startsWith(" ")) afterReplaced else " $afterReplaced"
-                prefix + normalized
+        // 仅匹配 > 之后紧跟的 "** 词 **"（允许两侧空白）且后面跟冒号
+        val tailPattern = Regex("^\\s*\\*\\*\\s*(.+?)\\s*\\*\\*(?=[:：])")
+
+        for ((i, raw) in lines.withIndex()) {
+            val gt = raw.indexOf('>')
+            if (gt >= 0) {
+                val prefix = raw.substring(0, gt + 1) // 包含 '>'
+                val tail = raw.substring(gt + 1)
+                val m = tailPattern.find(tail.trimStart())
+                if (m != null) {
+                    val tailTrimmed = tail.trimStart()
+                    val start = m.range.first
+                    val end = m.range.last + 1
+                    val inner = m.groupValues[1]
+                    val replacedHead = "**${inner}**"
+                    val newTail =
+                        tailTrimmed.substring(0, start) +
+                        replacedHead +
+                        tailTrimmed.substring(end)
+                    val finalLine = prefix + " " + newTail
+                    if (i > 0) out.append('\n')
+                    out.append(finalLine)
+                    continue
+                }
             }
             if (i > 0) out.append('\n')
-            out.append(replaced)
+            out.append(raw)
         }
         return out.toString()
     }
 
     val segments = splitByCodeFence(input)
     if (segments.size == 1 && !segments[0].first) {
-        val res = transformBlock(segments[0].second)
+        val res = fixOneBlock(segments[0].second)
         if (com.android.everytalk.BuildConfig.DEBUG && res != segments[0].second) {
             android.util.Log.d("MarkdownRenderer", "fixBlockquoteLeadingBoldWithColon: changed")
         }
@@ -264,7 +274,7 @@ private fun fixBlockquoteLeadingBoldWithColon(input: String): String {
     }
     val out = StringBuilder(input.length + 16)
     for ((inFence, seg) in segments) {
-        if (inFence) out.append("```").append(seg).append("```") else out.append(transformBlock(seg))
+        if (inFence) out.append("```").append(seg).append("```") else out.append(fixOneBlock(seg))
     }
     return out.toString()
 }
