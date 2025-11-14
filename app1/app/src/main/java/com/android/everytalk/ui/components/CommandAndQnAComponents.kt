@@ -176,11 +176,15 @@ fun RiskAlert(
  * - 若含 ```fenced code```，优先提取围栏内文本并拼接（多围栏用空行分隔）
  * - 否则返回原文（可能是行内命令）
  */
+private val CODE_FENCE_EXTRACT_REGEX =
+    Regex("(?s)```\\s*([a-zA-Z0-9_+\\-#.]*)[ \\t]*\\r?\\n?([\\s\\S]*?)\\r?\\n?```")
+
 private fun extractCopyPayloadForCommands(content: String): String {
-    val fence = Regex("(?s)```\\s*([a-zA-Z0-9_+\\-#.]*)[ \\t]*\\r?\\n?([\\s\\S]*?)\\r?\\n?```")
-    val matches = fence.findAll(content).toList()
+    val matches = CODE_FENCE_EXTRACT_REGEX.findAll(content).toList()
     if (matches.isEmpty()) return content.trim()
-    return matches.joinToString(separator = "\n\n") { it.groups[2]?.value?.trimEnd() ?: "" }.trim()
+    return matches.joinToString(separator = "\n\n") {
+        it.groups[2]?.value?.trimEnd() ?: ""
+    }.trim()
 }
 
 /**

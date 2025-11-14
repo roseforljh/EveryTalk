@@ -5,6 +5,9 @@ package com.android.everytalk.util
  */
 object ConversationNameHelper {
     
+    // 预编译的正则表达式，避免重复编译
+    private val WHITESPACE_REGEX = Regex("\\s+")
+    
     /**
      * 获取默认对话名称
      */
@@ -40,11 +43,14 @@ object ConversationNameHelper {
     
     /**
      * 清理和截断文本，用于生成对话预览
+     * 优化：使用预编译正则和字符串方法替代正则
      */
     fun cleanAndTruncateText(text: String, maxLength: Int = 50): String {
+        // 优化：直接用字符串方法替换换行，避免正则开销
         val cleanText = text
-            .replace(Regex("\\s+"), " ") // 合并多个空白字符为单个空格
-            .replace(Regex("[\\r\\n]+"), " ") // 将换行替换为空格
+            .replace('\r', ' ')
+            .replace('\n', ' ')
+            .replace(WHITESPACE_REGEX, " ") // 使用预编译的正则
             .trim()
         
         return if (cleanText.length <= maxLength) {

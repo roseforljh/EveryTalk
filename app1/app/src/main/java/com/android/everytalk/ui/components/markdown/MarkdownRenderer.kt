@@ -31,6 +31,10 @@ import android.text.style.ForegroundColorSpan
  * - 通过 AndroidView 包裹 TextView，Compose 层保持单一组件，避免流式结束的组件类型切换
  * - isStreaming 期间多次 setMarkdown 仅更新同一 TextView，减少重排
  */
+// 预编译的正则表达式，避免重复编译
+private val MULTIPLE_SPACES_REGEX = Regex(" {2,}")
+private val ENUM_ITEM_REGEX = Regex("(?<!\n)\\s+([A-DＡ-Ｄ][\\.．、])\\s")
+
 private fun preprocessAiMarkdown(input: String): String {
     var s = input
     // 1) 规范空白：将 HTML 不换行空格与全角空格替换为普通空格
@@ -38,11 +42,11 @@ private fun preprocessAiMarkdown(input: String): String {
         .replace("\u00A0", " ")
         .replace("\u3000", " ")
     // 2) 合并连续空格，避免在同一段中过宽
-    s = s.replace(Regex(" {2,}"), " ")
-    // 3) 把 “ A. / B. / C. / D. ” 这类枚举项从同一行拆为多行列表
+    s = s.replace(MULTIPLE_SPACES_REGEX, " ")
+    // 3) 把 " A. / B. / C. / D. " 这类枚举项从同一行拆为多行列表
     //    例如："... 四大益处  A. xxx  B. yyy  C. zzz  D. www"
     //    变为每项单独一行，交给 Markdown 渲染为列表
-    s = s.replace(Regex("(?<!\n)\\s+([A-DＡ-Ｄ][\\.．、])\\s"), "\n- $1 ")
+    s = s.replace(ENUM_ITEM_REGEX, "\n- $1 ")
     return s
 }
 @Composable
@@ -110,10 +114,12 @@ fun MarkdownRenderer(
                 isFocusable = false
                 isFocusableInTouchMode = false
                 
-                // ✅ 保留长按功能（用于弹出底部对话框）
-                isLongClickable = true
+                // ✅ 仅在需要时启用 TextView 自身的长按处理
+                // 对于外层已经有 Compose pointerInput 处理长按（如用户气泡）的场景，
+                // 如果这里始终 isLongClickable = true，会拦截长按事件，导致外层拿不到回调。
+                isLongClickable = onLongPress != null
                 
-                // 设置长按监听器
+                // 设置长按监听器（仅当调用方显式传入 onLongPress 时生效）
                 onLongPress?.let { callback ->
                     setOnLongClickListener {
                         callback()

@@ -79,7 +79,7 @@ internal fun UserOrErrorMessageContent(
 
     // 基于发送者动态计算最大宽度：用户60%，AI80%
     val screenDp = LocalConfiguration.current.screenWidthDp.dp
-    val roleMax = if (message.sender == Sender.User) screenDp * 0.6f else screenDp * 0.8f
+    val roleMax = if (message.sender == Sender.User) screenDp * 0.7f else screenDp * 0.8f
     val appliedMax = roleMax.coerceAtMost(maxWidth)
 
     Box(
@@ -99,45 +99,60 @@ internal fun UserOrErrorMessageContent(
             tonalElevation = if (isError) 0.dp else 1.dp,
             modifier = Modifier
                 .wrapContentWidth()                 // 以内容宽度为准
-                .widthIn(max = appliedMax)          // 根据角色限制最大宽度（用户60%/AI80%）
+                .widthIn(max = appliedMax)          // 根据角色限制最大宽度（用户70%/AI80%）
                 .onGloballyPositioned { coordinates ->
                     // 存储组件在屏幕中的全局位置
                     globalPosition = coordinates.localToRoot(Offset.Zero)
                 }
-                .pointerInput(message.id, isError) {
-                    detectTapGestures(
-                        onLongPress = { localOffset ->
-                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                            // 将局部坐标转换为全局屏幕坐标
-                            val globalOffset = globalPosition + localOffset
-
-                            onLongPress(message, globalOffset)
-                        }
-                    )
-                }
         ) {
+            // 外层包一层容器，内部保持原内容，叠加一个全覆盖的透明手势层，确保父层优先捕获长按
             Box(
-                contentAlignment = Alignment.CenterStart,
                 modifier = Modifier
                     .padding(horizontal = 12.dp, vertical = 8.dp)
                     .wrapContentWidth()
                     .defaultMinSize(minHeight = 28.dp)
             ) {
-                if (showLoadingDots && !isError) {
-                    ThreeDotsLoadingAnimation(
-                        dotColor = contentColor,
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .offset(y = (-6).dp)
-                    )
-                } else if (displayedText.isNotBlank() || isError) {
-                    // 直接使用EnhancedMarkdownText渲染整个文本
-                    EnhancedMarkdownText(
-                        message = message,
-                        modifier = Modifier.wrapContentWidth(),
-                        color = contentColor
-                    )
+                // 原有内容层
+                Box(
+                    contentAlignment = Alignment.CenterStart,
+                    modifier = Modifier
+                        .wrapContentWidth()
+                ) {
+                    if (showLoadingDots && !isError) {
+                        ThreeDotsLoadingAnimation(
+                            dotColor = contentColor,
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .offset(y = (-6).dp)
+                        )
+                    } else if (displayedText.isNotBlank() || isError) {
+                        EnhancedMarkdownText(
+                            message = message,
+                            modifier = Modifier.wrapContentWidth(),
+                            color = contentColor
+                        )
+                    }
                 }
+                // 透明手势层：全覆盖，拿到局部偏移并换算为全局坐标，避免子组件拦截导致父层长按无效
+                var overlayGlobal by remember { mutableStateOf(Offset.Zero) }
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .onGloballyPositioned { coords ->
+                            overlayGlobal = coords.localToRoot(Offset.Zero)
+                        }
+                        .pointerInput(message.id, isError) {
+                            detectTapGestures(
+                                onLongPress = { localOffset ->
+                                    haptic.performHapticFeedback(
+                                        androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress
+                                    )
+                                    val globalOffset = overlayGlobal + localOffset
+                                    onLongPress(message, globalOffset)
+                                }
+                            )
+                        }
+                )
             }
         }
 
@@ -402,12 +417,10 @@ fun MessageContextMenu(
         val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
         val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
         val estimatedMenuHeightPx = with(density) { (48.dp * 3 + 16.dp).toPx() }
-        val fingerOffsetYPx = with(density) { CONTEXT_MENU_FINGER_VERTICAL_OFFSET.toPx() }
  
-        // 角点贴手指（水平：优先右，垂直：上边对齐），再整体向下微移避免“偏高”
-        val canPlaceRight = pressOffset.x + menuWidthPx <= screenWidthPx
-        val rawX = if (canPlaceRight) pressOffset.x else pressOffset.x - menuWidthPx
-        val rawY = pressOffset.y + fingerOffsetYPx
+        // 将菜单左上角“精确对齐”到手指按压位置（向上微移 16dp）；如越界再进行边界夹紧
+        val rawX = pressOffset.x
+        val rawY = pressOffset.y - with(density) { 71.dp.toPx() }
  
         // 边界夹紧（若越界则回退，但尽量保持角点贴手指的原则）
         val finalX = rawX.coerceIn(0f, screenWidthPx - menuWidthPx)
@@ -557,12 +570,11 @@ fun ImageContextMenu(
        val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
 
        val estimatedMenuHeightPx = with(density) { (48.dp * 2 + 16.dp).toPx() }
-       val fingerOffsetYPx = with(density) { CONTEXT_MENU_FINGER_VERTICAL_OFFSET.toPx() }
 
-       // 角点贴手指 + 整体向下微移
-       val canPlaceRight = pressOffset.x + menuWidthPx <= screenWidthPx
-       val rawX = if (canPlaceRight) pressOffset.x else pressOffset.x - menuWidthPx
-       val rawY = pressOffset.y + fingerOffsetYPx
+       // 将菜单左上角“精确对齐”到手指按压位置（向上微移 16dp）；如越界再进行边界夹紧
+       val rawX = pressOffset.x
+       val rawY = pressOffset.y- with(density) { 71.dp.toPx() }
+ 
 
        val finalX = rawX.coerceIn(0f, screenWidthPx - menuWidthPx)
        val finalY = rawY.coerceIn(0f, screenHeightPx - estimatedMenuHeightPx)

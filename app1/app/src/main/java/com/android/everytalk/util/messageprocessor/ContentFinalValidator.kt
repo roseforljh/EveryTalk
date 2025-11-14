@@ -12,6 +12,12 @@ import android.util.Log
 object ContentFinalValidator {
 
     private const val TAG = "ContentFinalValidator"
+    
+    // 预编译的正则表达式，避免重复编译
+    private val CODE_FENCE_REGEX = Regex("```")
+    private val MATH_FENCE_REGEX = Regex("\\$\\$")
+    private val EXCESSIVE_NEWLINES_REGEX = Regex("\n{3,}")
+    private val WHITESPACE_REGEX = Regex("\\s+")
 
     /**
      * 判断是否应该用最终文本整体替换当前累积文本。
@@ -110,12 +116,12 @@ object ContentFinalValidator {
         var score = 0
 
         // ``` 围栏计数与配对
-        val tripleBacktickCount = Regex("```").findAll(text).count()
+        val tripleBacktickCount = CODE_FENCE_REGEX.findAll(text).count()
         if (tripleBacktickCount >= 2) {
             score += (tripleBacktickCount / 2)
         }
         // $$ 围栏计数与配对
-        val doubleDollarCount = Regex("\\$\\$").findAll(text).count()
+        val doubleDollarCount = MATH_FENCE_REGEX.findAll(text).count()
         if (doubleDollarCount >= 2) {
             score += (doubleDollarCount / 2)
         }
@@ -137,22 +143,22 @@ object ContentFinalValidator {
         val currentNewlines = currentContent.count { it == '\n' }
         val finalNewlines = finalContent.count { it == '\n' }
         
-        // 计算连续换行符数量（多余的换行）
-        val currentExcessiveNewlines = Regex("\n{3,}").findAll(currentContent).count()
-        val finalExcessiveNewlines = Regex("\n{3,}").findAll(finalContent).count()
+        // 计算连续换行符数量（多余的换行），复用预编译正则
+        val currentExcessiveNewlines = EXCESSIVE_NEWLINES_REGEX.findAll(currentContent).count()
+        val finalExcessiveNewlines = EXCESSIVE_NEWLINES_REGEX.findAll(finalContent).count()
         
         // 计算行尾空白总数
-        val currentTrailingSpaces = currentContent.lines().sumOf { line -> 
-            line.length - line.trimEnd().length 
+        val currentTrailingSpaces = currentContent.lines().sumOf { line ->
+            line.length - line.trimEnd().length
         }
-        val finalTrailingSpaces = finalContent.lines().sumOf { line -> 
-            line.length - line.trimEnd().length 
+        val finalTrailingSpaces = finalContent.lines().sumOf { line ->
+            line.length - line.trimEnd().length
         }
         
         // 计算去除所有空白后的内容相似度
-        val currentNormalized = currentContent.replace(Regex("\\s+"), " ").trim()
-        val finalNormalized = finalContent.replace(Regex("\\s+"), " ").trim()
-        val contentSimilar = currentNormalized.length > 0 && 
+        val currentNormalized = currentContent.replace(WHITESPACE_REGEX, " ").trim()
+        val finalNormalized = finalContent.replace(WHITESPACE_REGEX, " ").trim()
+        val contentSimilar = currentNormalized.length > 0 &&
             finalNormalized.length in (currentNormalized.length * 0.9).toInt()..(currentNormalized.length * 1.1).toInt()
         
         // 判断是否有格式化改进

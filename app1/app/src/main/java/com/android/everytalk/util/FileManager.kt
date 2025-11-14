@@ -432,7 +432,7 @@ class FileManager(private val context: Context) {
                 ?: "bin"
             
             val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-            val safeOriginalName = originalFileName?.replace("[^a-zA-Z0-9._-]".toRegex(), "_")?.take(30) ?: "file"
+            val safeOriginalName = originalFileName?.filter { it.isLetterOrDigit() || it in "._-" }?.take(30) ?: "file"
             val uniqueFileName = "${safeOriginalName}_${messageIdHint}_${attachmentIndex}_${timeStamp}_${
                 UUID.randomUUID().toString().take(4)
             }.$extension"
@@ -533,7 +533,7 @@ class FileManager(private val context: Context) {
             
             val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
             val baseName = originalFileNameHint?.substringBeforeLast('.')
-                ?.replace("[^a-zA-Z0-9._-]".toRegex(), "_")?.take(20) ?: "IMG"
+                ?.filter { it.isLetterOrDigit() || it in "._-" }?.take(20) ?: "IMG"
             val uniqueFileName = "${baseName}_${messageIdHint}_${attachmentIndex}_${timeStamp}_${
                 UUID.randomUUID().toString().take(4)
             }.$fileExtension"
@@ -834,7 +834,7 @@ class FileManager(private val context: Context) {
         try {
             val ext = guessExtensionFromMime(mime)
             val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-            val safeBase = baseName.replace("[^a-zA-Z0-9._-]".toRegex(), "_").take(30)
+            val safeBase = baseName.filter { it.isLetterOrDigit() || it in "._-" }.take(30)
             val uniqueName = "${safeBase}_${messageIdHint}_${index}_${timeStamp}_${UUID.randomUUID().toString().take(4)}.$ext"
 
             val dir = getChatAttachmentsDir()

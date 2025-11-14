@@ -5,17 +5,21 @@ import android.util.Log
 /**
  * 内容去重工具类
  * 用于检测和过滤重复的AI输出内容
- * 
+ *
  * 解决AI流式输出中的重复内容问题
+ * 优化：预编译正则表达式，避免重复编译开销
  */
 object ContentDeduplicator {
     private const val TAG = "ContentDeduplicator"
     private val recentContents = mutableListOf<String>()
     private const val MAX_HISTORY_SIZE = 20
     
+    // 预编译的正则表达式，避免每次调用时重复编译
+    private val WHITESPACE_REGEX = Regex("\\s+")
+    
     /**
      * 检测是否为重复内容
-     * 
+     *
      * @param content 待检测的内容
      * @return true表示内容重复，应该跳过
      */
@@ -28,7 +32,7 @@ object ContentDeduplicator {
         val isDup = recentContents.any { recent ->
             val recentNormalized = normalizeContent(recent)
             // 完全相同或高度相似
-            normalized == recentNormalized || 
+            normalized == recentNormalized ||
             calculateSimilarity(normalized, recentNormalized) > 0.85
         }
         
@@ -49,11 +53,12 @@ object ContentDeduplicator {
     /**
      * 归一化内容用于比较
      * 移除多余的空白字符，统一大小写
+     * 优化：使用预编译的正则表达式
      */
     private fun normalizeContent(content: String): String {
         return content
             .trim()
-            .replace(Regex("\\s+"), " ")  // 统一空白字符
+            .replace(WHITESPACE_REGEX, " ")  // 使用预编译的正则
             .lowercase()
     }
     

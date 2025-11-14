@@ -9,6 +9,9 @@ import androidx.compose.ui.unit.dp
  */
 object TableUtils {
     
+    // 预编译表格分隔行正则，避免在热点路径重复创建 Regex 实例
+    private val TABLE_SEPARATOR_REGEX = Regex("^\\s*\\|?\\s*[-:]+\\s*(\\|\\s*[-:]+\\s*)+\\|?\\s*$")
+    
     /**
      * 检查是否为表格行
      */
@@ -19,7 +22,7 @@ object TableUtils {
         if (pipeCount < 2) return false
         
         // 检查是否为分隔行（包含 - 和 | 的组合）
-        val isSeparator = trimmed.matches(Regex("^\\s*\\|?\\s*[-:]+\\s*(\\|\\s*[-:]+\\s*)+\\|?\\s*$"))
+        val isSeparator = trimmed.matches(TABLE_SEPARATOR_REGEX)
         
         // 检查是否为数据行（包含 | 分隔的内容）
         val isDataRow = trimmed.contains("|") && !trimmed.all { it == '|' || it == '-' || it == ':' || it.isWhitespace() }
@@ -32,7 +35,7 @@ object TableUtils {
      */
     fun isTableSeparator(line: String): Boolean {
         val trimmed = line.trim()
-        return trimmed.matches(Regex("^\\s*\\|?\\s*[-:]+\\s*(\\|\\s*[-:]+\\s*)+\\|?\\s*$"))
+        return trimmed.matches(TABLE_SEPARATOR_REGEX)
     }
     
     /**

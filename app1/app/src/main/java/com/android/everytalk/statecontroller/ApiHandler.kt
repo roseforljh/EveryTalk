@@ -871,13 +871,18 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
         return out
     }
  
+    // 预编译的正则表达式，避免重复编译
+    private val HTML_TAG_REGEX = Regex("<[^>]*>")
+    private val PUNCTUATION_WHITESPACE_REGEX = Regex("[\\p{Punct}\\s]+")
+    private val WHITESPACE_REGEX = Regex("\\s+")
+    
     private fun parseBackendError(response: HttpResponse, errorBody: String): String {
         return try {
             val errorJson = jsonParserForError.decodeFromString<BackendErrorContent>(errorBody)
             "服务响应错误: ${errorJson.message ?: response.status.description} (状态码: ${response.status.value}, 内部代码: ${errorJson.code ?: "N/A"})"
         } catch (e: Exception) {
             "服务响应错误 ${response.status.value}: ${
-                errorBody.take(150).replace(Regex("<[^>]*>"), "")
+                errorBody.take(150).replace(HTML_TAG_REGEX, "")
             }${if (errorBody.length > 150) "..." else ""}"
         }
     }
@@ -933,10 +938,10 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
         val containsAck = ack.any { p.contains(it) }
         if (!containsAck) return false
 
-        // 简短启发：仅当很短时判定为仅文本，避免“帮我画猫，谢谢”被误判（含“画”等词已优先排除）
-        val normalized = p.replace(Regex("[\\p{Punct}\\s]+"), "")
+        // 简短启发：仅当很短时判定为仅文本，避免"帮我画猫，谢谢"被误判（含"画"等词已优先排除）
+        val normalized = p.replace(PUNCTUATION_WHITESPACE_REGEX, "")
         if (normalized.length <= 8) return true
-        val tokenCount = p.split(Regex("\\s+")).filter { it.isNotBlank() }.size
+        val tokenCount = p.split(WHITESPACE_REGEX).filter { it.isNotBlank() }.size
         return tokenCount <= 3
     }
 

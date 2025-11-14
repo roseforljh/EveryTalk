@@ -228,7 +228,7 @@ private data class AttachmentProcessingResult(
                 val timeStamp: String =
                     SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
                 val safeOriginalName =
-                    originalFileName?.replace("[^a-zA-Z0-9._-]".toRegex(), "_")?.take(30) ?: "file"
+                    originalFileName?.filter { it.isLetterOrDigit() || it in "._-" }?.take(30) ?: "file"
                 val uniqueFileName =
                     "${safeOriginalName}_${messageIdHint}_${attachmentIndex}_${timeStamp}_${
                         UUID.randomUUID().toString().take(4)
@@ -308,7 +308,7 @@ private data class AttachmentProcessingResult(
                 val timeStamp: String =
                     SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
                 val baseName = originalFileNameHint?.substringBeforeLast('.')
-                    ?.replace("[^a-zA-Z0-9._-]".toRegex(), "_")?.take(20) ?: "IMG"
+                    ?.filter { it.isLetterOrDigit() || it in "._-" }?.take(20) ?: "IMG"
                 val uniqueFileName =
                     "${baseName}_${messageIdHint}_${attachmentIndex}_${timeStamp}_${
                         UUID.randomUUID().toString().take(4)

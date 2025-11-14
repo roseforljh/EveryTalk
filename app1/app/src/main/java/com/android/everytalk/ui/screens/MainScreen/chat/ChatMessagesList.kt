@@ -43,6 +43,7 @@ import com.android.everytalk.ui.theme.ChatDimensions
 import com.android.everytalk.ui.theme.chatColors
 
 import com.android.everytalk.ui.components.EnhancedMarkdownText
+import com.android.everytalk.ui.components.StableMarkdownText
 import com.android.everytalk.ui.components.markdown.MarkdownRenderer
 import kotlinx.coroutines.launch
 
@@ -166,92 +167,23 @@ fun ChatMessagesList(
                                         )
                                     }
                                     if (item.text.isNotBlank()) {
-                                        // 用户气泡：右对齐 + 自适应宽度 + 垂直滚动（无展开按钮）
-                                        val SCROLLABLE_MAX_HEIGHT = 220.dp
-                                        var bubbleGlobalPosition by remember(message.id) { mutableStateOf(Offset.Zero) }
-                                        val innerScroll = rememberScrollState()
-
-                                        Surface(
-                                            modifier = Modifier
-                                                .wrapContentWidth()
-                                                .widthIn(max = bubbleMaxWidth * ChatDimensions.USER_BUBBLE_WIDTH_RATIO)
-                                                .onGloballyPositioned {
-                                                    bubbleGlobalPosition = it.localToRoot(Offset.Zero)
-                                                }
-                                                .pointerInput(message.id) {
-                                                    detectTapGestures(
-                                                        onLongPress = { localOffset ->
-                                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                            contextMenuMessage = message
-                                                            contextMenuPressOffset = bubbleGlobalPosition + localOffset
-                                                            isContextMenuVisible = true
-                                                        }
-                                                    )
-                                                },
-                                            shape = RoundedCornerShape(
-                                                topStart = ChatDimensions.CORNER_RADIUS_LARGE,
-                                                topEnd = 0.dp,
-                                                bottomStart = ChatDimensions.CORNER_RADIUS_LARGE,
-                                                bottomEnd = ChatDimensions.CORNER_RADIUS_LARGE
-                                            ),
-                                            color = MaterialTheme.chatColors.userBubble,
+                                        // ✅ 复用已有的 UserOrErrorMessageContent 逻辑来渲染“用户文本气泡”，
+                                        // 其中已经实现了稳定可用的长按坐标计算和菜单回调。
+                                        UserOrErrorMessageContent(
+                                            message = message,
+                                            displayedText = item.text,
+                                            showLoadingDots = false,
+                                            bubbleColor = MaterialTheme.chatColors.userBubble,
                                             contentColor = MaterialTheme.colorScheme.onSurface,
-                                            shadowElevation = 0.dp
-                                        ) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .padding(
-                                                        horizontal = ChatDimensions.BUBBLE_INNER_PADDING_HORIZONTAL,
-                                                        vertical = ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL
-                                                    )
-                                            ) {
-                                                // 限高 + 内部垂直滚动，并拦截惯性/滚动以防外层被带动
-                                                val innerScrollBlocker = remember {
-                                                    object : NestedScrollConnection {
-                                                        override fun onPreScroll(
-                                                            available: Offset,
-                                                            source: NestedScrollSource
-                                                        ): Offset {
-                                                            // 消耗用户手势产生的垂直滚动，阻止向外层传递
-                                                            return if (source == NestedScrollSource.UserInput) {
-                                                                Offset(x = 0f, y = available.y)
-                                                            } else Offset.Zero
-                                                        }
-                                                        override fun onPostScroll(
-                                                            consumed: Offset,
-                                                            available: Offset,
-                                                            source: NestedScrollSource
-                                                        ): Offset {
-                                                            // 吞掉剩余的滚动量，避免外层获得“余量”
-                                                            return Offset(x = 0f, y = available.y)
-                                                        }
-                                                        override suspend fun onPreFling(available: Velocity): Velocity {
-                                                            // 吞掉即将开始的惯性，防止交给父级
-                                                            return available
-                                                        }
-                                                        override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
-                                                            // 吞掉剩余惯性，不让父级承接
-                                                            return available
-                                                        }
-                                                    }
-                                                }
-                                                Box(
-                                                    modifier = Modifier
-                                                        .heightIn(max = SCROLLABLE_MAX_HEIGHT)
-                                                        .verticalScroll(innerScroll)
-                                                        .nestedScroll(innerScrollBlocker)
-                                                ) {
-                                                    // 将用户消息也按 Markdown 渲染，确保 "* **注册新账号**" 等语法被正确解析
-                                                    MarkdownRenderer(
-                                                        markdown = item.text,
-                                                        style = MaterialTheme.typography.bodyLarge,
-                                                        color = MaterialTheme.colorScheme.onSurface,
-                                                        modifier = Modifier.wrapContentWidth(),
-                                                        isStreaming = false
-                                                    )
-                                                }
-                                            }
-                                        }
+                                            isError = false,
+                                            maxWidth = bubbleMaxWidth,
+                                            onLongPress = { msg, offset ->
+                                                contextMenuMessage = msg
+                                                contextMenuPressOffset = offset
+                                                isContextMenuVisible = true
+                                            },
+                                            scrollStateManager = scrollStateManager
+                                        )
                                     }
                                 }
                             }
