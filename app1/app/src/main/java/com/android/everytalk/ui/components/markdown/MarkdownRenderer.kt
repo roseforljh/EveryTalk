@@ -11,6 +11,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.graphics.toArgb
 import io.noties.markwon.Markwon
 import io.noties.markwon.ext.tables.TablePlugin
 import io.noties.markwon.core.CorePlugin
@@ -20,6 +21,7 @@ import io.noties.markwon.AbstractMarkwonPlugin
 import org.commonmark.node.Code
 import android.graphics.Typeface
 import android.text.style.StyleSpan
+import android.text.style.ForegroundColorSpan
 
 /**
  * 使用 Markwon 渲染 Markdown（TextView + Spannable）
@@ -47,21 +49,21 @@ fun MarkdownRenderer(
             // 主题与 span 定制（内联 `code` + 围栏代码块样式）
             .usePlugin(object : AbstractMarkwonPlugin() {
                 override fun configureTheme(builder: MarkwonTheme.Builder) {
-                    // 内联代码：灰色文字、透明背景
-                    builder
-                        .codeTextColor(android.graphics.Color.parseColor("#9E9E9E"))
-                        .codeBackgroundColor(android.graphics.Color.TRANSPARENT)
                     // 围栏代码块样式（外部库样式，非语法高亮）：
-                    // - 等宽外观由 Markwon 默认处理；这里设定背景、边距、内边距与文字色
+                    // - 等宽外观由 Markwon 默认处理；这里设定背景、边距与文字色
                     builder
                         .codeBlockTextColor(android.graphics.Color.parseColor("#D0D0D0"))
                         .codeBlockBackgroundColor(android.graphics.Color.parseColor("#1E1E1E")) // 深色背景
                         .codeBlockMargin(0)     // 去额外外边距，避免气泡内跳动
+                    // 注意：不在主题里设置 inline code 的背景/颜色，完全交由自定义 SpanFactory 控制，避免任何残留底色
                 }
                 override fun configureSpansFactory(builder: MarkwonSpansFactory.Builder) {
-                    // 为行内 `code` 追加粗体样式
-                    builder.appendFactory(Code::class.java) { _, _ ->
-                        StyleSpan(Typeface.BOLD)
+                    // 完全替换内联 `code` 的 Span，确保无背景，仅灰色+加粗
+                    builder.setFactory(Code::class.java) { _, _ ->
+                        arrayOf(
+                            StyleSpan(Typeface.BOLD),
+                            ForegroundColorSpan(android.graphics.Color.parseColor("#9E9E9E"))
+                        )
                     }
                 }
             })
@@ -89,17 +91,10 @@ fun MarkdownRenderer(
         },
         update = { tv ->
             markwon.setMarkdown(tv, markdown)
-            // TextView 的 isTextSelectable 仅有 getter，需调用 setter 方法
+            // 禁用文本选择 & 点击高亮，避免出现系统高亮底色
             tv.setTextIsSelectable(false)
+            tv.highlightColor = android.graphics.Color.TRANSPARENT
         }
     )
 }
 
-// Color 转 ARGB
-private fun Color.toArgb(): Int =
-    android.graphics.Color.argb(
-        (alpha * 255).toInt(),
-        (red * 255).toInt(),
-        (green * 255).toInt(),
-        (blue * 255).toInt()
-    )
