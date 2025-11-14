@@ -40,7 +40,7 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     // Kotlin Serialization 插件，版本与 Kotlin 2.2.21 对齐
     id("org.jetbrains.kotlin.plugin.serialization") version libs.versions.kotlin.get()
-    // 已移除 KSP（工程内未使用 ksp 配置/符号处理器，避免阻塞 Kotlin 2.2.21 升级）
+    // 已移除 KAPT（工程内未使用 ksp 配置/符号处理器，避免阻塞 Kotlin 2.2.21 升级）
 }
 
 android {
@@ -215,7 +215,12 @@ android {
         implementation("com.squareup.okhttp3:okhttp:5.3.0")
 
         // ===== Markdown 渲染 - Markwon =====
-        // 核心 + 表格（代码块样式用 Core 主题定制，无 Prism4j 依赖）
+        // 核心 + 表格
         implementation("io.noties.markwon:core:4.6.2")
         implementation("io.noties.markwon:ext-tables:4.6.2")
+        // 数学公式支持 - Latex 扩展（使用 JLatexMath 离线渲染）
+        implementation("io.noties.markwon:ext-latex:4.6.2")
+        // 语法高亮支持 - Prism4j（不使用 bundler，手动实现 GrammarLocator）
+        implementation("io.noties.markwon:syntax-highlight:4.6.2")
+        implementation("io.noties:prism4j:2.0.0")
     }

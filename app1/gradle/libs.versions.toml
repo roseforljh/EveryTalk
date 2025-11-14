@@ -37,5 +37,6 @@ androidx-profileinstaller = { group = "androidx.profileinstaller", name = "profi
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-kapt = { id = "org.jetbrains.kotlin.kapt", version.ref = "kotlin" }
 android-test = { id = "com.android.test", version.ref = "agp" }
 

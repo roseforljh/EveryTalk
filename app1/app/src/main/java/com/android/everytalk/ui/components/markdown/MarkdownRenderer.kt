@@ -4,6 +4,7 @@ import android.util.TypedValue
 import android.view.MotionEvent
 import android.view.Gravity
 import android.widget.TextView
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -16,10 +17,14 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.graphics.toArgb
 import io.noties.markwon.Markwon
 import io.noties.markwon.ext.tables.TablePlugin
+import io.noties.markwon.ext.latex.JLatexMathPlugin
+import io.noties.markwon.inlineparser.MarkwonInlineParserPlugin
 import io.noties.markwon.core.CorePlugin
 import io.noties.markwon.core.MarkwonTheme
 import io.noties.markwon.MarkwonSpansFactory
 import io.noties.markwon.AbstractMarkwonPlugin
+import io.noties.markwon.syntax.SyntaxHighlightPlugin
+import io.noties.prism4j.Prism4j
 import org.commonmark.node.Code
 import android.graphics.Typeface
 import android.text.style.StyleSpan
@@ -63,22 +68,43 @@ fun MarkdownRenderer(
     sender: Sender = Sender.AI
 ) {
     val context = LocalContext.current
-    val markwon = remember {
+    val isDark = isSystemInDarkTheme()
+    
+    val markwon = remember(isDark) {
+        android.util.Log.d("MarkdownRenderer", "🔧 初始化 Markwon with JLatexMathPlugin & SyntaxHighlight")
+        
+        // 根据 TextView 的字号动态计算公式大小
+        val textSizeSp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
+        val mathTextSize = textSizeSp * 5f  // 公式放大 5 倍
+        
+        // 创建 Prism4j 实例和语法高亮主题
+        val prism4j = Prism4j(SimpleGrammarLocator())
+        val syntaxTheme = if (isDark) {
+            SyntaxHighlightTheme.createDark()
+        } else {
+            SyntaxHighlightTheme.createLight()
+        }
+        
         Markwon.builder(context)
-            // 表格支持
-            .usePlugin(TablePlugin.create(context))
             // 启用核心插件
             .usePlugin(CorePlugin.create())
-            // 主题与 span 定制（内联 `code` + 围栏代码块样式）
+            // 数学公式支持 - 必须在 InlineParser 之前注册
+            .usePlugin(JLatexMathPlugin.create(mathTextSize) { builder ->
+                builder.inlinesEnabled(true)  // 启用内联公式 $...$
+                android.util.Log.d("MarkdownRenderer", "✅ JLatexMathPlugin 已配置，字号: $mathTextSize sp")
+            })
+            // InlineParser 必须在 JLatexMathPlugin 之后
+            .usePlugin(MarkwonInlineParserPlugin.create())
+            // 语法高亮支持
+            .usePlugin(SyntaxHighlightPlugin.create(prism4j, syntaxTheme))
+            // 表格支持
+            .usePlugin(TablePlugin.create(context))
+            // 主题与 span 定制（内联 `code` 样式）
             .usePlugin(object : AbstractMarkwonPlugin() {
                 override fun configureTheme(builder: MarkwonTheme.Builder) {
-                    // 围栏代码块样式（外部库样式，非语法高亮）：
-                    // - 等宽外观由 Markwon 默认处理；这里设定背景、边距与文字色
-                    builder
-                        .codeBlockTextColor(android.graphics.Color.parseColor("#D0D0D0"))
-                        .codeBlockBackgroundColor(android.graphics.Color.parseColor("#1E1E1E")) // 深色背景
-                        .codeBlockMargin(0)     // 去额外外边距，避免气泡内跳动
-                    // 注意：不在主题里设置 inline code 的背景/颜色，完全交由自定义 SpanFactory 控制，避免任何残留底色
+                    // 代码块背景和边距由语法高亮主题控制
+                    builder.codeBlockMargin(0)  // 去额外外边距，避免气泡内跳动
+                    // 注意：不在主题里设置 inline code 的背景/颜色，完全交由自定义 SpanFactory 控制
                 }
                 override fun configureSpansFactory(builder: MarkwonSpansFactory.Builder) {
                     // 完全替换内联 `code` 的 Span，确保无背景，仅灰色+加粗
@@ -184,6 +210,12 @@ fun MarkdownRenderer(
         },
         update = { tv ->
             val processed = preprocessAiMarkdown(markdown)
+            
+            // 调试：检查是否包含数学公式
+            if (processed.contains("$")) {
+                android.util.Log.d("MarkdownRenderer", "📐 检测到数学公式标记: ${processed.take(100)}")
+            }
+            
             markwon.setMarkdown(tv, processed)
 
             // 更新长按监听器

@@ -10,7 +10,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
-import com.android.everytalk.ui.components.math.MathAwareText
 import com.android.everytalk.ui.components.table.TableAwareText
 import com.android.everytalk.ui.components.table.TableUtils
 import com.android.everytalk.data.DataClass.Sender
@@ -103,27 +102,8 @@ fun ContentCoordinator(
         return
     }
     
-    // 🎯 优先级3：检测数学公式（粗略检测，以 $ 为信号）
-    val hasMath = text.contains("$")
-    if (hasMath) {
-        val longPressWrapperModifier = if (onLongPress != null) {
-            Modifier.combinedClickable(onClick = {}, onLongClick = { onLongPress() })
-        } else {
-            Modifier
-        }
-        MathAwareText(
-            text = text,
-            style = style,
-            color = color,
-            isStreaming = isStreaming,
-            modifier = modifier.then(longPressWrapperModifier),
-            recursionDepth = recursionDepth,
-            contentKey = contentKey  // 🎯 传递缓存key
-        )
-        return
-    }
-    
-    // 🎯 优先级4：纯文本（无代码块、表格、数学）
+    // 🎯 优先级3：纯文本（无代码块、表格）
+    // 数学公式 $...$ 与 $$...$$ 由 MarkdownRenderer 的 JLatexMathPlugin 统一处理
     val longPressWrapperModifier = if (onLongPress != null) {
         Modifier.combinedClickable(onClick = {}, onLongClick = { onLongPress() })
     } else {
