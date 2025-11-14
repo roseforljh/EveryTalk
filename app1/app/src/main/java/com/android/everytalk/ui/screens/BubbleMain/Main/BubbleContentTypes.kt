@@ -108,7 +108,7 @@ internal fun UserOrErrorMessageContent(
             // 外层包一层容器，内部保持原内容，叠加一个全覆盖的透明手势层，确保父层优先捕获长按
             Box(
                 modifier = Modifier
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .padding(horizontal = 20.dp, vertical = 16.dp)
                     .wrapContentWidth()
                     .defaultMinSize(minHeight = 28.dp)
             ) {

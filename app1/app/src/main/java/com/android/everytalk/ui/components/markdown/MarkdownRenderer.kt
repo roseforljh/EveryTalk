@@ -106,6 +106,27 @@ fun MarkdownRenderer(
                 // 稳定基线，减少跳动
                 setIncludeFontPadding(false)
                 
+                // 🎯 增加TextView内部padding，让文字更舒适
+                val paddingPx = TypedValue.applyDimension(
+                    TypedValue.COMPLEX_UNIT_DIP,
+                    6f,
+                    resources.displayMetrics
+                ).toInt()
+                setPadding(paddingPx, paddingPx, paddingPx, paddingPx)
+                
+                // 🎯 增加行间距，让文字不那么拥挤
+                setLineSpacing(
+                    TypedValue.applyDimension(
+                        TypedValue.COMPLEX_UNIT_DIP,
+                        6f,
+                        resources.displayMetrics
+                    ),
+                    1.0f
+                )
+                
+                // 🎯 增加字符间距，让文字左右距离更大
+                letterSpacing = 0.05f
+                
                 // 🔒 禁用文本选择但保留长按功能
                 setTextIsSelectable(false)
                 highlightColor = android.graphics.Color.TRANSPARENT
