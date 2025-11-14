@@ -9,6 +9,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.sp
 import kotlin.math.min
 
 /**
@@ -201,8 +202,9 @@ object LightweightInlineMarkdown {
         )
         val codeStyle = SpanStyle(
             fontFamily = FontFamily.Monospace,
-            color = Color(0xFF008ACF),
-            background = Color(0x00000000) // 全透明背景
+            color = Color(0xFFABABAB),            // 文本颜色改为 #ABABAB
+            fontWeight = FontWeight.SemiBold,     // 提升为半粗
+            background = Color.Unspecified        // 不绘制背景，避免任何残留底色
         )
 
         // 输出缓冲
@@ -395,17 +397,30 @@ object LightweightInlineMarkdown {
 
             fun canUse(extra: Int = 1): Boolean = used + extra <= budget
 
-            // 标题：^#{1,3}\s+(.+)$
+            // 标题：支持 H1~H6（允许前置空白），根据级别设置字号
             if (canUse()) {
-                val headingRe = Regex("(?m)^(#{1,3})\\s+(.+)$")
+                val headingRe = Regex("(?m)^[ \\t]*(#{1,6})\\s+(.+)$")
                 for (m in headingRe.findAll(plain)) {
+                    val hashes = m.groups[1]?.value?.length ?: 1
                     val g = m.groups[2] ?: continue
                     if (!canUse()) break
                     val s = g.range.first.coerceIn(0, builder.length)
                     val e = (g.range.last + 1).coerceIn(s, builder.length)
                     if (e > s) {
+                        val fontSize = when (hashes) {
+                            1 -> 26
+                            2 -> 22
+                            3 -> 20
+                            4 -> 18
+                            5 -> 16
+                            else -> 15
+                        }
                         builder.addStyle(
-                            SpanStyle(fontWeight = FontWeight.SemiBold, color = baseStyleColor),
+                            SpanStyle(
+                                fontWeight = FontWeight.SemiBold,
+                                color = baseStyleColor,
+                                fontSize = fontSize.sp
+                            ),
                             s, e
                         )
                         used++
