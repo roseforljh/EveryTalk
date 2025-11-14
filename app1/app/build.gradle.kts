@@ -215,10 +215,7 @@ android {
         implementation("com.squareup.okhttp3:okhttp:5.3.0")
 
         // ===== Markdown 渲染 - Markwon =====
-        // 核心 + 表格 + 代码高亮（Prism4j Okaidia 主题）
+        // 核心 + 表格（代码块样式用 Core 主题定制，无 Prism4j 依赖）
         implementation("io.noties.markwon:core:4.6.2")
         implementation("io.noties.markwon:ext-tables:4.6.2")
-        implementation("io.noties.markwon:syntax-highlight:4.6.2")
-        implementation("io.noties:prism4j:2.0.0")
-        implementation("io.noties:prism4j-languages:2.0.0")
     }

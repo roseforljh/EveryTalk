@@ -44,16 +44,22 @@ fun MarkdownRenderer(
             .usePlugin(TablePlugin.create(context))
             // 启用核心插件
             .usePlugin(CorePlugin.create())
-            // 主题与 span 定制
+            // 主题与 span 定制（内联 `code` + 围栏代码块样式）
             .usePlugin(object : AbstractMarkwonPlugin() {
                 override fun configureTheme(builder: MarkwonTheme.Builder) {
                     // 内联代码：灰色文字、透明背景
                     builder
                         .codeTextColor(android.graphics.Color.parseColor("#9E9E9E"))
                         .codeBackgroundColor(android.graphics.Color.TRANSPARENT)
+                    // 围栏代码块样式（外部库样式，非语法高亮）：
+                    // - 等宽外观由 Markwon 默认处理；这里设定背景、边距、内边距与文字色
+                    builder
+                        .codeBlockTextColor(android.graphics.Color.parseColor("#D0D0D0"))
+                        .codeBlockBackgroundColor(android.graphics.Color.parseColor("#1E1E1E")) // 深色背景
+                        .codeBlockMargin(0)     // 去额外外边距，避免气泡内跳动
                 }
                 override fun configureSpansFactory(builder: MarkwonSpansFactory.Builder) {
-                    // 为 `code` 追加粗体样式
+                    // 为行内 `code` 追加粗体样式
                     builder.appendFactory(Code::class.java) { _, _ ->
                         StyleSpan(Typeface.BOLD)
                     }
