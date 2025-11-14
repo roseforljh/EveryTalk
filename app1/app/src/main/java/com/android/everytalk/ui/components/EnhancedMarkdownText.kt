@@ -2,6 +2,12 @@ package com.android.everytalk.ui.components
 import com.android.everytalk.ui.components.coordinator.ContentCoordinator
 
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.zIndex
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -71,20 +77,44 @@ fun EnhancedMarkdownText(
         }
     }
 
+    // 使用覆盖层拦截：无论内部子项是否消费事件，长按都可触发
+    val needOverlay = onLongPress != null && !inSelectionDialog
+
     // 🎯 委托给 ContentCoordinator 统一调度
     // 优势：
     // 1. 职责分离：数学、表格、纯文本各自独立
     // 2. 易于维护：修改某个模块不影响其他模块
     // 3. 易于扩展：添加新类型（如图表）只需添加新模块
     // 4. 缓存机制：使用消息ID作为key，避免LazyColumn回收后重复解析
-    ContentCoordinator(
-        text = content,
-        style = style,
-        color = textColor,
-        isStreaming = isStreaming,
-        modifier = modifier.fillMaxWidth(),
-        contentKey = message.id  // 🎯 传递消息ID作为缓存key
-    )
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+    ) {
+        // 实际内容
+        ContentCoordinator(
+            text = content,
+            style = style,
+            color = textColor,
+            isStreaming = isStreaming,
+            modifier = Modifier.fillMaxWidth(),
+            contentKey = message.id,  // 🎯 传递消息ID作为缓存key
+            onLongPress = onLongPress
+        )
+
+        // 覆盖层（放在最后，位于最上层，确保捕获任何区域的长按）
+        if (needOverlay) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .zIndex(1f)
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onLongPress = { onLongPress?.invoke() }
+                        )
+                    }
+            )
+        }
+    }
 }
 
 /**

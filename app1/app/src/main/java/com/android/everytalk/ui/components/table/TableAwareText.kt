@@ -37,7 +37,8 @@ fun TableAwareText(
     isStreaming: Boolean = false,
     modifier: Modifier = Modifier,
     recursionDepth: Int = 0,
-    contentKey: String = ""  // 🎯 新增：用于缓存key（通常为消息ID）
+    contentKey: String = "",  // 🎯 新增：用于缓存key（通常为消息ID）
+    onLongPress: (() -> Unit)? = null
 ) {
     // ⚡ 流式阶段：直接渲染Markdown，不分段解析（避免递归+性能问题）
     if (isStreaming) {
@@ -46,7 +47,8 @@ fun TableAwareText(
             style = style,
             color = color,
             modifier = modifier.fillMaxWidth(),
-            isStreaming = true
+            isStreaming = true,
+            onLongPress = onLongPress
         )
         return
     }
@@ -116,7 +118,8 @@ fun TableAwareText(
             style = style,
             color = color,
             modifier = modifier.fillMaxWidth(),
-            isStreaming = false
+            isStreaming = false,
+            onLongPress = onLongPress
         )
         return
     }
@@ -132,7 +135,8 @@ fun TableAwareText(
                         style = style,
                         color = color,
                         modifier = Modifier.fillMaxWidth(),
-                        isStreaming = false
+                        isStreaming = false,
+                        onLongPress = onLongPress
                     )
                 }
                 is ContentPart.Code -> {

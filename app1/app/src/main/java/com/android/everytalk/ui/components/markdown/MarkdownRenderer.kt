@@ -37,7 +37,8 @@ fun MarkdownRenderer(
     modifier: Modifier = Modifier,
     style: TextStyle = MaterialTheme.typography.bodyMedium,
     color: Color = Color.Unspecified,
-    isStreaming: Boolean = false
+    isStreaming: Boolean = false,
+    onLongPress: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val markwon = remember {
@@ -86,7 +87,21 @@ fun MarkdownRenderer(
                 setTextColor(finalColor.toArgb())
                 // 稳定基线，减少跳动
                 setIncludeFontPadding(false)
+                // 链接点击仍可用，但确保长按不被吞掉
                 movementMethod = LinkMovementMethod.getInstance()
+                linksClickable = true
+                isClickable = true
+                isLongClickable = true
+
+                // 设置长按监听器（返回 true 明确消费，避免下传）
+                onLongPress?.let { callback ->
+                    setOnLongClickListener {
+                        callback()
+                        true
+                    }
+                } ?: run {
+                    setOnLongClickListener(null)
+                }
             }
         },
         update = { tv ->
@@ -94,6 +109,21 @@ fun MarkdownRenderer(
             // 禁用文本选择 & 点击高亮，避免出现系统高亮底色
             tv.setTextIsSelectable(false)
             tv.highlightColor = android.graphics.Color.TRANSPARENT
+
+            // 确保点击/长按能力开启
+            tv.linksClickable = true
+            tv.isClickable = true
+            tv.isLongClickable = true
+
+            // 更新长按监听器
+            if (onLongPress != null) {
+                tv.setOnLongClickListener {
+                    onLongPress.invoke()
+                    true
+                }
+            } else {
+                tv.setOnLongClickListener(null)
+            }
         }
     )
 }

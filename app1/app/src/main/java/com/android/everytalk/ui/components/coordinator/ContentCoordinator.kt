@@ -2,6 +2,8 @@ package com.android.everytalk.ui.components.coordinator
 import com.android.everytalk.ui.components.markdown.MarkdownRenderer
 
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -17,6 +19,7 @@ import com.android.everytalk.ui.components.table.TableUtils
  * 说明：统一调度表格/数学/代码块/纯文本渲染；提供递归深度保护。
  * 缓存机制：通过contentKey持久化解析结果，避免LazyColumn回收导致重复解析
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ContentCoordinator(
     text: String,
@@ -25,7 +28,8 @@ fun ContentCoordinator(
     isStreaming: Boolean = false,
     modifier: Modifier = Modifier,
     recursionDepth: Int = 0,
-    contentKey: String = ""  // 🎯 新增：用于缓存key（通常为消息ID）
+    contentKey: String = "",  // 🎯 新增：用于缓存key（通常为消息ID）
+    onLongPress: (() -> Unit)? = null
 ) {
     // 🛡️ 防止无限递归：超过3层直接渲染
     if (recursionDepth > 3) {
@@ -33,12 +37,21 @@ fun ContentCoordinator(
             "ContentCoordinator",
             "递归深度超限($recursionDepth)，直接渲染以避免ANR"
         )
+        // 统一包裹长按（即便在深层也可触发）
+        val longPressWrapperModifier = if (onLongPress != null) {
+            Modifier.combinedClickable(onClick = {}, onLongClick = { onLongPress() })
+        } else {
+            Modifier
+        }
         MarkdownRenderer(
             markdown = text,
             style = style,
             color = color,
-            modifier = modifier.fillMaxWidth(),
-            isStreaming = isStreaming
+            modifier = modifier
+                .fillMaxWidth()
+                .then(longPressWrapperModifier),
+            isStreaming = isStreaming,
+            onLongPress = onLongPress
         )
         return
     }
@@ -57,15 +70,24 @@ fun ContentCoordinator(
     if (hasCodeBlock || hasTable) {
         // 🎯 只根据流式状态判断是否使用轻量模式
         val shouldUseLightweight = isStreaming
+
+        val longPressWrapperModifier = if (onLongPress != null) {
+            Modifier.combinedClickable(onClick = {}, onLongClick = { onLongPress() })
+        } else {
+            Modifier
+        }
         
         TableAwareText(
             text = text,
             style = style,
             color = color,
             isStreaming = shouldUseLightweight, // true=轻量；false=完整（仅纯表格）
-            modifier = modifier.fillMaxWidth(),
+            modifier = modifier
+                .fillMaxWidth()
+                .then(longPressWrapperModifier),
             recursionDepth = recursionDepth,
-            contentKey = contentKey  // 🎯 传递缓存key
+            contentKey = contentKey,  // 🎯 传递缓存key
+            onLongPress = onLongPress
         )
         return
     }
@@ -73,12 +95,17 @@ fun ContentCoordinator(
     // 🎯 优先级3：检测数学公式（粗略检测，以 $ 为信号）
     val hasMath = text.contains("$")
     if (hasMath) {
+        val longPressWrapperModifier = if (onLongPress != null) {
+            Modifier.combinedClickable(onClick = {}, onLongClick = { onLongPress() })
+        } else {
+            Modifier
+        }
         MathAwareText(
             text = text,
             style = style,
             color = color,
             isStreaming = isStreaming,
-            modifier = modifier,
+            modifier = modifier.then(longPressWrapperModifier),
             recursionDepth = recursionDepth,
             contentKey = contentKey  // 🎯 传递缓存key
         )
@@ -86,11 +113,19 @@ fun ContentCoordinator(
     }
     
     // 🎯 优先级4：纯文本（无代码块、表格、数学）
+    val longPressWrapperModifier = if (onLongPress != null) {
+        Modifier.combinedClickable(onClick = {}, onLongClick = { onLongPress() })
+    } else {
+        Modifier
+    }
     MarkdownRenderer(
         markdown = text,
         style = style,
         color = color,
-        modifier = modifier.fillMaxWidth(),
-        isStreaming = isStreaming
+        modifier = modifier
+            .fillMaxWidth()
+            .then(longPressWrapperModifier),
+        isStreaming = isStreaming,
+        onLongPress = onLongPress
     )
 }

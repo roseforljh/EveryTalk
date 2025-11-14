@@ -511,18 +511,18 @@ fun AiMessageItem(
     
     Row(
         modifier = modifier
-            .wrapContentWidth()
-            .pointerInput(message.id) {
-                detectTapGestures(
-                    onLongPress = { onLongPress() }
-                )
-            },
+            .wrapContentWidth(),
         horizontalArrangement = Arrangement.Start
     ) {
         Surface(
             modifier = Modifier
                 .wrapContentWidth()
                 .widthIn(max = maxWidth) // 🎯 AI气泡最大宽度设置为100%
+                .pointerInput(message.id) {
+                    detectTapGestures(
+                        onLongPress = { onLongPress() }
+                    )
+                }
                 .semantics {
                     contentDescription = aiReplyMessageDescription
                 },
@@ -550,7 +550,8 @@ fun AiMessageItem(
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.fillMaxWidth(),
-                        isStreaming = false
+                        isStreaming = false,
+                        onLongPress = onLongPress
                     )
                 } else {
                     EnhancedMarkdownText(
