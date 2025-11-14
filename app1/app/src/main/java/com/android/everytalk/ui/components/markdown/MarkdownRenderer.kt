@@ -31,6 +31,20 @@ import android.text.style.ForegroundColorSpan
  * - 通过 AndroidView 包裹 TextView，Compose 层保持单一组件，避免流式结束的组件类型切换
  * - isStreaming 期间多次 setMarkdown 仅更新同一 TextView，减少重排
  */
+private fun preprocessAiMarkdown(input: String): String {
+    var s = input
+    // 1) 规范空白：将 HTML 不换行空格与全角空格替换为普通空格
+    s = s.replace("&nbsp;", " ")
+        .replace("\u00A0", " ")
+        .replace("\u3000", " ")
+    // 2) 合并连续空格，避免在同一段中过宽
+    s = s.replace(Regex(" {2,}"), " ")
+    // 3) 把 “ A. / B. / C. / D. ” 这类枚举项从同一行拆为多行列表
+    //    例如："... 四大益处  A. xxx  B. yyy  C. zzz  D. www"
+    //    变为每项单独一行，交给 Markdown 渲染为列表
+    s = s.replace(Regex("(?<!\n)\\s+([A-DＡ-Ｄ][\\.．、])\\s"), "\n- $1 ")
+    return s
+}
 @Composable
 fun MarkdownRenderer(
     markdown: String,
@@ -105,7 +119,8 @@ fun MarkdownRenderer(
             }
         },
         update = { tv ->
-            markwon.setMarkdown(tv, markdown)
+            val processed = preprocessAiMarkdown(markdown)
+            markwon.setMarkdown(tv, processed)
             // 禁用文本选择 & 点击高亮，避免出现系统高亮底色
             tv.setTextIsSelectable(false)
             tv.highlightColor = android.graphics.Color.TRANSPARENT
