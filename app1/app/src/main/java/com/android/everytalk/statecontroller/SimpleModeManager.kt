@@ -38,14 +38,18 @@ class SimpleModeManager(
      * 获取当前模式（考虑最近的模式切换）
      */
     fun getCurrentMode(): ModeType {
+        // 优先使用“意图模式”（UI权威来源），避免因保留历史索引导致误判
+        val intended = _uiMode.value
+        if (intended != ModeType.NONE) return intended
+
         val hasTextContent = stateHolder.messages.isNotEmpty() || stateHolder._loadedHistoryIndex.value != null
         val hasImageContent = stateHolder.imageGenerationMessages.isNotEmpty() || stateHolder._loadedImageGenerationHistoryIndex.value != null
-        
+
         return when {
             hasImageContent && !hasTextContent -> ModeType.IMAGE
             hasTextContent && !hasImageContent -> ModeType.TEXT
             !hasTextContent && !hasImageContent -> {
-                // 如果没有内容，但有最近的模式切换记录，使用记录的模式
+                // 若无内容，则回退到最近一次切换记录
                 val timeSinceLastSwitch = System.currentTimeMillis() - _lastModeSwitch
                 if (timeSinceLastSwitch < 5000L && _currentMode != ModeType.NONE) {
                     Log.d(TAG, "Using tracked mode: $_currentMode (${timeSinceLastSwitch}ms ago)")
@@ -55,8 +59,8 @@ class SimpleModeManager(
                 }
             }
             else -> {
-                // 异常情况：同时有两种模式的内容，记录警告并默认返回文本模式
-                Log.w(TAG, "Warning: Both text and image content detected. Defaulting to TEXT mode.")
+                // 同时存在两种内容的极端情况，仍以 UI 意图为准；若无意图则默认 TEXT
+                Log.w(TAG, "Warning: Both text and image content detected. Falling back to intended or TEXT.")
                 ModeType.TEXT
             }
         }
@@ -85,8 +89,7 @@ class SimpleModeManager(
         
         Log.d(TAG, "Image state before save: index=$imageHistoryIndexBeforeSave, messages=${imageMessagesBeforeSave.size}, hasContent=$hasImageContent")
         
-        // 🔥 关键修复2：只在必要时保存，避免重复保存已加载的历史记录
-        // 🔥 关键修复2：优先用“指纹查找”回填索引；找不到则不插入，仅保持为 last-open（避免切换时新增历史）
+        
         val savedImageIndex = run {
             if (!skipSavingTextChat) {
                 // 切换到文本模式时，如有文本索引会在其自身路径保存；这里不强制保存，避免误插入
@@ -112,11 +115,10 @@ class SimpleModeManager(
         
         Log.d(TAG, "Image index after save: $savedImageIndex")
         
-        // 🔥 关键修复3：清理状态
+        
         clearImageApiState()
         
-        // 🔥 关键修复4：保持图像历史索引不变（不要因为切换模式而清空）
-        // 只有在明确要求新建图像对话时才清空索引
+       
         stateHolder._loadedImageGenerationHistoryIndex.value = savedImageIndex
         Log.d(TAG, "Preserved image history index: $savedImageIndex")
         
@@ -145,6 +147,21 @@ class SimpleModeManager(
         Log.d(TAG, "State validation - currentMode: $currentMode, isInTextMode: ${isInTextMode()}, isInImageMode: ${isInImageMode()}")
         
         Log.d(TAG, "Switched to TEXT mode successfully")
+
+        // 🧭 仅在非 forceNew 时，才考虑自动回填“文本模式历史第一个会话”
+        if (!forceNew) {
+            try {
+                val textHistory = stateHolder._historicalConversations.value
+                val loadedIdx = stateHolder._loadedHistoryIndex.value
+                if (textHistory.isNotEmpty() && loadedIdx == null && stateHolder.messages.isEmpty()) {
+                    Log.d(TAG, "Auto-loading first TEXT history (index=0)")
+                    // 不改变意图模式，仅填充内容
+                    loadTextHistory(0)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Auto-load first TEXT history failed: ${e.message}")
+            }
+        }
     }
     
     /**
@@ -163,14 +180,14 @@ class SimpleModeManager(
             stateHolder.abandonEmptyPendingConversation()
         }
         
-        // 🔥 关键修复1：在保存前记录文本会话的状态
+        
         val textHistoryIndexBeforeSave = stateHolder._loadedHistoryIndex.value
         val textMessagesBeforeSave = stateHolder.messages.toList()
         val hasTextContent = textMessagesBeforeSave.isNotEmpty()
         
         Log.d(TAG, "Text state before save: index=$textHistoryIndexBeforeSave, messages=${textMessagesBeforeSave.size}, hasContent=$hasTextContent")
         
-        // 🔥 关键修复2：优先“指纹找回索引”；找不到则不插入历史，仅保持为 last-open，避免切换时产生新项
+        
         val savedTextIndex = run {
             if (textHistoryIndexBeforeSave != null) {
                 Log.d(TAG, "Skipping save: conversation already in history at index $textHistoryIndexBeforeSave")
@@ -198,11 +215,9 @@ class SimpleModeManager(
         
         Log.d(TAG, "Text index after save: $savedTextIndex")
         
-        // 🔥 关键修复3：清理状态
+        
         clearTextApiState()
         
-        // 🔥 关键修复4：保持文本历史索引不变（不要因为切换模式而清空）
-        // 只有在明确要求新建文本对话时才清空索引
         stateHolder._loadedHistoryIndex.value = savedTextIndex
         Log.d(TAG, "Preserved text history index: $savedTextIndex")
         
@@ -227,6 +242,21 @@ class SimpleModeManager(
         Log.d(TAG, "State validation - currentMode: $currentMode, isInTextMode: ${isInTextMode()}, isInImageMode: ${isInImageMode()}")
         
         Log.d(TAG, "Switched to IMAGE mode successfully")
+
+        // 🧭 仅在非 forceNew 时，才考虑自动回填“图像模式历史第一个会话”
+        if (!forceNew) {
+            try {
+                val imageHistory = stateHolder._imageGenerationHistoricalConversations.value
+                val loadedImgIdx = stateHolder._loadedImageGenerationHistoryIndex.value
+                if (imageHistory.isNotEmpty() && loadedImgIdx == null && stateHolder.imageGenerationMessages.isEmpty()) {
+                    Log.d(TAG, "Auto-loading first IMAGE history (index=0)")
+                    // 不改变意图模式，仅填充内容
+                    loadImageHistory(0)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Auto-load first IMAGE history failed: ${e.message}")
+            }
+        }
     }
     
     /**
@@ -304,7 +334,8 @@ class SimpleModeManager(
             Log.d(TAG, "🔥 Updating state on Main thread...")
             
             clearTextApiState()
-            stateHolder._loadedImageGenerationHistoryIndex.value = null
+            // 🔥 关键修复：不清除图像模式索引，保持两个模式的历史索引独立
+            // stateHolder._loadedImageGenerationHistoryIndex.value = null  // 删除这行，保持图像模式索引不变
             // 保留图像消息（不在加载文本历史时清空）
             Log.d(TAG, "🔥 Preserved image generation messages (${stateHolder.imageGenerationMessages.size} messages).")
             
@@ -340,16 +371,17 @@ class SimpleModeManager(
      */
     suspend fun loadImageHistory(index: Int) {
         Log.d(TAG, "Loading IMAGE history at index: $index")
-        
-        // 同步保存当前状态 - 确保状态切换的一致性
-        // 1. 先保存所有模式的当前状态
-        // 关键修复：必须先保存当前会话，再清理状态以加载新会话
-        // 关键修复：必须先保存当前会话，再清理状态以加载新会话
-        // 关键修复：必须先保存当前会话，再清理状态以加载新会话
-        withContext(Dispatchers.IO) {
-            historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = false, forceSave = true)
-            historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true, forceSave = true)
-        }
+        // 保证 UI 意图模式立即切换为 IMAGE，避免与文本模式的选择状态互相干扰
+        _uiMode.value = ModeType.IMAGE
+
+        // 🔥 关键修复：与 TEXT 历史加载保持一致，这里不再强制保存任一模式的当前会话
+        // - 避免在仅浏览图像历史时，意外修改文本模式的 last-open / 历史索引
+        // - 图像会话如需保存，应由模式切换或显式操作路径负责
+        // if (stateHolder.imageGenerationMessages.isNotEmpty()) {
+        //     withContext(Dispatchers.IO) {
+        //         historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true, forceSave = false)
+        //     }
+        // }
         
         // 2. 验证索引
         val conversationList = stateHolder._imageGenerationHistoricalConversations.value
@@ -361,8 +393,8 @@ class SimpleModeManager(
         // 3. 清理图像模式状态
         clearImageApiState()
         
-        // 关键修复：强制清除文本模式索引，确保图像模式历史记录选择完全独立
-        stateHolder._loadedHistoryIndex.value = null
+        // 🔥 关键修复：不清除文本模式索引，保持两个模式的历史索引独立
+        // stateHolder._loadedHistoryIndex.value = null  // 删除这行，保持文本模式索引不变
         // 保留文本消息（不在加载图像历史时清空）
         Log.d(TAG, "Preserved text messages (${stateHolder.messages.size} messages).")
         
@@ -384,7 +416,7 @@ class SimpleModeManager(
             // 针对图像模式，若AI消息包含图片URL，应视为已产生内容
             val hasImages = (msg.imageUrls?.isNotEmpty() == true)
             val updatedContentStarted = msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || msg.isError || hasImages
-
+        
             if (msg.sender == com.android.everytalk.data.DataClass.Sender.AI) {
                 if (hasImages && msg.text.isBlank() && msg.parts.isNotEmpty()) {
                     val rebuiltText = msg.parts
@@ -461,6 +493,15 @@ class SimpleModeManager(
         TEXT, IMAGE, NONE
     }
     
+    /**
+     * 主动设定“意图模式”（用于导航前/点击抽屉项时先行声明）
+     */
+    fun setIntendedMode(mode: ModeType) {
+        _uiMode.value = mode
+        _currentMode = mode
+        _lastModeSwitch = System.currentTimeMillis()
+    }
+
     /**
      * 获取当前模式的消息数量
      */

@@ -343,6 +343,8 @@ val _isStreamingPaused = MutableStateFlow(false)
     val _isLoadingHistoryData = MutableStateFlow(false)
     val _currentConversationId = MutableStateFlow<String>("new_chat_${System.currentTimeMillis()}")
     val _currentImageGenerationConversationId = MutableStateFlow<String>("new_image_generation_${System.currentTimeMillis()}")
+    // 待加载的图像历史索引（用于跨页面导航时抑制“新建图像会话”）
+    val _pendingImageHistoryIndex = MutableStateFlow<Int?>(null)
 
      val _apiConfigs = MutableStateFlow<List<ApiConfig>>(emptyList())
      val _selectedApiConfig = MutableStateFlow<ApiConfig?>(null)

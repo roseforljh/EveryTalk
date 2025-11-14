@@ -213,6 +213,8 @@ class MainActivity : ComponentActivity() {
                                         )
                                     },
                                     onImageGenerationConversationClick = { index ->
+                                        // 先声明意图模式，避免因内容/索引造成的误判
+                                        appViewModel.simpleModeManager.setIntendedMode(SimpleModeManager.ModeType.IMAGE)
                                         // 跨模式点击时，先跳转到图像生成页
                                         if (!isImageGenerationMode) {
                                             navController.navigate(Screen.IMAGE_GENERATION_SCREEN) {
@@ -226,18 +228,22 @@ class MainActivity : ComponentActivity() {
                                             coroutineScope.launch {
                                                 // 等待导航和动画完成 - 400ms确保300ms过渡动画完全结束 + 额外缓冲时间
                                                 kotlinx.coroutines.delay(400) // 稍微超过动画时间，确保过渡流畅
-                                                appViewModel.stateHolder._loadedHistoryIndex.value = null
+                                                // 🔥 修复：不清除文本模式索引，保持两个模式独立
+                                                // appViewModel.stateHolder._loadedHistoryIndex.value = null
                                                 appViewModel.loadImageGenerationConversationFromHistory(index)
                                                 appViewModel.drawerState.close()
                                             }
                                         } else {
                                             // 同模式内点击，直接加载
-                                            appViewModel.stateHolder._loadedHistoryIndex.value = null
+                                            // 🔥 修复：不清除文本模式索引，保持两个模式独立
+                                            // appViewModel.stateHolder._loadedHistoryIndex.value = null
                                             appViewModel.loadImageGenerationConversationFromHistory(index)
                                             coroutineScope.launch { appViewModel.drawerState.close() }
                                         }
                                     },
                                     onConversationClick = { index ->
+                                        // 先声明意图模式，避免因内容/索引造成的误判
+                                        appViewModel.simpleModeManager.setIntendedMode(SimpleModeManager.ModeType.TEXT)
                                         // 跨模式点击时，先跳转到文本聊天页
                                         if (isImageGenerationMode) {
                                             navController.navigate(Screen.CHAT_SCREEN) {
@@ -251,14 +257,15 @@ class MainActivity : ComponentActivity() {
                                             coroutineScope.launch {
                                                 // 等待导航和动画完成 - 400ms确保300ms过渡动画完全结束 + 额外缓冲时间
                                                 kotlinx.coroutines.delay(400) // 稍微超过动画时间，确保过渡流畅
-                                                // 文本模式历史点击：重置图像模式索引
-                                                appViewModel.stateHolder._loadedImageGenerationHistoryIndex.value = null
+                                                // 🔥 修复：不清除图像模式索引，保持两个模式独立
+                                                // appViewModel.stateHolder._loadedImageGenerationHistoryIndex.value = null
                                                 appViewModel.loadConversationFromHistory(index)
                                                 appViewModel.drawerState.close()
                                             }
                                         } else {
                                             // 同模式内点击，直接加载
-                                            appViewModel.stateHolder._loadedImageGenerationHistoryIndex.value = null
+                                            // 🔥 修复：不清除图像模式索引，保持两个模式独立
+                                            // appViewModel.stateHolder._loadedImageGenerationHistoryIndex.value = null
                                             appViewModel.loadConversationFromHistory(index)
                                             coroutineScope.launch { appViewModel.drawerState.close() }
                                         }
@@ -266,8 +273,8 @@ class MainActivity : ComponentActivity() {
                                     onNewChatClick = {
                                         if (isImageGenerationMode) {
                                             coroutineScope.launch { appViewModel.drawerState.close() }
-                                            // 关键修复：切换到文本模式时强制重置图像模式索引
-                                            appViewModel.stateHolder._loadedImageGenerationHistoryIndex.value = null
+                                            // 🔥 修复：不清除图像模式索引，保持两个模式独立
+                                            // appViewModel.stateHolder._loadedImageGenerationHistoryIndex.value = null
                                             navController.navigate(Screen.CHAT_SCREEN) {
                                                 popUpTo(navController.graph.startDestinationRoute!!) {
                                                     saveState = true
@@ -315,8 +322,8 @@ class MainActivity : ComponentActivity() {
                                     onAboutClick = { appViewModel.showAboutDialog() },
                                     onImageGenerationClick = {
                                         coroutineScope.launch { appViewModel.drawerState.close() }
-                                        // 关键修复：切换模式时强制重置文本模式索引
-                                        appViewModel.stateHolder._loadedHistoryIndex.value = null
+                                        // 🔥 修复：不清除文本模式索引，保持两个模式独立
+                                        // appViewModel.stateHolder._loadedHistoryIndex.value = null
                                         navController.navigate(Screen.IMAGE_GENERATION_SCREEN) {
                                             popUpTo(navController.graph.startDestinationRoute!!) {
                                                 saveState = true

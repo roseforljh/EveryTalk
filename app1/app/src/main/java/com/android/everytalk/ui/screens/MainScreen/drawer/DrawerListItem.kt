@@ -62,12 +62,20 @@ internal fun DrawerConversationListItem(
     longPressPositionForMenu: Offset?,
     groups: List<String>,
     onMoveToGroup: (Int, String?) -> Unit,
-    onMoveToGroupClick: (Int) -> Unit
+    onMoveToGroupClick: (Int) -> Unit,
+    isImageGenerationMode: Boolean = false
 ) {
     val originalIndex = itemData.originalIndex
     val definitivePreviewText = getPreviewForIndex(originalIndex)
 
+    // 🔥 修复: 根据当前模式判断是否激活,避免文本和图像模式历史项状态混淆
     val isActuallyActive = loadedHistoryIndex == originalIndex
+    
+    // 🔥 修复: 使用rememberUpdatedState确保回调总是使用最新的模式值
+    val currentImageMode by rememberUpdatedState(isImageGenerationMode)
+    
+    // 🐛 [DEBUG] 诊断日志：历史项激活状态
+    android.util.Log.d("DrawerListItem", "🐛 [ITEM_STATE] index=$originalIndex, loadedIndex=$loadedHistoryIndex, isActive=$isActuallyActive, isImageMode=$currentImageMode")
 
     var rippleState by remember { mutableStateOf<CustomRippleState>(CustomRippleState.Idle) }
     var currentPressPosition by remember { mutableStateOf(Offset.Zero) }
@@ -126,6 +134,8 @@ internal fun DrawerConversationListItem(
                         }
                     },
                     onTap = {
+                        // 🐛 [DEBUG] 诊断日志：历史项点击
+                        android.util.Log.d("DrawerListItem", "🐛 [ITEM_CLICK] index=$originalIndex, expandedIndex=$expandedItemIndex, isImageMode=$currentImageMode")
                         if (expandedItemIndex == originalIndex) {
                             onCollapseMenu()
                         } else {

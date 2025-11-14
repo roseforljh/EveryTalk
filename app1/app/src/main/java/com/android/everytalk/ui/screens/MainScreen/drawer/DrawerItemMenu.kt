@@ -99,18 +99,18 @@ internal fun ConversationItemMenu(
                             }
                         )
                         MenuItem(
-                            text = "删除",
-                            icon = Icons.Filled.Delete,
-                            onClick = {
-                                onDeleteClick()
-                                onDismissRequest()
-                            }
-                        )
-                        MenuItem(
                             text = "移动到",
                             icon = Icons.Filled.Folder,
                             onClick = {
                                 onMoveToGroupClick()
+                                onDismissRequest()
+                            }
+                        )
+                        MenuItem(
+                            text = "删除",
+                            icon = Icons.Filled.Delete,
+                            onClick = {
+                                onDeleteClick()
                                 onDismissRequest()
                             }
                         )

@@ -213,9 +213,13 @@ fun AppDrawerContent(
                 getPreviewForIndex = getPreviewForIndex,
                 onConversationClick = { index ->
                     selectedSet.clear()
+                    // 🐛 [DEBUG] 诊断日志：历史项点击 - 直接使用isImageGenerationMode,不缓存
+                    android.util.Log.d("AppDrawerContent", "🐛 [HISTORY_CLICK] index=$index, isImageMode=$isImageGenerationMode, loadedHistoryIndex=$loadedHistoryIndex")
                     if (isImageGenerationMode) {
+                        android.util.Log.d("AppDrawerContent", "🐛 [HISTORY_CLICK] Calling onImageGenerationConversationClick($index)")
                         onImageGenerationConversationClick(index)
                     } else {
+                        android.util.Log.d("AppDrawerContent", "🐛 [HISTORY_CLICK] Calling onConversationClick($index)")
                         onConversationClick(index)
                     }
                 },
@@ -249,7 +253,8 @@ fun AppDrawerContent(
                 },
                 onMoveToGroupClick = { index ->
                     showMoveToGroupDialog = index
-                }
+                },
+                isImageGenerationMode = isImageGenerationMode
             )
         }
     }
@@ -636,7 +641,7 @@ fun AppDrawerContent(
                                 if (groupItems.isNotEmpty()) {
                                     items(
                                         items = groupItems,
-                                        key = { item -> "group_${groupName}_${item.originalIndex}" }
+                                        key = { item -> "group_${groupName}_${item.originalIndex}_${isImageGenerationMode}" }
                                     ) { itemData ->
                                         ConversationItem(itemData)
                                     }
@@ -763,7 +768,7 @@ fun AppDrawerContent(
                                 if (expandedGroups.contains("pinned")) {
                                     items(
                                         items = processedItems.pinned,
-                                        key = { item -> "pinned_${item.originalIndex}" }
+                                        key = { item -> "pinned_${item.originalIndex}_${isImageGenerationMode}" }
                                     ) { itemData ->
                                         ConversationItem(itemData)
                                     }
@@ -774,7 +779,7 @@ fun AppDrawerContent(
                             if (processedItems.ungrouped.isNotEmpty()) {
                                 items(
                                     items = processedItems.ungrouped,
-                                    key = { item -> "ungrouped_${item.originalIndex}" }
+                                    key = { item -> "ungrouped_${item.originalIndex}_${isImageGenerationMode}" }
                                 ) { itemData ->
                                     ConversationItem(itemData)
                                 }
