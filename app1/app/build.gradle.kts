@@ -220,7 +220,4 @@ android {
         implementation("io.noties.markwon:ext-tables:4.6.2")
         // 数学公式支持 - Latex 扩展（使用 JLatexMath 离线渲染）
         implementation("io.noties.markwon:ext-latex:4.6.2")
-        // 语法高亮支持 - Prism4j（不使用 bundler，手动实现 GrammarLocator）
-        implementation("io.noties.markwon:syntax-highlight:4.6.2")
-        implementation("io.noties:prism4j:2.0.0")
     }

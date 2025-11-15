@@ -23,8 +23,6 @@ import io.noties.markwon.core.CorePlugin
 import io.noties.markwon.core.MarkwonTheme
 import io.noties.markwon.MarkwonSpansFactory
 import io.noties.markwon.AbstractMarkwonPlugin
-import io.noties.markwon.syntax.SyntaxHighlightPlugin
-import io.noties.prism4j.Prism4j
 import org.commonmark.node.Code
 import android.graphics.Typeface
 import android.text.style.StyleSpan
@@ -71,19 +69,11 @@ fun MarkdownRenderer(
     val isDark = isSystemInDarkTheme()
     
     val markwon = remember(isDark) {
-        android.util.Log.d("MarkdownRenderer", "🔧 初始化 Markwon with JLatexMathPlugin & SyntaxHighlight")
+        android.util.Log.d("MarkdownRenderer", "🔧 初始化 Markwon with JLatexMathPlugin")
         
         // 根据 TextView 的字号动态计算公式大小
         val textSizeSp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
         val mathTextSize = textSizeSp * 5f  // 公式放大 5 倍
-        
-        // 创建 Prism4j 实例和语法高亮主题
-        val prism4j = Prism4j(SimpleGrammarLocator())
-        val syntaxTheme = if (isDark) {
-            SyntaxHighlightTheme.createDark()
-        } else {
-            SyntaxHighlightTheme.createLight()
-        }
         
         Markwon.builder(context)
             // 启用核心插件
@@ -95,14 +85,12 @@ fun MarkdownRenderer(
             })
             // InlineParser 必须在 JLatexMathPlugin 之后
             .usePlugin(MarkwonInlineParserPlugin.create())
-            // 语法高亮支持
-            .usePlugin(SyntaxHighlightPlugin.create(prism4j, syntaxTheme))
             // 表格支持
             .usePlugin(TablePlugin.create(context))
             // 主题与 span 定制（内联 `code` 样式）
             .usePlugin(object : AbstractMarkwonPlugin() {
                 override fun configureTheme(builder: MarkwonTheme.Builder) {
-                    // 代码块背景和边距由语法高亮主题控制
+                    // 代码块背景和边距
                     builder.codeBlockMargin(0)  // 去额外外边距，避免气泡内跳动
                     // 注意：不在主题里设置 inline code 的背景/颜色，完全交由自定义 SpanFactory 控制
                 }
