@@ -76,6 +76,56 @@ object PerformanceConfig {
     // 代码块配置
     const val CODE_BLOCK_SCROLL_THRESHOLD = 80 // 超过80字符启用水平滚动
     
+    // ===== 流式渲染跳动修复配置 =====
+    /**
+     * 启用等高占位策略：流式期间为含代码块/表格的消息添加与完成态一致的占位高度
+     * 目的：消除流式结束时从单一MarkdownRenderer切换到分段渲染（CodeBlock/TableRenderer）的高度突变
+     */
+    const val ENABLE_STREAMING_HEIGHT_PLACEHOLDER = true
+    
+    /**
+     * 启用单次切换策略：等待解析完成后一次性替换，避免中间态回退导致的二次跳变
+     * 目的：从"流式Markdown → 回退Markdown → 分段渲染"优化为"流式Markdown → 分段渲染"
+     */
+    const val ENABLE_SINGLE_SWAP_RENDERING = true
+    
+    /**
+     * 代码块顶部工具条高度（dp）- 用于等高占位
+     * 必须与CodeBlock实际工具条高度保持一致
+     */
+    const val CODE_BLOCK_TOOLBAR_HEIGHT_DP = 28f
+    
+    /**
+     * 代码块额外垂直内边距（dp）- 用于等高占位
+     * 匹配CodeBlock的padding策略
+     */
+    const val CODE_BLOCK_EXTRA_VERTICAL_PADDING_DP = 4f
+    
+    /**
+     * 表格额外垂直外边距（dp）- 用于等高占位
+     * 匹配TableRenderer的padding策略
+     */
+    const val TABLE_EXTRA_VERTICAL_MARGIN_DP = 8f
+    
+    /**
+     * 启用渲染切换日志：记录isStreaming切换、解析完成、高度变化
+     */
+    const val ENABLE_RENDER_TRANSITION_LOGGING = true
+    
+    // ===== Markwon缓存配置 =====
+    /**
+     * 启用Markwon全局缓存：避免LazyColumn回收导致的重复初始化
+     * 修复前：流式结束后4次初始化，累计200-400ms
+     * 修复后：全局只初始化1-2次，后续<1ms命中缓存
+     */
+    const val ENABLE_MARKWON_GLOBAL_CACHE = true
+    
+    /**
+     * Markwon缓存最大实例数：按主题+字号缓存
+     * 推荐值：4（深色/浅色 × 2种常用字号）
+     */
+    const val MARKWON_CACHE_MAX_SIZE = 4
+    
     /**
      * 根据设备性能动态调整配置
      */

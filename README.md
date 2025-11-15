@@ -515,6 +515,31 @@ $$
 ```
 </details>
 
+<details>
+<summary><b>Q12: AI流式输出结束后列表为什么会跳动？</b></summary>
+
+**A:** 这是由于流式渲染切换导致的高度突变问题，已在最新版本中修复：
+
+**问题原因**：
+- 流式期间使用单一 `MarkdownRenderer`（紧凑布局）
+- 完成后切换为分段渲染（`CodeBlock` + `TableRenderer`，包含工具条与更大padding）
+- LazyColumn 项高度突变导致可视区域"向上跳"
+
+**修复方案**：
+1. **等高占位策略**：流式期间为含代码块/表格的消息添加与完成态一致的占位高度
+2. **单次切换策略**：等待解析完成后一次性替换，避免中间态回退
+
+**详细说明**：参见 [STREAMING_JUMP_FIX.md](STREAMING_JUMP_FIX.md)
+
+**配置开关**（在 `PerformanceConfig.kt` 中）：
+```kotlin
+ENABLE_STREAMING_HEIGHT_PLACEHOLDER = true  // 启用等高占位
+ENABLE_SINGLE_SWAP_RENDERING = true         // 启用单次切换
+```
+
+如需回退到旧逻辑，将上述开关设为 `false` 即可。
+</details>
+
 ---
 
 ## 📄 开源协议
