@@ -53,7 +53,9 @@ fun TableRenderer(
 
     // 根据表格规模决定渲染策略：单元格总量大时禁用单元格内Markdown/Math以避免递归渲染
     val totalCells = headers.size * dataRows.size
-    val usePlainTextCells = totalCells > 40 || isStreaming || !renderMarkdownInCells
+    // 🎯 优化：流式期间也允许渲染 Markdown，保持与流式结束后的样式一致，防止跳动。
+    // 仅在单元格非常多时降级为纯文本。
+    val usePlainTextCells = totalCells > 60 || !renderMarkdownInCells
 
     Column(
         modifier = modifier

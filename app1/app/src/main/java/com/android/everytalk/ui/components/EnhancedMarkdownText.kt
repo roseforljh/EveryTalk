@@ -60,13 +60,22 @@ fun EnhancedMarkdownText(
     
     // 🎯 获取实时流式内容
     // 使用 collectAsState 订阅Flow，实现流式效果
-    val content by if (isStreaming && viewModel != null) {
-        // 流式阶段：订阅StateFlow，实时获取增量内容
-        viewModel.streamingMessageStateManager
-            .getOrCreateStreamingState(message.id)
-            .collectAsState(initial = message.text)
+    // 🎯 优化：流式结束后继续订阅 StateFlow，直到组件销毁或显式重置
+    // 避免 isStreaming 从 true -> false 瞬间切换数据源导致重组闪烁
+    val streamingStateFlow = remember(message.id, viewModel) {
+        if (viewModel != null) {
+            viewModel.streamingMessageStateManager.getOrCreateStreamingState(message.id)
+        } else {
+            null
+        }
+    }
+
+    val content by if (streamingStateFlow != null && (isStreaming || viewModel?.streamingMessageStateManager?.isStreaming(message.id) == true)) {
+        // 如果有可用的 StateFlow 且 (正在流式 OR 状态管理器认为还在流式)，优先使用流式数据
+        // 即使 isStreaming 变为 false，只要 StateFlow 还在，就继续用它，防止切回 message.text 的瞬间闪烁
+        streamingStateFlow.collectAsState(initial = message.text)
     } else {
-        // 非流式：使用remember包装，避免不必要的重组
+        // 完全非流式或无 ViewModel：使用 remember 包装 message.text
         remember(message.text) { mutableStateOf(message.text) }
     }
     
