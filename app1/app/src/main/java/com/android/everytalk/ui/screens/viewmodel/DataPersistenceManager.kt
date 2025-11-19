@@ -151,7 +151,7 @@ class DataPersistenceManager(
                 if (!hasDefaultTextConfig) {
                     Log.i(TAG, "loadInitialData: 未找到默认文本配置，自动创建...")
                     val defaultTextModels = listOf(
-                        "gemini-2.5-pro-1M",
+                        "gemini-2.5-pro",
                         "gemini-2.5-flash",
                         "gemini-flash-lite-latest"
                     )
@@ -174,6 +174,27 @@ class DataPersistenceManager(
                     Log.i(TAG, "loadInitialData: 已创建并保存 ${newDefaultConfigs.size} 个默认文本配置")
                 }
                 
+                // 🆕 检查并修复旧的默认配置（如果存在旧模型名称，更新为新名称）
+                val updatedConfigs = loadedConfigs.map { config ->
+                    if (config.provider.trim().lowercase() in listOf("默认", "default") &&
+                        config.modalityType == com.android.everytalk.data.DataClass.ModalityType.TEXT &&
+                        config.model == "gemini-2.5-pro-1M") {
+                        Log.i(TAG, "loadInitialData: 自动更新过期的默认模型配置: gemini-2.5-pro-1M -> gemini-2.5-pro")
+                        config.copy(
+                            name = "gemini-2.5-pro",
+                            model = "gemini-2.5-pro"
+                        )
+                    } else {
+                        config
+                    }
+                }
+
+                if (updatedConfigs != loadedConfigs) {
+                    loadedConfigs = updatedConfigs
+                    dataSource.saveApiConfigs(loadedConfigs)
+                    Log.i(TAG, "loadInitialData: 已保存更新后的API配置")
+                }
+
                 initialConfigPresent = loadedConfigs.isNotEmpty()
 
                 Log.d(TAG, "loadInitialData: 调用 dataSource.loadSelectedConfigId()...")
