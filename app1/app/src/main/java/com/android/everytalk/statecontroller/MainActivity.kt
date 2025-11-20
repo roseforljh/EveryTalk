@@ -498,35 +498,27 @@ class MainActivity : ComponentActivity() {
                                composable(
                                    route = Screen.VOICE_INPUT_SCREEN,
                                    enterTransition = {
-                                       androidx.compose.animation.fadeIn(
-                                           animationSpec = tween(
-                                               durationMillis = 200,
-                                               easing = FastOutSlowInEasing
-                                           )
+                                       androidx.compose.animation.slideInHorizontally(
+                                           initialOffsetX = { fullWidth -> fullWidth },
+                                           animationSpec = tween(300, easing = FastOutSlowInEasing)
                                        )
                                    },
                                    exitTransition = {
-                                       androidx.compose.animation.fadeOut(
-                                           animationSpec = tween(
-                                               durationMillis = 150,
-                                               easing = FastOutSlowInEasing
-                                           )
+                                       androidx.compose.animation.slideOutHorizontally(
+                                           targetOffsetX = { fullWidth -> fullWidth },
+                                           animationSpec = tween(300, easing = FastOutSlowInEasing)
                                        )
                                    },
                                    popEnterTransition = {
-                                       androidx.compose.animation.fadeIn(
-                                           animationSpec = tween(
-                                               durationMillis = 200,
-                                               easing = FastOutSlowInEasing
-                                           )
+                                       androidx.compose.animation.slideInHorizontally(
+                                           initialOffsetX = { fullWidth -> fullWidth },
+                                           animationSpec = tween(300, easing = FastOutSlowInEasing)
                                        )
                                    },
                                    popExitTransition = {
-                                       androidx.compose.animation.fadeOut(
-                                           animationSpec = tween(
-                                               durationMillis = 150,
-                                               easing = FastOutSlowInEasing
-                                           )
+                                       androidx.compose.animation.slideOutHorizontally(
+                                           targetOffsetX = { fullWidth -> fullWidth },
+                                           animationSpec = tween(300, easing = FastOutSlowInEasing)
                                        )
                                    }
                               ) {
