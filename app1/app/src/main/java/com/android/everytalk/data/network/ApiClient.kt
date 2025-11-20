@@ -149,6 +149,11 @@ object ApiClient {
                     val imageUrl = jsonObject["imageUrl"]?.jsonPrimitive?.contentOrNull
                     AppStreamEvent.CodeExecutionResult(codeExecutionOutput, codeExecutionOutcome, imageUrl)
                 }
+                "code_executable" -> {
+                    val executableCode = jsonObject["executableCode"]?.jsonPrimitive?.contentOrNull
+                    val codeLanguage = jsonObject["codeLanguage"]?.jsonPrimitive?.contentOrNull
+                    AppStreamEvent.CodeExecutable(executableCode, codeLanguage)
+                }
                 else -> {
                     android.util.Log.w("ApiClient", "Unknown stream event type: $type")
                     null
@@ -186,6 +191,7 @@ object ApiClient {
                     subclass(AppStreamEvent.Finish::class)
                     subclass(AppStreamEvent.ImageGeneration::class)
                     subclass(AppStreamEvent.CodeExecutionResult::class)
+                    subclass(AppStreamEvent.CodeExecutable::class)
                 }
             }
         }

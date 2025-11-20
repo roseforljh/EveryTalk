@@ -150,32 +150,57 @@ object ContentParser {
     /**
      * 提取代码块
      */
-    private fun extractCodeBlock(lines: List<String>, startIndex: Int, isStreaming: Boolean = false): Pair<ContentPart.Code?, Int> {
-        val startLine = lines[startIndex].trimStart()
-        if (!startLine.startsWith("```")) return null to startIndex + 1
-        
-        val language = startLine.removePrefix("```").trim()
+    private fun extractCodeBlock(
+        lines: List<String>,
+        startIndex: Int,
+        isStreaming: Boolean = false
+    ): Pair<ContentPart.Code?, Int> {
+        // 起始边界与空安全校验，避免 String.charAt/startsWith 在异常输入上崩溃
+        if (startIndex < 0 || startIndex >= lines.size) {
+            return null to (startIndex + 1).coerceAtMost(lines.size)
+        }
+        val startTrimmed = try {
+            lines[startIndex].trimStart()
+        } catch (_: Throwable) {
+            return null to (startIndex + 1).coerceAtMost(lines.size)
+        }
+        if (startTrimmed.length < 3 || !startTrimmed.startsWith("```")) {
+            return null to (startIndex + 1).coerceAtMost(lines.size)
+        }
+
+        val language = startTrimmed.removePrefix("```").trim().ifBlank { null }
         val codeLines = mutableListOf<String>()
         var currentIndex = startIndex + 1
-        
+
         while (currentIndex < lines.size) {
-            val line = lines[currentIndex]
-            if (line.trimStart().startsWith("```")) {
-                // 找到结束标记
-                return ContentPart.Code(codeLines.joinToString("\n"), language.takeIf { it.isNotBlank() }) to currentIndex + 1
+            val endTrimmed = try {
+                lines[currentIndex].trimStart()
+            } catch (_: Throwable) {
+                // 出现无法读取当前行的异常：保守处理为“未闭合”
+                return if (isStreaming) {
+                    ContentPart.Code(codeLines.joinToString("\n"), language) to currentIndex
+                } else {
+                    null to (startIndex + 1).coerceAtMost(lines.size)
+                }
             }
-            codeLines.add(line)
+
+            if (endTrimmed.length >= 3 && endTrimmed.startsWith("```")) {
+                // 找到结束标记
+                return ContentPart.Code(codeLines.joinToString("\n"), language) to (currentIndex + 1).coerceAtMost(lines.size)
+            }
+
+            // 收集代码行（对异常输入做保护）
+            val safeLine = try { lines[currentIndex] } catch (_: Throwable) { "" }
+            codeLines.add(safeLine)
             currentIndex++
         }
-        
-        // 未找到结束标记
-        if (isStreaming) {
-            // 流式模式下，如果未闭合，则认为剩余部分都是代码块
-            return ContentPart.Code(codeLines.joinToString("\n"), language.takeIf { it.isNotBlank() }) to currentIndex
+
+        // 未找到结束标记：流式模式下将剩余部分视为代码块，非流式下回退为文本
+        return if (isStreaming) {
+            ContentPart.Code(codeLines.joinToString("\n"), language) to currentIndex
+        } else {
+            null to (startIndex + 1).coerceAtMost(lines.size)
         }
-        
-        // 非流式模式下，未闭合则不视为有效代码块（回退为文本）
-        return null to startIndex + 1
     }
     
     /**

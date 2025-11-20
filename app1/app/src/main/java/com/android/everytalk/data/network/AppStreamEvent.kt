@@ -73,6 +73,13 @@ sealed class AppStreamEvent {
         @SerialName("codeExecutionOutcome") val codeExecutionOutcome: String? = null,
         @SerialName("imageUrl") val imageUrl: String? = null
     ) : AppStreamEvent()
+
+    @Serializable
+    @SerialName("code_executable")
+    data class CodeExecutable(
+        @SerialName("executableCode") val executableCode: String? = null,
+        @SerialName("codeLanguage") val codeLanguage: String? = null
+    ) : AppStreamEvent()
 }
 
 @Serializable
