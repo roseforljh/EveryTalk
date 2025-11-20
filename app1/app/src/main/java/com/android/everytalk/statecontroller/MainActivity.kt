@@ -433,28 +433,68 @@ class MainActivity : ComponentActivity() {
                                }
                                 composable(
                                     route = Screen.SETTINGS_SCREEN,
-                                    enterTransition = { androidx.compose.animation.EnterTransition.None },
-                                    exitTransition = { ExitTransition.None },
-                                    popEnterTransition = { androidx.compose.animation.EnterTransition.None },
-                                    popExitTransition = { ExitTransition.None }
+                                    enterTransition = {
+                                        androidx.compose.animation.slideInHorizontally(
+                                            initialOffsetX = { fullWidth -> fullWidth },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing)
+                                        )
+                                    },
+                                    exitTransition = {
+                                        androidx.compose.animation.slideOutHorizontally(
+                                            targetOffsetX = { fullWidth -> fullWidth },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing)
+                                        )
+                                    },
+                                    popEnterTransition = {
+                                        androidx.compose.animation.slideInHorizontally(
+                                            initialOffsetX = { fullWidth -> fullWidth },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing)
+                                        )
+                                    },
+                                    popExitTransition = {
+                                        androidx.compose.animation.slideOutHorizontally(
+                                            targetOffsetX = { fullWidth -> fullWidth },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing)
+                                        )
+                                    }
                                 ) {
                                     SettingsScreen(
                                         viewModel = appViewModel,
                                         navController = navController
                                     )
                                 }
-                               composable(
-                                   route = Screen.IMAGE_GENERATION_SETTINGS_SCREEN,
-                                   enterTransition = { androidx.compose.animation.EnterTransition.None },
-                                   exitTransition = { ExitTransition.None },
-                                   popEnterTransition = { androidx.compose.animation.EnterTransition.None },
-                                   popExitTransition = { ExitTransition.None }
-                               ) {
-                                   com.android.everytalk.ui.screens.ImageGeneration.ImageGenerationSettingsScreen(
-                                       viewModel = appViewModel,
-                                       navController = navController
-                                   )
-                               }
+                                composable(
+                                    route = Screen.IMAGE_GENERATION_SETTINGS_SCREEN,
+                                    enterTransition = {
+                                        androidx.compose.animation.slideInHorizontally(
+                                            initialOffsetX = { fullWidth -> fullWidth },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing)
+                                        )
+                                    },
+                                    exitTransition = {
+                                        androidx.compose.animation.slideOutHorizontally(
+                                            targetOffsetX = { fullWidth -> fullWidth },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing)
+                                        )
+                                    },
+                                    popEnterTransition = {
+                                        androidx.compose.animation.slideInHorizontally(
+                                            initialOffsetX = { fullWidth -> fullWidth },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing)
+                                        )
+                                    },
+                                    popExitTransition = {
+                                        androidx.compose.animation.slideOutHorizontally(
+                                            targetOffsetX = { fullWidth -> fullWidth },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing)
+                                        )
+                                    }
+                                ) {
+                                    com.android.everytalk.ui.screens.ImageGeneration.ImageGenerationSettingsScreen(
+                                        viewModel = appViewModel,
+                                        navController = navController
+                                    )
+                                }
                                composable(
                                    route = Screen.VOICE_INPUT_SCREEN,
                                    enterTransition = {
