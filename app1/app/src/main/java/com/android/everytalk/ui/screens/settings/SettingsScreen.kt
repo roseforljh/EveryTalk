@@ -319,7 +319,7 @@ fun SettingsScreen(
                 // 重置获取的模型列表
                 viewModel.clearFetchedModels()
             },
-            onConfirm = { provider, address, key, channel, _, _, _ ->
+            onConfirm = { provider, address, key, channel, _, _, _, enableCodeExecution, toolsJson ->
                 val providerTrim = provider.trim()
                 val pLower = providerTrim.lowercase()
                 val isDefaultProvider = pLower in listOf("默认", "default")
@@ -366,7 +366,10 @@ fun SettingsScreen(
                     viewModel.clearFetchedModels()
                 } else if (key.isNotBlank() && providerTrim.isNotBlank() && address.isNotBlank()) {
                     // 改为启动"是否自动获取模型列表"的流程
-                    viewModel.startAddConfigFlow(providerTrim, address, key, channel, isInImageMode)
+                    // 将 enableCodeExecution 和 toolsJson 暂时存储在 ViewModel 或通过 Flow 传递
+                    // 这里简单处理：直接传递给 startAddConfigFlow (需要修改 ViewModel)
+                    // 或者先简化：在确认自动获取后，手动更新 Config
+                    viewModel.startAddConfigFlow(providerTrim, address, key, channel, isInImageMode, enableCodeExecution, toolsJson)
                     showAddFullConfigDialog = false
                 }
             },
@@ -480,8 +483,17 @@ fun SettingsScreen(
                 showEditConfigDialog = false
                 configToEdit = null
             },
-            onConfirm = { newAddress, newKey, newChannel ->
-                viewModel.updateConfigGroup(configToEdit!!, newAddress, newKey, configToEdit!!.provider, newChannel, isInImageMode)
+            onConfirm = { newAddress, newKey, newChannel, newEnableCodeExecution, newToolsJson ->
+                viewModel.updateConfigGroup(
+                    representativeConfig = configToEdit!!,
+                    newAddress = newAddress,
+                    newKey = newKey,
+                    currentProvider = configToEdit!!.provider,
+                    newChannel = newChannel,
+                    isImageGen = isInImageMode,
+                    newEnableCodeExecution = newEnableCodeExecution,
+                    newToolsJson = newToolsJson
+                )
                 showEditConfigDialog = false
                 configToEdit = null
             }

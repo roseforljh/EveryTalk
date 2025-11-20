@@ -249,7 +249,7 @@ fun ImageGenerationSettingsScreen(
                 showAddFullConfigDialog = false
                 viewModel.clearFetchedModels()
             },
-           onConfirm = { provider, address, key, channel, imageSize, numInferenceSteps, guidanceScale ->
+           onConfirm = { provider, address, key, channel, imageSize, numInferenceSteps, guidanceScale, _, _ ->
                val providerTrim = provider.trim()
                val pLower = providerTrim.lowercase()
                val isDefaultProvider = pLower in listOf("默认","default")
@@ -385,7 +385,7 @@ fun ImageGenerationSettingsScreen(
                 showEditConfigDialog = false
                 configToEdit = null
             },
-            onConfirm = { newAddress, newKey, newChannel ->
+            onConfirm = { newAddress, newKey, newChannel, _, _ ->
                 // 固定传入 isImageGen = true，确保更新图像配置
                 viewModel.updateConfigGroup(configToEdit!!, newAddress, newKey, configToEdit!!.provider, newChannel, true)
                 showEditConfigDialog = false

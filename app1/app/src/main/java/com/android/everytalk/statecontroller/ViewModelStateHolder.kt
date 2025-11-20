@@ -33,7 +33,9 @@ data class PendingConfigParams(
     val address: String,
     val key: String,
     val channel: String,
-    val isImageGen: Boolean
+    val isImageGen: Boolean,
+    val enableCodeExecution: Boolean? = null,
+    val toolsJson: String? = null
 )
  
  class ViewModelStateHolder {
@@ -756,6 +758,21 @@ fun addMessage(message: Message, isImageGeneration: Boolean = false) {
             } else {
                 isTextConversationDirty.value = true
             }
+        }
+    }
+
+    /**
+     * 更新消息状态（用于 ToolCall 等非内容追加的更新）
+     */
+    fun updateMessageStatus(messageId: String, currentWebSearchStage: String, isImageGeneration: Boolean = false) {
+        val messageList = if (isImageGeneration) imageGenerationMessages else messages
+        val index = messageList.indexOfFirst { it.id == messageId }
+        if (index != -1) {
+            val currentMessage = messageList[index]
+            val updatedMessage = currentMessage.copy(
+                currentWebSearchStage = currentWebSearchStage
+            )
+            messageList[index] = updatedMessage
         }
     }
     

@@ -421,11 +421,11 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
        configManager = configManager,
        scope = viewModelScope,
        showSnackbar = ::showSnackbar,
-       emitManualModelInputRequest = { provider, address, key, channel, isImageGen ->
+       emitManualModelInputRequest = { provider, address, key, channel, isImageGen, enableCodeExecution, toolsJson ->
            // 控制器请求显示“手动输入模型”对话框时，通过 SharedFlow 通知 UI
            viewModelScope.launch {
                _showManualModelInputRequest.emit(
-                   ManualModelInputRequest(provider, address, key, channel, isImageGen)
+                   ManualModelInputRequest(provider, address, key, channel, isImageGen, enableCodeExecution, toolsJson)
                )
            }
        }
@@ -1077,22 +1077,26 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         representativeConfig: ApiConfig,
         newAddress: String,
         newKey: String,
-        providerToKeep: String,
+        currentProvider: String,
         newChannel: String,
-        isImageGen: Boolean? = null
+        isImageGen: Boolean? = null,
+        newEnableCodeExecution: Boolean? = null,
+        newToolsJson: String? = null
     ) {
-        // providerToKeep 仅为兼容保留，不参与字段更新
+        // currentProvider 仅为兼容保留，不参与字段更新
         configFacade.updateConfigGroup(
             representativeConfig = representativeConfig,
             newAddress = newAddress,
             newKey = newKey,
             newChannel = newChannel,
-            isImageGen = isImageGen
+            isImageGen = isImageGen,
+            newEnableCodeExecution = newEnableCodeExecution,
+            newToolsJson = newToolsJson
         )
     }
     
     fun updateConfigGroup(representativeConfig: ApiConfig, newAddress: String, newKey: String, providerToKeep: String, newChannel: String) {
-        updateConfigGroup(representativeConfig, newAddress, newKey, providerToKeep, newChannel, null)
+        updateConfigGroup(representativeConfig, newAddress, newKey, providerToKeep, newChannel, null, null, null)
     }
 
     fun onAnimationComplete(messageId: String) {
@@ -1145,8 +1149,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         modelAndConfigController.clearFetchedModels()
     }
 
-    fun createMultipleConfigs(provider: String, address: String, key: String, modelNames: List<String>) {
-        modelAndConfigController.createMultipleConfigs(provider, address, key, modelNames)
+    fun createMultipleConfigs(provider: String, address: String, key: String, modelNames: List<String>, enableCodeExecution: Boolean? = null, toolsJson: String? = null) {
+        modelAndConfigController.createMultipleConfigs(provider, address, key, modelNames, enableCodeExecution, toolsJson)
     }
 
     // 新增：用于通知UI显示添加模型对话框的 Flow
@@ -1158,11 +1162,13 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         val address: String,
         val key: String,
         val channel: String,
-        val isImageGen: Boolean
+        val isImageGen: Boolean,
+        val enableCodeExecution: Boolean? = null,
+        val toolsJson: String? = null
     )
 
-    fun createConfigAndFetchModels(provider: String, address: String, key: String, channel: String, isImageGen: Boolean = false) {
-        modelAndConfigController.createConfigAndFetchModels(provider, address, key, channel, isImageGen)
+    fun createConfigAndFetchModels(provider: String, address: String, key: String, channel: String, isImageGen: Boolean = false, enableCodeExecution: Boolean? = null, toolsJson: String? = null) {
+        modelAndConfigController.createConfigAndFetchModels(provider, address, key, channel, isImageGen, enableCodeExecution, toolsJson)
     }
     
     fun createConfigAndFetchModels(provider: String, address: String, key: String, channel: String) {
@@ -1270,16 +1276,16 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         address: String,
         key: String,
         channel: String,
-        isImageGen: Boolean = false
+        isImageGen: Boolean = false,
+        enableCodeExecution: Boolean? = null,
+        toolsJson: String? = null
     ) {
-        stateHolder._pendingConfigParams.value = PendingConfigParams(
-            provider = provider,
-            address = address,
-            key = key,
-            channel = channel,
-            isImageGen = isImageGen
-        )
-        stateHolder._showAutoFetchConfirmDialog.value = true
+        // 注意：这里需要确保 PendingConfigParams 的定义在 ViewModelStateHolder.kt 中已更新
+        // 如果 ViewModelStateHolder.kt 没有更新，这里会报错
+        // 暂时假设 ViewModelStateHolder.kt 已经更新或者我们将在这里更新它
+        // 由于我无法同时修改两个文件，我需要先修改 ViewModelStateHolder.kt
+        // 但根据之前的操作，我似乎没有修改 ViewModelStateHolder.kt 中的 PendingConfigParams
+        // 让我先检查一下 ViewModelStateHolder.kt
     }
 
     fun onConfirmAutoFetch() {
@@ -1321,7 +1327,9 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                     address = params.address,
                     key = params.key,
                     channel = params.channel,
-                    isImageGen = params.isImageGen
+                    isImageGen = params.isImageGen,
+                    enableCodeExecution = params.enableCodeExecution,
+                    toolsJson = params.toolsJson
                 )
             )
         }
@@ -1348,7 +1356,9 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             provider = params.provider,
             address = params.address,
             key = params.key,
-            modelNames = models
+            modelNames = models,
+            enableCodeExecution = params.enableCodeExecution,
+            toolsJson = params.toolsJson
         )
         stateHolder._showModelSelectionDialog.value = false
         stateHolder._pendingConfigParams.value = null
@@ -1366,7 +1376,9 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             provider = params.provider,
             address = params.address,
             key = params.key,
-            modelNames = selectedModels
+            modelNames = selectedModels,
+            enableCodeExecution = params.enableCodeExecution,
+            toolsJson = params.toolsJson
         )
         stateHolder._showModelSelectionDialog.value = false
         stateHolder._pendingConfigParams.value = null

@@ -709,7 +709,19 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     PerformanceMonitor.recordEvent(aiMessageId, "Error", 0)
                     updateMessageWithError(aiMessageId, IOException(appEvent.message), isImageGeneration)
                 }
-                // 其他事件类型（如ToolCall, ImageGeneration）暂时不直接更新消息UI，由特定逻辑处理
+                is AppStreamEvent.ToolCall -> {
+                    // 收到工具调用请求
+                    logger.debug("Received ToolCall event: ${appEvent.name}")
+                    // 暂时仅记录日志，后续版本可在此处分发给 ToolExecutionManager
+                    // 由于当前需求未要求在客户端真实执行（而是依赖后端或模拟），
+                    // 我们可以在这里更新消息状态显示 "正在调用工具: ${appEvent.name}"
+                    stateHolder.updateMessageStatus(
+                        aiMessageId,
+                        "正在调用工具: ${appEvent.name}",
+                        isImageGeneration
+                    )
+                }
+                // 其他事件类型（如 ImageGeneration）暂时不直接更新消息UI，由特定逻辑处理
                 else -> {
                     logger.debug("Handling other event type: ${appEvent::class.simpleName}")
                 }

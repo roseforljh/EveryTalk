@@ -281,12 +281,15 @@ class ConfigManager(
         newAddress: String,
         newKey: String,
         newChannel: String,
-        isImageGen: Boolean? = null
+        isImageGen: Boolean? = null,
+        newEnableCodeExecution: Boolean? = null,
+        newToolsJson: String? = null
     ) {
         viewModelScope.launch {
             val trimmedAddress = newAddress.trim()
             val trimmedKey = newKey.trim()
             val trimmedChannel = newChannel.trim()
+            val trimmedToolsJson = newToolsJson?.trim()
 
             val useImageGen = isImageGen
                 ?: (representativeConfig.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE)
@@ -298,6 +301,7 @@ class ConfigManager(
                         cfg.provider == representativeConfig.provider &&
                         cfg.address == representativeConfig.address &&
                         cfg.channel == representativeConfig.channel) {
+                        // 图像模式暂不支持 tools
                         cfg.copy(address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
                     } else cfg
                 }
@@ -322,7 +326,16 @@ class ConfigManager(
                         cfg.provider == representativeConfig.provider &&
                         cfg.address == representativeConfig.address &&
                         cfg.channel == representativeConfig.channel) {
-                        cfg.copy(address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
+                        
+                        // 仅当参数不为 null 时才更新（支持部分更新）
+                        var updatedCfg = cfg.copy(address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
+                        if (newEnableCodeExecution != null) {
+                            updatedCfg = updatedCfg.copy(enableCodeExecution = newEnableCodeExecution)
+                        }
+                        if (trimmedToolsJson != null) {
+                            updatedCfg = updatedCfg.copy(toolsJson = trimmedToolsJson.ifBlank { null })
+                        }
+                        updatedCfg
                     } else cfg
                 }
                 if (newConfigs != currentConfigs) {
@@ -335,8 +348,15 @@ class ConfigManager(
                         selected.provider == representativeConfig.provider &&
                         selected.address == representativeConfig.address &&
                         selected.channel == representativeConfig.channel) {
-                        stateHolder._selectedApiConfig.value =
-                            selected.copy(address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
+                        
+                        var updatedSel = selected.copy(address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
+                        if (newEnableCodeExecution != null) {
+                            updatedSel = updatedSel.copy(enableCodeExecution = newEnableCodeExecution)
+                        }
+                        if (trimmedToolsJson != null) {
+                            updatedSel = updatedSel.copy(toolsJson = trimmedToolsJson.ifBlank { null })
+                        }
+                        stateHolder._selectedApiConfig.value = updatedSel
                     }
                 }
             }

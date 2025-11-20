@@ -5,6 +5,7 @@ import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -36,6 +37,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.PopupProperties
+import com.android.everytalk.data.DataClass.ModalityType
 
 val DialogTextFieldColors
     @Composable get() = OutlinedTextFieldDefaults.colors(
@@ -346,7 +348,7 @@ internal fun AddNewFullConfigDialog(
     apiKey: String,
     onApiKeyChange: (String) -> Unit,
     onDismissRequest: () -> Unit,
-    onConfirm: (String, String, String, String, String?, Int?, Float?) -> Unit,
+    onConfirm: (String, String, String, String, String?, Int?, Float?, Boolean?, String?) -> Unit,
     isImageMode: Boolean
 ) {
     var providerMenuExpanded by remember { mutableStateOf(false) }
@@ -359,6 +361,10 @@ internal fun AddNewFullConfigDialog(
    var imageSize by remember { mutableStateOf("1024x1024") }
    var numInferenceSteps by remember { mutableStateOf("20") }
    var guidanceScale by remember { mutableStateOf("7.5") }
+    // 新增：Function Calling 配置
+    var enableCodeExecution by remember { mutableStateOf(false) }
+    var toolsJson by remember { mutableStateOf("") }
+    var showToolsConfig by remember { mutableStateOf(false) }
 
     val providerMenuTransitionState = remember { MutableTransitionState(initialState = false) }
     val channelMenuTransitionState = remember { MutableTransitionState(initialState = false) }
@@ -629,18 +635,70 @@ internal fun AddNewFullConfigDialog(
                         keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
                         keyboardActions = KeyboardActions(onDone = {
                             if (apiKey.isNotBlank() && provider.isNotBlank() && apiAddress.isNotBlank()) {
-                               onConfirm(provider, apiAddress, apiKey, selectedChannel, imageSize, numInferenceSteps.toIntOrNull(), guidanceScale.toFloatOrNull())
+                               onConfirm(provider, apiAddress, apiKey, selectedChannel, imageSize, numInferenceSteps.toIntOrNull(), guidanceScale.toFloatOrNull(), enableCodeExecution, toolsJson.ifBlank { null })
                             }
                         }),
                         shape = DialogShape,
                         colors = DialogTextFieldColors
                     )
+
+                    // 工具配置区域 (仅文本模式)
+                    if (!isImageMode) {
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { showToolsConfig = !showToolsConfig }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "高级工具配置",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Icon(
+                                if (showToolsConfig) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                                contentDescription = null
+                            )
+                        }
+                        
+                        if (showToolsConfig) {
+                            Column(modifier = Modifier.padding(start = 8.dp)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Checkbox(
+                                        checked = enableCodeExecution,
+                                        onCheckedChange = { enableCodeExecution = it }
+                                    )
+                                    Text("启用代码执行 (Gemini Native)", style = MaterialTheme.typography.bodyMedium)
+                                }
+                                
+                                OutlinedTextField(
+                                    value = toolsJson,
+                                    onValueChange = { toolsJson = it },
+                                    label = { Text("自定义 Tools (JSON)") },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(150.dp)
+                                        .padding(vertical = 8.dp),
+                                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                                    placeholder = { Text("[\n  {\n    \"type\": \"function\",\n    \"function\": { ... }\n  }\n]") },
+                                    shape = DialogShape,
+                                    colors = DialogTextFieldColors
+                                )
+                            }
+                        }
+                    }
                 }
             }
         },
         confirmButton = {
             FilledTonalButton(
-                onClick = { onConfirm(provider, apiAddress, apiKey, selectedChannel, imageSize, numInferenceSteps.toIntOrNull(), guidanceScale.toFloatOrNull()) },
+                onClick = { onConfirm(provider, apiAddress, apiKey, selectedChannel, imageSize, numInferenceSteps.toIntOrNull(), guidanceScale.toFloatOrNull(), enableCodeExecution, toolsJson.ifBlank { null }) },
                 enabled = apiKey.isNotBlank() && provider.isNotBlank() && apiAddress.isNotBlank(),
                 shape = RoundedCornerShape(20.dp),
                 modifier = Modifier.height(52.dp).padding(horizontal = 4.dp),
@@ -679,11 +737,16 @@ internal fun EditConfigDialog(
     representativeConfig: com.android.everytalk.data.DataClass.ApiConfig,
     allProviders: List<String>,
     onDismissRequest: () -> Unit,
-    onConfirm: (newAddress: String, newKey: String, newChannel: String) -> Unit
+    onConfirm: (newAddress: String, newKey: String, newChannel: String, newEnableCodeExecution: Boolean?, newToolsJson: String?) -> Unit
 ) {
     var apiAddress by remember { mutableStateOf(representativeConfig.address) }
     var apiKey by remember { mutableStateOf(representativeConfig.key) }
     var selectedChannel by remember { mutableStateOf(representativeConfig.channel) }
+    // 新增：Function Calling 编辑
+    var enableCodeExecution by remember { mutableStateOf(representativeConfig.enableCodeExecution ?: false) }
+    var toolsJson by remember { mutableStateOf(representativeConfig.toolsJson ?: "") }
+    var showToolsConfig by remember { mutableStateOf(false) }
+
     val focusRequester = remember { FocusRequester() }
     
     // 固定的渠道类型选项
@@ -825,11 +888,63 @@ internal fun EditConfigDialog(
                         }
                     }
                 }
+
+                // 工具配置区域 (仅文本模式)
+                if (representativeConfig.modalityType == ModalityType.TEXT) {
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { showToolsConfig = !showToolsConfig }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "高级工具配置",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Icon(
+                            if (showToolsConfig) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                            contentDescription = null
+                        )
+                    }
+                    
+                    if (showToolsConfig) {
+                        Column(modifier = Modifier.padding(start = 8.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Checkbox(
+                                    checked = enableCodeExecution,
+                                    onCheckedChange = { enableCodeExecution = it }
+                                )
+                                Text("启用代码执行 (Gemini Native)", style = MaterialTheme.typography.bodyMedium)
+                            }
+                            
+                            OutlinedTextField(
+                                value = toolsJson,
+                                onValueChange = { toolsJson = it },
+                                label = { Text("自定义 Tools (JSON)") },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(150.dp)
+                                    .padding(vertical = 8.dp),
+                                textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                                placeholder = { Text("[\n  {\n    \"type\": \"function\",\n    \"function\": { ... }\n  }\n]") },
+                                shape = DialogShape,
+                                colors = DialogTextFieldColors
+                            )
+                        }
+                    }
+                }
             }
         },
         confirmButton = {
             FilledTonalButton(
-                onClick = { onConfirm(apiAddress, apiKey, selectedChannel) },
+                onClick = { onConfirm(apiAddress, apiKey, selectedChannel, enableCodeExecution, toolsJson.ifBlank { null }) },
                 enabled = apiKey.isNotBlank() && apiAddress.isNotBlank(),
                 shape = RoundedCornerShape(20.dp),
                 modifier = Modifier.height(52.dp).padding(horizontal = 4.dp),

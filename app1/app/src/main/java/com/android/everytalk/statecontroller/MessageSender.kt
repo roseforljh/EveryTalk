@@ -31,6 +31,15 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.longOrNull
 
 private data class AttachmentProcessingResult(
     val success: Boolean,
@@ -749,11 +758,42 @@ private data class AttachmentProcessingResult(
                         }
                         mapOf("reasoning_effort" to reasoningEffort)
                     } else null,
-                    // 新功能：Gemini渠道下开启联网搜索时启用google_search工具
-                    tools = if (shouldEnableGoogleSearch) {
-                        Log.d("MessageSender", "启用Google搜索工具用于Gemini渠道")
-                        listOf(mapOf("google_search" to emptyMap<String, Any>()))
-                    } else null,
+                    // 工具注入逻辑
+                    tools = run {
+                        val toolsList = mutableListOf<Map<String, Any>>()
+                        
+                        // 1. 用户自定义工具
+                        if (!currentConfig.toolsJson.isNullOrBlank()) {
+                            try {
+                                val jsonElement = Json.parseToJsonElement(currentConfig.toolsJson!!)
+                                if (jsonElement is JsonArray) {
+                                    jsonElement.forEach { element: JsonElement ->
+                                        if (element is JsonObject) {
+                                            // 递归转换 JsonObject 为 Map
+                                            val map = jsonObjectToMap(element)
+                                            toolsList.add(map)
+                                        }
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                Log.e("MessageSender", "Failed to parse custom tools JSON", e)
+                            }
+                        }
+                        
+                        // 2. 联网搜索 (Gemini Native)
+                        if (shouldEnableGoogleSearch) {
+                            Log.d("MessageSender", "启用Google搜索工具用于Gemini渠道")
+                            toolsList.add(mapOf("google_search" to emptyMap<String, Any>()))
+                        }
+                        
+                        // 3. 代码执行 (Gemini Native)
+                        if (currentConfig.enableCodeExecution == true) {
+                             Log.d("MessageSender", "启用代码执行工具 (Gemini Native)")
+                             toolsList.add(mapOf("code_execution" to emptyMap<String, Any>()))
+                        }
+                        
+                        toolsList.ifEmpty { null }
+                    },
                     imageGenRequest = if (isImageGeneration) {
                         // 调试信息：检查发送的配置
                         Log.d("MessageSender", "Image generation config - model: ${currentConfig.model}, channel: ${currentConfig.channel}, provider: ${currentConfig.provider}")
@@ -911,5 +951,39 @@ private suspend fun readTextFromUri(context: Context, uri: Uri): String? {
             "replace", "change to", "edit", "modify", "adjust", "based on previous", "on the previous image"
         )
         return editKeywords.any { k -> t.contains(k) }
+    }
+
+    // 辅助函数：递归将 JsonObject 转换为 Map<String, Any>
+    private fun jsonObjectToMap(jsonObject: JsonObject): Map<String, Any> {
+        val map = mutableMapOf<String, Any>()
+        jsonObject.entries.forEach { (key, value) ->
+            jsonElementToAny(value)?.let { map[key] = it }
+        }
+        return map
+    }
+
+    // 辅助函数：递归将 JsonArray 转换为 List<Any>
+    private fun jsonArrayToList(jsonArray: JsonArray): List<Any> {
+        val list = mutableListOf<Any>()
+        jsonArray.forEach { element ->
+            jsonElementToAny(element)?.let { list.add(it) }
+        }
+        return list
+    }
+
+    // 辅助函数：将 JsonElement 转换为 Any
+    private fun jsonElementToAny(element: JsonElement): Any? {
+        return when (element) {
+            is JsonObject -> jsonObjectToMap(element)
+            is JsonArray -> jsonArrayToList(element)
+            is JsonPrimitive -> {
+                if (element.isString) {
+                    element.content
+                } else {
+                    element.booleanOrNull ?: element.longOrNull ?: element.doubleOrNull ?: element.contentOrNull
+                }
+            }
+            else -> null
+        }
     }
 }

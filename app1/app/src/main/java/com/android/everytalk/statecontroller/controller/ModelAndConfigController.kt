@@ -26,7 +26,7 @@ class ModelAndConfigController(
     private val configManager: ConfigManager,
     private val scope: CoroutineScope,
     private val showSnackbar: (String) -> Unit,
-    private val emitManualModelInputRequest: (provider: String, address: String, key: String, channel: String, isImageGen: Boolean) -> Unit
+    private val emitManualModelInputRequest: (provider: String, address: String, key: String, channel: String, isImageGen: Boolean, enableCodeExecution: Boolean?, toolsJson: String?) -> Unit
 ) {
 
     val isFetchingModels: StateFlow<Boolean> get() = modelFetchManager.isFetchingModels
@@ -59,7 +59,7 @@ class ModelAndConfigController(
         }
     }
 
-    fun createMultipleConfigs(provider: String, address: String, key: String, modelNames: List<String>) {
+    fun createMultipleConfigs(provider: String, address: String, key: String, modelNames: List<String>, enableCodeExecution: Boolean? = null, toolsJson: String? = null) {
         if (modelNames.isEmpty()) {
             showSnackbar("请至少选择一个模型")
             return
@@ -78,7 +78,9 @@ class ModelAndConfigController(
                         name = modelName,
                         id = UUID.randomUUID().toString(),
                         isValid = true,
-                        modalityType = com.android.everytalk.data.DataClass.ModalityType.TEXT
+                        modalityType = com.android.everytalk.data.DataClass.ModalityType.TEXT,
+                        enableCodeExecution = enableCodeExecution,
+                        toolsJson = toolsJson
                     )
                     configManager.addConfig(config)
                     successfulConfigs.add(modelName)
@@ -97,7 +99,7 @@ class ModelAndConfigController(
         }
     }
 
-    fun createConfigAndFetchModels(provider: String, address: String, key: String, channel: String, isImageGen: Boolean = false) {
+    fun createConfigAndFetchModels(provider: String, address: String, key: String, channel: String, isImageGen: Boolean = false, enableCodeExecution: Boolean? = null, toolsJson: String? = null) {
         scope.launch {
             try {
                 val models = withContext(Dispatchers.IO) {
@@ -115,7 +117,9 @@ class ModelAndConfigController(
                             id = UUID.randomUUID().toString(),
                             isValid = true,
                             modalityType = if (isImageGen) com.android.everytalk.data.DataClass.ModalityType.IMAGE else com.android.everytalk.data.DataClass.ModalityType.TEXT,
-                            channel = channel
+                            channel = channel,
+                            enableCodeExecution = enableCodeExecution,
+                            toolsJson = toolsJson
                         )
                     }
                     newConfigs.forEach { config ->
@@ -124,12 +128,12 @@ class ModelAndConfigController(
                     showSnackbar("成功添加 ${models.size} 个模型")
                 } else {
                     // 无模型时直接触发手动输入
-                    emitManualModelInputRequest(provider, address, key, channel, isImageGen)
+                    emitManualModelInputRequest(provider, address, key, channel, isImageGen, enableCodeExecution, toolsJson)
                 }
             } catch (e: Exception) {
                 Log.e("ModelAndConfig", "获取模型失败", e)
                 // 失败时直接触发手动输入
-                emitManualModelInputRequest(provider, address, key, channel, isImageGen)
+                emitManualModelInputRequest(provider, address, key, channel, isImageGen, enableCodeExecution, toolsJson)
             }
         }
     }

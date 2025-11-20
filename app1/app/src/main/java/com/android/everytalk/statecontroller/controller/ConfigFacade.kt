@@ -46,14 +46,18 @@ class ConfigFacade(
         newAddress: String,
         newKey: String,
         newChannel: String,
-        isImageGen: Boolean? = null
+        isImageGen: Boolean? = null,
+        newEnableCodeExecution: Boolean? = null,
+        newToolsJson: String? = null
     ) {
         configManager.updateConfigGroup(
             representativeConfig = representativeConfig,
             newAddress = newAddress,
             newKey = newKey,
             newChannel = newChannel,
-            isImageGen = isImageGen
+            isImageGen = isImageGen,
+            newEnableCodeExecution = newEnableCodeExecution,
+            newToolsJson = newToolsJson
         )
     }
 }

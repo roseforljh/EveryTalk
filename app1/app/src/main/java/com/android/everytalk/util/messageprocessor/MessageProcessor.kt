@@ -79,6 +79,11 @@ class MessageProcessor {
                     // 推理完成事件 - 标记推理已完成，但流还在继续
                     ProcessedEventResult.ReasoningComplete
                 }
+                is AppStreamEvent.ToolCall -> {
+                    // 暂时不在此处处理 ToolCall，由 ApiHandler 拦截并处理
+                    // 返回 NoChange 或 新增 ToolCallResult
+                    ProcessedEventResult.NoChange
+                }
                 is AppStreamEvent.StreamEnd, is AppStreamEvent.Finish -> {
                     isCompleted.set(true)
                     ProcessedEventResult.StreamComplete
