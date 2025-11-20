@@ -41,10 +41,23 @@ private val ENUM_ITEM_REGEX = Regex("(?<!\n)\\s+([A-DＡ-Ｄ][\\.．、])\\s")
 
 private fun preprocessAiMarkdown(input: String): String {
     var s = input
+
+    // Normalize base64 data URIs inside markdown image links: ![...](data:image/...)
+    // Many providers insert newlines/spaces in long base64 strings which breaks Markdown parsing.
+    if (s.contains("data:image/")) {
+        val base64ImagePattern = Regex("(\\!\\[[^\\]]*\\]\\()\\s*(data:image\\/[^)]+)\\s*(\\))", setOf(RegexOption.DOT_MATCHES_ALL))
+        s = s.replace(base64ImagePattern) { mr ->
+            val prefix = mr.groupValues[1]
+            val data = mr.groupValues[2].filter { !it.isWhitespace() }
+            val suffix = mr.groupValues[3]
+            prefix + data + suffix
+        }
+    }
+
     s = s.replace("&nbsp;", " ")
         .replace("\u00A0", " ")
         .replace("\u3000", " ")
-    s = s.replace(MULTIPLE_SPACES_REGEX, " ") 
+    s = s.replace(MULTIPLE_SPACES_REGEX, " ")
     s = s.replace(ENUM_ITEM_REGEX, "\n- $1 ")
     return s
 }

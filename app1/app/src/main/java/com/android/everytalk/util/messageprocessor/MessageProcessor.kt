@@ -70,18 +70,31 @@ class MessageProcessor {
                     ProcessedEventResult.ContentUpdated(currentTextBuilder.get().toString())
                 }
                 is AppStreamEvent.CodeExecutionResult -> {
-                    // 处理代码执行结果，特别是图片
+                    // 处理代码执行结果：优先显示图片；若前面有未闭合代码块，先补一个围栏以避免图片被包进代码块
+                    val builder = currentTextBuilder.get()
+                    val textSoFar = builder.toString()
+
+                    // 检测未闭合的三反引号围栏数量（奇数表示未闭合）
+                    val fenceCount = Regex("```").findAll(textSoFar).count()
+                    if (fenceCount % 2 == 1) {
+                        builder.append("\n```\n")
+                    }
+
+                    // 若包含图片URL，优先渲染图片；并清理 data:image 中的所有空白，避免换行破坏 Markdown 链接
                     if (!event.imageUrl.isNullOrBlank()) {
-                        val imageMarkdown = "\n\n![Generated Image](${event.imageUrl})\n\n"
-                        currentTextBuilder.get().append(imageMarkdown)
-                        ProcessedEventResult.ContentUpdated(currentTextBuilder.get().toString())
+                        // 1) 移除一切空白(空格/制表/换行)，防止被Markdown当作多段文本
+                        val cleanUrl = event.imageUrl.replace(Regex("\\s+"), "")
+                        // 2) 使用尖括号包裹URL，进一步避免URL中残留特殊字符对Markdown解析造成影响
+                        val imageMarkdown = "\n\n![Generated Image](<" + cleanUrl + ">)\n\n"
+                        builder.append(imageMarkdown)
+                        logger.debug("Appended image markdown. url.len=${cleanUrl.length}, md.len=${imageMarkdown.length}")
+                        ProcessedEventResult.ContentUpdated(builder.toString())
                     } else {
-                        // 仅处理文本输出（可选，目前后端可能通过其他方式发送文本输出，或者此处也追加）
-                        // 如果需要显示代码执行的文本输出，可以在这里追加
+                        // 兜底：仅文本输出时以代码块形式追加，并显式闭合
                         if (!event.codeExecutionOutput.isNullOrBlank()) {
                             val outputMarkdown = "\n\n```\n${event.codeExecutionOutput}\n```\n\n"
-                             currentTextBuilder.get().append(outputMarkdown)
-                             ProcessedEventResult.ContentUpdated(currentTextBuilder.get().toString())
+                            builder.append(outputMarkdown)
+                            ProcessedEventResult.ContentUpdated(builder.toString())
                         } else {
                             ProcessedEventResult.NoChange
                         }
