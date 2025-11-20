@@ -50,7 +50,7 @@ object ContentParser {
      * @param text 原始文本
      * @return 解析后的内容块列表
      */
-    fun parseCompleteContent(text: String): List<ContentPart> {
+    fun parseCompleteContent(text: String, isStreaming: Boolean = false): List<ContentPart> {
         if (text.isBlank()) return listOf(ContentPart.Text(text))
         
         try {
@@ -63,7 +63,7 @@ object ContentParser {
                 
                 // 检查是否为代码块开始
                 if (line.trimStart().startsWith("```")) {
-                    val (codeBlock, nextIndex) = extractCodeBlock(lines, currentIndex)
+                    val (codeBlock, nextIndex) = extractCodeBlock(lines, currentIndex, isStreaming)
                     if (codeBlock != null) {
                         parts.add(codeBlock)
                         currentIndex = nextIndex
@@ -150,7 +150,7 @@ object ContentParser {
     /**
      * 提取代码块
      */
-    private fun extractCodeBlock(lines: List<String>, startIndex: Int): Pair<ContentPart.Code?, Int> {
+    private fun extractCodeBlock(lines: List<String>, startIndex: Int, isStreaming: Boolean = false): Pair<ContentPart.Code?, Int> {
         val startLine = lines[startIndex].trimStart()
         if (!startLine.startsWith("```")) return null to startIndex + 1
         
@@ -168,7 +168,13 @@ object ContentParser {
             currentIndex++
         }
         
-        // 未找到结束标记，返回null
+        // 未找到结束标记
+        if (isStreaming) {
+            // 流式模式下，如果未闭合，则认为剩余部分都是代码块
+            return ContentPart.Code(codeLines.joinToString("\n"), language.takeIf { it.isNotBlank() }) to currentIndex
+        }
+        
+        // 非流式模式下，未闭合则不视为有效代码块（回退为文本）
         return null to startIndex + 1
     }
     

@@ -69,10 +69,10 @@ fun TableAwareText(
             // 虽然流式期间完整解析有一定性能开销，但对于一般长度的回复是可以接受的。
             if (isStreaming) {
                 // 流式期间不读写全局缓存，直接解析
-                ContentParser.parseCompleteContent(text)
+                ContentParser.parseCompleteContent(text, isStreaming = true)
             } else {
                 // 非流式：尝试从全局缓存获取，否则完整解析并缓存
-                ContentParseCache.get(contentKey) ?: ContentParser.parseCompleteContent(text).also {
+                ContentParseCache.get(contentKey) ?: ContentParser.parseCompleteContent(text, isStreaming = false).also {
                     if (contentKey.isNotBlank()) ContentParseCache.put(contentKey, it)
                 }
             }

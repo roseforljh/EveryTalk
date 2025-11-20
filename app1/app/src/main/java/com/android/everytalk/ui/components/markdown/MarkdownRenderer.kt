@@ -134,7 +134,7 @@ fun MarkdownRenderer(
                 letterSpacing = if (sender == Sender.User) 0.02f else 0.03f
                 
                 // 🎯 设置居中对齐 - 对多行文本有效
-                gravity = Gravity.CENTER_VERTICAL
+                // gravity = Gravity.CENTER_VERTICAL // 移除垂直居中，避免长文/图片显示异常
                 
                 // 🔒 禁用文本选择但保留长按功能
                 setTextIsSelectable(false)
