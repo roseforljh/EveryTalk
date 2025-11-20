@@ -1,7 +1,12 @@
 package com.android.everytalk.ui.screens.settings
 
 import android.util.Log
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -167,7 +172,7 @@ internal fun AddProviderDialog(
     onDismissRequest: () -> Unit,
     onConfirm: () -> Unit
 ) {
-    val focusRequester = remember { FocusRequester() }
+    // val focusRequester = remember { FocusRequester() } // Removed auto-focus
 
     AlertDialog(
         onDismissRequest = onDismissRequest,
@@ -212,8 +217,8 @@ internal fun AddProviderDialog(
                     placeholder = { Text("例如: OpenRouter, Anthropic...") },
                     singleLine = true,
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .focusRequester(focusRequester),
+                        .fillMaxWidth(),
+                        // .focusRequester(focusRequester), // Removed auto-focus
                     keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
                     keyboardActions = KeyboardActions(onDone = { if (newProviderName.isNotBlank()) onConfirm() }),
                     shape = RoundedCornerShape(16.dp),
@@ -278,9 +283,9 @@ internal fun AddProviderDialog(
         }
     )
 
-    LaunchedEffect(Unit) {
-        focusRequester.requestFocus()
-    }
+    // LaunchedEffect(Unit) {
+    //     focusRequester.requestFocus() // Removed auto-focus
+    // }
 }
 
 @Composable
@@ -355,7 +360,7 @@ internal fun AddNewFullConfigDialog(
     var channelMenuExpanded by remember { mutableStateOf(false) }
     val channels = listOf("OpenAI兼容", "Gemini")
     var selectedChannel by remember { mutableStateOf(channels.first()) }
-    val focusRequesterApiKey = remember { FocusRequester() }
+    // val focusRequesterApiKey = remember { FocusRequester() } // Removed auto-focus
     var textFieldAnchorBounds by remember { mutableStateOf<Rect?>(null) }
     var channelTextFieldAnchorBounds by remember { mutableStateOf<Rect?>(null) }
    var imageSize by remember { mutableStateOf("1024x1024") }
@@ -629,8 +634,8 @@ internal fun AddNewFullConfigDialog(
                         label = { Text("API密钥") },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(bottom = 12.dp)
-                            .focusRequester(focusRequesterApiKey),
+                            .padding(bottom = 12.dp),
+                            // .focusRequester(focusRequesterApiKey), // Removed auto-focus
                         singleLine = true,
                         keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
                         keyboardActions = KeyboardActions(onDone = {
@@ -664,17 +669,29 @@ internal fun AddNewFullConfigDialog(
                             )
                         }
                         
-                        if (showToolsConfig) {
+                        AnimatedVisibility(
+                            visible = showToolsConfig,
+                            enter = expandVertically() + fadeIn(),
+                            exit = shrinkVertically() + fadeOut()
+                        ) {
                             Column(modifier = Modifier.padding(start = 8.dp)) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.fillMaxWidth()
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { enableCodeExecution = !enableCodeExecution }
+                                        .padding(vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Checkbox(
-                                        checked = enableCodeExecution,
-                                        onCheckedChange = { enableCodeExecution = it }
+                                    Text(
+                                        "启用代码执行 (Gemini Native)",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurface
                                     )
-                                    Text("启用代码执行 (Gemini Native)", style = MaterialTheme.typography.bodyMedium)
+                                    RadioButton(
+                                        selected = enableCodeExecution,
+                                        onClick = null // null to pass click to parent Row
+                                    )
                                 }
                                 
                                 OutlinedTextField(
@@ -747,7 +764,7 @@ internal fun EditConfigDialog(
     var toolsJson by remember { mutableStateOf(representativeConfig.toolsJson ?: "") }
     var showToolsConfig by remember { mutableStateOf(false) }
 
-    val focusRequester = remember { FocusRequester() }
+    // val focusRequester = remember { FocusRequester() } // Removed auto-focus
     
     // 固定的渠道类型选项
     val channelTypes = listOf("OpenAI兼容", "Gemini")
@@ -828,8 +845,8 @@ internal fun EditConfigDialog(
                     label = { Text("API密钥") },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(bottom = 12.dp)
-                        .focusRequester(focusRequester),
+                        .padding(bottom = 12.dp),
+                        // .focusRequester(focusRequester), // Removed auto-focus
                     singleLine = true,
                     keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Next),
                     shape = DialogShape,
@@ -911,17 +928,29 @@ internal fun EditConfigDialog(
                         )
                     }
                     
-                    if (showToolsConfig) {
+                    AnimatedVisibility(
+                        visible = showToolsConfig,
+                        enter = expandVertically() + fadeIn(),
+                        exit = shrinkVertically() + fadeOut()
+                    ) {
                         Column(modifier = Modifier.padding(start = 8.dp)) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { enableCodeExecution = !enableCodeExecution }
+                                    .padding(vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Checkbox(
-                                    checked = enableCodeExecution,
-                                    onCheckedChange = { enableCodeExecution = it }
+                                Text(
+                                    "启用代码执行 (Gemini Native)",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
                                 )
-                                Text("启用代码执行 (Gemini Native)", style = MaterialTheme.typography.bodyMedium)
+                                RadioButton(
+                                    selected = enableCodeExecution ?: false,
+                                    onClick = null // null to pass click to parent Row
+                                )
                             }
                             
                             OutlinedTextField(
@@ -968,9 +997,9 @@ internal fun EditConfigDialog(
         }
     )
 
-    LaunchedEffect(Unit) {
-        focusRequester.requestFocus()
-    }
+    // LaunchedEffect(Unit) {
+    //     focusRequester.requestFocus() // Removed auto-focus
+    // }
 }
 
 @Composable
@@ -1217,7 +1246,7 @@ internal fun AddModelDialog(
     onConfirm: (String) -> Unit
 ) {
     var modelName by remember { mutableStateOf("") }
-    val focusRequester = remember { FocusRequester() }
+    // val focusRequester = remember { FocusRequester() } // Removed auto-focus
 
     AlertDialog(
         onDismissRequest = onDismissRequest,
@@ -1270,8 +1299,8 @@ internal fun AddModelDialog(
                     placeholder = { Text("例如: gpt-4-turbo") },
                     singleLine = true,
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .focusRequester(focusRequester),
+                        .fillMaxWidth(),
+                        // .focusRequester(focusRequester), // Removed auto-focus
                     keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
                     keyboardActions = KeyboardActions(onDone = { if (modelName.isNotBlank()) onConfirm(modelName) }),
                     shape = RoundedCornerShape(16.dp),
@@ -1336,7 +1365,7 @@ internal fun AddModelDialog(
         }
     )
 
-    LaunchedEffect(Unit) {
-        focusRequester.requestFocus()
-    }
+    // LaunchedEffect(Unit) {
+    //     focusRequester.requestFocus() // Removed auto-focus
+    // }
 }
