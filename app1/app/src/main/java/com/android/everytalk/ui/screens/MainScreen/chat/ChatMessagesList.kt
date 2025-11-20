@@ -405,7 +405,7 @@ fun ChatMessagesList(
                                 Spacer(Modifier.width(ChatDimensions.LOADING_SPACER_WIDTH))
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(ChatDimensions.LOADING_INDICATOR_SIZE),
-                                    color = MaterialTheme.chatColors.loadingIndicator,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                     strokeWidth = ChatDimensions.LOADING_INDICATOR_STROKE_WIDTH
                                 )
                             }
@@ -430,7 +430,7 @@ fun ChatMessagesList(
                                 Spacer(Modifier.width(ChatDimensions.LOADING_SPACER_WIDTH))
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(ChatDimensions.LOADING_INDICATOR_SIZE),
-                                    color = MaterialTheme.chatColors.loadingIndicator,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                     strokeWidth = ChatDimensions.LOADING_INDICATOR_STROKE_WIDTH
                                 )
                             }
