@@ -290,6 +290,12 @@ class MessageItemsController(
                     else -> ChatListItem.AiMessage(message.id, message.text, state.hasReasoning)
                 }
                 items.add(streamingItem)
+                
+                // 添加执行状态指示器
+                if (!message.executionStatus.isNullOrBlank()) {
+                    items.add(ChatListItem.StatusIndicator(message.id, message.executionStatus))
+                }
+                
                 items
             }
             is com.android.everytalk.ui.state.AiBubbleState.Complete -> {
@@ -318,6 +324,7 @@ class MessageItemsController(
                 if (!message.webSearchResults.isNullOrEmpty()) {
                     items.add(ChatListItem.AiMessageFooter(message))
                 }
+
                 items
             }
             is com.android.everytalk.ui.state.AiBubbleState.Error -> {

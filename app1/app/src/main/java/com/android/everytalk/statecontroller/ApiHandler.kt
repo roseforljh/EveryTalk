@@ -532,6 +532,56 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                         }
                     }
                 }
+                is AppStreamEvent.CodeExecutable -> {
+                    // 显示"正在执行代码"状态，并将代码追加到正文
+                    val code = appEvent.executableCode ?: ""
+                    if (code.isNotBlank()) {
+                        val formattedCode = "\n```${appEvent.codeLanguage ?: "python"}\n$code\n```\n"
+                        stateHolder.appendContentToMessage(aiMessageId, formattedCode, isImageGeneration)
+                        updatedMessage = updatedMessage.copy(
+                            executionStatus = "正在执行代码...",
+                            contentStarted = true
+                        )
+                    }
+                }
+                is AppStreamEvent.CodeExecutionResult -> {
+                    // 清除执行状态，追加执行结果
+                    updatedMessage = updatedMessage.copy(executionStatus = null)
+                    val output = appEvent.codeExecutionOutput
+                    if (!output.isNullOrBlank()) {
+                        val formattedOutput = "\n```text\n$output\n```\n"
+                        stateHolder.appendContentToMessage(aiMessageId, formattedOutput, isImageGeneration)
+                    }
+                    // 如果有图片结果（虽然目前后端通过ImageGeneration事件发送，但保留兼容性）
+                    if (!appEvent.imageUrl.isNullOrBlank()) {
+                        // 处理图片... 暂时略过，主要关注文本流
+                    }
+                }
+                is AppStreamEvent.CodeExecutable -> {
+                    // 显示"正在执行代码"状态，并将代码追加到正文
+                    val code = appEvent.executableCode ?: ""
+                    if (code.isNotBlank()) {
+                        val formattedCode = "\n```${appEvent.codeLanguage ?: "python"}\n$code\n```\n"
+                        stateHolder.appendContentToMessage(aiMessageId, formattedCode, isImageGeneration)
+                        updatedMessage = updatedMessage.copy(
+                            executionStatus = "正在执行代码...",
+                            contentStarted = true
+                        )
+                    }
+                }
+                is AppStreamEvent.CodeExecutionResult -> {
+                    // 清除执行状态，追加执行结果
+                    updatedMessage = updatedMessage.copy(executionStatus = null)
+                    val output = appEvent.codeExecutionOutput
+                    if (!output.isNullOrBlank()) {
+                        val formattedOutput = "\n```text\n$output\n```\n"
+                        stateHolder.appendContentToMessage(aiMessageId, formattedOutput, isImageGeneration)
+                    }
+                    // 如果有图片结果（虽然目前后端通过ImageGeneration事件发送，但保留兼容性）
+                    if (!appEvent.imageUrl.isNullOrBlank()) {
+                        // 处理图片... 暂时略过，主要关注文本流
+                    }
+                }
                 is AppStreamEvent.Text -> {
                     if (processedResult is com.android.everytalk.util.messageprocessor.ProcessedEventResult.ContentUpdated) {
                         val deltaChunk = appEvent.text

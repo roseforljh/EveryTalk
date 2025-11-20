@@ -40,7 +40,8 @@ data class Message(
     val attachments: List<SelectedMediaItem> = emptyList(),
     val outputType: String = "general",
     @Serializable(with = MarkdownPartSerializer::class)
-    val parts: List<MarkdownPart> = emptyList()
+    val parts: List<MarkdownPart> = emptyList(),
+    val executionStatus: String? = null
 ) : IMessage {
     // 检查消息是否包含内联图片
     fun hasInlineImages(): Boolean {

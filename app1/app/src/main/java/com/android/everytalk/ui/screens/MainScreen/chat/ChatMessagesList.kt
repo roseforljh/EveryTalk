@@ -410,6 +410,32 @@ fun ChatMessagesList(
                                 )
                             }
                         }
+                        
+                        is ChatListItem.StatusIndicator -> {
+                            Row(
+                                modifier = Modifier
+                                    .padding(
+                                        start = ChatDimensions.HORIZONTAL_PADDING,
+                                        top = ChatDimensions.VERTICAL_PADDING,
+                                        bottom = ChatDimensions.VERTICAL_PADDING
+                                    ),
+                                verticalAlignment = Alignment.Bottom,
+                                horizontalArrangement = Arrangement.Start
+                            ) {
+                                Text(
+                                    text = item.text,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Spacer(Modifier.width(ChatDimensions.LOADING_SPACER_WIDTH))
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(ChatDimensions.LOADING_INDICATOR_SIZE),
+                                    color = MaterialTheme.chatColors.loadingIndicator,
+                                    strokeWidth = ChatDimensions.LOADING_INDICATOR_STROKE_WIDTH
+                                )
+                            }
+                        }
+                        
                         else -> { /* no-op */ }
                     }
                 }

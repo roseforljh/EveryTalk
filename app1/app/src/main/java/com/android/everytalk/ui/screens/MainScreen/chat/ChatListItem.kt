@@ -66,4 +66,11 @@ sealed interface ChatListItem {
     data class LoadingIndicator(val messageId: String) : ChatListItem {
         override val stableId: String = "${messageId}_loading"
     }
+
+    data class StatusIndicator(
+        val messageId: String,
+        val text: String
+    ) : ChatListItem {
+        override val stableId: String = "${messageId}_status"
+    }
 }
