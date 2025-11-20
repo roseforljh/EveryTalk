@@ -783,13 +783,13 @@ private data class AttachmentProcessingResult(
                         // 2. 联网搜索 (Gemini Native)
                         if (shouldEnableGoogleSearch) {
                             Log.d("MessageSender", "启用Google搜索工具用于Gemini渠道")
-                            toolsList.add(mapOf("google_search" to emptyMap<String, Any>()))
+                            toolsList.add(mapOf("googleSearch" to emptyMap<String, Any>()))
                         }
                         
                         // 3. 代码执行 (Gemini Native)
                         if (currentConfig.enableCodeExecution == true) {
                              Log.d("MessageSender", "启用代码执行工具 (Gemini Native)")
-                             toolsList.add(mapOf("code_execution" to emptyMap<String, Any>()))
+                             toolsList.add(mapOf("codeExecution" to emptyMap<String, Any>()))
                         }
                         
                         toolsList.ifEmpty { null }

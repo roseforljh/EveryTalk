@@ -22,7 +22,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.SelectAll
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.CompositionLocalProvider
@@ -343,6 +345,9 @@ fun ChatScreen(
                                 if (!scrollStateManager.userInteracted) {
                                     scrollStateManager.jumpToBottom()
                                 }
+                            },
+                            onImageClick = { imageUrl ->
+                                viewModel.showImageViewer(imageUrl)
                             }
                         )
                     }
@@ -474,6 +479,73 @@ fun ChatScreen(
             viewModel = viewModel,
             onDismiss = { viewModel.dismissAboutDialog() }
         )
+    }
+
+    // 🎯 图片查看器
+    val showImageViewer by viewModel.showImageViewer.collectAsState()
+    val imageViewerUrl by viewModel.imageViewerUrl.collectAsState()
+
+    if (showImageViewer && imageViewerUrl != null) {
+        // 临时使用一个对话框显示图片，或者如果项目中没有 ImageViewerDialog，我们需要创建一个
+        // 检查之前的文件列表，似乎没有 ImageViewerDialog。
+        // 我们应该在 ui/components 下创建一个 ImageViewerDialog.kt
+        // 但为了快速修复编译错误，我先用一个简单的 Dialog + AsyncImage
+        Dialog(
+            onDismissRequest = { viewModel.dismissImageViewer() },
+            properties = DialogProperties(
+                usePlatformDefaultWidth = false,
+                dismissOnBackPress = true,
+                dismissOnClickOutside = true
+            )
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black)
+                    .clickable { viewModel.dismissImageViewer() },
+                contentAlignment = Alignment.Center
+            ) {
+                com.android.everytalk.ui.components.ProportionalAsyncImage(
+                    model = imageViewerUrl!!,
+                    contentDescription = "Full Screen Image",
+                    modifier = Modifier.fillMaxWidth(),
+                    maxWidth = LocalConfiguration.current.screenWidthDp.dp,
+                    isAiGenerated = false,
+                    onSuccess = { }
+                )
+                
+                // 下载按钮
+                IconButton(
+                    onClick = {
+                        viewModel.downloadImage(imageViewerUrl!!)
+                        // viewModel.dismissImageViewer() // 下载后不一定关闭
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(16.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Download,
+                        contentDescription = "Download",
+                        tint = Color.White
+                    )
+                }
+                
+                // 关闭按钮
+                 IconButton(
+                    onClick = { viewModel.dismissImageViewer() },
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(16.dp)
+                ) {
+                    Icon(
+                        imageVector = androidx.compose.material.icons.Icons.Default.Close,
+                        contentDescription = "Close",
+                        tint = Color.White
+                    )
+                }
+            }
+        }
     }
 
     if (latestReleaseInfo != null) {

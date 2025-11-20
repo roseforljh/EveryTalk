@@ -220,4 +220,6 @@ android {
         implementation("io.noties.markwon:ext-tables:4.6.2")
         // 数学公式支持 - Latex 扩展（使用 JLatexMath 离线渲染）
         implementation("io.noties.markwon:ext-latex:4.6.2")
+        // 图片支持 - 用于渲染 Markdown 中的图片
+        implementation("io.noties.markwon:image:4.6.2")
     }

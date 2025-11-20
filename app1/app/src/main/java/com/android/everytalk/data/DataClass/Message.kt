@@ -42,6 +42,10 @@ data class Message(
     @Serializable(with = MarkdownPartSerializer::class)
     val parts: List<MarkdownPart> = emptyList()
 ) : IMessage {
+    // 检查消息是否包含内联图片
+    fun hasInlineImages(): Boolean {
+        return parts.any { it is MarkdownPart.InlineImage }
+    }
     // 实现IMessage接口的role属性
     override val role: String
         get() = sender.toRole()

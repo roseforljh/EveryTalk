@@ -33,7 +33,7 @@ import com.android.everytalk.statecontroller.AppViewModel
  * - 数学公式（KaTeX）
  * - 流式实时更新
  * 
- * 🔧 架构说明（重构后）：
+ *  架构说明（重构后）：
  * - 使用 collectAsState 订阅流式内容，实现实时更新
  * - 委托给 ContentCoordinator 统一调度不同类型的内容
  * - 单向数据流：Flow → State → UI（无反向依赖，避免无限重组）
@@ -50,6 +50,7 @@ fun EnhancedMarkdownText(
     inTableContext: Boolean = false,
     onLongPress: (() -> Unit)? = null,
     inSelectionDialog: Boolean = false,
+    onImageClick: ((String) -> Unit)? = null, // 🎯 新增
     viewModel: AppViewModel? = null
 ) {
     val textColor = when {
@@ -88,9 +89,6 @@ fun EnhancedMarkdownText(
         }
     }
 
-    // 使用覆盖层拦截：无论内部子项是否消费事件，长按都可触发
-    val needOverlay = onLongPress != null && !inSelectionDialog
-
     // 🎯 委托给 ContentCoordinator 统一调度
     // 优势：
     // 1. 职责分离：数学、表格、纯文本各自独立
@@ -116,22 +114,10 @@ fun EnhancedMarkdownText(
             modifier = widthModifier,
             contentKey = message.id,  // 🎯 传递消息ID作为缓存key
             onLongPress = onLongPress,
+            onImageClick = onImageClick, // 🎯 传递图片点击监听
             sender = message.sender  // 🎯 传递发送者信息
         )
 
-        // 覆盖层（放在最后，位于最上层，确保捕获任何区域的长按）
-        if (needOverlay) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .zIndex(1f)
-                    .pointerInput(Unit) {
-                        detectTapGestures(
-                            onLongPress = { onLongPress?.invoke() }
-                        )
-                    }
-            )
-        }
     }
 }
 

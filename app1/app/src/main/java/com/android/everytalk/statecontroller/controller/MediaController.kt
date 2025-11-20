@@ -23,15 +23,11 @@ class MediaController(
     private val showSnackbar: (String) -> Unit
 ) {
 
-    fun downloadImageFromMessage(message: Message) {
+    fun downloadImage(url: String) {
         scope.launch {
-            val source = message.imageUrls?.firstOrNull() ?: run {
-                showSnackbar("没有可下载的图片")
-                return@launch
-            }
             try {
                 // 原样字节读取（支持 data:image;base64 / http(s) / content:// / file:// / 绝对路径）
-                val loaded = fileManager.loadBytesFromFlexibleSource(source)
+                val loaded = fileManager.loadBytesFromFlexibleSource(url)
                 if (loaded == null) {
                     showSnackbar("无法获取原始图片数据")
                     return@launch
@@ -43,7 +39,7 @@ class MediaController(
                     bytes = bytes,
                     mime = mime,
                     baseName = "EveryTalk_Image",
-                    messageIdHint = message.id.takeLast(6),
+                    messageIdHint = System.currentTimeMillis().toString().takeLast(6),
                     index = 0
                 )
 
@@ -69,6 +65,15 @@ class MediaController(
                 showSnackbar("保存失败: ${e.message}")
             }
         }
+    }
+
+    fun downloadImageFromMessage(message: Message) {
+        val source = message.imageUrls?.firstOrNull()
+        if (source == null) {
+            showSnackbar("没有可下载的图片")
+            return
+        }
+        downloadImage(source)
     }
 
     fun saveBitmapToDownloads(bitmap: Bitmap) {

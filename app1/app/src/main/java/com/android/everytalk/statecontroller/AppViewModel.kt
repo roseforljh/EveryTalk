@@ -32,6 +32,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -1031,6 +1032,34 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
 
     private fun saveBitmapToDownloads(bitmap: Bitmap) {
         mediaController.saveBitmapToDownloads(bitmap)
+    }
+
+    // 🎯 图片查看器
+    private val _showImageViewer = MutableStateFlow(false)
+    val showImageViewer: StateFlow<Boolean> = _showImageViewer.asStateFlow()
+
+    private val _imageViewerUrl = MutableStateFlow<String?>(null)
+    val imageViewerUrl: StateFlow<String?> = _imageViewerUrl.asStateFlow()
+
+    fun showImageViewer(url: String) {
+        _imageViewerUrl.value = url
+        _showImageViewer.value = true
+    }
+
+    fun dismissImageViewer() {
+        _showImageViewer.value = false
+        _imageViewerUrl.value = null
+    }
+
+    fun downloadImage(url: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                mediaController.downloadImage(url)
+            } catch (e: Exception) {
+                Log.e("AppViewModel", "Download image failed", e)
+                showSnackbar("图片下载失败: ${e.message}")
+            }
+        }
     }
  
     fun addConfig(config: ApiConfig, isImageGen: Boolean = false) = configFacade.addConfig(config, isImageGen)

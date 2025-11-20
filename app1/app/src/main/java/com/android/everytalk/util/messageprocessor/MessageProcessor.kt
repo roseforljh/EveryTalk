@@ -69,6 +69,24 @@ class MessageProcessor {
                     // 不对已有内容做任何替换/合并处理，保持已累积文本原样
                     ProcessedEventResult.ContentUpdated(currentTextBuilder.get().toString())
                 }
+                is AppStreamEvent.CodeExecutionResult -> {
+                    // 处理代码执行结果，特别是图片
+                    if (!event.imageUrl.isNullOrBlank()) {
+                        val imageMarkdown = "\n\n![Generated Image](${event.imageUrl})\n\n"
+                        currentTextBuilder.get().append(imageMarkdown)
+                        ProcessedEventResult.ContentUpdated(currentTextBuilder.get().toString())
+                    } else {
+                        // 仅处理文本输出（可选，目前后端可能通过其他方式发送文本输出，或者此处也追加）
+                        // 如果需要显示代码执行的文本输出，可以在这里追加
+                        if (!event.codeExecutionOutput.isNullOrBlank()) {
+                            val outputMarkdown = "\n\n```\n${event.codeExecutionOutput}\n```\n\n"
+                             currentTextBuilder.get().append(outputMarkdown)
+                             ProcessedEventResult.ContentUpdated(currentTextBuilder.get().toString())
+                        } else {
+                            ProcessedEventResult.NoChange
+                        }
+                    }
+                }
                 is AppStreamEvent.Reasoning -> {
                     if (event.text.isNotEmpty()) {
                         currentReasoningBuilder.get().append(event.text)

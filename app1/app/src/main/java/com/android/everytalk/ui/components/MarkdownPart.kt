@@ -23,6 +23,13 @@ sealed class MarkdownPart {
         val content: String,
         val language: String = ""
     ) : MarkdownPart()
+
+    @Serializable
+    data class InlineImage(
+        override val id: String,
+        val mimeType: String,
+        val base64Data: String
+    ) : MarkdownPart()
 }
 
 /**

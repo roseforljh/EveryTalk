@@ -55,7 +55,8 @@ fun ChatMessagesList(
     scrollStateManager: ChatScrollStateManager,
     bubbleMaxWidth: Dp,
     onShowAiMessageOptions: (Message) -> Unit,
-    onImageLoaded: () -> Unit
+    onImageLoaded: () -> Unit,
+    onImageClick: (String) -> Unit
 ) {
     val haptic = LocalHapticFeedback.current
     val coroutineScope = rememberCoroutineScope()
@@ -236,7 +237,8 @@ fun ChatMessagesList(
                                         isStreaming = currentStreamingId == message.id,
                                         messageOutputType = message.outputType,
                                         viewModel = viewModel,
-                                        showMenuButton = false
+                                        showMenuButton = false,
+                                        onImageClick = onImageClick
                                     )
                                 }
                             }
@@ -262,7 +264,8 @@ fun ChatMessagesList(
                                         isStreaming = currentStreamingId == message.id,
                                         messageOutputType = message.outputType,
                                         viewModel = viewModel,
-                                        showMenuButton = false
+                                        showMenuButton = false,
+                                        onImageClick = onImageClick
                                     )
                                 }
                             }
@@ -294,7 +297,8 @@ fun ChatMessagesList(
                                         isStreaming = true,
                                         messageOutputType = message.outputType,
                                         viewModel = viewModel,
-                                        showMenuButton = false
+                                        showMenuButton = false,
+                                        onImageClick = onImageClick
                                     )
                                 }
                             }
@@ -319,7 +323,8 @@ fun ChatMessagesList(
                                         isStreaming = true,
                                         messageOutputType = message.outputType,
                                         viewModel = viewModel,
-                                        showMenuButton = false
+                                        showMenuButton = false,
+                                        onImageClick = onImageClick
                                     )
                                 }
                             }
@@ -435,7 +440,8 @@ fun AiMessageItem(
     isFastScroll: Boolean = false,
     messageOutputType: String,
     viewModel: AppViewModel,
-    showMenuButton: Boolean = true
+    showMenuButton: Boolean = true,
+    onImageClick: ((String) -> Unit)? = null
 ) {
     val shape = RectangleShape
     val aiReplyMessageDescription = stringResource(id = R.string.ai_reply_message)
@@ -482,7 +488,8 @@ fun AiMessageItem(
                         color = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.fillMaxWidth(),
                         isStreaming = false,
-                        onLongPress = onLongPress
+                        onLongPress = onLongPress,
+                        onImageClick = onImageClick
                     )
                 } else {
                     EnhancedMarkdownText(
@@ -492,6 +499,7 @@ fun AiMessageItem(
                         isStreaming = isStreaming,
                         messageOutputType = messageOutputType,
                         onLongPress = onLongPress,
+                        onImageClick = onImageClick,
                         viewModel = viewModel  // 🎯 传递viewModel以获取实时流式文本
                     )
                 }

@@ -2,6 +2,7 @@ package com.android.everytalk.ui.components.markdown
 
 import android.util.TypedValue
 import android.view.MotionEvent
+import android.view.GestureDetector
 import android.view.Gravity
 import android.widget.TextView
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -27,6 +28,11 @@ import org.commonmark.node.Code
 import android.graphics.Typeface
 import android.text.style.StyleSpan
 import android.text.style.ForegroundColorSpan
+import android.text.style.ClickableSpan
+import android.view.View
+import android.text.Spannable
+// import io.noties.markwon.image.ImageSpan // 移除，因为 ImageSpan 是 internal 的或者不可直接访问
+import io.noties.markwon.image.AsyncDrawable // 使用 AsyncDrawable
 import com.android.everytalk.data.DataClass.Sender
 
 /**
@@ -63,6 +69,7 @@ fun MarkdownRenderer(
     color: Color = Color.Unspecified,
     isStreaming: Boolean = false,
     onLongPress: (() -> Unit)? = null,
+    onImageClick: ((String) -> Unit)? = null, // 🎯 新增：图片点击回调
     sender: Sender = Sender.AI
 ) {
     val context = LocalContext.current
@@ -148,24 +155,97 @@ fun MarkdownRenderer(
                 // 🔒 禁用文本选择但保留长按功能
                 setTextIsSelectable(false)
                 highlightColor = android.graphics.Color.TRANSPARENT
-                movementMethod = null
-                linksClickable = false
+                // 🎯 启用 LinkMovementMethod 以支持 ClickableSpan
+                // ⚠️ 注意：LinkMovementMethod 可能会吞噬触摸事件，导致外层 Compose 的手势（如长按）失效。
+                // 解决方案：
+                // 1. 使用自定义的 LinkMovementMethod，在未点击到 Link 时返回 false。
+                // 2. 或者，在 Compose 层使用 pointerInput 处理所有手势，并手动计算点击位置是否命中 Link。
+                //
+                // 这里我们尝试方案 1 的变体：如果是 LinkMovementMethod，它会处理 onTouchEvent。
+                // 如果点击的是图片，ClickableSpan 会响应。
+                // 如果是长按，LinkMovementMethod 默认不处理长按，但 TextView 的 onTouchEvent 会处理长按。
+                //
+                // 问题在于：如果 movementMethod 不为 null，TextView.onTouchEvent 会调用 movementMethod.onTouchEvent。
+                // LinkMovementMethod.onTouchEvent 在 ACTION_UP 时会执行 ClickableSpan.onClick。
+                // 如果它返回 true，事件就被消费了。
+                //
+                // 为了解决冲突，我们可以：
+                // 仅当 onImageClick 存在时设置 movementMethod。
+                // 并且，我们需要确保长按事件能传递出去。
+                //
+                // 实际上，Compose 的 pointerInput (detectTapGestures) 是在 View 的 onTouchEvent 之前还是之后？
+                // AndroidView 内部是一个 View。Compose 的手势是在 Layout 层面处理的。
+                // 如果 View 消费了事件，Compose 可能就收不到了。
+                //
+                // 让我们尝试一种混合策略：
+                // 保持 movementMethod，但确保 TextView 不会因为 movementMethod 而拦截所有事件。
+                // 或者，我们自定义一个 MovementMethod，只处理点击，不消费其他事件。
+                
+                if (onImageClick != null) {
+                    movementMethod = android.text.method.LinkMovementMethod.getInstance()
+                } else {
+                    movementMethod = null
+                }
+                // linksClickable = false // 这行可能导致 ClickableSpan 不工作？不，这只影响 autoLink。
+                
                 isFocusable = false
                 isFocusableInTouchMode = false
                 
-                // ✅ 仅在需要时启用 TextView 自身的长按处理
-                // 对于外层已经有 Compose pointerInput 处理长按（如用户气泡）的场景，
-                // 如果这里始终 isLongClickable = true，会拦截长按事件，导致外层拿不到回调。
-                isLongClickable = onLongPress != null
+                // ✅ 关键：如果设置了 movementMethod，TextView 会在 onTouchEvent 中处理点击。
+                // 为了让外层 Compose 的长按生效，我们需要 TextView 返回 false (未消费)，
+                // 除非点击中了 ClickableSpan。
+                // 但 LinkMovementMethod 的实现通常会消费事件。
+                //
+                // 替代方案：不使用 LinkMovementMethod，而是在 onTouchEvent 中手动检测 ClickableSpan。
+                // 这样我们可以精确控制事件消费。
                 
-                // 设置长按监听器（仅当调用方显式传入 onLongPress 时生效）
-                onLongPress?.let { callback ->
-                    setOnLongClickListener {
-                        callback()
-                        true
+                if (onImageClick != null) {
+                    movementMethod = null // 禁用默认的 MovementMethod
+                    
+                    val gestureDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
+                        override fun onSingleTapUp(e: MotionEvent): Boolean {
+                            val textView = it as TextView
+                            val text = textView.text
+                            if (text is Spannable) {
+                                var x = e.x.toInt()
+                                var y = e.y.toInt()
+                                x -= textView.totalPaddingLeft
+                                y -= textView.totalPaddingTop
+                                x += textView.scrollX
+                                y += textView.scrollY
+                                val layout = textView.layout
+                                val line = layout.getLineForVertical(y)
+                                val off = layout.getOffsetForHorizontal(line, x.toFloat())
+                                val link = text.getSpans(off, off, ClickableSpan::class.java)
+                                if (link.isNotEmpty()) {
+                                    link[0].onClick(textView)
+                                    return true
+                                }
+                            }
+                            return false
+                        }
+                        override fun onLongPress(e: MotionEvent) {
+                             onLongPress?.invoke()
+                        }
+                    })
+
+                    setOnTouchListener { v, event ->
+                        gestureDetector.onTouchEvent(event)
                     }
-                } ?: run {
-                    setOnLongClickListener(null)
+                    isClickable = true
+                    isLongClickable = true
+                } else {
+                    setOnTouchListener(null)
+                    isClickable = false
+                }
+
+                if (onLongPress != null) {
+                   setOnLongClickListener {
+                       onLongPress.invoke()
+                       true
+                   }
+                } else {
+                   setOnLongClickListener(null)
                 }
             }
         },
@@ -179,15 +259,58 @@ fun MarkdownRenderer(
             
             markwon.setMarkdown(tv, processed)
 
-            // 更新长按监听器
-            if (onLongPress != null) {
-                tv.setOnLongClickListener {
-                    onLongPress.invoke()
-                    true
+            // 🎯 处理图片点击事件
+            if (onImageClick != null) {
+                val text = tv.text
+                if (text is Spannable) {
+                    // Markwon 的 ImagesPlugin 使用 ImageSpan 来渲染图片
+                    val imageSpans = text.getSpans(0, text.length, android.text.style.ImageSpan::class.java)
+                    imageSpans.forEach { imageSpan ->
+                        val start = text.getSpanStart(imageSpan)
+                        val end = text.getSpanEnd(imageSpan)
+                        
+                        // 尝试获取 source
+                        var source: String? = null
+                        val drawable = imageSpan.drawable
+                        if (drawable is AsyncDrawable) {
+                            source = drawable.destination
+                        } else {
+                            source = imageSpan.source
+                        }
+
+                        if (source != null) {
+                            // 移除已有的 ClickableSpan（如果有）避免重复叠加
+                            val existingClickables = text.getSpans(start, end, ClickableSpan::class.java)
+                            existingClickables.forEach { text.removeSpan(it) }
+
+                            // 添加新的 ClickableSpan
+                            // 注意：这里需要一个 final 的 source 变量供匿名内部类使用
+                            val finalSource = source
+                            text.setSpan(object : ClickableSpan() {
+                                override fun onClick(widget: View) {
+                                    onImageClick(finalSource)
+                                }
+                                
+                                // 去除下划线
+                                override fun updateDrawState(ds: android.text.TextPaint) {
+                                    super.updateDrawState(ds)
+                                    ds.isUnderlineText = false
+                                }
+                            }, start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                        }
+                    }
                 }
-            } else {
-                tv.setOnLongClickListener(null)
             }
+
+            // 更新长按监听器 - 移除，改由 Compose 层统一处理
+            // if (onLongPress != null) {
+            //    tv.setOnLongClickListener {
+            //        onLongPress.invoke()
+            //        true
+            //    }
+            // } else {
+            //    tv.setOnLongClickListener(null)
+            // }
         }
     )
 }

@@ -65,6 +65,14 @@ sealed class AppStreamEvent {
     @Serializable
     @SerialName("image_generation")
     data class ImageGeneration(val imageUrl: String) : AppStreamEvent()
+
+    @Serializable
+    @SerialName("code_execution_result")
+    data class CodeExecutionResult(
+        @SerialName("codeExecutionOutput") val codeExecutionOutput: String? = null,
+        @SerialName("codeExecutionOutcome") val codeExecutionOutcome: String? = null,
+        @SerialName("imageUrl") val imageUrl: String? = null
+    ) : AppStreamEvent()
 }
 
 @Serializable
