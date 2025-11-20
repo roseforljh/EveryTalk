@@ -166,7 +166,8 @@ fun ChatMessagesList(
                                             scrollStateManager = scrollStateManager,
                                             onImageLoaded = onImageLoaded,
                                             bubbleColor = MaterialTheme.chatColors.userBubble,
-                                            isAiGenerated = false
+                                            isAiGenerated = false,
+                                            onImageClick = onImageClick
                                         )
                                     }
                                     if (item.text.isNotBlank()) {

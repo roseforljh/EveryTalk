@@ -52,6 +52,9 @@ import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.components.ProportionalAsyncImage
 
 import com.android.everytalk.ui.components.EnhancedMarkdownText
+import android.graphics.Bitmap
+import android.util.Base64
+import java.io.ByteArrayOutputStream
 
 private const val CONTEXT_MENU_ANIMATION_DURATION_MS = 150
 private val CONTEXT_MENU_CORNER_RADIUS = 16.dp
@@ -174,7 +177,8 @@ fun AttachmentsContent(
     onImageLoaded: () -> Unit,
     scrollStateManager: com.android.everytalk.ui.screens.MainScreen.chat.ChatScrollStateManager,
     bubbleColor: Color = MaterialTheme.colorScheme.surfaceVariant,
-    isAiGenerated: Boolean = false  // 新增参数标识是否为AI生成
+    isAiGenerated: Boolean = false,  // 新增参数标识是否为AI生成
+    onImageClick: ((String) -> Unit)? = null   // 新增：图片点击放大回调
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
@@ -214,7 +218,13 @@ fun AttachmentsContent(
                                 .pointerInput(message.id, attachment.uri) {
                                     detectTapGestures(
                                         onTap = {
-                                            onAttachmentClick(attachment)
+                                            // 优先使用全屏图片查看回调，否则回退为原先的附件点击
+                                            val url = attachment.uri.toString()
+                                            if (onImageClick != null) {
+                                                onImageClick.invoke(url)
+                                            } else {
+                                                onAttachmentClick(attachment)
+                                            }
                                         },
                                         onLongPress = { localOffset ->
                                             haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
@@ -241,7 +251,16 @@ fun AttachmentsContent(
                                 }
                                 .pointerInput(message.id, attachment.bitmap) {
                                     detectTapGestures(
-                                        onTap = { onAttachmentClick(attachment) },
+                                        onTap = {
+                                            // 将 Bitmap(可空) 转为 data URI，若为空则回退到原附件点击
+                                            val bmp = attachment.bitmap
+                                            val dataUri = bmp?.let { bitmapToDataUri(it) }
+                                            if (onImageClick != null && dataUri != null) {
+                                                onImageClick.invoke(dataUri)
+                                            } else {
+                                                onAttachmentClick(attachment)
+                                            }
+                                        },
                                         onLongPress = { localOffset ->
                                             haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                                             val globalOffset = imageGlobalPosition + localOffset
@@ -398,6 +417,13 @@ private fun getIconForMimeType(mimeType: String?): androidx.compose.ui.graphics.
             else -> Icons.Outlined.AttachFile
         }
     }
+}
+
+private fun bitmapToDataUri(bitmap: Bitmap): String {
+    val output = ByteArrayOutputStream()
+    bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+    val base64 = Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP)
+    return "data:image/png;base64,$base64"
 }
 
 @Composable
