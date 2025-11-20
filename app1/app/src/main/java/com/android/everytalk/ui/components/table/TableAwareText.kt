@@ -11,7 +11,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -56,21 +58,23 @@ fun TableAwareText(
     // 1. 解析状态管理
     // 在流式期间，使用轻量级解析（parseCodeBlocksOnly）；结束后，使用完整解析（parseCompleteContent）。
     // 为了性能，流式期间的解析结果不缓存到全局，仅在组件内记忆。
-    val parsedParts = remember(text) {
-        // 每次文本变化时重新解析
-        // 🎯 修复重影与闪烁 + 恢复表格渲染：
-        // 统一使用 parseCompleteContent，无论流式还是非流式都提取表格。
-        // 这样可以：
-        // 1. 满足用户使用 Compose 表格的需求。
-        // 2. 保证流式期间和结束后的渲染结构一致（都是 ContentPart.Table），消除组件切换导致的闪烁。
-        // 虽然流式期间完整解析有一定性能开销，但对于一般长度的回复是可以接受的。
-        if (isStreaming) {
-            // 流式期间不读写全局缓存，直接解析
-            ContentParser.parseCompleteContent(text)
-        } else {
-            // 非流式：尝试从全局缓存获取，否则完整解析并缓存
-            ContentParseCache.get(contentKey) ?: ContentParser.parseCompleteContent(text).also {
-                if (contentKey.isNotBlank()) ContentParseCache.put(contentKey, it)
+    val parsedParts by produceState<List<ContentPart>>(initialValue = listOf(ContentPart.Text(text)), key1 = text) {
+        value = withContext(Dispatchers.Default) {
+            // 每次文本变化时重新解析
+            // 🎯 修复重影与闪烁 + 恢复表格渲染：
+            // 统一使用 parseCompleteContent，无论流式还是非流式都提取表格。
+            // 这样可以：
+            // 1. 满足用户使用 Compose 表格的需求。
+            // 2. 保证流式期间和结束后的渲染结构一致（都是 ContentPart.Table），消除组件切换导致的闪烁。
+            // 虽然流式期间完整解析有一定性能开销，但对于一般长度的回复是可以接受的。
+            if (isStreaming) {
+                // 流式期间不读写全局缓存，直接解析
+                ContentParser.parseCompleteContent(text)
+            } else {
+                // 非流式：尝试从全局缓存获取，否则完整解析并缓存
+                ContentParseCache.get(contentKey) ?: ContentParser.parseCompleteContent(text).also {
+                    if (contentKey.isNotBlank()) ContentParseCache.put(contentKey, it)
+                }
             }
         }
     }
