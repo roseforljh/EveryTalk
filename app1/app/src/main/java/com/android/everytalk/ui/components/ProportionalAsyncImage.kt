@@ -71,15 +71,20 @@ fun ProportionalAsyncImage(
     // 读取全局尺寸缓存（首帧即占位，防止版式跳动）
     val cacheKey = remember(model) { model?.toString() }
     val cachedSize = remember(cacheKey) { ImageSizeCache.get(cacheKey) }
-    if (preserveAspectRatio && cachedSize != null && !hasCalculatedSize) {
-        val (cw, ch) = cachedSize
-        if (cw > 0 && ch > 0) {
-            val aspect = cw.toFloat() / ch.toFloat()
-            val targetWidthDp = with(density) { cw.toDp() }
-            calculatedModifier = modifier
-                .width(minOf(targetWidthDp, maxWidth))
-                .aspectRatio(aspect)
-            hasCalculatedSize = true
+    
+    // 优化：使用 LaunchedEffect 确保缓存在首帧就生效
+    LaunchedEffect(cacheKey, cachedSize) {
+        if (preserveAspectRatio && cachedSize != null && !hasCalculatedSize) {
+            val (cw, ch) = cachedSize
+            if (cw > 0 && ch > 0) {
+                val aspect = cw.toFloat() / ch.toFloat()
+                val targetWidthDp = with(density) { cw.toDp() }
+                calculatedModifier = modifier
+                    .width(minOf(targetWidthDp, maxWidth))
+                    .aspectRatio(aspect)
+                hasCalculatedSize = true
+                logger.debug("Using cached size for image: ${cw}x${ch}")
+            }
         }
     }
 

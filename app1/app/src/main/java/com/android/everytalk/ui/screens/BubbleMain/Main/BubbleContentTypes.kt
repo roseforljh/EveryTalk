@@ -52,6 +52,7 @@ import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.components.ProportionalAsyncImage
 
 import com.android.everytalk.ui.components.EnhancedMarkdownText
+import com.android.everytalk.ui.components.ImagePreviewDialog
 import android.graphics.Bitmap
 import android.util.Base64
 import java.io.ByteArrayOutputStream
@@ -79,6 +80,7 @@ internal fun UserOrErrorMessageContent(
 ) {
     val haptic = LocalHapticFeedback.current
     var globalPosition by remember { mutableStateOf(Offset.Zero) }
+    var previewUrl by remember { mutableStateOf<String?>(null) }
 
     // 基于发送者动态计算最大宽度：用户71%，AI80%
     val screenDp = LocalConfiguration.current.screenWidthDp.dp
@@ -135,7 +137,8 @@ internal fun UserOrErrorMessageContent(
                         EnhancedMarkdownText(
                             message = message,
                             modifier = Modifier.wrapContentWidth(),
-                            color = contentColor
+                            color = contentColor,
+                            onImageClick = { url -> previewUrl = url }
                         )
                     }
                 }
@@ -162,6 +165,13 @@ internal fun UserOrErrorMessageContent(
             }
         }
 
+        // 全屏图片预览对话框
+        if (previewUrl != null) {
+            ImagePreviewDialog(
+                url = previewUrl!!,
+                onDismiss = { previewUrl = null }
+            )
+        }
     }
 }
 
@@ -182,6 +192,7 @@ fun AttachmentsContent(
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
+    var previewUrlInternal by remember { mutableStateOf<String?>(null) }
 
     // 附件区域也跟随相同的最大宽度限制
     val screenDp = LocalConfiguration.current.screenWidthDp.dp
@@ -203,72 +214,92 @@ fun AttachmentsContent(
                         } else {
                             attachment.uri
                         }
-                        ProportionalAsyncImage(
-                            model = imageModel,
-                            contentDescription = "Image attachment",
-                            maxWidth = attachmentsAppliedMax * 0.8f,
-                            isAiGenerated = isAiGenerated,
-                            onSuccess = { _ -> onImageLoaded() },
+                        // 额外父级宽度约束，防止重组或内部状态重置导致图片短暂“放大占满并左对齐”
+                        Box(
                             modifier = Modifier
+                                .widthIn(
+                                    min = 100.dp,
+                                    max = attachmentsAppliedMax * 0.8f
+                                )
                                 .padding(vertical = 4.dp)
-                                .clip(RoundedCornerShape(16.dp))
-                                .onGloballyPositioned {
-                                    imageGlobalPosition = it.localToRoot(Offset.Zero)
-                                }
-                                .pointerInput(message.id, attachment.uri) {
-                                    detectTapGestures(
-                                        onTap = {
-                                            // 优先使用全屏图片查看回调，否则回退为原先的附件点击
-                                            val url = attachment.uri.toString()
-                                            if (onImageClick != null) {
-                                                onImageClick.invoke(url)
-                                            } else {
-                                                onAttachmentClick(attachment)
+                        ) {
+                            ProportionalAsyncImage(
+                                model = imageModel,
+                                contentDescription = "Image attachment",
+                                maxWidth = attachmentsAppliedMax * 0.8f,
+                                isAiGenerated = isAiGenerated,
+                                onSuccess = { _ -> onImageLoaded() },
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .onGloballyPositioned {
+                                        imageGlobalPosition = it.localToRoot(Offset.Zero)
+                                    }
+                                    .pointerInput(message.id, attachment.uri) {
+                                        detectTapGestures(
+                                            onTap = {
+                                                val url = attachment.uri.toString()
+                                                if (onImageClick != null) {
+                                                    onImageClick.invoke(url)
+                                                } else {
+                                                    // 默认内置预览
+                                                    previewUrlInternal = url
+                                                }
+                                            },
+                                            onLongPress = { localOffset ->
+                                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                                val globalOffset = imageGlobalPosition + localOffset
+                                                onLongPress(message, globalOffset)
                                             }
-                                        },
-                                        onLongPress = { localOffset ->
-                                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                            val globalOffset = imageGlobalPosition + localOffset
-                                            onLongPress(message, globalOffset)
-                                        }
-                                    )
-                                }
-                        )
+                                        )
+                                    }
+                            )
+                        }
                     }
                     is SelectedMediaItem.ImageFromBitmap -> {
                         var imageGlobalPosition by remember { mutableStateOf(Offset.Zero) }
-                        ProportionalAsyncImage(
-                            model = attachment.bitmap,
-                            contentDescription = "Image attachment",
-                            maxWidth = attachmentsAppliedMax * 0.8f,
-                            isAiGenerated = isAiGenerated,
-                            onSuccess = { _ -> onImageLoaded() },
+                        // 额外父级宽度约束，防止重组或内部状态重置导致图片短暂“放大占满并左对齐”
+                        Box(
                             modifier = Modifier
+                                .widthIn(
+                                    min = 100.dp,
+                                    max = attachmentsAppliedMax * 0.8f
+                                )
                                 .padding(vertical = 4.dp)
-                                .clip(RoundedCornerShape(16.dp))
-                                .onGloballyPositioned {
-                                    imageGlobalPosition = it.localToRoot(Offset.Zero)
-                                }
-                                .pointerInput(message.id, attachment.bitmap) {
-                                    detectTapGestures(
-                                        onTap = {
-                                            // 将 Bitmap(可空) 转为 data URI，若为空则回退到原附件点击
-                                            val bmp = attachment.bitmap
-                                            val dataUri = bmp?.let { bitmapToDataUri(it) }
-                                            if (onImageClick != null && dataUri != null) {
-                                                onImageClick.invoke(dataUri)
-                                            } else {
-                                                onAttachmentClick(attachment)
+                        ) {
+                            ProportionalAsyncImage(
+                                model = attachment.bitmap,
+                                contentDescription = "Image attachment",
+                                maxWidth = attachmentsAppliedMax * 0.8f,
+                                isAiGenerated = isAiGenerated,
+                                onSuccess = { _ -> onImageLoaded() },
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .onGloballyPositioned {
+                                        imageGlobalPosition = it.localToRoot(Offset.Zero)
+                                    }
+                                    .pointerInput(message.id, attachment.bitmap) {
+                                        detectTapGestures(
+                                            onTap = {
+                                                val bmp = attachment.bitmap
+                                                val dataUri = bmp?.let { bitmapToDataUri(it) }
+                                                if (dataUri != null) {
+                                                    if (onImageClick != null) {
+                                                        onImageClick.invoke(dataUri)
+                                                    } else {
+                                                        // 默认内置预览
+                                                        previewUrlInternal = dataUri
+                                                    }
+                                                }
+                                            },
+                                            onLongPress = { localOffset ->
+                                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                                val globalOffset = imageGlobalPosition + localOffset
+                                                onLongPress(message, globalOffset)
                                             }
-                                        },
-                                        onLongPress = { localOffset ->
-                                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                            val globalOffset = imageGlobalPosition + localOffset
-                                            onLongPress(message, globalOffset)
-                                        }
-                                    )
-                                }
-                        )
+                                        )
+                                    }
+                            )
+                        }
                     }
                     is SelectedMediaItem.GenericFile -> {
                         var itemGlobalPosition by remember { mutableStateOf(Offset.Zero) }
@@ -363,6 +394,13 @@ fun AttachmentsContent(
             }
         }
 
+        // 内置全屏图片预览对话框（当未外部接管 onImageClick 时）
+        if (previewUrlInternal != null) {
+            com.android.everytalk.ui.components.ImagePreviewDialog(
+                url = previewUrlInternal!!,
+                onDismiss = { previewUrlInternal = null }
+            )
+        }
     }
 }
 

@@ -117,77 +117,84 @@ fun ChatMessagesList(
                 (item is ChatListItem.ErrorMessage &&
                  viewModel.getMessageById((item as ChatListItem.ErrorMessage).messageId)?.sender == com.android.everytalk.data.DataClass.Sender.User)
             
+            // 父容器统一控制左右对齐，避免子树重组/图片尺寸回调致对齐失效
+            val itemAlignment = when (item) {
+                is ChatListItem.UserMessage -> Alignment.CenterEnd
+                is ChatListItem.ErrorMessage -> {
+                    val message = viewModel.getMessageById(item.messageId)
+                    if (message?.sender == com.android.everytalk.data.DataClass.Sender.User) {
+                        Alignment.CenterEnd
+                    } else {
+                        Alignment.CenterStart
+                    }
+                }
+                else -> Alignment.CenterStart
+            }
+
             Box(
                 modifier = if (isUserMessage) {
-                    Modifier.fillMaxWidth() // 用户消息需要fillMaxWidth以便右对齐
+                    Modifier.fillMaxWidth()
                 } else {
-                    Modifier.fillMaxWidth() // AI消息也需要fillMaxWidth以便左对齐
-                }
+                    Modifier.fillMaxWidth()
+                },
+                contentAlignment = itemAlignment
             ) {
-                val alignment = when (item) {
-                    is ChatListItem.UserMessage -> Alignment.CenterEnd
-                    is ChatListItem.ErrorMessage -> {
-                        val message = viewModel.getMessageById(item.messageId)
-                        if (message?.sender == com.android.everytalk.data.DataClass.Sender.User) {
-                            Alignment.CenterEnd
-                        } else {
-                            Alignment.CenterStart
-                        }
-                    }
-                    else -> Alignment.CenterStart
-                }
 
                     // 用户消息直接渲染，不需要Column包装
                     when (item) {
                         is ChatListItem.UserMessage -> {
-                            Column(
-                                modifier = Modifier
-                                    .align(alignment)
-                                    .wrapContentWidth()
+                            // 使用 Row + Arrangement.End 强制右贴齐，避免任何重组或父对齐变化造成漂移
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End,
+                                verticalAlignment = Alignment.Top
                             ) {
-                                val message = viewModel.getMessageById(item.messageId)
-                                if (message != null) {
-                                    if (!item.attachments.isNullOrEmpty()) {
-                                        AttachmentsContent(
-                                            attachments = item.attachments,
-                                            onAttachmentClick = { },
-                                            maxWidth = bubbleMaxWidth * ChatDimensions.USER_BUBBLE_WIDTH_RATIO,
-                                            message = message,
-                                            onEditRequest = { viewModel.requestEditMessage(it) },
-                                            onRegenerateRequest = {
-                                                viewModel.regenerateAiResponse(it, isImageGeneration = false)
-                                                scrollStateManager.jumpToBottom()
-                                            },
-                                            onLongPress = { msg, offset ->
-                                                contextMenuMessage = msg
-                                                contextMenuPressOffset = offset
-                                                isContextMenuVisible = true
-                                            },
-                                            scrollStateManager = scrollStateManager,
-                                            onImageLoaded = onImageLoaded,
-                                            bubbleColor = MaterialTheme.chatColors.userBubble,
-                                            isAiGenerated = false,
-                                            onImageClick = onImageClick
-                                        )
-                                    }
-                                    if (item.text.isNotBlank()) {
-                                        // ✅ 复用已有的 UserOrErrorMessageContent 逻辑来渲染“用户文本气泡”，
-                                        // 其中已经实现了稳定可用的长按坐标计算和菜单回调。
-                                        UserOrErrorMessageContent(
-                                            message = message,
-                                            displayedText = item.text,
-                                            showLoadingDots = false,
-                                            bubbleColor = MaterialTheme.chatColors.userBubble,
-                                            contentColor = MaterialTheme.colorScheme.onSurface,
-                                            isError = false,
-                                            maxWidth = bubbleMaxWidth,
-                                            onLongPress = { msg, offset ->
-                                                contextMenuMessage = msg
-                                                contextMenuPressOffset = offset
-                                                isContextMenuVisible = true
-                                            },
-                                            scrollStateManager = scrollStateManager
-                                        )
+                                Column(
+                                    modifier = Modifier.wrapContentWidth()
+                                ) {
+                                    val message = viewModel.getMessageById(item.messageId)
+                                    if (message != null) {
+                                        if (!item.attachments.isNullOrEmpty()) {
+                                            AttachmentsContent(
+                                                attachments = item.attachments,
+                                                onAttachmentClick = { },
+                                                maxWidth = bubbleMaxWidth * ChatDimensions.USER_BUBBLE_WIDTH_RATIO,
+                                                message = message,
+                                                onEditRequest = { viewModel.requestEditMessage(it) },
+                                                onRegenerateRequest = {
+                                                    viewModel.regenerateAiResponse(it, isImageGeneration = false)
+                                                    scrollStateManager.jumpToBottom()
+                                                },
+                                                onLongPress = { msg, offset ->
+                                                    contextMenuMessage = msg
+                                                    contextMenuPressOffset = offset
+                                                    isContextMenuVisible = true
+                                                },
+                                                scrollStateManager = scrollStateManager,
+                                                onImageLoaded = onImageLoaded,
+                                                bubbleColor = MaterialTheme.chatColors.userBubble,
+                                                isAiGenerated = false,
+                                                onImageClick = onImageClick
+                                            )
+                                        }
+                                        if (item.text.isNotBlank()) {
+                                            // 复用文本气泡渲染
+                                            UserOrErrorMessageContent(
+                                                message = message,
+                                                displayedText = item.text,
+                                                showLoadingDots = false,
+                                                bubbleColor = MaterialTheme.chatColors.userBubble,
+                                                contentColor = MaterialTheme.colorScheme.onSurface,
+                                                isError = false,
+                                                maxWidth = bubbleMaxWidth,
+                                                onLongPress = { msg, offset ->
+                                                    contextMenuMessage = msg
+                                                    contextMenuPressOffset = offset
+                                                    isContextMenuVisible = true
+                                                },
+                                                scrollStateManager = scrollStateManager
+                                            )
+                                        }
                                     }
                                 }
                             }

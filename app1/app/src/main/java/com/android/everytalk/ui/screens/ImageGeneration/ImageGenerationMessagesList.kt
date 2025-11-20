@@ -1453,7 +1453,8 @@ private fun AiMessageItem(
                             color = MaterialTheme.colorScheme.onSurface,
                             isStreaming = isStreaming,
                             messageOutputType = message.outputType,
-                            viewModel = viewModel  // 🎯 传递viewModel以获取实时流式文本
+                            viewModel = viewModel,  // 🎯 传递viewModel以获取实时流式文本
+                            onImageClick = { url -> onOpenPreview(url) } // 🎯 让Markdown内图片单击可直接预览放大
                         )
                     }
                     android.util.Log.d("AiMessageItem", "🖼️ [RENDER] messageId=${message.id.take(8)}, imageUrls=${message.imageUrls?.size}, text='${text.take(20)}...'")
@@ -1480,7 +1481,7 @@ private fun AiMessageItem(
                                 SelectedMediaItem.ImageFromUri(safeUri, UUID.randomUUID().toString())
                             },
                             onAttachmentClick = { _ ->
-                                // 单击直接走“长按-查看图片”的同一路径（使用消息里的 URL）
+                                // 单击直接走"长按-查看图片"的同一路径（使用消息里的 URL）
                                 val firstUrl = message.imageUrls.firstOrNull()
                                 if (!firstUrl.isNullOrBlank()) {
                                     onOpenPreview(firstUrl)
@@ -1494,7 +1495,8 @@ private fun AiMessageItem(
                             onImageLoaded = onImageLoaded,
                             bubbleColor = MaterialTheme.chatColors.aiBubble,
                             scrollStateManager = scrollStateManager,
-                            isAiGenerated = true  // 标识为AI生成的图片
+                            isAiGenerated = true,  // 标识为AI生成的图片
+                            onImageClick = { url -> onOpenPreview(url) }  // 🎯 连接到完整预览功能
                         )
                     }
                 }

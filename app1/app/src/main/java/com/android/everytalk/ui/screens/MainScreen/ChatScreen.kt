@@ -54,6 +54,7 @@ import com.android.everytalk.statecontroller.SimpleModeManager
 import com.android.everytalk.ui.components.AppTopBar
 import com.android.everytalk.ui.components.ScrollToBottomButton
 import com.android.everytalk.ui.components.WebSourcesDialog
+import com.android.everytalk.ui.components.ImagePreviewDialog
 import com.android.everytalk.ui.screens.MainScreen.chat.ChatInputArea
 import com.android.everytalk.ui.screens.MainScreen.chat.ChatMessagesList
 import com.android.everytalk.ui.screens.MainScreen.chat.EditMessageDialog
@@ -486,66 +487,10 @@ fun ChatScreen(
     val imageViewerUrl by viewModel.imageViewerUrl.collectAsState()
 
     if (showImageViewer && imageViewerUrl != null) {
-        // 临时使用一个对话框显示图片，或者如果项目中没有 ImageViewerDialog，我们需要创建一个
-        // 检查之前的文件列表，似乎没有 ImageViewerDialog。
-        // 我们应该在 ui/components 下创建一个 ImageViewerDialog.kt
-        // 但为了快速修复编译错误，我先用一个简单的 Dialog + AsyncImage
-        Dialog(
-            onDismissRequest = { viewModel.dismissImageViewer() },
-            properties = DialogProperties(
-                usePlatformDefaultWidth = false,
-                dismissOnBackPress = true,
-                dismissOnClickOutside = true
-            )
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black)
-                    .clickable { viewModel.dismissImageViewer() },
-                contentAlignment = Alignment.Center
-            ) {
-                com.android.everytalk.ui.components.ProportionalAsyncImage(
-                    model = imageViewerUrl!!,
-                    contentDescription = "Full Screen Image",
-                    modifier = Modifier.fillMaxWidth(),
-                    maxWidth = LocalConfiguration.current.screenWidthDp.dp,
-                    isAiGenerated = false,
-                    onSuccess = { }
-                )
-                
-                // 下载按钮
-                IconButton(
-                    onClick = {
-                        viewModel.downloadImage(imageViewerUrl!!)
-                        // viewModel.dismissImageViewer() // 下载后不一定关闭
-                    },
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(16.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Download,
-                        contentDescription = "Download",
-                        tint = Color.White
-                    )
-                }
-                
-                // 关闭按钮
-                 IconButton(
-                    onClick = { viewModel.dismissImageViewer() },
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(16.dp)
-                ) {
-                    Icon(
-                        imageVector = androidx.compose.material.icons.Icons.Default.Close,
-                        contentDescription = "Close",
-                        tint = Color.White
-                    )
-                }
-            }
-        }
+        ImagePreviewDialog(
+            url = imageViewerUrl!!,
+            onDismiss = { viewModel.dismissImageViewer() }
+        )
     }
 
     if (latestReleaseInfo != null) {
