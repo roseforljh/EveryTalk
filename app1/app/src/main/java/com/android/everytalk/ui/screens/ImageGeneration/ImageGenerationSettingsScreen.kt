@@ -119,7 +119,7 @@ fun ImageGenerationSettingsScreen(
                         viewModel.importSettings(jsonContent, isImageGen = true)
                     }
                 } catch (e: Exception) {
-                    viewModel.showSnackbar("导入失败: ${e.message}")
+                    viewModel.showToast("导入失败: ${e.message}")
                 }
             }
         }

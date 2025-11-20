@@ -174,7 +174,7 @@ object MarkwonCache {
                     override fun configureSpansFactory(builder: MarkwonSpansFactory.Builder) {
                         // 完全替换内联`code`的Span，确保无背景，仅灰色+加粗
                         builder.setFactory(Code::class.java) { _, _ ->
-                            arrayOf(
+                            arrayOf<Any>(
                                 StyleSpan(Typeface.BOLD),
                                 ForegroundColorSpan(android.graphics.Color.parseColor("#9E9E9E"))
                             )

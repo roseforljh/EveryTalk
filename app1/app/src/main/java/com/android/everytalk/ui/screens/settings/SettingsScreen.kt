@@ -141,10 +141,10 @@ fun SettingsScreen(
                                 outputStream.write(jsonContent.toByteArray())
                             }
                         }
-                        viewModel.showSnackbar("配置已导出")
+                        viewModel.showToast("配置已导出")
                     } catch (e: Exception) {
                         Log.e("SettingsScreen", "导出失败", e)
-                        viewModel.showSnackbar("导出失败: ${e.message}")
+                        viewModel.showToast("导出失败: ${e.message}")
                     } finally {
                         exportData = null
                     }
@@ -163,7 +163,7 @@ fun SettingsScreen(
                         viewModel.importSettings(jsonContent, isImageGen = isInImageMode)
                     }
                 } catch (e: Exception) {
-                    viewModel.showSnackbar("导入失败: ${e.message}")
+                    viewModel.showToast("导入失败: ${e.message}")
                 }
             }
         }

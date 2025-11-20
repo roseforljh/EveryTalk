@@ -28,6 +28,7 @@ import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import com.android.everytalk.util.CacheManager
 import android.graphics.Bitmap
 import android.net.Uri
+import android.widget.Toast
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -351,7 +352,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
        dataSource = dataSource,
        exportManager = exportManager,
        json = json,
-       showSnackbar = ::showSnackbar,
+       showSnackbar = { showToast(it) },
        scope = viewModelScope
    )
 
@@ -421,7 +422,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
        modelFetchManager = modelFetchManager,
        configManager = configManager,
        scope = viewModelScope,
-       showSnackbar = ::showSnackbar,
+       showSnackbar = { showToast(it) },
        emitManualModelInputRequest = { provider, address, key, channel, isImageGen, enableCodeExecution, toolsJson ->
            // 控制器请求显示“手动输入模型”对话框时，通过 SharedFlow 通知 UI
            viewModelScope.launch {
@@ -716,6 +717,12 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
 
     fun showSnackbar(message: String) {
         viewModelScope.launch { stateHolder._snackbarMessage.emit(message) }
+    }
+
+    fun showToast(message: String) {
+        viewModelScope.launch(Dispatchers.Main) {
+            Toast.makeText(getApplication(), message, Toast.LENGTH_SHORT).show()
+        }
     }
 
     fun setSearchActiveInDrawer(isActive: Boolean) {
@@ -1309,12 +1316,20 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         enableCodeExecution: Boolean? = null,
         toolsJson: String? = null
     ) {
-        // 注意：这里需要确保 PendingConfigParams 的定义在 ViewModelStateHolder.kt 中已更新
-        // 如果 ViewModelStateHolder.kt 没有更新，这里会报错
-        // 暂时假设 ViewModelStateHolder.kt 已经更新或者我们将在这里更新它
-        // 由于我无法同时修改两个文件，我需要先修改 ViewModelStateHolder.kt
-        // 但根据之前的操作，我似乎没有修改 ViewModelStateHolder.kt 中的 PendingConfigParams
-        // 让我先检查一下 ViewModelStateHolder.kt
+        // 1) 记录挂起参数，后续“自动获取/手动输入/选择模型”公用
+        stateHolder._pendingConfigParams.value = PendingConfigParams(
+            provider = provider.trim(),
+            address = address.trim(),
+            key = key.trim(),
+            channel = channel.trim(),
+            isImageGen = isImageGen,
+            enableCodeExecution = enableCodeExecution,
+            toolsJson = toolsJson
+        )
+        // 2) 清理上一次的模型获取结果，避免旧数据残留
+        clearFetchedModels()
+        // 3) 弹出“是否自动获取模型列表”的确认对话框
+        stateHolder._showAutoFetchConfirmDialog.value = true
     }
 
     fun onConfirmAutoFetch() {

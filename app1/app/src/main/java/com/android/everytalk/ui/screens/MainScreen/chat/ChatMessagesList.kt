@@ -18,6 +18,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import android.os.SystemClock
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
@@ -65,6 +66,8 @@ fun ChatMessagesList(
     var isContextMenuVisible by remember { mutableStateOf(false) }
     var contextMenuMessage by remember { mutableStateOf<Message?>(null) }
     var contextMenuPressOffset by remember { mutableStateOf(Offset.Zero) }
+    // 防重复触发：在极短时间内只允许一次预览弹出
+    var lastImagePreviewAt by remember { mutableStateOf(0L) }
 
     val isApiCalling by viewModel.isTextApiCalling.collectAsState()
     val currentStreamingId by viewModel.currentTextStreamingAiMessageId.collectAsState()
@@ -238,7 +241,13 @@ fun ChatMessagesList(
                                         messageOutputType = message.outputType,
                                         viewModel = viewModel,
                                         showMenuButton = false,
-                                        onImageClick = onImageClick
+                                        onImageClick = { url ->
+                                            val now = SystemClock.elapsedRealtime()
+                                            if (now - lastImagePreviewAt > 500) {
+                                                lastImagePreviewAt = now
+                                                onImageClick(url)
+                                            }
+                                        }
                                     )
                                 }
                             }
@@ -265,7 +274,13 @@ fun ChatMessagesList(
                                         messageOutputType = message.outputType,
                                         viewModel = viewModel,
                                         showMenuButton = false,
-                                        onImageClick = onImageClick
+                                        onImageClick = { url ->
+                                            val now = SystemClock.elapsedRealtime()
+                                            if (now - lastImagePreviewAt > 500) {
+                                                lastImagePreviewAt = now
+                                                onImageClick(url)
+                                            }
+                                        }
                                     )
                                 }
                             }
@@ -298,7 +313,13 @@ fun ChatMessagesList(
                                         messageOutputType = message.outputType,
                                         viewModel = viewModel,
                                         showMenuButton = false,
-                                        onImageClick = onImageClick
+                                        onImageClick = { url ->
+                                            val now = SystemClock.elapsedRealtime()
+                                            if (now - lastImagePreviewAt > 500) {
+                                                lastImagePreviewAt = now
+                                                onImageClick(url)
+                                            }
+                                        }
                                     )
                                 }
                             }
@@ -324,7 +345,13 @@ fun ChatMessagesList(
                                         messageOutputType = message.outputType,
                                         viewModel = viewModel,
                                         showMenuButton = false,
-                                        onImageClick = onImageClick
+                                        onImageClick = { url ->
+                                            val now = SystemClock.elapsedRealtime()
+                                            if (now - lastImagePreviewAt > 500) {
+                                                lastImagePreviewAt = now
+                                                onImageClick(url)
+                                            }
+                                        }
                                     )
                                 }
                             }
@@ -455,11 +482,8 @@ fun AiMessageItem(
             modifier = Modifier
                 .wrapContentWidth()
                 .widthIn(max = maxWidth) // 🎯 AI气泡最大宽度设置为100%
-                .pointerInput(message.id) {
-                    detectTapGestures(
-                        onLongPress = { onLongPress() }
-                    )
-                }
+                // 移除 pointerInput(detectTapGestures)，因为它会拦截子 View 的点击事件
+                // 长按事件现由 MarkdownRenderer 内部的 setOnLongClickListener 处理
                 .semantics {
                     contentDescription = aiReplyMessageDescription
                 },

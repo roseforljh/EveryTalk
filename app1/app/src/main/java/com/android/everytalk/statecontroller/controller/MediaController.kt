@@ -11,6 +11,9 @@ import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.util.FileManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import android.widget.Toast
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * MediaController
@@ -23,13 +26,19 @@ class MediaController(
     private val showSnackbar: (String) -> Unit
 ) {
 
+    private suspend fun showToast(message: String) {
+        withContext(Dispatchers.Main) {
+            Toast.makeText(application, message, Toast.LENGTH_SHORT).show()
+        }
+    }
+
     fun downloadImage(url: String) {
         scope.launch {
             try {
                 // 原样字节读取（支持 data:image;base64 / http(s) / content:// / file:// / 绝对路径）
                 val loaded = fileManager.loadBytesFromFlexibleSource(url)
                 if (loaded == null) {
-                    showSnackbar("无法获取原始图片数据")
+                    showToast("无法获取原始图片数据")
                     return@launch
                 }
                 val (bytes, mime) = loaded
@@ -52,17 +61,17 @@ class MediaController(
 
                 when {
                     !internalPath.isNullOrBlank() && savedUri != null ->
-                        showSnackbar("原图已保存：应用空间与相册")
+                        showToast("原图已保存：应用空间与相册")
                     savedUri != null ->
-                        showSnackbar("原图已保存到相册")
+                        showToast("原图已保存到相册")
                     !internalPath.isNullOrBlank() ->
-                        showSnackbar("原图已保存到应用空间")
+                        showToast("原图已保存到应用空间")
                     else ->
-                        showSnackbar("保存失败：无法写入存储")
+                        showToast("保存失败：无法写入存储")
                 }
             } catch (e: Exception) {
                 Log.e("MediaController", "原图保存失败", e)
-                showSnackbar("保存失败: ${e.message}")
+                showToast("保存失败: ${e.message}")
             }
         }
     }
@@ -70,51 +79,54 @@ class MediaController(
     fun downloadImageFromMessage(message: Message) {
         val source = message.imageUrls?.firstOrNull()
         if (source == null) {
-            showSnackbar("没有可下载的图片")
+            scope.launch { showToast("没有可下载的图片") }
             return
         }
         downloadImage(source)
     }
 
     fun saveBitmapToDownloads(bitmap: Bitmap) {
-        val contentResolver = application.contentResolver
-        val imageCollection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-        } else {
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-        }
-
-        val contentDetails = ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, "EveryTalk_Image_${System.currentTimeMillis()}.jpg")
-            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                put(MediaStore.Images.Media.IS_PENDING, 1)
+        scope.launch(Dispatchers.IO) {
+            val contentResolver = application.contentResolver
+            val imageCollection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            } else {
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI
             }
-        }
 
-        val imageUri: Uri? = contentResolver.insert(imageCollection, contentDetails)
-        imageUri?.let {
-            try {
-                contentResolver.openOutputStream(it).use { outputStream ->
-                    if (outputStream != null) {
-                        bitmap.compress(Bitmap.CompressFormat.JPEG, 100, outputStream)
-                    } else {
-                        throw Exception("无法打开输出流")
-                    }
-                }
+            val contentDetails = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, "EveryTalk_Image_${System.currentTimeMillis()}.jpg")
+                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    contentDetails.clear()
-                    contentDetails.put(MediaStore.Images.Media.IS_PENDING, 0)
-                    contentResolver.update(it, contentDetails, null, null)
+                    put(MediaStore.Images.Media.IS_PENDING, 1)
                 }
-                showSnackbar("图片已保存")
-            } catch (e: Exception) {
-                Log.e("MediaController", "保存图片失败", e)
-                contentResolver.delete(it, null, null) // 清理失败的条目
-                showSnackbar("保存失败: ${e.message}")
             }
-        } ?: run {
-            throw Exception("无法创建MediaStore条目")
+
+            val imageUri: Uri? = contentResolver.insert(imageCollection, contentDetails)
+            imageUri?.let {
+                try {
+                    contentResolver.openOutputStream(it).use { outputStream ->
+                        if (outputStream != null) {
+                            bitmap.compress(Bitmap.CompressFormat.JPEG, 100, outputStream)
+                        } else {
+                            throw Exception("无法打开输出流")
+                        }
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        contentDetails.clear()
+                        contentDetails.put(MediaStore.Images.Media.IS_PENDING, 0)
+                        contentResolver.update(it, contentDetails, null, null)
+                    }
+                    showToast("图片已保存")
+                } catch (e: Exception) {
+                    Log.e("MediaController", "保存图片失败", e)
+                    contentResolver.delete(it, null, null) // 清理失败的条目
+                    showToast("保存失败: ${e.message}")
+                }
+            } ?: run {
+                // throw Exception("无法创建MediaStore条目")
+                showToast("无法创建MediaStore条目")
+            }
         }
     }
 }

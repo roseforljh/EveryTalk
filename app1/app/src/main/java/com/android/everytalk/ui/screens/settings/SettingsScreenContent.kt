@@ -340,10 +340,14 @@ private fun ApiKeyItemGroup(
     }
     val providerName =
         configsInGroup.firstOrNull()?.provider?.ifBlank { null } ?: "综合平台"
-    // 默认配置组标识(支持文本和图像模式)
+    // 默认配置组标识：
+    // - 始终将“默认/default”视为默认组
+    // - 在图像模式下，将“硅基流动/siliconflow”视为默认组（不可删除）
     val firstCfg = configsInGroup.firstOrNull()
-    val isDefaultGroup = firstCfg != null
-            && firstCfg.provider.trim().lowercase() in listOf("默认","default")
+    val isDefaultGroup = firstCfg != null && (
+        firstCfg.provider.trim().lowercase() in listOf("默认","default") ||
+        (modalityType == ModalityType.IMAGE && firstCfg.provider.trim().lowercase() in listOf("硅基流动","siliconflow"))
+    )
     val isDarkMode = isSystemInDarkTheme()
     val cardContainerColor = if (isDarkMode) {
         Color.Black

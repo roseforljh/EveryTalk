@@ -424,9 +424,8 @@ internal fun AddNewFullConfigDialog(
         },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                // 仅图像模式下限制平台列表为：即梦、硅基流动、Nano Banana
-                val imageModeProviders = listOf("即梦", "硅基流动", "Nano Banana")
-                val providersToShow = if (isImageMode) imageModeProviders else allProviders
+                // 图像模式与文本模式一致：展示所有可用平台
+                val providersToShow = allProviders
                 val isDefaultSel = false // 移除默认选项，此变量保持为 false
                 val isGoogleProvider = provider.trim().lowercase() in listOf("google","谷歌")
                 // 当平台为 Google 时，通道锁定为 Gemini
@@ -457,16 +456,14 @@ internal fun AddNewFullConfigDialog(
                                 textFieldAnchorBounds = coordinates.boundsInWindow()
                             },
                         trailingIcon = {
-                            // 图像模式下不允许新增/自定义平台（仅显示三项），隐藏右侧加号
-                            if (!isImageMode) {
-                                IconButton(onClick = {
-                                    if (providerMenuExpanded && allProviders.isNotEmpty()) {
-                                        providerMenuExpanded = false
-                                    }
-                                    onShowAddCustomProviderDialog()
-                                }) {
-                                    Icon(Icons.Outlined.Add, "添加自定义平台")
+                            // 统一允许添加自定义平台
+                            IconButton(onClick = {
+                                if (providerMenuExpanded && allProviders.isNotEmpty()) {
+                                    providerMenuExpanded = false
                                 }
+                                onShowAddCustomProviderDialog()
+                            }) {
+                                Icon(Icons.Outlined.Add, "添加自定义平台")
                             }
                         },
                         shape = DialogShape,
@@ -493,19 +490,19 @@ internal fun AddNewFullConfigDialog(
                                                 color = MaterialTheme.colorScheme.onSurface,
                                                 modifier = Modifier.weight(1f)
                                             )
-                                            // 图像模式下固定三项且不可删除，隐藏右侧删除按钮
+                                            // 统一删除策略：仅保护部分系统预置平台，其他均可删除
                                             val lower = providerItem.lowercase().trim()
-                                            val imageModeLocked = isImageMode && listOf("即梦","硅基流动","nano banana").contains(lower)
                                             val nonDeletableProviders = listOf(
                                                 "openai compatible",
                                                 "google",
-                                                "硅基流动",
                                                 "阿里云百炼",
                                                 "火山引擎",
                                                 "深度求索",
-                                                "openrouter"
+                                                "openrouter",
+                                                "硅基流动",
+                                                "siliconflow"
                                             )
-                                            val canDelete = !imageModeLocked && !nonDeletableProviders.contains(lower)
+                                            val canDelete = !nonDeletableProviders.contains(lower)
                                             if (canDelete) {
                                                 IconButton(
                                                     onClick = {

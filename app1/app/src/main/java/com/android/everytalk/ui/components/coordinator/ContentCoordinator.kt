@@ -48,18 +48,13 @@ fun ContentCoordinator(
             "递归深度超限($recursionDepth)，直接渲染以避免ANR"
         )
         // 统一包裹长按（即便在深层也可触发）
-        val longPressWrapperModifier = if (onLongPress != null) {
-            Modifier.combinedClickable(onClick = {}, onLongClick = { onLongPress() })
-        } else {
-            Modifier
-        }
+        // 移除 combinedClickable，因为它会拦截子 View 的点击事件
         MarkdownRenderer(
             markdown = text,
             style = style,
             color = color,
             modifier = modifier
-                .then(widthModifier)
-                .then(longPressWrapperModifier),
+                .then(widthModifier),
             isStreaming = isStreaming,
             onLongPress = onLongPress,
             onImageClick = onImageClick,
@@ -83,41 +78,29 @@ fun ContentCoordinator(
         // 🎯 只根据流式状态判断是否使用轻量模式
         val shouldUseLightweight = isStreaming
 
-        val longPressWrapperModifier = if (onLongPress != null) {
-            Modifier.combinedClickable(onClick = {}, onLongClick = { onLongPress() })
-        } else {
-            Modifier
-        }
-        
         TableAwareText(
             text = text,
             style = style,
             color = color,
             isStreaming = shouldUseLightweight, // true=轻量；false=完整（仅纯表格）
             modifier = modifier
-                .then(widthModifier)
-                .then(longPressWrapperModifier),
+                .then(widthModifier),
             recursionDepth = recursionDepth,
             contentKey = contentKey,  // 🎯 传递缓存key
-            onLongPress = onLongPress
+            onLongPress = onLongPress,
+            onImageClick = onImageClick
         )
         return
     }
     
     // 🎯 优先级3：纯文本（无代码块、表格）
     // 数学公式 $...$ 与 $$...$$ 由 MarkdownRenderer 的 JLatexMathPlugin 统一处理
-    val longPressWrapperModifier = if (onLongPress != null) {
-        Modifier.combinedClickable(onClick = {}, onLongClick = { onLongPress() })
-    } else {
-        Modifier
-    }
     MarkdownRenderer(
         markdown = text,
         style = style,
         color = color,
         modifier = modifier
-            .then(widthModifier)
-            .then(longPressWrapperModifier),
+            .then(widthModifier),
         isStreaming = isStreaming,
         onLongPress = onLongPress,
         onImageClick = onImageClick,

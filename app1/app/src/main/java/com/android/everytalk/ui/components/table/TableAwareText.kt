@@ -47,7 +47,8 @@ fun TableAwareText(
     modifier: Modifier = Modifier,
     recursionDepth: Int = 0,
     contentKey: String = "",  // 🎯 新增：用于缓存key（通常为消息ID）
-    onLongPress: (() -> Unit)? = null
+    onLongPress: (() -> Unit)? = null,
+    onImageClick: ((String) -> Unit)? = null
 ) {
     // 🎯 方案二：实时分段解析与统一渲染
     // 无论是否流式，都尝试进行轻量级分段解析（仅分离代码块，表格仍由MarkdownRenderer处理或后续优化）
@@ -87,7 +88,8 @@ fun TableAwareText(
                         color = color,
                         modifier = Modifier.fillMaxWidth(),
                         isStreaming = isStreaming, // 传递流式状态给MarkdownRenderer（用于内部优化）
-                        onLongPress = onLongPress
+                        onLongPress = onLongPress,
+                        onImageClick = onImageClick
                     )
                 }
                 is ContentPart.Code -> {

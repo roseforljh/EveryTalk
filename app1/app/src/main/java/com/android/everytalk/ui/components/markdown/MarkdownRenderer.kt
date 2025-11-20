@@ -31,33 +31,20 @@ import android.text.style.ForegroundColorSpan
 import android.text.style.ClickableSpan
 import android.view.View
 import android.text.Spannable
-// import io.noties.markwon.image.ImageSpan // 移除，因为 ImageSpan 是 internal 的或者不可直接访问
 import io.noties.markwon.image.AsyncDrawable // 使用 AsyncDrawable
+import io.noties.markwon.image.AsyncDrawableSpan
 import com.android.everytalk.data.DataClass.Sender
 
-/**
- * 使用 Markwon 渲染 Markdown（TextView + Spannable）
- *
- * 设计要点
- * - 无 WebView、无 HTML 中间态，直接 Spannable，稳定且高性能
- * - 通过 AndroidView 包裹 TextView，Compose 层保持单一组件，避免流式结束的组件类型切换
- * - isStreaming 期间多次 setMarkdown 仅更新同一 TextView，减少重排
- */
-// 预编译的正则表达式，避免重复编译
+
 private val MULTIPLE_SPACES_REGEX = Regex(" {2,}")
 private val ENUM_ITEM_REGEX = Regex("(?<!\n)\\s+([A-DＡ-Ｄ][\\.．、])\\s")
 
 private fun preprocessAiMarkdown(input: String): String {
     var s = input
-    // 1) 规范空白：将 HTML 不换行空格与全角空格替换为普通空格
     s = s.replace("&nbsp;", " ")
         .replace("\u00A0", " ")
         .replace("\u3000", " ")
-    // 2) 合并连续空格，避免在同一段中过宽
-    s = s.replace(MULTIPLE_SPACES_REGEX, " ")
-    // 3) 把 " A. / B. / C. / D. " 这类枚举项从同一行拆为多行列表
-    //    例如："... 四大益处  A. xxx  B. yyy  C. zzz  D. www"
-    //    变为每项单独一行，交给 Markdown 渲染为列表
+    s = s.replace(MULTIPLE_SPACES_REGEX, " ") 
     s = s.replace(ENUM_ITEM_REGEX, "\n- $1 ")
     return s
 }
@@ -69,15 +56,12 @@ fun MarkdownRenderer(
     color: Color = Color.Unspecified,
     isStreaming: Boolean = false,
     onLongPress: (() -> Unit)? = null,
-    onImageClick: ((String) -> Unit)? = null, // 🎯 新增：图片点击回调
+    onImageClick: ((String) -> Unit)? = null, 
     sender: Sender = Sender.AI
 ) {
     val context = LocalContext.current
     val isDark = isSystemInDarkTheme()
     
-    // 🎯 性能优化：使用全局缓存避免重复初始化
-    // 修复前：每次重组都初始化Markwon，流式结束后4次初始化耗时200-400ms
-    // 修复后：全局缓存，后续命中缓存<1ms
     val textSizeSp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
     val markwon = remember(isDark, textSizeSp) {
         MarkwonCache.getOrCreate(
@@ -93,7 +77,7 @@ fun MarkdownRenderer(
         else -> MaterialTheme.colorScheme.onSurface
     }
 
-    // 🎯 根据发送者决定AndroidView的宽度策略
+    // 
     val viewModifier = if (sender == Sender.User) {
         modifier.wrapContentWidth()
     } else {
@@ -200,43 +184,99 @@ fun MarkdownRenderer(
                 // 这样我们可以精确控制事件消费。
                 
                 if (onImageClick != null) {
-                    movementMethod = null // 禁用默认的 MovementMethod
-                    
-                    val gestureDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
-                        override fun onSingleTapUp(e: MotionEvent): Boolean {
-                            val textView = it as TextView
-                            val text = textView.text
-                            if (text is Spannable) {
-                                var x = e.x.toInt()
-                                var y = e.y.toInt()
-                                x -= textView.totalPaddingLeft
-                                y -= textView.totalPaddingTop
-                                x += textView.scrollX
-                                y += textView.scrollY
-                                val layout = textView.layout
-                                val line = layout.getLineForVertical(y)
-                                val off = layout.getOffsetForHorizontal(line, x.toFloat())
-                                val link = text.getSpans(off, off, ClickableSpan::class.java)
-                                if (link.isNotEmpty()) {
-                                    link[0].onClick(textView)
-                                    return true
-                                }
-                            }
-                            return false
-                        }
-                        override fun onLongPress(e: MotionEvent) {
-                             onLongPress?.invoke()
-                        }
-                    })
-
-                    setOnTouchListener { v, event ->
-                        gestureDetector.onTouchEvent(event)
-                    }
+                    // 自定义触摸监听：优先检测是否命中 ClickableSpan（图片），
+                    // 如果命中则执行 onClick 并消费事件；
+                    // 否则返回 false 交由父层处理（如长按等）。
+                    movementMethod = null // 禁用 LinkMovementMethod，完全手动接管
+                    linksClickable = false
                     isClickable = true
                     isLongClickable = true
+
+                    setOnTouchListener { v, event ->
+                        // 仅在 ACTION_UP 时检测点击
+                        if (event.action == MotionEvent.ACTION_UP) {
+                            val tvLocal = v as TextView
+                            val text = tvLocal.text
+                            if (text is android.text.Spannable) {
+                                var x = event.x.toInt()
+                                var y = event.y.toInt()
+
+                                x -= tvLocal.totalPaddingLeft
+                                y -= tvLocal.totalPaddingTop
+                                x += tvLocal.scrollX
+                                y += tvLocal.scrollY
+
+                                val layout = tvLocal.layout
+                                if (layout != null) {
+                                    val line = layout.getLineForVertical(y)
+                                    val off = layout.getOffsetForHorizontal(line, x.toFloat())
+
+                                    // 几何命中测试：直接检查触摸点是否在 ImageSpan 的 bounds 内
+                                    // 这种方式不依赖 getOffsetForHorizontal 的光标位置计算，对图片更准确
+                                    val lineStart = layout.getLineStart(line)
+                                    val lineEnd = layout.getLineEnd(line)
+                                    
+                                    // 1. 查找该行内的所有图片 Span (AsyncDrawableSpan)
+                                    val imageSpans = text.getSpans(lineStart, lineEnd, AsyncDrawableSpan::class.java)
+                                    
+                                    for (imageSpan in imageSpans) {
+                                        val spanStart = text.getSpanStart(imageSpan)
+                                        // 获取图片在该行的水平位置
+                                        val xStart = layout.getPrimaryHorizontal(spanStart)
+                                        val drawable = imageSpan.drawable
+                                        val bounds = drawable.bounds
+                                        val width = bounds.width()
+                                        
+                                        // 检查 x 坐标是否在图片范围内 (允许一定的触摸误差)
+                                        val touchSlop = 20
+                                        if (x >= (xStart - touchSlop) && x <= (xStart + width + touchSlop)) {
+                                            // 命中！查找对应的 source 并触发点击
+                                            val source = if (drawable is AsyncDrawable) drawable.destination else null
+                                            if (!source.isNullOrEmpty()) {
+                                                android.util.Log.d("MarkdownRenderer", "🎯 Geometric Hit: x=$x, imgX=$xStart, w=$width, src=$source")
+                                                onImageClick(source)
+                                                return@setOnTouchListener true
+                                            }
+                                        }
+                                    }
+
+                                    // 2. 兜底：查找 ImageSpan (非 AsyncDrawableSpan)
+                                    val standardImageSpans = text.getSpans(lineStart, lineEnd, android.text.style.ImageSpan::class.java)
+                                    for (imageSpan in standardImageSpans) {
+                                        val spanStart = text.getSpanStart(imageSpan)
+                                        val xStart = layout.getPrimaryHorizontal(spanStart)
+                                        val drawable = imageSpan.drawable
+                                        val width = drawable.bounds.width()
+                                        
+                                        if (x >= xStart && x <= (xStart + width)) {
+                                            val source = imageSpan.source
+                                            if (!source.isNullOrEmpty()) {
+                                                android.util.Log.d("MarkdownRenderer", "🎯 Geometric Hit (Standard): src=$source")
+                                                onImageClick(source)
+                                                return@setOnTouchListener true
+                                            }
+                                        }
+                                    }
+
+                                    android.util.Log.d("MarkdownRenderer", "No geometric image hit at line $line, x=$x")
+                                }
+                            }
+                        }
+                        // 返回 false，让 View 继续处理长按等其他事件
+                        false
+                    }
+
+                    // 明确提供长按回调
+                    setOnLongClickListener {
+                        onLongPress?.invoke()
+                        true
+                    }
                 } else {
+                    movementMethod = null
+                    linksClickable = false
                     setOnTouchListener(null)
                     isClickable = false
+                    setOnLongClickListener(null)
                 }
 
                 if (onLongPress != null) {
@@ -251,53 +291,67 @@ fun MarkdownRenderer(
         },
         update = { tv ->
             val processed = preprocessAiMarkdown(markdown)
-            
+
             // 调试：检查是否包含数学公式
             if (processed.contains("$")) {
                 android.util.Log.d("MarkdownRenderer", "📐 检测到数学公式标记: ${processed.take(100)}")
             }
-            
+
             markwon.setMarkdown(tv, processed)
 
-            // 🎯 处理图片点击事件
+            // 🎯 处理图片点击事件（兼容 AsyncDrawableSpan 与 ImageSpan）
             if (onImageClick != null) {
                 val text = tv.text
                 if (text is Spannable) {
-                    // Markwon 的 ImagesPlugin 使用 ImageSpan 来渲染图片
+                    // 1) 先处理 Markwon 的 AsyncDrawableSpan
+                    val asyncSpans = text.getSpans(0, text.length, AsyncDrawableSpan::class.java)
+                    asyncSpans.forEach { span ->
+                        val start = text.getSpanStart(span)
+                        val end = text.getSpanEnd(span)
+                        val drawable = span.drawable
+                        val source: String? = if (drawable is AsyncDrawable) drawable.destination else null
+
+                        // 清理该范围内的历史 ClickableSpan，防止叠加
+                        text.getSpans(start, end, ClickableSpan::class.java).forEach { text.removeSpan(it) }
+
+                        val finalSource = source ?: ""
+                        android.util.Log.d("MarkdownRenderer", "Attach ClickableSpan on AsyncDrawableSpan: range=[$start,$end), src.len=${finalSource.length}")
+                        text.setSpan(object : ClickableSpan() {
+                            override fun onClick(widget: View) {
+                                android.util.Log.d("MarkdownRenderer", "onImageClick triggered (AsyncDrawableSpan)")
+                                onImageClick(finalSource)
+                            }
+                            override fun updateDrawState(ds: android.text.TextPaint) {
+                                ds.isUnderlineText = false
+                            }
+                        }, start, end, Spannable.SPAN_EXCLUSIVE_INCLUSIVE)
+                    }
+                    // 若 asyncSpans 为空，打印一次日志帮助定位
+                    if (asyncSpans.isEmpty()) {
+                        android.util.Log.d("MarkdownRenderer", "No AsyncDrawableSpan found; will fallback to ImageSpan")
+                    }
+
+                    // 2) 再兜底处理系统的 ImageSpan（某些设备/版本可能使用它）
                     val imageSpans = text.getSpans(0, text.length, android.text.style.ImageSpan::class.java)
                     imageSpans.forEach { imageSpan ->
                         val start = text.getSpanStart(imageSpan)
                         val end = text.getSpanEnd(imageSpan)
-                        
-                        // 尝试获取 source
-                        var source: String? = null
-                        val drawable = imageSpan.drawable
-                        if (drawable is AsyncDrawable) {
-                            source = drawable.destination
-                        } else {
-                            source = imageSpan.source
-                        }
+                        val source: String = imageSpan.source ?: ""
 
-                        if (source != null) {
-                            // 移除已有的 ClickableSpan（如果有）避免重复叠加
-                            val existingClickables = text.getSpans(start, end, ClickableSpan::class.java)
-                            existingClickables.forEach { text.removeSpan(it) }
+                        // 清理该范围内的历史 ClickableSpan，防止叠加
+                        text.getSpans(start, end, ClickableSpan::class.java).forEach { text.removeSpan(it) }
 
-                            // 添加新的 ClickableSpan
-                            // 注意：这里需要一个 final 的 source 变量供匿名内部类使用
-                            val finalSource = source
-                            text.setSpan(object : ClickableSpan() {
-                                override fun onClick(widget: View) {
-                                    onImageClick(finalSource)
-                                }
-                                
-                                // 去除下划线
-                                override fun updateDrawState(ds: android.text.TextPaint) {
-                                    super.updateDrawState(ds)
-                                    ds.isUnderlineText = false
-                                }
-                            }, start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-                        }
+                        val finalSource = source
+                        android.util.Log.d("MarkdownRenderer", "Attach ClickableSpan on ImageSpan: range=[$start,$end), src.len=${finalSource.length}")
+                        text.setSpan(object : ClickableSpan() {
+                            override fun onClick(widget: View) {
+                                android.util.Log.d("MarkdownRenderer", "onImageClick triggered (ImageSpan)")
+                                onImageClick(finalSource)
+                            }
+                            override fun updateDrawState(ds: android.text.TextPaint) {
+                                ds.isUnderlineText = false
+                            }
+                        }, start, end, Spannable.SPAN_EXCLUSIVE_INCLUSIVE)
                     }
                 }
             }
