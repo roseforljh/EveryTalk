@@ -89,6 +89,7 @@ jobs:
           ./gradlew :app:bundleRelease --stacktrace
 
       - name: Upload Android artifacts to Release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
@@ -96,3 +97,12 @@ jobs:
             ${{ env.APP_DIR }}/app/build/outputs/bundle/release/*.aab
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifacts for manual runs
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-release-artifacts
+          path: |
+            ${{ env.APP_DIR }}/app/build/outputs/apk/release/*.apk
+            ${{ env.APP_DIR }}/app/build/outputs/bundle/release/*.aab
