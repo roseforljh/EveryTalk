@@ -64,14 +64,25 @@ android {
     // Signing configs for release build; values come from local.properties
     signingConfigs {
         create("release") {
+            // 先读 local.properties，其次读环境变量，最后默认使用 CI 解码生成的 ../everytalk-release.jks
             val props = localProperties
-            val storeFilePath = props.getProperty("storeFile") ?: ""
-            if (storeFilePath.isNotBlank()) {
-                storeFile = file(storeFilePath)
+            val envStoreFile = System.getenv("ANDROID_KEYSTORE_PATH")
+            val storeFilePath = (props.getProperty("storeFile") ?: envStoreFile ?: "../everytalk-release.jks").trim()
+            val candidate = file(storeFilePath)
+            if (storeFilePath.isNotBlank() && candidate.exists()) {
+                storeFile = candidate
+            } else {
+                println("[signing] keystore not found at $storeFilePath，release 签名会失败")
             }
-            storePassword = props.getProperty("storePassword") ?: ""
-            keyAlias = props.getProperty("keyAlias") ?: ""
-            keyPassword = props.getProperty("keyPassword") ?: ""
+            storePassword = props.getProperty("storePassword")
+                ?: System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                ?: ""
+            keyAlias = props.getProperty("keyAlias")
+                ?: System.getenv("ANDROID_KEY_ALIAS")
+                ?: ""
+            keyPassword = props.getProperty("keyPassword")
+                ?: System.getenv("ANDROID_KEY_PASSWORD")
+                ?: ""
         }
     }
 

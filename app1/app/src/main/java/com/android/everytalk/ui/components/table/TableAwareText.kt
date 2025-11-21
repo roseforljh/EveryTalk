@@ -106,7 +106,19 @@ fun TableAwareText(
                     // 流式期间可能没有语言标识或未闭合，CodeBlock 需能处理
                     
                     // 🎯 检查是否支持预览
-                    val supportedLanguages = setOf("mermaid", "echarts", "chartjs", "flowchart", "flow", "vega", "vega-lite", "html", "svg")
+                    // 新增 xml：让 ```xml 代码块也显示“预览”按钮（走 html 模板）
+                    val supportedLanguages = setOf(
+                        "mermaid",
+                        "echarts",
+                        "chartjs",
+                        "flowchart",
+                        "flow",
+                        "vega",
+                        "vega-lite",
+                        "html",
+                        "svg",
+                        "xml"
+                    )
                     val isPreviewSupported = part.language?.lowercase() in supportedLanguages
                     
                     CodeBlock(
