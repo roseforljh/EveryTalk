@@ -20,8 +20,8 @@ class ConversationPreviewController(
     private val cacheManager: CacheManager,
     private val scope: CoroutineScope,
     // 由外部传入以沿用原有缓存对象
-    private val textConversationPreviewCache: LruCache<Int, String>,
-    private val imageConversationPreviewCache: LruCache<Int, String>
+    private val textConversationPreviewCache: LruCache<String, String>,
+    private val imageConversationPreviewCache: LruCache<String, String>
 ) {
 
     /**
@@ -37,16 +37,16 @@ class ConversationPreviewController(
      * 设置/覆盖指定会话索引的预览标题缓存。
      * 用于重命名后立即更新本地缓存，避免 UI 延迟。
      */
-    fun setCachedTitle(index: Int, isImageGeneration: Boolean, title: String) {
+    fun setCachedTitle(stableId: String, title: String, isImageGeneration: Boolean) {
         val cache = if (isImageGeneration) imageConversationPreviewCache else textConversationPreviewCache
-        cache.remove(index)
-        cache.put(index, title.trim())
+        cache.remove(stableId)
+        cache.put(stableId, title.trim())
     }
 
     /**
      * 获取某个会话的预览文本，带本地 LruCache 与异步高质量回填。
      */
-    fun getConversationPreviewText(index: Int, isImageGeneration: Boolean = false): String {
+    fun getConversationPreviewText(stableId: String, index: Int, isImageGeneration: Boolean = false): String {
         val conversationList = if (isImageGeneration) {
             stateHolder._imageGenerationHistoricalConversations.value
         } else {
@@ -58,19 +58,19 @@ class ConversationPreviewController(
         val cache = if (isImageGeneration) imageConversationPreviewCache else textConversationPreviewCache
 
         // 命中缓存立即返回
-        cache.get(index)?.let { cached -> return cached }
+        cache.get(stableId)?.let { cached -> return cached }
 
         // 生成快速预览并写入缓存
         val preview = generateQuickPreview(conversation, isImageGeneration, index)
-        cache.put(index, preview)
+        cache.put(stableId, preview)
 
         // 异步生成高质量预览，若不同则更新缓存
-        val cacheKey = "${if (isImageGeneration) "img" else "txt"}_$index"
+        val cacheKey = "${if (isImageGeneration) "img" else "txt"}_$stableId"
         scope.launch {
             try {
                 val highQualityPreview = cacheManager.getConversationPreview(cacheKey, conversation, isImageGeneration)
                 if (highQualityPreview != preview) {
-                    cache.put(index, highQualityPreview)
+                    cache.put(stableId, highQualityPreview)
                 }
             } catch (e: Exception) {
                 // 静默处理，避免影响 UI
@@ -79,6 +79,21 @@ class ConversationPreviewController(
         }
 
         return preview
+    }
+    
+    // 兼容旧方法，但建议迁移到带 stableId 的版本
+    fun getConversationPreviewText(index: Int, isImageGeneration: Boolean = false): String {
+        // 尝试从会话列表中获取 stableId
+        val conversationList = if (isImageGeneration) {
+            stateHolder._imageGenerationHistoricalConversations.value
+        } else {
+            stateHolder._historicalConversations.value
+        }
+        val conversation = conversationList.getOrNull(index) ?: return getDefaultConversationName(index, isImageGeneration)
+        
+        val stableId = com.android.everytalk.util.ConversationNameHelper.resolveStableId(conversation) ?: "unknown_$index"
+            
+        return getConversationPreviewText(stableId, index, isImageGeneration)
     }
 
     private fun generateQuickPreview(conversation: List<Message>, isImageGeneration: Boolean, index: Int): String {

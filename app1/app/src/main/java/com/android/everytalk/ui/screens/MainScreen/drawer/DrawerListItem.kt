@@ -100,7 +100,7 @@ internal fun DrawerConversationListItem(
     val alpha = remember { Animatable(0f) }
     val translationY = remember { Animatable(50f) }
 
-    LaunchedEffect(itemData.originalIndex) {
+    LaunchedEffect(itemData.stableId) {
         launch {
             alpha.animateTo(1f, animationSpec = tween(durationMillis = 300))
         }

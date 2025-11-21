@@ -69,4 +69,14 @@ object ConversationNameHelper {
             }
         }
     }
+    /**
+     * 解析会话的稳定ID（用于置顶标识、缓存键等）
+     * 优先使用首条User消息ID，其次非占位System消息ID，最后使用首条消息ID
+     */
+    fun resolveStableId(conversation: List<com.android.everytalk.data.DataClass.Message>?): String? {
+        if (conversation.isNullOrEmpty()) return null
+        return conversation.firstOrNull { it.sender == com.android.everytalk.data.DataClass.Sender.User }?.id
+            ?: conversation.firstOrNull { it.sender == com.android.everytalk.data.DataClass.Sender.System && !it.isPlaceholderName }?.id
+            ?: conversation.firstOrNull()?.id
+    }
 }

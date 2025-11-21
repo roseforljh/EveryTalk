@@ -143,16 +143,15 @@ fun AppDrawerContent(
 
     // 解析会话稳定ID的辅助函数（与 AppViewModel 中的逻辑一致）
     fun resolveStableId(conversation: List<Message>): String? {
-        return conversation.firstOrNull { it.sender == com.android.everytalk.data.DataClass.Sender.User }?.id
-            ?: conversation.firstOrNull { it.sender == com.android.everytalk.data.DataClass.Sender.System && !it.isPlaceholderName }?.id
-            ?: conversation.firstOrNull()?.id
+        return com.android.everytalk.util.ConversationNameHelper.resolveStableId(conversation)
     }
     
     val processedItems = remember(currentSearchQuery, historicalConversations, isSearchActive, pinnedIds, conversationGroups) {
         derivedStateOf {
             val baseItems = if (!isSearchActive || currentSearchQuery.isBlank()) {
                 historicalConversations.mapIndexed { index, conversation ->
-                    FilteredConversationItem(index, conversation)
+                    val stableId = resolveStableId(conversation) ?: "unknown_$index"
+                    FilteredConversationItem(index, conversation, stableId)
                 }
             } else {
                 historicalConversations.mapIndexedNotNull { index, conversation ->
@@ -160,7 +159,10 @@ fun AppDrawerContent(
                     val matches = searchableMessages.any { message ->
                         message.text.contains(currentSearchQuery, ignoreCase = true)
                     }
-                    if (matches) FilteredConversationItem(index, conversation) else null
+                    if (matches) {
+                        val stableId = resolveStableId(conversation) ?: "unknown_$index"
+                        FilteredConversationItem(index, conversation, stableId)
+                    } else null
                 }
             }
 
@@ -652,10 +654,12 @@ fun AppDrawerContent(
                                         val groupItems = processedItems.custom[groupName] ?: emptyList()
                                         if (groupItems.isNotEmpty()) {
                                             groupItems.forEach { itemData ->
-                                                ConversationItem(
-                                                    itemData = itemData,
-                                                    modifier = Modifier
-                                                )
+                                                key(itemData.stableId) {
+                                                    ConversationItem(
+                                                        itemData = itemData,
+                                                        modifier = Modifier
+                                                    )
+                                                }
                                             }
                                         } else {
                                             // 空分组显示提示
@@ -787,7 +791,9 @@ fun AppDrawerContent(
                                     ) {
                                         Column {
                                             processedItems.pinned.forEach { itemData ->
-                                                ConversationItem(itemData)
+                                                key(itemData.stableId) {
+                                                    ConversationItem(itemData)
+                                                }
                                             }
                                         }
                                     }
@@ -798,7 +804,7 @@ fun AppDrawerContent(
                             if (processedItems.ungrouped.isNotEmpty()) {
                                 items(
                                     items = processedItems.ungrouped,
-                                    key = { item -> "ungrouped_${item.originalIndex}_${isImageGenerationMode}" }
+                                    key = { item -> "ungrouped_${item.stableId}_${isImageGenerationMode}" }
                                 ) { itemData ->
                                     ConversationItem(
                                         itemData = itemData,

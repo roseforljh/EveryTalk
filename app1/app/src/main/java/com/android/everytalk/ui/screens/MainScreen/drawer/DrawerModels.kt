@@ -13,4 +13,5 @@ internal sealed class CustomRippleState {
 data class FilteredConversationItem(
     val originalIndex: Int, // 在原始历史对话列表中的索引
     val conversation: List<Message>, // 对话消息列表 (仍用于搜索时匹配内容和生成高亮片段)
+    val stableId: String // 稳定的会话ID，用于LazyColumn的key
 )

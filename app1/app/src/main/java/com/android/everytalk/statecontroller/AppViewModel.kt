@@ -96,8 +96,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     
     private val messagesMutex = Mutex()
     private val historyMutex = Mutex()
-    private val textConversationPreviewCache = LruCache<Int, String>(100)
-    private val imageConversationPreviewCache = LruCache<Int, String>(100)
+    private val textConversationPreviewCache = LruCache<String, String>(100)
+    private val imageConversationPreviewCache = LruCache<String, String>(100)
     internal val stateHolder = ViewModelStateHolder().apply {
         // Initialize with data source for persistent parameter storage
         initializeDataSource(dataSource)
@@ -1149,15 +1149,29 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         return conversationPreviewController.getConversationPreviewText(index, isImageGeneration)
     }
     
+    fun getConversationPreviewText(stableId: String, index: Int, isImageGeneration: Boolean = false): String {
+        return conversationPreviewController.getConversationPreviewText(stableId, index, isImageGeneration)
+    }
 
     fun getConversationFullText(index: Int, isImageGeneration: Boolean = false): String {
         return historyController.getConversationFullText(index, isImageGeneration)
     }
 
     fun renameConversation(index: Int, newName: String, isImageGeneration: Boolean = false) {
+        // 获取会话以解析 stableId
+        val history = if (isImageGeneration) {
+            stateHolder._imageGenerationHistoricalConversations.value
+        } else {
+            stateHolder._historicalConversations.value
+        }
+        val conversation = history.getOrNull(index)
+        val stableId = com.android.everytalk.util.ConversationNameHelper.resolveStableId(conversation)
+
         historyController.renameConversation(index, newName, isImageGeneration)
         // 通过控制器更新本地预览缓存，避免在 VM 内直接操作 LruCache
-        conversationPreviewController.setCachedTitle(index, isImageGeneration, newName)
+        if (stableId != null) {
+            conversationPreviewController.setCachedTitle(stableId, newName, isImageGeneration)
+        }
     }
 
     private fun onAiMessageFullTextChanged(messageId: String, currentFullText: String) {
@@ -1452,10 +1466,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
      * 优先使用首条User消息ID，其次非占位System消息ID，最后使用首条消息ID
      */
     private fun resolveStableConversationId(conversation: List<Message>?): String? {
-        if (conversation.isNullOrEmpty()) return null
-        return conversation.firstOrNull { it.sender == Sender.User }?.id
-            ?: conversation.firstOrNull { it.sender == Sender.System && !it.isPlaceholderName }?.id
-            ?: conversation.firstOrNull()?.id
+        return com.android.everytalk.util.ConversationNameHelper.resolveStableId(conversation)
     }
     
     /**
