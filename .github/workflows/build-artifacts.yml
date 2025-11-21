@@ -38,7 +38,8 @@ jobs:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
         run: |
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > app1/everytalk-release.jks
+          KEYPATH=${ANDROID_KEYSTORE_PATH:-app1/everytalk-release.jks}
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$KEYPATH"
 
       - name: Grant Gradle permissions
         run: chmod +x ./app1/gradlew
