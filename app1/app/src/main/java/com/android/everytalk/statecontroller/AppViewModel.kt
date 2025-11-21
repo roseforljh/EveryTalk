@@ -1111,17 +1111,17 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
 
     fun updateConfigGroup(
         representativeConfig: ApiConfig,
+        newProvider: String,
         newAddress: String,
         newKey: String,
-        currentProvider: String,
         newChannel: String,
         isImageGen: Boolean? = null,
         newEnableCodeExecution: Boolean? = null,
         newToolsJson: String? = null
     ) {
-        // currentProvider 仅为兼容保留，不参与字段更新
         configFacade.updateConfigGroup(
             representativeConfig = representativeConfig,
+            newProvider = newProvider,
             newAddress = newAddress,
             newKey = newKey,
             newChannel = newChannel,
@@ -1132,7 +1132,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     }
     
     fun updateConfigGroup(representativeConfig: ApiConfig, newAddress: String, newKey: String, providerToKeep: String, newChannel: String) {
-        updateConfigGroup(representativeConfig, newAddress, newKey, providerToKeep, newChannel, null, null, null)
+        updateConfigGroup(representativeConfig, providerToKeep, newAddress, newKey, newChannel, null, null, null)
     }
 
     fun onAnimationComplete(messageId: String) {

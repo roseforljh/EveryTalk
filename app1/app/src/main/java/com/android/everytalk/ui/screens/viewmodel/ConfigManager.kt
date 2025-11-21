@@ -278,6 +278,7 @@ class ConfigManager(
      */
     fun updateConfigGroup(
         representativeConfig: ApiConfig,
+        newProvider: String,
         newAddress: String,
         newKey: String,
         newChannel: String,
@@ -286,6 +287,7 @@ class ConfigManager(
         newToolsJson: String? = null
     ) {
         viewModelScope.launch {
+            val trimmedProvider = newProvider.trim()
             val trimmedAddress = newAddress.trim()
             val trimmedKey = newKey.trim()
             val trimmedChannel = newChannel.trim()
@@ -302,7 +304,7 @@ class ConfigManager(
                         cfg.address == representativeConfig.address &&
                         cfg.channel == representativeConfig.channel) {
                         // 图像模式暂不支持 tools
-                        cfg.copy(address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
+                        cfg.copy(provider = trimmedProvider, address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
                     } else cfg
                 }
                 if (newConfigs != currentConfigs) {
@@ -316,7 +318,7 @@ class ConfigManager(
                         selected.address == representativeConfig.address &&
                         selected.channel == representativeConfig.channel) {
                         stateHolder._selectedImageGenApiConfig.value =
-                            selected.copy(address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
+                            selected.copy(provider = trimmedProvider, address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
                     }
                 }
             } else {
@@ -328,7 +330,7 @@ class ConfigManager(
                         cfg.channel == representativeConfig.channel) {
                         
                         // 仅当参数不为 null 时才更新（支持部分更新）
-                        var updatedCfg = cfg.copy(address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
+                        var updatedCfg = cfg.copy(provider = trimmedProvider, address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
                         if (newEnableCodeExecution != null) {
                             updatedCfg = updatedCfg.copy(enableCodeExecution = newEnableCodeExecution)
                         }
@@ -349,7 +351,7 @@ class ConfigManager(
                         selected.address == representativeConfig.address &&
                         selected.channel == representativeConfig.channel) {
                         
-                        var updatedSel = selected.copy(address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
+                        var updatedSel = selected.copy(provider = trimmedProvider, address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
                         if (newEnableCodeExecution != null) {
                             updatedSel = updatedSel.copy(enableCodeExecution = newEnableCodeExecution)
                         }

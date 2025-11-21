@@ -43,6 +43,7 @@ class ConfigFacade(
 
     fun updateConfigGroup(
         representativeConfig: ApiConfig,
+        newProvider: String,
         newAddress: String,
         newKey: String,
         newChannel: String,
@@ -52,6 +53,7 @@ class ConfigFacade(
     ) {
         configManager.updateConfigGroup(
             representativeConfig = representativeConfig,
+            newProvider = newProvider,
             newAddress = newAddress,
             newKey = newKey,
             newChannel = newChannel,

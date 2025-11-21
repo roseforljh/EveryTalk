@@ -483,12 +483,12 @@ fun SettingsScreen(
                 showEditConfigDialog = false
                 configToEdit = null
             },
-            onConfirm = { newAddress, newKey, newChannel, newEnableCodeExecution, newToolsJson ->
+            onConfirm = { newProvider, newAddress, newKey, newChannel, newEnableCodeExecution, newToolsJson ->
                 viewModel.updateConfigGroup(
                     representativeConfig = configToEdit!!,
+                    newProvider = newProvider,
                     newAddress = newAddress,
                     newKey = newKey,
-                    currentProvider = configToEdit!!.provider,
                     newChannel = newChannel,
                     isImageGen = isInImageMode,
                     newEnableCodeExecution = newEnableCodeExecution,

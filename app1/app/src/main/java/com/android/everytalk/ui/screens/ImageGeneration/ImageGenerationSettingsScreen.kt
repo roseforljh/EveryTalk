@@ -385,9 +385,17 @@ fun ImageGenerationSettingsScreen(
                 showEditConfigDialog = false
                 configToEdit = null
             },
-            onConfirm = { newAddress, newKey, newChannel, _, _ ->
+            onConfirm = { newProvider, newAddress, newKey, newChannel, _, _ ->
                 // 固定传入 isImageGen = true，确保更新图像配置
-                viewModel.updateConfigGroup(configToEdit!!, newAddress, newKey, configToEdit!!.provider, newChannel, true)
+                // Also pass newProvider to update the provider name
+                viewModel.updateConfigGroup(
+                    representativeConfig = configToEdit!!,
+                    newProvider = newProvider,
+                    newAddress = newAddress,
+                    newKey = newKey,
+                    newChannel = newChannel,
+                    isImageGen = true
+                )
                 showEditConfigDialog = false
                 configToEdit = null
             }

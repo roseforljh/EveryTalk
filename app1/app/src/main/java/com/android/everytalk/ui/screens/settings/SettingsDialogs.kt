@@ -780,8 +780,10 @@ internal fun EditConfigDialog(
     representativeConfig: com.android.everytalk.data.DataClass.ApiConfig,
     allProviders: List<String>,
     onDismissRequest: () -> Unit,
-    onConfirm: (newAddress: String, newKey: String, newChannel: String, newEnableCodeExecution: Boolean?, newToolsJson: String?) -> Unit
+    onConfirm: (newProvider: String, newAddress: String, newKey: String, newChannel: String, newEnableCodeExecution: Boolean?, newToolsJson: String?) -> Unit
 ) {
+    Log.d("EditConfigDialog", "Opening dialog for config: ${representativeConfig.name}, provider: ${representativeConfig.provider}")
+    var provider by remember { mutableStateOf(representativeConfig.provider) }
     var apiAddress by remember { mutableStateOf(representativeConfig.address) }
     var apiKey by remember { mutableStateOf(representativeConfig.key) }
     var selectedChannel by remember { mutableStateOf(representativeConfig.channel) }
@@ -831,6 +833,19 @@ internal fun EditConfigDialog(
         },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                OutlinedTextField(
+                    value = provider,
+                    onValueChange = { provider = it },
+                    label = { Text("模型平台") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Next),
+                    shape = DialogShape,
+                    colors = DialogTextFieldColors
+                )
+
                 OutlinedTextField(
                     value = apiAddress,
                     onValueChange = { apiAddress = it },
@@ -999,8 +1014,8 @@ internal fun EditConfigDialog(
         },
         confirmButton = {
             FilledTonalButton(
-                onClick = { onConfirm(apiAddress, apiKey, selectedChannel, enableCodeExecution, toolsJson.ifBlank { null }) },
-                enabled = apiKey.isNotBlank() && apiAddress.isNotBlank(),
+                onClick = { onConfirm(provider, apiAddress, apiKey, selectedChannel, enableCodeExecution, toolsJson.ifBlank { null }) },
+                enabled = apiKey.isNotBlank() && apiAddress.isNotBlank() && provider.isNotBlank(),
                 shape = RoundedCornerShape(20.dp),
                 modifier = Modifier.height(52.dp).padding(horizontal = 4.dp),
                 colors = ButtonDefaults.filledTonalButtonColors(
