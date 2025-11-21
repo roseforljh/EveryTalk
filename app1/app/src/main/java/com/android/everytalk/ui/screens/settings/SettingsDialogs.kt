@@ -681,7 +681,7 @@ internal fun AddNewFullConfigDialog(
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
                                     Text(
-                                        "启用代码执行 (Gemini Native)",
+                                        "启用代码执行",
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = MaterialTheme.colorScheme.onSurface
                                     )
@@ -940,7 +940,7 @@ internal fun EditConfigDialog(
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Text(
-                                    "启用代码执行 (Gemini Native)",
+                                    "启用代码执行",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
