@@ -389,6 +389,13 @@ internal fun AddNewFullConfigDialog(
     LaunchedEffect(allProviders) {
         Log.d("DropdownDebug", "AddNewFullConfigDialog: allProviders size: ${allProviders.size}")
     }
+    // 确保进入对话框时不显示“默认”占位值
+    LaunchedEffect(Unit) {
+        val lower = provider.trim().lowercase()
+        if (lower in listOf("默认","default","default_text")) {
+            onProviderChange("")
+        }
+    }
 
     val isDark = isSystemInDarkTheme()
     AlertDialog(
@@ -425,7 +432,10 @@ internal fun AddNewFullConfigDialog(
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 // 图像模式与文本模式一致：展示所有可用平台
-                val providersToShow = allProviders
+                val providersToShow = allProviders.filter {
+                    val lower = it.trim().lowercase()
+                    lower !in listOf("默认", "default", "default_text")
+                }
                 val isDefaultSel = false // 移除默认选项，此变量保持为 false
                 val isGoogleProvider = provider.trim().lowercase() in listOf("google","谷歌")
                 // 当平台为 Google 时，通道锁定为 Gemini
@@ -445,10 +455,11 @@ internal fun AddNewFullConfigDialog(
                     modifier = Modifier.padding(bottom = 12.dp)
                 ) {
                     OutlinedTextField(
-                        value = provider,
+                        value = if (provider.trim().lowercase() in listOf("默认","default","default_text")) "" else provider,
                         onValueChange = {},
                         readOnly = true,
                         label = { Text("模型平台") },
+                        placeholder = { Text("请选择平台") },
                         modifier = Modifier
                             .menuAnchor()
                             .fillMaxWidth()
@@ -458,7 +469,7 @@ internal fun AddNewFullConfigDialog(
                         trailingIcon = {
                             // 统一允许添加自定义平台
                             IconButton(onClick = {
-                                if (providerMenuExpanded && allProviders.isNotEmpty()) {
+                                if (providerMenuExpanded && providersToShow.isNotEmpty()) {
                                     providerMenuExpanded = false
                                 }
                                 onShowAddCustomProviderDialog()
@@ -711,9 +722,27 @@ internal fun AddNewFullConfigDialog(
             }
         },
         confirmButton = {
+            val canSubmit = apiKey.isNotBlank()
+                    && apiAddress.isNotBlank()
+                    && provider.isNotBlank()
+                    && provider.trim().lowercase() !in listOf("默认","default","default_text")
             FilledTonalButton(
-                onClick = { onConfirm(provider, apiAddress, apiKey, selectedChannel, imageSize, numInferenceSteps.toIntOrNull(), guidanceScale.toFloatOrNull(), enableCodeExecution, toolsJson.ifBlank { null }) },
-                enabled = apiKey.isNotBlank() && provider.isNotBlank() && apiAddress.isNotBlank(),
+                onClick = {
+                    if (canSubmit) {
+                        onConfirm(
+                            provider,
+                            apiAddress,
+                            apiKey,
+                            selectedChannel,
+                            imageSize,
+                            numInferenceSteps.toIntOrNull(),
+                            guidanceScale.toFloatOrNull(),
+                            enableCodeExecution,
+                            toolsJson.ifBlank { null }
+                        )
+                    }
+                },
+                enabled = canSubmit,
                 shape = RoundedCornerShape(20.dp),
                 modifier = Modifier.height(52.dp).padding(horizontal = 4.dp),
                 colors = ButtonDefaults.filledTonalButtonColors(
