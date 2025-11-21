@@ -30,6 +30,22 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Detect Android project directory
+        id: detect-app
+        run: |
+          if [ -f "EveryTalk/app1/gradlew" ]; then
+            APP_DIR="EveryTalk/app1"
+          elif [ -f "app1/gradlew" ]; then
+            APP_DIR="app1"
+          elif [ -f "app/gradlew" ]; then
+            APP_DIR="app"
+          else
+            echo "::error::Unable to locate gradlew under EveryTalk/app1, app1, or app"
+            exit 1
+          fi
+          echo "Resolved app directory: $APP_DIR"
+          echo "APP_DIR=$APP_DIR" >> $GITHUB_ENV
+
       # 从 Secrets 还原 keystore（你已经有签名）
       # 在仓库 Settings → Secrets and variables → Actions 中配置：
       # ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD
@@ -40,8 +56,8 @@ jobs:
         if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
         run: |
           echo "Secrets ANDROID_KEYSTORE_PATH='${ANDROID_KEYSTORE_PATH}'"
-          # Default to EveryTalk/app1/everytalk-release.jks if not specified
-          KEYPATH=${ANDROID_KEYSTORE_PATH:-EveryTalk/app1/everytalk-release.jks}
+          # Default to ${APP_DIR}/everytalk-release.jks if not specified
+          KEYPATH=${ANDROID_KEYSTORE_PATH:-${APP_DIR}/everytalk-release.jks}
           # Use absolute path to avoid relative path issues in Gradle
           ABS_KEYPATH=$GITHUB_WORKSPACE/$KEYPATH
           echo "Writing keystore to $ABS_KEYPATH"
@@ -49,10 +65,10 @@ jobs:
           echo "ANDROID_KEYSTORE_PATH=$ABS_KEYPATH" >> $GITHUB_ENV
 
       - name: Grant Gradle permissions
-        run: chmod +x ./EveryTalk/app1/gradlew
+        run: chmod +x "./${{ env.APP_DIR }}/gradlew"
 
       - name: Build Release APK
-        working-directory: EveryTalk/app1
+        working-directory: ${{ env.APP_DIR }}
         continue-on-error: true
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -63,7 +79,7 @@ jobs:
           ./gradlew :app:assembleRelease --stacktrace
 
       - name: Build Release AAB
-        working-directory: EveryTalk/app1
+        working-directory: ${{ env.APP_DIR }}
         continue-on-error: true
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -79,7 +95,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            EveryTalk/app1/app/build/outputs/apk/release/*.apk
-            EveryTalk/app1/app/build/outputs/bundle/release/*.aab
+            ${{ env.APP_DIR }}/app/build/outputs/apk/release/*.apk
+            ${{ env.APP_DIR }}/app/build/outputs/bundle/release/*.aab
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
