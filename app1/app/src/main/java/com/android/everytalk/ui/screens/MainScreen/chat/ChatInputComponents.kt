@@ -1,6 +1,8 @@
 package com.android.everytalk.ui.screens.MainScreen.chat
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -307,13 +309,46 @@ fun OptimizedControlButtonsRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onToggleWebSearch) {
-                Icon(
-                    if (isWebSearchEnabled) Icons.Outlined.TravelExplore else Icons.Filled.Language,
-                    if (isWebSearchEnabled) "网页搜索已开启" else "网页搜索已关闭",
-                    tint = SeaBlue,
-                    modifier = Modifier.size(25.dp)
-                )
+            Surface(
+                shape = RoundedCornerShape(50),
+                color = Color.Transparent,
+                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .height(40.dp)
+                    .then(
+                        if (isWebSearchEnabled) {
+                            Modifier.border(width = 1.dp, color = SeaBlue, shape = RoundedCornerShape(50))
+                        } else {
+                            Modifier
+                        }
+                    )
+                    .animateContentSize(
+                        animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing)
+                    )
+                    .clip(RoundedCornerShape(50))
+                    .clickable(onClick = onToggleWebSearch)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 10.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Language,
+                        contentDescription = if (isWebSearchEnabled) "网页搜索已开启" else "网页搜索已关闭",
+                        tint = SeaBlue,
+                        modifier = Modifier.size(25.dp)
+                    )
+                    
+                    if (isWebSearchEnabled) {
+                        Spacer(Modifier.width(8.dp))
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "关闭",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
             }
             Spacer(Modifier.width(8.dp))
             IconButton(onClick = onToggleImagePanel) {
