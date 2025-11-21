@@ -33,17 +33,6 @@ jobs:
       - name: Grant Gradle permissions
         run: chmod +x ./app1/gradlew
 
-      # 如果你配置了签名(建议用仓库 Secrets)，以下环境变量会被 Gradle 使用
-      # 请在仓库 Settings -> Secrets and variables -> Actions 中设置：
-      # ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
-      # 你的 Gradle 配置中需要读取这些变量进行签名
-      - name: Restore keystore from base64 (optional)
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-        if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
-        run: |
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > app1/everytalk-release.jks
-
       - name: Build Release APK
         working-directory: app1
         continue-on-error: true
