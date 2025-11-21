@@ -372,7 +372,7 @@ X-Timestamp: Unix timestamp
 4.  推送至您的分支 (`git push origin feature/AmazingFeature`)。
 5.  **创建 Pull Request**。
 
-请确保遵循 Kotlin 官方编码规范,并为您的代码添加必要的注释和测试。。
+请确保遵循 Kotlin 官方编码规范,并为您的代码添加必要的注释和测试。
 
 ---
 
