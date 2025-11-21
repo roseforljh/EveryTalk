@@ -89,9 +89,6 @@ jobs:
           ./gradlew :app:bundleRelease --stacktrace
 
       - name: Upload Android artifacts to Release
-        # 只在 tag 场景（Release 发布）下上传到 GitHub Release
-        # 如果是 workflow_dispatch 手动触发，ref 是分支，不满足这个条件，会直接跳过
-        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
