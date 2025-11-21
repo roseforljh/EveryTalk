@@ -33,6 +33,10 @@ jobs:
       - name: Grant Gradle permissions
         run: chmod +x ./EveryTalk/app1/gradlew
 
+      # 如果你配置了签名(建议用仓库 Secrets)，以下环境变量会被 Gradle 使用
+      # 请在仓库 Settings -> Secrets and variables -> Actions 中设置：
+      # ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+      # 你的 Gradle 配置中需要读取这些变量进行签名
       - name: Restore keystore from base64 (optional)
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -65,24 +69,5 @@ jobs:
             EveryTalk/app1/app/build/outputs/apk/release/*.apk
             EveryTalk/app1/app/build/outputs/apk/debug/*.apk
             EveryTalk/app1/app/build/outputs/bundle/release/*.aab
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  backend:
-    name: Backend Package
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Pack backend as tar.gz
-        run: |
-          tar -czf ET-Backend-code.tar.gz ET-Backend-code
-
-      - name: Upload backend package to Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            ET-Backend-code.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
