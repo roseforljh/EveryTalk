@@ -40,23 +40,35 @@ jobs:
         if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
         run: |
           echo "Secrets ANDROID_KEYSTORE_PATH='${ANDROID_KEYSTORE_PATH}'"
-          KEYPATH=${ANDROID_KEYSTORE_PATH:-app1/everytalk-release.jks}
-          echo "Writing keystore to $KEYPATH"
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$KEYPATH"
+          # Default to EveryTalk/app1/everytalk-release.jks if not specified
+          KEYPATH=${ANDROID_KEYSTORE_PATH:-EveryTalk/app1/everytalk-release.jks}
+          # Use absolute path to avoid relative path issues in Gradle
+          ABS_KEYPATH=$GITHUB_WORKSPACE/$KEYPATH
+          echo "Writing keystore to $ABS_KEYPATH"
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$ABS_KEYPATH"
+          echo "ANDROID_KEYSTORE_PATH=$ABS_KEYPATH" >> $GITHUB_ENV
 
       - name: Grant Gradle permissions
-        run: chmod +x ./app1/gradlew
+        run: chmod +x ./EveryTalk/app1/gradlew
 
       - name: Build Release APK
-        working-directory: app1
+        working-directory: EveryTalk/app1
         continue-on-error: true
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           ./gradlew :app:clean
           ./gradlew :app:assembleRelease --stacktrace
 
       - name: Build Release AAB
-        working-directory: app1
+        working-directory: EveryTalk/app1
         continue-on-error: true
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           ./gradlew :app:bundleRelease --stacktrace
 
@@ -67,7 +79,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            app1/app/build/outputs/apk/release/*.apk
-            app1/app/build/outputs/bundle/release/*.aab
+            EveryTalk/app1/app/build/outputs/apk/release/*.apk
+            EveryTalk/app1/app/build/outputs/bundle/release/*.aab
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
