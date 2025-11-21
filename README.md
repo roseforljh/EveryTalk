@@ -96,6 +96,28 @@
 2.  下载最新版本的 `app-release.apk` 文件。
 3.  在您的安卓设备上允许"安装未知来源的应用",然后点击 APK 文件进行安装。
 
+### 1.1 自动发版与安装包获取
+
+以下流程已在仓库中自动配置完成（工作流见 [.github/workflows/release-please.yml](.github/workflows/release-please.yml:1)、[.github/workflows/build-artifacts.yml](.github/workflows/build-artifacts.yml:1)）：
+
+1. 推送任意提交到 `main`/`master` 分支  
+   - 机器人会自动创建“发版 PR”，其中包含自动生成的版本号与 Changelog。
+2. 在 GitHub 上审阅并合并该“发版 PR”  
+   - 合并后将自动创建新的 Release 与 Tag。
+3. 打开最新的 Release 页面，下载安装包  
+   - 入口：项目页 → Releases → 最新版本  
+   - 你将看到以下附件（Assets）：  
+     - Android 安装包：`app-release.apk`（若未签名将提供 `debug` APK）  
+     - 应用商店包：`*.aab`（若构建成功）  
+     - 后端打包：`ET-Backend-code.tar.gz`
+4. 可选：配置 Android 签名（建议用于生成可分发的 release APK/AAB）  
+   - 仓库 → Settings → Secrets and variables → Actions → New repository secret  
+   - 添加以下 Secrets：  
+     - `ANDROID_KEYSTORE_BASE64`：将你的 `everytalk-release.jks` 用 base64 编码后的字符串  
+     - `ANDROID_KEYSTORE_PASSWORD`  
+     - `ANDROID_KEY_ALIAS`  
+     - `ANDROID_KEY_PASSWORD`  
+   - 构建脚本会自动读取这些变量并完成签名；未设置时会回退上传 `debug` APK 以便测试。
 ### 2. 配置模型
 
 首次启动应用后,您需要配置连接 AI 模型的 API。
