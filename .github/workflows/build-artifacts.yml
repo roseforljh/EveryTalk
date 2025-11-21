@@ -31,7 +31,7 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Grant Gradle permissions
-        run: chmod +x ./EveryTalk/app1/gradlew
+        run: chmod +x ./app1/gradlew
 
       # 如果你配置了签名(建议用仓库 Secrets)，以下环境变量会被 Gradle 使用
       # 请在仓库 Settings -> Secrets and variables -> Actions 中设置：
@@ -42,23 +42,23 @@ jobs:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
         run: |
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > EveryTalk/app1/everytalk-release.jks
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > app1/everytalk-release.jks
 
       - name: Build Release APK
-        working-directory: EveryTalk/app1
+        working-directory: app1
         continue-on-error: true
         run: |
           ./gradlew :app:clean
           ./gradlew :app:assembleRelease --stacktrace
 
       - name: Build Release AAB
-        working-directory: EveryTalk/app1
+        working-directory: app1
         continue-on-error: true
         run: |
           ./gradlew :app:bundleRelease --stacktrace
 
       - name: Build Debug APK (fallback)
-        working-directory: EveryTalk/app1
+        working-directory: app1
         run: |
           ./gradlew :app:assembleDebug --stacktrace
 
