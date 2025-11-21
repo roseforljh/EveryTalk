@@ -30,6 +30,16 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      # 从 Secrets 还原 keystore（你已经有签名）
+      # 在仓库 Settings → Secrets and variables → Actions 中配置：
+      # ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD
+      - name: Restore keystore from base64
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
+        run: |
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > app1/everytalk-release.jks
+
       - name: Grant Gradle permissions
         run: chmod +x ./app1/gradlew
 
@@ -55,8 +65,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            EveryTalk/app1/app/build/outputs/apk/release/*.apk
-            EveryTalk/app1/app/build/outputs/apk/debug/*.apk
-            EveryTalk/app1/app/build/outputs/bundle/release/*.aab
+            app1/app/build/outputs/apk/release/*.apk
+            app1/app/build/outputs/apk/debug/*.apk
+            app1/app/build/outputs/bundle/release/*.aab
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
