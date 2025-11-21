@@ -64,15 +64,27 @@ android {
     // Signing configs for release build; values come from local.properties
     signingConfigs {
         create("release") {
-            // 先读 local.properties，其次读环境变量，最后默认使用 CI 解码生成的 ../everytalk-release.jks
+            // 优先使用 ANDROID_KEYSTORE_PATH，其次才是 local.properties 的 storeFile
             val props = localProperties
-            val envStoreFile = System.getenv("ANDROID_KEYSTORE_PATH")
-            val storeFilePath = (props.getProperty("storeFile") ?: envStoreFile ?: "../everytalk-release.jks").trim()
-            val candidate = file(storeFilePath)
-            if (storeFilePath.isNotBlank() && candidate.exists()) {
-                storeFile = candidate
+            val envStoreFile = System.getenv("ANDROID_KEYSTORE_PATH")?.trim().orEmpty()
+            val propsStoreFile = props.getProperty("storeFile")?.trim().orEmpty()
+            val defaultPath = "../everytalk-release.jks"
+
+            fun resolveCandidate(path: String?): File? {
+                if (path.isNullOrBlank()) return null
+                val candidate = file(path)
+                return if (candidate.exists()) candidate else null
+            }
+
+            val resolvedStore = resolveCandidate(envStoreFile)
+                ?: resolveCandidate(propsStoreFile)
+                ?: resolveCandidate(defaultPath)
+
+            if (resolvedStore != null) {
+                storeFile = resolvedStore
+                println("[signing] using keystore at ${resolvedStore.path}")
             } else {
-                println("[signing] keystore not found at $storeFilePath，release 签名会失败")
+                println("[signing] keystore not found via env/local/default path，release 签名会失败")
             }
             storePassword = props.getProperty("storePassword")
                 ?: System.getenv("ANDROID_KEYSTORE_PASSWORD")
