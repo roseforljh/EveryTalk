@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="../vega/vega.min.js"></script>
+    <script src="../vega/vega-lite.min.js"></script>
+    <script src="../vega/vega-embed.min.js"></script>
+    <style>
+        body { margin: 0; padding: 16px; background-color: #ffffff; }
+        @media (prefers-color-scheme: dark) {
+            body { background-color: #1e1e1e; }
+        }
+        #vis { width: 100%; }
+    </style>
+</head>
+<body>
+    <div id="vis"></div>
+    <script>
+        var spec = <!-- CONTENT_PLACEHOLDER -->;
+        var theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default';
+        vegaEmbed('#vis', spec, { theme: theme, actions: false }).catch(console.warn);
+    </script>
+</body>
+</html>

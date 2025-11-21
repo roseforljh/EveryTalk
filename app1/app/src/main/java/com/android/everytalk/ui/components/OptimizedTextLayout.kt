@@ -10,6 +10,7 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.background
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -47,7 +48,8 @@ fun CodeBlock(
     maxHeight: Int = 300,
     cornerRadius: Int = 10,
     enableHorizontalScroll: Boolean = true, // 🎯 新增：是否启用水平滚动
-    onScrollingStateChanged: (Boolean) -> Unit = {} // 🎯 新增：滚动状态回调
+    onScrollingStateChanged: (Boolean) -> Unit = {}, // 🎯 新增：滚动状态回调
+    onPreviewClick: (() -> Unit)? = null // 🎯 新增：预览回调
 ) {
     val isDark = isSystemInDarkTheme()
     val codeColor = if (isDark) Color(0xFFD4D4D4) else Color(0xFF24292F)
@@ -139,19 +141,36 @@ fun CodeBlock(
                 )
             )
 
-            IconButton(
-                onClick = {
-                    clipboard.setText(AnnotatedString(code))
-                    Toast.makeText(ctx, "代码已复制", Toast.LENGTH_SHORT).show()
-                },
-                modifier = Modifier.size(32.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.ContentCopy,
-                    contentDescription = "复制代码",
-                    tint = topBarColor,
-                    modifier = Modifier.size(16.dp)
-                )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // 🎯 预览按钮 (仅当 onPreviewClick 不为空时显示)
+                if (onPreviewClick != null) {
+                    IconButton(
+                        onClick = onPreviewClick,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Visibility,
+                            contentDescription = "预览",
+                            tint = topBarColor,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+
+                IconButton(
+                    onClick = {
+                        clipboard.setText(AnnotatedString(code))
+                        Toast.makeText(ctx, "代码已复制", Toast.LENGTH_SHORT).show()
+                    },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.ContentCopy,
+                        contentDescription = "复制代码",
+                        tint = topBarColor,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
             }
         }
     }

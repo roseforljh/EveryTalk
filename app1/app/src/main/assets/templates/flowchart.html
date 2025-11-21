@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="../flowchart/raphael.min.js"></script>
+    <script src="../flowchart/flowchart.min.js"></script>
+    <style>
+        body { margin: 0; padding: 16px; background-color: #ffffff; display: flex; justify-content: center; }
+        @media (prefers-color-scheme: dark) {
+            body { background-color: #1e1e1e; }
+        }
+    </style>
+</head>
+<body>
+    <div id="canvas"></div>
+    <script>
+        var code = `<!-- CONTENT_PLACEHOLDER -->`;
+        var chart = flowchart.parse(code);
+        chart.drawSVG('canvas', {
+            'x': 0,
+            'y': 0,
+            'line-width': 2,
+            'line-length': 50,
+            'text-margin': 10,
+            'font-size': 14,
+            'font-color': window.matchMedia('(prefers-color-scheme: dark)').matches ? 'white' : 'black',
+            'line-color': window.matchMedia('(prefers-color-scheme: dark)').matches ? 'white' : 'black',
+            'element-color': window.matchMedia('(prefers-color-scheme: dark)').matches ? 'white' : 'black',
+            'fill': window.matchMedia('(prefers-color-scheme: dark)').matches ? 'transparent' : 'white',
+            'yes-text': 'yes',
+            'no-text': 'no',
+            'arrow-end': 'block',
+            'scale': 1,
+            'symbols': {
+                'start': {
+                    'font-color': window.matchMedia('(prefers-color-scheme: dark)').matches ? 'white' : 'black',
+                    'element-color': window.matchMedia('(prefers-color-scheme: dark)').matches ? 'white' : 'black',
+                    'fill': window.matchMedia('(prefers-color-scheme: dark)').matches ? 'transparent' : 'white'
+                },
+                'end':{
+                    'class': 'end-element'
+                }
+            },
+            'flowstate' : {
+                'past' : { 'fill' : '#CCCCCC', 'font-size' : 12},
+                'current' : {'fill' : 'yellow', 'font-color' : 'red', 'font-weight' : 'bold'},
+                'future' : { 'fill' : '#FFFF99'},
+                'request' : { 'fill' : 'blue'},
+                'invalid': {'fill' : '#444444'},
+                'approved' : { 'fill' : '#58C4A3', 'font-size' : 12, 'yes-text' : 'APPROVED', 'no-text' : 'n/a' },
+                'rejected' : { 'fill' : '#C45879', 'font-size' : 12, 'yes-text' : 'n/a', 'no-text' : 'REJECTED' }
+            }
+        });
+    </script>
+</body>
+</html>

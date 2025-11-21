@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="../chartjs/chart.min.js"></script>
+    <style>
+        body { margin: 0; padding: 16px; background-color: #ffffff; height: 100vh; box-sizing: border-box; }
+        @media (prefers-color-scheme: dark) {
+            body { background-color: #1e1e1e; }
+        }
+        .chart-container { position: relative; height: 100%; width: 100%; }
+    </style>
+</head>
+<body>
+    <div class="chart-container">
+        <canvas id="myChart"></canvas>
+    </div>
+    <script>
+        var ctx = document.getElementById('myChart').getContext('2d');
+        var config = <!-- CONTENT_PLACEHOLDER -->;
+        
+        // Auto-detect theme colors if not specified
+        if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            Chart.defaults.color = '#ffffff';
+            Chart.defaults.borderColor = '#444444';
+        }
+        
+        new Chart(ctx, config);
+    </script>
+</body>
+</html>

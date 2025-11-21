@@ -14,6 +14,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -22,6 +23,7 @@ import com.android.everytalk.config.PerformanceConfig
 import com.android.everytalk.ui.components.CodeBlock
 import com.android.everytalk.ui.components.ContentParser
 import com.android.everytalk.ui.components.ContentPart
+import com.android.everytalk.ui.components.WebPreviewDialog
 import com.android.everytalk.ui.components.markdown.MarkdownRenderer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -52,6 +54,9 @@ fun TableAwareText(
     onLongPress: (() -> Unit)? = null,
     onImageClick: ((String) -> Unit)? = null
 ) {
+    // 🎯 预览状态管理
+    var previewState by remember { mutableStateOf<Pair<String, String>?>(null) } // (code, language)
+
     // 🎯 方案二：实时分段解析与统一渲染
     // 无论是否流式，都尝试进行轻量级分段解析（仅分离代码块，表格仍由MarkdownRenderer处理或后续优化）
     
@@ -99,6 +104,11 @@ fun TableAwareText(
                 is ContentPart.Code -> {
                     // 代码块部分：始终用 CodeBlock 渲染
                     // 流式期间可能没有语言标识或未闭合，CodeBlock 需能处理
+                    
+                    // 🎯 检查是否支持预览
+                    val supportedLanguages = setOf("mermaid", "echarts", "chartjs", "flowchart", "flow", "vega", "vega-lite", "html", "svg")
+                    val isPreviewSupported = part.language?.lowercase() in supportedLanguages
+                    
                     CodeBlock(
                         code = part.content,
                         language = part.language,
@@ -107,7 +117,10 @@ fun TableAwareText(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 4.dp),
-                        maxHeight = 600
+                        maxHeight = 600,
+                        onPreviewClick = if (isPreviewSupported) {
+                            { previewState = part.content to (part.language ?: "") }
+                        } else null
                     )
                 }
                 is ContentPart.Table -> {
@@ -123,5 +136,14 @@ fun TableAwareText(
                 }
             }
         }
+    }
+
+    // 🎯 显示预览对话框
+    previewState?.let { (code, language) ->
+        WebPreviewDialog(
+            code = code,
+            language = language,
+            onDismiss = { previewState = null }
+        )
     }
 }
