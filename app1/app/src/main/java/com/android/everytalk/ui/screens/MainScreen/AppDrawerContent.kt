@@ -18,6 +18,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -196,12 +198,12 @@ fun AppDrawerContent(
     )
 
     @Composable
-    fun ConversationItem(itemData: FilteredConversationItem) {
+    fun ConversationItem(itemData: FilteredConversationItem, modifier: Modifier = Modifier) {
         val stableId = resolveStableId(itemData.conversation)
         val isPinned = stableId != null && pinnedIds.contains(stableId)
 
         Box(
-            modifier = Modifier
+            modifier = modifier
                 .fillMaxWidth()
                 .defaultMinSize(minHeight = LIST_ITEM_MIN_HEIGHT)
         ) {
@@ -338,7 +340,7 @@ fun AppDrawerContent(
                                     modifier = Modifier.size(24.dp)
                                 ) {
                                     Icon(
-                                        Icons.Filled.ArrowBack,
+                                        Icons.AutoMirrored.Filled.ArrowBack,
                                         "返回",
                                         modifier = Modifier.size(20.dp)
                                     )
@@ -633,33 +635,43 @@ fun AppDrawerContent(
                                     isExpanded = expandedGroups.contains(groupName),
                                     onToggleExpand = { onToggleGroup(groupName) },
                                     onRename = { newName -> onRenameGroup(groupName, newName) },
-                                    onDelete = { onDeleteGroup(groupName) }
+                                    onDelete = { onDeleteGroup(groupName) },
+                                    modifier = Modifier.animateItem()
                                 )
                             }
-                            if (expandedGroups.contains(groupName)) {
-                                val groupItems = processedItems.custom[groupName] ?: emptyList()
-                                if (groupItems.isNotEmpty()) {
-                                    items(
-                                        items = groupItems,
-                                        key = { item -> "group_${groupName}_${item.originalIndex}_${isImageGenerationMode}" }
-                                    ) { itemData ->
-                                        ConversationItem(itemData)
-                                    }
-                                } else {
-                                    // 空分组显示提示
-                                    item(key = "group_empty_$groupName") {
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(vertical = 12.dp),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Text(
-                                                "暂无分组",
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                                style = MaterialTheme.typography.bodySmall,
-                                                fontWeight = FontWeight.Bold
-                                            )
+                            
+                            // 使用单个 item 包裹 AnimatedVisibility 实现展开/收起动画
+                            item(key = "group_content_$groupName") {
+                                androidx.compose.animation.AnimatedVisibility(
+                                    visible = expandedGroups.contains(groupName),
+                                    enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300)),
+                                    exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
+                                    modifier = Modifier.animateItem()
+                                ) {
+                                    Column {
+                                        val groupItems = processedItems.custom[groupName] ?: emptyList()
+                                        if (groupItems.isNotEmpty()) {
+                                            groupItems.forEach { itemData ->
+                                                ConversationItem(
+                                                    itemData = itemData,
+                                                    modifier = Modifier
+                                                )
+                                            }
+                                        } else {
+                                            // 空分组显示提示
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(vertical = 12.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    "暂无分组",
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -761,16 +773,23 @@ fun AppDrawerContent(
                                         groupName = "已置顶",
                                         isExpanded = expandedGroups.contains("pinned"),
                                         onToggleExpand = { onToggleGroup("pinned") },
-                                        isPinnedGroup = true
+                                        isPinnedGroup = true,
+                                        modifier = Modifier.animateItem()
                                     )
                                 }
-                                // 修复: 直接使用 items,不需要 AnimatedVisibility 包装
-                                if (expandedGroups.contains("pinned")) {
-                                    items(
-                                        items = processedItems.pinned,
-                                        key = { item -> "pinned_${item.originalIndex}_${isImageGenerationMode}" }
-                                    ) { itemData ->
-                                        ConversationItem(itemData)
+                                
+                                item(key = "pinned_content") {
+                                    androidx.compose.animation.AnimatedVisibility(
+                                        visible = expandedGroups.contains("pinned"),
+                                        enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300)),
+                                        exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
+                                        modifier = Modifier.animateItem()
+                                    ) {
+                                        Column {
+                                            processedItems.pinned.forEach { itemData ->
+                                                ConversationItem(itemData)
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -781,7 +800,10 @@ fun AppDrawerContent(
                                     items = processedItems.ungrouped,
                                     key = { item -> "ungrouped_${item.originalIndex}_${isImageGenerationMode}" }
                                 ) { itemData ->
-                                    ConversationItem(itemData)
+                                    ConversationItem(
+                                        itemData = itemData,
+                                        modifier = Modifier.animateItem()
+                                    )
                                 }
                             }
                         }
@@ -961,7 +983,8 @@ fun CollapsibleGroupHeader(
     onToggleExpand: () -> Unit,
     onRename: ((String) -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
-    isPinnedGroup: Boolean = false
+    isPinnedGroup: Boolean = false,
+    modifier: Modifier = Modifier
 ) {
     var showRenameDialog by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf(groupName) }
@@ -975,7 +998,7 @@ fun CollapsibleGroupHeader(
     )
 
     Surface(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp, vertical = 4.dp),
         onClick = onToggleExpand,
@@ -989,7 +1012,7 @@ fun CollapsibleGroupHeader(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
-                imageVector = Icons.Filled.KeyboardArrowRight,
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
                 contentDescription = if (isExpanded) "收起" else "展开",
                 tint = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier
