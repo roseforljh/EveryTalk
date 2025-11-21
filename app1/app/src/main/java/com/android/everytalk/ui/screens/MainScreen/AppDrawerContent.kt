@@ -633,6 +633,7 @@ fun AppDrawerContent(
                     LazyColumn(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .animateContentSize()
                             .heightIn(max = 200.dp), // 限制分组区域的最大高度
                         contentPadding = PaddingValues(vertical = 4.dp)
                     ) {
@@ -643,6 +644,7 @@ fun AppDrawerContent(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+                                        .then(if (deletingGroups.contains(groupName)) Modifier else Modifier.animateItem(placementSpec = tween(300)))
                                 ) {
                                     androidx.compose.animation.AnimatedVisibility(
                                         visible = !deletingGroups.contains(groupName),
@@ -661,7 +663,7 @@ fun AppDrawerContent(
                                                     deletingGroups.remove(groupName)
                                                 }
                                             },
-                                            modifier = Modifier.animateItem()
+                                            modifier = Modifier
                                         )
                                     }
                                 }
@@ -672,7 +674,7 @@ fun AppDrawerContent(
                                     visible = expandedGroups.contains(groupName) && !deletingGroups.contains(groupName),
                                     enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300)),
                                     exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
-                                    modifier = Modifier.animateItem()
+                                    modifier = if (deletingGroups.contains(groupName)) Modifier else Modifier.animateItem(placementSpec = tween(300))
                                 ) {
                                     Column(
                                         modifier = Modifier.animateContentSize(animationSpec = tween(300))
@@ -810,7 +812,7 @@ fun AppDrawerContent(
                                         isExpanded = expandedGroups.contains("pinned"),
                                         onToggleExpand = { onToggleGroup("pinned") },
                                         isPinnedGroup = true,
-                                        modifier = Modifier.animateItem()
+                                        modifier = Modifier.animateItem(placementSpec = tween(300))
                                     )
                                 }
                                 
@@ -819,7 +821,7 @@ fun AppDrawerContent(
                                         visible = expandedGroups.contains("pinned"),
                                         enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300)),
                                         exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
-                                        modifier = Modifier.animateItem()
+                                        modifier = Modifier.animateItem(placementSpec = tween(300))
                                     ) {
                                         Column {
                                             processedItems.pinned.forEach { itemData ->
@@ -827,7 +829,8 @@ fun AppDrawerContent(
                                                     androidx.compose.animation.AnimatedVisibility(
                                                         visible = !deletingItems.contains(itemData.stableId),
                                                         exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
-                                                        enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300))
+                                                        enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300)),
+                                                        modifier = if (deletingItems.contains(itemData.stableId)) Modifier else Modifier.animateItem(placementSpec = tween(300))
                                                     ) {
                                                         ConversationItem(itemData)
                                                     }
@@ -848,7 +851,7 @@ fun AppDrawerContent(
                                         visible = !deletingItems.contains(itemData.stableId),
                                         exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
                                         enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300)),
-                                        modifier = Modifier.animateItem()
+                                        modifier = if (deletingItems.contains(itemData.stableId)) Modifier else Modifier.animateItem(placementSpec = tween(300))
                                     ) {
                                         ConversationItem(
                                             itemData = itemData,
