@@ -142,3 +142,17 @@
 # 保留泛型签名
 -keepattributes Signature
 -keepattributes Exceptions
+
+# ===== Markwon 图片解码 & 依赖（修复 R8 缺类）=====
+-keep class io.noties.markwon.image.gif.** { *; }
+-dontwarn io.noties.markwon.image.gif.**
+-keep class io.noties.markwon.image.svg.** { *; }
+-dontwarn io.noties.markwon.image.svg.**
+
+# android-gif-drawable
+-keep class pl.droidsonroids.gif.** { *; }
+-dontwarn pl.droidsonroids.gif.**
+
+# AndroidSVG
+-keep class com.caverock.androidsvg.** { *; }
+-dontwarn com.caverock.androidsvg.**

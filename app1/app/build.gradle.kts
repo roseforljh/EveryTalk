@@ -222,4 +222,7 @@ android {
         implementation("io.noties.markwon:ext-latex:4.6.2")
         // 图片支持 - 用于渲染 Markdown 中的图片
         implementation("io.noties.markwon:image:4.6.2")
+        // 直接声明底层解码库，避免额外模块解析失败
+        implementation("pl.droidsonroids.gif:android-gif-drawable:1.2.29")
+        implementation("com.caverock:androidsvg:1.4")
     }
