@@ -28,6 +28,7 @@ import androidx.compose.animation.core.*
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -631,18 +632,23 @@ fun AppDrawerContent(
                     ) {
                         // 显示所有分组(包括空分组)
                         conversationGroups.keys.forEach { groupName ->
-                            item(key = "group_header_$groupName") {
-                                CollapsibleGroupHeader(
-                                    groupName = groupName,
-                                    isExpanded = expandedGroups.contains(groupName),
-                                    onToggleExpand = { onToggleGroup(groupName) },
-                                    onRename = { newName -> onRenameGroup(groupName, newName) },
-                                    onDelete = { onDeleteGroup(groupName) },
-                                    modifier = Modifier.animateItem()
-                                )
+                            stickyHeader(key = "group_header_$groupName") {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+                                ) {
+                                    CollapsibleGroupHeader(
+                                        groupName = groupName,
+                                        isExpanded = expandedGroups.contains(groupName),
+                                        onToggleExpand = { onToggleGroup(groupName) },
+                                        onRename = { newName -> onRenameGroup(groupName, newName) },
+                                        onDelete = { onDeleteGroup(groupName) },
+                                        modifier = Modifier.animateItem()
+                                    )
+                                }
                             }
-                            
-                            // 使用单个 item 包裹 AnimatedVisibility 实现展开/收起动画
+
                             item(key = "group_content_$groupName") {
                                 androidx.compose.animation.AnimatedVisibility(
                                     visible = expandedGroups.contains(groupName),
