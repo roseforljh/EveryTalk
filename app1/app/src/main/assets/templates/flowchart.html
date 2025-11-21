@@ -6,9 +6,19 @@
     <script src="../flowchart/raphael.min.js"></script>
     <script src="../flowchart/flowchart.min.js"></script>
     <style>
-        body { margin: 0; padding: 16px; background-color: #ffffff; display: flex; justify-content: center; }
+        html, body { height: 100%; }
+        body {
+            margin: 0;
+            padding: calc(env(safe-area-inset-top, 0px) + 64px) 16px 32px 16px;
+            background-color: #ffffff;
+            box-sizing: border-box;
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+            overflow: auto;
+        }
         @media (prefers-color-scheme: dark) {
-            body { background-color: #1e1e1e; }
+            body { background-color: #101010; }
         }
     </style>
 </head>

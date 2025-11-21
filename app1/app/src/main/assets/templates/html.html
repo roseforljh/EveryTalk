@@ -4,29 +4,38 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
+        html, body { height: 100%; }
         body {
             margin: 0;
-            padding: 16px;
+            padding: calc(env(safe-area-inset-top, 0px) + 100px) 20px 40px 20px;
             background-color: #ffffff;
             color: #000000;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
             box-sizing: border-box;
+            overflow: auto;
+        }
+        .preview-container {
+            width: 100%;
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
         }
         img {
             display: block;
             max-width: 100%;
             height: auto;
-            margin: 0 auto;
+            margin: 16px auto;
+            border-radius: 8px;
         }
         @media (prefers-color-scheme: dark) {
-            body { background-color: #1e1e1e; color: #ffffff; }
+            body { background-color: #101010; color: #f7f7f7; }
         }
     </style>
 </head>
 <body>
-    <!-- CONTENT_PLACEHOLDER -->
+    <div class="preview-container">
+        <!-- CONTENT_PLACEHOLDER -->
+    </div>
 </body>
 </html>
