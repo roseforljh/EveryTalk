@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.ui.screens.MainScreen.drawer.* // 导入抽屉子包下的所有内容
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.clickable
 
 // Helper data class for processed items
@@ -111,6 +112,11 @@ fun AppDrawerContent(
     var showMoveToGroupDialog by remember { mutableStateOf<Int?>(null) }
     var isAddGroupButtonVisible by remember { mutableStateOf(false) } // 控制"创建分组"按钮的可见性（默认隐藏）
     var isGroupSectionExpanded by remember { mutableStateOf(false) } // 控制分组区域的展开/收起（默认收起）
+
+    // Animation states for deletion
+    val deletingGroups = remember { mutableStateListOf<String>() }
+    val deletingItems = remember { mutableStateListOf<String>() }
+    val scope = rememberCoroutineScope()
 
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -638,33 +644,53 @@ fun AppDrawerContent(
                                         .fillMaxWidth()
                                         .background(MaterialTheme.colorScheme.surfaceContainerLowest)
                                 ) {
-                                    CollapsibleGroupHeader(
-                                        groupName = groupName,
-                                        isExpanded = expandedGroups.contains(groupName),
-                                        onToggleExpand = { onToggleGroup(groupName) },
-                                        onRename = { newName -> onRenameGroup(groupName, newName) },
-                                        onDelete = { onDeleteGroup(groupName) },
-                                        modifier = Modifier.animateItem()
-                                    )
+                                    androidx.compose.animation.AnimatedVisibility(
+                                        visible = !deletingGroups.contains(groupName),
+                                        exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300))
+                                    ) {
+                                        CollapsibleGroupHeader(
+                                            groupName = groupName,
+                                            isExpanded = expandedGroups.contains(groupName),
+                                            onToggleExpand = { onToggleGroup(groupName) },
+                                            onRename = { newName -> onRenameGroup(groupName, newName) },
+                                            onDelete = {
+                                                deletingGroups.add(groupName)
+                                                scope.launch {
+                                                    delay(300)
+                                                    onDeleteGroup(groupName)
+                                                    deletingGroups.remove(groupName)
+                                                }
+                                            },
+                                            modifier = Modifier.animateItem()
+                                        )
+                                    }
                                 }
                             }
 
                             item(key = "group_content_$groupName") {
                                 androidx.compose.animation.AnimatedVisibility(
-                                    visible = expandedGroups.contains(groupName),
+                                    visible = expandedGroups.contains(groupName) && !deletingGroups.contains(groupName),
                                     enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300)),
                                     exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
                                     modifier = Modifier.animateItem()
                                 ) {
-                                    Column {
+                                    Column(
+                                        modifier = Modifier.animateContentSize(animationSpec = tween(300))
+                                    ) {
                                         val groupItems = processedItems.custom[groupName] ?: emptyList()
                                         if (groupItems.isNotEmpty()) {
                                             groupItems.forEach { itemData ->
                                                 key(itemData.stableId) {
-                                                    ConversationItem(
-                                                        itemData = itemData,
-                                                        modifier = Modifier
-                                                    )
+                                                    androidx.compose.animation.AnimatedVisibility(
+                                                        visible = !deletingItems.contains(itemData.stableId),
+                                                        exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
+                                                        enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300))
+                                                    ) {
+                                                        ConversationItem(
+                                                            itemData = itemData,
+                                                            modifier = Modifier
+                                                        )
+                                                    }
                                                 }
                                             }
                                         } else {
@@ -798,7 +824,13 @@ fun AppDrawerContent(
                                         Column {
                                             processedItems.pinned.forEach { itemData ->
                                                 key(itemData.stableId) {
-                                                    ConversationItem(itemData)
+                                                    androidx.compose.animation.AnimatedVisibility(
+                                                        visible = !deletingItems.contains(itemData.stableId),
+                                                        exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
+                                                        enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300))
+                                                    ) {
+                                                        ConversationItem(itemData)
+                                                    }
                                                 }
                                             }
                                         }
@@ -812,10 +844,17 @@ fun AppDrawerContent(
                                     items = processedItems.ungrouped,
                                     key = { item -> "ungrouped_${item.stableId}_${isImageGenerationMode}" }
                                 ) { itemData ->
-                                    ConversationItem(
-                                        itemData = itemData,
+                                    androidx.compose.animation.AnimatedVisibility(
+                                        visible = !deletingItems.contains(itemData.stableId),
+                                        exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
+                                        enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300)),
                                         modifier = Modifier.animateItem()
-                                    )
+                                    ) {
+                                        ConversationItem(
+                                            itemData = itemData,
+                                            modifier = Modifier
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -872,12 +911,23 @@ fun AppDrawerContent(
                     selectedSet.clear()
                 },
                 onConfirm = {
-                    val indicesToDelete = selectedSet.toList()
+                    val indicesToDelete = selectedSet.toList().sortedDescending()
                     showDeleteConfirm = false // 关闭对话框
                     selectedSet.clear()
                     onExpandItem(null) // 如果有菜单打开，也关闭它
-                    // 从后往前删除，避免索引错位
-                    indicesToDelete.sortedDescending().forEach(onDeleteRequest)
+                    
+                    // 收集需要删除的项的ID以进行动画
+                    val idsToAnimate = indicesToDelete.mapNotNull { index ->
+                        historicalConversations.getOrNull(index)?.let { resolveStableId(it) }
+                    }
+                    deletingItems.addAll(idsToAnimate)
+
+                    scope.launch {
+                        delay(300) // 等待动画完成
+                        // 从后往前删除，避免索引错位
+                        indicesToDelete.forEach(onDeleteRequest)
+                        deletingItems.removeAll(idsToAnimate)
+                    }
                 }
             )
 
