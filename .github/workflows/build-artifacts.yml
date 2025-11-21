@@ -39,6 +39,7 @@ jobs:
           ANDROID_KEYSTORE_PATH: ${{ secrets.ANDROID_KEYSTORE_PATH }}
         if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
         run: |
+          echo "Secrets ANDROID_KEYSTORE_PATH='${ANDROID_KEYSTORE_PATH}'"
           KEYPATH=${ANDROID_KEYSTORE_PATH:-app1/everytalk-release.jks}
           echo "Writing keystore to $KEYPATH"
           echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$KEYPATH"
