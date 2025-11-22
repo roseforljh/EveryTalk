@@ -112,8 +112,13 @@ fun ChatMessagesList(
             key = { _, item -> item.stableId },
             contentType = { _, item ->
                 when (item) {
-                    is ChatListItem.AiMessage, is ChatListItem.AiMessageStreaming -> "AiMessage"
-                    is ChatListItem.AiMessageCode, is ChatListItem.AiMessageCodeStreaming -> "AiMessageCode"
+                    // Merge all AI message types into a single contentType to prevent
+                    // item recreation when switching between Streaming/Non-Streaming states.
+                    // This allows the inner Composable to handle state transitions smoothly.
+                    is ChatListItem.AiMessage,
+                    is ChatListItem.AiMessageStreaming,
+                    is ChatListItem.AiMessageCode,
+                    is ChatListItem.AiMessageCodeStreaming -> "AiMessage"
                     else -> item::class.java.simpleName
                 }
             }
