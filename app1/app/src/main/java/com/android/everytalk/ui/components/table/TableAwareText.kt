@@ -61,32 +61,36 @@ fun TableAwareText(
     // 无论是否流式，都尝试进行轻量级分段解析（仅分离代码块，表格仍由MarkdownRenderer处理或后续优化）
     
     // 1. 解析状态管理
-    // 🎯 优化：同步初始化状态，避免闪烁
-    // 如果缓存中有数据，直接作为初始值，而不是先显示 Text 再切换
-    val initialParts = remember(text, contentKey, isStreaming) {
-        if (!isStreaming && contentKey.isNotBlank()) {
-            ContentParseCache.get(contentKey) ?: listOf(ContentPart.Text(text))
-        } else {
-            listOf(ContentPart.Text(text))
-        }
+    // 🎯 优化：使用 remember + LaunchedEffect 替代 produceState
+    // 目的：当 isStreaming 变化时（true -> false），保持当前的 parsedParts 不变，
+    // 直到新的解析完成。避免 produceState 重置导致的回退到 initialValue (纯文本) 造成的闪烁/跳动。
+    
+    val parsedPartsState = remember(contentKey) {
+        mutableStateOf(
+            if (!isStreaming && contentKey.isNotBlank()) {
+                ContentParseCache.get(contentKey) ?: listOf(ContentPart.Text(text))
+            } else {
+                listOf(ContentPart.Text(text))
+            }
+        )
     }
 
-    val parsedParts by produceState<List<ContentPart>>(initialValue = initialParts, key1 = text, key2 = isStreaming, key3 = contentKey) {
-        // 如果初始值已经是缓存值（且非默认Text），则不需要立即重新解析，除非是流式更新
-        // 但为了保险起见（比如缓存可能为空），我们还是执行解析逻辑，但 Compose 的 State 机制会避免相同值的重组
-        value = withContext(Dispatchers.Default) {
+    LaunchedEffect(text, isStreaming, contentKey) {
+        val newParts = withContext(Dispatchers.Default) {
             if (isStreaming) {
                 // 流式期间不读写全局缓存，直接解析
                 ContentParser.parseCompleteContent(text, isStreaming = true)
             } else {
                 // 非流式：尝试从全局缓存获取，否则完整解析并缓存
-                // 注意：这里再次 get 是为了处理 initialParts 为默认值的情况，或者并发更新
                 ContentParseCache.get(contentKey) ?: ContentParser.parseCompleteContent(text, isStreaming = false).also {
                     if (contentKey.isNotBlank()) ContentParseCache.put(contentKey, it)
                 }
             }
         }
+        parsedPartsState.value = newParts
     }
+    
+    val parsedParts = parsedPartsState.value
 
     // 2. 统一渲染逻辑
     // 不再区分 isStreaming 的大分支，而是统一遍历 parsedParts 进行渲染

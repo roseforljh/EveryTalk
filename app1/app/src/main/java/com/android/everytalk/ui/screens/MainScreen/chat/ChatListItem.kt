@@ -36,14 +36,14 @@ sealed interface ChatListItem {
         val messageId: String,
         val hasReasoning: Boolean
     ) : ChatListItem {
-        override val stableId: String = "${messageId}_stream"
+        override val stableId: String = messageId
     }
 
     data class AiMessageCodeStreaming(
         val messageId: String,
         val hasReasoning: Boolean
     ) : ChatListItem {
-        override val stableId: String = "${messageId}_code_stream"
+        override val stableId: String = "${messageId}_code"
     }
     // —— 新增结束 ——
 

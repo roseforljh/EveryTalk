@@ -110,7 +110,13 @@ fun ChatMessagesList(
         itemsIndexed(
             items = chatItems,
             key = { _, item -> item.stableId },
-            contentType = { _, item -> item::class.java.simpleName }
+            contentType = { _, item ->
+                when (item) {
+                    is ChatListItem.AiMessage, is ChatListItem.AiMessageStreaming -> "AiMessage"
+                    is ChatListItem.AiMessageCode, is ChatListItem.AiMessageCodeStreaming -> "AiMessageCode"
+                    else -> item::class.java.simpleName
+                }
+            }
         ) { index, item ->
             // 根据消息类型决定Box是否占满宽度
             val isUserMessage = item is ChatListItem.UserMessage ||
@@ -229,23 +235,28 @@ fun ChatMessagesList(
                             )
                         }
 
-                        is ChatListItem.AiMessage -> {
-                            val message = viewModel.getMessageById(item.messageId)
+                        is ChatListItem.AiMessage, is ChatListItem.AiMessageStreaming -> {
+                            val messageId = if (item is ChatListItem.AiMessage) item.messageId else (item as ChatListItem.AiMessageStreaming).messageId
+                            val message = viewModel.getMessageById(messageId)
                             if (message != null) {
+                                val text = if (item is ChatListItem.AiMessage) item.text else message.text
+                                val hasReasoning = if (item is ChatListItem.AiMessage) item.hasReasoning else (item as ChatListItem.AiMessageStreaming).hasReasoning
+                                val isStreaming = if (item is ChatListItem.AiMessageStreaming) true else (currentStreamingId == message.id)
+
                                 Column(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalAlignment = Alignment.Start
                                 ) {
                                     AiMessageItem(
                                         message = message,
-                                        text = item.text,
+                                        text = text,
                                         maxWidth = bubbleMaxWidth,
-                                        hasReasoning = item.hasReasoning,
+                                        hasReasoning = hasReasoning,
                                         onLongPress = {
                                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                             onShowAiMessageOptions(message)
                                         },
-                                        isStreaming = currentStreamingId == message.id,
+                                        isStreaming = isStreaming,
                                         messageOutputType = message.outputType,
                                         viewModel = viewModel,
                                         showMenuButton = false,
@@ -261,9 +272,14 @@ fun ChatMessagesList(
                             }
                         }
 
-                        is ChatListItem.AiMessageCode -> {
-                            val message = viewModel.getMessageById(item.messageId)
+                        is ChatListItem.AiMessageCode, is ChatListItem.AiMessageCodeStreaming -> {
+                            val messageId = if (item is ChatListItem.AiMessageCode) item.messageId else (item as ChatListItem.AiMessageCodeStreaming).messageId
+                            val message = viewModel.getMessageById(messageId)
                             if (message != null) {
+                                val text = if (item is ChatListItem.AiMessageCode) item.text else message.text
+                                val hasReasoning = if (item is ChatListItem.AiMessageCode) item.hasReasoning else (item as ChatListItem.AiMessageCodeStreaming).hasReasoning
+                                val isStreaming = if (item is ChatListItem.AiMessageCodeStreaming) true else (currentStreamingId == message.id)
+
                                 Column(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalAlignment = Alignment.Start
@@ -271,14 +287,14 @@ fun ChatMessagesList(
                                     AiMessageItem(
                                         message = message,
                                         // 不再任何包裹：按原文渲染，避免把普通文本误判为代码
-                                        text = item.text,
+                                        text = text,
                                         maxWidth = bubbleMaxWidth,
-                                        hasReasoning = item.hasReasoning,
+                                        hasReasoning = hasReasoning,
                                         onLongPress = {
                                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                             onShowAiMessageOptions(message)
                                         },
-                                        isStreaming = currentStreamingId == message.id,
+                                        isStreaming = isStreaming,
                                         messageOutputType = message.outputType,
                                         viewModel = viewModel,
                                         showMenuButton = false,
@@ -301,69 +317,6 @@ fun ChatMessagesList(
                             )
                         }
 
-                        is ChatListItem.AiMessageStreaming -> {
-                            val message = viewModel.getMessageById(item.messageId)
-                            if (message != null) {
-                                Column(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalAlignment = Alignment.Start
-                                ) {
-                                    AiMessageItem(
-                                        message = message,
-                                        text = message.text,
-                                        maxWidth = bubbleMaxWidth,
-                                        hasReasoning = item.hasReasoning,
-                                        onLongPress = {
-                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            onShowAiMessageOptions(message)
-                                        },
-                                        isStreaming = true,
-                                        messageOutputType = message.outputType,
-                                        viewModel = viewModel,
-                                        showMenuButton = false,
-                                        onImageClick = { url ->
-                                            val now = SystemClock.elapsedRealtime()
-                                            if (now - lastImagePreviewAt > 500) {
-                                                lastImagePreviewAt = now
-                                                onImageClick(url)
-                                            }
-                                        }
-                                    )
-                                }
-                            }
-                        }
-
-                        is ChatListItem.AiMessageCodeStreaming -> {
-                            val message = viewModel.getMessageById(item.messageId)
-                            if (message != null) {
-                                Column(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalAlignment = Alignment.Start
-                                ) {
-                                    AiMessageItem(
-                                        message = message,
-                                        text = message.text,
-                                        maxWidth = bubbleMaxWidth,
-                                        hasReasoning = item.hasReasoning,
-                                        onLongPress = {
-                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            onShowAiMessageOptions(message)
-                                        },
-                                        isStreaming = true,
-                                        messageOutputType = message.outputType,
-                                        viewModel = viewModel,
-                                        showMenuButton = false,
-                                        onImageClick = { url ->
-                                            val now = SystemClock.elapsedRealtime()
-                                            if (now - lastImagePreviewAt > 500) {
-                                                lastImagePreviewAt = now
-                                                onImageClick(url)
-                                            }
-                                        }
-                                    )
-                                }
-                            }
-                        }
 
                         is ChatListItem.ErrorMessage -> {
                             val message = viewModel.getMessageById(item.messageId)
