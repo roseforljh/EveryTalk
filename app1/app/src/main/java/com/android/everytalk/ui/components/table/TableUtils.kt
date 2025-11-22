@@ -16,10 +16,12 @@ object TableUtils {
      * 检查是否为表格行
      */
     fun isTableLine(line: String): Boolean {
-        val trimmed = line.trim()
-        // 表格行必须包含至少两个 | 符号
+        // 移除 BOM 和首尾空白
+        val trimmed = line.replace("\uFEFF", "").trim()
+        
+        // 表格行必须包含至少一个 | 符号 (例如 "col1 | col2" 只有一个 |)
         val pipeCount = trimmed.count { it == '|' }
-        if (pipeCount < 2) return false
+        if (pipeCount < 1) return false
         
         // 检查是否为分隔行（包含 - 和 | 的组合）
         val isSeparator = trimmed.matches(TABLE_SEPARATOR_REGEX)
@@ -34,7 +36,8 @@ object TableUtils {
      * 检查是否为表格分隔行
      */
     fun isTableSeparator(line: String): Boolean {
-        val trimmed = line.trim()
+        // 移除 BOM 和首尾空白
+        val trimmed = line.replace("\uFEFF", "").trim()
         return trimmed.matches(TABLE_SEPARATOR_REGEX)
     }
     
@@ -65,7 +68,7 @@ object TableUtils {
      */
     fun parseTableRow(line: String): List<String> {
         // 移除首尾的 | 符号，然后按 | 分割
-        return line.trim()
+        return line.replace("\uFEFF", "").trim()
             .removePrefix("|")
             .removeSuffix("|")
             .split("|")

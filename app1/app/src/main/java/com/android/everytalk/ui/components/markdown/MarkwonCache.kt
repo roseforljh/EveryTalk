@@ -2,7 +2,6 @@ package com.android.everytalk.ui.components.markdown
 
 import android.content.Context
 import io.noties.markwon.Markwon
-import io.noties.markwon.ext.tables.TablePlugin
 import io.noties.markwon.image.ImagesPlugin
 import io.noties.markwon.image.AsyncDrawable
 import io.noties.markwon.ext.latex.JLatexMathPlugin
@@ -163,8 +162,8 @@ object MarkwonCache {
                 })
                 // InlineParser必须在JLatexMathPlugin之后
                 .usePlugin(MarkwonInlineParserPlugin.create())
-                // 表格支持
-                .usePlugin(TablePlugin.create(context))
+                // 表格支持：已移除，改用 Compose TableRenderer 统一渲染
+                // .usePlugin(TablePlugin.create(context))
                 // 主题与span定制（内联`code`样式）
                 .usePlugin(object : AbstractMarkwonPlugin() {
                     override fun configureTheme(builder: MarkwonTheme.Builder) {

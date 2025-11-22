@@ -1,17 +1,12 @@
 package com.android.everytalk.ui.components.table
 
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -19,7 +14,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
-import com.android.everytalk.config.PerformanceConfig
 import com.android.everytalk.ui.components.CodeBlock
 import com.android.everytalk.ui.components.ContentParser
 import com.android.everytalk.ui.components.ContentPart
@@ -28,7 +22,6 @@ import com.android.everytalk.ui.components.markdown.MarkdownRenderer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.android.everytalk.util.ContentParseCache
-import com.android.everytalk.util.PerformanceMonitor
 
 /**
  * 表格感知文本渲染器（优化版 + 跳动修复）
@@ -145,15 +138,17 @@ fun TableAwareText(
                     )
                 }
                 is ContentPart.Table -> {
-                    // 表格部分：仅在完整解析（非流式）时出现
-                    // 流式期间表格会被视为 Text 由 MarkdownRenderer 渲染（Markwon支持基础表格）
+                    // 表格部分：使用 TableRenderer 渲染
                     TableRenderer(
                         lines = part.lines,
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 8.dp),
-                        isStreaming = false,
-                        contentKey = if (contentKey.isNotBlank()) "${contentKey}_part_${parsedParts.indexOf(part)}" else ""
+                        isStreaming = isStreaming,
+                        contentKey = if (contentKey.isNotBlank()) "${contentKey}_table_${parsedParts.indexOf(part)}" else "",
+                        // 使用与文本一致的样式
+                        headerStyle = style.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Bold),
+                        cellStyle = style
                     )
                 }
             }

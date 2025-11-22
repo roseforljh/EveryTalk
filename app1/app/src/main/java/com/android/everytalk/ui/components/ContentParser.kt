@@ -3,6 +3,7 @@ package com.android.everytalk.ui.components
 import android.util.Log
 import com.android.everytalk.config.PerformanceConfig
 import com.android.everytalk.ui.components.math.MathParser
+import com.android.everytalk.ui.components.table.TableUtils
 
 /**
  * 内容类型枚举
@@ -28,7 +29,7 @@ sealed class ContentPart {
  * 内容解析器
  * 
  * 核心功能：
- * - 统一解析Markdown、数学公式、代码块、表格
+ * - 统一解析Markdown、数学公式、代码块
  * - 流式解析支持（批量缓冲）
  * - 安全断句点检测（避免不完整结构）
  */
@@ -70,12 +71,14 @@ object ContentParser {
                         continue
                     }
                 }
-                
+
                 // 检查是否为表格开始
-                if (isTableLine(line)) {
-                    val (table, nextIndex) = extractTable(lines, currentIndex)
-                    if (table != null) {
-                        parts.add(table)
+                // 🎯 新增：使用TableUtils检测表格
+                if (TableUtils.isTableLine(line)) {
+                    val (tableLines, nextIndex) = TableUtils.extractTableLines(lines, currentIndex)
+                    // extractTableLines会验证表格完整性（至少有表头和分隔行）
+                    if (tableLines.isNotEmpty()) {
+                        parts.add(ContentPart.Table(tableLines))
                         currentIndex = nextIndex
                         continue
                     }
@@ -83,10 +86,25 @@ object ContentParser {
                 
                 // 收集普通文本行
                 val textLines = mutableListOf<String>()
-                while (currentIndex < lines.size && 
-                       !lines[currentIndex].trimStart().startsWith("```") &&
-                       !isTableLine(lines[currentIndex])) {
-                    textLines.add(lines[currentIndex])
+                while (currentIndex < lines.size) {
+                    val currentLine = lines[currentIndex]
+                    // 遇到代码块起始，中断文本收集
+                    if (currentLine.trimStart().startsWith("```")) break
+
+                    // 遇到可能的表格行，检查是否为有效表格起始
+                    // 🎯 优化：仅当下一行是表格分隔行时才中断文本收集
+                    // 这比调用 extractTableLines 更高效，且能准确识别 Markdown 表格头
+                    if (TableUtils.isTableLine(currentLine)) {
+                        val nextLine = lines.getOrNull(currentIndex + 1)
+                        if (nextLine != null && TableUtils.isTableSeparator(nextLine)) {
+                            Log.d(TAG, "Found table start at index $currentIndex: $currentLine")
+                            break
+                        } else {
+                             // Log.d(TAG, "Line looks like table but next line is not separator: $currentLine -> ${nextLine ?: "EOF"}")
+                        }
+                    }
+
+                    textLines.add(currentLine)
                     currentIndex++
                 }
                 
@@ -201,67 +219,6 @@ object ContentParser {
         } else {
             null to (startIndex + 1).coerceAtMost(lines.size)
         }
-    }
-    
-    /**
-     * 提取表格
-     */
-    private fun extractTable(lines: List<String>, startIndex: Int): Pair<ContentPart.Table?, Int> {
-        val tableLines = mutableListOf<String>()
-        var currentIndex = startIndex
-        
-        // 收集连续的表格行
-        while (currentIndex < lines.size && isTableLine(lines[currentIndex])) {
-            tableLines.add(lines[currentIndex])
-            currentIndex++
-        }
-        
-        // 验证表格格式：至少需要表头、分隔行
-        if (tableLines.size >= 2 && isTableSeparator(tableLines[1])) {
-            return ContentPart.Table(tableLines) to currentIndex
-        }
-        
-        // 不是有效的表格
-        return null to startIndex + 1
-    }
-    
-    // 缓存编译后的正则（避免重复编译）
-    private val tableSeparatorRegex = Regex("^\\s*\\|?\\s*[-:]+\\s*(\\|\\s*[-:]+\\s*)+\\|?\\s*$")
-    
-    /**
-     * 检查是否为表格行（优化版：减少正则匹配）
-     */
-    private fun isTableLine(line: String): Boolean {
-        val trimmed = line.trim()
-        if (trimmed.isEmpty()) return false
-        
-        // 快速检查：必须包含 |
-        if (!trimmed.contains('|')) return false
-        
-        // 表格行必须包含至少两个 | 符号
-        val pipeCount = trimmed.count { it == '|' }
-        if (pipeCount < 2) return false
-        
-        // 🎯 优化：先用简单规则判断，减少正则匹配
-        // 分隔行特征：主要包含 - : | 和空格
-        val isLikelySeparator = trimmed.count { it == '-' || it == ':' } >= pipeCount
-        if (isLikelySeparator) {
-            // 精确验证分隔行
-            return tableSeparatorRegex.matches(trimmed)
-        }
-        
-        // 数据行：包含 | 但不全是特殊字符
-        val isDataRow = trimmed.any { it != '|' && it != '-' && it != ':' && !it.isWhitespace() }
-        
-        return isDataRow
-    }
-    
-    /**
-     * 检查是否为表格分隔行（优化版：复用缓存的正则）
-     */
-    private fun isTableSeparator(line: String): Boolean {
-        val trimmed = line.trim()
-        return tableSeparatorRegex.matches(trimmed)
     }
     
     /**

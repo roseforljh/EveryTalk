@@ -11,7 +11,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import com.android.everytalk.ui.components.table.TableAwareText
-import com.android.everytalk.ui.components.table.TableUtils
 import com.android.everytalk.data.DataClass.Sender
 
 /**
@@ -66,16 +65,13 @@ fun ContentCoordinator(
     
     // 🎯 轻量检测
     val hasCodeBlock = text.contains("```")
-    // 修复：表格检测过于宽泛，导致含管道符的普通文本被错误分发。
-    // 新逻辑：必须同时包含管道符和表格分隔线语法（如 |---|），或通过 TableUtils 精确判断。
-    val hasTable = (text.contains("|") && text.contains("---")) && text.lineSequence().any { line -> TableUtils.isTableLine(line) }
 
     // ⚡ 流式阶段：使用轻量模式，避免频繁解析
     // 流式结束后：触发完整解析，将代码块转换为CodeBlock组件
     // 性能保护：
     //   - TableAwareText 延迟250ms解析大型内容（>8000字符）
     //   - 使用后台线程（Dispatchers.Default）避免阻塞UI
-    if (hasCodeBlock || hasTable) {
+    if (hasCodeBlock) {
         // 🎯 只根据流式状态判断是否使用轻量模式
         val shouldUseLightweight = isStreaming
 
