@@ -9,10 +9,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -58,12 +60,16 @@ fun TableRenderer(
     // 仅在单元格非常多时降级为纯文本。
     val usePlainTextCells = totalCells > 60 || !renderMarkdownInCells
 
+    val cornerRadius = 12.dp
+    val tableShape = RoundedCornerShape(cornerRadius)
+
     Column(
         modifier = modifier
             .fillMaxWidth()
+            .clip(tableShape) // 应用圆角裁剪
             .horizontalScroll(rememberScrollState()) // 由外层统一提供水平滚动，保证表头与数据行滚动同步
             .background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, MaterialTheme.colorScheme.outline)
+            .border(1.dp, MaterialTheme.colorScheme.outline, tableShape) // 边框也使用圆角
     ) {
         // 渲染表头（使用轻量Text，避免复杂渲染）
         Row(

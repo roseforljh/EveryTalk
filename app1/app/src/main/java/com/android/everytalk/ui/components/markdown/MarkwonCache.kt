@@ -162,8 +162,6 @@ object MarkwonCache {
                 })
                 // InlineParser必须在JLatexMathPlugin之后
                 .usePlugin(MarkwonInlineParserPlugin.create())
-                // 表格支持：已移除，改用 Compose TableRenderer 统一渲染
-                // .usePlugin(TablePlugin.create(context))
                 // 主题与span定制（内联`code`样式）
                 .usePlugin(object : AbstractMarkwonPlugin() {
                     override fun configureTheme(builder: MarkwonTheme.Builder) {

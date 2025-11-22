@@ -10,7 +10,8 @@ import androidx.compose.ui.unit.dp
 object TableUtils {
     
     // 预编译表格分隔行正则，避免在热点路径重复创建 Regex 实例
-    private val TABLE_SEPARATOR_REGEX = Regex("^\\s*\\|?\\s*[-:]+\\s*(\\|\\s*[-:]+\\s*)+\\|?\\s*$")
+    // 改进的表格分隔行正则，支持更宽松的格式
+    private val TABLE_SEPARATOR_REGEX = Regex("^\\s*\\|?\\s*:?-+:?\\s*(\\|\\s*:?-+:?\\s*)+\\|?\\s*$")
     
     /**
      * 检查是否为表格行
@@ -19,17 +20,21 @@ object TableUtils {
         // 移除 BOM 和首尾空白
         val trimmed = line.replace("\uFEFF", "").trim()
         
-        // 表格行必须包含至少一个 | 符号 (例如 "col1 | col2" 只有一个 |)
-        val pipeCount = trimmed.count { it == '|' }
-        if (pipeCount < 1) return false
+        // 快速检查：必须包含 |
+        if (!trimmed.contains('|')) return false
         
-        // 检查是否为分隔行（包含 - 和 | 的组合）
-        val isSeparator = trimmed.matches(TABLE_SEPARATOR_REGEX)
+        // 检查是否为分隔行
+        if (trimmed.matches(TABLE_SEPARATOR_REGEX)) return true
         
-        // 检查是否为数据行（包含 | 分隔的内容）
-        val isDataRow = trimmed.contains("|") && !trimmed.all { it == '|' || it == '-' || it == ':' || it.isWhitespace() }
+        // 检查是否为数据行或表头
+        // 规则：
+        // 1. 必须包含 |
+        // 2. 不能只包含表格符号（防止误判分隔行）
+        // 3. 或者是分隔行（上面已经检查过了）
         
-        return isSeparator || isDataRow
+        // 简单的启发式检查：如果包含 | 且不是分隔行，我们暂时认为是潜在的表格行
+        // 更严格的检查由 extractTableLines 和 ContentParser 的上下文逻辑处理
+        return true
     }
     
     /**
