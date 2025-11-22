@@ -179,6 +179,7 @@ fun TableAwareText(
                             .padding(vertical = 8.dp),
                         isStreaming = isStreaming,
                         contentKey = if (contentKey.isNotBlank()) "${contentKey}_table_${parsedParts.indexOf(part)}" else "",
+                        onLongPress = onLongPress,
                         // 使用与文本一致的样式
                         headerStyle = style.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Bold),
                         cellStyle = style

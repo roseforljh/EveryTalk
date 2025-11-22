@@ -2,6 +2,7 @@ package com.android.everytalk.ui.components.table
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,6 +16,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -41,7 +43,8 @@ fun TableRenderer(
         fontSize = 14.sp
     ),
     cellStyle: TextStyle = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
-    contentKey: String = ""
+    contentKey: String = "",
+    onLongPress: (() -> Unit)? = null
 ) {
     if (lines.size < 2) return
 
@@ -67,6 +70,17 @@ fun TableRenderer(
         modifier = modifier
             .fillMaxWidth()
             .clip(tableShape) // 应用圆角裁剪
+            .pointerInput(onLongPress) {
+                if (onLongPress != null) {
+                    detectTapGestures(
+                        onLongPress = {
+                            onLongPress()
+                        },
+                        // 允许点击穿透，不消费点击事件，以免影响内部可能的点击交互（虽然目前主要是长按）
+                        onTap = { /* no-op */ }
+                    )
+                }
+            }
             .horizontalScroll(rememberScrollState()) // 由外层统一提供水平滚动，保证表头与数据行滚动同步
             .background(MaterialTheme.colorScheme.surface)
             .border(1.dp, MaterialTheme.colorScheme.outline, tableShape) // 边框也使用圆角
