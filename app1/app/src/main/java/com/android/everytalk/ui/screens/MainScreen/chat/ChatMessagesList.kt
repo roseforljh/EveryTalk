@@ -547,7 +547,8 @@ fun AiMessageItem(
                         modifier = Modifier.fillMaxWidth(),
                         isStreaming = false,
                         onLongPress = onLongPress,
-                        onImageClick = onImageClick
+                        onImageClick = onImageClick,
+                        contentKey = if (message.id.isNotBlank()) "${message.id}_custom" else ""
                     )
                 } else {
                     EnhancedMarkdownText(

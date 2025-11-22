@@ -58,7 +58,8 @@ fun ContentCoordinator(
             isStreaming = isStreaming,
             onLongPress = onLongPress,
             onImageClick = onImageClick,
-            sender = sender
+            sender = sender,
+            contentKey = contentKey
         )
         return
     }
@@ -104,6 +105,7 @@ fun ContentCoordinator(
         isStreaming = isStreaming,
         onLongPress = onLongPress,
         onImageClick = onImageClick,
-        sender = sender
+        sender = sender,
+        contentKey = contentKey
     )
 }

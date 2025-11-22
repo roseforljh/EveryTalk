@@ -61,22 +61,26 @@ fun TableAwareText(
     // 无论是否流式，都尝试进行轻量级分段解析（仅分离代码块，表格仍由MarkdownRenderer处理或后续优化）
     
     // 1. 解析状态管理
-    // 在流式期间，使用轻量级解析（parseCodeBlocksOnly）；结束后，使用完整解析（parseCompleteContent）。
-    // 为了性能，流式期间的解析结果不缓存到全局，仅在组件内记忆。
-    val parsedParts by produceState<List<ContentPart>>(initialValue = listOf(ContentPart.Text(text)), key1 = text) {
+    // 🎯 优化：同步初始化状态，避免闪烁
+    // 如果缓存中有数据，直接作为初始值，而不是先显示 Text 再切换
+    val initialParts = remember(text, contentKey, isStreaming) {
+        if (!isStreaming && contentKey.isNotBlank()) {
+            ContentParseCache.get(contentKey) ?: listOf(ContentPart.Text(text))
+        } else {
+            listOf(ContentPart.Text(text))
+        }
+    }
+
+    val parsedParts by produceState<List<ContentPart>>(initialValue = initialParts, key1 = text, key2 = isStreaming, key3 = contentKey) {
+        // 如果初始值已经是缓存值（且非默认Text），则不需要立即重新解析，除非是流式更新
+        // 但为了保险起见（比如缓存可能为空），我们还是执行解析逻辑，但 Compose 的 State 机制会避免相同值的重组
         value = withContext(Dispatchers.Default) {
-            // 每次文本变化时重新解析
-            // 🎯 修复重影与闪烁 + 恢复表格渲染：
-            // 统一使用 parseCompleteContent，无论流式还是非流式都提取表格。
-            // 这样可以：
-            // 1. 满足用户使用 Compose 表格的需求。
-            // 2. 保证流式期间和结束后的渲染结构一致（都是 ContentPart.Table），消除组件切换导致的闪烁。
-            // 虽然流式期间完整解析有一定性能开销，但对于一般长度的回复是可以接受的。
             if (isStreaming) {
                 // 流式期间不读写全局缓存，直接解析
                 ContentParser.parseCompleteContent(text, isStreaming = true)
             } else {
                 // 非流式：尝试从全局缓存获取，否则完整解析并缓存
+                // 注意：这里再次 get 是为了处理 initialParts 为默认值的情况，或者并发更新
                 ContentParseCache.get(contentKey) ?: ContentParser.parseCompleteContent(text, isStreaming = false).also {
                     if (contentKey.isNotBlank()) ContentParseCache.put(contentKey, it)
                 }
@@ -98,7 +102,8 @@ fun TableAwareText(
                         modifier = Modifier.fillMaxWidth(),
                         isStreaming = isStreaming, // 传递流式状态给MarkdownRenderer（用于内部优化）
                         onLongPress = onLongPress,
-                        onImageClick = onImageClick
+                        onImageClick = onImageClick,
+                        contentKey = if (contentKey.isNotBlank()) "${contentKey}_part_${parsedParts.indexOf(part)}" else "" // 🎯 传递子Key
                     )
                 }
                 is ContentPart.Code -> {
@@ -143,7 +148,8 @@ fun TableAwareText(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 8.dp),
-                        isStreaming = false
+                        isStreaming = false,
+                        contentKey = if (contentKey.isNotBlank()) "${contentKey}_part_${parsedParts.indexOf(part)}" else ""
                     )
                 }
             }

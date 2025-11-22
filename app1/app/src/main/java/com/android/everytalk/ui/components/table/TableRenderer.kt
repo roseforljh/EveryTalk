@@ -38,7 +38,8 @@ fun TableRenderer(
         fontWeight = FontWeight.Bold,
         fontSize = 14.sp
     ),
-    cellStyle: TextStyle = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp)
+    cellStyle: TextStyle = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
+    contentKey: String = ""
 ) {
     if (lines.size < 2) return
 
@@ -83,7 +84,8 @@ fun TableRenderer(
                         style = headerStyle,
                         color = MaterialTheme.colorScheme.onSurface,
                         isStreaming = false,
-                        modifier = cellModifier
+                        modifier = cellModifier,
+                        contentKey = if (contentKey.isNotBlank()) "${contentKey}_th_$index" else ""
                     )
                 } else {
                     Text(
@@ -122,7 +124,8 @@ fun TableRenderer(
                                 style = cellStyle,
                                 color = MaterialTheme.colorScheme.onSurface,
                                 isStreaming = false,
-                                modifier = cellModifier
+                                modifier = cellModifier,
+                                contentKey = if (contentKey.isNotBlank()) "${contentKey}_tr_${dataRows.indexOf(row)}_td_$index" else ""
                             )
                         } else {
                             Text(

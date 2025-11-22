@@ -34,6 +34,7 @@ import android.text.Spannable
 import io.noties.markwon.image.AsyncDrawable // 使用 AsyncDrawable
 import io.noties.markwon.image.AsyncDrawableSpan
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.ui.components.markdown.MarkdownSpansCache
 
 
 private val MULTIPLE_SPACES_REGEX = Regex(" {2,}")
@@ -69,8 +70,9 @@ fun MarkdownRenderer(
     color: Color = Color.Unspecified,
     isStreaming: Boolean = false,
     onLongPress: (() -> Unit)? = null,
-    onImageClick: ((String) -> Unit)? = null, 
-    sender: Sender = Sender.AI
+    onImageClick: ((String) -> Unit)? = null,
+    sender: Sender = Sender.AI,
+    contentKey: String = ""
 ) {
     val context = LocalContext.current
     val isDark = isSystemInDarkTheme()
@@ -303,14 +305,45 @@ fun MarkdownRenderer(
             }
         },
         update = { tv ->
-            val processed = preprocessAiMarkdown(markdown)
+            // 🎯 缓存优化：尝试从缓存获取 Spanned 对象
+            val sp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
+            val cacheKey = if (contentKey.isNotBlank() && !isStreaming) {
+                MarkdownSpansCache.generateKey(contentKey, isDark, sp)
+            } else ""
 
-            // 调试：检查是否包含数学公式
-            if (processed.contains("$")) {
-                android.util.Log.d("MarkdownRenderer", "📐 检测到数学公式标记: ${processed.take(100)}")
+            val cachedSpanned = if (cacheKey.isNotBlank()) MarkdownSpansCache.get(cacheKey) else null
+
+            if (cachedSpanned != null) {
+                // 命中缓存：直接设置文本，跳过解析
+                tv.text = cachedSpanned
+                if (com.android.everytalk.config.PerformanceConfig.ENABLE_PERFORMANCE_LOGGING) {
+                    android.util.Log.d("MarkdownRenderer", "✅ Spans Cache HIT: $cacheKey")
+                }
+            } else {
+                // 未命中缓存：执行完整解析
+                val processed = preprocessAiMarkdown(markdown)
+
+                // 调试：检查是否包含数学公式
+                if (processed.contains("$")) {
+                    android.util.Log.d("MarkdownRenderer", "📐 检测到数学公式标记: ${processed.take(100)}")
+                }
+
+                // 分步解析以支持缓存
+                // markwon.setMarkdown(tv, processed) // 原逻辑
+                
+                // 新逻辑：Parse -> Render -> Cache -> Set
+                val node = markwon.parse(processed)
+                val spanned = markwon.render(node)
+                
+                if (cacheKey.isNotBlank()) {
+                    MarkdownSpansCache.put(cacheKey, spanned)
+                    if (com.android.everytalk.config.PerformanceConfig.ENABLE_PERFORMANCE_LOGGING) {
+                        android.util.Log.d("MarkdownRenderer", "🔧 Spans Cache MISS, cached: $cacheKey")
+                    }
+                }
+                
+                markwon.setParsedMarkdown(tv, spanned)
             }
-
-            markwon.setMarkdown(tv, processed)
 
             // 🎯 处理图片点击事件（兼容 AsyncDrawableSpan 与 ImageSpan）
             if (onImageClick != null) {
