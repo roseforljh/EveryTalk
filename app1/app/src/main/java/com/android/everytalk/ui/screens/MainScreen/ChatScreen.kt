@@ -162,16 +162,6 @@ fun ChatScreen(
     }
 
 
-    LaunchedEffect(isApiCalling) {
-        if (isApiCalling) {
-            scrollStateManager.onStreamingStarted()
-        } else {
-            // Add a small delay to allow the UI to settle before finishing streaming mode
-            delay(100)
-            scrollStateManager.onStreamingFinished()
-        }
-    }
-
     LaunchedEffect(Unit) {
         viewModel.scrollToBottomEvent.collect {
             scrollStateManager.jumpToBottom()
@@ -343,7 +333,7 @@ fun ChatScreen(
                                 showAiMessageOptionsBottomSheet = true
                             },
                             onImageLoaded = {
-                                if (!scrollStateManager.userInteracted) {
+                                if (scrollStateManager.isAtBottom.value) {
                                     scrollStateManager.jumpToBottom()
                                 }
                             },

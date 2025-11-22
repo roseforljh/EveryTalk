@@ -30,8 +30,11 @@ class ChatScrollStateManager(
     private val logger = AppLogger.forComponent("ChatScrollStateManager")
 
     private var autoScrollJob: Job? = null
-    var userInteracted by mutableStateOf(false)
-        private set
+    
+    // We assume sticky by default so the initial load goes to bottom if applicable
+    private var shouldStickToBottom = true
+    private var isAutoScrolling = false
+
     private var hideButtonJob: Job? = null
     private var isStreaming by mutableStateOf(false)
 
@@ -43,30 +46,10 @@ class ChatScrollStateManager(
 
     val nestedScrollConnection = object : NestedScrollConnection {
         override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-            // Detect user interaction on any significant scroll
-            if (source == NestedScrollSource.UserInput && kotlin.math.abs(available.y) > 2) {
-                if (!userInteracted) {
-                    logger.debug("User scrolled (drag). Marking as interacted.")
-                    userInteracted = true
-                    cancelAutoScroll()
-                }
-                if (!_isAtBottom.value) {
-                    showScrollToBottomButtonWithTimeout()
-                }
+            if (!_isAtBottom.value && !_showScrollToBottomButton.value && source == NestedScrollSource.UserInput) {
+                showScrollToBottomButtonWithTimeout()
             }
             return Offset.Zero
-        }
-
-        override suspend fun onPreFling(available: Velocity): Velocity {
-            // Detect user interaction on fling
-            if (kotlin.math.abs(available.y) > 50) {
-                if (!userInteracted) {
-                    logger.debug("User scrolled (fling). Marking as interacted.")
-                    userInteracted = true
-                    cancelAutoScroll()
-                }
-            }
-            return Velocity.Zero
         }
     }
 
@@ -74,58 +57,105 @@ class ChatScrollStateManager(
         coroutineScope.launch {
             snapshotFlow {
                 val layoutInfo = listState.layoutInfo
-                Triple(
-                    listState.isScrollInProgress,
-                    layoutInfo.totalItemsCount,
-                    layoutInfo.visibleItemsInfo.lastOrNull()?.index
-                )
-            }.distinctUntilChanged().collect { (isScrolling, itemCount, lastVisibleIndex) ->
-                val atBottom = checkIfAtBottom(itemCount, lastVisibleIndex)
-
-                if (!isScrolling) {
-                    _isAtBottom.value = atBottom
-                    if (atBottom) {
-                        cancelHideButtonJob()
-                        _showScrollToBottomButton.value = false
-                    }
+                val totalItems = layoutInfo.totalItemsCount
+                val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
+                
+                // Strict check for "At Bottom"
+                // Must be viewing the last item, AND the bottom of that item must be visible
+                val isStrictlyAtBottom = if (lastVisibleItem == null || totalItems == 0) {
+                    true
+                } else {
+                    val viewportEnd = layoutInfo.viewportEndOffset + layoutInfo.afterContentPadding
+                    val lastItemBottom = lastVisibleItem.offset + lastVisibleItem.size
+                    // Tolerance of 20px for margins/padding/rounding
+                    lastVisibleItem.index == totalItems - 1 && lastItemBottom <= viewportEnd + 20
                 }
 
-                // Auto-scroll logic
-                // Only auto-scroll if the user hasn't interrupted AND is not currently scrolling.
-                if (!userInteracted && !isScrolling && !atBottom) {
-                    smoothScrollToBottom()
+                ScrollSnapshot(
+                    isScrollInProgress = listState.isScrollInProgress,
+                    isStrictlyAtBottom = isStrictlyAtBottom,
+                    totalItems = totalItems,
+                    lastIndex = lastVisibleItem?.index ?: 0,
+                    lastSize = lastVisibleItem?.size ?: 0
+                )
+            }.collect { snapshot ->
+                _isAtBottom.value = snapshot.isStrictlyAtBottom
+
+                if (snapshot.isScrollInProgress) {
+                    if (!isAutoScrolling) {
+                        // User is scrolling (or system fling).
+                        // If they are currently at the bottom, we latch "sticky".
+                        // If they leave the bottom, we unlatch "sticky".
+                        shouldStickToBottom = snapshot.isStrictlyAtBottom
+                    }
+                    // If it IS auto-scrolling, we don't touch 'shouldStickToBottom'
+                    // because we expect it to be false during the animation towards the bottom,
+                    // but we don't want to cancel our intent.
+                } else {
+                    // Not scrolling (Idle)
+                    isAutoScrolling = false
+                    
+                    if (shouldStickToBottom) {
+                        // We WANT to be at bottom. Are we?
+                        if (!snapshot.isStrictlyAtBottom && snapshot.totalItems > 0) {
+                            // Content changed or something pushed us up. Scroll back down.
+                            smoothScrollToBottom()
+                        }
+                    } else {
+                        // We are free roaming.
+                        // But if the user accidentally landed at the bottom, stick again.
+                        if (snapshot.isStrictlyAtBottom) {
+                            shouldStickToBottom = true
+                            _showScrollToBottomButton.value = false
+                            cancelHideButtonJob()
+                        }
+                    }
+                    
+                    if (snapshot.isStrictlyAtBottom) {
+                        _showScrollToBottomButton.value = false
+                        cancelHideButtonJob()
+                    }
                 }
             }
         }
     }
 
-    private fun checkIfAtBottom(totalItems: Int, lastVisibleIndex: Int?): Boolean {
-        if (totalItems == 0 || lastVisibleIndex == null) return true
-        return lastVisibleIndex >= totalItems - 2 // Allow some tolerance
-    }
+    private data class ScrollSnapshot(
+        val isScrollInProgress: Boolean,
+        val isStrictlyAtBottom: Boolean,
+        val totalItems: Int,
+        val lastIndex: Int,
+        val lastSize: Int
+    )
 
     private fun smoothScrollToBottom() {
         if (autoScrollJob?.isActive == true) {
             autoScrollJob?.cancel()
         }
+        isAutoScrolling = true
         autoScrollJob = coroutineScope.launch {
             try {
                 val targetIndex = listState.layoutInfo.totalItemsCount - 1
                 if (targetIndex >= 0) {
+                    // Use animateScrollToItem for smooth "following" effect
                     listState.animateScrollToItem(index = targetIndex)
                 }
             } catch (e: Exception) {
                 logger.error("Error during smooth scroll: ${e.message}")
+            } finally {
+                // Do NOT set isAutoScrolling = false here immediately,
+                // let the next snapshot (scrolling stopped) handle it.
             }
         }
     }
 
     fun jumpToBottom() {
         logger.debug("Jumping to bottom.")
-        userInteracted = false
+        shouldStickToBottom = true
         if (autoScrollJob?.isActive == true) {
             autoScrollJob?.cancel()
         }
+        isAutoScrolling = true
         autoScrollJob = coroutineScope.launch {
             val targetIndex = listState.layoutInfo.totalItemsCount - 1
             if (targetIndex >= 0) {
@@ -137,19 +167,17 @@ class ChatScrollStateManager(
         }
     }
 
-    // Kept for compatibility, though logic is simplified
+    // Kept for compatibility
     fun handleStreamingScroll() {
-        if (userInteracted) return
-        if (_isAtBottom.value) return
-        smoothScrollToBottom()
+        // No-op: logic is now fully reactive in init block
     }
 
     private fun cancelAutoScroll() {
         if (autoScrollJob?.isActive == true) {
             autoScrollJob?.cancel()
-            logger.debug("Auto-scroll job cancelled.")
         }
         autoScrollJob = null
+        isAutoScrolling = false
     }
 
     private fun showScrollToBottomButtonWithTimeout() {
@@ -166,20 +194,11 @@ class ChatScrollStateManager(
         hideButtonJob = null
     }
 
-    fun onStreamingStarted() {
-        logger.debug("Streaming started.")
-        isStreaming = true
-    }
-
-    fun onStreamingFinished() {
-        logger.debug("Streaming finished.")
-        isStreaming = false
-    }
 
     fun resetScrollState() {
         logger.debug("Resetting scroll state.")
-        userInteracted = false
         isStreaming = false
+        shouldStickToBottom = true
         jumpToBottom()
     }
 }
