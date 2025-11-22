@@ -26,7 +26,8 @@ class EditMessageController(
     private val dialogManager: DialogManager,
     private val historyManager: HistoryManager,
     private val scope: CoroutineScope,
-    private val messagesMutex: Mutex
+    private val messagesMutex: Mutex,
+    private val clearMessageCache: (String, Boolean) -> Unit
 ) {
 
     fun onEditDialogTextChanged(newText: String) {
@@ -67,6 +68,10 @@ class EditMessageController(
                             stateHolder.textMessageAnimationStates[updatedMessage.id] = true
                         }
                         needsHistorySave = true
+
+                        // 🎯 新增：清除缓存以强制UI更新
+                        clearMessageCache(messageIdToEdit, false)
+                        android.util.Log.d("EditMessageController", "✅ Message edited and cache cleared: ${messageIdToEdit.take(8)}")
                     }
                 }
             }
@@ -107,7 +112,10 @@ class EditMessageController(
                         )
                         stateHolder.imageGenerationMessages[messageIndex] = updatedMessage
                         needsHistorySave = true
-                        android.util.Log.d("EditMessageController", "✅ Message updated successfully")
+
+                        // 🎯 新增：清除缓存以强制UI更新
+                        clearMessageCache(messageToEdit.id, true)
+                        android.util.Log.d("EditMessageController", "✅ Image message edited and cache cleared: ${messageToEdit.id.take(8)}")
                     } else {
                         android.util.Log.d("EditMessageController", "⚠️ Text unchanged, skipping update")
                     }

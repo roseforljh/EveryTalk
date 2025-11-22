@@ -257,7 +257,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         dialogManager = dialogManager,
         historyManager = historyManager,
         scope = viewModelScope,
-        messagesMutex = messagesMutex
+        messagesMutex = messagesMutex,
+        clearMessageCache = ::clearMessageCache
     )
     val showEditDialog: StateFlow<Boolean> = dialogManager.showEditDialog
     val editingMessage: StateFlow<Message?> = dialogManager.editingMessage
@@ -1400,6 +1401,16 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
 
     fun dismissModelSelectionDialog() {
         stateHolder._showModelSelectionDialog.value = false
+    }
+
+    /**
+     * 清除指定消息的ChatListItem缓存
+     * 用于消息编辑后强制UI更新
+     */
+    fun clearMessageCache(messageId: String, isImageGeneration: Boolean = false) {
+        messageItemsController.clearCacheForMessage(messageId, isImageGeneration)
+        // Also clear Markdown cache for this message to force re-rendering
+        com.android.everytalk.ui.components.markdown.MarkdownSpansCache.remove(messageId)
     }
 
     fun onSelectAllModels() {

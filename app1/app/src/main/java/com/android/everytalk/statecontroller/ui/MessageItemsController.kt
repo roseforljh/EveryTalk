@@ -349,4 +349,27 @@ class MessageItemsController(
             else -> emptyList()
         }
     }
+
+    /**
+     * 清除指定消息的缓存，强制重新计算ChatListItem
+     * 用于消息编辑后确保UI更新
+     */
+    fun clearCacheForMessage(messageId: String, isImageGeneration: Boolean = false) {
+        if (isImageGeneration) {
+            imageGenerationChatListItemCache.remove(messageId)
+            android.util.Log.d("MessageItemsController", "🗑️ Cleared IMAGE cache for message: ${messageId.take(8)}")
+        } else {
+            chatListItemCache.remove(messageId)
+            android.util.Log.d("MessageItemsController", "🗑️ Cleared TEXT cache for message: ${messageId.take(8)}")
+        }
+    }
+
+    /**
+     * 清除所有缓存
+     */
+    fun clearAllCaches() {
+        chatListItemCache.clear()
+        imageGenerationChatListItemCache.clear()
+        android.util.Log.d("MessageItemsController", "🗑️ Cleared all caches")
+    }
 }
