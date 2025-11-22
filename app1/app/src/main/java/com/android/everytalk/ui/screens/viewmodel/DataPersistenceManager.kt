@@ -143,7 +143,7 @@ class DataPersistenceManager(
                     stateHolder._apiConfigs.value
                 }
                 
-                // 🆕 自动创建默认文本配置（如果不存在）
+                // 自动创建默认文本配置（如果不存在）
                 val hasDefaultTextConfig = loadedConfigs.any {
                     it.provider.trim().lowercase() in listOf("默认", "default") &&
                     it.modalityType == com.android.everytalk.data.DataClass.ModalityType.TEXT
@@ -174,7 +174,7 @@ class DataPersistenceManager(
                     Log.i(TAG, "loadInitialData: 已创建并保存 ${newDefaultConfigs.size} 个默认文本配置")
                 }
                 
-                // 🆕 检查并修复旧的默认配置（如果存在旧模型名称，更新为新名称）
+                // 检查并修复旧的默认配置（如果存在旧模型名称，更新为新名称）
                 val updatedConfigs = loadedConfigs.map { config ->
                     if (config.provider.trim().lowercase() in listOf("默认", "default") &&
                         config.modalityType == com.android.everytalk.data.DataClass.ModalityType.TEXT &&
@@ -225,7 +225,7 @@ class DataPersistenceManager(
                 // Load image generation configs
                 var loadedImageGenConfigs: List<ApiConfig> = dataSource.loadImageGenApiConfigs()
                 
-                // 🆕 自动创建默认图像配置（如果不存在）
+                // 自动创建默认图像配置（如果不存在）
                 val hasDefaultImageConfig = loadedImageGenConfigs.any {
                     it.provider.trim().lowercase() in listOf("默认", "default") &&
                     it.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE
@@ -293,7 +293,7 @@ class DataPersistenceManager(
                         initialHistoryPresent = loadedHistory.isNotEmpty()
                         Log.i(TAG, "loadInitialData: 历史数据加载完成。数量: ${loadedHistory.size}")
 
-                        // 🎯 自动修复消息parts - 检查并修复有问题的AI消息
+                        // 自动修复消息parts - 检查并修复有问题的AI消息
                         val repairedHistory = loadedHistory.map { conversation ->
                             conversation.map { message ->
                                 if (message.sender == com.android.everytalk.data.DataClass.Sender.AI &&
@@ -379,7 +379,7 @@ class DataPersistenceManager(
                         stateHolder.imageGenerationMessages.clear()
                         stateHolder.imageGenerationMessages.addAll(finalLastOpenImageGen)
 
-                        // ✅ 修复：为已恢复的对话补齐推理完成映射，保证“小白点”可见
+                        // 修复：为已恢复的对话补齐推理完成映射，保证“小白点”可见
                         // 文本模式
                         stateHolder.textReasoningCompleteMap.clear()
                         stateHolder.messages.forEach { msg ->
@@ -530,7 +530,7 @@ class DataPersistenceManager(
            }
        }
        
-       // 🔥 修复：确保AI消息的文本内容不会丢失
+       // 修复：确保AI消息的文本内容不会丢失
        val processedMessages = messages.map { message ->
            if (message.sender == com.android.everytalk.data.DataClass.Sender.AI &&
                message.contentStarted &&

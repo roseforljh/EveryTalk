@@ -62,7 +62,7 @@ object MarkwonCache {
         // 考虑到缓存的复用性，我们将 imageClickListener 作为一个非缓存因素。
         // 如果传入了 listener，我们可能需要每次都 build，或者使用一个能够动态分发的机制。
         //
-        // 💡 最佳实践：Markwon 实例缓存通用配置。对于点击事件，我们在 MarkdownRenderer 中
+        // 最佳实践：Markwon 实例缓存通用配置。对于点击事件，我们在 MarkdownRenderer 中
         // 通过 LinkMovementMethod 或者 setOnTouchListener 来处理，或者使用 Markwon 的 configuration。
         //
         // 但是 Markwon 的 AsyncDrawable 是通过 ImageSpan 渲染的，ImageSpan 本身不处理点击。
@@ -85,7 +85,7 @@ object MarkwonCache {
         // 让我们尝试使用一个自定义的 ImagePlugin 配置，它允许点击。
         // 由于 MarkwonCache 是单例对象，很难传入随 UI 变化的 listener。
         //
-        // 💡 解决方案：
+        // 解决方案：
         // 我们保留 getOrCreate 的签名不变（或者增加参数但不影响缓存key，这有风险）。
         // 更好的方式是：在 MarkdownRenderer 中，不依赖 MarkwonCache 的缓存来处理点击，
         // 或者让 MarkwonCache 支持一个“无缓存模式”或者“带点击回调的构建”。
@@ -129,7 +129,7 @@ object MarkwonCache {
         // 这样我们就可以复用 Markwon 实例（它只负责生成 Spannable），
         // 而点击逻辑在 View 层处理。
         //
-        // ✅ 决定：不修改 MarkwonCache 的构建逻辑（保持缓存），
+        // 决定：不修改 MarkwonCache 的构建逻辑（保持缓存），
         // 而是在 MarkdownRenderer 中，拿到 Spanned 后，
         // 查找 ImageSpan 并包裹 ClickableSpan。
         
@@ -139,12 +139,12 @@ object MarkwonCache {
         synchronized(lock) {
             // 命中缓存：直接返回
             cacheMap[cacheKey]?.let { cached ->
-                android.util.Log.d("MarkwonCache", "✅ Cache HIT: $cacheKey")
+                android.util.Log.d("MarkwonCache", "Cache HIT: $cacheKey")
                 return cached
             }
             
             // 缓存未命中：创建新实例
-            android.util.Log.d("MarkwonCache", "🔧 Cache MISS, creating new instance: $cacheKey")
+            android.util.Log.d("MarkwonCache", "Cache MISS, creating new instance: $cacheKey")
             val startTime = System.currentTimeMillis()
             
             val mathTextSize = textSize * 5f  // 公式放大5倍
@@ -181,7 +181,7 @@ object MarkwonCache {
                 .build()
             
             val initTime = System.currentTimeMillis() - startTime
-            android.util.Log.d("MarkwonCache", "✅ Created in ${initTime}ms, cached as: $cacheKey")
+            android.util.Log.d("MarkwonCache", "Created in ${initTime}ms, cached as: $cacheKey")
             
             // 写入缓存
             cacheMap[cacheKey] = markwon
@@ -190,7 +190,7 @@ object MarkwonCache {
             if (cacheMap.size > 4) {
                 val oldestKey = cacheMap.keys.first()
                 cacheMap.remove(oldestKey)
-                android.util.Log.d("MarkwonCache", "🗑️ Evicted oldest: $oldestKey")
+                android.util.Log.d("MarkwonCache", "Evicted oldest: $oldestKey")
             }
             
             return markwon
@@ -204,7 +204,7 @@ object MarkwonCache {
         synchronized(lock) {
             val size = cacheMap.size
             cacheMap.clear()
-            android.util.Log.d("MarkwonCache", "🗑️ Cache cleared, removed $size instances")
+            android.util.Log.d("MarkwonCache", "Cache cleared, removed $size instances")
         }
     }
     

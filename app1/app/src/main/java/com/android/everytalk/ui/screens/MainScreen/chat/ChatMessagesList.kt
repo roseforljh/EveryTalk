@@ -61,7 +61,7 @@ fun ChatMessagesList(
 ) {
     val haptic = LocalHapticFeedback.current
     val coroutineScope = rememberCoroutineScope()
-    // 🎯 永久化：移除animatedItems，不再需要追踪动画状态
+    // 永久化：移除animatedItems，不再需要追踪动画状态
 
     var isContextMenuVisible by remember { mutableStateOf(false) }
     var contextMenuMessage by remember { mutableStateOf<Message?>(null) }
@@ -73,7 +73,7 @@ fun ChatMessagesList(
     val currentStreamingId by viewModel.currentTextStreamingAiMessageId.collectAsState()
     val density = LocalDensity.current
     
-    // 🎯 Performance monitoring: Track recomposition count for ChatMessagesList
+    // Performance monitoring: Track recomposition count for ChatMessagesList
     // This helps verify that the overall list recomposition is reduced
     // Requirements: 1.4, 3.4
     val listRecompositionCount = remember { mutableStateOf(0) }
@@ -102,7 +102,7 @@ fun ChatMessagesList(
             top = 8.dp,
             bottom = 10.dp  // 增加底部padding以确保内容完全显示在输入框上方
         ),
-        // ⚡ 提升滚动稳定性：在可视区域外保留一定数量的项，降低回收/重组频率
+        // 提升滚动稳定性：在可视区域外保留一定数量的项，降低回收/重组频率
         // 需要 @OptIn(ExperimentalFoundationApi::class)
         
         verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -468,7 +468,7 @@ fun AiMessageItem(
         Surface(
             modifier = Modifier
                 .wrapContentWidth()
-                .widthIn(max = maxWidth) // 🎯 AI气泡最大宽度设置为100%
+                .widthIn(max = maxWidth) // AI气泡最大宽度设置为100%
                 // 移除 pointerInput(detectTapGestures)，因为它会拦截子 View 的点击事件
                 // 长按事件现由 MarkdownRenderer 内部的 setOnLongClickListener 处理
                 .semantics {
@@ -512,7 +512,7 @@ fun AiMessageItem(
                         messageOutputType = messageOutputType,
                         onLongPress = onLongPress,
                         onImageClick = onImageClick,
-                        viewModel = viewModel  // 🎯 传递viewModel以获取实时流式文本
+                        viewModel = viewModel  // 传递viewModel以获取实时流式文本
                     )
                 }
             }

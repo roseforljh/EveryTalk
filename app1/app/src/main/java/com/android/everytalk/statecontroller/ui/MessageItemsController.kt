@@ -129,7 +129,7 @@ class MessageItemsController(
         ) { messages, isApiCalling, currentStreamingAiMessageId ->
             android.util.Log.d(
                 "MessageItemsController",
-                "🖼️ [IMAGE FLOW] Triggered - messages.size=${messages.size}, isApiCalling=$isApiCalling"
+                "[IMAGE FLOW] Triggered - messages.size=${messages.size}, isApiCalling=$isApiCalling"
             )
             messages
                 .map { message ->
@@ -149,17 +149,17 @@ class MessageItemsController(
 
                             android.util.Log.d(
                                 "MessageItemsController",
-                                "🖼️ [IMAGE CACHE] messageId=${message.id.take(8)}, " +
+                                "[IMAGE CACHE] messageId=${message.id.take(8)}, " +
                                     "cacheValid=$cacheValid, " +
                                     "cached.imageUrls=${cached?.imageUrls?.size}, " +
                                     "message.imageUrls=${message.imageUrls?.size}"
                             )
 
                             if (cacheValid) {
-                                android.util.Log.d("MessageItemsController", "🖼️ [IMAGE CACHE HIT] Using cached items")
+                                android.util.Log.d("MessageItemsController", "[IMAGE CACHE HIT] Using cached items")
                                 cached!!.items
                             } else {
-                                android.util.Log.d("MessageItemsController", "🖼️ [IMAGE CACHE MISS] Recomputing items")
+                                android.util.Log.d("MessageItemsController", "[IMAGE CACHE MISS] Recomputing items")
                                 val newItems = createAiMessageItems(
                                     message,
                                     isApiCalling,
@@ -248,7 +248,7 @@ class MessageItemsController(
         if (isCurrentStreaming) {
             android.util.Log.d(
                 "MessageItemsController",
-                "🎯 BubbleState for ${message.id.take(8)}: ${state::class.simpleName}, " +
+                "BubbleState for ${message.id.take(8)}: ${state::class.simpleName}, " +
                     "isStreaming=$isCurrentStreaming, contentStarted=${message.contentStarted}, textLen=${message.text.length}"
             )
         }
@@ -267,13 +267,13 @@ class MessageItemsController(
 
         return when (state) {
             is com.android.everytalk.ui.state.AiBubbleState.Connecting -> {
-                android.util.Log.d("MessageItemsController", "🎯 createAiMessageItems: Connecting -> LoadingIndicator")
+                android.util.Log.d("MessageItemsController", "createAiMessageItems: Connecting -> LoadingIndicator")
                 listOf(ChatListItem.LoadingIndicator(message.id))
             }
             is com.android.everytalk.ui.state.AiBubbleState.Reasoning -> {
                 android.util.Log.d(
                     "MessageItemsController",
-                    "🎯 createAiMessageItems: Reasoning -> AiMessageReasoning, reasoning=${message.reasoning?.take(30)}"
+                    "createAiMessageItems: Reasoning -> AiMessageReasoning, reasoning=${message.reasoning?.take(30)}"
                 )
                 listOf(ChatListItem.AiMessageReasoning(message))
             }
@@ -316,7 +316,7 @@ class MessageItemsController(
                     )
                     android.util.Log.d(
                         "MessageItemsController",
-                        "🖼️ [COMPLETE STATE] Created AiMessage item: hasTextContent=$hasTextContent, " +
+                        "[COMPLETE STATE] Created AiMessage item: hasTextContent=$hasTextContent, " +
                             "hasImageContent=$hasImageContent, imageUrls=${message.imageUrls?.size}"
                     )
                 }
@@ -357,10 +357,10 @@ class MessageItemsController(
     fun clearCacheForMessage(messageId: String, isImageGeneration: Boolean = false) {
         if (isImageGeneration) {
             imageGenerationChatListItemCache.remove(messageId)
-            android.util.Log.d("MessageItemsController", "🗑️ Cleared IMAGE cache for message: ${messageId.take(8)}")
+            android.util.Log.d("MessageItemsController", "Cleared IMAGE cache for message: ${messageId.take(8)}")
         } else {
             chatListItemCache.remove(messageId)
-            android.util.Log.d("MessageItemsController", "🗑️ Cleared TEXT cache for message: ${messageId.take(8)}")
+            android.util.Log.d("MessageItemsController", "Cleared TEXT cache for message: ${messageId.take(8)}")
         }
     }
 
@@ -370,6 +370,6 @@ class MessageItemsController(
     fun clearAllCaches() {
         chatListItemCache.clear()
         imageGenerationChatListItemCache.clear()
-        android.util.Log.d("MessageItemsController", "🗑️ Cleared all caches")
+        android.util.Log.d("MessageItemsController", "Cleared all caches")
     }
 }

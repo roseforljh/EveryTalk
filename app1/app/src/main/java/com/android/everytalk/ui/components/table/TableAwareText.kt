@@ -44,22 +44,22 @@ fun TableAwareText(
     isStreaming: Boolean = false,
     modifier: Modifier = Modifier,
     recursionDepth: Int = 0,
-    contentKey: String = "",  // 🎯 新增：用于缓存key（通常为消息ID）
+    contentKey: String = "",  // 新增：用于缓存key（通常为消息ID）
     onLongPress: (() -> Unit)? = null,
     onImageClick: ((String) -> Unit)? = null
 ) {
-    // 🎯 预览状态管理
+    // 预览状态管理
     var previewState by remember { mutableStateOf<Pair<String, String>?>(null) } // (code, language)
 
-    // 🎯 方案二：实时分段解析与统一渲染
+    // 方案二：实时分段解析与统一渲染
     // 无论是否流式，都尝试进行轻量级分段解析（仅分离代码块，表格仍由MarkdownRenderer处理或后续优化）
     
     // 1. 解析状态管理
-    // 🎯 优化：使用 remember + LaunchedEffect 替代 produceState
+    // 优化：使用 remember + LaunchedEffect 替代 produceState
     // 目的：当 isStreaming 变化时（true -> false），保持当前的 parsedParts 不变，
     // 直到新的解析完成。避免 produceState 重置导致的回退到 initialValue (纯文本) 造成的闪烁/跳动。
     
-    // 🎯 缓存版本控制：当解析逻辑更新时，通过修改版本号使旧缓存失效
+    // 缓存版本控制：当解析逻辑更新时，通过修改版本号使旧缓存失效
     val effectiveCacheKey = if (contentKey.isNotBlank()) "${contentKey}_v${ContentParseCache.PARSER_VERSION}" else ""
 
     val parsedPartsState = remember(contentKey) {
@@ -79,7 +79,7 @@ fun TableAwareText(
                 ContentParser.parseCompleteContent(text, isStreaming = true)
             } else {
                 // 非流式：尝试从全局缓存获取，否则完整解析并缓存
-                // 🎯 策略：如果文本包含表格特征字符 '|'，为了保险起见，可以考虑强制刷新（可选）
+                // 策略：如果文本包含表格特征字符 '|'，为了保险起见，可以考虑强制刷新（可选）
                 // 但有了版本号控制，通常不需要强制刷新。
                 ContentParseCache.get(effectiveCacheKey) ?: ContentParser.parseCompleteContent(text, isStreaming = false).also {
                     if (effectiveCacheKey.isNotBlank()) ContentParseCache.put(effectiveCacheKey, it)
@@ -91,7 +91,7 @@ fun TableAwareText(
     
     val parsedParts = parsedPartsState.value
 
-    // 🎯 UI层兜底过滤：移除 ContentPart.Text 中的表格行
+    // UI层兜底过滤：移除 ContentPart.Text 中的表格行
     // 即使解析器偶尔漏判，这里也能保证表格源文本不会被渲染出来
     val filteredParts = remember(parsedParts) {
         parsedParts.mapNotNull { part ->
@@ -133,14 +133,14 @@ fun TableAwareText(
                         isStreaming = isStreaming, // 传递流式状态给MarkdownRenderer（用于内部优化）
                         onLongPress = onLongPress,
                         onImageClick = onImageClick,
-                        contentKey = if (contentKey.isNotBlank()) "${contentKey}_part_${parsedParts.indexOf(part)}" else "" // 🎯 传递子Key
+                        contentKey = if (contentKey.isNotBlank()) "${contentKey}_part_${parsedParts.indexOf(part)}" else "" // 传递子Key
                     )
                 }
                 is ContentPart.Code -> {
                     // 代码块部分：始终用 CodeBlock 渲染
                     // 流式期间可能没有语言标识或未闭合，CodeBlock 需能处理
                     
-                    // 🎯 检查是否支持预览
+                    // 检查是否支持预览
                     // 新增 xml：让 ```xml 代码块也显示“预览”按钮（走 html 模板）
                     val supportedLanguages = setOf(
                         "mermaid",
@@ -189,7 +189,7 @@ fun TableAwareText(
         }
     }
 
-    // 🎯 显示预览对话框
+    // 显示预览对话框
     previewState?.let { (code, language) ->
         WebPreviewDialog(
             code = code,

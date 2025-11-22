@@ -103,10 +103,10 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         initializeDataSource(dataSource)
     }
     
-    // 🎯 手势冲突管理器（用于协调代码块滚动和抽屉手势）
+    // 手势冲突管理器（用于协调代码块滚动和抽屉手势）
     val gestureManager = com.android.everytalk.ui.components.GestureConflictManager()
     
-    // 🎯 流式消息状态管理器（用于实时流式内容观察）
+    // 流式消息状态管理器（用于实时流式内容观察）
     val streamingMessageStateManager get() = stateHolder.streamingMessageStateManager
     
     private val imageLoader = ImageLoader.Builder(application.applicationContext)
@@ -246,7 +246,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     val systemPromptExpandedState: SnapshotStateMap<String, Boolean>
         get() = stateHolder.systemPromptExpandedState
 
-    // 🎯 重构：使用管理器类来组织代码
+    // 重构：使用管理器类来组织代码
     private val exportManager = ExportManager()
     val exportRequest: Flow<Pair<String, String>> = exportManager.exportRequest
     val settingsExportRequest: Flow<Pair<String, String>> = exportManager.settingsExportRequest
@@ -270,7 +270,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     val editDialogInputText: StateFlow<String>
         get() = stateHolder._editDialogInputText.asStateFlow()
     
-    // 🎯 新增:添加配置流程相关的对话框状态
+    // 新增:添加配置流程相关的对话框状态
     val showAutoFetchConfirmDialog: StateFlow<Boolean>
         get() = stateHolder._showAutoFetchConfirmDialog.asStateFlow()
     val showModelSelectionDialog: StateFlow<Boolean>
@@ -508,7 +508,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
                 }
             }
             
-            // 🔧 修复：始终加载分组信息，不依赖历史数据是否存在
+            // 修复：始终加载分组信息，不依赖历史数据是否存在
             viewModelScope.launch(Dispatchers.IO) {
                 try {
                     val groups = persistenceManager.loadConversationGroups()
@@ -1042,7 +1042,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         mediaController.saveBitmapToDownloads(bitmap)
     }
 
-    // 🎯 图片查看器
+    // 图片查看器
     private val _showImageViewer = MutableStateFlow(false)
     val showImageViewer: StateFlow<Boolean> = _showImageViewer.asStateFlow()
 
@@ -1259,7 +1259,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     }
     
     /**
-     * 🎯 将URI编码为Base64字符串
+     * 将URI编码为Base64字符串
      */
     private fun encodeUriAsBase64(uri: Uri): String? {
         return try {
@@ -1275,7 +1275,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     }
     
     /**
-     * 🎯 处理加载的消息列表，确保完整性
+     * 处理加载的消息列表，确保完整性
      */
     // 历史消息的完整性修复已移至 HistoryController
     
@@ -1463,7 +1463,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     }
     
     /**
-     * 🎯 低内存回调 - 清理非必要缓存
+     * 低内存回调 - 清理非必要缓存
      * 在MainActivity的onTrimMemory中调用
      */
     fun onLowMemory() {

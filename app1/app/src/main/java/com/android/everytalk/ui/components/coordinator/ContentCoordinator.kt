@@ -28,19 +28,19 @@ fun ContentCoordinator(
     isStreaming: Boolean = false,
     modifier: Modifier = Modifier,
     recursionDepth: Int = 0,
-    contentKey: String = "",  // 🎯 新增：用于缓存key（通常为消息ID）
+    contentKey: String = "",  // 新增：用于缓存key（通常为消息ID）
     onLongPress: (() -> Unit)? = null,
-    onImageClick: ((String) -> Unit)? = null, // 🎯 新增
-    sender: Sender = Sender.AI  // 🎯 新增：发送者信息，默认为AI
+    onImageClick: ((String) -> Unit)? = null, // 新增
+    sender: Sender = Sender.AI  // 新增：发送者信息，默认为AI
 ) {
-    // 🎯 根据发送者决定宽度策略
+    // 根据发送者决定宽度策略
     val widthModifier = if (sender == Sender.User) {
         Modifier.wrapContentWidth()
     } else {
         Modifier.fillMaxWidth()
     }
     
-    // 🛡️ 防止无限递归：超过3层直接渲染
+    // 防止无限递归：超过3层直接渲染
     if (recursionDepth > 3) {
         android.util.Log.w(
             "ContentCoordinator",
@@ -63,19 +63,19 @@ fun ContentCoordinator(
         return
     }
     
-    // 🎯 轻量检测
+    // 轻量检测
     val hasCodeBlock = text.contains("```")
-    // 🎯 表格检测：简单的启发式检查，避免复杂的正则匹配
+    // 表格检测：简单的启发式检查，避免复杂的正则匹配
     // 只有同时包含 | 和 - 才可能是表格（表头分隔线至少包含 --- 或 :---）
     val hasTable = text.contains("|") && text.contains("-")
 
-    // ⚡ 流式阶段：使用轻量模式，避免频繁解析
+    // 流式阶段：使用轻量模式，避免频繁解析
     // 流式结束后：触发完整解析，将代码块转换为CodeBlock组件
     // 性能保护：
     //   - TableAwareText 延迟250ms解析大型内容（>8000字符）
     //   - 使用后台线程（Dispatchers.Default）避免阻塞UI
     if (hasCodeBlock || hasTable) {
-        // 🎯 只根据流式状态判断是否使用轻量模式
+        // 只根据流式状态判断是否使用轻量模式
         // 如果包含表格，即使是流式也建议走 TableAwareText 以便正确渲染表格（虽然 TableAwareText 内部对流式有优化）
         // 但为了性能，流式期间如果只有表格没有代码块，也可以考虑暂缓？
         // 不，TableAwareText 内部会处理流式。
@@ -89,14 +89,14 @@ fun ContentCoordinator(
             modifier = modifier
                 .then(widthModifier),
             recursionDepth = recursionDepth,
-            contentKey = contentKey,  // 🎯 传递缓存key
+            contentKey = contentKey,  // 传递缓存key
             onLongPress = onLongPress,
             onImageClick = onImageClick
         )
         return
     }
     
-    // 🎯 优先级3：纯文本（无代码块、表格）
+    // 优先级3：纯文本（无代码块、表格）
     // 数学公式 $...$ 与 $$...$$ 由 MarkdownRenderer 的 JLatexMathPlugin 统一处理
     MarkdownRenderer(
         markdown = text,

@@ -110,7 +110,7 @@ fun MarkdownRenderer(
                 // 稳定基线，减少跳动
                 setIncludeFontPadding(false)
                 
-                // 🎯 TextView内部padding - 用户气泡使用相等的上下padding实现垂直居中
+                // TextView内部padding - 用户气泡使用相等的上下padding实现垂直居中
                 if (sender == Sender.User) {
                     // 用户气泡：使用相等的上下padding，减小水平padding
                     val horizontalPaddingPx = TypedValue.applyDimension(
@@ -134,7 +134,7 @@ fun MarkdownRenderer(
                     setPadding(paddingPx, paddingPx, paddingPx, paddingPx)
                 }
                 
-                // 🎯 行间距 - 更小的行间距
+                // 行间距 - 更小的行间距
                 val lineSpacingDp = if (sender == Sender.User) 2f else 3f
                 setLineSpacing(
                     TypedValue.applyDimension(
@@ -145,16 +145,16 @@ fun MarkdownRenderer(
                     1.0f
                 )
                 
-                // 🎯 字符间距 - 更小的字符间距
+                // 字符间距 - 更小的字符间距
                 letterSpacing = if (sender == Sender.User) 0.02f else 0.03f
                 
-                // 🎯 设置居中对齐 - 对多行文本有效
+                // 设置居中对齐 - 对多行文本有效
                 // gravity = Gravity.CENTER_VERTICAL // 移除垂直居中，避免长文/图片显示异常
                 
-                // 🔒 禁用文本选择但保留长按功能
+                // 禁用文本选择但保留长按功能
                 setTextIsSelectable(false)
                 highlightColor = android.graphics.Color.TRANSPARENT
-                // 🎯 启用 LinkMovementMethod 以支持 ClickableSpan
+                // 启用 LinkMovementMethod 以支持 ClickableSpan
                 // ⚠️ 注意：LinkMovementMethod 可能会吞噬触摸事件，导致外层 Compose 的手势（如长按）失效。
                 // 解决方案：
                 // 1. 使用自定义的 LinkMovementMethod，在未点击到 Link 时返回 false。
@@ -190,7 +190,7 @@ fun MarkdownRenderer(
                 isFocusable = false
                 isFocusableInTouchMode = false
                 
-                // ✅ 关键：如果设置了 movementMethod，TextView 会在 onTouchEvent 中处理点击。
+                // 关键：如果设置了 movementMethod，TextView 会在 onTouchEvent 中处理点击。
                 // 为了让外层 Compose 的长按生效，我们需要 TextView 返回 false (未消费)，
                 // 除非点击中了 ClickableSpan。
                 // 但 LinkMovementMethod 的实现通常会消费事件。
@@ -248,7 +248,7 @@ fun MarkdownRenderer(
                                             // 命中！查找对应的 source 并触发点击
                                             val source = if (drawable is AsyncDrawable) drawable.destination else null
                                             if (!source.isNullOrEmpty()) {
-                                                android.util.Log.d("MarkdownRenderer", "🎯 Geometric Hit: x=$x, imgX=$xStart, w=$width, src=$source")
+                                                android.util.Log.d("MarkdownRenderer", "Geometric Hit: x=$x, imgX=$xStart, w=$width, src=$source")
                                                 onImageClick(source)
                                                 return@setOnTouchListener true
                                             }
@@ -266,7 +266,7 @@ fun MarkdownRenderer(
                                         if (x >= xStart && x <= (xStart + width)) {
                                             val source = imageSpan.source
                                             if (!source.isNullOrEmpty()) {
-                                                android.util.Log.d("MarkdownRenderer", "🎯 Geometric Hit (Standard): src=$source")
+                                                android.util.Log.d("MarkdownRenderer", "Geometric Hit (Standard): src=$source")
                                                 onImageClick(source)
                                                 return@setOnTouchListener true
                                             }
@@ -305,7 +305,7 @@ fun MarkdownRenderer(
             }
         },
         update = { tv ->
-            // 🎯 缓存优化：尝试从缓存获取 Spanned 对象
+            // 缓存优化：尝试从缓存获取 Spanned 对象
             val sp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
             val cacheKey = if (contentKey.isNotBlank() && !isStreaming) {
                 MarkdownSpansCache.generateKey(contentKey, isDark, sp)
@@ -317,7 +317,7 @@ fun MarkdownRenderer(
                 // 命中缓存：直接设置文本，跳过解析
                 tv.text = cachedSpanned
                 if (com.android.everytalk.config.PerformanceConfig.ENABLE_PERFORMANCE_LOGGING) {
-                    android.util.Log.d("MarkdownRenderer", "✅ Spans Cache HIT: $cacheKey")
+                    android.util.Log.d("MarkdownRenderer", "Spans Cache HIT: $cacheKey")
                 }
             } else {
                 // 未命中缓存：执行完整解析
@@ -325,7 +325,7 @@ fun MarkdownRenderer(
 
                 // 调试：检查是否包含数学公式
                 if (processed.contains("$")) {
-                    android.util.Log.d("MarkdownRenderer", "📐 检测到数学公式标记: ${processed.take(100)}")
+                    android.util.Log.d("MarkdownRenderer", "检测到数学公式标记: ${processed.take(100)}")
                 }
 
                 // 分步解析以支持缓存
@@ -338,14 +338,14 @@ fun MarkdownRenderer(
                 if (cacheKey.isNotBlank()) {
                     MarkdownSpansCache.put(cacheKey, spanned)
                     if (com.android.everytalk.config.PerformanceConfig.ENABLE_PERFORMANCE_LOGGING) {
-                        android.util.Log.d("MarkdownRenderer", "🔧 Spans Cache MISS, cached: $cacheKey")
+                        android.util.Log.d("MarkdownRenderer", "Spans Cache MISS, cached: $cacheKey")
                     }
                 }
                 
                 markwon.setParsedMarkdown(tv, spanned)
             }
 
-            // 🎯 处理图片点击事件（兼容 AsyncDrawableSpan 与 ImageSpan）
+            // 处理图片点击事件（兼容 AsyncDrawableSpan 与 ImageSpan）
             if (onImageClick != null) {
                 val text = tv.text
                 if (text is Spannable) {
