@@ -22,6 +22,7 @@ import com.android.everytalk.ui.components.markdown.MarkdownRenderer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.android.everytalk.util.ContentParseCache
+import com.android.everytalk.ui.components.table.TableUtils
 
 /**
  * 表格感知文本渲染器（优化版 + 跳动修复）
@@ -58,10 +59,15 @@ fun TableAwareText(
     // 目的：当 isStreaming 变化时（true -> false），保持当前的 parsedParts 不变，
     // 直到新的解析完成。避免 produceState 重置导致的回退到 initialValue (纯文本) 造成的闪烁/跳动。
     
+    // 🎯 缓存版本控制：当解析逻辑更新时，通过修改版本号使旧缓存失效
+    // 也可以在 ContentParseCache 内部处理，但这里显式控制更灵活
+    val cacheVersion = "v2"
+    val effectiveCacheKey = if (contentKey.isNotBlank()) "${contentKey}_$cacheVersion" else ""
+
     val parsedPartsState = remember(contentKey) {
         mutableStateOf(
-            if (!isStreaming && contentKey.isNotBlank()) {
-                ContentParseCache.get(contentKey) ?: listOf(ContentPart.Text(text))
+            if (!isStreaming && effectiveCacheKey.isNotBlank()) {
+                ContentParseCache.get(effectiveCacheKey) ?: listOf(ContentPart.Text(text))
             } else {
                 listOf(ContentPart.Text(text))
             }
@@ -75,8 +81,10 @@ fun TableAwareText(
                 ContentParser.parseCompleteContent(text, isStreaming = true)
             } else {
                 // 非流式：尝试从全局缓存获取，否则完整解析并缓存
-                ContentParseCache.get(contentKey) ?: ContentParser.parseCompleteContent(text, isStreaming = false).also {
-                    if (contentKey.isNotBlank()) ContentParseCache.put(contentKey, it)
+                // 🎯 策略：如果文本包含表格特征字符 '|'，为了保险起见，可以考虑强制刷新（可选）
+                // 但有了版本号控制，通常不需要强制刷新。
+                ContentParseCache.get(effectiveCacheKey) ?: ContentParser.parseCompleteContent(text, isStreaming = false).also {
+                    if (effectiveCacheKey.isNotBlank()) ContentParseCache.put(effectiveCacheKey, it)
                 }
             }
         }
@@ -85,10 +93,37 @@ fun TableAwareText(
     
     val parsedParts = parsedPartsState.value
 
+    // 🎯 UI层兜底过滤：移除 ContentPart.Text 中的表格行
+    // 即使解析器偶尔漏判，这里也能保证表格源文本不会被渲染出来
+    val filteredParts = remember(parsedParts) {
+        parsedParts.mapNotNull { part ->
+            if (part is ContentPart.Text) {
+                // 按行拆分，过滤掉看起来像表格行或分隔行的内容
+                val lines = part.content.lines()
+                val filteredLines = lines.filterNot { line ->
+                    // 过滤条件：是表格行 OR 是分隔行
+                    // 注意：这里使用 TableUtils 的宽松检查，宁可错杀不可放过（对于纯文本中的 | 行）
+                    // 但为了避免误伤普通文本（如 "A | B"），我们结合上下文判断？
+                    // 不，这里是兜底，假设 ContentParser 已经把真正的表格提取走了。
+                    // 剩下的 Text 里如果还有类似表格行的东西，大概率是解析残留。
+                    // 只要包含 | 且符合表格行特征，就过滤掉。
+                    TableUtils.isTableLine(line)
+                }
+                
+                // 如果过滤后内容为空（说明全是表格行），则丢弃该 Text 片段
+                // 如果还有内容，重新组合
+                val newContent = filteredLines.joinToString("\n")
+                if (newContent.isBlank()) null else ContentPart.Text(newContent)
+            } else {
+                part
+            }
+        }
+    }
+
     // 2. 统一渲染逻辑
     // 不再区分 isStreaming 的大分支，而是统一遍历 parsedParts 进行渲染
     Column(modifier = modifier.fillMaxWidth()) {
-        parsedParts.forEach { part ->
+        filteredParts.forEach { part ->
             when (part) {
                 is ContentPart.Text -> {
                     // 纯文本部分：用MarkdownRenderer渲染

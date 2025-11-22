@@ -11,20 +11,31 @@ object TableUtils {
     
     // 预编译表格分隔行正则，避免在热点路径重复创建 Regex 实例
     // 改进的表格分隔行正则，支持更宽松的格式
+    // 改进的表格分隔行正则，支持更宽松的格式
     private val TABLE_SEPARATOR_REGEX = Regex("^\\s*\\|?\\s*:?-+:?\\s*(\\|\\s*:?-+:?\\s*)+\\|?\\s*$")
     
+    /**
+     * 规范化表格行字符
+     * 将全角符号转换为半角，以便统一处理
+     */
+    private fun normalizeTableChars(line: String): String {
+        return line.replace('｜', '|')
+            .replace('：', ':')
+            .replace('－', '-')
+    }
+
     /**
      * 检查是否为表格行
      */
     fun isTableLine(line: String): Boolean {
-        // 移除 BOM 和首尾空白
-        val trimmed = line.replace("\uFEFF", "").trim()
+        // 移除 BOM 和首尾空白，并规范化字符
+        val normalized = normalizeTableChars(line.replace("\uFEFF", "")).trim()
         
         // 快速检查：必须包含 |
-        if (!trimmed.contains('|')) return false
+        if (!normalized.contains('|')) return false
         
         // 检查是否为分隔行
-        if (trimmed.matches(TABLE_SEPARATOR_REGEX)) return true
+        if (normalized.matches(TABLE_SEPARATOR_REGEX)) return true
         
         // 检查是否为数据行或表头
         // 规则：
@@ -41,9 +52,9 @@ object TableUtils {
      * 检查是否为表格分隔行
      */
     fun isTableSeparator(line: String): Boolean {
-        // 移除 BOM 和首尾空白
-        val trimmed = line.replace("\uFEFF", "").trim()
-        return trimmed.matches(TABLE_SEPARATOR_REGEX)
+        // 移除 BOM 和首尾空白，并规范化字符
+        val normalized = normalizeTableChars(line.replace("\uFEFF", "")).trim()
+        return normalized.matches(TABLE_SEPARATOR_REGEX)
     }
     
     /**
@@ -73,7 +84,9 @@ object TableUtils {
      */
     fun parseTableRow(line: String): List<String> {
         // 移除首尾的 | 符号，然后按 | 分割
-        return line.replace("\uFEFF", "").trim()
+        // 同样需要规范化字符，确保全角｜也能被正确分割
+        val normalized = normalizeTableChars(line.replace("\uFEFF", "")).trim()
+        return normalized
             .removePrefix("|")
             .removeSuffix("|")
             .split("|")
