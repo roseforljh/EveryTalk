@@ -11,7 +11,6 @@ object TableUtils {
     
     // 预编译表格分隔行正则，避免在热点路径重复创建 Regex 实例
     // 改进的表格分隔行正则，支持更宽松的格式
-    // 改进的表格分隔行正则，支持更宽松的格式
     private val TABLE_SEPARATOR_REGEX = Regex("^\\s*\\|?\\s*:?-+:?\\s*(\\|\\s*:?-+:?\\s*)+\\|?\\s*$")
     
     /**

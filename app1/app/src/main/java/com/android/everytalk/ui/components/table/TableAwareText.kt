@@ -60,9 +60,7 @@ fun TableAwareText(
     // 直到新的解析完成。避免 produceState 重置导致的回退到 initialValue (纯文本) 造成的闪烁/跳动。
     
     // 🎯 缓存版本控制：当解析逻辑更新时，通过修改版本号使旧缓存失效
-    // 也可以在 ContentParseCache 内部处理，但这里显式控制更灵活
-    val cacheVersion = "v2"
-    val effectiveCacheKey = if (contentKey.isNotBlank()) "${contentKey}_$cacheVersion" else ""
+    val effectiveCacheKey = if (contentKey.isNotBlank()) "${contentKey}_v${ContentParseCache.PARSER_VERSION}" else ""
 
     val parsedPartsState = remember(contentKey) {
         mutableStateOf(

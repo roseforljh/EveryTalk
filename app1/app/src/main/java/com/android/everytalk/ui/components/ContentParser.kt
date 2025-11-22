@@ -97,24 +97,8 @@ object ContentParser {
                     if (TableUtils.isTableLine(currentLine)) {
                         val nextLine = lines.getOrNull(currentIndex + 1)
                         if (nextLine != null && TableUtils.isTableSeparator(nextLine)) {
-                            Log.d(TAG, "✅ Found table start at index $currentIndex: $currentLine")
+                            // Found table start
                             break
-                        } else {
-                             // ⚠️ 关键：即使下一行不是分隔符，也要检查是否在表格中间
-                             // 例如：表格前有文本，当前行可能是表格的第一行
-                             // 如果我们在这里不中断，这一行就会被加入文本，导致表格分裂
-                             // 但我们不能太激进，否则会误判普通文本中的 |
-                             
-                             // 策略：如果当前行看起来像表格行，且下一行也像表格行（即使不是分隔符），
-                             // 我们记录日志，但不中断，除非我们非常确定。
-                             // 目前 TableUtils.isTableLine 已经增强了准确性。
-                             
-                             // 如果当前行是表格行，但下一行不是分隔符，可能是：
-                             // 1. 只有一行的表格（不常见）
-                             // 2. 表格中间的行（不应该发生，因为我们是在寻找表格起始）
-                             // 3. 普通文本包含 |
-                             
-                             Log.d(TAG, "⚠️ Line looks like table but next line is not separator: $currentLine -> ${nextLine ?: "EOF"}")
                         }
                     }
 
