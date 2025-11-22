@@ -26,6 +26,26 @@ sealed class ContentPart {
 }
 
 /**
+ * 代码块提取结果
+ */
+private sealed class CodeBlockResult {
+    /**
+     * 成功提取完整代码块
+     */
+    data class Success(val code: ContentPart.Code, val nextIndex: Int) : CodeBlockResult()
+    
+    /**
+     * 代码块未闭合（流式模式下的临时状态）
+     */
+    data class Unclosed(val code: ContentPart.Code, val nextIndex: Int) : CodeBlockResult()
+    
+    /**
+     * 无效的代码块格式（应作为普通文本处理）
+     */
+    object Invalid : CodeBlockResult()
+}
+
+/**
  * 内容解析器
  * 
  * 核心功能：
@@ -59,24 +79,39 @@ object ContentParser {
             val lines = text.lines()
             var currentIndex = 0
             
+            Log.d(TAG, "parseCompleteContent: total lines=${lines.size}, isStreaming=$isStreaming")
+            
             while (currentIndex < lines.size) {
                 val line = lines[currentIndex]
                 
                 // 检查是否为代码块开始
                 if (line.trimStart().startsWith("```")) {
-                    val (codeBlock, nextIndex) = extractCodeBlock(lines, currentIndex, isStreaming)
-                    if (codeBlock != null) {
-                        parts.add(codeBlock)
-                        currentIndex = nextIndex
-                        continue
+                    Log.d(TAG, "Found code block start at line $currentIndex: '${line.take(20)}'")
+                    when (val result = extractCodeBlockNew(lines, currentIndex, isStreaming)) {
+                        is CodeBlockResult.Success -> {
+                            Log.d(TAG, "CodeBlock Success: lang=${result.code.language}, lines=${result.code.content.lines().size}, nextIndex=${result.nextIndex}")
+                            parts.add(result.code)
+                            currentIndex = result.nextIndex
+                            continue
+                        }
+                        is CodeBlockResult.Unclosed -> {
+                            Log.d(TAG, "CodeBlock Unclosed: lang=${result.code.language}, lines=${result.code.content.lines().size}")
+                            parts.add(result.code)
+                            currentIndex = result.nextIndex
+                            continue
+                        }
+                        is CodeBlockResult.Invalid -> {
+                            Log.d(TAG, "CodeBlock Invalid at line $currentIndex, adding as Text")
+                            parts.add(ContentPart.Text(line))
+                            currentIndex++
+                            continue
+                        }
                     }
                 }
 
                 // 检查是否为表格开始
-                // 🎯 新增：使用TableUtils检测表格
                 if (TableUtils.isTableLine(line)) {
                     val (tableLines, nextIndex) = TableUtils.extractTableLines(lines, currentIndex)
-                    // extractTableLines会验证表格完整性（至少有表头和分隔行）
                     if (tableLines.isNotEmpty()) {
                         parts.add(ContentPart.Table(tableLines))
                         currentIndex = nextIndex
@@ -88,16 +123,16 @@ object ContentParser {
                 val textLines = mutableListOf<String>()
                 while (currentIndex < lines.size) {
                     val currentLine = lines[currentIndex]
-                    // 遇到代码块起始，中断文本收集
-                    if (currentLine.trimStart().startsWith("```")) break
+                    
+                    // 遇到代码块起始，立即中断文本收集
+                    if (currentLine.trimStart().startsWith("```")) {
+                        break
+                    }
 
                     // 遇到可能的表格行，检查是否为有效表格起始
-                    // 🎯 优化：仅当下一行是表格分隔行时才中断文本收集
-                    // 这比调用 extractTableLines 更高效，且能准确识别 Markdown 表格头
                     if (TableUtils.isTableLine(currentLine)) {
                         val nextLine = lines.getOrNull(currentIndex + 1)
                         if (nextLine != null && TableUtils.isTableSeparator(nextLine)) {
-                            // Found table start
                             break
                         }
                     }
@@ -111,7 +146,13 @@ object ContentParser {
                 }
             }
             
-            Log.d(TAG, "Parsed ${parts.size} content parts from text")
+            Log.d(TAG, "Parsed ${parts.size} content parts: ${parts.mapIndexed { idx, it ->
+                when(it) {
+                    is ContentPart.Text -> "[$idx]Text(len=${it.content.length}, preview='${it.content.take(50).replace("\n", "\\n")}')"
+                    is ContentPart.Code -> "[$idx]Code(lang=${it.language}, codeLines=${it.content.lines().size})"
+                    is ContentPart.Table -> "[$idx]Table(${it.lines.size} rows)"
+                }
+            }}")
             return parts.ifEmpty { listOf(ContentPart.Text(text)) }
             
         } catch (e: Exception) {
@@ -164,58 +205,86 @@ object ContentParser {
     }
     
     /**
-     * 提取代码块
+     * 提取代码块（新版本，返回明确的结果类型）
      */
+    private fun extractCodeBlockNew(
+        lines: List<String>,
+        startIndex: Int,
+        isStreaming: Boolean = false
+    ): CodeBlockResult {
+        // 边界检查
+        if (startIndex < 0 || startIndex >= lines.size) {
+            return CodeBlockResult.Invalid
+        }
+        
+        val startLine = try {
+            lines[startIndex].trimStart()
+        } catch (_: Throwable) {
+            return CodeBlockResult.Invalid
+        }
+        
+        // 验证代码块起始标记
+        if (startLine.length < 3 || !startLine.startsWith("```")) {
+            return CodeBlockResult.Invalid
+        }
+
+        val language = startLine.removePrefix("```").trim().ifBlank { null }
+        val codeLines = mutableListOf<String>()
+        var currentIndex = startIndex + 1
+
+        // 收集代码行，寻找结束标记
+        while (currentIndex < lines.size) {
+            val currentLine = try {
+                lines[currentIndex]
+            } catch (_: Throwable) {
+                // 异常情况：根据模式返回不同结果
+                return if (isStreaming && codeLines.isNotEmpty()) {
+                    CodeBlockResult.Unclosed(
+                        ContentPart.Code(codeLines.joinToString("\n"), language),
+                        currentIndex
+                    )
+                } else {
+                    CodeBlockResult.Invalid
+                }
+            }
+            
+            val trimmedLine = currentLine.trimStart()
+            
+            // 找到结束标记
+            if (trimmedLine.length >= 3 && trimmedLine.startsWith("```")) {
+                return CodeBlockResult.Success(
+                    ContentPart.Code(codeLines.joinToString("\n"), language),
+                    currentIndex + 1
+                )
+            }
+
+            // 收集代码内容
+            codeLines.add(currentLine)
+            currentIndex++
+        }
+
+        // 未找到结束标记
+        // 无论流式还是非流式，都将其作为代码块处理（避免Markdown渲染器再次渲染）
+        return CodeBlockResult.Success(
+            ContentPart.Code(codeLines.joinToString("\n"), language),
+            currentIndex
+        )
+    }
+    
+    /**
+     * 提取代码块（旧版本，保持向后兼容）
+     * @deprecated 使用 extractCodeBlockNew 替代
+     */
+    @Deprecated("Use extractCodeBlockNew instead", ReplaceWith("extractCodeBlockNew(lines, startIndex, isStreaming)"))
     private fun extractCodeBlock(
         lines: List<String>,
         startIndex: Int,
         isStreaming: Boolean = false
     ): Pair<ContentPart.Code?, Int> {
-        // 起始边界与空安全校验，避免 String.charAt/startsWith 在异常输入上崩溃
-        if (startIndex < 0 || startIndex >= lines.size) {
-            return null to (startIndex + 1).coerceAtMost(lines.size)
-        }
-        val startTrimmed = try {
-            lines[startIndex].trimStart()
-        } catch (_: Throwable) {
-            return null to (startIndex + 1).coerceAtMost(lines.size)
-        }
-        if (startTrimmed.length < 3 || !startTrimmed.startsWith("```")) {
-            return null to (startIndex + 1).coerceAtMost(lines.size)
-        }
-
-        val language = startTrimmed.removePrefix("```").trim().ifBlank { null }
-        val codeLines = mutableListOf<String>()
-        var currentIndex = startIndex + 1
-
-        while (currentIndex < lines.size) {
-            val endTrimmed = try {
-                lines[currentIndex].trimStart()
-            } catch (_: Throwable) {
-                // 出现无法读取当前行的异常：保守处理为“未闭合”
-                return if (isStreaming) {
-                    ContentPart.Code(codeLines.joinToString("\n"), language) to currentIndex
-                } else {
-                    null to (startIndex + 1).coerceAtMost(lines.size)
-                }
-            }
-
-            if (endTrimmed.length >= 3 && endTrimmed.startsWith("```")) {
-                // 找到结束标记
-                return ContentPart.Code(codeLines.joinToString("\n"), language) to (currentIndex + 1).coerceAtMost(lines.size)
-            }
-
-            // 收集代码行（对异常输入做保护）
-            val safeLine = try { lines[currentIndex] } catch (_: Throwable) { "" }
-            codeLines.add(safeLine)
-            currentIndex++
-        }
-
-        // 未找到结束标记：流式模式下将剩余部分视为代码块，非流式下回退为文本
-        return if (isStreaming) {
-            ContentPart.Code(codeLines.joinToString("\n"), language) to currentIndex
-        } else {
-            null to (startIndex + 1).coerceAtMost(lines.size)
+        return when (val result = extractCodeBlockNew(lines, startIndex, isStreaming)) {
+            is CodeBlockResult.Success -> result.code to result.nextIndex
+            is CodeBlockResult.Unclosed -> result.code to result.nextIndex
+            is CodeBlockResult.Invalid -> null to (startIndex + 1).coerceAtMost(lines.size)
         }
     }
     

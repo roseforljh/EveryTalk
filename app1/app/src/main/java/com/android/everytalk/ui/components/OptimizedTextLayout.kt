@@ -7,6 +7,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.background
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ContentCopy
@@ -49,7 +50,8 @@ fun CodeBlock(
     cornerRadius: Int = 10,
     enableHorizontalScroll: Boolean = true, // 🎯 新增：是否启用水平滚动
     onScrollingStateChanged: (Boolean) -> Unit = {}, // 🎯 新增：滚动状态回调
-    onPreviewClick: (() -> Unit)? = null // 🎯 新增：预览回调
+    onPreviewClick: (() -> Unit)? = null, // 🎯 新增：预览回调
+    onLongPress: (() -> Unit)? = null // 🎯 新增：长按回调
 ) {
     val isDark = isSystemInDarkTheme()
     val codeColor = if (isDark) Color(0xFFD4D4D4) else Color(0xFF24292F)
@@ -76,8 +78,25 @@ fun CodeBlock(
             // 恢复原先圆角（使用组件参数 cornerRadius）
             .clip(RoundedCornerShape(cornerRadius.dp))
             .background(codeBgColor)
-            .pointerInput(enableHorizontalScroll) {
+            .pointerInput(enableHorizontalScroll, onLongPress) {
                 // 🎯 如果启用水平滚动，捕获水平拖动手势
+                // 注意：detectHorizontalDragGestures 可能会拦截长按，所以我们需要组合使用
+                // 或者使用 awaitPointerEventScope 手动处理
+                
+                // 简化策略：优先处理长按，只有在确实发生拖动时才消费事件
+                
+                if (onLongPress != null) {
+                     detectTapGestures(
+                        onLongPress = {
+                            if (!isScrolling) {
+                                onLongPress()
+                            }
+                        },
+                         onTap = { /* no-op */ }
+                    )
+                }
+            }
+            .pointerInput(enableHorizontalScroll) {
                 if (enableHorizontalScroll) {
                     detectHorizontalDragGestures(
                         onDragStart = { onScrollingStateChanged(true) },
@@ -96,14 +115,32 @@ fun CodeBlock(
                 .verticalScroll(vScroll)
                 .padding(start = 4.dp, end = 4.dp, top = 28.dp, bottom = 4.dp)
         ) {
-            SelectionContainer {
-                // 🎯 根据enableHorizontalScroll决定是否可以水平滚动
-                val contentModifier = if (enableHorizontalScroll) {
-                    Modifier.horizontalScroll(hScroll)
-                } else {
-                    Modifier.fillMaxWidth()
+            // 🎯 根据是否需要长按来决定是否启用文本选择
+            // 如果启用了长按，禁用SelectionContainer以避免手势冲突
+            val contentModifier = if (enableHorizontalScroll) {
+                Modifier.horizontalScroll(hScroll)
+            } else {
+                Modifier.fillMaxWidth()
+            }
+            
+            if (onLongPress == null) {
+                SelectionContainer {
+                    Row(modifier = contentModifier) {
+                        Text(
+                            text = code,
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp,
+                                lineHeight = 17.sp,
+                                fontWeight = FontWeight.Normal,
+                                color = codeColor,
+                                letterSpacing = 0.sp
+                            ),
+                            softWrap = !enableHorizontalScroll
+                        )
+                    }
                 }
-                
+            } else {
                 Row(modifier = contentModifier) {
                     Text(
                         text = code,
@@ -115,7 +152,7 @@ fun CodeBlock(
                             color = codeColor,
                             letterSpacing = 0.sp
                         ),
-                        softWrap = !enableHorizontalScroll // 🎯 短代码自动换行
+                        softWrap = !enableHorizontalScroll
                     )
                 }
             }
@@ -156,7 +193,7 @@ fun CodeBlock(
                         )
                     }
                 }
-
+                
                 IconButton(
                     onClick = {
                         clipboard.setText(AnnotatedString(code))

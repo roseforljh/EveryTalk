@@ -28,13 +28,16 @@ import com.android.everytalk.ui.components.table.TableUtils
  * 表格感知文本渲染器（优化版 + 跳动修复）
  *
  * 核心策略：
- * - 方案二：统一渲染流水线（终极方案）
- *   - 全程（流式 + 结束）都使用分段解析和渲染。
- *   - 实时使用 ContentParser.parseCodeBlocksOnly（轻量）解析文本和代码块。
- *   - 统一使用 CodeBlock 渲染代码块，统一使用 MarkdownRenderer 渲染文本。
- *   - 彻底消除流式结束时的组件替换，从而根除跳动。
+ * - 统一渲染流水线：
+ *   - 全程（流式 + 结束）都使用分段解析和渲染
+ *   - ContentParser 负责准确解析文本、代码块和表格
+ *   - UI 层只负责渲染，不做内容过滤
+ *   - 彻底消除流式结束时的组件替换，从而根除跳动
  *
- * 缓存机制：通过contentKey持久化解析结果，避免LazyColumn回收导致重复解析
+ * 缓存机制：通过 contentKey 持久化解析结果，避免 LazyColumn 回收导致重复解析
+ *
+ * 修复历史：
+ * - 2024-11: 移除 filteredParts 补丁逻辑，由 ContentParser 保证解析准确性
  */
 @Composable
 fun TableAwareText(
@@ -91,37 +94,10 @@ fun TableAwareText(
     
     val parsedParts = parsedPartsState.value
 
-    // UI层兜底过滤：移除 ContentPart.Text 中的表格行
-    // 即使解析器偶尔漏判，这里也能保证表格源文本不会被渲染出来
-    val filteredParts = remember(parsedParts) {
-        parsedParts.mapNotNull { part ->
-            if (part is ContentPart.Text) {
-                // 按行拆分，过滤掉看起来像表格行或分隔行的内容
-                val lines = part.content.lines()
-                val filteredLines = lines.filterNot { line ->
-                    // 过滤条件：是表格行 OR 是分隔行
-                    // 注意：这里使用 TableUtils 的宽松检查，宁可错杀不可放过（对于纯文本中的 | 行）
-                    // 但为了避免误伤普通文本（如 "A | B"），我们结合上下文判断？
-                    // 不，这里是兜底，假设 ContentParser 已经把真正的表格提取走了。
-                    // 剩下的 Text 里如果还有类似表格行的东西，大概率是解析残留。
-                    // 只要包含 | 且符合表格行特征，就过滤掉。
-                    TableUtils.isTableLine(line)
-                }
-                
-                // 如果过滤后内容为空（说明全是表格行），则丢弃该 Text 片段
-                // 如果还有内容，重新组合
-                val newContent = filteredLines.joinToString("\n")
-                if (newContent.isBlank()) null else ContentPart.Text(newContent)
-            } else {
-                part
-            }
-        }
-    }
-
-    // 2. 统一渲染逻辑
-    // 不再区分 isStreaming 的大分支，而是统一遍历 parsedParts 进行渲染
+    // 统一渲染逻辑
+    // ContentParser 已经确保解析准确性，UI 层直接渲染即可
     Column(modifier = modifier.fillMaxWidth()) {
-        filteredParts.forEach { part ->
+        parsedParts.forEach { part ->
             when (part) {
                 is ContentPart.Text -> {
                     // 纯文本部分：用MarkdownRenderer渲染
@@ -133,7 +109,8 @@ fun TableAwareText(
                         isStreaming = isStreaming, // 传递流式状态给MarkdownRenderer（用于内部优化）
                         onLongPress = onLongPress,
                         onImageClick = onImageClick,
-                        contentKey = if (contentKey.isNotBlank()) "${contentKey}_part_${parsedParts.indexOf(part)}" else "" // 传递子Key
+                        // 修复缓存冲突：Key 必须包含内容的特征（如长度），因为 index 0 可能从完整文本变为片段
+                        contentKey = if (contentKey.isNotBlank()) "${contentKey}_part_${parsedParts.indexOf(part)}_${part.content.length}" else ""
                     )
                 }
                 is ContentPart.Code -> {
@@ -167,7 +144,8 @@ fun TableAwareText(
                         maxHeight = 600,
                         onPreviewClick = if (isPreviewSupported) {
                             { previewState = part.content to (part.language ?: "") }
-                        } else null
+                        } else null,
+                        onLongPress = onLongPress
                     )
                 }
                 is ContentPart.Table -> {
@@ -178,7 +156,7 @@ fun TableAwareText(
                             .fillMaxWidth()
                             .padding(vertical = 8.dp),
                         isStreaming = isStreaming,
-                        contentKey = if (contentKey.isNotBlank()) "${contentKey}_table_${parsedParts.indexOf(part)}" else "",
+                        contentKey = if (contentKey.isNotBlank()) "${contentKey}_table_${parsedParts.indexOf(part)}_${part.lines.size}" else "",
                         onLongPress = onLongPress,
                         // 使用与文本一致的样式
                         headerStyle = style.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Bold),
