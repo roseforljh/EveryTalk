@@ -31,11 +31,8 @@
     @kotlinx.serialization.SerialName <fields>;
 }
 
-# ===== 项目数据类 (仅保留序列化相关) =====
-# 只保留字段名,允许混淆方法
--keepclassmembers class com.android.everytalk.data.DataClass.** {
-    <fields>;
-}
+# ===== 项目数据类 (完全保留，防止序列化失败) =====
+-keep class com.android.everytalk.data.DataClass.** { *; }
 -keepclassmembers class com.android.everytalk.models.** {
     <fields>;
 }
