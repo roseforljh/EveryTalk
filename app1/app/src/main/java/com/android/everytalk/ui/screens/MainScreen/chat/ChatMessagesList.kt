@@ -87,7 +87,6 @@ fun ChatMessagesList(
         }
     }
 
-
     Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
         state = listState,

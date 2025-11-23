@@ -161,4 +161,4 @@ class ChatScrollStateManager(
         isStreaming = false
         jumpToBottom()
     }
-chong
+}
