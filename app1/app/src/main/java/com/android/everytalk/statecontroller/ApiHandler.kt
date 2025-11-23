@@ -783,9 +783,10 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
             }
         }
 
-        if (stateHolder.shouldAutoScroll()) {
-            triggerScrollToBottom()
-        }
+        // Removed auto-scroll trigger during streaming
+        // if (stateHolder.shouldAutoScroll()) {
+        //     triggerScrollToBottom()
+        // }
     }
 
 

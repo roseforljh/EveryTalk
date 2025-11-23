@@ -69,9 +69,10 @@ class MessageContentController(
                             )
                         }
 
-                        if (stateHolder.shouldAutoScroll()) {
-                            triggerScrollToBottom()
-                        }
+                        // Removed auto-scroll trigger during streaming
+                        // if (stateHolder.shouldAutoScroll()) {
+                        //     triggerScrollToBottom()
+                        // }
                     }
                 }
             }

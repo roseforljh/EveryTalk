@@ -52,7 +52,8 @@ class StreamingControls(
         // 恢复显示：将当前流式消息累积文本一次性刷新
         scope.launch {
             apiHandler.flushPausedStreamingUpdate(isImageGeneration = isImageMode)
-            triggerScrollToBottom()
+            // 移除流式输出时的自动滚动触发
+            // triggerScrollToBottom()
             showSnackbar("已继续")
         }
     }
