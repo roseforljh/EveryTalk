@@ -49,10 +49,32 @@ fun ImageRatioSelectionDialog(
             allRatios
         } else {
             val names = allowedRatioNames.map { it.trim() }.toSet()
-            allRatios.filter { r ->
+            val existing = allRatios.filter { r ->
                 val name = r.displayName.trim()
                 name in names
             }
+            // 对于不在默认集合中的比例（如 3:2），尝试动态解析并添加
+            val existingNames = existing.map { it.displayName.trim() }.toSet()
+            val missing = names - existingNames
+            val dynamic = missing.mapNotNull { name ->
+                val parts = name.split(":")
+                if (parts.size == 2) {
+                    val wRatio = parts[0].toFloatOrNull()
+                    val hRatio = parts[1].toFloatOrNull()
+                    if (wRatio != null && hRatio != null && wRatio > 0 && hRatio > 0) {
+                        // 动态计算分辨率：以 1024 为基准长边，确保生成的 ImageRatio 具有合理的像素尺寸
+                        // 避免直接使用比例整数（如 3x2）导致生成的图片极小
+                        val baseSize = 1024f
+                        val (w, h) = if (wRatio >= hRatio) {
+                            baseSize to (baseSize / wRatio * hRatio)
+                        } else {
+                            (baseSize / hRatio * wRatio) to baseSize
+                        }
+                        ImageRatio(displayName = name, width = w.toInt(), height = h.toInt())
+                    } else null
+                } else null
+            }
+            existing + dynamic
         }
     }
  

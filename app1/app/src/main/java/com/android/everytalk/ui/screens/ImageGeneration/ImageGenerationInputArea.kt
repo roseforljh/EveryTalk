@@ -314,6 +314,17 @@ fun ImageGenerationInputArea(
         val r = familyCapabilities?.ratios.orEmpty()
         if (r.isEmpty()) null else r.map { it.ratio }
     }
+
+    // 当模型家族变化导致可用比例列表变更时，校验当前选中比例是否合法
+    // 若当前比例不在新模型的允许列表中（且非 AUTO），则重置为 AUTO
+    LaunchedEffect(allowedRatioNames) {
+        if (allowedRatioNames != null && !selectedImageRatio.isAuto) {
+            if (selectedImageRatio.displayName !in allowedRatioNames) {
+                onImageRatioChanged(ImageRatio.AUTO)
+            }
+        }
+    }
+
     var seedreamQuality by remember(detectedFamily) {
         mutableStateOf(QualityTier.Q2K)
     }

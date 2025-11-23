@@ -116,7 +116,12 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
         val availableModels = remember(selectedApiConfig, allImageConfigs) {
             val currentSelectedConfig = selectedApiConfig
             if (currentSelectedConfig != null) {
-                allImageConfigs.filter { it.key == currentSelectedConfig.key }
+                allImageConfigs.filter {
+                    it.provider == currentSelectedConfig.provider &&
+                    it.address == currentSelectedConfig.address &&
+                    it.key == currentSelectedConfig.key &&
+                    it.channel == currentSelectedConfig.channel
+                }
             } else {
                 allImageConfigs
             }
