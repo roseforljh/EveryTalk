@@ -9,6 +9,7 @@ import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.ensureActive
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -743,6 +744,9 @@ class VoiceChatSession(
                 var line: String?
                 
                 while (reader.readLine().also { line = it } != null && !shouldStopPlayback) {
+                    // 检查协程是否已取消，如果取消则抛出 CancellationException
+                    kotlin.coroutines.coroutineContext.ensureActive()
+
                     if (line.isNullOrBlank()) continue
                     
                     try {
@@ -796,7 +800,14 @@ class VoiceChatSession(
                             }
                         }
                     } catch (e: Exception) {
-                        Log.w(TAG, "Failed to parse stream line: $line", e)
+                        // 取消类异常（包括 JobCancellationException）直接向上抛出，避免当成解析错误刷屏
+                        if (e is java.util.concurrent.CancellationException ||
+                            e.javaClass.name.contains("CancellationException")) {
+                            throw e
+                        }
+                        // 截断日志，防止刷屏
+                        val logLine = if (line != null && line!!.length > 200) line!!.substring(0, 200) + "..." else line
+                        Log.w(TAG, "Failed to parse stream line: $logLine", e)
                     }
                 }
             }
@@ -906,7 +917,7 @@ class VoiceChatSession(
                     val normalizedVolume = (rms / 2000.0).coerceIn(0.0, 1.0).toFloat()
                     
                     withContext(Dispatchers.Main) {
-                        onVolumeChanged.invoke(normalizedVolume)
+                        onVolumeChanged?.invoke(normalizedVolume)
                     }
                 }
             }
@@ -968,7 +979,7 @@ class VoiceChatSession(
                 
                 if (forceStop) {
                     Log.i("StreamAudioPlayer", "Playback force stopped by user")
-                    track.stop()
+                    // track.stop() // Already handled in forceStop
                     track.release()
                     return
                 }
