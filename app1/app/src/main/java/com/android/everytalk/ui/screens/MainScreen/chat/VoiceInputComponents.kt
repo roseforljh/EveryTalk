@@ -1,11 +1,18 @@
 package com.android.everytalk.ui.screens.MainScreen.chat
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -196,14 +203,22 @@ fun VoiceContentDisplay(
         }
         
         // 对话文本显示
-        if (userText.isNotEmpty() || assistantText.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(32.dp))
-            ConversationTextCard(
-                userText = userText,
-                assistantText = assistantText,
-                isDarkTheme = isDarkTheme,
-                contentColor = contentColor
-            )
+        AnimatedVisibility(
+            visible = userText.isNotEmpty() || assistantText.isNotEmpty(),
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Spacer(modifier = Modifier.height(32.dp))
+                ConversationTextCard(
+                    userText = userText,
+                    assistantText = assistantText,
+                    isDarkTheme = isDarkTheme,
+                    contentColor = contentColor
+                )
+            }
         }
     }
 }
@@ -258,11 +273,13 @@ private fun ConversationTextCard(
     Column(
         modifier = Modifier
             .fillMaxWidth(0.85f)
+            .heightIn(max = 400.dp)
             .background(
                 color = if (isDarkTheme) Color(0xFF2A2A2A) else Color(0xFFF5F5F5),
                 shape = RoundedCornerShape(16.dp)
             )
-            .padding(16.dp),
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         if (userText.isNotEmpty()) {
