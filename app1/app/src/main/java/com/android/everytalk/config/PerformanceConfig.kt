@@ -125,6 +125,43 @@ object PerformanceConfig {
      * 推荐值：4（深色/浅色 × 2种常用字号）
      */
     const val MARKWON_CACHE_MAX_SIZE = 4
+
+    // ===== 语音模式配置 =====
+    /**
+     * 语音录音采样率（Hz）
+     * 当前端录音和服务端 STT 需要保持一致时，可以通过这个参数统一调整
+     */
+    const val VOICE_RECORD_SAMPLE_RATE_HZ = 16_000
+
+    /**
+     * 录音阶段音量回调的时间间隔（毫秒）
+     * 数值越小波形越“丝滑”，但 CPU/主线程开销越大；推荐 50–80ms
+     */
+    const val VOICE_RECORD_VOLUME_UPDATE_INTERVAL_MS = 60L
+
+    /**
+     * 录音阶段音量计算的采样步长
+     * 例如 4 表示每 4 个采样点取 1 个做 RMS，降低计算量
+     */
+    const val VOICE_RECORD_VOLUME_SAMPLE_STEP = 4
+
+    /**
+     * 短语音阈值（毫秒）
+     * 录音时长低于该值时，前端直接走 WAV 上传，跳过 AAC 编码以降低首包延迟
+     */
+    const val VOICE_SHORT_UTTERANCE_MAX_DURATION_MS = 3_000L
+
+    /**
+     * 流式播放预缓冲时长（毫秒）
+     * 从首次收到音频到开始播放之间的最小缓冲时间，用于平衡首音延迟和 Underrun 风险
+     */
+    const val VOICE_STREAM_PREBUFFER_MS = 200L
+
+    /**
+     * 流式播放在 close() 阶段的最大等待时间（毫秒）
+     * 用于防止尾部等待过长导致协程阻塞
+     */
+    const val VOICE_STREAM_CLOSE_TIMEOUT_MS = 4_000L
     
     /**
      * 根据设备性能动态调整配置

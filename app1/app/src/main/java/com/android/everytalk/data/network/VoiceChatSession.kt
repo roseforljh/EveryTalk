@@ -11,6 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.ensureActive
 import okhttp3.MediaType.Companion.toMediaType
+import com.android.everytalk.config.PerformanceConfig
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -79,8 +80,8 @@ class VoiceChatSession(
     @Volatile
     private var shouldStopPlayback = false
 
-    // 录音参数（16k / 16-bit / mono）
-    private val sampleRate = 16_000
+    // 录音参数（采样率 / 16-bit / mono）
+    private val sampleRate = PerformanceConfig.VOICE_RECORD_SAMPLE_RATE_HZ
     private val channelConfig = AudioFormat.CHANNEL_IN_MONO
     private val audioFormat = AudioFormat.ENCODING_PCM_16BIT
 
@@ -144,20 +145,24 @@ class VoiceChatSession(
                 if (n > 0) {
                     pcmBuffer.write(readBuf, 0, n)
 
-                    // 计算音量（RMS）并回调给UI
+                    // 计算音量（RMS）并回调给UI（降低频率 + 抽样以减少CPU开销）
                     val currentTime = System.currentTimeMillis()
-                    if (onVolumeChanged != null && currentTime - lastVolumeUpdateTime >= 50) {
+                    if (onVolumeChanged != null &&
+                        currentTime - lastVolumeUpdateTime >= PerformanceConfig.VOICE_RECORD_VOLUME_UPDATE_INTERVAL_MS
+                    ) {
                         lastVolumeUpdateTime = currentTime
 
                         var sum = 0.0
+                        val step = PerformanceConfig.VOICE_RECORD_VOLUME_SAMPLE_STEP.coerceAtLeast(1)
                         var i = 0
-                        while (i < n - 1) {
+                        val limit = n - 1
+                        while (i < limit) {
                             val sample = (readBuf[i].toInt() and 0xFF) or (readBuf[i + 1].toInt() shl 8)
                             val shortValue = sample.toShort()
                             sum += shortValue * shortValue
-                            i += 2
+                            i += 2 * step
                         }
-                        val sampleCount = n / 2
+                        val sampleCount = (n / 2) / step
                         if (sampleCount > 0) {
                             val rms = kotlin.math.sqrt(sum / sampleCount)
                             val normalizedVolume = (rms / 3000.0).coerceIn(0.0, 1.0).toFloat()
@@ -273,23 +278,37 @@ class VoiceChatSession(
 
         Log.i(TAG, "Recorded ${pcmData.size} bytes of PCM data")
 
+        // 基于 PCM 数据估算录音时长（毫秒）
+        val totalSamples = pcmData.size / 2 // 16-bit PCM: 2 bytes per sample
+        val recordDurationMs = if (sampleRate > 0) {
+            (totalSamples * 1000L) / sampleRate
+        } else {
+            0L
+        }
+        val isShortUtterance =
+            recordDurationMs in 1..PerformanceConfig.VOICE_SHORT_UTTERANCE_MAX_DURATION_MS
+
         // 尝试将 PCM 编码为 AAC (m4a) 以减小上传体积
-        // 如果编码失败，回退到 WAV
+        // 短语音直接走 WAV 上传以降低首包延迟；长语音保留 AAC 压缩策略
         var uploadFile: File? = null
         var mimeType = "audio/wav"
         
-        try {
-            val tempAacFile = File.createTempFile("voice_chat_", ".m4a")
-            val success = encodePcmToAac(pcmData, tempAacFile, sampleRate)
-            if (success && tempAacFile.length() > 0) {
-                uploadFile = tempAacFile
-                mimeType = "audio/mp4" // m4a
-                Log.i(TAG, "Encoded PCM to AAC: ${pcmData.size} -> ${uploadFile.length()} bytes")
-            } else {
-                tempAacFile.delete()
+        if (!isShortUtterance) {
+            try {
+                val tempAacFile = File.createTempFile("voice_chat_", ".m4a")
+                val success = encodePcmToAac(pcmData, tempAacFile, sampleRate)
+                if (success && tempAacFile.length() > 0) {
+                    uploadFile = tempAacFile
+                    mimeType = "audio/mp4" // m4a
+                    Log.i(TAG, "Encoded PCM to AAC: ${pcmData.size} -> ${uploadFile.length()} bytes (duration=${recordDurationMs}ms)")
+                } else {
+                    tempAacFile.delete()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "AAC encoding failed, falling back to WAV", e)
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "AAC encoding failed, falling back to WAV", e)
+        } else {
+            Log.i(TAG, "Short utterance ($recordDurationMs ms), skip AAC and upload as WAV")
         }
 
         // 如果 AAC 编码失败或未执行，使用 WAV
@@ -836,8 +855,9 @@ class VoiceChatSession(
         // 预缓冲配置
         private var totalWrittenBytes = 0
         private var isBuffering = true
-        // 预缓冲 0.3 秒的数据量，确保有足够数据开始播放
-        private var nextPlayThreshold = (sampleRate * 2 * 0.3).toInt()
+        // 按配置的预缓冲时长计算需要写入的字节数
+        private var nextPlayThreshold =
+            ((sampleRate * 2L * PerformanceConfig.VOICE_STREAM_PREBUFFER_MS) / 1000L).toInt()
         
         // 字节对齐缓冲 (处理奇数包)
         private var leftoverByte: Byte? = null
@@ -962,10 +982,14 @@ class VoiceChatSession(
                 } else {
                     // 播放阶段：检查是否意外停止 (Underrun)
                     if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
-                        Log.w("StreamAudioPlayer", "Underrun detected (state=${track.playState}, head=${track.playbackHeadPosition}, written=$totalWrittenBytes), pausing to re-buffer")
+                        Log.w(
+                            "StreamAudioPlayer",
+                            "Underrun detected (state=${track.playState}, head=${track.playbackHeadPosition}, written=$totalWrittenBytes), pausing to re-buffer"
+                        )
                         isBuffering = true
-                        // 重新缓冲 0.3 秒数据
-                        nextPlayThreshold = totalWrittenBytes + (sampleRate * 2 * 0.3).toInt()
+                        // 重新缓冲指定时长的数据
+                        nextPlayThreshold =
+                            totalWrittenBytes + ((sampleRate * 2L * PerformanceConfig.VOICE_STREAM_PREBUFFER_MS) / 1000L).toInt()
                     }
                 }
             } else {
@@ -993,7 +1017,7 @@ class VoiceChatSession(
                 // 2. 阻塞等待播放完成 (防止尾部截断)
                 val totalFrames = totalWrittenBytes / 2 // 16-bit = 2 bytes per frame
                 var waitedMs = 0
-                val timeoutMs = 5000 // 缩短超时时间到5秒
+                val timeoutMs = PerformanceConfig.VOICE_STREAM_CLOSE_TIMEOUT_MS.toInt()
                 var lastPosition = -1L
                 var positionStuckCount = 0
                 
