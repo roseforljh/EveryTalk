@@ -12,11 +12,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.outlined.ClosedCaption
 import androidx.compose.material.icons.outlined.VolumeUp
 import androidx.compose.material3.*
@@ -46,6 +48,7 @@ import kotlin.math.cos
 import kotlin.math.sin
 import android.Manifest
 import android.content.pm.PackageManager
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
@@ -61,7 +64,8 @@ fun VoiceInputScreen(
 ) {
     // 防抖状态：防止快速连点导致二次 popBackStack 黑屏
     var isClosing by remember { mutableStateOf(false) }
-    var showSettingsDialog by remember { mutableStateOf(false) }
+    var showTtsSettingsDialog by remember { mutableStateOf(false) }
+    var showSttChatSettingsDialog by remember { mutableStateOf(false) }
     var showVoiceSelectionDialog by remember { mutableStateOf(false) }
     var isRecording by remember { mutableStateOf(false) }
     
@@ -80,28 +84,35 @@ fun VoiceInputScreen(
     val context = LocalContext.current
 
     // 启动录音会话（新版：使用VoiceChatSession）
-    val startRecordingSession = remember(selectedApiConfig, viewModel) {
+    val startRecordingSession: () -> Unit = remember(selectedApiConfig, viewModel) {
         {
-            // 从 BuildConfig 读取语音模式后端地址
-            val baseUrl = com.android.everytalk.BuildConfig.VOICE_BACKEND_URL
-            var apiKey = (selectedApiConfig?.key ?: "").trim()
+            val prefs = context.getSharedPreferences("voice_settings", android.content.Context.MODE_PRIVATE)
             
-            // 覆盖为"语音设置"里按平台保存的Key（若存在）
-            try {
-                val prefs = context.getSharedPreferences("voice_settings", android.content.Context.MODE_PRIVATE)
-                val platform = prefs.getString("voice_platform", selectedApiConfig?.provider ?: "Gemini") ?: "Gemini"
-                val keyOverride = prefs.getString("voice_key_${platform}", null)?.trim()
-                if (!keyOverride.isNullOrEmpty()) {
-                    apiKey = keyOverride
-                }
-                
-                // 获取语音名称设置
-                val voiceName = prefs.getString("voice_name", "Kore") ?: "Kore"
-            } catch (_: Throwable) {}
+            // 从 SharedPreferences 读取语音 API 地址
+            val providerApiUrl = prefs.getString("voice_base_url", "")?.trim() ?: ""
+            val ttsPlatform = prefs.getString("voice_platform", "Gemini") ?: "Gemini"
             
-            if (apiKey.isEmpty()) {
-                android.util.Log.w("VoiceInputScreen", "API Key is empty, cannot start voice chat session.")
+            // 检查 BuildConfig.VOICE_BACKEND_URL 是否配置
+            if (com.android.everytalk.BuildConfig.VOICE_BACKEND_URL.isEmpty()) {
+                android.widget.Toast.makeText(context, "未配置语音网关地址(VOICE_BACKEND_URL)", android.widget.Toast.LENGTH_LONG).show()
+            } else if (ttsPlatform == "Minimax" && providerApiUrl.isEmpty()) {
+                android.widget.Toast.makeText(context, "Minimax 平台必须填写语音 API 地址", android.widget.Toast.LENGTH_LONG).show()
             } else {
+                var apiKey = (selectedApiConfig?.key ?: "").trim()
+                
+                // 覆盖为"语音设置"里按平台保存的Key（若存在）
+                try {
+                    val platform = prefs.getString("voice_platform", selectedApiConfig?.provider ?: "Gemini") ?: "Gemini"
+                    val keyOverride = prefs.getString("voice_key_${platform}", null)?.trim()
+                    if (!keyOverride.isNullOrEmpty()) {
+                        apiKey = keyOverride
+                    }
+                } catch (_: Throwable) {}
+                
+                if (apiKey.isEmpty()) {
+                    android.util.Log.w("VoiceInputScreen", "API Key is empty, cannot start voice chat session.")
+                    android.widget.Toast.makeText(context, "请先配置 API Key", android.widget.Toast.LENGTH_SHORT).show()
+                } else {
                 // 获取当前对话历史（优化：只取最近3轮，减少处理时间）
                 val chatHistory = mutableListOf<Pair<String, String>>()
                 viewModel?.stateHolder?.let { holder ->
@@ -114,22 +125,51 @@ fun VoiceInputScreen(
                     }
                 }
                 
-                // 获取系统提示词
-                val systemPrompt = viewModel?.stateHolder?.let { holder ->
+                // 获取系统提示词，并注入语音模式专用指令
+                val baseSystemPrompt = viewModel?.stateHolder?.let { holder ->
                     val convId = holder._currentConversationId.value
                     holder.systemPrompts[convId] ?: ""
                 } ?: ""
                 
-                val prefs = context.getSharedPreferences("voice_settings", android.content.Context.MODE_PRIVATE)
-                val voiceName = prefs.getString("voice_name", "Kore") ?: "Kore"
+                val voiceModePrompt = """
+                    【重要指令】你现在正在进行语音通话。请完全扮演一个真实的人类，用最自然、最口语化的语气交流。
+                    回复必须极度简练、直接，避免长篇大论和书面语。
+                    禁止使用Markdown格式、列表或复杂结构。
+                    像朋友聊天一样说话，尽量缩短回复长度以优化语音体验。
+                """.trimIndent()
                 
+                val systemPrompt = if (baseSystemPrompt.isNotEmpty()) {
+                    "$baseSystemPrompt\n\n$voiceModePrompt"
+                } else {
+                    voiceModePrompt
+                }
+                
+                val voiceName = prefs.getString("voice_name", "Kore") ?: "Kore"
+                val chatModel = prefs.getString("voice_chat_model", "")?.trim()?.takeIf { it.isNotEmpty() }
+                val ttsPlatform = prefs.getString("voice_platform", "Gemini") ?: "Gemini"
+                
+                // STT/Chat 配置
+                val sttChatPlatform = prefs.getString("stt_chat_platform", "Google") ?: "Google"
+                val sttChatApiUrl = prefs.getString("stt_chat_api_url", "")?.trim() ?: ""
+                val sttChatModel = prefs.getString("stt_chat_model", "")?.trim() ?: ""
+                val sttChatApiKey = when (sttChatPlatform) {
+                    "OpenAI" -> prefs.getString("stt_chat_key_OpenAI", "") ?: ""
+                    else -> prefs.getString("stt_chat_key_Google", "") ?: ""
+                }.trim()
+
                 // 创建新的语音对话会话
                 val session = VoiceChatSession(
-                    baseUrl = baseUrl,
+                    providerApiUrl = providerApiUrl,
                     apiKey = apiKey,
                     chatHistory = chatHistory,
                     systemPrompt = systemPrompt,
                     voiceName = voiceName,
+                    ttsPlatform = ttsPlatform,
+                    chatModel = chatModel,
+                    sttChatPlatform = sttChatPlatform,
+                    sttChatApiUrl = sttChatApiUrl,
+                    sttChatApiKey = sttChatApiKey,
+                    sttChatModel = sttChatModel,
                     onVolumeChanged = { volume ->
                         currentVolume = volume
                     },
@@ -156,6 +196,7 @@ fun VoiceInputScreen(
                         voiceChatSession = null
                     }
                 }
+                }
             }
         }
     }
@@ -165,12 +206,49 @@ fun VoiceInputScreen(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
-            startRecordingSession()
+            startRecordingSession.invoke()
         } else {
             android.util.Log.w("VoiceInputScreen", "RECORD_AUDIO permission denied by user.")
         }
     }
      
+    // 拦截系统返回键
+    BackHandler(enabled = true) {
+        if (isRecording) {
+            // 录音中：取消本次语音
+            val session = voiceChatSession
+            isRecording = false
+            currentVolume = 0f
+            userText = ""
+            assistantText = ""
+            
+            if (session != null) {
+                coroutineScope.launch {
+                    try {
+                        session.cancelRecording()
+                    } catch (t: Throwable) {
+                        android.util.Log.e("VoiceInputScreen", "Cancel recording on back pressed failed", t)
+                    } finally {
+                        voiceChatSession = null
+                    }
+                }
+            }
+        } else {
+            // 非录音中：正常关闭
+            if (!isClosing) {
+                isClosing = true
+                onClose()
+            }
+        }
+    }
+
+    // 生命周期管理：组件销毁时强制释放资源
+    DisposableEffect(Unit) {
+        onDispose {
+            voiceChatSession?.forceRelease()
+        }
+    }
+
     // 主题适配
     val isDarkTheme = isSystemInDarkTheme()
     val backgroundColor = if (isDarkTheme) Color.Black else MaterialTheme.colorScheme.background
@@ -184,13 +262,17 @@ fun VoiceInputScreen(
             TopAppBar(
                 title = { },
                 actions = {
-                    // 音色选择按钮
+                    // STT/Chat 设置按钮 (左)
+                    IconButton(onClick = { showSttChatSettingsDialog = true }) {
+                        Icon(Icons.Default.Build, contentDescription = "模型配置", tint = contentColor)
+                    }
+                    // 音色选择按钮 (中)
                     IconButton(onClick = { showVoiceSelectionDialog = true }) {
                         Icon(Icons.Default.RecordVoiceOver, contentDescription = "选择音色", tint = contentColor)
                     }
-                    // 设置按钮
-                    IconButton(onClick = { showSettingsDialog = true }) {
-                        Icon(Icons.Default.Settings, contentDescription = "设置", tint = contentColor)
+                    // TTS 设置按钮 (右)
+                    IconButton(onClick = { showTtsSettingsDialog = true }) {
+                        Icon(Icons.Default.Settings, contentDescription = "语音设置", tint = contentColor)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
@@ -222,7 +304,7 @@ fun VoiceInputScreen(
                                     Manifest.permission.RECORD_AUDIO
                                 ) == PackageManager.PERMISSION_GRANTED
                                 if (granted) {
-                                    startRecordingSession()
+                                    startRecordingSession.invoke()
                                 } else {
                                     requestAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                                 }
@@ -308,7 +390,7 @@ fun VoiceInputScreen(
                 
                 Spacer(modifier = Modifier.weight(1f))
                 
-                // 右侧关闭按钮 - 圆形背景
+                // 右侧按钮（关闭/取消） - 圆形背景
                 Box(
                     modifier = Modifier
                         .padding(end = 16.dp)
@@ -321,18 +403,38 @@ fun VoiceInputScreen(
                 ) {
                     IconButton(
                         onClick = {
-                            if (!isClosing) {
-                                isClosing = true
+                            if (isRecording) {
+                                // 录音中：取消本次语音
+                                val session = voiceChatSession
+                                isRecording = false
+                                currentVolume = 0f
+                                userText = ""
+                                assistantText = ""
                                 
-                                // 直接调用关闭（保存逻辑由ViewModel的生命周期管理）
-                                onClose()
+                                if (session != null) {
+                                    coroutineScope.launch {
+                                        try {
+                                            session.cancelRecording()
+                                        } catch (t: Throwable) {
+                                            android.util.Log.e("VoiceInputScreen", "Cancel recording failed", t)
+                                        } finally {
+                                            voiceChatSession = null
+                                        }
+                                    }
+                                }
+                            } else {
+                                // 非录音中：关闭页面
+                                if (!isClosing) {
+                                    isClosing = true
+                                    onClose()
+                                }
                             }
                         },
                         modifier = Modifier.fillMaxSize()
                     ) {
                         Icon(
-                            imageVector = Icons.Default.Close,
-                            contentDescription = "关闭",
+                            imageVector = if (isRecording) Icons.Default.Delete else Icons.Default.Close,
+                            contentDescription = if (isRecording) "取消本次语音" else "关闭",
                             modifier = Modifier.size(28.dp),
                             tint = Color.White
                         )
@@ -466,11 +568,18 @@ fun VoiceInputScreen(
         }
     }
     
-    // 设置对话框
-    if (showSettingsDialog) {
+    // TTS 设置对话框
+    if (showTtsSettingsDialog) {
         VoiceSettingsDialog(
             selectedApiConfig = selectedApiConfig,
-            onDismiss = { showSettingsDialog = false }
+            onDismiss = { showTtsSettingsDialog = false }
+        )
+    }
+
+    // STT/Chat 设置对话框
+    if (showSttChatSettingsDialog) {
+        SttChatSettingsDialog(
+            onDismiss = { showSttChatSettingsDialog = false }
         )
     }
     
@@ -494,11 +603,15 @@ private fun VoiceSettingsDialog(
     val savedPlatform = remember { prefs.getString("voice_platform", null) }
     val savedKeyGemini = remember { prefs.getString("voice_key_Gemini", "") ?: "" }
     val savedKeyOpenAI = remember { prefs.getString("voice_key_OpenAI", "") ?: "" }
+    val savedKeyMinimax = remember { prefs.getString("voice_key_Minimax", "") ?: "" }
+    val savedBaseUrl = remember { prefs.getString("voice_base_url", "") ?: "" }
+    val savedChatModel = remember { prefs.getString("voice_chat_model", "") ?: "" }
 
     // 根据平台解析Key的函数：仅从本地保存中读取，首次安装时为空
     fun resolveKeyFor(platform: String): String {
         val fromPrefs = when (platform) {
             "OpenAI" -> savedKeyOpenAI
+            "Minimax" -> savedKeyMinimax
             else -> savedKeyGemini
         }.trim()
         return fromPrefs
@@ -510,8 +623,10 @@ private fun VoiceSettingsDialog(
     var apiKey by remember {
         mutableStateOf(resolveKeyFor(selectedPlatform))
     }
+    var baseUrl by remember { mutableStateOf(savedBaseUrl) }
+    var chatModel by remember { mutableStateOf(savedChatModel) }
     var expanded by remember { mutableStateOf(false) }
-    val platforms = listOf("Gemini", "OpenAI")
+    val platforms = listOf("Gemini", "OpenAI", "Minimax")
     
     val isDarkTheme = isSystemInDarkTheme()
     val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
@@ -543,7 +658,7 @@ private fun VoiceSettingsDialog(
             ) {
                 // 标题
                 Text(
-                    text = "语音设置",
+                    text = "TTS 设置 (语音合成)",
                     style = MaterialTheme.typography.headlineSmall.copy(
                         fontWeight = FontWeight.Bold
                     ),
@@ -556,7 +671,7 @@ private fun VoiceSettingsDialog(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = "平台",
+                        text = "TTS 平台",
                         style = MaterialTheme.typography.labelLarge.copy(
                             fontWeight = FontWeight.SemiBold
                         ),
@@ -607,7 +722,7 @@ private fun VoiceSettingsDialog(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = "API Key",
+                        text = "TTS API Key",
                         style = MaterialTheme.typography.labelLarge.copy(
                             fontWeight = FontWeight.SemiBold
                         ),
@@ -618,6 +733,71 @@ private fun VoiceSettingsDialog(
                         onValueChange = { apiKey = it },
                         modifier = Modifier.fillMaxWidth(),
                         placeholder = { Text("请输入 API Key") },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        singleLine = true
+                    )
+                }
+
+                // 语音 API 地址输入框
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "TTS API 地址",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = baseUrl,
+                        onValueChange = { baseUrl = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("例如 https://api.minimaxi.com/v1/t2a_v2") },
+                        supportingText = {
+                            if (baseUrl.isNotEmpty() && !baseUrl.startsWith("http")) {
+                                Text("请填写完整的 http(s) 地址", color = MaterialTheme.colorScheme.error)
+                            } else if (selectedPlatform == "Minimax" && baseUrl.isEmpty()) {
+                                Text("Minimax 平台必须填写 API 地址", color = MaterialTheme.colorScheme.error)
+                            } else {
+                                Text("大模型厂商的 API 地址 (可选)", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        singleLine = true
+                    )
+                }
+
+                // 语音模型名称输入框
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "TTS 模型名称",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = chatModel,
+                        onValueChange = { chatModel = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("例如 gemini-flash-lite-latest") },
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
                             unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
@@ -662,11 +842,15 @@ private fun VoiceSettingsDialog(
                             runCatching {
                                 val editor = prefs.edit()
                                 editor.putString("voice_platform", selectedPlatform)
-                                if (selectedPlatform == "OpenAI") {
-                                    editor.putString("voice_key_OpenAI", apiKey)
-                                } else {
-                                    editor.putString("voice_key_Gemini", apiKey)
+                                when (selectedPlatform) {
+                                    "OpenAI" -> editor.putString("voice_key_OpenAI", apiKey)
+                                    "Minimax" -> editor.putString("voice_key_Minimax", apiKey)
+                                    else -> editor.putString("voice_key_Gemini", apiKey)
                                 }
+                                if (baseUrl.isNotBlank()) {
+                                    editor.putString("voice_base_url", baseUrl.trim())
+                                }
+                                editor.putString("voice_chat_model", chatModel.trim())
                                 editor.apply()
                             }
                             onDismiss()
@@ -695,19 +879,272 @@ private fun VoiceSettingsDialog(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+private fun SttChatSettingsDialog(
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("voice_settings", android.content.Context.MODE_PRIVATE) }
+    
+    val savedPlatform = remember { prefs.getString("stt_chat_platform", "Google") ?: "Google" }
+    val savedKeyGoogle = remember { prefs.getString("stt_chat_key_Google", "") ?: "" }
+    val savedKeyOpenAI = remember { prefs.getString("stt_chat_key_OpenAI", "") ?: "" }
+    val savedApiUrl = remember { prefs.getString("stt_chat_api_url", "") ?: "" }
+    val savedModel = remember { prefs.getString("stt_chat_model", "") ?: "" }
+
+    fun resolveKeyFor(platform: String): String {
+        return when (platform) {
+            "OpenAI" -> savedKeyOpenAI
+            else -> savedKeyGoogle
+        }.trim()
+    }
+
+    var selectedPlatform by remember { mutableStateOf(savedPlatform) }
+    var apiKey by remember { mutableStateOf(resolveKeyFor(selectedPlatform)) }
+    var apiUrl by remember { mutableStateOf(savedApiUrl) }
+    var model by remember { mutableStateOf(savedModel) }
+    var expanded by remember { mutableStateOf(false) }
+    
+    val platforms = listOf("Google", "OpenAI")
+    
+    val isDarkTheme = isSystemInDarkTheme()
+    val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
+    val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
+    val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
+    
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            dismissOnClickOutside = true,
+            dismissOnBackPress = true,
+            usePlatformDefaultWidth = false
+        )
+    ) {
+        Card(
+            shape = RoundedCornerShape(28.dp),
+            modifier = Modifier
+                .fillMaxWidth(0.9f)
+                .wrapContentHeight(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surface
+            )
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(20.dp)
+            ) {
+                Text(
+                    text = "STT & Chat 设置",
+                    style = MaterialTheme.typography.headlineSmall.copy(
+                        fontWeight = FontWeight.Bold
+                    ),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                
+                // 平台选择
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "平台",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    ExposedDropdownMenuBox(
+                        expanded = expanded,
+                        onExpandedChange = { expanded = it }
+                    ) {
+                        OutlinedTextField(
+                            value = selectedPlatform,
+                            onValueChange = {},
+                            readOnly = true,
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                            modifier = Modifier.fillMaxWidth().menuAnchor(),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                            ),
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                        ExposedDropdownMenu(
+                            expanded = expanded,
+                            onDismissRequest = { expanded = false }
+                        ) {
+                            platforms.forEach { platform ->
+                                DropdownMenuItem(
+                                    text = { Text(platform) },
+                                    onClick = {
+                                        selectedPlatform = platform
+                                        apiKey = resolveKeyFor(platform)
+                                        expanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+                
+                // API Key
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "API Key",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = apiKey,
+                        onValueChange = { apiKey = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("请输入 API Key") },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        singleLine = true
+                    )
+                }
+
+                // API 地址
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "API 地址",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = apiUrl,
+                        onValueChange = { apiUrl = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("例如 https://api.openai.com/v1") },
+                        supportingText = {
+                            if (apiUrl.isNotEmpty() && !apiUrl.startsWith("http")) {
+                                Text("请填写完整的 http(s) 地址", color = MaterialTheme.colorScheme.error)
+                            } else {
+                                Text("留空则使用默认地址", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        singleLine = true
+                    )
+                }
+
+                // 模型名称
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "模型名称",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = model,
+                        onValueChange = { model = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("例如 gpt-4o-mini") },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        singleLine = true
+                    )
+                }
+                
+                // 底部按钮
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f).height(48.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = MaterialTheme.colorScheme.surface,
+                            contentColor = cancelButtonColor
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
+                    ) {
+                        Text("取消", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
+                    }
+                    
+                    Button(
+                        onClick = {
+                            runCatching {
+                                val editor = prefs.edit()
+                                editor.putString("stt_chat_platform", selectedPlatform)
+                                when (selectedPlatform) {
+                                    "OpenAI" -> editor.putString("stt_chat_key_OpenAI", apiKey)
+                                    else -> editor.putString("stt_chat_key_Google", apiKey)
+                                }
+                                editor.putString("stt_chat_api_url", apiUrl.trim())
+                                editor.putString("stt_chat_model", model.trim())
+                                editor.apply()
+                            }
+                            onDismiss()
+                        },
+                        modifier = Modifier.weight(1f).height(48.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = confirmButtonColor,
+                            contentColor = confirmButtonTextColor
+                        )
+                    ) {
+                        Text("确定", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
 private fun VoiceSelectionDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("voice_settings", android.content.Context.MODE_PRIVATE) }
     val savedVoice = remember { prefs.getString("voice_name", "Kore") ?: "Kore" }
+    val ttsPlatform = remember { prefs.getString("voice_platform", "Gemini") ?: "Gemini" }
     
     var selectedVoice by remember { mutableStateOf(savedVoice) }
     
-    // 所有30种音色及其特点
-    val voices = listOf(
+    // Gemini 音色
+    val geminiVoices = listOf(
         "Zephyr" to "明亮",
-        "Puck" to "欢快", 
+        "Puck" to "欢快",
         "Charon" to "知性",
         "Kore" to "坚定",
         "Fenrir" to "兴奋",
@@ -737,6 +1174,36 @@ private fun VoiceSelectionDialog(
         "Sadaltager" to "博学",
         "Sulafat" to "温暖"
     )
+
+    // Minimax 音色 (示例)
+    val minimaxVoices = listOf(
+        "male-qn-qingse" to "青涩男声",
+        "male-qn-jingying" to "精英男声",
+        "female-shaonv" to "少女音",
+        "female-yujie" to "御姐音",
+        "presenter_male" to "男主持人",
+        "presenter_female" to "女主持人",
+        "audiobook_male_1" to "有声书男1",
+        "audiobook_male_2" to "有声书男2",
+        "audiobook_female_1" to "有声书女1",
+        "audiobook_female_2" to "有声书女2"
+    )
+
+    // OpenAI 音色
+    val openaiVoices = listOf(
+        "alloy" to "中性",
+        "echo" to "沉稳",
+        "fable" to "英式",
+        "onyx" to "深沉",
+        "nova" to "活力",
+        "shimmer" to "清澈"
+    )
+
+    val voices = when (ttsPlatform) {
+        "Minimax" -> minimaxVoices
+        "OpenAI" -> openaiVoices
+        else -> geminiVoices
+    }
     
     val isDarkTheme = isSystemInDarkTheme()
     val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)

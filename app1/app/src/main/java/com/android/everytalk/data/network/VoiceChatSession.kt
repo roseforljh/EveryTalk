@@ -15,6 +15,7 @@ import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.TimeUnit
+import com.android.everytalk.security.RequestSignatureUtil
 
 /**
  * 语音对话会话（新流程）：STT → Chat → TTS
@@ -29,11 +30,17 @@ import java.util.concurrent.TimeUnit
  * 返回：识别的文字、AI回复文字、语音数据
  */
 class VoiceChatSession(
-    private val baseUrl: String,
+    private val providerApiUrl: String,
     private val apiKey: String,
     private val chatHistory: List<Pair<String, String>> = emptyList(), // List of (role, content)
     private val systemPrompt: String = "",
     private val voiceName: String = "Kore",
+    private val ttsPlatform: String = "Gemini",
+    private val chatModel: String? = null,
+    private val sttChatPlatform: String = "Google",
+    private val sttChatApiUrl: String = "",
+    private val sttChatApiKey: String = "",
+    private val sttChatModel: String = "",
     private val onVolumeChanged: ((Float) -> Unit)? = null,
     private val onTranscriptionReceived: ((String) -> Unit)? = null, // 识别到的文字回调
     private val onResponseReceived: ((String) -> Unit)? = null  // AI回复文字回调
@@ -125,6 +132,44 @@ class VoiceChatSession(
     }
 
     /**
+     * 取消录音
+     * 停止录音并丢弃数据，不进行后续处理
+     */
+    suspend fun cancelRecording() = withContext(Dispatchers.IO) {
+        if (!isRecording) return@withContext
+        
+        isRecording = false
+        
+        try {
+            audioRecord?.stop()
+        } catch (_: Throwable) {}
+        try {
+            audioRecord?.release()
+        } catch (_: Throwable) {}
+        audioRecord = null
+        
+        pcmBuffer.reset()
+        Log.i(TAG, "Recording cancelled and data discarded")
+    }
+
+    /**
+     * 强制释放资源（非协程版本，用于生命周期销毁时）
+     */
+    fun forceRelease() {
+        if (!isRecording && audioRecord == null) return
+        
+        isRecording = false
+        try {
+            audioRecord?.stop()
+        } catch (_: Throwable) {}
+        try {
+            audioRecord?.release()
+        } catch (_: Throwable) {}
+        audioRecord = null
+        Log.i(TAG, "Force released audio recorder")
+    }
+
+    /**
      * 停止录音并处理完整的语音对话流程
      */
     suspend fun stopRecordingAndProcess(): VoiceChatResult = withContext(Dispatchers.IO) {
@@ -180,7 +225,7 @@ class VoiceChatSession(
                 )
                 .build()
 
-            val requestBody = MultipartBody.Builder()
+            val requestBodyBuilder = MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
                 .addFormDataPart(
                     "audio",
@@ -191,17 +236,45 @@ class VoiceChatSession(
                 .addFormDataPart("chat_history", historyJson.toString())
                 .addFormDataPart("system_prompt", systemPrompt)
                 .addFormDataPart("voice_name", voiceName)
-                .build()
+                .addFormDataPart("voice_platform", ttsPlatform)
+                .addFormDataPart("provider_api_url", providerApiUrl)
+                .addFormDataPart("stt_chat_platform", sttChatPlatform)
+                .addFormDataPart("stt_chat_api_url", sttChatApiUrl)
+                .addFormDataPart("stt_chat_api_key", sttChatApiKey)
+                .addFormDataPart("stt_chat_model", sttChatModel)
+
+            if (!chatModel.isNullOrEmpty()) {
+                requestBodyBuilder.addFormDataPart("chat_model", chatModel)
+            }
+
+            val requestBody = requestBodyBuilder.build()
 
             // 使用配置的URL和混淆的路径
+            val baseUrl = com.android.everytalk.BuildConfig.VOICE_BACKEND_URL
             val apiUrl = baseUrl + API_PATH
             
-            val request = Request.Builder()
+            // 生成签名头
+            // 注意：MultipartBody 的内容签名比较复杂，这里简化处理，只对空 body 进行签名
+            // 后端中间件应该配置为对 multipart/form-data 请求放宽 body 校验，或者只校验 path/method/timestamp
+            // 根据 RequestSignatureUtil 的实现，body 为 null 时 bodyHash 为空字符串
+            val signatureHeaders = RequestSignatureUtil.generateSignatureHeaders(
+                method = "POST",
+                path = API_PATH,
+                body = null // MultipartBody 难以在此处获取完整字符串，且包含二进制文件
+            )
+            
+            val requestBuilder = Request.Builder()
                 .url(apiUrl)
                 .post(requestBody)
-                .build()
+            
+            // 添加签名头
+            signatureHeaders.forEach { (key, value) ->
+                requestBuilder.addHeader(key, value)
+            }
+            
+            val request = requestBuilder.build()
 
-            Log.i(TAG, "Sending voice chat request...")
+            Log.i(TAG, "Sending voice chat request to: $apiUrl")
 
             val response = client.newCall(request).execute()
 
