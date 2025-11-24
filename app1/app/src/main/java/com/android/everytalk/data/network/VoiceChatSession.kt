@@ -1,6 +1,11 @@
 package com.android.everytalk.data.network
 
 import android.media.*
+import android.media.MediaCodec
+import android.media.MediaCodecInfo
+import android.media.MediaFormat
+import android.media.MediaMuxer
+import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -219,16 +224,38 @@ class VoiceChatSession(
 
         Log.i(TAG, "Recorded ${pcmData.size} bytes of PCM data")
 
-        // 将PCM保存为临时WAV文件（OkHttp上传需要文件）
-        val tempWavFile = File.createTempFile("voice_chat_", ".wav")
+        // 尝试将 PCM 编码为 AAC (m4a) 以减小上传体积
+        // 如果编码失败，回退到 WAV
+        var uploadFile: File? = null
+        var mimeType = "audio/wav"
+        
         try {
+            val tempAacFile = File.createTempFile("voice_chat_", ".m4a")
+            val success = encodePcmToAac(pcmData, tempAacFile, sampleRate)
+            if (success && tempAacFile.length() > 0) {
+                uploadFile = tempAacFile
+                mimeType = "audio/mp4" // m4a
+                Log.i(TAG, "Encoded PCM to AAC: ${pcmData.size} -> ${uploadFile.length()} bytes")
+            } else {
+                tempAacFile.delete()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "AAC encoding failed, falling back to WAV", e)
+        }
+
+        // 如果 AAC 编码失败或未执行，使用 WAV
+        if (uploadFile == null) {
+            val tempWavFile = File.createTempFile("voice_chat_", ".wav")
             tempWavFile.outputStream().use { out ->
-                // 写入WAV头部
                 writeWavHeader(out, pcmData.size, sampleRate, 1, 16)
-                // 写入PCM数据
                 out.write(pcmData)
             }
+            uploadFile = tempWavFile
+            mimeType = "audio/wav"
+            Log.i(TAG, "Saved PCM as WAV: ${uploadFile.length()} bytes")
+        }
 
+        try {
             // 构建对话历史JSON
             val historyJson = JSONArray()
             chatHistory.forEach { (role, content) ->
@@ -245,8 +272,8 @@ class VoiceChatSession(
                 .setType(MultipartBody.FORM)
                 .addFormDataPart(
                     "audio",
-                    "recording.wav",
-                    tempWavFile.asRequestBody("audio/wav".toMediaType())
+                    "recording.${if (mimeType == "audio/mp4") "m4a" else "wav"}",
+                    uploadFile.asRequestBody(mimeType.toMediaType())
                 )
                 .addFormDataPart("chat_history", historyJson.toString())
                 .addFormDataPart("system_prompt", systemPrompt)
@@ -365,8 +392,106 @@ class VoiceChatSession(
         } finally {
             // 清理临时文件
             try {
-                tempWavFile.delete()
+                uploadFile?.delete()
             } catch (_: Throwable) {}
+        }
+    }
+
+    /**
+     * 使用 MediaCodec 将 PCM 编码为 AAC (M4A)
+     */
+    private fun encodePcmToAac(pcmData: ByteArray, outputFile: File, sampleRate: Int): Boolean {
+        try {
+            val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, sampleRate, 1)
+            format.setInteger(MediaFormat.KEY_BIT_RATE, 64000) // 64kbps for voice is enough
+            format.setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+            
+            val encoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
+            encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            encoder.start()
+
+            val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            var trackIndex = -1
+            var muxerStarted = false
+            
+            val bufferInfo = MediaCodec.BufferInfo()
+            var inputOffset = 0
+            var outputDone = false
+            
+            val inputBuffers = encoder.inputBuffers
+            // 注意: outputBuffers 在 API 21+ 已废弃，但为了兼容性使用 getOutputBuffer(index)
+            
+            while (!outputDone) {
+                // 1. 写入输入数据
+                if (inputOffset < pcmData.size) {
+                    val inputBufferIndex = encoder.dequeueInputBuffer(10000)
+                    if (inputBufferIndex >= 0) {
+                        val inputBuffer = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                            encoder.getInputBuffer(inputBufferIndex)
+                        } else {
+                            inputBuffers[inputBufferIndex]
+                        }
+                        
+                        inputBuffer?.clear()
+                        val chunkSize = minOf(inputBuffer?.capacity() ?: 0, pcmData.size - inputOffset)
+                        inputBuffer?.put(pcmData, inputOffset, chunkSize)
+                        
+                        inputOffset += chunkSize
+                        
+                        val flags = if (inputOffset >= pcmData.size) MediaCodec.BUFFER_FLAG_END_OF_STREAM else 0
+                        encoder.queueInputBuffer(inputBufferIndex, 0, chunkSize, System.nanoTime() / 1000, flags)
+                    }
+                }
+                
+                // 2. 读取输出数据
+                var encoderStatus = encoder.dequeueOutputBuffer(bufferInfo, 10000)
+                if (encoderStatus == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                    if (inputOffset >= pcmData.size) {
+                        // 输入已结束，但这只是暂时没有输出，继续循环等待 EOS
+                    }
+                } else if (encoderStatus == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    if (muxerStarted) throw IllegalStateException("format changed twice")
+                    val newFormat = encoder.outputFormat
+                    trackIndex = muxer.addTrack(newFormat)
+                    muxer.start()
+                    muxerStarted = true
+                } else if (encoderStatus < 0) {
+                    // ignore
+                } else {
+                    // 获取编码后的数据
+                    val outputBuffer = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                        encoder.getOutputBuffer(encoderStatus)
+                    } else {
+                        encoder.outputBuffers[encoderStatus]
+                    }
+                    
+                    if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                        bufferInfo.size = 0
+                    }
+                    
+                    if (bufferInfo.size != 0) {
+                        if (!muxerStarted) throw IllegalStateException("muxer hasn't started")
+                        outputBuffer?.position(bufferInfo.offset)
+                        outputBuffer?.limit(bufferInfo.offset + bufferInfo.size)
+                        muxer.writeSampleData(trackIndex, outputBuffer!!, bufferInfo)
+                    }
+                    
+                    encoder.releaseOutputBuffer(encoderStatus, false)
+                    
+                    if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                        outputDone = true
+                    }
+                }
+            }
+            
+            encoder.stop()
+            encoder.release()
+            muxer.stop()
+            muxer.release()
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "MediaCodec exception", e)
+            return false
         }
     }
 
