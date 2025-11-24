@@ -72,6 +72,8 @@ class MessageItemsController(
                                 cached.hasReasoning == hasReasoning &&
                                 cached.imageUrls == message.imageUrls &&
                                 cached.contentStarted == message.contentStarted &&
+                                // 缓存校验增加对 webSearchResults 的检查，确保 Footer 变化能触发更新
+                                (cached.items.any { it is ChatListItem.AiMessageFooter } == !message.webSearchResults.isNullOrEmpty()) &&
                                 (isCurrentlyStreaming == (cached.items.any {
                                     it is ChatListItem.LoadingIndicator ||
                                         it is ChatListItem.AiMessageStreaming ||
@@ -294,6 +296,11 @@ class MessageItemsController(
                 // 添加执行状态指示器
                 if (!message.executionStatus.isNullOrBlank()) {
                     items.add(ChatListItem.StatusIndicator(message.id, message.executionStatus))
+                }
+
+                // 提前显示 Footer（如果有搜索结果），减少 Finish 时的结构突变
+                if (!message.webSearchResults.isNullOrEmpty()) {
+                    items.add(ChatListItem.AiMessageFooter(message))
                 }
                 
                 items

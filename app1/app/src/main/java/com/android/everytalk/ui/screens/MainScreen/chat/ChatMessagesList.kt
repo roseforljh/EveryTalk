@@ -2,6 +2,7 @@
 package com.android.everytalk.ui.screens.MainScreen.chat
 import com.android.everytalk.R
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -84,6 +85,33 @@ fun ChatMessagesList(
                 "ChatMessagesList",
                 "List recomposed ${listRecompositionCount.value} times (items: ${chatItems.size}, streaming: $isApiCalling)"
             )
+        }
+    }
+
+    // 滚动锚点逻辑：当用户手动离开底部时，记录当前位置；当列表数据变化时，尝试恢复该位置
+    // 避免因底部内容高度变化（如Finish时）导致视图整体上移
+    val isAtBottom by scrollStateManager.isAtBottom
+    LaunchedEffect(listState.isScrollInProgress, isAtBottom) {
+        if (listState.isScrollInProgress && !isAtBottom) {
+            scrollStateManager.onUserScrollSnapshot(listState)
+        }
+    }
+
+    // 构造内容签名：结合列表长度和最后一条AI消息的文本长度
+    // 这样即使列表项数量不变（例如Streaming -> Complete），只要内容长度变了（Finish时同步完整文本），也能触发锚点恢复
+    val lastAiItem = chatItems.lastOrNull { it is ChatListItem.AiMessage || it is ChatListItem.AiMessageCode }
+    val contentSignature = remember(chatItems.size, lastAiItem) {
+        val lastTextLen = when (lastAiItem) {
+            is ChatListItem.AiMessage -> lastAiItem.text.length
+            is ChatListItem.AiMessageCode -> lastAiItem.text.length
+            else -> 0
+        }
+        "${chatItems.size}_${lastAiItem?.stableId}_$lastTextLen"
+    }
+
+    LaunchedEffect(contentSignature, isAtBottom) {
+        if (!isAtBottom) {
+            scrollStateManager.restoreAnchorIfNeeded(listState)
         }
     }
 

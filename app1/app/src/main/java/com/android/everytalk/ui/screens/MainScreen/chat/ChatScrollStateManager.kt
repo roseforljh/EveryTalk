@@ -41,12 +41,20 @@ class ChatScrollStateManager(
     private val _showScrollToBottomButton = mutableStateOf(false)
     val showScrollToBottomButton: State<Boolean> = _showScrollToBottomButton
 
+    // User anchor state
+    private var userAnchored by mutableStateOf(false)
+    private var anchorIndex by mutableStateOf(0)
+    private var anchorScrollOffset by mutableStateOf(0)
+    private var lastRestoreTime = 0L
+
     val nestedScrollConnection = object : NestedScrollConnection {
         override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
             if (source == NestedScrollSource.UserInput) {
                 if (!_isAtBottom.value && !_showScrollToBottomButton.value) {
                     showScrollToBottomButtonWithTimeout()
                 }
+                // 实时记录用户锚点，不再受 isAtBottom 限制
+                onUserScrollSnapshot(listState)
             }
             return Offset.Zero
         }
@@ -70,7 +78,9 @@ class ChatScrollStateManager(
                     isStrictlyAtBottom = isStrictlyAtBottom,
                     totalItems = totalItems,
                     lastIndex = lastVisibleItem?.index ?: 0,
-                    lastSize = lastVisibleItem?.size ?: 0
+                    lastSize = lastVisibleItem?.size ?: 0,
+                    firstVisibleIndex = listState.firstVisibleItemIndex,
+                    firstVisibleOffset = listState.firstVisibleItemScrollOffset
                 )
             }.collect { snapshot ->
                 _isAtBottom.value = snapshot.isStrictlyAtBottom
@@ -78,6 +88,7 @@ class ChatScrollStateManager(
                 if (snapshot.isStrictlyAtBottom) {
                     _showScrollToBottomButton.value = false
                     cancelHideButtonJob()
+                    onReachedBottom()
                 }
             }
         }
@@ -88,8 +99,38 @@ class ChatScrollStateManager(
         val isStrictlyAtBottom: Boolean,
         val totalItems: Int,
         val lastIndex: Int,
-        val lastSize: Int
+        val lastSize: Int,
+        val firstVisibleIndex: Int,
+        val firstVisibleOffset: Int
     )
+
+    fun onUserScrollSnapshot(listState: LazyListState) {
+        // 只要用户在手动滚动，就实时更新锚点，无论是否在底部
+        // 这样能确保锚点始终跟随用户的最新视线，避免在贴底滑动时锚点滞后
+        userAnchored = true
+        anchorIndex = listState.firstVisibleItemIndex
+        anchorScrollOffset = listState.firstVisibleItemScrollOffset
+        // logger.debug("User anchored at index=$anchorIndex, offset=$anchorScrollOffset")
+    }
+
+    private fun onReachedBottom() {
+        if (userAnchored) {
+            userAnchored = false
+            // logger.debug("Reached bottom, clearing anchor")
+        }
+    }
+
+    suspend fun restoreAnchorIfNeeded(listState: LazyListState) {
+        if (userAnchored && !_isAtBottom.value) {
+            val now = System.currentTimeMillis()
+            // Throttle restore to avoid fighting with layout
+            if (now - lastRestoreTime > 100) {
+                // logger.debug("Restoring anchor to index=$anchorIndex, offset=$anchorScrollOffset")
+                listState.scrollToItem(anchorIndex, anchorScrollOffset)
+                lastRestoreTime = now
+            }
+        }
+    }
 
     fun jumpToBottom() {
         logger.debug("Jumping to bottom.")
