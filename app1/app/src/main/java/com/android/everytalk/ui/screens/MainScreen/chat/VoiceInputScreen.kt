@@ -99,6 +99,7 @@ fun VoiceInputScreen(
             val sttModel = prefs.getString("stt_model_${sttPlatform}", null) ?: prefs.getString("stt_model", "")?.trim() ?: ""
             val sttApiKey = when (sttPlatform) {
                 "OpenAI" -> prefs.getString("stt_key_OpenAI", "") ?: ""
+                "SiliconFlow" -> prefs.getString("stt_key_SiliconFlow", "") ?: ""
                 else -> prefs.getString("stt_key_Google", "") ?: ""
             }.trim()
 
@@ -961,16 +962,29 @@ private fun SttSettingsDialog(
     fun resolveKeyFor(platform: String): String {
         return when (platform) {
             "OpenAI" -> savedKeyOpenAI
+            "SiliconFlow" -> prefs.getString("stt_key_SiliconFlow", "") ?: ""
             else -> savedKeyGoogle
         }.trim()
     }
     
     fun resolveApiUrlFor(platform: String): String {
-        return prefs.getString("stt_api_url_${platform}", null) ?: defaultApiUrl
+        val saved = prefs.getString("stt_api_url_${platform}", null)
+        if (saved != null) return saved
+        
+        return when (platform) {
+            "SiliconFlow" -> "https://api.siliconflow.cn/v1/audio/transcriptions"
+            else -> defaultApiUrl
+        }
     }
     
     fun resolveModelFor(platform: String): String {
-        return prefs.getString("stt_model_${platform}", null) ?: defaultModel
+        val saved = prefs.getString("stt_model_${platform}", null)
+        if (saved != null) return saved
+        
+        return when (platform) {
+            "SiliconFlow" -> "FunAudioLLM/SenseVoiceSmall"
+            else -> defaultModel
+        }
     }
 
     var selectedPlatform by remember { mutableStateOf(savedPlatform) }
@@ -979,7 +993,7 @@ private fun SttSettingsDialog(
     var model by remember { mutableStateOf(resolveModelFor(selectedPlatform)) }
     var expanded by remember { mutableStateOf(false) }
     
-    val platforms = listOf("Google", "OpenAI")
+    val platforms = listOf("Google", "OpenAI", "SiliconFlow")
     
     val isDarkTheme = isSystemInDarkTheme()
     val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
@@ -1119,6 +1133,8 @@ private fun SttSettingsDialog(
                                 Text("OpenAI 平台必须填写 API 地址", color = MaterialTheme.colorScheme.error)
                             } else if (selectedPlatform == "OpenAI") {
                                 Text("将使用你配置的 OpenAI API 地址", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            } else if (selectedPlatform == "SiliconFlow") {
+                                Text("默认: https://api.siliconflow.cn/v1/audio/transcriptions", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             } else {
                                 Text("留空则使用默认地址", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
@@ -1187,6 +1203,7 @@ private fun SttSettingsDialog(
                                 editor.putString("stt_platform", selectedPlatform)
                                 when (selectedPlatform) {
                                     "OpenAI" -> editor.putString("stt_key_OpenAI", apiKey)
+                                    "SiliconFlow" -> editor.putString("stt_key_SiliconFlow", apiKey)
                                     else -> editor.putString("stt_key_Google", apiKey)
                                 }
                                 // 按平台保存
