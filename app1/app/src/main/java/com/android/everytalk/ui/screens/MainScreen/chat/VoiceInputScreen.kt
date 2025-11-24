@@ -20,6 +20,8 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.outlined.ClosedCaption
+import androidx.compose.material.icons.filled.Face
+import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.outlined.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -66,6 +68,7 @@ fun VoiceInputScreen(
     var isClosing by remember { mutableStateOf(false) }
     var showTtsSettingsDialog by remember { mutableStateOf(false) }
     var showSttChatSettingsDialog by remember { mutableStateOf(false) }
+    var showLlmSettingsDialog by remember { mutableStateOf(false) }
     var showVoiceSelectionDialog by remember { mutableStateOf(false) }
     var isRecording by remember { mutableStateOf(false) }
     
@@ -88,35 +91,60 @@ fun VoiceInputScreen(
         {
             val prefs = context.getSharedPreferences("voice_settings", android.content.Context.MODE_PRIVATE)
             
-            // 从 SharedPreferences 读取语音 API 地址
-            val providerApiUrl = prefs.getString("voice_base_url", "")?.trim() ?: ""
-            val ttsPlatform = prefs.getString("voice_platform", "Gemini") ?: "Gemini"
+            // --- 1. 读取所有配置 ---
             
-            // 检查 BuildConfig.VOICE_BACKEND_URL 是否配置
-            if (com.android.everytalk.BuildConfig.VOICE_BACKEND_URL.isEmpty()) {
-                android.widget.Toast.makeText(context, "未配置语音网关地址(VOICE_BACKEND_URL)", android.widget.Toast.LENGTH_LONG).show()
-            } else if (ttsPlatform == "Minimax" && providerApiUrl.isEmpty()) {
-                android.widget.Toast.makeText(context, "Minimax 平台必须填写语音 API 地址", android.widget.Toast.LENGTH_LONG).show()
+            // STT
+            val sttPlatform = prefs.getString("stt_platform", "Google") ?: "Google"
+            val sttApiUrl = prefs.getString("stt_api_url", "")?.trim() ?: ""
+            val sttModel = prefs.getString("stt_model", "")?.trim() ?: ""
+            val sttApiKey = when (sttPlatform) {
+                "OpenAI" -> prefs.getString("stt_key_OpenAI", "") ?: ""
+                else -> prefs.getString("stt_key_Google", "") ?: ""
+            }.trim()
+
+            // Chat
+            val chatPlatform = prefs.getString("chat_platform", "Google") ?: "Google"
+            val chatApiUrl = prefs.getString("chat_api_url", "")?.trim() ?: ""
+            val chatModel = prefs.getString("chat_model", "")?.trim() ?: ""
+            val chatApiKey = when (chatPlatform) {
+                "OpenAI" -> prefs.getString("chat_key_OpenAI", "") ?: ""
+                else -> prefs.getString("chat_key_Google", "") ?: ""
+            }.trim()
+
+            // TTS
+            val ttsPlatform = prefs.getString("voice_platform", "Gemini") ?: "Gemini"
+            val ttsApiUrl = prefs.getString("voice_base_url", "")?.trim() ?: ""
+            val ttsModel = prefs.getString("voice_chat_model", "")?.trim() ?: ""
+            val voiceName = prefs.getString("voice_name", "Kore") ?: "Kore"
+            val ttsApiKey = when (ttsPlatform) {
+                "OpenAI" -> prefs.getString("voice_key_OpenAI", "") ?: ""
+                "Minimax" -> prefs.getString("voice_key_Minimax", "") ?: ""
+                else -> prefs.getString("voice_key_Gemini", "") ?: ""
+            }.trim()
+
+            // --- 2. 校验必填项 ---
+            var errorMsg = ""
+            
+            // STT 校验
+            if (sttModel.isEmpty()) errorMsg = "请配置 STT 模型名称"
+            else if (sttPlatform != "Google" && sttApiUrl.isEmpty()) errorMsg = "请配置 STT API 地址"
+            
+            // Chat 校验
+            else if (chatModel.isEmpty()) errorMsg = "请配置 Chat 模型名称"
+            else if (chatPlatform != "Google" && chatApiUrl.isEmpty()) errorMsg = "请配置 Chat API 地址"
+            
+            // TTS 校验
+            else if (ttsModel.isEmpty()) errorMsg = "请配置 TTS 模型名称"
+            else if (ttsPlatform == "Minimax" && ttsApiUrl.isEmpty()) errorMsg = "请配置 Minimax API 地址"
+            else if (com.android.everytalk.BuildConfig.VOICE_BACKEND_URL.isEmpty()) errorMsg = "未配置语音网关地址(VOICE_BACKEND_URL)"
+
+            if (errorMsg.isNotEmpty()) {
+                android.widget.Toast.makeText(context, errorMsg, android.widget.Toast.LENGTH_LONG).show()
             } else {
-                var apiKey = (selectedApiConfig?.key ?: "").trim()
-                
-                // 覆盖为"语音设置"里按平台保存的Key（若存在）
-                try {
-                    val platform = prefs.getString("voice_platform", selectedApiConfig?.provider ?: "Gemini") ?: "Gemini"
-                    val keyOverride = prefs.getString("voice_key_${platform}", null)?.trim()
-                    if (!keyOverride.isNullOrEmpty()) {
-                        apiKey = keyOverride
-                    }
-                } catch (_: Throwable) {}
-                
-                if (apiKey.isEmpty()) {
-                    android.util.Log.w("VoiceInputScreen", "API Key is empty, cannot start voice chat session.")
-                    android.widget.Toast.makeText(context, "请先配置 API Key", android.widget.Toast.LENGTH_SHORT).show()
-                } else {
-                // 获取当前对话历史（优化：只取最近3轮，减少处理时间）
+                // --- 3. 构建会话 ---
                 val chatHistory = mutableListOf<Pair<String, String>>()
                 viewModel?.stateHolder?.let { holder ->
-                    holder.messages.takeLast(6).forEach { msg ->  // 3轮对话=6条消息
+                    holder.messages.takeLast(6).forEach { msg ->
                         when (msg.sender) {
                             Sender.User -> chatHistory.add("user" to msg.text)
                             Sender.AI -> chatHistory.add("assistant" to msg.text)
@@ -125,7 +153,6 @@ fun VoiceInputScreen(
                     }
                 }
                 
-                // 获取系统提示词，并注入语音模式专用指令
                 val baseSystemPrompt = viewModel?.stateHolder?.let { holder ->
                     val convId = holder._currentConversationId.value
                     holder.systemPrompts[convId] ?: ""
@@ -143,33 +170,27 @@ fun VoiceInputScreen(
                 } else {
                     voiceModePrompt
                 }
-                
-                val voiceName = prefs.getString("voice_name", "Kore") ?: "Kore"
-                val chatModel = prefs.getString("voice_chat_model", "")?.trim()?.takeIf { it.isNotEmpty() }
-                val ttsPlatform = prefs.getString("voice_platform", "Gemini") ?: "Gemini"
-                
-                // STT/Chat 配置
-                val sttChatPlatform = prefs.getString("stt_chat_platform", "Google") ?: "Google"
-                val sttChatApiUrl = prefs.getString("stt_chat_api_url", "")?.trim() ?: ""
-                val sttChatModel = prefs.getString("stt_chat_model", "")?.trim() ?: ""
-                val sttChatApiKey = when (sttChatPlatform) {
-                    "OpenAI" -> prefs.getString("stt_chat_key_OpenAI", "") ?: ""
-                    else -> prefs.getString("stt_chat_key_Google", "") ?: ""
-                }.trim()
 
-                // 创建新的语音对话会话
                 val session = VoiceChatSession(
-                    providerApiUrl = providerApiUrl,
-                    apiKey = apiKey,
                     chatHistory = chatHistory,
                     systemPrompt = systemPrompt,
-                    voiceName = voiceName,
-                    ttsPlatform = ttsPlatform,
+                    
+                    sttPlatform = sttPlatform,
+                    sttApiKey = sttApiKey,
+                    sttApiUrl = sttApiUrl, // Google 平台传空值，由后端忽略
+                    sttModel = sttModel,
+                    
+                    chatPlatform = chatPlatform,
+                    chatApiKey = chatApiKey,
+                    chatApiUrl = chatApiUrl,
                     chatModel = chatModel,
-                    sttChatPlatform = sttChatPlatform,
-                    sttChatApiUrl = sttChatApiUrl,
-                    sttChatApiKey = sttChatApiKey,
-                    sttChatModel = sttChatModel,
+                    
+                    ttsPlatform = ttsPlatform,
+                    ttsApiKey = ttsApiKey,
+                    ttsApiUrl = ttsApiUrl,
+                    ttsModel = ttsModel,
+                    voiceName = voiceName,
+                    
                     onVolumeChanged = { volume ->
                         currentVolume = volume
                     },
@@ -186,7 +207,6 @@ fun VoiceInputScreen(
                 userText = ""
                 assistantText = ""
                 
-                // 启动录音
                 coroutineScope.launch {
                     try {
                         session.startRecording()
@@ -195,7 +215,6 @@ fun VoiceInputScreen(
                         isRecording = false
                         voiceChatSession = null
                     }
-                }
                 }
             }
         }
@@ -261,16 +280,22 @@ fun VoiceInputScreen(
         topBar = {
             TopAppBar(
                 title = { },
-                actions = {
-                    // STT/Chat 设置按钮 (左)
-                    IconButton(onClick = { showSttChatSettingsDialog = true }) {
-                        Icon(Icons.Default.Build, contentDescription = "模型配置", tint = contentColor)
-                    }
-                    // 音色选择按钮 (中)
+                navigationIcon = {
+                    // 音色选择按钮 (最左)
                     IconButton(onClick = { showVoiceSelectionDialog = true }) {
                         Icon(Icons.Default.RecordVoiceOver, contentDescription = "选择音色", tint = contentColor)
                     }
-                    // TTS 设置按钮 (右)
+                },
+                actions = {
+                    // STT/Chat 设置按钮
+                    IconButton(onClick = { showSttChatSettingsDialog = true }) {
+                        Icon(Icons.Default.Build, contentDescription = "STT配置", tint = contentColor)
+                    }
+                    // LLM 设置按钮
+                    IconButton(onClick = { showLlmSettingsDialog = true }) {
+                        Icon(Icons.Default.Face, contentDescription = "LLM配置", tint = contentColor)
+                    }
+                    // TTS 设置按钮 (最右)
                     IconButton(onClick = { showTtsSettingsDialog = true }) {
                         Icon(Icons.Default.Settings, contentDescription = "语音设置", tint = contentColor)
                     }
@@ -576,10 +601,17 @@ fun VoiceInputScreen(
         )
     }
 
-    // STT/Chat 设置对话框
+    // STT 设置对话框
     if (showSttChatSettingsDialog) {
-        SttChatSettingsDialog(
+        SttSettingsDialog(
             onDismiss = { showSttChatSettingsDialog = false }
+        )
+    }
+
+    // LLM 设置对话框
+    if (showLlmSettingsDialog) {
+        LlmSettingsDialog(
+            onDismiss = { showLlmSettingsDialog = false }
         )
     }
     
@@ -757,22 +789,26 @@ private fun VoiceSettingsDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     OutlinedTextField(
-                        value = baseUrl,
-                        onValueChange = { baseUrl = it },
+                        value = if (selectedPlatform == "Gemini") "自动使用默认地址" else baseUrl,
+                        onValueChange = { if (selectedPlatform != "Gemini") baseUrl = it },
+                        enabled = selectedPlatform != "Gemini",
                         modifier = Modifier.fillMaxWidth(),
                         placeholder = { Text("例如 https://api.minimaxi.com/v1/t2a_v2") },
                         supportingText = {
-                            if (baseUrl.isNotEmpty() && !baseUrl.startsWith("http")) {
+                            if (selectedPlatform == "Gemini") {
+                                Text("自动使用 https://generativelanguage.googleapis.com", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            } else if (baseUrl.isNotEmpty() && !baseUrl.startsWith("http")) {
                                 Text("请填写完整的 http(s) 地址", color = MaterialTheme.colorScheme.error)
-                            } else if (selectedPlatform == "Minimax" && baseUrl.isEmpty()) {
+                            } else if (selectedPlatform == "Minimax" && baseUrl.isBlank()) {
                                 Text("Minimax 平台必须填写 API 地址", color = MaterialTheme.colorScheme.error)
                             } else {
-                                Text("大模型厂商的 API 地址 (可选)", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("大模型厂商的 API 地址", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         },
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
                             unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                             focusedBorderColor = MaterialTheme.colorScheme.primary,
                             unfocusedBorderColor = MaterialTheme.colorScheme.outline
                         ),
@@ -798,6 +834,11 @@ private fun VoiceSettingsDialog(
                         onValueChange = { chatModel = it },
                         modifier = Modifier.fillMaxWidth(),
                         placeholder = { Text("例如 gemini-flash-lite-latest") },
+                        supportingText = {
+                            if (chatModel.isBlank()) {
+                                Text("必填项：请输入模型名称", color = MaterialTheme.colorScheme.error)
+                            }
+                        },
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
                             unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
@@ -838,6 +879,15 @@ private fun VoiceSettingsDialog(
                     // 确定按钮
                     Button(
                         onClick = {
+                            if (chatModel.isBlank()) {
+                                android.widget.Toast.makeText(context, "请填写 TTS 模型名称", android.widget.Toast.LENGTH_SHORT).show()
+                                return@Button
+                            }
+                            if (selectedPlatform == "Minimax" && baseUrl.isBlank()) {
+                                android.widget.Toast.makeText(context, "Minimax 平台请填写 API 地址", android.widget.Toast.LENGTH_SHORT).show()
+                                return@Button
+                            }
+
                             // 保存用户选择的平台和对应Key
                             runCatching {
                                 val editor = prefs.edit()
@@ -879,17 +929,17 @@ private fun VoiceSettingsDialog(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SttChatSettingsDialog(
+private fun SttSettingsDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("voice_settings", android.content.Context.MODE_PRIVATE) }
     
-    val savedPlatform = remember { prefs.getString("stt_chat_platform", "Google") ?: "Google" }
-    val savedKeyGoogle = remember { prefs.getString("stt_chat_key_Google", "") ?: "" }
-    val savedKeyOpenAI = remember { prefs.getString("stt_chat_key_OpenAI", "") ?: "" }
-    val savedApiUrl = remember { prefs.getString("stt_chat_api_url", "") ?: "" }
-    val savedModel = remember { prefs.getString("stt_chat_model", "") ?: "" }
+    val savedPlatform = remember { prefs.getString("stt_platform", "Google") ?: "Google" }
+    val savedKeyGoogle = remember { prefs.getString("stt_key_Google", "") ?: "" }
+    val savedKeyOpenAI = remember { prefs.getString("stt_key_OpenAI", "") ?: "" }
+    val savedApiUrl = remember { prefs.getString("stt_api_url", "") ?: "" }
+    val savedModel = remember { prefs.getString("stt_model", "") ?: "" }
 
     fun resolveKeyFor(platform: String): String {
         return when (platform) {
@@ -935,7 +985,7 @@ private fun SttChatSettingsDialog(
                 verticalArrangement = Arrangement.spacedBy(20.dp)
             ) {
                 Text(
-                    text = "STT & Chat 设置",
+                    text = "STT 设置 (语音识别)",
                     style = MaterialTheme.typography.headlineSmall.copy(
                         fontWeight = FontWeight.Bold
                     ),
@@ -1038,6 +1088,266 @@ private fun SttChatSettingsDialog(
                         supportingText = {
                             if (apiUrl.isNotEmpty() && !apiUrl.startsWith("http")) {
                                 Text("请填写完整的 http(s) 地址", color = MaterialTheme.colorScheme.error)
+                            } else if (selectedPlatform == "OpenAI" && apiUrl.isBlank()) {
+                                Text("OpenAI 平台必须填写 API 地址", color = MaterialTheme.colorScheme.error)
+                            } else if (selectedPlatform == "OpenAI") {
+                                Text("将使用你配置的 OpenAI API 地址", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            } else {
+                                Text("留空则使用默认地址", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        singleLine = true
+                    )
+                }
+
+                // 模型名称
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "模型名称",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = model,
+                        onValueChange = { model = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("例如 whisper-1") },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        singleLine = true
+                    )
+                }
+                
+                // 底部按钮
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f).height(48.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = MaterialTheme.colorScheme.surface,
+                            contentColor = cancelButtonColor
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
+                    ) {
+                        Text("取消", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
+                    }
+                    
+                    Button(
+                        onClick = {
+                            runCatching {
+                                val editor = prefs.edit()
+                                editor.putString("stt_platform", selectedPlatform)
+                                when (selectedPlatform) {
+                                    "OpenAI" -> editor.putString("stt_key_OpenAI", apiKey)
+                                    else -> editor.putString("stt_key_Google", apiKey)
+                                }
+                                editor.putString("stt_api_url", apiUrl.trim())
+                                editor.putString("stt_model", model.trim())
+                                editor.apply()
+                            }
+                            onDismiss()
+                        },
+                        modifier = Modifier.weight(1f).height(48.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = confirmButtonColor,
+                            contentColor = confirmButtonTextColor
+                        )
+                    ) {
+                        Text("确定", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LlmSettingsDialog(
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("voice_settings", android.content.Context.MODE_PRIVATE) }
+    
+    val savedPlatform = remember { prefs.getString("chat_platform", "Google") ?: "Google" }
+    val savedKeyGoogle = remember { prefs.getString("chat_key_Google", "") ?: "" }
+    val savedKeyOpenAI = remember { prefs.getString("chat_key_OpenAI", "") ?: "" }
+    val savedApiUrl = remember { prefs.getString("chat_api_url", "") ?: "" }
+    val savedModel = remember { prefs.getString("chat_model", "") ?: "" }
+
+    fun resolveKeyFor(platform: String): String {
+        return when (platform) {
+            "OpenAI" -> savedKeyOpenAI
+            else -> savedKeyGoogle
+        }.trim()
+    }
+
+    var selectedPlatform by remember { mutableStateOf(savedPlatform) }
+    var apiKey by remember { mutableStateOf(resolveKeyFor(selectedPlatform)) }
+    var apiUrl by remember { mutableStateOf(savedApiUrl) }
+    var model by remember { mutableStateOf(savedModel) }
+    var expanded by remember { mutableStateOf(false) }
+    
+    val platforms = listOf("Google", "OpenAI")
+    
+    val isDarkTheme = isSystemInDarkTheme()
+    val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
+    val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
+    val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
+    
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            dismissOnClickOutside = true,
+            dismissOnBackPress = true,
+            usePlatformDefaultWidth = false
+        )
+    ) {
+        Card(
+            shape = RoundedCornerShape(28.dp),
+            modifier = Modifier
+                .fillMaxWidth(0.9f)
+                .wrapContentHeight(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surface
+            )
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(20.dp)
+            ) {
+                Text(
+                    text = "LLM 设置 (对话模型)",
+                    style = MaterialTheme.typography.headlineSmall.copy(
+                        fontWeight = FontWeight.Bold
+                    ),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                
+                // 平台选择
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "平台",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    ExposedDropdownMenuBox(
+                        expanded = expanded,
+                        onExpandedChange = { expanded = it }
+                    ) {
+                        OutlinedTextField(
+                            value = selectedPlatform,
+                            onValueChange = {},
+                            readOnly = true,
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                            modifier = Modifier.fillMaxWidth().menuAnchor(),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                            ),
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                        ExposedDropdownMenu(
+                            expanded = expanded,
+                            onDismissRequest = { expanded = false }
+                        ) {
+                            platforms.forEach { platform ->
+                                DropdownMenuItem(
+                                    text = { Text(platform) },
+                                    onClick = {
+                                        selectedPlatform = platform
+                                        apiKey = resolveKeyFor(platform)
+                                        expanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+                
+                // API Key
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "API Key",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = apiKey,
+                        onValueChange = { apiKey = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("请输入 API Key") },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        singleLine = true
+                    )
+                }
+
+                // API 地址
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "API 地址",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = apiUrl,
+                        onValueChange = { apiUrl = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("例如 https://api.openai.com/v1") },
+                        supportingText = {
+                            if (apiUrl.isNotEmpty() && !apiUrl.startsWith("http")) {
+                                Text("请填写完整的 http(s) 地址", color = MaterialTheme.colorScheme.error)
+                            } else if (selectedPlatform == "OpenAI" && apiUrl.isBlank()) {
+                                Text("OpenAI 平台必须填写 API 地址", color = MaterialTheme.colorScheme.error)
+                            } else if (selectedPlatform == "OpenAI") {
+                                Text("将使用你配置的 OpenAI API 地址", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             } else {
                                 Text("留空则使用默认地址", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
@@ -1103,13 +1413,13 @@ private fun SttChatSettingsDialog(
                         onClick = {
                             runCatching {
                                 val editor = prefs.edit()
-                                editor.putString("stt_chat_platform", selectedPlatform)
+                                editor.putString("chat_platform", selectedPlatform)
                                 when (selectedPlatform) {
-                                    "OpenAI" -> editor.putString("stt_chat_key_OpenAI", apiKey)
-                                    else -> editor.putString("stt_chat_key_Google", apiKey)
+                                    "OpenAI" -> editor.putString("chat_key_OpenAI", apiKey)
+                                    else -> editor.putString("chat_key_Google", apiKey)
                                 }
-                                editor.putString("stt_chat_api_url", apiUrl.trim())
-                                editor.putString("stt_chat_model", model.trim())
+                                editor.putString("chat_api_url", apiUrl.trim())
+                                editor.putString("chat_model", model.trim())
                                 editor.apply()
                             }
                             onDismiss()

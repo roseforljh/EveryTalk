@@ -30,17 +30,28 @@ import com.android.everytalk.security.RequestSignatureUtil
  * 返回：识别的文字、AI回复文字、语音数据
  */
 class VoiceChatSession(
-    private val providerApiUrl: String,
-    private val apiKey: String,
     private val chatHistory: List<Pair<String, String>> = emptyList(), // List of (role, content)
     private val systemPrompt: String = "",
-    private val voiceName: String = "Kore",
+    
+    // STT Config
+    private val sttPlatform: String = "Google",
+    private val sttApiKey: String = "",
+    private val sttApiUrl: String = "",
+    private val sttModel: String = "",
+    
+    // Chat Config
+    private val chatPlatform: String = "Google",
+    private val chatApiKey: String = "",
+    private val chatApiUrl: String = "",
+    private val chatModel: String = "",
+    
+    // TTS Config
     private val ttsPlatform: String = "Gemini",
-    private val chatModel: String? = null,
-    private val sttChatPlatform: String = "Google",
-    private val sttChatApiUrl: String = "",
-    private val sttChatApiKey: String = "",
-    private val sttChatModel: String = "",
+    private val ttsApiKey: String = "",
+    private val ttsApiUrl: String = "",
+    private val ttsModel: String = "",
+    private val voiceName: String = "Kore",
+    
     private val onVolumeChanged: ((Float) -> Unit)? = null,
     private val onTranscriptionReceived: ((String) -> Unit)? = null, // 识别到的文字回调
     private val onResponseReceived: ((String) -> Unit)? = null  // AI回复文字回调
@@ -58,7 +69,6 @@ class VoiceChatSession(
         private const val TAG = "VoiceChatSession"
         // 接口路径（编译时混淆）
         private val API_PATH = buildString {
-            append("/gemini")
             append("/voice")
             append("-chat")
             append("/complete")
@@ -237,20 +247,27 @@ class VoiceChatSession(
                     "recording.wav",
                     tempWavFile.asRequestBody("audio/wav".toMediaType())
                 )
-                .addFormDataPart("api_key", apiKey)
                 .addFormDataPart("chat_history", historyJson.toString())
                 .addFormDataPart("system_prompt", systemPrompt)
-                .addFormDataPart("voice_name", voiceName)
+                
+                // STT
+                .addFormDataPart("stt_platform", sttPlatform)
+                .addFormDataPart("stt_api_key", sttApiKey)
+                .addFormDataPart("stt_api_url", sttApiUrl)
+                .addFormDataPart("stt_model", sttModel)
+                
+                // Chat
+                .addFormDataPart("chat_platform", chatPlatform)
+                .addFormDataPart("chat_api_key", chatApiKey)
+                .addFormDataPart("chat_api_url", chatApiUrl)
+                .addFormDataPart("chat_model", chatModel)
+                
+                // TTS
                 .addFormDataPart("voice_platform", ttsPlatform)
-                .addFormDataPart("provider_api_url", providerApiUrl)
-                .addFormDataPart("stt_chat_platform", sttChatPlatform)
-                .addFormDataPart("stt_chat_api_url", sttChatApiUrl)
-                .addFormDataPart("stt_chat_api_key", sttChatApiKey)
-                .addFormDataPart("stt_chat_model", sttChatModel)
-
-            if (!chatModel.isNullOrEmpty()) {
-                requestBodyBuilder.addFormDataPart("chat_model", chatModel)
-            }
+                .addFormDataPart("voice_name", voiceName)
+                .addFormDataPart("tts_api_key", ttsApiKey)
+                .addFormDataPart("tts_api_url", ttsApiUrl)
+                .addFormDataPart("tts_model", ttsModel)
 
             val requestBody = requestBodyBuilder.build()
 
