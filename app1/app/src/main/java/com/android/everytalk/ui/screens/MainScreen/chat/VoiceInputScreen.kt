@@ -23,6 +23,7 @@ import androidx.compose.material.icons.outlined.ClosedCaption
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.outlined.VolumeUp
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -116,10 +117,24 @@ fun VoiceInputScreen(
             val ttsPlatform = prefs.getString("voice_platform", "Gemini") ?: "Gemini"
             val ttsApiUrl = prefs.getString("voice_base_url_${ttsPlatform}", null) ?: prefs.getString("voice_base_url", "")?.trim() ?: ""
             val ttsModel = prefs.getString("voice_chat_model_${ttsPlatform}", null) ?: prefs.getString("voice_chat_model", "")?.trim() ?: ""
-            val voiceName = prefs.getString("voice_name_${ttsPlatform}", null) ?: prefs.getString("voice_name", "Kore") ?: "Kore"
+            
+            // 确保 voiceName 对当前平台有效
+            val savedVoice = prefs.getString("voice_name_${ttsPlatform}", null)
+            val voiceName = if (savedVoice != null) {
+                savedVoice
+            } else {
+                when (ttsPlatform) {
+                    "SiliconFlow" -> "alex"
+                    "Minimax" -> "male-qn-qingse"
+                    "OpenAI" -> "alloy"
+                    else -> "Kore" // Gemini
+                }
+            }
+            
             val ttsApiKey = when (ttsPlatform) {
                 "OpenAI" -> prefs.getString("voice_key_OpenAI", "") ?: ""
                 "Minimax" -> prefs.getString("voice_key_Minimax", "") ?: ""
+                "SiliconFlow" -> prefs.getString("voice_key_SiliconFlow", "") ?: ""
                 else -> prefs.getString("voice_key_Gemini", "") ?: ""
             }.trim()
 
@@ -137,6 +152,7 @@ fun VoiceInputScreen(
             // TTS 校验
             else if (ttsModel.isEmpty()) errorMsg = "请配置 TTS 模型名称"
             else if (ttsPlatform == "Minimax" && ttsApiUrl.isEmpty()) errorMsg = "请配置 Minimax API 地址"
+            else if (ttsPlatform == "SiliconFlow" && ttsApiKey.isEmpty()) errorMsg = "请配置 SiliconFlow API Key"
             else if (com.android.everytalk.BuildConfig.VOICE_BACKEND_URL.isEmpty()) errorMsg = "未配置语音网关地址(VOICE_BACKEND_URL)"
 
             if (errorMsg.isNotEmpty()) {
@@ -162,7 +178,8 @@ fun VoiceInputScreen(
                 val voiceModePrompt = """
                     【重要指令】你现在正在进行语音通话。请完全扮演一个真实的人类，用最自然、最口语化的语气交流。
                     回复必须极度简练、直接，避免长篇大论和书面语。
-                    禁止使用Markdown格式、列表或复杂结构。
+                    禁止使用任何Markdown格式（如加粗、列表、标题等），只输出纯文本。
+                    禁止使用列表、分点陈述或复杂结构，必须用连贯的口语表达。
                     像朋友聊天一样说话，尽量缩短回复长度以优化语音体验。
                 """.trimIndent()
                 
@@ -637,6 +654,7 @@ private fun VoiceSettingsDialog(
     val savedKeyGemini = remember { prefs.getString("voice_key_Gemini", "") ?: "" }
     val savedKeyOpenAI = remember { prefs.getString("voice_key_OpenAI", "") ?: "" }
     val savedKeyMinimax = remember { prefs.getString("voice_key_Minimax", "") ?: "" }
+    val savedKeySiliconFlow = remember { prefs.getString("voice_key_SiliconFlow", "") ?: "" }
     
     // 旧全局默认值
     val defaultBaseUrl = remember { prefs.getString("voice_base_url", "") ?: "" }
@@ -647,16 +665,29 @@ private fun VoiceSettingsDialog(
         return when (platform) {
             "OpenAI" -> savedKeyOpenAI
             "Minimax" -> savedKeyMinimax
+            "SiliconFlow" -> savedKeySiliconFlow
             else -> savedKeyGemini
         }.trim()
     }
     
     fun resolveBaseUrlFor(platform: String): String {
-        return prefs.getString("voice_base_url_${platform}", null) ?: defaultBaseUrl
+        val saved = prefs.getString("voice_base_url_${platform}", null)
+        if (saved != null) return saved
+        
+        return when (platform) {
+            "SiliconFlow" -> "https://api.siliconflow.cn/v1/audio/speech"
+            else -> defaultBaseUrl
+        }
     }
     
     fun resolveModelFor(platform: String): String {
-        return prefs.getString("voice_chat_model_${platform}", null) ?: defaultChatModel
+        val saved = prefs.getString("voice_chat_model_${platform}", null)
+        if (saved != null) return saved
+        
+        return when (platform) {
+            "SiliconFlow" -> "IndexTeam/IndexTTS-2"
+            else -> defaultChatModel
+        }
     }
 
     var selectedPlatform by remember {
@@ -668,7 +699,22 @@ private fun VoiceSettingsDialog(
     var baseUrl by remember { mutableStateOf(resolveBaseUrlFor(selectedPlatform)) }
     var chatModel by remember { mutableStateOf(resolveModelFor(selectedPlatform)) }
     var expanded by remember { mutableStateOf(false) }
-    val platforms = listOf("Gemini", "OpenAI", "Minimax")
+    var modelExpanded by remember { mutableStateOf(false) }
+    
+    val platforms = listOf("Gemini", "OpenAI", "Minimax", "SiliconFlow")
+    
+    // 预设模型列表
+    // 自定义模型管理
+    val customModelsKey = "custom_models_tts_${selectedPlatform}"
+    val savedCustomModelsStr = remember(selectedPlatform) { prefs.getString(customModelsKey, "") ?: "" }
+    
+    var customModels by remember(selectedPlatform) {
+        mutableStateOf(
+            if (savedCustomModelsStr.isNotEmpty()) savedCustomModelsStr.split(",").filter { it.isNotEmpty() }
+            else emptyList()
+        )
+    }
+    val allModels = customModels
     
     val isDarkTheme = isSystemInDarkTheme()
     val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
@@ -813,6 +859,8 @@ private fun VoiceSettingsDialog(
                                 Text("请填写完整的 http(s) 地址", color = MaterialTheme.colorScheme.error)
                             } else if (selectedPlatform == "Minimax" && baseUrl.isBlank()) {
                                 Text("Minimax 平台必须填写 API 地址", color = MaterialTheme.colorScheme.error)
+                            } else if (selectedPlatform == "SiliconFlow") {
+                                Text("默认: https://api.siliconflow.cn/v1/audio/speech", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             } else {
                                 Text("大模型厂商的 API 地址", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
@@ -829,38 +877,29 @@ private fun VoiceSettingsDialog(
                     )
                 }
 
-                // 语音模型名称输入框
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "TTS 模型名称",
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.SemiBold
-                        ),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    OutlinedTextField(
-                        value = chatModel,
-                        onValueChange = { chatModel = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("例如 gemini-flash-lite-latest") },
-                        supportingText = {
-                            if (chatModel.isBlank()) {
-                                Text("必填项：请输入模型名称", color = MaterialTheme.colorScheme.error)
-                            }
-                        },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
-                        ),
-                        shape = RoundedCornerShape(12.dp),
-                        singleLine = true
-                    )
-                }
+                // 语音模型名称输入框 (动态列表)
+                DynamicModelSelector(
+                    label = "TTS 模型名称",
+                    currentModel = chatModel,
+                    onModelChange = { chatModel = it },
+                    modelList = allModels,
+                    onAddModel = { newModel ->
+                        if (newModel.isNotBlank() && !customModels.contains(newModel)) {
+                            val newList = customModels + newModel.trim()
+                            customModels = newList
+                            prefs.edit().putString(customModelsKey, newList.joinToString(",")).apply()
+                            chatModel = newModel.trim()
+                        }
+                    },
+                    onRemoveModel = { modelToRemove ->
+                        val newList = customModels - modelToRemove
+                        customModels = newList
+                        prefs.edit().putString(customModelsKey, newList.joinToString(",")).apply()
+                        if (chatModel == modelToRemove) {
+                            chatModel = ""
+                        }
+                    }
+                )
                 
                 // 底部按钮
                 Row(
@@ -907,6 +946,7 @@ private fun VoiceSettingsDialog(
                                 when (selectedPlatform) {
                                     "OpenAI" -> editor.putString("voice_key_OpenAI", apiKey)
                                     "Minimax" -> editor.putString("voice_key_Minimax", apiKey)
+                                    "SiliconFlow" -> editor.putString("voice_key_SiliconFlow", apiKey)
                                     else -> editor.putString("voice_key_Gemini", apiKey)
                                 }
                                 // 保存该平台特定的 Base URL 和 Model
@@ -992,8 +1032,21 @@ private fun SttSettingsDialog(
     var apiUrl by remember { mutableStateOf(resolveApiUrlFor(selectedPlatform)) }
     var model by remember { mutableStateOf(resolveModelFor(selectedPlatform)) }
     var expanded by remember { mutableStateOf(false) }
+    var modelExpanded by remember { mutableStateOf(false) }
     
     val platforms = listOf("Google", "OpenAI", "SiliconFlow")
+    
+    // 自定义模型管理
+    val customModelsKey = "custom_models_stt_${selectedPlatform}"
+    val savedCustomModelsStr = remember(selectedPlatform) { prefs.getString(customModelsKey, "") ?: "" }
+    
+    var customModels by remember(selectedPlatform) {
+        mutableStateOf(
+            if (savedCustomModelsStr.isNotEmpty()) savedCustomModelsStr.split(",").filter { it.isNotEmpty() }
+            else emptyList()
+        )
+    }
+    val allModels = customModels
     
     val isDarkTheme = isSystemInDarkTheme()
     val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
@@ -1150,33 +1203,29 @@ private fun SttSettingsDialog(
                     )
                 }
 
-                // 模型名称
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "模型名称",
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.SemiBold
-                        ),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    OutlinedTextField(
-                        value = model,
-                        onValueChange = { model = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("例如 whisper-1") },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
-                        ),
-                        shape = RoundedCornerShape(12.dp),
-                        singleLine = true
-                    )
-                }
+                // 模型名称 (动态列表)
+                DynamicModelSelector(
+                    label = "模型名称",
+                    currentModel = model,
+                    onModelChange = { model = it },
+                    modelList = allModels,
+                    onAddModel = { newModel ->
+                        if (newModel.isNotBlank() && !customModels.contains(newModel)) {
+                            val newList = customModels + newModel.trim()
+                            customModels = newList
+                            prefs.edit().putString(customModelsKey, newList.joinToString(",")).apply()
+                            model = newModel.trim()
+                        }
+                    },
+                    onRemoveModel = { modelToRemove ->
+                        val newList = customModels - modelToRemove
+                        customModels = newList
+                        prefs.edit().putString(customModelsKey, newList.joinToString(",")).apply()
+                        if (model == modelToRemove) {
+                            model = ""
+                        }
+                    }
+                )
                 
                 // 底部按钮
                 Row(
@@ -1264,8 +1313,21 @@ private fun LlmSettingsDialog(
     var apiUrl by remember { mutableStateOf(resolveApiUrlFor(selectedPlatform)) }
     var model by remember { mutableStateOf(resolveModelFor(selectedPlatform)) }
     var expanded by remember { mutableStateOf(false) }
+    var modelExpanded by remember { mutableStateOf(false) }
     
     val platforms = listOf("Google", "OpenAI")
+    
+    // 自定义模型管理
+    val customModelsKey = "custom_models_chat_${selectedPlatform}"
+    val savedCustomModelsStr = remember(selectedPlatform) { prefs.getString(customModelsKey, "") ?: "" }
+    
+    var customModels by remember(selectedPlatform) {
+        mutableStateOf(
+            if (savedCustomModelsStr.isNotEmpty()) savedCustomModelsStr.split(",").filter { it.isNotEmpty() }
+            else emptyList()
+        )
+    }
+    val allModels = customModels
     
     val isDarkTheme = isSystemInDarkTheme()
     val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
@@ -1420,33 +1482,29 @@ private fun LlmSettingsDialog(
                     )
                 }
 
-                // 模型名称
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "模型名称",
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.SemiBold
-                        ),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    OutlinedTextField(
-                        value = model,
-                        onValueChange = { model = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("例如 gpt-4o-mini") },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
-                        ),
-                        shape = RoundedCornerShape(12.dp),
-                        singleLine = true
-                    )
-                }
+                // 模型名称 (动态列表)
+                DynamicModelSelector(
+                    label = "模型名称",
+                    currentModel = model,
+                    onModelChange = { model = it },
+                    modelList = allModels,
+                    onAddModel = { newModel ->
+                        if (newModel.isNotBlank() && !customModels.contains(newModel)) {
+                            val newList = customModels + newModel.trim()
+                            customModels = newList
+                            prefs.edit().putString(customModelsKey, newList.joinToString(",")).apply()
+                            model = newModel.trim()
+                        }
+                    },
+                    onRemoveModel = { modelToRemove ->
+                        val newList = customModels - modelToRemove
+                        customModels = newList
+                        prefs.edit().putString(customModelsKey, newList.joinToString(",")).apply()
+                        if (model == modelToRemove) {
+                            model = ""
+                        }
+                    }
+                )
                 
                 // 底部按钮
                 Row(
@@ -1567,9 +1625,22 @@ private fun VoiceSelectionDialog(
         "shimmer" to "清澈"
     )
 
+    // SiliconFlow 音色
+    val siliconFlowVoices = listOf(
+        "alex" to "Alex (男声)",
+        "anna" to "Anna (女声)",
+        "bella" to "Bella (女声)",
+        "benjamin" to "Benjamin (男声)",
+        "charles" to "Charles (男声)",
+        "claire" to "Claire (女声)",
+        "david" to "David (男声)",
+        "diana" to "Diana (女声)"
+    )
+
     val voices = when (ttsPlatform) {
         "Minimax" -> minimaxVoices
         "OpenAI" -> openaiVoices
+        "SiliconFlow" -> siliconFlowVoices
         else -> geminiVoices
     }
     
@@ -1862,4 +1933,201 @@ fun DrawScope.drawIrregularCircle(
 
     path.close()
     drawPath(path, color)
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DynamicModelSelector(
+    label: String,
+    currentModel: String,
+    onModelChange: (String) -> Unit,
+    modelList: List<String>,
+    onAddModel: (String) -> Unit,
+    onRemoveModel: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    var showAddDialog by remember { mutableStateOf(false) }
+    var newModelName by remember { mutableStateOf("") }
+    
+    // 添加模型对话框
+    if (showAddDialog) {
+        Dialog(
+            onDismissRequest = { showAddDialog = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Card(
+                shape = RoundedCornerShape(28.dp),
+                modifier = Modifier
+                    .fillMaxWidth(0.9f)
+                    .wrapContentHeight(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                )
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(24.dp)
+                ) {
+                    Text(
+                        text = "添加模型",
+                        style = MaterialTheme.typography.headlineSmall.copy(
+                            fontWeight = FontWeight.Bold
+                        ),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    
+                    OutlinedTextField(
+                        value = newModelName,
+                        onValueChange = { newModelName = it },
+                        placeholder = { Text("请输入模型名称") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { showAddDialog = false },
+                            modifier = Modifier.weight(1f).height(48.dp),
+                            shape = RoundedCornerShape(24.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                containerColor = MaterialTheme.colorScheme.surface,
+                                contentColor = if (isSystemInDarkTheme()) Color(0xFFFF5252) else Color(0xFFD32F2F)
+                            ),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, if (isSystemInDarkTheme()) Color(0xFFFF5252) else Color(0xFFD32F2F))
+                        ) {
+                            Text("取消", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
+                        }
+                        
+                        Button(
+                            onClick = {
+                                if (newModelName.isNotBlank()) {
+                                    onAddModel(newModelName.trim())
+                                    showAddDialog = false
+                                    newModelName = ""
+                                }
+                            },
+                            modifier = Modifier.weight(1f).height(48.dp),
+                            shape = RoundedCornerShape(24.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isSystemInDarkTheme()) Color.White else Color(0xFF212121),
+                                contentColor = if (isSystemInDarkTheme()) Color.Black else Color.White
+                            )
+                        ) {
+                            Text("确定", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelLarge.copy(
+                fontWeight = FontWeight.SemiBold
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        
+        ExposedDropdownMenuBox(
+            expanded = expanded,
+            onExpandedChange = { expanded = it }
+        ) {
+            OutlinedTextField(
+                value = currentModel,
+                onValueChange = {},
+                readOnly = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .menuAnchor(),
+                placeholder = { Text("选择模型") },
+                trailingIcon = {
+                    // 使用 Surface 拦截点击事件，防止传递给 ExposedDropdownMenuBox 导致下拉框展开
+                    Surface(
+                        onClick = { showAddDialog = true },
+                        color = Color.Transparent,
+                        shape = CircleShape
+                    ) {
+                        Box(
+                            modifier = Modifier.size(48.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = androidx.compose.material.icons.Icons.Default.Add,
+                                contentDescription = "添加模型",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                },
+                supportingText = {
+                    if (currentModel.isBlank()) {
+                        Text("必填项：请输入模型名称", color = MaterialTheme.colorScheme.error)
+                    }
+                },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                ),
+                shape = RoundedCornerShape(12.dp),
+                singleLine = true
+            )
+            
+            if (modelList.isNotEmpty()) {
+                ExposedDropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false }
+                ) {
+                    modelList.forEach { modelOption ->
+                        DropdownMenuItem(
+                            text = {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(text = modelOption, modifier = Modifier.weight(1f))
+                                    IconButton(
+                                        onClick = {
+                                            onRemoveModel(modelOption)
+                                        },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = androidx.compose.material.icons.Icons.Default.Close,
+                                            contentDescription = "删除",
+                                            tint = MaterialTheme.colorScheme.error,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            },
+                            onClick = {
+                                onModelChange(modelOption)
+                                expanded = false
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
