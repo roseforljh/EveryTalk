@@ -29,6 +29,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.material3.Divider
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -2058,22 +2060,20 @@ fun DynamicModelSelector(
                     .menuAnchor(),
                 placeholder = { Text("选择模型") },
                 trailingIcon = {
-                    // 使用 Surface 拦截点击事件，防止传递给 ExposedDropdownMenuBox 导致下拉框展开
-                    Surface(
-                        onClick = { showAddDialog = true },
-                        color = Color.Transparent,
-                        shape = CircleShape
+                    // 使用 pointerInput 显式处理点击，确保不传递给 ExposedDropdownMenuBox
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .pointerInput(Unit) {
+                                detectTapGestures(onTap = { showAddDialog = true })
+                            },
+                        contentAlignment = Alignment.Center
                     ) {
-                        Box(
-                            modifier = Modifier.size(48.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = androidx.compose.material.icons.Icons.Default.Add,
-                                contentDescription = "添加模型",
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        }
+                        Icon(
+                            imageVector = androidx.compose.material.icons.Icons.Default.Add,
+                            contentDescription = "添加模型",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
                     }
                 },
                 supportingText = {
