@@ -677,6 +677,14 @@ class VoiceChatSession(
                             "meta" -> {
                                 userText = json.optString("user_text", "")
                                 assistantText = json.optString("assistant_text", "")
+                                
+                                // 更新采样率 (如果后端下发)
+                                val sr = json.optInt("sample_rate", 0)
+                                if (sr > 0) {
+                                    sampleRate = sr
+                                    Log.i(TAG, "Updated sample rate from stream meta: $sampleRate")
+                                }
+                                
                                 // 立即回调文字
                                 withContext(Dispatchers.Main) {
                                     if (userText.isNotEmpty()) onTranscriptionReceived?.invoke(userText)
@@ -738,6 +746,9 @@ class VoiceChatSession(
         private var isBuffering = true
         // 预缓冲 0.3 秒的数据量，平衡首字延迟与抗抖动能力
         private var nextPlayThreshold = (sampleRate * 2 * 0.3).toInt()
+        
+        // 字节对齐缓冲 (处理奇数包)
+        private var leftoverByte: Byte? = null
 
         init {
             val channelConfig = AudioFormat.CHANNEL_OUT_MONO
@@ -772,7 +783,28 @@ class VoiceChatSession(
         
         fun write(data: ByteArray) {
             val track = audioTrack ?: return
-            val written = track.write(data, 0, data.size)
+            
+            // 处理字节对齐 (16-bit PCM 必须偶数写入)
+            var dataToWrite = data
+            
+            // 1. 如果有上次剩余的字节，拼接到开头
+            if (leftoverByte != null) {
+                val newData = ByteArray(data.size + 1)
+                newData[0] = leftoverByte!!
+                System.arraycopy(data, 0, newData, 1, data.size)
+                dataToWrite = newData
+                leftoverByte = null
+            }
+            
+            // 2. 如果当前数据长度是奇数，剥离最后一个字节留给下次
+            if (dataToWrite.size % 2 != 0) {
+                leftoverByte = dataToWrite[dataToWrite.size - 1]
+                dataToWrite = dataToWrite.copyOfRange(0, dataToWrite.size - 1)
+            }
+            
+            if (dataToWrite.isEmpty()) return
+
+            val written = track.write(dataToWrite, 0, dataToWrite.size)
             
             if (written > 0) {
                 totalWrittenBytes += written
