@@ -403,7 +403,7 @@ class VoiceChatSession(
     private fun encodePcmToAac(pcmData: ByteArray, outputFile: File, sampleRate: Int): Boolean {
         try {
             val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, sampleRate, 1)
-            format.setInteger(MediaFormat.KEY_BIT_RATE, 64000) // 64kbps for voice is enough
+            format.setInteger(MediaFormat.KEY_BIT_RATE, 32000) // 32kbps for STT is sufficient and faster
             format.setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
             
             val encoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
@@ -744,8 +744,8 @@ class VoiceChatSession(
         // 预缓冲配置
         private var totalWrittenBytes = 0
         private var isBuffering = true
-        // 预缓冲 0.3 秒的数据量，平衡首字延迟与抗抖动能力
-        private var nextPlayThreshold = (sampleRate * 2 * 0.3).toInt()
+        // 预缓冲 0.1 秒的数据量，追求极致首字延迟
+        private var nextPlayThreshold = (sampleRate * 2 * 0.1).toInt()
         
         // 字节对齐缓冲 (处理奇数包)
         private var leftoverByte: Byte? = null
