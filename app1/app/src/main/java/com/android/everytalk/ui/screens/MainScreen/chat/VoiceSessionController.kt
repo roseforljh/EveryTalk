@@ -9,8 +9,10 @@ import com.android.everytalk.data.network.VoiceChatSession
 import com.android.everytalk.statecontroller.AppViewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.CancellationException
 
 /**
  * 语音会话控制器
@@ -28,6 +30,7 @@ class VoiceSessionController(
     private val onTtsQuotaWarning: (Boolean) -> Unit
 ) {
     private var currentSession: VoiceChatSession? = null
+    private var processingJob: Job? = null
     private val configManager = VoiceConfigManager(context)
     
     /**
@@ -100,7 +103,7 @@ class VoiceSessionController(
         onVolumeChanged(0f)
         onProcessingChanged(true)
         
-        coroutineScope.launch {
+        processingJob = coroutineScope.launch {
             try {
                 val result = session.stopRecordingAndProcess()
                 
@@ -119,6 +122,9 @@ class VoiceSessionController(
                 }
                 
                 android.util.Log.i("VoiceSessionController", "Voice chat saved to history")
+            } catch (e: CancellationException) {
+                android.util.Log.i("VoiceSessionController", "Processing cancelled")
+                // 取消时不显示错误
             } catch (t: Throwable) {
                 android.util.Log.e("VoiceSessionController", "Voice chat failed", t)
                 onTranscriptionReceived("")
@@ -126,14 +132,21 @@ class VoiceSessionController(
             } finally {
                 currentSession = null
                 onProcessingChanged(false)
+                processingJob = null
             }
         }
     }
     
     /**
-     * 停止当前播放
+     * 停止当前播放或处理
      */
     fun stopPlayback() {
+        // 如果正在处理中，取消处理任务
+        if (processingJob?.isActive == true) {
+            processingJob?.cancel()
+            processingJob = null
+        }
+        // 停止音频播放
         currentSession?.stopPlayback()
     }
     
@@ -147,6 +160,10 @@ class VoiceSessionController(
         onVolumeChanged(0f)
         onTranscriptionReceived("")
         onResponseReceived("")
+        
+        // 取消正在进行的处理任务
+        processingJob?.cancel()
+        processingJob = null
         
         coroutineScope.launch {
             try {

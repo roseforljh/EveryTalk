@@ -66,6 +66,10 @@ class VoiceChatSession(
     private var isRecording: Boolean = false
     private val pcmBuffer = ByteArrayOutputStream(256 * 1024)
     
+    // 网络请求控制
+    @Volatile
+    private var currentCall: okhttp3.Call? = null
+    
     // 音频播放控制
     @Volatile
     private var currentAudioTrack: AudioTrack? = null
@@ -198,6 +202,12 @@ class VoiceChatSession(
      */
     fun stopPlayback() {
         shouldStopPlayback = true
+        
+        // 取消网络请求
+        try {
+            currentCall?.cancel()
+        } catch (_: Throwable) {}
+        currentCall = null
         
         // 停止标准播放
         currentAudioTrack?.let { track ->
@@ -368,8 +378,20 @@ class VoiceChatSession(
             val request = requestBuilder.build()
 
             Log.i(TAG, "Sending voice chat request to: $apiUrl")
-
-            val response = client.newCall(request).execute()
+            
+            val call = client.newCall(request)
+            currentCall = call
+            
+            val response = try {
+                call.execute()
+            } catch (e: Exception) {
+                if (call.isCanceled()) {
+                    throw java.util.concurrent.CancellationException("Request cancelled")
+                }
+                throw e
+            } finally {
+                currentCall = null
+            }
 
             if (!response.isSuccessful) {
                 val errorBody = response.body?.string() ?: "Unknown error"
