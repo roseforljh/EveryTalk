@@ -1,4 +1,4 @@
-package com.android.everytalk.ui.util
+package com.android.everytalk.util
 
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.getValue

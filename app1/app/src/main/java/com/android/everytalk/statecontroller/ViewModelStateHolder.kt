@@ -12,7 +12,7 @@ import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.models.SelectedMediaItem
-import com.android.everytalk.ui.util.ScrollController
+import com.android.everytalk.util.ScrollController
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
