@@ -95,8 +95,8 @@ fun VoiceInputScreen(
             
             // STT
             val sttPlatform = prefs.getString("stt_platform", "Google") ?: "Google"
-            val sttApiUrl = prefs.getString("stt_api_url", "")?.trim() ?: ""
-            val sttModel = prefs.getString("stt_model", "")?.trim() ?: ""
+            val sttApiUrl = prefs.getString("stt_api_url_${sttPlatform}", null) ?: prefs.getString("stt_api_url", "")?.trim() ?: ""
+            val sttModel = prefs.getString("stt_model_${sttPlatform}", null) ?: prefs.getString("stt_model", "")?.trim() ?: ""
             val sttApiKey = when (sttPlatform) {
                 "OpenAI" -> prefs.getString("stt_key_OpenAI", "") ?: ""
                 else -> prefs.getString("stt_key_Google", "") ?: ""
@@ -104,8 +104,8 @@ fun VoiceInputScreen(
 
             // Chat
             val chatPlatform = prefs.getString("chat_platform", "Google") ?: "Google"
-            val chatApiUrl = prefs.getString("chat_api_url", "")?.trim() ?: ""
-            val chatModel = prefs.getString("chat_model", "")?.trim() ?: ""
+            val chatApiUrl = prefs.getString("chat_api_url_${chatPlatform}", null) ?: prefs.getString("chat_api_url", "")?.trim() ?: ""
+            val chatModel = prefs.getString("chat_model_${chatPlatform}", null) ?: prefs.getString("chat_model", "")?.trim() ?: ""
             val chatApiKey = when (chatPlatform) {
                 "OpenAI" -> prefs.getString("chat_key_OpenAI", "") ?: ""
                 else -> prefs.getString("chat_key_Google", "") ?: ""
@@ -113,9 +113,9 @@ fun VoiceInputScreen(
 
             // TTS
             val ttsPlatform = prefs.getString("voice_platform", "Gemini") ?: "Gemini"
-            val ttsApiUrl = prefs.getString("voice_base_url", "")?.trim() ?: ""
-            val ttsModel = prefs.getString("voice_chat_model", "")?.trim() ?: ""
-            val voiceName = prefs.getString("voice_name", "Kore") ?: "Kore"
+            val ttsApiUrl = prefs.getString("voice_base_url_${ttsPlatform}", null) ?: prefs.getString("voice_base_url", "")?.trim() ?: ""
+            val ttsModel = prefs.getString("voice_chat_model_${ttsPlatform}", null) ?: prefs.getString("voice_chat_model", "")?.trim() ?: ""
+            val voiceName = prefs.getString("voice_name_${ttsPlatform}", null) ?: prefs.getString("voice_name", "Kore") ?: "Kore"
             val ttsApiKey = when (ttsPlatform) {
                 "OpenAI" -> prefs.getString("voice_key_OpenAI", "") ?: ""
                 "Minimax" -> prefs.getString("voice_key_Minimax", "") ?: ""
@@ -636,17 +636,26 @@ private fun VoiceSettingsDialog(
     val savedKeyGemini = remember { prefs.getString("voice_key_Gemini", "") ?: "" }
     val savedKeyOpenAI = remember { prefs.getString("voice_key_OpenAI", "") ?: "" }
     val savedKeyMinimax = remember { prefs.getString("voice_key_Minimax", "") ?: "" }
-    val savedBaseUrl = remember { prefs.getString("voice_base_url", "") ?: "" }
-    val savedChatModel = remember { prefs.getString("voice_chat_model", "") ?: "" }
+    
+    // 旧全局默认值
+    val defaultBaseUrl = remember { prefs.getString("voice_base_url", "") ?: "" }
+    val defaultChatModel = remember { prefs.getString("voice_chat_model", "") ?: "" }
 
-    // 根据平台解析Key的函数：仅从本地保存中读取，首次安装时为空
+    // 辅助函数：根据平台解析配置（优先独立配置，回退到旧全局）
     fun resolveKeyFor(platform: String): String {
-        val fromPrefs = when (platform) {
+        return when (platform) {
             "OpenAI" -> savedKeyOpenAI
             "Minimax" -> savedKeyMinimax
             else -> savedKeyGemini
         }.trim()
-        return fromPrefs
+    }
+    
+    fun resolveBaseUrlFor(platform: String): String {
+        return prefs.getString("voice_base_url_${platform}", null) ?: defaultBaseUrl
+    }
+    
+    fun resolveModelFor(platform: String): String {
+        return prefs.getString("voice_chat_model_${platform}", null) ?: defaultChatModel
     }
 
     var selectedPlatform by remember {
@@ -655,8 +664,8 @@ private fun VoiceSettingsDialog(
     var apiKey by remember {
         mutableStateOf(resolveKeyFor(selectedPlatform))
     }
-    var baseUrl by remember { mutableStateOf(savedBaseUrl) }
-    var chatModel by remember { mutableStateOf(savedChatModel) }
+    var baseUrl by remember { mutableStateOf(resolveBaseUrlFor(selectedPlatform)) }
+    var chatModel by remember { mutableStateOf(resolveModelFor(selectedPlatform)) }
     var expanded by remember { mutableStateOf(false) }
     val platforms = listOf("Gemini", "OpenAI", "Minimax")
     
@@ -738,8 +747,10 @@ private fun VoiceSettingsDialog(
                                     text = { Text(platform) },
                                     onClick = {
                                         selectedPlatform = platform
-                                        // 实时切换到对应平台的Key（优先本地；否则回退到selectedApiConfig；否则空）
+                                        // 实时切换到对应平台的Key
                                         apiKey = resolveKeyFor(platform)
+                                        baseUrl = resolveBaseUrlFor(platform)
+                                        chatModel = resolveModelFor(platform)
                                         expanded = false
                                     }
                                 )
@@ -888,7 +899,7 @@ private fun VoiceSettingsDialog(
                                 return@Button
                             }
 
-                            // 保存用户选择的平台和对应Key
+                            // 保存用户选择的平台和对应Key（按平台独立保存）
                             runCatching {
                                 val editor = prefs.edit()
                                 editor.putString("voice_platform", selectedPlatform)
@@ -897,10 +908,14 @@ private fun VoiceSettingsDialog(
                                     "Minimax" -> editor.putString("voice_key_Minimax", apiKey)
                                     else -> editor.putString("voice_key_Gemini", apiKey)
                                 }
-                                if (baseUrl.isNotBlank()) {
-                                    editor.putString("voice_base_url", baseUrl.trim())
-                                }
-                                editor.putString("voice_chat_model", chatModel.trim())
+                                // 保存该平台特定的 Base URL 和 Model
+                                editor.putString("voice_base_url_${selectedPlatform}", baseUrl.trim())
+                                editor.putString("voice_chat_model_${selectedPlatform}", chatModel.trim())
+                                
+                                // 兼容性：同时更新全局旧键（可选，视需求而定，这里暂且不覆盖旧键以免污染其他平台回退）
+                                // editor.putString("voice_base_url", baseUrl.trim())
+                                // editor.putString("voice_chat_model", chatModel.trim())
+                                
                                 editor.apply()
                             }
                             onDismiss()
@@ -938,8 +953,10 @@ private fun SttSettingsDialog(
     val savedPlatform = remember { prefs.getString("stt_platform", "Google") ?: "Google" }
     val savedKeyGoogle = remember { prefs.getString("stt_key_Google", "") ?: "" }
     val savedKeyOpenAI = remember { prefs.getString("stt_key_OpenAI", "") ?: "" }
-    val savedApiUrl = remember { prefs.getString("stt_api_url", "") ?: "" }
-    val savedModel = remember { prefs.getString("stt_model", "") ?: "" }
+    
+    // 旧全局默认值
+    val defaultApiUrl = remember { prefs.getString("stt_api_url", "") ?: "" }
+    val defaultModel = remember { prefs.getString("stt_model", "") ?: "" }
 
     fun resolveKeyFor(platform: String): String {
         return when (platform) {
@@ -947,11 +964,19 @@ private fun SttSettingsDialog(
             else -> savedKeyGoogle
         }.trim()
     }
+    
+    fun resolveApiUrlFor(platform: String): String {
+        return prefs.getString("stt_api_url_${platform}", null) ?: defaultApiUrl
+    }
+    
+    fun resolveModelFor(platform: String): String {
+        return prefs.getString("stt_model_${platform}", null) ?: defaultModel
+    }
 
     var selectedPlatform by remember { mutableStateOf(savedPlatform) }
     var apiKey by remember { mutableStateOf(resolveKeyFor(selectedPlatform)) }
-    var apiUrl by remember { mutableStateOf(savedApiUrl) }
-    var model by remember { mutableStateOf(savedModel) }
+    var apiUrl by remember { mutableStateOf(resolveApiUrlFor(selectedPlatform)) }
+    var model by remember { mutableStateOf(resolveModelFor(selectedPlatform)) }
     var expanded by remember { mutableStateOf(false) }
     
     val platforms = listOf("Google", "OpenAI")
@@ -1032,6 +1057,8 @@ private fun SttSettingsDialog(
                                     onClick = {
                                         selectedPlatform = platform
                                         apiKey = resolveKeyFor(platform)
+                                        apiUrl = resolveApiUrlFor(platform)
+                                        model = resolveModelFor(platform)
                                         expanded = false
                                     }
                                 )
@@ -1162,8 +1189,9 @@ private fun SttSettingsDialog(
                                     "OpenAI" -> editor.putString("stt_key_OpenAI", apiKey)
                                     else -> editor.putString("stt_key_Google", apiKey)
                                 }
-                                editor.putString("stt_api_url", apiUrl.trim())
-                                editor.putString("stt_model", model.trim())
+                                // 按平台保存
+                                editor.putString("stt_api_url_${selectedPlatform}", apiUrl.trim())
+                                editor.putString("stt_model_${selectedPlatform}", model.trim())
                                 editor.apply()
                             }
                             onDismiss()
@@ -1194,8 +1222,10 @@ private fun LlmSettingsDialog(
     val savedPlatform = remember { prefs.getString("chat_platform", "Google") ?: "Google" }
     val savedKeyGoogle = remember { prefs.getString("chat_key_Google", "") ?: "" }
     val savedKeyOpenAI = remember { prefs.getString("chat_key_OpenAI", "") ?: "" }
-    val savedApiUrl = remember { prefs.getString("chat_api_url", "") ?: "" }
-    val savedModel = remember { prefs.getString("chat_model", "") ?: "" }
+    
+    // 旧全局默认值
+    val defaultApiUrl = remember { prefs.getString("chat_api_url", "") ?: "" }
+    val defaultModel = remember { prefs.getString("chat_model", "") ?: "" }
 
     fun resolveKeyFor(platform: String): String {
         return when (platform) {
@@ -1203,11 +1233,19 @@ private fun LlmSettingsDialog(
             else -> savedKeyGoogle
         }.trim()
     }
+    
+    fun resolveApiUrlFor(platform: String): String {
+        return prefs.getString("chat_api_url_${platform}", null) ?: defaultApiUrl
+    }
+    
+    fun resolveModelFor(platform: String): String {
+        return prefs.getString("chat_model_${platform}", null) ?: defaultModel
+    }
 
     var selectedPlatform by remember { mutableStateOf(savedPlatform) }
     var apiKey by remember { mutableStateOf(resolveKeyFor(selectedPlatform)) }
-    var apiUrl by remember { mutableStateOf(savedApiUrl) }
-    var model by remember { mutableStateOf(savedModel) }
+    var apiUrl by remember { mutableStateOf(resolveApiUrlFor(selectedPlatform)) }
+    var model by remember { mutableStateOf(resolveModelFor(selectedPlatform)) }
     var expanded by remember { mutableStateOf(false) }
     
     val platforms = listOf("Google", "OpenAI")
@@ -1288,6 +1326,8 @@ private fun LlmSettingsDialog(
                                     onClick = {
                                         selectedPlatform = platform
                                         apiKey = resolveKeyFor(platform)
+                                        apiUrl = resolveApiUrlFor(platform)
+                                        model = resolveModelFor(platform)
                                         expanded = false
                                     }
                                 )
@@ -1418,8 +1458,9 @@ private fun LlmSettingsDialog(
                                     "OpenAI" -> editor.putString("chat_key_OpenAI", apiKey)
                                     else -> editor.putString("chat_key_Google", apiKey)
                                 }
-                                editor.putString("chat_api_url", apiUrl.trim())
-                                editor.putString("chat_model", model.trim())
+                                // 按平台保存
+                                editor.putString("chat_api_url_${selectedPlatform}", apiUrl.trim())
+                                editor.putString("chat_model_${selectedPlatform}", model.trim())
                                 editor.apply()
                             }
                             onDismiss()
@@ -1446,8 +1487,8 @@ private fun VoiceSelectionDialog(
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("voice_settings", android.content.Context.MODE_PRIVATE) }
-    val savedVoice = remember { prefs.getString("voice_name", "Kore") ?: "Kore" }
     val ttsPlatform = remember { prefs.getString("voice_platform", "Gemini") ?: "Gemini" }
+    val savedVoice = remember { prefs.getString("voice_name_${ttsPlatform}", null) ?: prefs.getString("voice_name", "Kore") ?: "Kore" }
     
     var selectedVoice by remember { mutableStateOf(savedVoice) }
     
@@ -1627,7 +1668,9 @@ private fun VoiceSelectionDialog(
                         // 保存选择
                         runCatching {
                             val editor = prefs.edit()
-                            editor.putString("voice_name", selectedVoice)
+                            editor.putString("voice_name_${ttsPlatform}", selectedVoice)
+                            // 可选：更新全局，作为默认
+                            // editor.putString("voice_name", selectedVoice)
                             editor.apply()
                         }
                         onDismiss()
