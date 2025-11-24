@@ -15,6 +15,7 @@ import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.TimeUnit
+import java.io.BufferedReader
 import com.android.everytalk.security.RequestSignatureUtil
 
 /**
@@ -269,6 +270,11 @@ class VoiceChatSession(
                 .addFormDataPart("tts_api_url", ttsApiUrl)
                 .addFormDataPart("tts_model", ttsModel)
 
+            // 针对 Minimax 和 SiliconFlow 启用流式
+            if (ttsPlatform == "Minimax" || ttsPlatform == "SiliconFlow") {
+                requestBodyBuilder.addFormDataPart("stream", "true")
+            }
+
             val requestBody = requestBodyBuilder.build()
 
             // 使用配置的URL和混淆的路径
@@ -306,6 +312,14 @@ class VoiceChatSession(
                 throw Exception("Voice chat failed: ${response.code} - $errorBody")
             }
 
+            val contentType = response.header("Content-Type")
+            
+            // 判断是否为流式响应 (NDJSON)
+            if (contentType?.contains("application/x-ndjson") == true) {
+                return@withContext handleStreamingResponse(response)
+            }
+
+            // 原有非流式逻辑
             val responseBody = response.body?.string() ?: throw Exception("Empty response")
             val jsonResponse = JSONObject(responseBody)
 
@@ -400,8 +414,26 @@ class VoiceChatSession(
                 offset += written
             }
 
-            // 等待播放完成
-            Thread.sleep(100)
+            // 等待播放完成 (防止尾部截断)
+            // 计算总帧数 (16-bit = 2 bytes per frame)
+            val totalFrames = audioData.size / 2
+            var waitedMs = 0
+            val timeoutMs = (totalFrames.toFloat() / sampleRate * 1000).toLong() + 2000 // 理论时长 + 2秒缓冲
+            
+            while (waitedMs < timeoutMs) {
+                if (track.playState == AudioTrack.PLAYSTATE_STOPPED) break
+                
+                // getPlaybackHeadPosition() 返回的是帧数
+                val currentPosition = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
+                
+                if (currentPosition >= totalFrames) {
+                    Log.i(TAG, "Standard playback completed ($currentPosition / $totalFrames)")
+                    break
+                }
+                
+                kotlinx.coroutines.delay(50)
+                waitedMs += 50
+            }
         } catch (t: Throwable) {
             Log.e(TAG, "Audio playback error", t)
         } finally {
@@ -491,6 +523,208 @@ class VoiceChatSession(
             (value and 0xFF).toByte(),
             ((value shr 8) and 0xFF).toByte()
         )
+    }
+    /**
+     * 处理流式响应
+     */
+    private suspend fun handleStreamingResponse(response: okhttp3.Response): VoiceChatResult {
+        Log.i(TAG, "Starting streaming response processing")
+        
+        var userText = ""
+        var assistantText = ""
+        val fullAudioData = ByteArrayOutputStream()
+        var sampleRate = 24000
+        var audioPlayer: StreamAudioPlayer? = null
+        
+        try {
+            response.body?.byteStream()?.use { inputStream ->
+                val reader = BufferedReader(java.io.InputStreamReader(inputStream))
+                var line: String?
+                
+                while (reader.readLine().also { line = it } != null) {
+                    if (line.isNullOrBlank()) continue
+                    
+                    try {
+                        val json = JSONObject(line)
+                        val type = json.optString("type")
+                        
+                        when (type) {
+                            "meta" -> {
+                                userText = json.optString("user_text", "")
+                                assistantText = json.optString("assistant_text", "")
+                                // 立即回调文字
+                                withContext(Dispatchers.Main) {
+                                    if (userText.isNotEmpty()) onTranscriptionReceived?.invoke(userText)
+                                    if (assistantText.isNotEmpty()) onResponseReceived?.invoke(assistantText)
+                                }
+                            }
+                            "audio" -> {
+                                val b64Data = json.optString("data", "")
+                                if (b64Data.isNotEmpty()) {
+                                    val chunk = android.util.Base64.decode(b64Data, android.util.Base64.DEFAULT)
+                                    if (chunk.isNotEmpty()) {
+                                        fullAudioData.write(chunk)
+                                        
+                                        // 初始化播放器（收到第一包音频时）
+                                        if (audioPlayer == null) {
+                                            // Minimax 流式通常是 24000 或 32000，这里假设 24000，后续可优化
+                                            audioPlayer = StreamAudioPlayer(sampleRate)
+                                            audioPlayer?.start()
+                                        }
+                                        
+                                        // 写入播放器
+                                        audioPlayer?.write(chunk)
+                                    }
+                                }
+                            }
+                            "error" -> {
+                                val msg = json.optString("message", "Unknown error")
+                                Log.e(TAG, "Stream error: $msg")
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to parse stream line: $line", e)
+                    }
+                }
+            }
+        } finally {
+            // 等待播放完成并释放
+            audioPlayer?.close()
+        }
+        
+        return VoiceChatResult(
+            userText = userText,
+            assistantText = assistantText,
+            audioData = fullAudioData.toByteArray(),
+            audioFormat = "pcm",
+            sampleRate = sampleRate
+        )
+    }
+
+    /**
+     * 流式音频播放器
+     */
+    private class StreamAudioPlayer(private val sampleRate: Int) {
+        private var audioTrack: AudioTrack? = null
+        private val bufferSize: Int
+        
+        // 预缓冲配置
+        private var totalWrittenBytes = 0
+        private var isBuffering = true
+        // 预缓冲 0.3 秒的数据量，平衡首字延迟与抗抖动能力
+        private var nextPlayThreshold = (sampleRate * 2 * 0.3).toInt()
+
+        init {
+            val channelConfig = AudioFormat.CHANNEL_OUT_MONO
+            val audioFormat = AudioFormat.ENCODING_PCM_16BIT
+            val minBufSize = AudioTrack.getMinBufferSize(sampleRate, channelConfig, audioFormat)
+            // 大幅增大缓冲区至 4 秒，从根本上减少 Underrun 概率
+            bufferSize = maxOf(minBufSize * 8, sampleRate * 2 * 4)
+            
+            audioTrack = AudioTrack.Builder()
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                )
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setSampleRate(sampleRate)
+                        .setEncoding(audioFormat)
+                        .setChannelMask(channelConfig)
+                        .build()
+                )
+                .setBufferSizeInBytes(bufferSize)
+                .setTransferMode(AudioTrack.MODE_STREAM)
+                .build()
+        }
+        
+        fun start() {
+            // 不再立即播放，由 write() 中的预缓冲逻辑触发
+            // audioTrack?.play()
+        }
+        
+        fun write(data: ByteArray) {
+            val track = audioTrack ?: return
+            val written = track.write(data, 0, data.size)
+            
+            if (written > 0) {
+                totalWrittenBytes += written
+                
+                // 检查播放状态，处理 Underrun 自动恢复
+                if (isBuffering) {
+                    // 缓冲阶段：达到阈值才播放
+                    if (totalWrittenBytes >= nextPlayThreshold) {
+                        try {
+                            track.play()
+                            isBuffering = false
+                            Log.i("StreamAudioPlayer", "Buffering complete ($totalWrittenBytes bytes), starting playback")
+                        } catch (e: Exception) {
+                            Log.e("StreamAudioPlayer", "Failed to start playback", e)
+                        }
+                    }
+                } else {
+                    // 播放阶段：检查是否意外停止 (Underrun)
+                    if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
+                        Log.w("StreamAudioPlayer", "Underrun detected (state=${track.playState}), pausing to re-buffer")
+                        isBuffering = true
+                        // 重新缓冲 1.5 秒数据后再继续，避免频繁启停 (从 0.5 增加到 1.5)
+                        nextPlayThreshold = totalWrittenBytes + (sampleRate * 2 * 1.5).toInt()
+                    }
+                }
+            }
+        }
+        
+        fun close() {
+            try {
+                val track = audioTrack ?: return
+                
+                // 1. 确保处于播放状态
+                if (totalWrittenBytes > 0 && (isBuffering || track.playState != AudioTrack.PLAYSTATE_PLAYING)) {
+                    track.play()
+                    Log.i("StreamAudioPlayer", "Force starting playback in close()")
+                }
+                
+                // 2. 阻塞等待播放完成 (防止尾部截断)
+                val totalFrames = totalWrittenBytes / 2 // 16-bit = 2 bytes per frame
+                var waitedMs = 0
+                val timeoutMs = 15000 // 最多等15秒
+                
+                // 只有当实际写入了数据才等待
+                if (totalFrames > 0) {
+                    while (waitedMs < timeoutMs) {
+                        // 检查 Track 状态
+                        if (track.playState == AudioTrack.PLAYSTATE_STOPPED) break
+                        
+                        // 检查播放进度 (HeadPosition 可能会溢出，但短对话通常没事，严谨可用 mask)
+                        // 注意：getPlaybackHeadPosition() 返回的是帧数
+                        val currentPosition = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
+                        
+                        if (currentPosition >= totalFrames) {
+                            Log.i("StreamAudioPlayer", "Playback completed naturally ($currentPosition / $totalFrames)")
+                            break
+                        }
+                        
+                        // 简单的超时退出：如果进度长时间不动(如AudioTrack卡死)，这里会有timeoutMs保护
+                        Thread.sleep(50)
+                        waitedMs += 50
+                    }
+                }
+                
+                if (waitedMs >= timeoutMs) {
+                    Log.w("StreamAudioPlayer", "Playback wait timed out")
+                }
+
+                // 3. 释放资源
+                track.stop()
+                track.release()
+            } catch (e: Exception) {
+                Log.w("StreamAudioPlayer", "Error closing AudioTrack", e)
+            } finally {
+                audioTrack = null
+            }
+        }
     }
 }
 
