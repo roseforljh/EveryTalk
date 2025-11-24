@@ -63,6 +63,23 @@ class VoiceChatSession(
             append("-chat")
             append("/complete")
         }
+
+        // 全局单例 OkHttpClient，复用连接池以减少握手延迟
+        private val okHttpClient: OkHttpClient by lazy {
+            OkHttpClient.Builder()
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(45, TimeUnit.SECONDS)
+                .writeTimeout(15, TimeUnit.SECONDS)
+                .retryOnConnectionFailure(false)
+                .connectionPool(
+                    okhttp3.ConnectionPool(
+                        maxIdleConnections = 5,
+                        keepAliveDuration = 5,
+                        TimeUnit.MINUTES
+                    )
+                )
+                .build()
+        }
     }
 
     /**
@@ -210,20 +227,8 @@ class VoiceChatSession(
                 })
             }
 
-            // 构建HTTP客户端（优化：连接池+更短超时）
-            val client = OkHttpClient.Builder()
-                .connectTimeout(10, TimeUnit.SECONDS)  // 连接超时缩短
-                .readTimeout(45, TimeUnit.SECONDS)     // 读取超时缩短
-                .writeTimeout(15, TimeUnit.SECONDS)    // 写入超时缩短
-                .retryOnConnectionFailure(false)        // 禁用重试，加快失败响应
-                .connectionPool(
-                    okhttp3.ConnectionPool(
-                        maxIdleConnections = 5,
-                        keepAliveDuration = 5,
-                        TimeUnit.MINUTES
-                    )
-                )
-                .build()
+            // 使用全局单例 client 复用连接
+            val client = okHttpClient
 
             val requestBodyBuilder = MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
