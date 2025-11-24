@@ -42,6 +42,7 @@ fun VoiceInputScreen(
     var isClosing by remember { mutableStateOf(false) }
     var isRecording by remember { mutableStateOf(false) }
     var isProcessing by remember { mutableStateOf(false) }
+    var isPlaying by remember { mutableStateOf(false) }
     var currentVolume by remember { mutableStateOf(0f) }
     var userText by remember { mutableStateOf("") }
     var assistantText by remember { mutableStateOf("") }
@@ -64,10 +65,25 @@ fun VoiceInputScreen(
         onVolumeChanged = { currentVolume = it },
         onTranscriptionReceived = { userText = it },
         onResponseReceived = { assistantText = it },
-        onProcessingChanged = { isProcessing = it },
+        onProcessingChanged = {
+            isProcessing = it
+            // 处理中意味着开始播放
+            if (it) isPlaying = true
+        },
         onRecordingChanged = { isRecording = it },
         onTtsQuotaWarning = { showTtsQuotaWarning = it }
     )
+    
+    // 监听处理状态变化，当处理完成且有回复文字时，表示正在播放
+    LaunchedEffect(isProcessing, assistantText) {
+        if (!isProcessing && assistantText.isNotEmpty()) {
+            // 处理完成且有文字，开始播放
+            isPlaying = true
+            // 等待一段时间后自动结束播放状态（作为兜底）
+            kotlinx.coroutines.delay(30000) // 30秒后自动结束
+            isPlaying = false
+        }
+    }
     
     // ========== 权限管理 ==========
     val requestAudioPermissionLauncher = rememberLauncherForActivityResult(
@@ -97,6 +113,9 @@ fun VoiceInputScreen(
     BackHandler(enabled = true) {
         if (isRecording) {
             sessionController.cancel()
+        } else if (isPlaying) {
+            sessionController.stopPlayback()
+            isPlaying = false
         } else if (!isClosing) {
             isClosing = true
             onClose()
@@ -164,9 +183,14 @@ fun VoiceInputScreen(
             ) {
                 VoiceBottomControls(
                     isRecording = isRecording,
+                    isPlaying = isPlaying,
                     onStartRecording = startRecordingWithPermission,
                     onStopRecording = { sessionController.stopAndProcess() },
                     onCancel = { sessionController.cancel() },
+                    onStopPlayback = {
+                        sessionController.stopPlayback()
+                        isPlaying = false
+                    },
                     onClose = {
                         if (!isClosing) {
                             isClosing = true

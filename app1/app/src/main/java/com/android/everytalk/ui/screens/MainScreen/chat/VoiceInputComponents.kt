@@ -31,9 +31,11 @@ import kotlinx.coroutines.delay
 @Composable
 fun VoiceBottomControls(
     isRecording: Boolean,
+    isPlaying: Boolean = false,
     onStartRecording: () -> Unit,
     onStopRecording: () -> Unit,
     onCancel: () -> Unit,
+    onStopPlayback: () -> Unit = {},
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -103,7 +105,7 @@ fun VoiceBottomControls(
         
         Spacer(modifier = Modifier.weight(1f))
         
-        // 右侧按钮（关闭/取消）
+        // 右侧按钮（关闭/取消/停止播放）
         Box(
             modifier = Modifier
                 .padding(end = 16.dp)
@@ -116,17 +118,25 @@ fun VoiceBottomControls(
                 )
                 .clickable {
                     endClickAnim = true
-                    if (isRecording) {
-                        onCancel()
-                    } else {
-                        onClose()
+                    when {
+                        isRecording -> onCancel()
+                        isPlaying -> onStopPlayback()
+                        else -> onClose()
                     }
                 },
             contentAlignment = Alignment.Center
         ) {
             Icon(
-                imageVector = if (isRecording) Icons.Default.Delete else Icons.Default.Close,
-                contentDescription = if (isRecording) "取消本次语音" else "关闭",
+                imageVector = when {
+                    isRecording -> Icons.Default.Delete
+                    isPlaying -> Icons.Default.Delete
+                    else -> Icons.Default.Close
+                },
+                contentDescription = when {
+                    isRecording -> "取消本次语音"
+                    isPlaying -> "中断AI回答"
+                    else -> "关闭"
+                },
                 modifier = Modifier.size(28.dp),
                 tint = Color.White
             )

@@ -109,7 +109,7 @@ class VoiceSessionController(
                 
                 // 检查是否有音频
                 val hasAudio = result.audioData.isNotEmpty()
-                android.util.Log.i("VoiceSessionController", 
+                android.util.Log.i("VoiceSessionController",
                     "Voice chat completed - User: '${result.userText}', AI: '${result.assistantText}', HasAudio: $hasAudio")
                 
                 if (!hasAudio) {
@@ -128,6 +128,13 @@ class VoiceSessionController(
                 onProcessingChanged(false)
             }
         }
+    }
+    
+    /**
+     * 停止当前播放
+     */
+    fun stopPlayback() {
+        currentSession?.stopPlayback()
     }
     
     /**

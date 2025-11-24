@@ -65,6 +65,14 @@ class VoiceChatSession(
     private var audioRecord: AudioRecord? = null
     private var isRecording: Boolean = false
     private val pcmBuffer = ByteArrayOutputStream(256 * 1024)
+    
+    // 音频播放控制
+    @Volatile
+    private var currentAudioTrack: AudioTrack? = null
+    @Volatile
+    private var streamAudioPlayer: StreamAudioPlayer? = null
+    @Volatile
+    private var shouldStopPlayback = false
 
     // 录音参数（16k / 16-bit / mono）
     private val sampleRate = 16_000
@@ -186,6 +194,32 @@ class VoiceChatSession(
     }
 
     /**
+     * 停止当前播放的音频
+     */
+    fun stopPlayback() {
+        shouldStopPlayback = true
+        
+        // 停止标准播放
+        currentAudioTrack?.let { track ->
+            try {
+                track.stop()
+                track.release()
+            } catch (_: Throwable) {}
+        }
+        currentAudioTrack = null
+        
+        // 停止流式播放
+        streamAudioPlayer?.let { player ->
+            try {
+                player.forceStop()
+            } catch (_: Throwable) {}
+        }
+        streamAudioPlayer = null
+        
+        Log.i(TAG, "Audio playback stopped by user")
+    }
+    
+    /**
      * 强制释放资源（非协程版本，用于生命周期销毁时）
      */
     fun forceRelease() {
@@ -199,6 +233,10 @@ class VoiceChatSession(
             audioRecord?.release()
         } catch (_: Throwable) {}
         audioRecord = null
+        
+        // 同时停止播放
+        stopPlayback()
+        
         Log.i(TAG, "Force released audio recorder")
     }
 
@@ -500,6 +538,8 @@ class VoiceChatSession(
      */
     private suspend fun playAudio(audioData: ByteArray, sampleRate: Int) = withContext(Dispatchers.IO) {
         Log.i(TAG, "Playing audio: ${audioData.size} bytes at ${sampleRate}Hz")
+        
+        shouldStopPlayback = false
 
         val channelConfig = AudioFormat.CHANNEL_OUT_MONO
         val audioFormat = AudioFormat.ENCODING_PCM_16BIT
@@ -524,12 +564,14 @@ class VoiceChatSession(
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
 
+        currentAudioTrack = track
+
         try {
             track.play()
 
             var offset = 0
             val chunkSize = 4096
-            while (offset < audioData.size) {
+            while (offset < audioData.size && !shouldStopPlayback) {
                 val toWrite = minOf(chunkSize, audioData.size - offset)
                 val written = track.write(audioData, offset, toWrite)
                 if (written < 0) {
@@ -538,6 +580,11 @@ class VoiceChatSession(
                 }
                 offset += written
             }
+            
+            if (shouldStopPlayback) {
+                Log.i(TAG, "Playback interrupted by user")
+                return@withContext
+            }
 
             // 等待播放完成 (防止尾部截断)
             // 计算总帧数 (16-bit = 2 bytes per frame)
@@ -545,7 +592,7 @@ class VoiceChatSession(
             var waitedMs = 0
             val timeoutMs = (totalFrames.toFloat() / sampleRate * 1000).toLong() + 2000 // 理论时长 + 2秒缓冲
             
-            while (waitedMs < timeoutMs) {
+            while (waitedMs < timeoutMs && !shouldStopPlayback) {
                 if (track.playState == AudioTrack.PLAYSTATE_STOPPED) break
                 
                 // getPlaybackHeadPosition() 返回的是帧数
@@ -568,6 +615,7 @@ class VoiceChatSession(
             try {
                 track.release()
             } catch (_: Throwable) {}
+            currentAudioTrack = null
         }
     }
 
@@ -660,13 +708,14 @@ class VoiceChatSession(
         val fullAudioData = ByteArrayOutputStream()
         var sampleRate = 24000
         var audioPlayer: StreamAudioPlayer? = null
+        shouldStopPlayback = false
         
         try {
             response.body?.byteStream()?.use { inputStream ->
                 val reader = BufferedReader(java.io.InputStreamReader(inputStream))
                 var line: String?
                 
-                while (reader.readLine().also { line = it } != null) {
+                while (reader.readLine().also { line = it } != null && !shouldStopPlayback) {
                     if (line.isNullOrBlank()) continue
                     
                     try {
@@ -702,6 +751,7 @@ class VoiceChatSession(
                                         if (audioPlayer == null) {
                                             // Minimax 流式通常是 24000 或 32000，这里假设 24000，后续可优化
                                             audioPlayer = StreamAudioPlayer(sampleRate)
+                                            streamAudioPlayer = audioPlayer
                                             audioPlayer?.start()
                                         }
                                         
@@ -723,6 +773,7 @@ class VoiceChatSession(
         } finally {
             // 等待播放完成并释放
             audioPlayer?.close()
+            streamAudioPlayer = null
         }
         
         return VoiceChatResult(
@@ -776,12 +827,23 @@ class VoiceChatSession(
                 .build()
         }
         
+        @Volatile
+        private var forceStop = false
+        
         fun start() {
             // 不再立即播放，由 write() 中的预缓冲逻辑触发
             // audioTrack?.play()
         }
         
+        fun forceStop() {
+            forceStop = true
+            try {
+                audioTrack?.stop()
+            } catch (_: Throwable) {}
+        }
+        
         fun write(data: ByteArray) {
+            if (forceStop) return
             val track = audioTrack ?: return
             
             // 处理字节对齐 (16-bit PCM 必须偶数写入)
@@ -837,6 +899,13 @@ class VoiceChatSession(
             try {
                 val track = audioTrack ?: return
                 
+                if (forceStop) {
+                    Log.i("StreamAudioPlayer", "Playback force stopped by user")
+                    track.stop()
+                    track.release()
+                    return
+                }
+                
                 // 1. 确保处于播放状态
                 if (totalWrittenBytes > 0 && (isBuffering || track.playState != AudioTrack.PLAYSTATE_PLAYING)) {
                     track.play()
@@ -850,7 +919,7 @@ class VoiceChatSession(
                 
                 // 只有当实际写入了数据才等待
                 if (totalFrames > 0) {
-                    while (waitedMs < timeoutMs) {
+                    while (waitedMs < timeoutMs && !forceStop) {
                         // 检查 Track 状态
                         if (track.playState == AudioTrack.PLAYSTATE_STOPPED) break
                         
