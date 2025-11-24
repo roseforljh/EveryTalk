@@ -35,6 +35,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -329,19 +331,45 @@ fun VoiceInputScreen(
                 contentColor = contentColor,
                 modifier = Modifier.padding(bottom = 16.dp)
             ) {
+                var micClickAnim by remember { mutableStateOf(false) }
+                val micScale by animateFloatAsState(
+                    targetValue = if (micClickAnim) 0.9f else 1f,
+                    animationSpec = tween(durationMillis = 120),
+                    label = "micClickScale"
+                )
+                var endClickAnim by remember { mutableStateOf(false) }
+                val endScale by animateFloatAsState(
+                    targetValue = if (endClickAnim) 0.9f else 1f,
+                    animationSpec = tween(durationMillis = 120),
+                    label = "endClickScale"
+                )
+    
+                LaunchedEffect(micClickAnim) {
+                    if (micClickAnim) {
+                        delay(120)
+                        micClickAnim = false
+                    }
+                }
+                LaunchedEffect(endClickAnim) {
+                    if (endClickAnim) {
+                        delay(120)
+                        endClickAnim = false
+                    }
+                }
+    
                 // 左侧麦克风按钮 - 圆形背景
                 Box(
                     modifier = Modifier
                         .padding(start = 16.dp)
                         .size(56.dp)
+                        .scale(micScale)
+                        .clip(CircleShape)
                         .background(
                             color = if (isRecording) Color(0xFF8B4545) else Color(0xFF3A3A3A),
                             shape = CircleShape
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    IconButton(
-                        onClick = {
+                        )
+                        .clickable {
+                            micClickAnim = true
                             // 单击左下角麦克风：开始/结束语音模式（先校验运行时权限）
                             if (!isRecording) {
                                 val granted = ContextCompat.checkSelfPermission(
@@ -422,15 +450,14 @@ fun VoiceInputScreen(
                                 }
                             }
                         },
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Mic,
-                            contentDescription = if (isRecording) "停止录音" else "开始录音",
-                            modifier = Modifier.size(28.dp),
-                            tint = if (isRecording) Color(0xFFFF8A8A) else Color.White
-                        )
-                    }
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Mic,
+                        contentDescription = if (isRecording) "停止录音" else "开始录音",
+                        modifier = Modifier.size(28.dp),
+                        tint = if (isRecording) Color(0xFFFF8A8A) else Color.White
+                    )
                 }
                 
                 Spacer(modifier = Modifier.weight(1f))
@@ -440,14 +467,14 @@ fun VoiceInputScreen(
                     modifier = Modifier
                         .padding(end = 16.dp)
                         .size(56.dp)
+                        .scale(endScale)
+                        .clip(CircleShape)
                         .background(
                             color = Color(0xFF3A3A3A),
                             shape = CircleShape
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    IconButton(
-                        onClick = {
+                        )
+                        .clickable {
+                            endClickAnim = true
                             if (isRecording) {
                                 // 录音中：取消本次语音
                                 val session = voiceChatSession
@@ -475,15 +502,14 @@ fun VoiceInputScreen(
                                 }
                             }
                         },
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        Icon(
-                            imageVector = if (isRecording) Icons.Default.Delete else Icons.Default.Close,
-                            contentDescription = if (isRecording) "取消本次语音" else "关闭",
-                            modifier = Modifier.size(28.dp),
-                            tint = Color.White
-                        )
-                    }
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = if (isRecording) Icons.Default.Delete else Icons.Default.Close,
+                        contentDescription = if (isRecording) "取消本次语音" else "关闭",
+                        modifier = Modifier.size(28.dp),
+                        tint = Color.White
+                    )
                 }
             }
         }
@@ -2051,23 +2077,37 @@ fun DynamicModelSelector(
             expanded = expanded,
             onExpandedChange = { expanded = it }
         ) {
-            OutlinedTextField(
-                value = currentModel,
-                onValueChange = {},
-                readOnly = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .menuAnchor(),
-                placeholder = { Text("选择模型") },
-                trailingIcon = {
-                    // 使用 pointerInput 显式处理点击，确保不传递给 ExposedDropdownMenuBox
-                    Box(
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = currentModel,
+                        onValueChange = {},
+                        readOnly = true,
                         modifier = Modifier
-                            .size(48.dp)
-                            .pointerInput(Unit) {
-                                detectTapGestures(onTap = { showAddDialog = true })
-                            },
-                        contentAlignment = Alignment.Center
+                            .weight(1f)
+                            .menuAnchor(),
+                        placeholder = { Text("选择模型") },
+                        trailingIcon = {
+                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        singleLine = true
+                    )
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    IconButton(
+                        onClick = { showAddDialog = true },
+                        modifier = Modifier.size(56.dp)
                     ) {
                         Icon(
                             imageVector = androidx.compose.material.icons.Icons.Default.Add,
@@ -2075,22 +2115,18 @@ fun DynamicModelSelector(
                             tint = MaterialTheme.colorScheme.primary
                         )
                     }
-                },
-                supportingText = {
-                    if (currentModel.isBlank()) {
-                        Text("必填项：请输入模型名称", color = MaterialTheme.colorScheme.error)
-                    }
-                },
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                    focusedBorderColor = MaterialTheme.colorScheme.primary,
-                    unfocusedBorderColor = MaterialTheme.colorScheme.outline
-                ),
-                shape = RoundedCornerShape(12.dp),
-                singleLine = true
-            )
-            
+                }
+                
+                if (currentModel.isBlank()) {
+                    Text(
+                        text = "必填项：请输入模型名称",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(start = 16.dp, top = 4.dp)
+                    )
+                }
+            }
+
             if (modelList.isNotEmpty()) {
                 ExposedDropdownMenu(
                     expanded = expanded,
