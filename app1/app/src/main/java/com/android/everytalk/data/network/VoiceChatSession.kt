@@ -638,6 +638,11 @@ class VoiceChatSession(
                 track.release()
             } catch (_: Throwable) {}
             currentAudioTrack = null
+            
+            // 播放结束后，将音量归零
+            withContext(Dispatchers.Main) {
+                onVolumeChanged?.invoke(0f)
+            }
         }
     }
 
@@ -782,6 +787,9 @@ class VoiceChatSession(
                                     }
                                 }
                             }
+                            "ping" -> {
+                                // 保持连接活跃，忽略
+                            }
                             "error" -> {
                                 val msg = json.optString("message", "Unknown error")
                                 Log.e(TAG, "Stream error: $msg")
@@ -810,26 +818,31 @@ class VoiceChatSession(
     /**
      * 流式音频播放器
      */
-    private class StreamAudioPlayer(private val sampleRate: Int) {
+    private inner class StreamAudioPlayer(private val sampleRate: Int) {
         private var audioTrack: AudioTrack? = null
         private val bufferSize: Int
         
         // 预缓冲配置
         private var totalWrittenBytes = 0
         private var isBuffering = true
-        // 预缓冲 0.1 秒的数据量，追求极致首字延迟
-        private var nextPlayThreshold = (sampleRate * 2 * 0.1).toInt()
+        // 预缓冲 0.3 秒的数据量，确保有足够数据开始播放
+        private var nextPlayThreshold = (sampleRate * 2 * 0.3).toInt()
         
         // 字节对齐缓冲 (处理奇数包)
         private var leftoverByte: Byte? = null
+
+        // 音量计算
+        private var lastVolumeUpdateTime = 0L
 
         init {
             val channelConfig = AudioFormat.CHANNEL_OUT_MONO
             val audioFormat = AudioFormat.ENCODING_PCM_16BIT
             val minBufSize = AudioTrack.getMinBufferSize(sampleRate, channelConfig, audioFormat)
-            // 大幅增大缓冲区至 4 秒，从根本上减少 Underrun 概率
-            bufferSize = maxOf(minBufSize * 8, sampleRate * 2 * 4)
+            // 缓冲区大小调整：1秒左右，兼顾稳定性和延迟
+            bufferSize = maxOf(minBufSize * 2, sampleRate * 2 * 1)
             
+            Log.i("StreamAudioPlayer", "Init AudioTrack: sampleRate=$sampleRate, minBuf=$minBufSize, actualBuf=$bufferSize")
+
             audioTrack = AudioTrack.Builder()
                 .setAudioAttributes(
                     AudioAttributes.Builder()
@@ -860,14 +873,44 @@ class VoiceChatSession(
         fun forceStop() {
             forceStop = true
             try {
+                audioTrack?.pause()
+                audioTrack?.flush()
                 audioTrack?.stop()
             } catch (_: Throwable) {}
         }
         
-        fun write(data: ByteArray) {
+        suspend fun write(data: ByteArray) {
             if (forceStop) return
             val track = audioTrack ?: return
             
+            // 计算音量并回调
+            val currentTime = System.currentTimeMillis()
+            if (onVolumeChanged != null && currentTime - lastVolumeUpdateTime >= 50) {
+                lastVolumeUpdateTime = currentTime
+                
+                // 简单的 RMS 计算 (只取一部分样本以提高性能)
+                var sum = 0.0
+                val step = 4 // 步长，减少计算量
+                var i = 0
+                while (i < data.size - 1) {
+                    val sample = (data[i].toInt() and 0xFF) or (data[i + 1].toInt() shl 8)
+                    val shortValue = sample.toShort()
+                    sum += shortValue * shortValue
+                    i += 2 * step
+                }
+                
+                val sampleCount = data.size / (2 * step)
+                if (sampleCount > 0) {
+                    val rms = kotlin.math.sqrt(sum / sampleCount)
+                    // 调整归一化系数，让波形更明显
+                    val normalizedVolume = (rms / 2000.0).coerceIn(0.0, 1.0).toFloat()
+                    
+                    withContext(Dispatchers.Main) {
+                        onVolumeChanged.invoke(normalizedVolume)
+                    }
+                }
+            }
+
             // 处理字节对齐 (16-bit PCM 必须偶数写入)
             var dataToWrite = data
             
@@ -900,7 +943,7 @@ class VoiceChatSession(
                         try {
                             track.play()
                             isBuffering = false
-                            Log.i("StreamAudioPlayer", "Buffering complete ($totalWrittenBytes bytes), starting playback")
+                            Log.i("StreamAudioPlayer", "Buffering complete ($totalWrittenBytes bytes), starting playback. Head: ${track.playbackHeadPosition}")
                         } catch (e: Exception) {
                             Log.e("StreamAudioPlayer", "Failed to start playback", e)
                         }
@@ -908,12 +951,14 @@ class VoiceChatSession(
                 } else {
                     // 播放阶段：检查是否意外停止 (Underrun)
                     if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
-                        Log.w("StreamAudioPlayer", "Underrun detected (state=${track.playState}), pausing to re-buffer")
+                        Log.w("StreamAudioPlayer", "Underrun detected (state=${track.playState}, head=${track.playbackHeadPosition}, written=$totalWrittenBytes), pausing to re-buffer")
                         isBuffering = true
-                        // 重新缓冲 1.5 秒数据后再继续，避免频繁启停 (从 0.5 增加到 1.5)
-                        nextPlayThreshold = totalWrittenBytes + (sampleRate * 2 * 1.5).toInt()
+                        // 重新缓冲 0.3 秒数据
+                        nextPlayThreshold = totalWrittenBytes + (sampleRate * 2 * 0.3).toInt()
                     }
                 }
+            } else {
+                Log.w("StreamAudioPlayer", "AudioTrack.write returned $written")
             }
         }
         
@@ -937,16 +982,22 @@ class VoiceChatSession(
                 // 2. 阻塞等待播放完成 (防止尾部截断)
                 val totalFrames = totalWrittenBytes / 2 // 16-bit = 2 bytes per frame
                 var waitedMs = 0
-                val timeoutMs = 15000 // 最多等15秒
+                val timeoutMs = 5000 // 缩短超时时间到5秒
+                var lastPosition = -1L
+                var positionStuckCount = 0
                 
+                Log.i("StreamAudioPlayer", "Waiting for playback completion. Total frames: $totalFrames")
+
                 // 只有当实际写入了数据才等待
                 if (totalFrames > 0) {
                     while (waitedMs < timeoutMs && !forceStop) {
                         // 检查 Track 状态
-                        if (track.playState == AudioTrack.PLAYSTATE_STOPPED) break
+                        if (track.playState == AudioTrack.PLAYSTATE_STOPPED) {
+                            Log.i("StreamAudioPlayer", "AudioTrack stopped unexpectedly")
+                            break
+                        }
                         
-                        // 检查播放进度 (HeadPosition 可能会溢出，但短对话通常没事，严谨可用 mask)
-                        // 注意：getPlaybackHeadPosition() 返回的是帧数
+                        // 检查播放进度
                         val currentPosition = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
                         
                         if (currentPosition >= totalFrames) {
@@ -954,14 +1005,25 @@ class VoiceChatSession(
                             break
                         }
                         
-                        // 简单的超时退出：如果进度长时间不动(如AudioTrack卡死)，这里会有timeoutMs保护
+                        // 检测卡死：如果进度条长时间不动
+                        if (currentPosition == lastPosition) {
+                            positionStuckCount++
+                            if (positionStuckCount > 20) { // 1秒不动
+                                Log.w("StreamAudioPlayer", "Playback stuck at $currentPosition / $totalFrames for 1s, aborting wait")
+                                break
+                            }
+                        } else {
+                            lastPosition = currentPosition
+                            positionStuckCount = 0
+                        }
+                        
                         Thread.sleep(50)
                         waitedMs += 50
                     }
                 }
                 
                 if (waitedMs >= timeoutMs) {
-                    Log.w("StreamAudioPlayer", "Playback wait timed out")
+                    Log.w("StreamAudioPlayer", "Playback wait timed out. Final pos: ${track.playbackHeadPosition} / $totalFrames")
                 }
 
                 // 3. 释放资源
