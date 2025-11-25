@@ -75,7 +75,7 @@ fun TableAwareText(
         )
     }
 
-    LaunchedEffect(text, isStreaming, contentKey) {
+    LaunchedEffect(text, contentKey) {
         val newParts = withContext(Dispatchers.Default) {
             if (isStreaming) {
                 // 流式期间不读写全局缓存，直接解析

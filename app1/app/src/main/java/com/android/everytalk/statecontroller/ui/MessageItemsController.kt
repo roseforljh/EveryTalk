@@ -36,6 +36,7 @@ class MessageItemsController(
         val hasReasoning: Boolean,
         val imageUrls: List<String>?,
         val contentStarted: Boolean,
+        val executionStatus: String?,
         val items: List<ChatListItem>
     )
 
@@ -65,6 +66,14 @@ class MessageItemsController(
                             val hasReasoning = !message.reasoning.isNullOrBlank()
                             val isCurrentlyStreaming = isApiCalling && message.id == currentStreamingAiMessageId
 
+                            // 定义仅流式状态下允许存在的组件类型
+                            val hasStreamingOnlyItems = cached?.items?.any {
+                                it is ChatListItem.LoadingIndicator ||
+                                    it is ChatListItem.AiMessageStreaming ||
+                                    it is ChatListItem.AiMessageCodeStreaming ||
+                                    it is ChatListItem.StatusIndicator
+                            } ?: false
+
                             val cacheValid = cached != null &&
                                 cached.text == message.text &&
                                 cached.reasoning == message.reasoning &&
@@ -72,13 +81,13 @@ class MessageItemsController(
                                 cached.hasReasoning == hasReasoning &&
                                 cached.imageUrls == message.imageUrls &&
                                 cached.contentStarted == message.contentStarted &&
+                                cached.executionStatus == message.executionStatus &&
                                 // 缓存校验增加对 webSearchResults 的检查，确保 Footer 变化能触发更新
                                 (cached.items.any { it is ChatListItem.AiMessageFooter } == !message.webSearchResults.isNullOrEmpty()) &&
-                                (isCurrentlyStreaming == (cached.items.any {
-                                    it is ChatListItem.LoadingIndicator ||
-                                        it is ChatListItem.AiMessageStreaming ||
-                                        it is ChatListItem.AiMessageCodeStreaming
-                                }))
+                                // 校验流式状态兼容性：
+                                // 1. 如果当前是流式：我们接受任何缓存（因为 AiMessage 现在也用于流式），只要内容匹配
+                                // 2. 如果当前非流式：缓存中不能包含“仅流式”组件（如 Loading/StatusIndicator）
+                                (isCurrentlyStreaming || !hasStreamingOnlyItems)
 
                             if (cacheValid) {
                                 android.util.Log.d(
@@ -105,6 +114,7 @@ class MessageItemsController(
                                     hasReasoning = hasReasoning,
                                     imageUrls = message.imageUrls,
                                     contentStarted = message.contentStarted,
+                                    executionStatus = message.executionStatus,
                                     items = newItems
                                 )
                                 newItems
@@ -176,6 +186,7 @@ class MessageItemsController(
                                     hasReasoning = hasReasoning,
                                     imageUrls = message.imageUrls,
                                     contentStarted = message.contentStarted,
+                                    executionStatus = message.executionStatus,
                                     items = newItems
                                 )
                                 newItems
