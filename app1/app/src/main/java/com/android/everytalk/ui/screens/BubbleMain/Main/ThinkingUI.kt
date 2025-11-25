@@ -181,7 +181,27 @@ internal fun ReasoningToggleAndContent(
         // 修复思考完成后的圆点显示逻辑：确保有推理内容时就显示圆点
         val shouldShowReviewDotToggle = displayedReasoningText.isNotBlank() && !messageIsError &&
             (isReasoningComplete || (!isReasoningStreaming && displayedReasoningText.isNotEmpty()))
-        if (shouldShowReviewDotToggle) {
+
+        // 延迟显示控制：仅当思考框完全消失（动画结束）后才显示小白点
+        // 初始化逻辑：如果是历史消息（showInlineStreamingBox初始为false），则无需延迟，直接显示
+        var showDotDelayed by remember { mutableStateOf(!showInlineStreamingBox) }
+
+        LaunchedEffect(showInlineStreamingBox) {
+            if (showInlineStreamingBox) {
+                // 思考框出现，小白点立即隐藏
+                showDotDelayed = false
+            } else {
+                // 思考框消失，等待动画结束（FadeOut 150ms + Shrink 100ms + Buffer）
+                delay(280)
+                showDotDelayed = true
+            }
+        }
+
+        AnimatedVisibility(
+            visible = shouldShowReviewDotToggle && showDotDelayed,
+            enter = fadeIn(tween(200)),
+            exit = fadeOut(tween(150))
+        ) {
             Box(
                 modifier = Modifier.padding(
                     start = 8.dp,

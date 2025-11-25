@@ -292,7 +292,11 @@ class MessageItemsController(
             }
             is com.android.everytalk.ui.state.AiBubbleState.Streaming -> {
                 val items = mutableListOf<ChatListItem>()
-                if (state.hasReasoning && state.reasoningComplete && !message.reasoning.isNullOrBlank()) {
+                // 即使 reasoningComplete 为 false，只要有 reasoning 内容且进入 Streaming 阶段（意味着 contentStarted=true），
+                // 我们也需要保留 AiMessageReasoning Item。
+                // 这样 ThinkingUI 才能留在组件树中，执行“思考框消失 -> 小白点出现”的过渡动画。
+                // 否则 Item 会被移除，导致动画状态丢失，直到 Complete 状态才重新出现。
+                if (state.hasReasoning && !message.reasoning.isNullOrBlank()) {
                     items.add(ChatListItem.AiMessageReasoning(message))
                 }
 
