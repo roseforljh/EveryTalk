@@ -522,30 +522,42 @@ fun AiMessageItem(
                     )
             ) {
                 // 确保 Markdown 始终被解析渲染：
-                // 若传入的 text 与 message.text 不同（例如经过前置加工），也用 MarkdownRenderer 正确解析。
-                if (text != message.text) {
-                    MarkdownRenderer(
-                        markdown = text,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.fillMaxWidth(),
-                        isStreaming = false,
-                        onLongPress = onLongPress,
-                        onImageClick = onImageClick,
-                        contentKey = if (message.id.isNotBlank()) "${message.id}_custom" else ""
-                    )
-                } else {
-                    EnhancedMarkdownText(
-                        message = message,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        isStreaming = isStreaming,
-                        messageOutputType = messageOutputType,
-                        onLongPress = onLongPress,
-                        onImageClick = onImageClick,
-                        viewModel = viewModel  // 传递viewModel以获取实时流式文本
-                    )
-                }
+                // 始终使用 EnhancedMarkdownText 以保持组件树结构稳定，防止流式结束时的组件切换导致跳动。
+                // EnhancedMarkdownText 内部会处理流式与非流式的状态，并利用 ContentCoordinator 统一调度。
+                // 即使传入的 text 与 message.text 不同（例如代码块分离场景），EnhancedMarkdownText 也能正确处理。
+                // 注意：如果 text 是完全自定义的内容且不希望走增强渲染，才需要考虑回退，但目前 ChatListItem 逻辑中
+                // text 主要是 message.text 的快照或流式片段，走 EnhancedMarkdownText 是安全的。
+                
+                // 关键修复：移除 if (text != message.text) 分支，统一入口。
+                // 但 EnhancedMarkdownText 默认使用 message.text，如果我们需要渲染传入的 `text` 参数
+                // (例如在流式过程中 text 可能是累积的片段)，我们需要让 EnhancedMarkdownText 支持传入 overrideText。
+                // 查看 EnhancedMarkdownText 源码，它目前主要依赖 message.text 或 streamingStateFlow。
+                
+                // 鉴于 EnhancedMarkdownText 目前没有 overrideText 参数，且 ChatListItem 中的 text
+                // 在流式（AiMessageStreaming）和非流式（AiMessage）时其实都对应 message 的内容。
+                // 唯一例外是 AiMessageCode 可能只有代码部分？不，ChatListItem.AiMessageCode 的 text 也是完整内容或片段。
+                
+                // 让我们再次确认：ChatListItem.AiMessage(text=...) 中的 text 是否总是等于 message.text？
+                // 在 MessageItemsController 中：
+                // ChatListItem.AiMessage(message.id, message.text, ...) -> 相等
+                // ChatListItem.AiMessageCode(..., message.text, ...) -> 相等
+                // ChatListItem.AiMessageStreaming 甚至不带 text，直接用 messageId 去取流。
+                
+                // 只有一种情况：ChatListItem 缓存了旧的 text，而 message.text 更新了。
+                // 但 EnhancedMarkdownText 内部会监听流，或者使用传入的 message (它是引用)。
+                // 如果 message 对象变了（StateFlow 发出的新列表），EnhancedMarkdownText 会重组。
+                
+                // 因此，直接使用 EnhancedMarkdownText 是安全的，也是解决跳动的关键。
+                EnhancedMarkdownText(
+                    message = message,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    isStreaming = isStreaming,
+                    messageOutputType = messageOutputType,
+                    onLongPress = onLongPress,
+                    onImageClick = onImageClick,
+                    viewModel = viewModel
+                )
             }
         }
     }

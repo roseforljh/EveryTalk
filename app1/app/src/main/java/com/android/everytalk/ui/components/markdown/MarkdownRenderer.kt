@@ -305,6 +305,12 @@ fun MarkdownRenderer(
             }
         },
         update = { tv ->
+            // ⚡️ 性能优化：如果内容未变更，直接跳过更新，防止流式结束时的闪烁/跳动
+            if (tv.tag == markdown) {
+                return@AndroidView
+            }
+            tv.tag = markdown
+
             // 缓存优化：尝试从缓存获取 Spanned 对象
             val sp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
             val cacheKey = if (contentKey.isNotBlank() && !isStreaming) {
