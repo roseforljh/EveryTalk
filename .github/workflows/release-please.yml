@@ -15,16 +15,18 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - name: Sync manifest version from Gradle
         run: |
           python - << 'PY'
           import re, json, pathlib
 
-          gradle_path = pathlib.Path("./app1/app/build.gradle.kts")
+          gradle_path = pathlib.Path("EveryTalk/app1/app/build.gradle.kts")
           text = gradle_path.read_text(encoding="utf-8")
-          m = re.search(r'versionName\s*=\s*"([^"]+)"', text)
+          m = re.search(r'val baseVersionName\s*=\s*"([^"]+)"', text)
           if not m:
-              raise SystemExit("versionName not found in EveryTalk/app1/app/build.gradle.kts")
+              raise SystemExit("baseVersionName not found in app1/app/build.gradle.kts")
           version = m.group(1)
 
           manifest_path = pathlib.Path(".release-please-manifest.json")
