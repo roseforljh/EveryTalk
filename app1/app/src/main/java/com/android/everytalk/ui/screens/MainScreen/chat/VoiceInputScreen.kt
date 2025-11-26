@@ -113,7 +113,11 @@ fun VoiceInputScreen(
     }
     
     // ========== 生命周期管理 ==========
-    BackHandler(enabled = true) {
+    // 仅在有活动任务（录音/播放/处理）时拦截返回键
+    // 闲置状态下让系统接管返回逻辑，以触发 predictive back animation (popExitTransition)
+    val shouldInterceptBack = isRecording || isPlaying || isProcessing
+    
+    BackHandler(enabled = shouldInterceptBack) {
         if (isRecording) {
             sessionController.cancel()
         } else if (isPlaying || isProcessing) {
@@ -121,9 +125,6 @@ fun VoiceInputScreen(
             userCancelledPlayback = true
             sessionController.stopPlayback()
             isPlaying = false
-        } else if (!isClosing) {
-            isClosing = true
-            onClose()
         }
     }
     
