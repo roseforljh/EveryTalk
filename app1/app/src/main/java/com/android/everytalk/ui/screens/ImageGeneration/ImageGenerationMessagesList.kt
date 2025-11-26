@@ -862,7 +862,7 @@ fun ImageGenerationMessagesList(
                         val pair = loadBytesAndMime(imagePreviewModel!!)
                         if (pair == null) {
                             android.util.Log.e("ImagePreview", "saveToAlbum failed: loadBytesAndMime returned null for model: $imagePreviewModel")
-                            Toast.makeText(context, "无法加载图片", Toast.LENGTH_SHORT).show()
+                            viewModel.showSnackbar("加载失败")
                             return@launch
                         }
                         val (bytes, mime) = pair
@@ -886,7 +886,7 @@ fun ImageGenerationMessagesList(
                         }
                         val uri = resolver.insert(collection, values)
                         if (uri == null) {
-                            Toast.makeText(context, "保存失败", Toast.LENGTH_SHORT).show()
+                            viewModel.showSnackbar("保存失败")
                             return@launch
                         }
                         resolver.openOutputStream(uri)?.use { os ->
@@ -897,9 +897,9 @@ fun ImageGenerationMessagesList(
                             values.put(MediaStore.Images.Media.IS_PENDING, 0)
                             resolver.update(uri, values, null, null)
                         }
-                        Toast.makeText(context, "已保存到相册（无损）", Toast.LENGTH_SHORT).show()
+                        viewModel.showSnackbar("已保存")
                     } catch (e: Exception) {
-                        Toast.makeText(context, "保存失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                        viewModel.showSnackbar("保存失败")
                     }
                 }
             }
@@ -908,7 +908,7 @@ fun ImageGenerationMessagesList(
             suspend fun ensureCacheFileUri(): Uri? {
                 val pair = loadBytesAndMime(imagePreviewModel!!)
                 if (pair == null) {
-                    Toast.makeText(context, "无法加载图片", Toast.LENGTH_SHORT).show()
+                    viewModel.showSnackbar("加载失败")
                     return null
                 }
                 val (bytes, mime) = pair
@@ -929,7 +929,7 @@ fun ImageGenerationMessagesList(
                 scope.launch {
                     val bmp = loadBitmapFromModel(imagePreviewModel!!)
                     if (bmp == null) {
-                        Toast.makeText(context, "无法加载图片", Toast.LENGTH_SHORT).show()
+                        viewModel.showSnackbar("加载失败")
                         return@launch
                     }
                     brushBaseBitmap = bmp
@@ -943,7 +943,7 @@ fun ImageGenerationMessagesList(
                     try {
                         val pair = loadBytesAndMime(imagePreviewModel!!)
                         if (pair == null) {
-                            Toast.makeText(context, "无法加载图片", Toast.LENGTH_SHORT).show()
+                            viewModel.showSnackbar("加载失败")
                             return@launch
                         }
                         val (bytes, mime) = pair
@@ -966,7 +966,7 @@ fun ImageGenerationMessagesList(
                         }
                         context.startActivity(android.content.Intent.createChooser(intent, "分享图片"))
                     } catch (e: Exception) {
-                        Toast.makeText(context, "分享失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                        viewModel.showSnackbar("分享失败")
                     }
                 }
             }
@@ -983,9 +983,9 @@ fun ImageGenerationMessagesList(
                                 filePath = null
                             )
                         )
-                        Toast.makeText(context, "已加入选择", Toast.LENGTH_SHORT).show()
+                        viewModel.showSnackbar("已选择")
                     } catch (e: Exception) {
-                        Toast.makeText(context, "选择失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                        viewModel.showSnackbar("选择失败")
                     }
                 }
             }
@@ -995,7 +995,7 @@ fun ImageGenerationMessagesList(
                 scope.launch {
                     val uri = ensureCacheFileUri()
                     if (uri == null) {
-                        Toast.makeText(context, "无法加载图片", Toast.LENGTH_SHORT).show()
+                        viewModel.showSnackbar("加载失败")
                         return@launch
                     }
                     viewModel.addMediaItem(
@@ -1005,7 +1005,7 @@ fun ImageGenerationMessagesList(
                             filePath = null
                         )
                     )
-                    Toast.makeText(context, "已加入选择", Toast.LENGTH_SHORT).show()
+                    viewModel.showSnackbar("已选择")
                     // 关闭预览对话框，返回图像模式页面
                     isImagePreviewVisible = false
                 }
@@ -1148,11 +1148,11 @@ fun ImageGenerationMessagesList(
                                             filePath = null
                                         )
                                     )
-                                    Toast.makeText(context, "编辑完成，已加入选择", Toast.LENGTH_SHORT).show()
+                                    viewModel.showSnackbar("已编辑")
                                     isBrushing = false
                                     isImagePreviewVisible = false
                                 } catch (e: Exception) {
-                                    Toast.makeText(context, "保存编辑结果失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                                    viewModel.showSnackbar("保存失败")
                                 }
                             }
                         }

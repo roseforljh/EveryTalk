@@ -250,14 +250,14 @@ class HistoryController(
                     stateHolder.clearForNewTextChat()
                     if (shouldAutoScroll()) triggerScrollToBottom()
                 }
-                showSnackbar("所有对话已清除")
+                showSnackbar("记录已清空")
             } else {
                 withContext(Dispatchers.IO) { historyManager.clearAllHistory(isImageGeneration = true) }
                 messagesMutex.withLock {
                     stateHolder.clearForNewImageChat()
                     if (shouldAutoScroll()) triggerScrollToBottom()
                 }
-                showSnackbar("所有图像生成对话已清除")
+                showSnackbar("图像记录已清空")
             }
         }
     }

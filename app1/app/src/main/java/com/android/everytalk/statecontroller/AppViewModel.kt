@@ -717,7 +717,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
 
 
     fun showSnackbar(message: String) {
-        viewModelScope.launch { stateHolder._snackbarMessage.emit(message) }
+        showToast(message)
     }
 
     fun showToast(message: String) {
