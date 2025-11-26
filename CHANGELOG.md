@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.4](https://github.com/roseforljh/EveryTalk/compare/v1.7.3...v1.7.4) (2025-11-26)
+
+
+### Bug Fixes
+
+* **ui:** optimize imports in EnhancedMarkdownText ([a371936](https://github.com/roseforljh/EveryTalk/commit/a371936128ec9e930ece0dc2d35c81111e91dd24))
+
 ## [1.10.0](https://github.com/roseforljh/EveryTalk/compare/v1.9.0...v1.10.0) (2025-11-26)
 
 
