@@ -352,6 +352,7 @@ fun ChatScreen(
                     viewModel.onTextChange(it)
                 },
                 onSendMessageRequest = { messageText, _, attachments, mimeType ->
+                    val initialCount = viewModel.chatListItems.value.size
                     viewModel.onSendMessage(messageText = messageText, attachments = attachments, audioBase64 = null, mimeType = mimeType)
                     keyboardController?.hide()
                     coroutineScope.launch {
@@ -359,14 +360,16 @@ fun ChatScreen(
                         snapshotFlow { imeInsets.getBottom(density) > 0 }
                             .filter { isVisible -> !isVisible }
                             .first()
-                        // 滚动到底部，或者更准确地说，将用户消息滚动到顶部
-                        // 尝试多次寻找用户消息，确保列表已更新
+                        
+                        // 等待列表更新（确保找到了新发送的消息）
                         var attempts = 0
                         var targetIndex = -1
-                        while (attempts < 10) {
+                        while (attempts < 20) {
                             val items = viewModel.chatListItems.value
-                            targetIndex = items.indexOfLast { it is com.android.everytalk.ui.screens.MainScreen.chat.ChatListItem.UserMessage }
-                            if (targetIndex != -1) break
+                            if (items.size > initialCount) {
+                                targetIndex = items.indexOfLast { it is com.android.everytalk.ui.screens.MainScreen.chat.ChatListItem.UserMessage }
+                                if (targetIndex != -1) break
+                            }
                             delay(50)
                             attempts++
                         }

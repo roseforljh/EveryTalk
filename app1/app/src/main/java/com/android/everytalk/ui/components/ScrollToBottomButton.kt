@@ -54,7 +54,7 @@ fun ScrollToBottomButton(
         
         Box(modifier = Modifier.fillMaxSize()) {
             FloatingActionButton(
-                onClick = { scrollStateManager.jumpToBottom() },
+                onClick = { scrollStateManager.jumpToBottom(true) },
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(end = endPadding, bottom = bottomPadding),

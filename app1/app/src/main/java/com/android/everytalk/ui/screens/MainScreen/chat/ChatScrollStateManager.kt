@@ -46,6 +46,12 @@ class ChatScrollStateManager(
     private var anchorIndex by mutableStateOf(0)
     private var anchorScrollOffset by mutableStateOf(0)
     private var lastRestoreTime = 0L
+    
+    // Flag to prevent auto-scroll (e.g. from image loading) when we want to stay anchored to top
+    private var preventAutoScroll = false
+    
+    // Flag to indicate a programmatic scroll is in progress, so we shouldn't update the anchor from scroll snapshots
+    private var isProgrammaticScroll = false
 
     val nestedScrollConnection = object : NestedScrollConnection {
         override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
@@ -55,6 +61,8 @@ class ChatScrollStateManager(
                 }
                 // 实时记录用户锚点，不再受 isAtBottom 限制
                 onUserScrollSnapshot(listState)
+                // User interaction re-enables auto-scroll
+                preventAutoScroll = false
             }
             return Offset.Zero
         }
@@ -105,6 +113,10 @@ class ChatScrollStateManager(
     )
 
     fun onUserScrollSnapshot(listState: LazyListState) {
+        // If we are scrolling programmatically (e.g. scrollItemToTop animation), ignore snapshots.
+        // The snapshot might capture an intermediate state during the animation, overwriting our target anchor.
+        if (isProgrammaticScroll) return
+
         // 只要用户在手动滚动，就实时更新锚点，无论是否在底部
         // 这样能确保锚点始终跟随用户的最新视线，避免在贴底滑动时锚点滞后
         userAnchored = true
@@ -132,7 +144,16 @@ class ChatScrollStateManager(
         }
     }
 
-    fun jumpToBottom() {
+    fun jumpToBottom(isUserAction: Boolean = false) {
+        if (!isUserAction && preventAutoScroll) {
+            logger.debug("Ignoring auto jumpToBottom because preventAutoScroll is active")
+            return
+        }
+        
+        if (isUserAction) {
+            preventAutoScroll = false
+        }
+
         logger.debug("Jumping to bottom.")
         if (autoScrollJob?.isActive == true) {
             autoScrollJob?.cancel()
@@ -182,14 +203,40 @@ class ChatScrollStateManager(
         if (autoScrollJob?.isActive == true) {
             autoScrollJob?.cancel()
         }
+        
+        // Lock auto-scroll to prevent image loading etc from jumping to bottom
+        preventAutoScroll = true
+        
         autoScrollJob = coroutineScope.launch {
-            // Wait a bit to ensure list is updated
-            delay(50)
+            // Wait for layout to update and contain the index
+            var attempts = 0
+            while (attempts < 20) { // Retry for up to 1 second
+                val totalItems = listState.layoutInfo.totalItemsCount
+                if (totalItems > index) {
+                    break
+                }
+                delay(50)
+                attempts++
+            }
+
             val totalItems = listState.layoutInfo.totalItemsCount
             if (totalItems > 0 && index in 0 until totalItems) {
+                // Manually update anchor to prevent "jumping up" when restoreAnchorIfNeeded triggers
+                // This ensures that if the list recomposes (e.g. streaming finishes), we stay at this new position
+                userAnchored = true
+                anchorIndex = index
+                anchorScrollOffset = 0
+                
                 // Scroll to the top of the item (offset 0)
                 // Use animateScrollToItem for smooth transition now that layout is stable
-                listState.animateScrollToItem(index, 0)
+                isProgrammaticScroll = true
+                try {
+                    listState.animateScrollToItem(index, 0)
+                } finally {
+                    isProgrammaticScroll = false
+                }
+            } else {
+                logger.warn("Failed to scroll item $index to top: Index out of bounds (total=$totalItems)")
             }
         }
     }
