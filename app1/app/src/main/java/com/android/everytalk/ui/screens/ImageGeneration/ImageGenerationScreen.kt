@@ -194,32 +194,25 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                 .padding(paddingValues)
         ) {
             Box(modifier = Modifier.weight(1f)) {
-                // 使用 Crossfade 在不同历史项之间平滑过渡（以会话ID为 key）
-                Crossfade(
-                    targetState = currentImageConvId,
-                    animationSpec = tween(durationMillis = 250, easing = FastOutSlowInEasing),
-                    label = "ImageHistoryCrossfade"
-                ) {
-                    // 注意：列表数据仍从 imageGenerationChatListItems 读取；
-                    // Crossfade 仅用会话ID作为切换触发点，避免闪烁与硬切换
-                    ImageGenerationMessagesList(
-                        chatItems = imageGenerationChatListItems,
-                        viewModel = viewModel,
-                        listState = listState,
-                        scrollStateManager = scrollStateManager,
-                        bubbleMaxWidth = bubbleMaxWidth,
-                        onShowAiMessageOptions = { msg ->
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            selectedMessageForOptions = msg
-                            showImageMessageOptionsBottomSheet = true
-                        },
-                        onImageLoaded = {
-                            if (scrollStateManager.isAtBottom.value) {
-                                scrollStateManager.jumpToBottom()
-                            }
-                        },
-                    )
-                }
+                // 移除 Crossfade 以避免编辑消息时因状态更新导致的列表重组和滚动丢失
+                // 直接展示列表，确保 LazyColumn 状态稳定性
+                ImageGenerationMessagesList(
+                    chatItems = imageGenerationChatListItems,
+                    viewModel = viewModel,
+                    listState = listState,
+                    scrollStateManager = scrollStateManager,
+                    bubbleMaxWidth = bubbleMaxWidth,
+                    onShowAiMessageOptions = { msg ->
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        selectedMessageForOptions = msg
+                        showImageMessageOptionsBottomSheet = true
+                    },
+                    onImageLoaded = {
+                        if (scrollStateManager.isAtBottom.value) {
+                            scrollStateManager.jumpToBottom()
+                        }
+                    },
+                )
 
                 // 复用文本模式的“返回底部”按钮，悬浮于列表右下角
                 ScrollToBottomButton(

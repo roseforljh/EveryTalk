@@ -161,33 +161,6 @@ fun ImageGenerationMessagesList(
     val animatedItems = remember { mutableStateMapOf<String, Boolean>() }
     val density = LocalDensity.current
 
-    // 滚动锚点逻辑：当用户手动离开底部时，记录当前位置；当列表数据变化时，尝试恢复该位置
-    // 避免因底部内容高度变化（如Finish时）导致视图整体上移
-    val isAtBottom by scrollStateManager.isAtBottom
-    LaunchedEffect(listState.isScrollInProgress, isAtBottom) {
-        if (listState.isScrollInProgress && !isAtBottom) {
-            scrollStateManager.onUserScrollSnapshot(listState)
-        }
-    }
-
-    // 构造内容签名：结合列表长度和最后一条AI消息的文本长度
-    // 这样即使列表项数量不变（例如Streaming -> Complete），只要内容长度变了（Finish时同步完整文本），也能触发锚点恢复
-    // 优化：仅在非编辑场景下触发（编辑时 text 变化不应视为新内容追加）
-    val lastAiItem = chatItems.lastOrNull { it is ChatListItem.AiMessage }
-    val contentSignature = remember(chatItems.size, lastAiItem) {
-        val lastTextLen = when (lastAiItem) {
-            is ChatListItem.AiMessage -> lastAiItem.text.length
-            else -> 0
-        }
-        // 使用更稳定的签名，避免因编辑导致的不必要滚动
-        "${chatItems.size}_${lastAiItem?.stableId}_$lastTextLen"
-    }
-
-    LaunchedEffect(contentSignature, isAtBottom) {
-        if (!isAtBottom) {
-            scrollStateManager.restoreAnchorIfNeeded(listState)
-        }
-    }
  
     var isContextMenuVisible by remember { mutableStateOf(false) }
     var contextMenuMessage by remember { mutableStateOf<Message?>(null) }
