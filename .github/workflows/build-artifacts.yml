@@ -88,8 +88,14 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           VERSION_NAME: ${{ env.VERSION_NAME }}
+          # 注入后端配置
+          BACKEND_URLS_RELEASE: ${{ secrets.BACKEND_URLS_RELEASE }}
+          VOICE_BACKEND_URL_RELEASE: ${{ secrets.VOICE_BACKEND_URL_RELEASE }}
         run: |
-          ./gradlew :app:assembleRelease --parallel --build-cache --stacktrace
+          ./gradlew :app:assembleRelease \
+            -PBACKEND_URLS_RELEASE="${{ secrets.BACKEND_URLS_RELEASE }}" \
+            -PVOICE_BACKEND_URL_RELEASE="${{ secrets.VOICE_BACKEND_URL_RELEASE }}" \
+            --parallel --build-cache --stacktrace
 
       - name: Upload Android artifacts to Release
         if: startsWith(github.ref, 'refs/tags/')
