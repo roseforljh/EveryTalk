@@ -35,6 +35,7 @@ import com.android.everytalk.statecontroller.SimpleModeManager
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.ui.screens.MainScreen.chat.ModelSelectionBottomSheet
 import com.android.everytalk.ui.screens.MainScreen.chat.rememberChatScrollStateManager
+import com.android.everytalk.ui.screens.MainScreen.chat.EditMessageDialog
 import kotlinx.coroutines.launch
 import com.android.everytalk.ui.components.ScrollToBottomButton
 import androidx.compose.ui.text.font.FontWeight
@@ -47,7 +48,6 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
     val selectedApiConfig by viewModel.selectedImageGenApiConfig.collectAsState()
     val coroutineScope = rememberCoroutineScope()
     val text by viewModel.text.collectAsState()
-    val editingMessage by viewModel.editingMessage.collectAsState()
     val selectedMediaItems = viewModel.selectedMediaItems
     val isApiCalling by viewModel.isImageApiCalling.collectAsState()
     val isStreamingPaused by viewModel.isStreamingPaused.collectAsState()
@@ -103,11 +103,32 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
 
     // 关于对话框 - 修复图像模式下的显示bug
     val showAboutDialog by viewModel.showAboutDialog.collectAsState()
+    val showEditDialog by viewModel.showEditDialog.collectAsState()
+    val editDialogInputText by viewModel.editDialogInputText.collectAsState()
+
+    // 标记是否刚关闭编辑对话框，用于防止输入框重新获焦时自动滚动到底部
+    var justClosedEditDialog by remember { mutableStateOf(false) }
+    LaunchedEffect(showEditDialog) {
+        if (!showEditDialog) {
+            justClosedEditDialog = true
+            kotlinx.coroutines.delay(500)
+            justClosedEditDialog = false
+        }
+    }
 
     if (showAboutDialog) {
         AboutDialog(
             viewModel = viewModel,
             onDismiss = { viewModel.dismissAboutDialog() }
+        )
+    }
+    
+    if (showEditDialog) {
+        EditMessageDialog(
+            editDialogInputText = editDialogInputText,
+            onDismissRequest = { viewModel.dismissEditDialog() },
+            onEditDialogTextChanged = viewModel::onEditDialogTextChanged,
+            onConfirmMessageEdit = { viewModel.confirmImageGenerationMessageEdit() }
         )
     }
 
@@ -253,10 +274,10 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                 density = density,
                 keyboardController = keyboardController,
                 onFocusChange = {
-                    scrollStateManager.jumpToBottom()
+                    if (!justClosedEditDialog) {
+                        scrollStateManager.jumpToBottom()
+                    }
                 },
-                editingMessage = editingMessage,
-                onCancelEdit = { viewModel.cancelEditing() },
                 selectedImageRatio = selectedImageRatio,
                 onImageRatioChanged = { viewModel.stateHolder._selectedImageRatio.value = it }
             )

@@ -36,14 +36,9 @@ class EditMessageController(
 
     fun requestEditMessage(message: Message, isImageGeneration: Boolean = false) {
         if (message.sender != Sender.User) return
-        if (isImageGeneration) {
-            dialogManager.showEditDialog(message.id, message)
-            stateHolder._text.value = message.text
-        } else {
-            val current = getMessageById(message.id)
-            stateHolder._editDialogInputText.value = current?.text ?: message.text
-            dialogManager.showEditDialog(message.id, message)
-        }
+        val current = getMessageById(message.id)
+        stateHolder._editDialogInputText.value = current?.text ?: message.text
+        dialogManager.showEditDialog(message.id, message)
     }
 
     fun confirmMessageEdit() {
@@ -85,15 +80,11 @@ class EditMessageController(
         }
     }
 
-    fun confirmImageGenerationMessageEdit(updatedText: String) {
+    fun confirmImageGenerationMessageEdit() {
         val messageToEdit = dialogManager.editingMessage.value
-        android.util.Log.d("EditMessageController", "🔥 confirmImageGenerationMessageEdit called")
-        android.util.Log.d("EditMessageController", "   messageToEdit: ${messageToEdit?.id}")
-        android.util.Log.d("EditMessageController", "   updatedText: '$updatedText'")
-        android.util.Log.d("EditMessageController", "   imageGenerationMessages.size: ${stateHolder.imageGenerationMessages.size}")
+        val updatedText = stateHolder._editDialogInputText.value.trim()
         
         if (messageToEdit == null) {
-            android.util.Log.e("EditMessageController", "❌ messageToEdit is null! This should not happen.")
             return
         }
         
@@ -101,7 +92,6 @@ class EditMessageController(
             var needsHistorySave = false
             messagesMutex.withLock {
                 val messageIndex = stateHolder.imageGenerationMessages.indexOfFirst { it.id == messageToEdit.id }
-                android.util.Log.d("EditMessageController", "   messageIndex: $messageIndex")
                 
                 if (messageIndex != -1) {
                     val originalMessage = stateHolder.imageGenerationMessages[messageIndex]
@@ -116,12 +106,7 @@ class EditMessageController(
                         // 🎯 新增：清除缓存以强制UI更新
                         clearMessageCache(messageToEdit.id, true)
                         android.util.Log.d("EditMessageController", "✅ Image message edited and cache cleared: ${messageToEdit.id.take(8)}")
-                    } else {
-                        android.util.Log.d("EditMessageController", "⚠️ Text unchanged, skipping update")
                     }
-                } else {
-                    android.util.Log.e("EditMessageController", "❌ Message not found in list! messageId=${messageToEdit.id}")
-                    android.util.Log.d("EditMessageController", "   Current message IDs: ${stateHolder.imageGenerationMessages.map { it.id }}")
                 }
             }
             if (needsHistorySave) {
@@ -129,7 +114,6 @@ class EditMessageController(
             }
             stateHolder.isImageConversationDirty.value = true
             dialogManager.dismissEditDialog()
-            stateHolder._text.value = ""
         }
     }
 
@@ -140,7 +124,6 @@ class EditMessageController(
 
     fun cancelEditing() {
         dialogManager.dismissEditDialog()
-        stateHolder._text.value = ""
     }
 
     private fun getMessageById(id: String): Message? {

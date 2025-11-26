@@ -172,12 +172,14 @@ fun ImageGenerationMessagesList(
 
     // 构造内容签名：结合列表长度和最后一条AI消息的文本长度
     // 这样即使列表项数量不变（例如Streaming -> Complete），只要内容长度变了（Finish时同步完整文本），也能触发锚点恢复
+    // 优化：仅在非编辑场景下触发（编辑时 text 变化不应视为新内容追加）
     val lastAiItem = chatItems.lastOrNull { it is ChatListItem.AiMessage }
     val contentSignature = remember(chatItems.size, lastAiItem) {
         val lastTextLen = when (lastAiItem) {
             is ChatListItem.AiMessage -> lastAiItem.text.length
             else -> 0
         }
+        // 使用更稳定的签名，避免因编辑导致的不必要滚动
         "${chatItems.size}_${lastAiItem?.stableId}_$lastTextLen"
     }
 

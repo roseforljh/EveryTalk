@@ -750,22 +750,18 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         mimeType: String? = null,
         isImageGeneration: Boolean = false
     ) {
-        if (editingMessage.value != null && isImageGeneration) {
-            confirmImageGenerationMessageEdit(messageText)
-        } else {
-            // 仅在“接入系统提示”开启时，才把系统提示注入到本次会话
-            val engaged = stateHolder.systemPromptEngagedState[stateHolder._currentConversationId.value] ?: false
-            val promptToUse = if (engaged) systemPrompt.value else null
-            messageSender.sendMessage(
-                messageText,
-                isFromRegeneration,
-                attachments,
-                audioBase64 = audioBase64,
-                mimeType = mimeType,
-                systemPrompt = promptToUse,
-                isImageGeneration = isImageGeneration
-            )
-        }
+        // 仅在“接入系统提示”开启时，才把系统提示注入到本次会话
+        val engaged = stateHolder.systemPromptEngagedState[stateHolder._currentConversationId.value] ?: false
+        val promptToUse = if (engaged) systemPrompt.value else null
+        messageSender.sendMessage(
+            messageText,
+            isFromRegeneration,
+            attachments,
+            audioBase64 = audioBase64,
+            mimeType = mimeType,
+            systemPrompt = promptToUse,
+            isImageGeneration = isImageGeneration
+        )
     }
 
     fun addMediaItem(item: SelectedMediaItem) {
@@ -832,8 +828,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         editMessageController.confirmMessageEdit()
     }
 
-    fun confirmImageGenerationMessageEdit(updatedText: String) {
-        editMessageController.confirmImageGenerationMessageEdit(updatedText)
+    fun confirmImageGenerationMessageEdit() {
+        editMessageController.confirmImageGenerationMessageEdit()
     }
 
     fun dismissEditDialog() {

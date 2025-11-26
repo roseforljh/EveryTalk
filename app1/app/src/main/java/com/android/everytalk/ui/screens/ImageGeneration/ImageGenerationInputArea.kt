@@ -271,8 +271,6 @@ fun ImageGenerationInputArea(
     density: Density,
     keyboardController: SoftwareKeyboardController?,
     onFocusChange: (isFocused: Boolean) -> Unit,
-    editingMessage: Message?,
-    onCancelEdit: () -> Unit,
     selectedImageRatio: ImageRatio = ImageRatio.DEFAULT_SELECTED,
     onImageRatioChanged: (ImageRatio) -> Unit = {},
     // 在选择比例后，把解析出的最终分辨率（如 "960x1280"）回传给上层；无法解析时传 null
@@ -482,31 +480,6 @@ fun ImageGenerationInputArea(
                 modifier = Modifier
                     .padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 4.dp)
             ) {
-                if (editingMessage != null) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 8.dp)
-                            .background(MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("正在编辑", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
-                            Text(
-                                text = editingMessage.text,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        IconButton(onClick = onCancelEdit, modifier = Modifier.size(24.dp)) {
-                            Icon(Icons.Default.Close, "取消编辑", tint = MaterialTheme.colorScheme.onSecondaryContainer)
-                        }
-                    }
-                }
                 if (selectedMediaItems.isNotEmpty()) {
                     LazyRow(
                         modifier = Modifier
