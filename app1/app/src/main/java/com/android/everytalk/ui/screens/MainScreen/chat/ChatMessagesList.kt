@@ -187,7 +187,8 @@ fun ChatMessagesList(
                                 verticalAlignment = Alignment.Top
                             ) {
                                 Column(
-                                    modifier = Modifier.wrapContentWidth()
+                                    modifier = Modifier.wrapContentWidth(),
+                                    horizontalAlignment = Alignment.End
                                 ) {
                                     val message = viewModel.getMessageById(item.messageId)
                                     if (message != null) {
