@@ -956,20 +956,47 @@ fun AppDrawerContent(
 
             renamingIndex?.let { index ->
                 var newName by remember(index) { mutableStateOf(getFullTextForIndex(index)) }
+                val isDarkTheme = isSystemInDarkTheme()
+                val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
+                val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
+                val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
+
                 AlertDialog(
                     onDismissRequest = { renamingIndex = null },
                     title = { Text("重命名会话") },
                     text = {
-                        OutlinedTextField(
-                            value = newName,
-                            onValueChange = { newName = it },
-                            singleLine = true,
-                            shape = RoundedCornerShape(32.dp),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = MaterialTheme.colorScheme.primary,
-                                unfocusedBorderColor = Color.Gray.copy(alpha = 0.5f)
+                        Column {
+                            Text(
+                                text = "会话名称",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(bottom = 8.dp)
                             )
-                        )
+                            OutlinedTextField(
+                                value = newName,
+                                onValueChange = { newName = it },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                                placeholder = { Text("请输入会话名称") },
+                                shape = RoundedCornerShape(12.dp),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                                    unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                                    disabledTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                    cursorColor = MaterialTheme.colorScheme.primary,
+                                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                                    disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                                    focusedLabelColor = MaterialTheme.colorScheme.primary,
+                                    unfocusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                    disabledLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                )
+                            )
+                        }
                     },
                     confirmButton = {
                         Button(
@@ -977,28 +1004,45 @@ fun AppDrawerContent(
                                 onRenameRequest(index, newName)
                                 renamingIndex = null
                             },
-                            shape = RoundedCornerShape(32.dp),
+                            modifier = Modifier
+                                .height(48.dp)
+                                .padding(horizontal = 4.dp),
+                            shape = RoundedCornerShape(24.dp),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.surface,
-                                contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black
+                                containerColor = confirmButtonColor,
+                                contentColor = confirmButtonTextColor
                             )
                         ) {
-                            Text("确定", fontWeight = FontWeight.Bold)
+                            Text(
+                                "确定",
+                                style = MaterialTheme.typography.labelLarge.copy(
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            )
                         }
                     },
                     dismissButton = {
-                        Button(
+                        OutlinedButton(
                             onClick = { renamingIndex = null },
-                            shape = RoundedCornerShape(32.dp),
-                            colors = ButtonDefaults.buttonColors(
+                            modifier = Modifier
+                                .height(48.dp)
+                                .padding(horizontal = 4.dp),
+                            shape = RoundedCornerShape(24.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
                                 containerColor = MaterialTheme.colorScheme.surface,
-                                contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black
-                            )
+                                contentColor = cancelButtonColor
+                            ),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
                         ) {
-                            Text("取消", fontWeight = FontWeight.Bold)
+                            Text(
+                                "取消",
+                                style = MaterialTheme.typography.labelLarge.copy(
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            )
                         }
                     },
-                    shape = RoundedCornerShape(32.dp),
+                    shape = RoundedCornerShape(28.dp),
                     containerColor = MaterialTheme.colorScheme.surface
                 )
             }

@@ -62,6 +62,20 @@ val DialogTextFieldColors
     )
 val DialogShape = RoundedCornerShape(12.dp)
 
+@Composable
+internal fun SettingsFieldLabel(
+    text: String,
+    modifier: Modifier = Modifier
+) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = modifier.padding(bottom = 8.dp)
+    )
+}
+
 private fun normalizeBaseUrlForPreview(url: String): String =
     url.trim().trimEnd('#')
 
@@ -210,20 +224,24 @@ internal fun AddProviderDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     lineHeight = MaterialTheme.typography.bodyMedium.lineHeight * 1.5f
                 )
-                OutlinedTextField(
-                    value = newProviderName,
-                    onValueChange = onNewProviderNameChange,
-                    label = { Text("平台名称", fontWeight = FontWeight.Medium) },
-                    placeholder = { Text("例如: OpenRouter, Anthropic...") },
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth(),
-                        // .focusRequester(focusRequester), // Removed auto-focus
-                    keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(onDone = { if (newProviderName.isNotBlank()) onConfirm() }),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = DialogTextFieldColors
-                )
+                Column(
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    SettingsFieldLabel("平台名称")
+                    OutlinedTextField(
+                        value = newProviderName,
+                        onValueChange = onNewProviderNameChange,
+                        placeholder = { Text("例如: OpenRouter, Anthropic...") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth(),
+                            // .focusRequester(focusRequester), // Removed auto-focus
+                        keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { if (newProviderName.isNotBlank()) onConfirm() }),
+                        shape = DialogShape,
+                        colors = DialogTextFieldColors
+                    )
+                }
                 // 提示信息
                 if (newProviderName.isNotBlank()) {
                     Surface(
@@ -442,6 +460,7 @@ internal fun AddNewFullConfigDialog(
                     }
                 }
 
+                SettingsFieldLabel("模型平台")
                 ExposedDropdownMenuBox(
                     expanded = providerMenuExpanded && providersToShow.isNotEmpty(),
                     onExpandedChange = {
@@ -455,7 +474,6 @@ internal fun AddNewFullConfigDialog(
                         value = if (provider.trim().lowercase() in listOf("默认","default","default_text")) "" else provider,
                         onValueChange = {},
                         readOnly = true,
-                        label = { Text("模型平台") },
                         placeholder = { Text("请选择平台") },
                         modifier = Modifier
                             .menuAnchor()
@@ -547,6 +565,7 @@ internal fun AddNewFullConfigDialog(
 
                 // 当选择“默认”时隐藏渠道/地址/密钥等输入
                 if (!isDefaultSel) {
+                    SettingsFieldLabel("渠道")
                     ExposedDropdownMenuBox(
                         expanded = channelMenuExpanded,
                         onExpandedChange = {
@@ -563,7 +582,6 @@ internal fun AddNewFullConfigDialog(
                             onValueChange = {},
                             readOnly = true,
                             enabled = !isGoogleProvider, // Google 平台时禁用手动切换
-                            label = { Text("渠道") },
                             modifier = Modifier
                                 .menuAnchor()
                                 .fillMaxWidth()
@@ -598,10 +616,10 @@ internal fun AddNewFullConfigDialog(
                         }
                     }
 
+                    SettingsFieldLabel("API接口地址")
                     OutlinedTextField(
                         value = apiAddress,
                         onValueChange = onApiAddressChange,
-                        label = { Text("API接口地址") },
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(bottom = 12.dp),
@@ -633,10 +651,10 @@ internal fun AddNewFullConfigDialog(
                         }
                     }
 
+                    SettingsFieldLabel("API密钥")
                     OutlinedTextField(
                         value = apiKey,
                         onValueChange = onApiKeyChange,
-                        label = { Text("API密钥") },
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(bottom = 12.dp),
@@ -699,10 +717,10 @@ internal fun AddNewFullConfigDialog(
                                     )
                                 }
                                 
+                                SettingsFieldLabel("自定义 Tools (JSON)")
                                 OutlinedTextField(
                                     value = toolsJson,
                                     onValueChange = { toolsJson = it },
-                                    label = { Text("自定义 Tools (JSON)") },
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .height(150.dp)
@@ -829,10 +847,10 @@ internal fun EditConfigDialog(
         },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                SettingsFieldLabel("模型平台")
                 OutlinedTextField(
                     value = provider,
                     onValueChange = { provider = it },
-                    label = { Text("模型平台") },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(bottom = 12.dp),
@@ -842,10 +860,10 @@ internal fun EditConfigDialog(
                     colors = DialogTextFieldColors
                 )
 
+                SettingsFieldLabel("API接口地址")
                 OutlinedTextField(
                     value = apiAddress,
                     onValueChange = { apiAddress = it },
-                    label = { Text("API接口地址") },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(bottom = 12.dp),
@@ -876,10 +894,10 @@ internal fun EditConfigDialog(
                         )
                     }
                 }
+                SettingsFieldLabel("API密钥")
                 OutlinedTextField(
                     value = apiKey,
                     onValueChange = { apiKey = it },
-                    label = { Text("API密钥") },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(bottom = 12.dp),
@@ -901,6 +919,7 @@ internal fun EditConfigDialog(
                     channelMenuTransitionState.targetState = shouldShowChannelMenuLogical
                 }
 
+                SettingsFieldLabel("渠道")
                 ExposedDropdownMenuBox(
                     expanded = channelMenuExpanded,
                     onExpandedChange = { channelMenuExpanded = !channelMenuExpanded },
@@ -910,7 +929,6 @@ internal fun EditConfigDialog(
                         value = selectedChannel,
                         onValueChange = {},
                         readOnly = true,
-                        label = { Text("渠道") },
                         modifier = Modifier
                             .menuAnchor()
                             .fillMaxWidth()
@@ -990,10 +1008,10 @@ internal fun EditConfigDialog(
                                 )
                             }
                             
+                            SettingsFieldLabel("自定义 Tools (JSON)")
                             OutlinedTextField(
                                 value = toolsJson,
                                 onValueChange = { toolsJson = it },
-                                label = { Text("自定义 Tools (JSON)") },
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(150.dp)
@@ -1329,20 +1347,24 @@ internal fun AddModelDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     lineHeight = MaterialTheme.typography.bodyMedium.lineHeight * 1.5f
                 )
-                OutlinedTextField(
-                    value = modelName,
-                    onValueChange = { modelName = it },
-                    label = { Text("模型名称", fontWeight = FontWeight.Medium) },
-                    placeholder = { Text("例如: gpt-4-turbo") },
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth(),
-                        // .focusRequester(focusRequester), // Removed auto-focus
-                    keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(onDone = { if (modelName.isNotBlank()) onConfirm(modelName) }),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = DialogTextFieldColors
-                )
+                Column(
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    SettingsFieldLabel("模型名称")
+                    OutlinedTextField(
+                        value = modelName,
+                        onValueChange = { modelName = it },
+                        placeholder = { Text("例如: gpt-4-turbo") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth(),
+                            // .focusRequester(focusRequester), // Removed auto-focus
+                        keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { if (modelName.isNotBlank()) onConfirm(modelName) }),
+                        shape = DialogShape,
+                        colors = DialogTextFieldColors
+                    )
+                }
                 // 提示信息
                 if (modelName.isNotBlank()) {
                     Surface(

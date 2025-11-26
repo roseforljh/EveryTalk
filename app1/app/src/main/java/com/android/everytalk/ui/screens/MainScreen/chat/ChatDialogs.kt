@@ -19,6 +19,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -58,6 +59,10 @@ fun EditMessageDialog(
 ) {
     val alpha = remember { Animatable(0f) }
     val scale = remember { Animatable(0.8f) }
+    val isDarkTheme = isSystemInDarkTheme()
+    val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
+    val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
+    val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
 
     LaunchedEffect(Unit) {
         launch {
@@ -79,51 +84,83 @@ fun EditMessageDialog(
         title = { Text("编辑消息", color = MaterialTheme.colorScheme.onSurface) },
         text = {
             SelectionContainer {
-                OutlinedTextField(
-                    value = editDialogInputText,
-                    onValueChange = onEditDialogTextChanged,
-                    modifier = Modifier.fillMaxWidth(),
-                    label = {
-                        Text(
-                            text = "消息内容",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    },
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = MaterialTheme.colorScheme.primary,
-                        unfocusedBorderColor = Color.Gray.copy(alpha = 0.5f),
-                        focusedLabelColor = MaterialTheme.colorScheme.primary,
-                        unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        cursorColor = MaterialTheme.colorScheme.primary,
-                        focusedTextColor = MaterialTheme.colorScheme.onSurface,
-                        unfocusedTextColor = MaterialTheme.colorScheme.onSurface
-                    ),
-                    singleLine = false, maxLines = 5,
-                    shape = RoundedCornerShape(32.dp)
-                )
+                Column {
+                    Text(
+                        text = "消息内容",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    OutlinedTextField(
+                        value = editDialogInputText,
+                        onValueChange = onEditDialogTextChanged,
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("请输入消息内容") },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                            unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                            disabledTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                            cursorColor = MaterialTheme.colorScheme.primary,
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                            disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                            focusedLabelColor = MaterialTheme.colorScheme.primary,
+                            unfocusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                            disabledLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        ),
+                        singleLine = false,
+                        maxLines = 5,
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                }
             }
         },
         confirmButton = {
             Button(
                 onClick = onConfirmMessageEdit,
-                shape = RoundedCornerShape(32.dp),
+                modifier = Modifier
+                    .height(48.dp)
+                    .padding(horizontal = 4.dp),
+                shape = RoundedCornerShape(24.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black
+                    containerColor = confirmButtonColor,
+                    contentColor = confirmButtonTextColor
                 )
-            ) { Text("确定", fontWeight = FontWeight.Bold) }
+            ) {
+                Text(
+                    "确定",
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        fontWeight = FontWeight.SemiBold
+                    )
+                )
+            }
         },
         dismissButton = {
-            Button(
+            OutlinedButton(
                 onClick = onDismissRequest,
-                shape = RoundedCornerShape(32.dp),
-                colors = ButtonDefaults.buttonColors(
+                modifier = Modifier
+                    .height(48.dp)
+                    .padding(horizontal = 4.dp),
+                shape = RoundedCornerShape(24.dp),
+                colors = ButtonDefaults.outlinedButtonColors(
                     containerColor = MaterialTheme.colorScheme.surface,
-                    contentColor = if (isSystemInDarkTheme()) Color.White else Color.Black
+                    contentColor = cancelButtonColor
+                ),
+                border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
+            ) {
+                Text(
+                    "取消",
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        fontWeight = FontWeight.SemiBold
+                    )
                 )
-            ) { Text("取消", fontWeight = FontWeight.Bold) }
+            }
         },
-        shape = RoundedCornerShape(32.dp)
+        shape = RoundedCornerShape(28.dp)
     )
 }
 @Composable
