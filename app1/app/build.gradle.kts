@@ -114,8 +114,16 @@ android {
             }
             signingConfig = signingConfigs.getByName("release")
             // Inject backend configuration for Release
-            val backendUrlsRelease = sanitizeForBuildConfig(localProperties.getProperty("BACKEND_URLS_RELEASE", ""))
-            val voiceBackendUrlRelease = sanitizeForBuildConfig(localProperties.getProperty("VOICE_BACKEND_URL_RELEASE", ""))
+            val backendUrlsRelease = sanitizeForBuildConfig(
+                localProperties.getProperty("BACKEND_URLS_RELEASE")
+                    ?: System.getenv("BACKEND_URLS_RELEASE")
+                    ?: ""
+            )
+            val voiceBackendUrlRelease = sanitizeForBuildConfig(
+                localProperties.getProperty("VOICE_BACKEND_URL_RELEASE")
+                    ?: System.getenv("VOICE_BACKEND_URL_RELEASE")
+                    ?: ""
+            )
             buildConfigField("String", "BACKEND_URLS", "\"${backendUrlsRelease}\"")
             buildConfigField("String", "VOICE_BACKEND_URL", "\"${voiceBackendUrlRelease}\"")
             buildConfigField("boolean", "CONCURRENT_REQUEST_ENABLED", "false")

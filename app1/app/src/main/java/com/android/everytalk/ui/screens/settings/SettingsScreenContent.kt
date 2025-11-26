@@ -49,8 +49,8 @@ private fun DefaultPinnedCard(
     isImageMode: Boolean = false
 ) {
     val isDark = isSystemInDarkTheme()
-    val container = if (isDark) Color.Black else MaterialTheme.colorScheme.surfaceColorAtElevation(2.dp)
-    val border = if (isDark) Color.White.copy(alpha = 0.45f) else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+    val container = MaterialTheme.colorScheme.surface
+    val border = if (isDark) Color.White.copy(alpha = 0.2f) else MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
 
     OutlinedCard(
         modifier = Modifier.fillMaxWidth(),
@@ -349,17 +349,13 @@ private fun ApiKeyItemGroup(
         (modalityType == ModalityType.IMAGE && firstCfg.provider.trim().lowercase() in listOf("硅基流动","siliconflow"))
     )
     val isDarkMode = isSystemInDarkTheme()
-    val cardContainerColor = if (isDarkMode) {
-        Color.Black
-    } else {
-        MaterialTheme.colorScheme.surfaceColorAtElevation(2.dp)
-    }
+    val cardContainerColor = MaterialTheme.colorScheme.surface
     val cardBorderColor = if (isDarkMode) {
-        Color.White.copy(alpha = 0.45f)
+        Color.White.copy(alpha = 0.2f)
     } else {
-        MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+        MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
     }
-    val cardElevation = if (isDarkMode) 6.dp else 2.dp
+    val cardElevation = 2.dp
 
     OutlinedCard(
         modifier = modifier.fillMaxWidth(),
@@ -585,7 +581,7 @@ private fun ModelItem(
             MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
         }
     } else {
-        if (isDarkMode) Color.Black else MaterialTheme.colorScheme.surfaceColorAtElevation(1.dp)
+        MaterialTheme.colorScheme.surface
     }
 
     Row(

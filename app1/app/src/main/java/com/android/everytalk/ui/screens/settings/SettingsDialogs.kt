@@ -49,18 +49,18 @@ val DialogTextFieldColors
         focusedTextColor = MaterialTheme.colorScheme.onSurface,
         unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
         disabledTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-        cursorColor = MaterialTheme.colorScheme.tertiary,
-        focusedBorderColor = MaterialTheme.colorScheme.tertiary,
-        unfocusedBorderColor = Color.Gray.copy(alpha = 0.5f),
+        cursorColor = MaterialTheme.colorScheme.primary,
+        focusedBorderColor = MaterialTheme.colorScheme.primary,
+        unfocusedBorderColor = MaterialTheme.colorScheme.outline,
         disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
-        focusedLabelColor = MaterialTheme.colorScheme.tertiary,
+        focusedLabelColor = MaterialTheme.colorScheme.primary,
         unfocusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
         disabledLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-        focusedContainerColor = Color.Transparent,
-        unfocusedContainerColor = Color.Transparent,
-        disabledContainerColor = Color.Transparent
+        focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
     )
-val DialogShape = RoundedCornerShape(32.dp)
+val DialogShape = RoundedCornerShape(12.dp)
 
 private fun normalizeBaseUrlForPreview(url: String): String =
     url.trim().trimEnd('#')
@@ -305,15 +305,13 @@ private fun CustomStyledDropdownMenu(
     if ((transitionState.currentState || transitionState.targetState) && anchorBounds != null) {
         val density = LocalDensity.current
         val menuWidth = with(density) { anchorBounds.width.toDp() }
-        val isDark = isSystemInDarkTheme()
-
-        // 使用 DropdownMenu 并设置样式和颜色，深色模式使用灰色背景
+        // 使用 DropdownMenu 并设置样式和颜色
         MaterialTheme(
             shapes = MaterialTheme.shapes.copy(
                 extraSmall = RoundedCornerShape(32.dp)
             ),
             colorScheme = MaterialTheme.colorScheme.copy(
-                surface = if (isDark) Color(0xFF424242) else MaterialTheme.colorScheme.surfaceContainerHighest
+                surface = MaterialTheme.colorScheme.surfaceContainerHighest
             )
         ) {
             DropdownMenu(
@@ -397,11 +395,10 @@ internal fun AddNewFullConfigDialog(
         }
     }
 
-    val isDark = isSystemInDarkTheme()
     AlertDialog(
         shape = RoundedCornerShape(32.dp),
         onDismissRequest = onDismissRequest,
-        containerColor = if (isDark) Color.Black else MaterialTheme.colorScheme.surface,
+        containerColor = MaterialTheme.colorScheme.surface,
         title = {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -797,11 +794,10 @@ internal fun EditConfigDialog(
     // 固定的渠道类型选项
     val channelTypes = listOf("OpenAI兼容", "Gemini")
 
-    val isDark = isSystemInDarkTheme()
     AlertDialog(
         onDismissRequest = onDismissRequest,
         shape = RoundedCornerShape(32.dp),
-        containerColor = if (isDark) Color.Black else MaterialTheme.colorScheme.surface,
+        containerColor = MaterialTheme.colorScheme.surface,
         titleContentColor = MaterialTheme.colorScheme.onSurface,
         textContentColor = MaterialTheme.colorScheme.onSurface,
         title = {
