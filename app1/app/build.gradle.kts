@@ -56,7 +56,8 @@ android {
         versionCode = 6000
         // 优先从环境变量获取版本号(CI环境)，否则使用默认值
         val baseVersionName = "1.7.5"
-        versionName = System.getenv("VERSION_NAME") ?: baseVersionName
+        val envVersionName = System.getenv("VERSION_NAME")
+        versionName = if (!envVersionName.isNullOrBlank()) envVersionName else baseVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
