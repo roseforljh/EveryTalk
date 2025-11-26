@@ -1,14 +1,9 @@
 package com.android.everytalk.ui.components
 import com.android.everytalk.ui.components.coordinator.ContentCoordinator
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.wrapContentWidth
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.ui.zIndex
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -50,7 +45,7 @@ fun EnhancedMarkdownText(
     inTableContext: Boolean = false,
     onLongPress: (() -> Unit)? = null,
     inSelectionDialog: Boolean = false,
-    onImageClick: ((String) -> Unit)? = null, // 🎯 新增
+    onImageClick: ((String) -> Unit)? = null, //  新增
     viewModel: AppViewModel? = null
 ) {
     val textColor = when {
@@ -59,9 +54,9 @@ fun EnhancedMarkdownText(
         else -> MaterialTheme.colorScheme.onSurface
     }
     
-    // 🎯 获取实时流式内容
+    //  获取实时流式内容
     // 使用 collectAsState 订阅Flow，实现流式效果
-    // 🎯 优化：流式结束后继续订阅 StateFlow，直到组件销毁或显式重置
+    //  优化：流式结束后继续订阅 StateFlow，直到组件销毁或显式重置
     // 避免 isStreaming 从 true -> false 瞬间切换数据源导致重组闪烁
     val streamingStateFlow = remember(message.id, viewModel) {
         if (viewModel != null) {
@@ -89,13 +84,13 @@ fun EnhancedMarkdownText(
         }
     }
 
-    // 🎯 委托给 ContentCoordinator 统一调度
+    //  委托给 ContentCoordinator 统一调度
     // 优势：
     // 1. 职责分离：数学、表格、纯文本各自独立
     // 2. 易于维护：修改某个模块不影响其他模块
     // 3. 易于扩展：添加新类型（如图表）只需添加新模块
     // 4. 缓存机制：使用消息ID作为key，避免LazyColumn回收后重复解析
-    // 🎯 根据发送者决定宽度策略
+    //  根据发送者决定宽度策略
     val widthModifier = if (message.sender == Sender.User) {
         Modifier.wrapContentWidth()
     } else {
