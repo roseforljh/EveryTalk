@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.MainScreen.drawer
 
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Folder
@@ -11,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -35,34 +37,73 @@ internal fun DeleteConfirmationDialog(
     onConfirm: () -> Unit
 ) {
     if (showDialog) {
+        val isDarkTheme = isSystemInDarkTheme()
+        val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
+        val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
+        val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
+
         AlertDialog(
             shape = RoundedCornerShape(32.dp),
             onDismissRequest = onDismiss,
-            title = { Text(if (selectedItemCount > 1) "确定删除所有所选项？" else if (selectedItemCount == 1) "确定删除所选项？" else "确定删除此项？") },
+            title = {
+                Text(
+                    if (selectedItemCount > 1) "确定删除所有所选项？"
+                    else if (selectedItemCount == 1) "确定删除所选项？"
+                    else "确定删除此项？"
+                )
+            },
             // text = { Text("此操作无法撤销。") }, // 可选
             confirmButton = {
-                FilledTonalButton(
-                    onClick = {
-                        onConfirm()
-                        onDismiss()
-                    },
-                    shape = RoundedCornerShape(20.dp),
-                    modifier = Modifier.height(52.dp).padding(horizontal = 4.dp),
-                    colors = ButtonDefaults.filledTonalButtonColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer,
-                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                    )
-                ) { Text("确定", fontWeight = FontWeight.Bold) }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = MaterialTheme.colorScheme.surface,
+                            contentColor = cancelButtonColor
+                        ),
+                        border = BorderStroke(1.dp, cancelButtonColor)
+                    ) {
+                        Text(
+                            text = "取消",
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        )
+                    }
+
+                    Button(
+                        onClick = {
+                            onConfirm()
+                            onDismiss()
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = confirmButtonColor,
+                            contentColor = confirmButtonTextColor,
+                            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        )
+                    ) {
+                        Text(
+                            text = "确定",
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        )
+                    }
+                }
             },
-            dismissButton = {
-                TextButton(
-                    onClick = onDismiss,
-                    shape = RoundedCornerShape(20.dp),
-                    modifier = Modifier.height(52.dp).padding(horizontal = 4.dp)
-                ) { Text("取消", fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.error) }
-            },
+            dismissButton = {},
             containerColor = MaterialTheme.colorScheme.surface,
             titleContentColor = MaterialTheme.colorScheme.onSurface,
             textContentColor = MaterialTheme.colorScheme.onSurface
@@ -83,34 +124,67 @@ internal fun ClearAllConfirmationDialog(
     onConfirm: () -> Unit
 ) {
     if (showDialog) {
+        val isDarkTheme = isSystemInDarkTheme()
+        val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
+        val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
+        val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
+
         AlertDialog(
             shape = RoundedCornerShape(32.dp),
             onDismissRequest = onDismiss,
             title = { Text("确定清空所有聊天记录？") },
             text = { Text("此操作无法撤销，所有聊天记录将被永久删除。") },
             confirmButton = {
-                FilledTonalButton(
-                    onClick = {
-                        onConfirm()
-                        onDismiss()
-                    },
-                    shape = RoundedCornerShape(20.dp),
-                    modifier = Modifier.height(52.dp).padding(horizontal = 4.dp),
-                    colors = ButtonDefaults.filledTonalButtonColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer,
-                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                    )
-                ) { Text("确定清空", fontWeight = FontWeight.Bold) }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = MaterialTheme.colorScheme.surface,
+                            contentColor = cancelButtonColor
+                        ),
+                        border = BorderStroke(1.dp, cancelButtonColor)
+                    ) {
+                        Text(
+                            text = "取消",
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        )
+                    }
+
+                    Button(
+                        onClick = {
+                            onConfirm()
+                            onDismiss()
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = confirmButtonColor,
+                            contentColor = confirmButtonTextColor,
+                            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        )
+                    ) {
+                        Text(
+                            text = "确定清空",
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        )
+                    }
+                }
             },
-            dismissButton = {
-                TextButton(
-                    onClick = onDismiss,
-                    shape = RoundedCornerShape(20.dp),
-                    modifier = Modifier.height(52.dp).padding(horizontal = 4.dp)
-                ) { Text("取消", fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.error) }
-            },
+            dismissButton = {},
             containerColor = MaterialTheme.colorScheme.surface,
             titleContentColor = MaterialTheme.colorScheme.onSurface,
             textContentColor = MaterialTheme.colorScheme.onSurface
@@ -124,34 +198,67 @@ internal fun ClearImageHistoryConfirmationDialog(
    onConfirm: () -> Unit
 ) {
    if (showDialog) {
+       val isDarkTheme = isSystemInDarkTheme()
+       val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
+       val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
+       val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
+
        AlertDialog(
            shape = RoundedCornerShape(32.dp),
            onDismissRequest = onDismiss,
            title = { Text("确定清空所有图像生成历史？") },
            text = { Text("此操作无法撤销，所有图像生成历史将被永久删除。") },
            confirmButton = {
-               FilledTonalButton(
-                   onClick = {
-                       onConfirm()
-                       onDismiss()
-                   },
-                   shape = RoundedCornerShape(20.dp),
-                   modifier = Modifier.height(52.dp).padding(horizontal = 4.dp),
-                   colors = ButtonDefaults.filledTonalButtonColors(
-                       containerColor = MaterialTheme.colorScheme.errorContainer,
-                       contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                       disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                       disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                   )
-               ) { Text("确定清空", fontWeight = FontWeight.Bold) }
+               Row(
+                   modifier = Modifier.fillMaxWidth(),
+                   horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp)
+               ) {
+                   OutlinedButton(
+                       onClick = onDismiss,
+                       modifier = Modifier
+                           .weight(1f)
+                           .height(48.dp),
+                       shape = RoundedCornerShape(24.dp),
+                       colors = ButtonDefaults.outlinedButtonColors(
+                           containerColor = MaterialTheme.colorScheme.surface,
+                           contentColor = cancelButtonColor
+                       ),
+                       border = BorderStroke(1.dp, cancelButtonColor)
+                   ) {
+                       Text(
+                           text = "取消",
+                           style = MaterialTheme.typography.labelLarge.copy(
+                               fontWeight = FontWeight.SemiBold
+                           )
+                       )
+                   }
+
+                   Button(
+                       onClick = {
+                           onConfirm()
+                           onDismiss()
+                       },
+                       modifier = Modifier
+                           .weight(1f)
+                           .height(48.dp),
+                       shape = RoundedCornerShape(24.dp),
+                       colors = ButtonDefaults.buttonColors(
+                           containerColor = confirmButtonColor,
+                           contentColor = confirmButtonTextColor,
+                           disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                           disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                       )
+                   ) {
+                       Text(
+                           text = "确定清空",
+                           style = MaterialTheme.typography.labelLarge.copy(
+                               fontWeight = FontWeight.SemiBold
+                           )
+                       )
+                   }
+               }
            },
-           dismissButton = {
-               TextButton(
-                   onClick = onDismiss,
-                   shape = RoundedCornerShape(20.dp),
-                   modifier = Modifier.height(52.dp).padding(horizontal = 4.dp)
-               ) { Text("取消", fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.error) }
-           },
+           dismissButton = {},
            containerColor = MaterialTheme.colorScheme.surface,
            titleContentColor = MaterialTheme.colorScheme.onSurface,
            textContentColor = MaterialTheme.colorScheme.onSurface

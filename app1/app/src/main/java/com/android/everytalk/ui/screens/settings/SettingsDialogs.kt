@@ -188,6 +188,11 @@ internal fun AddProviderDialog(
 ) {
     // val focusRequester = remember { FocusRequester() } // Removed auto-focus
 
+    val isDarkTheme = isSystemInDarkTheme()
+    val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
+    val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
+    val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
+
     AlertDialog(
         onDismissRequest = onDismissRequest,
         shape = RoundedCornerShape(32.dp),
@@ -271,34 +276,63 @@ internal fun AddProviderDialog(
             }
         },
         confirmButton = {
-            FilledTonalButton(
-                onClick = onConfirm,
-                enabled = newProviderName.isNotBlank(),
-                shape = RoundedCornerShape(20.dp),
-                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp),
-                colors = ButtonDefaults.filledTonalButtonColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                    disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Outlined.Add,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp).padding(end = 4.dp)
-                )
-                Text("添加平台", fontWeight = FontWeight.Bold)
+                // 取消按钮（红色描边）
+                OutlinedButton(
+                    onClick = onDismissRequest,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = cancelButtonColor
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
+                ) {
+                    Text(
+                        text = "取消",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    )
+                }
+
+                // 确定按钮（与语音模式一致）
+                Button(
+                    onClick = onConfirm,
+                    enabled = newProviderName.isNotBlank(),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = confirmButtonColor,
+                        contentColor = confirmButtonTextColor,
+                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Add,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .size(20.dp)
+                            .padding(end = 4.dp)
+                    )
+                    Text(
+                        text = "添加平台",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    )
+                }
             }
         },
-        dismissButton = {
-            TextButton(
-                onClick = onDismissRequest,
-                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp)
-            ) {
-                Text("取消", fontWeight = FontWeight.Medium)
-            }
-        }
+        dismissButton = {}
     )
 
     // LaunchedEffect(Unit) {
@@ -386,6 +420,11 @@ internal fun AddNewFullConfigDialog(
     var enableCodeExecution by remember { mutableStateOf(false) }
     var toolsJson by remember { mutableStateOf("") }
     var showToolsConfig by remember { mutableStateOf(false) }
+
+    val isDarkTheme = isSystemInDarkTheme()
+    val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
+    val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
+    val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
 
     val providerMenuTransitionState = remember { MutableTransitionState(initialState = false) }
     val channelMenuTransitionState = remember { MutableTransitionState(initialState = false) }
@@ -741,48 +780,78 @@ internal fun AddNewFullConfigDialog(
                     && apiAddress.isNotBlank()
                     && provider.isNotBlank()
                     && provider.trim().lowercase() !in listOf("默认","default","default_text")
-            FilledTonalButton(
-                onClick = {
-                    if (canSubmit) {
-                        onConfirm(
-                            provider,
-                            apiAddress,
-                            apiKey,
-                            selectedChannel,
-                            imageSize,
-                            numInferenceSteps.toIntOrNull(),
-                            guidanceScale.toFloatOrNull(),
-                            enableCodeExecution,
-                            toolsJson.ifBlank { null }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // 取消按钮（红色描边）
+                OutlinedButton(
+                    onClick = onDismissRequest,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = cancelButtonColor
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
+                ) {
+                    Text(
+                        text = "取消",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontWeight = FontWeight.SemiBold
                         )
-                    }
-                },
-                enabled = canSubmit,
-                shape = RoundedCornerShape(20.dp),
-                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp),
-                colors = ButtonDefaults.filledTonalButtonColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                    disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                )
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.Add,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp).padding(end = 4.dp)
-                )
-                Text("确定添加", fontWeight = FontWeight.Bold)
+                    )
+                }
+
+                // 确定按钮（与语音模式一致）
+                Button(
+                    onClick = {
+                        if (canSubmit) {
+                            onConfirm(
+                                provider,
+                                apiAddress,
+                                apiKey,
+                                selectedChannel,
+                                imageSize,
+                                numInferenceSteps.toIntOrNull(),
+                                guidanceScale.toFloatOrNull(),
+                                enableCodeExecution,
+                                toolsJson.ifBlank { null }
+                            )
+                        }
+                    },
+                    enabled = canSubmit,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = confirmButtonColor,
+                        contentColor = confirmButtonTextColor,
+                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Add,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .size(20.dp)
+                            .padding(end = 4.dp)
+                    )
+                    Text(
+                        text = "确定添加",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    )
+                }
             }
         },
-        dismissButton = {
-            TextButton(
-                onClick = onDismissRequest,
-                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp)
-            ) {
-                Text("取消", fontWeight = FontWeight.Medium)
-            }
-        },
+        dismissButton = {},
         titleContentColor = MaterialTheme.colorScheme.onSurface,
         textContentColor = MaterialTheme.colorScheme.onSurface
     )
@@ -807,8 +876,13 @@ internal fun EditConfigDialog(
     var toolsJson by remember { mutableStateOf(representativeConfig.toolsJson ?: "") }
     var showToolsConfig by remember { mutableStateOf(false) }
 
+    val isDarkTheme = isSystemInDarkTheme()
+    val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
+    val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
+    val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
+
     // val focusRequester = remember { FocusRequester() } // Removed auto-focus
-    
+     
     // 固定的渠道类型选项
     val channelTypes = listOf("OpenAI兼容", "Gemini")
 
@@ -1027,29 +1101,69 @@ internal fun EditConfigDialog(
             }
         },
         confirmButton = {
-            FilledTonalButton(
-                onClick = { onConfirm(provider, apiAddress, apiKey, selectedChannel, enableCodeExecution, toolsJson.ifBlank { null }) },
-                enabled = apiKey.isNotBlank() && apiAddress.isNotBlank() && provider.isNotBlank(),
-                shape = RoundedCornerShape(20.dp),
-                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp),
-                colors = ButtonDefaults.filledTonalButtonColors(
-                    containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
-                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                    disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                )
+            val canSubmit = apiKey.isNotBlank() && apiAddress.isNotBlank() && provider.isNotBlank()
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text("保存更新", fontWeight = FontWeight.Bold)
+                // 取消按钮（红色描边）
+                OutlinedButton(
+                    onClick = onDismissRequest,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = cancelButtonColor
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
+                ) {
+                    Text(
+                        text = "取消",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    )
+                }
+
+                // 保存按钮（与语音模式一致）
+                Button(
+                    onClick = {
+                        if (canSubmit) {
+                            onConfirm(
+                                provider,
+                                apiAddress,
+                                apiKey,
+                                selectedChannel,
+                                enableCodeExecution,
+                                toolsJson.ifBlank { null }
+                            )
+                        }
+                    },
+                    enabled = canSubmit,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = confirmButtonColor,
+                        contentColor = confirmButtonTextColor,
+                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                    )
+                ) {
+                    Text(
+                        text = "保存更新",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    )
+                }
             }
         },
-        dismissButton = {
-            TextButton(
-                onClick = onDismissRequest,
-                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp)
-            ) {
-                Text("取消", fontWeight = FontWeight.Medium)
-            }
-        }
+        dismissButton = {}
     )
 
     // LaunchedEffect(Unit) {
@@ -1303,6 +1417,11 @@ internal fun AddModelDialog(
     var modelName by remember { mutableStateOf("") }
     // val focusRequester = remember { FocusRequester() } // Removed auto-focus
 
+    val isDarkTheme = isSystemInDarkTheme()
+    val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
+    val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
+    val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
+
     AlertDialog(
         onDismissRequest = onDismissRequest,
         shape = RoundedCornerShape(32.dp),
@@ -1394,34 +1513,63 @@ internal fun AddModelDialog(
             }
         },
         confirmButton = {
-            FilledTonalButton(
-                onClick = { onConfirm(modelName) },
-                enabled = modelName.isNotBlank(),
-                shape = RoundedCornerShape(20.dp),
-                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp),
-                colors = ButtonDefaults.filledTonalButtonColors(
-                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                    disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Outlined.Add,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp).padding(end = 4.dp)
-                )
-                Text("添加模型", fontWeight = FontWeight.Bold)
+                // 取消按钮（红色描边）
+                OutlinedButton(
+                    onClick = onDismissRequest,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = cancelButtonColor
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
+                ) {
+                    Text(
+                        text = "取消",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    )
+                }
+
+                // 确定按钮（与语音模式一致）
+                Button(
+                    onClick = { onConfirm(modelName) },
+                    enabled = modelName.isNotBlank(),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = confirmButtonColor,
+                        contentColor = confirmButtonTextColor,
+                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Add,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .size(20.dp)
+                            .padding(end = 4.dp)
+                    )
+                    Text(
+                        text = "添加模型",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    )
+                }
             }
         },
-        dismissButton = {
-            TextButton(
-                onClick = onDismissRequest,
-                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp)
-            ) {
-                Text("取消", fontWeight = FontWeight.Medium)
-            }
-        }
+        dismissButton = {}
     )
 
     // LaunchedEffect(Unit) {

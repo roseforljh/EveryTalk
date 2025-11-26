@@ -3,6 +3,7 @@ package com.android.everytalk.ui.screens.ImageGeneration
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -13,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.android.everytalk.data.DataClass.ApiConfig
@@ -26,7 +28,9 @@ import com.android.everytalk.ui.screens.settings.ImportExportDialog
 import com.android.everytalk.ui.screens.settings.SettingsScreenContent
 import java.util.UUID
 import com.android.everytalk.ui.screens.settings.DialogTextFieldColors
+import com.android.everytalk.ui.screens.settings.DialogShape
 import com.android.everytalk.ui.screens.settings.SettingsDefaults
+import com.android.everytalk.ui.screens.settings.SettingsFieldLabel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -447,34 +451,96 @@ private fun AddImageModelToKeyDialog(
 ) {
     var modelName by remember { mutableStateOf("") }
 
+    val isDarkTheme = isSystemInDarkTheme()
+    val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
+    val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
+    val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
+
     AlertDialog(
         onDismissRequest = onDismissRequest,
-        title = { Text("添加图像模型") },
-        text = {
-            OutlinedTextField(
-                value = modelName,
-                onValueChange = { modelName = it },
-                label = { Text("模型名称") },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = DialogTextFieldColors
+        shape = RoundedCornerShape(28.dp),
+        containerColor = MaterialTheme.colorScheme.surface,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurface,
+        title = {
+            Text(
+                text = "添加图像模型",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
             )
         },
-        confirmButton = {
-            Button(
-                onClick = {
-                    if (modelName.isNotBlank()) {
-                        onConfirm(modelName)
-                    }
-                }
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                Text("确认")
+                SettingsFieldLabel("模型名称")
+                OutlinedTextField(
+                    value = modelName,
+                    onValueChange = { modelName = it },
+                    placeholder = { Text("例如: Kwai-Kolors/Kolors") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    shape = DialogShape,
+                    colors = DialogTextFieldColors
+                )
             }
         },
-        dismissButton = {
-            TextButton(onClick = onDismissRequest) {
-                Text("取消")
+        confirmButton = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // 取消按钮：与语音模式 TTS 样式统一（红色描边）
+                OutlinedButton(
+                    onClick = onDismissRequest,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = cancelButtonColor
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
+                ) {
+                    Text(
+                        text = "取消",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    )
+                }
+
+                // 确认按钮：与语音模式 TTS 样式统一
+                Button(
+                    onClick = {
+                        if (modelName.isNotBlank()) {
+                            onConfirm(modelName)
+                        }
+                    },
+                    enabled = modelName.isNotBlank(),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = confirmButtonColor,
+                        contentColor = confirmButtonTextColor,
+                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                    )
+                ) {
+                    Text(
+                        text = "确认",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    )
+                }
             }
-        }
+        },
+        dismissButton = {}
     )
 }

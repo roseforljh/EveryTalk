@@ -114,14 +114,16 @@ android {
             }
             signingConfig = signingConfigs.getByName("release")
             // Inject backend configuration for Release
-            // 优先使用环境变量 (GitHub Secrets)，其次才是 local.properties
+            // 优先级: Gradle Property (-P) > 环境变量 > local.properties
             val backendUrlsRelease = sanitizeForBuildConfig(
-                System.getenv("BACKEND_URLS_RELEASE")?.takeIf { it.isNotBlank() }
+                (project.findProperty("BACKEND_URLS_RELEASE") as? String)?.takeIf { it.isNotBlank() }
+                    ?: System.getenv("BACKEND_URLS_RELEASE")?.takeIf { it.isNotBlank() }
                     ?: localProperties.getProperty("BACKEND_URLS_RELEASE")
                     ?: ""
             )
             val voiceBackendUrlRelease = sanitizeForBuildConfig(
-                System.getenv("VOICE_BACKEND_URL_RELEASE")?.takeIf { it.isNotBlank() }
+                (project.findProperty("VOICE_BACKEND_URL_RELEASE") as? String)?.takeIf { it.isNotBlank() }
+                    ?: System.getenv("VOICE_BACKEND_URL_RELEASE")?.takeIf { it.isNotBlank() }
                     ?: localProperties.getProperty("VOICE_BACKEND_URL_RELEASE")
                     ?: ""
             )

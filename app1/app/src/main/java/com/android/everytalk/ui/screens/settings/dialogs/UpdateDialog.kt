@@ -1,6 +1,9 @@
 package com.android.everytalk.ui.screens.settings.dialogs
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -12,11 +15,12 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.ui.graphics.Color
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
@@ -39,12 +43,19 @@ fun UpdateDialog(
     if (!showDialog) return
 
     val scrollState = rememberScrollState()
+    val isDarkTheme = isSystemInDarkTheme()
+    val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
+    val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
+    val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
 
     AlertDialog(
         onDismissRequest = {
             if (!force) onDismiss()
         },
         shape = RoundedCornerShape(32.dp),
+        containerColor = MaterialTheme.colorScheme.surface,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurface,
         title = {
             Column {
                 Text(
@@ -81,46 +92,60 @@ fun UpdateDialog(
             }
         },
         confirmButton = {
-            Button(
-                onClick = {
-                    onUpdateNow()
-                    onDismiss()
-                },
-                shape = RoundedCornerShape(20.dp),
-                modifier = Modifier
-                    .height(52.dp)
-                    .padding(horizontal = 4.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.tertiary,
-                    contentColor = MaterialTheme.colorScheme.onTertiary,
-                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                    disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp)
             ) {
-                Text("立即更新", fontWeight = FontWeight.Bold)
-            }
-        },
-        dismissButton = {
-            if (!force) {
-                TextButton(
+                if (!force) {
+                    OutlinedButton(
+                        onClick = {
+                            onRemindLater()
+                            onDismiss()
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = MaterialTheme.colorScheme.surface,
+                            contentColor = cancelButtonColor
+                        ),
+                        border = BorderStroke(1.dp, cancelButtonColor)
+                    ) {
+                        Text(
+                            text = "稍后提醒",
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        )
+                    }
+                }
+
+                Button(
                     onClick = {
-                        onRemindLater()
+                        onUpdateNow()
                         onDismiss()
                     },
-                    shape = RoundedCornerShape(20.dp),
                     modifier = Modifier
-                        .height(52.dp)
-                        .padding(horizontal = 4.dp),
-                    colors = ButtonDefaults.textButtonColors(
-                        contentColor = Color.White
+                        .weight(1f)
+                        .height(48.dp),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = confirmButtonColor,
+                        contentColor = confirmButtonTextColor,
+                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                        disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                     )
                 ) {
-                    Text("稍后提醒", fontWeight = FontWeight.Medium)
+                    Text(
+                        text = "立即更新",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    )
                 }
             }
         },
-        containerColor = MaterialTheme.colorScheme.surface,
-        titleContentColor = MaterialTheme.colorScheme.onSurface,
-        textContentColor = MaterialTheme.colorScheme.onSurface
+        dismissButton = {}
     )
 }
