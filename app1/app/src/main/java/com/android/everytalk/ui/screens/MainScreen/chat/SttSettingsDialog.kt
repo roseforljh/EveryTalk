@@ -218,7 +218,22 @@ fun SttSettingsDialog(
                             } else if (selectedPlatform == "SiliconFlow") {
                                 Text("默认: https://api.siliconflow.cn/v1/audio/transcriptions", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             } else {
-                                Text("留空则使用默认地址", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                // 智能提示最终使用的完整URL
+                                val finalUrl = if (selectedPlatform == "OpenAI" && apiUrl.isNotBlank()) {
+                                    if (!apiUrl.endsWith("/transcriptions")) {
+                                        "${apiUrl.trimEnd('/')}/audio/transcriptions"
+                                    } else {
+                                        null
+                                    }
+                                } else {
+                                    null
+                                }
+                                
+                                if (finalUrl != null) {
+                                    Text("最终请求地址: $finalUrl", color = MaterialTheme.colorScheme.primary)
+                                } else {
+                                    Text("留空则使用默认地址", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
                             }
                         },
                         colors = OutlinedTextFieldDefaults.colors(
