@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.9](https://github.com/roseforljh/EveryTalk/compare/v1.7.8...v1.7.9) (2025-11-26)
+
+
+### Bug Fixes
+
+* 优化输出框UI ([9f807e4](https://github.com/roseforljh/EveryTalk/commit/9f807e48b7f2922a6f5df50c2daf2e0c553befbb))
+
 ## [1.7.8](https://github.com/roseforljh/EveryTalk/compare/v1.7.7...v1.7.8) (2025-11-26)
 
 
