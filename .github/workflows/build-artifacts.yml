@@ -27,7 +27,9 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-          cache: gradle
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -69,6 +71,15 @@ jobs:
       - name: Grant Gradle permissions
         run: chmod +x "./${{ env.APP_DIR }}/gradlew"
 
+      - name: Extract Version from Tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          # Remove 'v' prefix if present (e.g. v1.7.5 -> 1.7.5)
+          VERSION_NAME=${TAG_NAME#v}
+          echo "Detected version from tag: $VERSION_NAME"
+          echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_ENV
+
       - name: Build Release APK
         working-directory: ${{ env.APP_DIR }}
         continue-on-error: true
@@ -76,9 +87,9 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          VERSION_NAME: ${{ env.VERSION_NAME }}
         run: |
-          ./gradlew :app:clean
-          ./gradlew :app:assembleRelease --parallel --stacktrace
+          ./gradlew :app:assembleRelease --parallel --build-cache --stacktrace
 
       - name: Upload Android artifacts to Release
         if: startsWith(github.ref, 'refs/tags/')
