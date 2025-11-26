@@ -211,11 +211,34 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                 text = text,
                 onTextChange = { viewModel.onTextChange(it) },
                 onSendMessageRequest = { messageText, attachments ->
+                    val initialCount = viewModel.imageGenerationChatListItems.value.size
                     viewModel.onSendMessage(
                         messageText = messageText,
                         attachments = attachments,
                         isImageGeneration = true
                     )
+                    keyboardController?.hide()
+                    coroutineScope.launch {
+                        // Wait for list update (ensure new message is found)
+                        var attempts = 0
+                        var targetIndex = -1
+                        while (attempts < 20) {
+                            val items = viewModel.imageGenerationChatListItems.value
+                            if (items.size > initialCount) {
+                                targetIndex = items.indexOfLast { it is com.android.everytalk.ui.screens.MainScreen.chat.ChatListItem.UserMessage }
+                                if (targetIndex != -1) break
+                            }
+                            kotlinx.coroutines.delay(50)
+                            attempts++
+                        }
+                        
+                        if (targetIndex != -1) {
+                            scrollStateManager.scrollItemToTop(targetIndex)
+                        } else {
+                            // Fallback if not found
+                            scrollStateManager.jumpToBottom()
+                        }
+                    }
                 },
                 selectedMediaItems = selectedMediaItems,
                 onAddMediaItem = { viewModel.addMediaItem(it) },
