@@ -78,21 +78,13 @@ fun VoiceInputScreen(
     )
     
     // 监听处理状态变化，自动管理播放状态
-    LaunchedEffect(isProcessing, assistantText, userCancelledPlayback) {
+    LaunchedEffect(isProcessing, userCancelledPlayback) {
         if (userCancelledPlayback) {
             // 用户主动取消了播放，保持关闭状态
             isPlaying = false
-        } else if (isProcessing) {
-            // 开始处理，准备播放
-            isPlaying = true
-        } else if (!isProcessing && assistantText.isNotEmpty()) {
-            // 处理完成且有文字，继续播放状态
-            isPlaying = true
-            // 等待一段时间后自动结束播放状态（作为兜底）
-            kotlinx.coroutines.delay(30000) // 30秒后自动结束
-            if (isPlaying && !userCancelledPlayback) {
-                isPlaying = false
-            }
+        } else {
+            // 播放状态跟随处理状态（处理包含录音后的STT+LLM+TTS播放全过程）
+            isPlaying = isProcessing
         }
     }
     
