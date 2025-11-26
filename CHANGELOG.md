@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.7](https://github.com/roseforljh/EveryTalk/compare/v1.7.6...v1.7.7) (2025-11-26)
+
+
+### Bug Fixes
+
+* 修复用户气泡过长造成的对话体验变差的bug ([599e6a0](https://github.com/roseforljh/EveryTalk/commit/599e6a08b8bdc52562efdc317014a9e9bf0a6d92))
+
 ## [1.7.6](https://github.com/roseforljh/EveryTalk/compare/v1.7.5...v1.7.6) (2025-11-26)
 
 
