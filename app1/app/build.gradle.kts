@@ -54,7 +54,9 @@ android {
         //noinspection OldTargetApi
         targetSdk = 36 // 通常与 compileSdk 一致
         versionCode = 6000
-        versionName = "1.7.3"
+        // 优先从环境变量获取版本号(CI环境)，否则使用默认值
+        val baseVersionName = "1.7.5"
+        versionName = System.getenv("VERSION_NAME") ?: baseVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
