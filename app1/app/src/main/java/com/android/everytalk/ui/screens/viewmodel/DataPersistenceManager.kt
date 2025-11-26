@@ -732,11 +732,25 @@ class DataPersistenceManager(
                    Log.w(TAG, "Failed to collect active file paths for orphan cleanup", e)
                }
 
-               // 2) 跳过 chat_attachments 的自动删除：仅在“用户删除会话/历史”时释放占用
+               // 2) 执行 chat_attachments 的孤儿文件清理
+               // 删除那些不在 allActiveFilePaths 中的文件
                var orphanedCount = 0
                if (chatAttachmentsDir.exists()) {
-                   val skipped = chatAttachmentsDir.listFiles()?.count { it.isFile && !allActiveFilePaths.contains(it.absolutePath) } ?: 0
-                   Log.i(TAG, "Skip auto-deletion for $skipped attachment file(s) in chat_attachments by policy (manual deletion only).")
+                   chatAttachmentsDir.listFiles()?.forEach { file ->
+                       if (file.isFile && !allActiveFilePaths.contains(file.absolutePath)) {
+                           try {
+                               if (file.delete()) {
+                                   orphanedCount++
+                                   Log.d(TAG, "Deleted orphaned attachment: ${file.name}")
+                               }
+                           } catch (e: Exception) {
+                               Log.w(TAG, "Failed to delete orphaned attachment: ${file.name}", e)
+                           }
+                       }
+                   }
+                   if (orphanedCount > 0) {
+                       Log.i(TAG, "Cleaned up $orphanedCount orphaned attachment file(s) in chat_attachments.")
+                   }
                }
 
                // 3) 清空预览/分享产生的临时缓存（cacheDir），这些文件不持久化引用，直接安全删除
