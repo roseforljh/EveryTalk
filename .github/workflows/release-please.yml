@@ -15,16 +15,40 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - name: Sync manifest version from Gradle
         run: |
           python - << 'PY'
           import re, json, pathlib
 
-          gradle_path = pathlib.Path("EveryTalk/app1/app/build.gradle.kts")
+          possible_paths = [
+              "EveryTalk/app1/app/build.gradle.kts",
+              "app1/app/build.gradle.kts",
+              "app/build.gradle.kts"
+          ]
+          
+          gradle_path = None
+          for p in possible_paths:
+              path = pathlib.Path(p)
+              if path.exists():
+                  gradle_path = path
+                  break
+          
+          if not gradle_path:
+              import os
+              print("Current working directory:", os.getcwd())
+              print("Listing files in current directory:")
+              for root, dirs, files in os.walk("."):
+                  for name in files:
+                      print(os.path.join(root, name))
+              raise SystemExit(f"Could not find build.gradle.kts. Checked: {possible_paths}")
+
+          print(f"Found gradle file at: {gradle_path}")
           text = gradle_path.read_text(encoding="utf-8")
-          m = re.search(r'versionName\s*=\s*"([^"]+)"', text)
+          m = re.search(r'val baseVersionName\s*=\s*"([^"]+)"', text)
           if not m:
-              raise SystemExit("versionName not found in EveryTalk/app1/app/build.gradle.kts")
+              raise SystemExit(f"baseVersionName not found in {gradle_path}")
           version = m.group(1)
 
           manifest_path = pathlib.Path(".release-please-manifest.json")
