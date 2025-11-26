@@ -78,17 +78,7 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           ./gradlew :app:clean
-          ./gradlew :app:assembleRelease --stacktrace
-
-      - name: Build Release AAB
-        working-directory: ${{ env.APP_DIR }}
-        continue-on-error: true
-        env:
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          ./gradlew :app:bundleRelease --stacktrace
+          ./gradlew :app:assembleRelease --parallel --stacktrace
 
       - name: Upload Android artifacts to Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -96,7 +86,6 @@ jobs:
         with:
           files: |
             ${{ env.APP_DIR }}/app/build/outputs/apk/release/*.apk
-            ${{ env.APP_DIR }}/app/build/outputs/bundle/release/*.aab
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -104,7 +93,6 @@ jobs:
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/upload-artifact@v4
         with:
-          name: android-release-artifacts
+          name: android-release-apk
           path: |
             ${{ env.APP_DIR }}/app/build/outputs/apk/release/*.apk
-            ${{ env.APP_DIR }}/app/build/outputs/bundle/release/*.aab
