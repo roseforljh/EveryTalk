@@ -374,12 +374,9 @@ fun ChatScreen(
                             attempts++
                         }
                         
-                        if (targetIndex != -1) {
-                            scrollStateManager.scrollItemToTop(targetIndex)
-                        } else {
-                            // Fallback if not found (shouldn't happen for sent message)
-                            scrollStateManager.jumpToBottom()
-                        }
+                        // 总是滚动到底部，符合通常的聊天体验（看到消息末尾和即将出现的回复）
+                        // 使用平滑滚动提供更好的视觉反馈
+                        scrollStateManager.smoothScrollToBottom()
                     }
                 },
                 selectedMediaItems = selectedMediaItems,

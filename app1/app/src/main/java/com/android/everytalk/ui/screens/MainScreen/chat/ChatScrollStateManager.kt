@@ -1,6 +1,7 @@
 package com.android.everytalk.ui.screens.MainScreen.chat
 
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.*
 import androidx.compose.ui.geometry.Offset
@@ -145,6 +146,14 @@ class ChatScrollStateManager(
     }
 
     fun jumpToBottom(isUserAction: Boolean = false) {
+        jumpToBottomInternal(isUserAction = isUserAction, smooth = false)
+    }
+
+    fun smoothScrollToBottom(isUserAction: Boolean = false) {
+        jumpToBottomInternal(isUserAction = isUserAction, smooth = true)
+    }
+
+    private fun jumpToBottomInternal(isUserAction: Boolean, smooth: Boolean) {
         if (!isUserAction && preventAutoScroll) {
             logger.debug("Ignoring auto jumpToBottom because preventAutoScroll is active")
             return
@@ -154,7 +163,7 @@ class ChatScrollStateManager(
             preventAutoScroll = false
         }
 
-        logger.debug("Jumping to bottom.")
+        logger.debug("Jumping to bottom (smooth=$smooth).")
         if (autoScrollJob?.isActive == true) {
             autoScrollJob?.cancel()
         }
@@ -164,7 +173,10 @@ class ChatScrollStateManager(
                 val lastIndex = totalItems - 1
                 
                 // First scroll to the item to ensure it's laid out
-                listState.scrollToItem(index = lastIndex)
+                // Even for smooth scroll, we snap first if we are far away to avoid long animations
+                if (!smooth || totalItems - listState.firstVisibleItemIndex > 10) {
+                    listState.scrollToItem(index = lastIndex)
+                }
                 
                 // Wait for layout to update
                 withFrameNanos { }
@@ -185,11 +197,19 @@ class ChatScrollStateManager(
                     if (lastVisible.index == lastIndex) {
                          val remainingScroll = (lastVisible.offset + lastVisible.size) - layoutInfo.viewportEndOffset
                          if (remainingScroll > 0) {
-                             listState.scrollBy(remainingScroll.toFloat())
+                             if (smooth) {
+                                 listState.animateScrollBy(remainingScroll.toFloat())
+                             } else {
+                                 listState.scrollBy(remainingScroll.toFloat())
+                             }
                          }
                     } else {
                         // If for some reason we are not even at the last index, try scrolling again
-                        listState.scrollToItem(index = lastIndex)
+                        if (smooth) {
+                            listState.animateScrollToItem(index = lastIndex)
+                        } else {
+                            listState.scrollToItem(index = lastIndex)
+                        }
                     }
                 }
             }

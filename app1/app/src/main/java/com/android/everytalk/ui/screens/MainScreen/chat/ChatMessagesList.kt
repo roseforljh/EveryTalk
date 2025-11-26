@@ -225,7 +225,7 @@ fun ChatMessagesList(
                                                 bubbleColor = MaterialTheme.chatColors.userBubble,
                                                 contentColor = MaterialTheme.colorScheme.onSurface,
                                                 isError = false,
-                                                maxWidth = bubbleMaxWidth,
+                                                maxWidth = bubbleMaxWidth * ChatDimensions.USER_BUBBLE_WIDTH_RATIO,
                                                 onLongPress = { msg, offset ->
                                                     contextMenuMessage = msg
                                                     contextMenuPressOffset = offset

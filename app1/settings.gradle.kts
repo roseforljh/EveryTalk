@@ -1,8 +1,10 @@
 
 pluginManagement {
     repositories {
-        maven { url = uri("https://maven.aliyun.com/repository/public") }
-        maven { url = uri("https://maven.aliyun.com/repository/google") }
+        if (System.getenv("CI") != "true") {
+            maven { url = uri("https://maven.aliyun.com/repository/public") }
+            maven { url = uri("https://maven.aliyun.com/repository/google") }
+        }
         google()
         mavenCentral()
 
@@ -12,8 +14,10 @@ pluginManagement {
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS) // 推荐设置
     repositories {
-        maven { url = uri("https://maven.aliyun.com/repository/public") }
-        maven { url = uri("https://maven.aliyun.com/repository/google") }
+        if (System.getenv("CI") != "true") {
+            maven { url = uri("https://maven.aliyun.com/repository/public") }
+            maven { url = uri("https://maven.aliyun.com/repository/google") }
+        }
         google()
         mavenCentral()
         maven { url = uri("https://jitpack.io") }
