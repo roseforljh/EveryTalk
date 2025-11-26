@@ -60,6 +60,7 @@ import coil3.imageLoader
 import coil3.request.ImageRequest
 import coil3.request.SuccessResult
 import coil3.request.allowHardware
+import coil3.asDrawable
 import android.content.Context
 import java.util.UUID
 import android.graphics.Bitmap
@@ -511,28 +512,43 @@ fun ImageGenerationMessagesList(
                 model: Any,
                 context: Context
             ): Bitmap? {
-                try {
-                    val imageLoader = context.imageLoader
-                    val request = ImageRequest.Builder(context)
-                        .data(model)
-                        .allowHardware(false) // 禁用硬件位图以便后续写入
-                        .build()
-                    val result = imageLoader.execute(request)
-                    if (result is SuccessResult) {
-                        val drawable = result.image as? android.graphics.drawable.Drawable
-                        if (drawable != null) {
-                            val w = drawable.intrinsicWidth.coerceAtLeast(1)
-                            val h = drawable.intrinsicHeight.coerceAtLeast(1)
-                            // 使用 AndroidX 的 toBitmap，避免手动离屏绘制易错
-                            val bmp = drawable.toBitmap(w, h, Bitmap.Config.ARGB_8888)
-                            android.util.Log.d("ImagePreview", "Bitmap obtained via Coil.")
-                            return bmp
+                // Coil 建议在主线程初始化 Request，但 execute 可在挂起函数中调用
+                // 为确保安全，我们切换到 Main 调度器构建 Request，再执行
+                return withContext(Dispatchers.Main) {
+                    try {
+                        val imageLoader = context.imageLoader
+                        val request = ImageRequest.Builder(context)
+                            .data(model)
+                            .allowHardware(false) // 禁用硬件位图以便后续写入
+                            // 必须指定 size，否则某些情况下 Coil 无法确定尺寸会导致加载失败
+                            .size(coil3.size.Size.ORIGINAL)
+                            .build()
+                        
+                        // execute 是挂起函数，会处理线程切换
+                        val result = imageLoader.execute(request)
+                        
+                        if (result is SuccessResult) {
+                            // 修复：coil3.Image 需要转为 Drawable 才能获取宽高和转换为 Bitmap
+                            // Coil 3.x 的 result.image 是 coil3.Image 类型，需要用 asDrawable(Resources) 转为 Android Drawable
+                            val image = result.image
+                            val drawable = image?.asDrawable(context.resources)
+                            
+                            if (drawable != null) {
+                                val w = drawable.intrinsicWidth.coerceAtLeast(1)
+                                val h = drawable.intrinsicHeight.coerceAtLeast(1)
+                                // 使用 AndroidX 的 toBitmap，避免手动离屏绘制易错
+                                val bmp = drawable.toBitmap(w, h, Bitmap.Config.ARGB_8888)
+                                android.util.Log.d("ImagePreview", "Bitmap obtained via Coil cache/network.")
+                                return@withContext bmp
+                            }
+                        } else {
+                            android.util.Log.w("ImagePreview", "Coil execute returned non-success result.")
                         }
+                    } catch (e: Exception) {
+                        android.util.Log.w("ImagePreview", "Coil load failed, will fallback. Error: ${e.message}")
                     }
-                } catch (e: Exception) {
-                    android.util.Log.w("ImagePreview", "Coil load failed, will fallback. Error: ${e.message}")
+                    null
                 }
-                return null
             }
 
 
@@ -602,13 +618,18 @@ fun ImageGenerationMessagesList(
                         }
                         is String -> {
                             val s = model
-                            if (s.startsWith("data:image", ignoreCase = true)) {
-                                val base64 = s.substringAfter(",", "")
-                                return@withContext if (base64.isNotBlank()) {
-                                    val bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT)
-                                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                                } else null
+                            // 修复：支持所有 data: 开头的 URI（包括 application/octet-stream）
+                            if (s.startsWith("data:", ignoreCase = true)) {
+                                val isBase64 = s.contains(";base64,", ignoreCase = true)
+                                if (isBase64) {
+                                    val base64 = s.substringAfter(";base64,", "")
+                                    if (base64.isNotBlank()) {
+                                        val bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT)
+                                        return@withContext BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                    }
+                                }
                             }
+                            
                             val uri = try { Uri.parse(s) } catch (_: Exception) { null }
                             val scheme = uri?.scheme?.lowercase()
                             return@withContext when (scheme) {
@@ -672,11 +693,32 @@ fun ImageGenerationMessagesList(
             }
 
             // 无损原始字节与 MIME 提取：基于 data:image、file、content、http(s)
+            // 增加降级策略：如果直接获取失败（如链接失效），尝试从 Coil 缓存/显存获取 Bitmap 并转为 PNG
             suspend fun loadBytesAndMime(model: Any): Pair<ByteArray, String>? = withContext(Dispatchers.IO) {
-                try {
+                // 1. 尝试原始获取方式（保留原始格式）
+                val primaryResult = try {
                     when (model) {
                         is String -> {
                             val s = model
+                            // 修复：支持 application/octet-stream 等非标准 MIME 的 data URI
+                            if (s.startsWith("data:", ignoreCase = true)) {
+                                val mimePart = s.substringAfter("data:", "").substringBefore(";", "")
+                                val isBase64 = s.contains(";base64,", ignoreCase = true)
+                                
+                                if (isBase64) {
+                                    val base64 = s.substringAfter(";base64,", "")
+                                    if (base64.isNotBlank()) {
+                                        val bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT)
+                                        // 如果 MIME 是 octet-stream，尝试修正为 image/png
+                                        val finalMime = if (mimePart.contains("image", true)) mimePart else "image/png"
+                                        android.util.Log.d("ImagePreview", "Decoded data URI with MIME: $finalMime")
+                                        return@withContext bytes to finalMime
+                                    }
+                                }
+                                // 如果不是 base64 或者是空，暂时不支持，走后续流程
+                            }
+                            
+                            // 旧逻辑：仅检查 data:image
                             if (s.startsWith("data:image", ignoreCase = true)) {
                                 val mime = s.substringAfter("data:", "").substringBefore(";base64", "")
                                 val base64 = s.substringAfter(";base64,", "")
@@ -790,9 +832,27 @@ fun ImageGenerationMessagesList(
                         else -> null
                     }
                 } catch (e: Exception) {
-                    android.util.Log.e("ImagePreview", "loadBytesAndMime error: ${e.message}", e)
+                    android.util.Log.e("ImagePreview", "loadBytesAndMime primary failed: ${e.message}", e)
                     null
                 }
+
+                if (primaryResult != null) return@withContext primaryResult
+
+                // 2. 降级策略：从 Coil 缓存/渲染结果获取 Bitmap (所见即所得)
+                android.util.Log.w("ImagePreview", "Primary load failed, falling back to Coil cache/render...")
+                try {
+                    val fallbackBitmap = loadBitmapWithCache(model, context)
+                    if (fallbackBitmap != null) {
+                        val baos = java.io.ByteArrayOutputStream()
+                        fallbackBitmap.compress(Bitmap.CompressFormat.PNG, 100, baos)
+                        android.util.Log.i("ImagePreview", "Fallback success: recovered image from view/cache.")
+                        return@withContext baos.toByteArray() to "image/png"
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("ImagePreview", "Fallback failed: ${e.message}", e)
+                }
+                
+                null
             }
 
             // 保存到相册（无损写入原始字节）
@@ -801,6 +861,7 @@ fun ImageGenerationMessagesList(
                     try {
                         val pair = loadBytesAndMime(imagePreviewModel!!)
                         if (pair == null) {
+                            android.util.Log.e("ImagePreview", "saveToAlbum failed: loadBytesAndMime returned null for model: $imagePreviewModel")
                             Toast.makeText(context, "无法加载图片", Toast.LENGTH_SHORT).show()
                             return@launch
                         }
