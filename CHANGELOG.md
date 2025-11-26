@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.7.5](https://github.com/roseforljh/EveryTalk/compare/v1.7.4...v1.7.5) (2025-11-26)
+
+
+### Bug Fixes
+
+* **ui:** update debug logging ([1d1304e](https://github.com/roseforljh/EveryTalk/commit/1d1304ef0a3080ecd47a66544bdcbf4f5908bff8))
+* **ui:** update debug logging ([585ffd8](https://github.com/roseforljh/EveryTalk/commit/585ffd8da73c9b849f23d37557950981949ed9ed))
+* **ui:** update debug logging in EnhancedMarkdownText ([da9b93b](https://github.com/roseforljh/EveryTalk/commit/da9b93b8a86aba64497209f7a789d2b21cd03ac8))
+
 ## [1.7.4](https://github.com/roseforljh/EveryTalk/compare/v1.7.3...v1.7.4) (2025-11-26)
 
 
