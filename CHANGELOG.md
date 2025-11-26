@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.6](https://github.com/roseforljh/EveryTalk/compare/v1.7.5...v1.7.6) (2025-11-26)
+
+
+### Bug Fixes
+
+* 安装包版本号有问题 ([c4f09b8](https://github.com/roseforljh/EveryTalk/commit/c4f09b8997f0beb0f3956651b0324e9b9155965f))
+
 ## [1.7.5](https://github.com/roseforljh/EveryTalk/compare/v1.7.4...v1.7.5) (2025-11-26)
 
 
