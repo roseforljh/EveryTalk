@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.10.1](https://github.com/roseforljh/EveryTalk/compare/v1.10.0...v1.10.1) (2025-11-26)
+
+
+### Bug Fixes
+
+* 修改了 DataPersistenceManager.kt，移除了跳过清理的逻辑 ([3fe10ed](https://github.com/roseforljh/EveryTalk/commit/3fe10ed73ee2a13909c4a6473af3951ba8df90a0))
+* 图像模式默认配置bug ([0336248](https://github.com/roseforljh/EveryTalk/commit/03362487ef9e9103312be5c9294bae66304a5ebb))
+* 提示优化 ([ac6214d](https://github.com/roseforljh/EveryTalk/commit/ac6214d00285215811539bd1db29de8f45758ef3))
+
 ## [1.10.0](https://github.com/roseforljh/EveryTalk/compare/v1.9.0...v1.10.0) (2025-11-26)
 
 
