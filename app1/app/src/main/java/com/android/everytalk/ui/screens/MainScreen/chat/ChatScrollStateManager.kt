@@ -188,8 +188,8 @@ class ChatScrollStateManager(
             val totalItems = listState.layoutInfo.totalItemsCount
             if (totalItems > 0 && index in 0 until totalItems) {
                 // Scroll to the top of the item (offset 0)
-                // Use scrollToItem for instant snap to avoid animation conflict with ongoing updates
-                listState.scrollToItem(index, 0)
+                // Use animateScrollToItem for smooth transition now that layout is stable
+                listState.animateScrollToItem(index, 0)
             }
         }
     }
