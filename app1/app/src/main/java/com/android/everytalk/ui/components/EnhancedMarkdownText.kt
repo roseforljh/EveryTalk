@@ -79,8 +79,8 @@ fun EnhancedMarkdownText(
     if (isStreaming && com.android.everytalk.BuildConfig.DEBUG) {
         androidx.compose.runtime.SideEffect {
             // 每次content变化都记录
-            android.util.Log.d("EnhancedMarkdownText", 
-                "📝 Content updated: msgId=${message.id.take(8)}, len=${content.length}, preview=${content.take(30)}")
+            android.util.Log.d("EnhancedMarkdownText",
+                "📝 Streaming content updated: msgId=${message.id.take(8)}, len=${content.length}, preview=${content.take(30)}")
         }
     }
 
