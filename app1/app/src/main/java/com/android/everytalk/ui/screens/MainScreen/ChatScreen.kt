@@ -359,8 +359,24 @@ fun ChatScreen(
                         snapshotFlow { imeInsets.getBottom(density) > 0 }
                             .filter { isVisible -> !isVisible }
                             .first()
-                        // 滚动到底部
-                        scrollStateManager.jumpToBottom()
+                        // 滚动到底部，或者更准确地说，将用户消息滚动到顶部
+                        // 尝试多次寻找用户消息，确保列表已更新
+                        var attempts = 0
+                        var targetIndex = -1
+                        while (attempts < 10) {
+                            val items = viewModel.chatListItems.value
+                            targetIndex = items.indexOfLast { it is com.android.everytalk.ui.screens.MainScreen.chat.ChatListItem.UserMessage }
+                            if (targetIndex != -1) break
+                            delay(50)
+                            attempts++
+                        }
+                        
+                        if (targetIndex != -1) {
+                            scrollStateManager.scrollItemToTop(targetIndex)
+                        } else {
+                            // Fallback if not found (shouldn't happen for sent message)
+                            scrollStateManager.jumpToBottom()
+                        }
                     }
                 },
                 selectedMediaItems = selectedMediaItems,

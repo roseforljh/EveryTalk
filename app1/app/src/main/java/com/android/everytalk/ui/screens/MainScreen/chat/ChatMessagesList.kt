@@ -115,7 +115,8 @@ fun ChatMessagesList(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val availableHeight = maxHeight
         LazyColumn(
         state = listState,
         reverseLayout = false,
@@ -252,19 +253,34 @@ fun ChatMessagesList(
                                 !item.message.contentStarted
                             }
                             val isReasoningComplete = reasoningCompleteMap[item.message.id] ?: false
+                            val isLastItem = index == chatItems.lastIndex
+                            val shouldApplyMinHeight = isLastItem && chatItems.size > 2
 
-                            ReasoningToggleAndContent(
-                                modifier = Modifier.fillMaxWidth(),
-                                currentMessageId = item.message.id,
-                                displayedReasoningText = item.message.reasoning ?: "",
-                                isReasoningStreaming = isReasoningStreaming,
-                                isReasoningComplete = isReasoningComplete,
-                                messageIsError = item.message.isError,
-                                mainContentHasStarted = item.message.contentStarted,
-                                reasoningTextColor = MaterialTheme.chatColors.reasoningText,
-                                reasoningToggleDotColor = MaterialTheme.colorScheme.onSurface,
-                                onVisibilityChanged = { }
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .then(
+                                        if (shouldApplyMinHeight) {
+                                            Modifier.heightIn(min = availableHeight * 0.85f)
+                                        } else {
+                                            Modifier
+                                        }
+                                    ),
+                                contentAlignment = if (shouldApplyMinHeight) Alignment.TopStart else Alignment.CenterStart
+                            ) {
+                                ReasoningToggleAndContent(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    currentMessageId = item.message.id,
+                                    displayedReasoningText = item.message.reasoning ?: "",
+                                    isReasoningStreaming = isReasoningStreaming,
+                                    isReasoningComplete = isReasoningComplete,
+                                    messageIsError = item.message.isError,
+                                    mainContentHasStarted = item.message.contentStarted,
+                                    reasoningTextColor = MaterialTheme.chatColors.reasoningText,
+                                    reasoningToggleDotColor = MaterialTheme.colorScheme.onSurface,
+                                    onVisibilityChanged = { }
+                                )
+                            }
                         }
 
                         is ChatListItem.AiMessage, is ChatListItem.AiMessageStreaming -> {
@@ -274,6 +290,11 @@ fun ChatMessagesList(
                                 val text = if (item is ChatListItem.AiMessage) item.text else message.text
                                 val hasReasoning = if (item is ChatListItem.AiMessage) item.hasReasoning else (item as ChatListItem.AiMessageStreaming).hasReasoning
                                 val isStreaming = if (item is ChatListItem.AiMessageStreaming) true else (currentStreamingId == message.id)
+                                val isLastItem = index == chatItems.lastIndex
+                                // Only apply min height for subsequent conversations (size > 2) to allow scrolling user message to top.
+                                // For the first conversation (size <= 2), natural layout is sufficient and preferred.
+                                // We apply this even if not streaming, to ensure the view doesn't collapse (user message slides down) after generation finishes.
+                                val shouldApplyMinHeight = isLastItem && chatItems.size > 2
 
                                 Column(
                                     modifier = Modifier.fillMaxWidth(),
@@ -298,6 +319,11 @@ fun ChatMessagesList(
                                                 lastImagePreviewAt = now
                                                 onImageClick(url)
                                             }
+                                        },
+                                        modifier = if (shouldApplyMinHeight) {
+                                            Modifier.heightIn(min = availableHeight * 0.85f)
+                                        } else {
+                                            Modifier
                                         }
                                     )
                                 }
@@ -311,6 +337,8 @@ fun ChatMessagesList(
                                 val text = if (item is ChatListItem.AiMessageCode) item.text else message.text
                                 val hasReasoning = if (item is ChatListItem.AiMessageCode) item.hasReasoning else (item as ChatListItem.AiMessageCodeStreaming).hasReasoning
                                 val isStreaming = if (item is ChatListItem.AiMessageCodeStreaming) true else (currentStreamingId == message.id)
+                                val isLastItem = index == chatItems.lastIndex
+                                val shouldApplyMinHeight = isLastItem && chatItems.size > 2
 
                                 Column(
                                     modifier = Modifier.fillMaxWidth(),
@@ -336,6 +364,11 @@ fun ChatMessagesList(
                                                 lastImagePreviewAt = now
                                                 onImageClick(url)
                                             }
+                                        },
+                                        modifier = if (shouldApplyMinHeight) {
+                                            Modifier.heightIn(min = availableHeight * 0.85f)
+                                        } else {
+                                            Modifier
                                         }
                                     )
                                 }
@@ -372,14 +405,23 @@ fun ChatMessagesList(
                         }
 
                         is ChatListItem.LoadingIndicator -> {
+                            val isLastItem = index == chatItems.lastIndex
+                            val shouldApplyMinHeight = isLastItem && chatItems.size > 2
                             Row(
                                 modifier = Modifier
                                     .padding(
                                         start = ChatDimensions.HORIZONTAL_PADDING,
                                         top = ChatDimensions.VERTICAL_PADDING,
                                         bottom = ChatDimensions.VERTICAL_PADDING
+                                    )
+                                    .then(
+                                        if (shouldApplyMinHeight) {
+                                            Modifier.heightIn(min = availableHeight * 0.85f)
+                                        } else {
+                                            Modifier
+                                        }
                                     ),
-                                verticalAlignment = Alignment.Bottom,
+                                verticalAlignment = if (shouldApplyMinHeight) Alignment.Top else Alignment.Bottom,
                                 horizontalArrangement = Arrangement.Start
                             ) {
                                 Text(
