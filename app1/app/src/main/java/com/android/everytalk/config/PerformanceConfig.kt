@@ -155,7 +155,7 @@ object PerformanceConfig {
      * 流式播放预缓冲时长（毫秒）
      * 从首次收到音频到开始播放之间的最小缓冲时间，用于平衡首音延迟和 Underrun 风险
      */
-    const val VOICE_STREAM_PREBUFFER_MS = 200L
+    const val VOICE_STREAM_PREBUFFER_MS = 50L
 
     /**
      * 流式播放在 close() 阶段的最大等待时间（毫秒）

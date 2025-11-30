@@ -365,10 +365,8 @@ class VoiceChatSession(
                 .addFormDataPart("tts_api_url", ttsApiUrl)
                 .addFormDataPart("tts_model", ttsModel)
 
-            // 针对 Minimax 和 SiliconFlow 启用流式
-            if (ttsPlatform == "Minimax" || ttsPlatform == "SiliconFlow") {
-                requestBodyBuilder.addFormDataPart("stream", "true")
-            }
+            // 默认启用流式以优化延迟 (支持 Google/OpenAI/Minimax/SiliconFlow)
+            requestBodyBuilder.addFormDataPart("stream", "true")
 
             val requestBody = requestBodyBuilder.build()
 
