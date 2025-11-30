@@ -3,6 +3,8 @@ package com.android.everytalk.ui.components.markdown
 import android.content.Context
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
+import android.text.style.TypefaceSpan
+import android.text.style.RelativeSizeSpan
 import android.graphics.Typeface
 import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.Markwon
@@ -38,7 +40,7 @@ object MarkwonCache {
             cacheMap[cacheKey]?.let { return it }
             
             val density = context.resources.displayMetrics.density
-            val mathTextSize = textSize * density * 0.85f
+            val mathTextSize = textSize * density
             
             val markwon = Markwon.builder(context)
                 .usePlugin(CorePlugin.create())
@@ -58,7 +60,8 @@ object MarkwonCache {
                     override fun configureSpansFactory(builder: MarkwonSpansFactory.Builder) {
                         builder.setFactory(Code::class.java) { _, _ ->
                             arrayOf<Any>(
-                                StyleSpan(Typeface.BOLD),
+                                TypefaceSpan("monospace"),
+                                RelativeSizeSpan(0.85f),
                                 ForegroundColorSpan(android.graphics.Color.parseColor("#9E9E9E"))
                             )
                         }

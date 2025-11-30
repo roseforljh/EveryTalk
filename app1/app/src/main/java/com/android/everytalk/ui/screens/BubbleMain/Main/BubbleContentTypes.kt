@@ -11,6 +11,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -84,7 +86,10 @@ internal fun UserOrErrorMessageContent(
     var previewUrl by remember { mutableStateOf<String?>(null) }
 
     // 基于发送者动态计算最大宽度：用户71%，AI80%
-    val screenDp = LocalConfiguration.current.screenWidthDp.dp
+    val configuration = LocalConfiguration.current
+    val screenDp = configuration.screenWidthDp.dp
+    val screenHeightDp = configuration.screenHeightDp.dp
+    
     val roleMax = if (message.sender == Sender.User) screenDp * 0.71f else screenDp * 0.8f
     val appliedMax = roleMax.coerceAtMost(maxWidth)
 
@@ -120,6 +125,15 @@ internal fun UserOrErrorMessageContent(
                     )
                     .wrapContentWidth()
                     .defaultMinSize(minHeight = 28.dp)
+                    .then(
+                        if (message.sender == Sender.User) {
+                            Modifier
+                                .heightIn(max = screenHeightDp * 0.6f)
+                                .verticalScroll(rememberScrollState())
+                        } else {
+                            Modifier
+                        }
+                    )
             ) {
                 // 原有内容层
                 Box(
