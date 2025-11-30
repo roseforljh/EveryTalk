@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.10](https://github.com/roseforljh/EveryTalk/compare/v1.7.9...v1.7.10) (2025-11-26)
+
+
+### Bug Fixes
+
+* 按钮UI美化 ([5374b0c](https://github.com/roseforljh/EveryTalk/commit/5374b0c937e2c36f57c339044f4c97b26f228a9d))
+
 ## [1.7.9](https://github.com/roseforljh/EveryTalk/compare/v1.7.8...v1.7.9) (2025-11-26)
 
 
