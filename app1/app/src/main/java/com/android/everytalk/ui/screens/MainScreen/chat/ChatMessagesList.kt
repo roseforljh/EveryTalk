@@ -98,16 +98,16 @@ fun ChatMessagesList(
         }
     }
 
-    // 构造内容签名：结合列表长度和最后一条AI消息的文本长度
-    // 这样即使列表项数量不变（例如Streaming -> Complete），只要内容长度变了（Finish时同步完整文本），也能触发锚点恢复
-    val lastAiItem = chatItems.lastOrNull { it is ChatListItem.AiMessage || it is ChatListItem.AiMessageCode }
+    // 构造内容签名：仅结合列表长度和最后一条AI消息的ID
+    // 修复：不再包含文本长度，避免流式输出过程中或结束时因长度变化触发强制锚点恢复导致跳动
+    val lastAiItem = chatItems.lastOrNull {
+        it is ChatListItem.AiMessage ||
+        it is ChatListItem.AiMessageCode ||
+        it is ChatListItem.AiMessageStreaming ||
+        it is ChatListItem.AiMessageCodeStreaming
+    }
     val contentSignature = remember(chatItems.size, lastAiItem) {
-        val lastTextLen = when (lastAiItem) {
-            is ChatListItem.AiMessage -> lastAiItem.text.length
-            is ChatListItem.AiMessageCode -> lastAiItem.text.length
-            else -> 0
-        }
-        "${chatItems.size}_${lastAiItem?.stableId}_$lastTextLen"
+        "${chatItems.size}_${lastAiItem?.stableId}"
     }
 
     LaunchedEffect(contentSignature, isAtBottom) {
