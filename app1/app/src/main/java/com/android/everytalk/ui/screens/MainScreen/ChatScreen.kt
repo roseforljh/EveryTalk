@@ -375,9 +375,12 @@ fun ChatScreen(
                             attempts++
                         }
                         
-                        // 总是滚动到底部，符合通常的聊天体验（看到消息末尾和即将出现的回复）
-                        // 使用平滑滚动提供更好的视觉反馈
-                        scrollStateManager.smoothScrollToBottom()
+                        // 将用户刚发送的消息滚动到顶部，以便用户能看到完整的消息内容（包括附件）以及下方正在生成的AI回复
+                        if (targetIndex != -1) {
+                            scrollStateManager.scrollItemToTop(targetIndex)
+                        } else {
+                            scrollStateManager.smoothScrollToBottom()
+                        }
                     }
                 },
                 selectedMediaItems = selectedMediaItems,
