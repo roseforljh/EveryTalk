@@ -10,6 +10,7 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -175,6 +176,7 @@ internal fun UserOrErrorMessageContent(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AttachmentsContent(
     attachments: List<SelectedMediaItem>,
@@ -200,9 +202,10 @@ fun AttachmentsContent(
     val attachmentsAppliedMax = roleMax.coerceAtMost(maxWidth)
 
     Box {
-        Column(
+        FlowRow(
             modifier = Modifier.padding(top = 8.dp),
-            horizontalAlignment = Alignment.End
+            horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             attachments.forEach { attachment ->
                 when (attachment) {
@@ -215,18 +218,21 @@ fun AttachmentsContent(
                             attachment.uri
                         }
                         // 额外父级宽度约束，防止重组或内部状态重置导致图片短暂“放大占满并左对齐”
+                        // 在 FlowRow 中，我们可能希望图片不要太大，以便多张并排
+                        // 如果只有一张，可以大一点；多张时适当缩小
+                        val isMultiple = attachments.size > 1
+                        val itemMaxWidth = if (isMultiple) attachmentsAppliedMax * 0.48f else attachmentsAppliedMax * 0.8f
+                        
                         Box(
                             modifier = Modifier
                                 .widthIn(
-                                    min = 100.dp,
-                                    max = attachmentsAppliedMax * 0.8f
+                                    max = itemMaxWidth
                                 )
-                                .padding(vertical = 4.dp)
                         ) {
                             ProportionalAsyncImage(
                                 model = imageModel,
                                 contentDescription = "Image attachment",
-                                maxWidth = attachmentsAppliedMax * 0.8f,
+                                maxWidth = itemMaxWidth,
                                 isAiGenerated = isAiGenerated,
                                 onSuccess = { _ -> onImageLoaded() },
                                 modifier = Modifier
@@ -258,18 +264,19 @@ fun AttachmentsContent(
                     is SelectedMediaItem.ImageFromBitmap -> {
                         var imageGlobalPosition by remember { mutableStateOf(Offset.Zero) }
                         // 额外父级宽度约束，防止重组或内部状态重置导致图片短暂“放大占满并左对齐”
+                        val isMultiple = attachments.size > 1
+                        val itemMaxWidth = if (isMultiple) attachmentsAppliedMax * 0.48f else attachmentsAppliedMax * 0.8f
+
                         Box(
                             modifier = Modifier
                                 .widthIn(
-                                    min = 100.dp,
-                                    max = attachmentsAppliedMax * 0.8f
+                                    max = itemMaxWidth
                                 )
-                                .padding(vertical = 4.dp)
                         ) {
                             ProportionalAsyncImage(
                                 model = attachment.bitmap,
                                 contentDescription = "Image attachment",
-                                maxWidth = attachmentsAppliedMax * 0.8f,
+                                maxWidth = itemMaxWidth,
                                 isAiGenerated = isAiGenerated,
                                 onSuccess = { _ -> onImageLoaded() },
                                 modifier = Modifier
