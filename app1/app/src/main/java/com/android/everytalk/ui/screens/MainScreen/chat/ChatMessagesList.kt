@@ -48,6 +48,7 @@ import com.android.everytalk.ui.components.EnhancedMarkdownText
 import com.android.everytalk.ui.components.StableMarkdownText
 import com.android.everytalk.ui.components.markdown.MarkdownRenderer
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
 @Composable
 fun ChatMessagesList(
@@ -254,7 +255,7 @@ fun ChatMessagesList(
                             }
                             val isReasoningComplete = reasoningCompleteMap[item.message.id] ?: false
                             val isLastItem = index == chatItems.lastIndex
-                            val shouldApplyMinHeight = isLastItem && chatItems.size > 2
+                            val shouldApplyMinHeight = isLastItem && chatItems.size >= 2
 
                             Box(
                                 modifier = Modifier
@@ -291,10 +292,8 @@ fun ChatMessagesList(
                                 val hasReasoning = if (item is ChatListItem.AiMessage) item.hasReasoning else (item as ChatListItem.AiMessageStreaming).hasReasoning
                                 val isStreaming = if (item is ChatListItem.AiMessageStreaming) true else (currentStreamingId == message.id)
                                 val isLastItem = index == chatItems.lastIndex
-                                // Only apply min height for subsequent conversations (size > 2) to allow scrolling user message to top.
-                                // For the first conversation (size <= 2), natural layout is sufficient and preferred.
-                                // We apply this even if not streaming, to ensure the view doesn't collapse (user message slides down) after generation finishes.
-                                val shouldApplyMinHeight = isLastItem && chatItems.size > 2
+                                // Apply min height even for the first conversation (size >= 2) to ensure user message scrolls to top.
+                                val shouldApplyMinHeight = isLastItem && chatItems.size >= 2
 
                                 Column(
                                     modifier = Modifier.fillMaxWidth(),
@@ -338,7 +337,7 @@ fun ChatMessagesList(
                                 val hasReasoning = if (item is ChatListItem.AiMessageCode) item.hasReasoning else (item as ChatListItem.AiMessageCodeStreaming).hasReasoning
                                 val isStreaming = if (item is ChatListItem.AiMessageCodeStreaming) true else (currentStreamingId == message.id)
                                 val isLastItem = index == chatItems.lastIndex
-                                val shouldApplyMinHeight = isLastItem && chatItems.size > 2
+                                val shouldApplyMinHeight = isLastItem && chatItems.size >= 2
 
                                 Column(
                                     modifier = Modifier.fillMaxWidth(),
@@ -406,7 +405,7 @@ fun ChatMessagesList(
 
                         is ChatListItem.LoadingIndicator -> {
                             val isLastItem = index == chatItems.lastIndex
-                            val shouldApplyMinHeight = isLastItem && chatItems.size > 2
+                            val shouldApplyMinHeight = isLastItem && chatItems.size >= 2
                             Row(
                                 modifier = Modifier
                                     .padding(
@@ -494,10 +493,43 @@ fun ChatMessagesList(
                     isContextMenuVisible = false
                 },
                 onRegenerate = {
-                    scrollStateManager.resetScrollState()
+                    // Remove resetScrollState to avoid conflicting scroll animations
                     viewModel.regenerateAiResponse(it, isImageGeneration = false)
                     isContextMenuVisible = false
                     coroutineScope.launch {
+                        // Wait briefly for the list to update (AI message replaced by loading)
+                        // This ensures we scroll based on the new layout
+                        var attempts = 0
+                        var targetIndex = -1
+                        
+                        // Increase timeout to 5 seconds to be safe against slow UI updates/DB operations
+                        while (attempts < 100) {
+                            val currentItems = viewModel.chatListItems.value
+                            targetIndex = currentItems.indexOfFirst { item ->
+                                (item is ChatListItem.UserMessage && item.messageId == it.id) ||
+                                (item is ChatListItem.ErrorMessage && item.messageId == it.id)
+                            }
+                            
+                            // We need to ensure that the Loading Indicator (or new AI message) has appeared AFTER the user message.
+                            // If targetIndex is the last item, it means the AI message/loading hasn't been added yet (or old one removed).
+                            // We wait until there is an item AFTER the user message, which ensures the list has grown/updated
+                            // and the 'shouldApplyMinHeight' logic in the Loading item will trigger, allowing scroll to top.
+                            if (targetIndex != -1 && targetIndex < currentItems.lastIndex) {
+                                // Also verify that the LazyListState has actually updated to include these new items.
+                                // The footer spacer adds 1 to the total count.
+                                val expectedTotalItems = currentItems.size + 1
+                                if (listState.layoutInfo.totalItemsCount >= expectedTotalItems) {
+                                    break
+                                }
+                            }
+                            delay(50)
+                            attempts++
+                        }
+                        
+                        // Give layout a moment to settle (measure the new height of the Loading item)
+                        delay(100)
+                        
+                        // Always scroll to bottom for regenerate action, as requested by user
                         scrollStateManager.jumpToBottom()
                     }
                 }

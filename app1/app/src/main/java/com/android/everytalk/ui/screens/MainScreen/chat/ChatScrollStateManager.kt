@@ -2,6 +2,7 @@ package com.android.everytalk.ui.screens.MainScreen.chat
 
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.*
 import androidx.compose.ui.geometry.Offset
@@ -248,10 +249,28 @@ class ChatScrollStateManager(
                 anchorScrollOffset = 0
                 
                 // Scroll to the top of the item (offset 0)
-                // Use animateScrollToItem for smooth transition now that layout is stable
                 isProgrammaticScroll = true
                 try {
-                    listState.animateScrollToItem(index, 0)
+                    // Calculate distance to scroll if item is visible
+                    val layoutInfo = listState.layoutInfo
+                    val visibleItem = layoutInfo.visibleItemsInfo.find { it.index == index }
+                    
+                    if (visibleItem != null) {
+                        // Item is visible, we can use animateScrollBy for custom control
+                        val currentOffset = visibleItem.offset
+                        // We want offset to be 0 (top of screen), so we scroll by currentOffset
+                        // Use a longer duration (e.g. 800ms) and CubicBezierEasing for a "heavy/slow" natural feel
+                        listState.animateScrollBy(
+                            value = currentOffset.toFloat(),
+                            animationSpec = tween(
+                                durationMillis = 800,
+                                easing = androidx.compose.animation.core.CubicBezierEasing(0.2f, 0.0f, 0.0f, 1.0f)
+                            )
+                        )
+                    } else {
+                        // Fallback if item is somehow not visible (should be rare in this flow)
+                        listState.animateScrollToItem(index, 0)
+                    }
                 } finally {
                     isProgrammaticScroll = false
                 }
