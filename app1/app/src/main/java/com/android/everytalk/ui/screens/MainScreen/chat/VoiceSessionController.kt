@@ -37,6 +37,9 @@ class VoiceSessionController(
      * 启动录音会话
      */
     fun startRecording() {
+        // 启动新录音前，确保停止之前的播放或处理
+        stopPlayback()
+
         val config = configManager.loadConfig()
         val errorMsg = configManager.validateConfig(config)
         
@@ -130,7 +133,11 @@ class VoiceSessionController(
                 onTranscriptionReceived("")
                 onResponseReceived("处理失败: ${t.message}")
             } finally {
-                currentSession = null
+                // 只有当 currentSession 仍然是当前处理的 session 时才置空
+                // 避免 race condition：如果用户在处理过程中开始了新录音，currentSession 已经被更新，此时不应置空
+                if (currentSession === session) {
+                    currentSession = null
+                }
                 onProcessingChanged(false)
                 processingJob = null
             }

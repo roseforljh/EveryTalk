@@ -239,6 +239,9 @@ class VoiceChatSession(
      * 强制释放资源（非协程版本，用于生命周期销毁时）
      */
     fun forceRelease() {
+        // 优先停止播放，确保退出时不会继续发声
+        stopPlayback()
+
         if (!isRecording && audioRecord == null) return
         
         isRecording = false
@@ -249,9 +252,6 @@ class VoiceChatSession(
             audioRecord?.release()
         } catch (_: Throwable) {}
         audioRecord = null
-        
-        // 同时停止播放
-        stopPlayback()
         
         Log.i(TAG, "Force released audio recorder")
     }
