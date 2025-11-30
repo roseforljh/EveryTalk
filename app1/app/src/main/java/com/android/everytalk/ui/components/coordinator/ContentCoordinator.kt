@@ -68,13 +68,15 @@ fun ContentCoordinator(
     // 表格检测：简单的启发式检查，避免复杂的正则匹配
     // 只有同时包含 | 和 - 才可能是表格（表头分隔线至少包含 --- 或 :---）
     val hasTable = text.contains("|") && text.contains("-")
+    // 数学公式块检测
+    val hasMathBlock = text.contains("$$")
 
     // 流式阶段：使用轻量模式，避免频繁解析
     // 流式结束后：触发完整解析，将代码块转换为CodeBlock组件
     // 性能保护：
     //   - TableAwareText 延迟250ms解析大型内容（>8000字符）
     //   - 使用后台线程（Dispatchers.Default）避免阻塞UI
-    if (hasCodeBlock || hasTable) {
+    if (hasCodeBlock || hasTable || hasMathBlock) {
         // 只根据流式状态判断是否使用轻量模式
         // 如果包含表格，即使是流式也建议走 TableAwareText 以便正确渲染表格（虽然 TableAwareText 内部对流式有优化）
         // 但为了性能，流式期间如果只有表格没有代码块，也可以考虑暂缓？

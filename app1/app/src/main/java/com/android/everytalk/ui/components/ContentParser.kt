@@ -23,6 +23,11 @@ sealed class ContentPart {
      * 表格
      */
     data class Table(val lines: List<String>) : ContentPart()
+    
+    /**
+     * 数学公式块
+     */
+    data class Math(val content: String) : ContentPart()
 }
 
 /**
@@ -109,6 +114,14 @@ object ContentParser {
                     }
                 }
 
+                // 检查是否包含数学公式块 ($$)
+                if (line.contains("$$")) {
+                    val (newParts, nextIndex) = processLineWithMath(lines, currentIndex)
+                    parts.addAll(newParts)
+                    currentIndex = nextIndex
+                    continue
+                }
+
                 // 检查是否为表格开始
                 if (TableUtils.isTableLine(line)) {
                     val (tableLines, nextIndex) = TableUtils.extractTableLines(lines, currentIndex)
@@ -126,6 +139,11 @@ object ContentParser {
                     
                     // 遇到代码块起始，立即中断文本收集
                     if (currentLine.trimStart().startsWith("```")) {
+                        break
+                    }
+                    
+                    // 遇到数学公式块起始，立即中断
+                    if (currentLine.contains("$$")) {
                         break
                     }
 
@@ -151,6 +169,7 @@ object ContentParser {
                     is ContentPart.Text -> "[$idx]Text(len=${it.content.length}, preview='${it.content.take(50).replace("\n", "\\n")}')"
                     is ContentPart.Code -> "[$idx]Code(lang=${it.language}, codeLines=${it.content.lines().size})"
                     is ContentPart.Table -> "[$idx]Table(${it.lines.size} rows)"
+                    is ContentPart.Math -> "[$idx]Math(len=${it.content.length})"
                 }
             }}")
             return parts.ifEmpty { listOf(ContentPart.Text(text)) }
@@ -159,6 +178,100 @@ object ContentParser {
             Log.e(TAG, "Error parsing content", e)
             return listOf(ContentPart.Text(text))
         }
+    }
+
+    /**
+     * 处理包含 $$ 的行，提取文本和数学公式
+     */
+    private fun processLineWithMath(
+        lines: List<String>,
+        startIndex: Int
+    ): Pair<List<ContentPart>, Int> {
+        val parts = mutableListOf<ContentPart>()
+        val line = lines[startIndex]
+        
+        val dollarIndex = line.indexOf("$$")
+        if (dollarIndex == -1) {
+            // Should not happen if called correctly
+            return listOf(ContentPart.Text(line)) to startIndex + 1
+        }
+        
+        // 1. 提取 $$ 之前的文本
+        if (dollarIndex > 0) {
+            parts.add(ContentPart.Text(line.substring(0, dollarIndex)))
+        }
+        
+        // 2. 检查是否在同一行闭合
+        val closingIndex = line.indexOf("$$", dollarIndex + 2)
+        if (closingIndex != -1) {
+            // 同行闭合：提取公式
+            val mathContent = line.substring(dollarIndex, closingIndex + 2)
+            parts.add(ContentPart.Math(mathContent))
+            
+            // 处理剩余部分（递归或循环）
+            val remainingText = line.substring(closingIndex + 2)
+            if (remainingText.isNotEmpty()) {
+                // 简单处理：作为文本，或者如果还有 $$ 则继续递归？
+                // 这里简化处理：如果有剩余，作为新的一行处理逻辑太复杂，
+                // 我们假设一行通常只有一个主要公式，或者剩余的是文本。
+                // 为了健壮性，如果剩余部分还有 $$，我们应该递归处理，但这里先作为文本返回，
+                // 或者我们可以构造一个虚拟的行列表来递归调用自己？
+                // 简单起见，如果剩余部分包含 $$，我们把它当作文本返回，或者尝试再次分割。
+                if (remainingText.contains("$$")) {
+                     // 递归处理剩余部分
+                     val (subParts, _) = processLineWithMath(listOf(remainingText), 0)
+                     parts.addAll(subParts)
+                } else {
+                    parts.add(ContentPart.Text(remainingText))
+                }
+            }
+            return parts to startIndex + 1
+        }
+        
+        // 3. 跨行闭合
+        val mathLines = mutableListOf<String>()
+        mathLines.add(line.substring(dollarIndex)) // 从 $$ 开始的部分
+        var currentIndex = startIndex + 1
+        var foundClosing = false
+        
+        while (currentIndex < lines.size) {
+            val currentLine = lines[currentIndex]
+            val closeIdx = currentLine.indexOf("$$")
+            
+            if (closeIdx != -1) {
+                // 找到闭合
+                mathLines.add(currentLine.substring(0, closeIdx + 2))
+                parts.add(ContentPart.Math(mathLines.joinToString("\n")))
+                
+                // 处理闭合行剩余的文本
+                val remaining = currentLine.substring(closeIdx + 2)
+                if (remaining.isNotEmpty()) {
+                     // 同样，如果剩余部分还有 $$，这里暂不处理，直接作为文本
+                     // 因为跨行公式后面紧跟另一个公式的情况较少
+                     parts.add(ContentPart.Text(remaining))
+                }
+                foundClosing = true
+                currentIndex++
+                break
+            } else {
+                mathLines.add(currentLine)
+                currentIndex++
+            }
+        }
+        
+        if (!foundClosing) {
+            // 未找到闭合，当作普通文本处理
+            // 回退：把所有累积的行作为文本返回？
+            // 或者把 mathLines 拼起来作为 Math (Markwon 可能会渲染未闭合的?)
+            // 通常未闭合的 $$ 会导致渲染问题。
+            // 这里我们选择将其作为 Math 返回，让渲染器尽力而为，或者作为 Text。
+            // 为了安全，作为 Text 返回比较好，但为了流式体验，可能作为 Math 更好。
+            // 鉴于 MathParser 已经处理了流式未闭合检测，这里如果到了 parseCompleteContent 仍未闭合，
+            // 说明是最终状态。
+            parts.add(ContentPart.Text(mathLines.joinToString("\n")))
+        }
+        
+        return parts to currentIndex
     }
 
     /**

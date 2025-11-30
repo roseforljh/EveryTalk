@@ -1,8 +1,17 @@
 package com.android.everytalk.ui.components.table
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.background
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -162,6 +171,29 @@ fun TableAwareText(
                         headerStyle = style.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Bold),
                         cellStyle = style
                     )
+                }
+                is ContentPart.Math -> {
+                    // 数学公式块部分：支持横向滚动
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp)
+                            .background(Color.Red)
+                            .horizontalScroll(rememberScrollState())
+                    ) {
+                        MarkdownRenderer(
+                            markdown = part.content,
+                            style = style,
+                            color = color,
+                            // 增加外部 padding，防止 AndroidView 边界裁剪内容
+                            modifier = Modifier.wrapContentWidth().padding(horizontal = 8.dp),
+                            isStreaming = isStreaming,
+                            onLongPress = onLongPress,
+                            onImageClick = onImageClick,
+                            contentKey = if (contentKey.isNotBlank()) "${contentKey}_math_${parsedParts.indexOf(part)}_${part.content.length}" else ""
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
+                    }
                 }
             }
         }

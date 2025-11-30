@@ -60,6 +60,18 @@ private fun preprocessAiMarkdown(input: String): String {
         .replace("\u3000", " ")
     s = s.replace(MULTIPLE_SPACES_REGEX, " ")
     s = s.replace(ENUM_ITEM_REGEX, "\n- $1 ")
+
+    // Fallback: Convert inline math ($...$) to block math ($$...$$)
+    // This helps when the inline math parser fails or when we want consistent display.
+    // We use a regex that avoids matching existing block math ($$) or escaped dollars (\$).
+    // Pattern ensures we match $content$ but not $$content$$
+    val inlineMathPattern = Regex("(?<!\\\\)(?<!\\$)\\$([^$]+?)(?<!\\\\)(?<!\\$)\\$")
+    if (s.contains("$")) {
+        s = s.replace(inlineMathPattern) { matchResult ->
+            "$$" + matchResult.groupValues[1] + "$$"
+        }
+    }
+
     return s
 }
 @Composable
@@ -108,7 +120,8 @@ fun MarkdownRenderer(
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
                 setTextColor(finalColor.toArgb())
                 // 稳定基线，减少跳动
-                setIncludeFontPadding(false)
+                // setIncludeFontPadding(false) // 导致数学公式垂直被截断，必须开启
+                setIncludeFontPadding(true)
                 
                 // TextView内部padding - 用户气泡使用相等的上下padding实现垂直居中
                 if (sender == Sender.User) {
@@ -126,9 +139,11 @@ fun MarkdownRenderer(
                     setPadding(horizontalPaddingPx, verticalPaddingPx, horizontalPaddingPx, verticalPaddingPx)
                 } else {
                     // AI气泡
+                    // 增加 padding 以防止数学公式（特别是斜体/积分符号）在边缘被截断
+                    // 16dp 应该足够容纳大部分溢出的字形
                     val paddingPx = TypedValue.applyDimension(
                         TypedValue.COMPLEX_UNIT_DIP,
-                        3f,
+                        16f,
                         resources.displayMetrics
                     ).toInt()
                     setPadding(paddingPx, paddingPx, paddingPx, paddingPx)
