@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.7.11](https://github.com/roseforljh/EveryTalk/compare/v1.7.10...v1.7.11) (2025-11-30)
+
+
+### Bug Fixes
+
+* voice mode bug 麦克风按钮逻辑修复与完善 ([7e16006](https://github.com/roseforljh/EveryTalk/commit/7e160065503674f0b2e233eecfc2d36cebe385a3))
+* 优化滚动效果 ([919528e](https://github.com/roseforljh/EveryTalk/commit/919528ee0978b45dff31c25fcfa46c5a89cb76da))
+* 优化滚动逻辑 ([474f47c](https://github.com/roseforljh/EveryTalk/commit/474f47c2c2a636d3d509db808b7967e254969462))
+* 图片水平 ([02711ec](https://github.com/roseforljh/EveryTalk/commit/02711ecb9aef3010991218c6e5dcc7424554ea91))
+* 实现行内数学公式转换 ([aeb2f83](https://github.com/roseforljh/EveryTalk/commit/aeb2f833306203761bf6e57ddcd6631931b8afbe))
+* 当 AI 输出结束时，界面应该会保持稳定，不会再发生跳动 ([95e0b4a](https://github.com/roseforljh/EveryTalk/commit/95e0b4aa08bcb514e296a5d96cc52ed5d555532d))
+* 语音模式流式输出 ([29ceff0](https://github.com/roseforljh/EveryTalk/commit/29ceff0de1c15141ab7dbb9b431d45e870f1f8a6))
+* 限制用户气泡最大高度、优化行内代码样式 ([674717a](https://github.com/roseforljh/EveryTalk/commit/674717abea6e1bae994afc1bf133a01a299da1aa))
+
 ## [1.7.10](https://github.com/roseforljh/EveryTalk/compare/v1.7.9...v1.7.10) (2025-11-26)
 
 
