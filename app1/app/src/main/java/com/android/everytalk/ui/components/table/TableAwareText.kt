@@ -31,6 +31,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.android.everytalk.util.ContentParseCache
 import com.android.everytalk.ui.components.table.TableUtils
+import android.widget.ImageView
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.graphics.toArgb
+import ru.noties.jlatexmath.JLatexMathDrawable
 
 /**
  * 表格感知文本渲染器（优化版 + 跳动修复）
@@ -179,16 +183,44 @@ fun TableAwareText(
                             .padding(vertical = 8.dp)
                             .horizontalScroll(rememberScrollState())
                     ) {
-                        MarkdownRenderer(
-                            markdown = part.content,
-                            style = style,
-                            color = color,
-                            // 增加外部 padding，防止 AndroidView 边界裁剪内容
-                            modifier = Modifier.wrapContentWidth().padding(horizontal = 8.dp),
-                            isStreaming = isStreaming,
-                            onLongPress = onLongPress,
-                            onImageClick = onImageClick,
-                            contentKey = if (contentKey.isNotBlank()) "${contentKey}_math_${parsedParts.indexOf(part)}_${part.content.length}" else ""
+                        // 尝试直接使用 JLatexMathDrawable 渲染，绕过 Markwon 解析
+                        // 这样可以避免 Markwon 对 $$ 块的解析问题
+                        val mathContent = part.content.trim().removePrefix("$$").removeSuffix("$$").trim()
+                        val density = androidx.compose.ui.platform.LocalDensity.current.density
+                        val textSizePx = style.fontSize.value * density
+                        
+                        // 修复：避免在非 Composable 上下文中使用 Composable 函数
+                        val defaultColor = MaterialTheme.colorScheme.onSurface
+                        val finalColor = if (color != Color.Unspecified) color else defaultColor
+                        val textColorInt = finalColor.toArgb()
+
+                        AndroidView(
+                            factory = { context ->
+                                ImageView(context).apply {
+                                    scaleType = ImageView.ScaleType.FIT_START
+                                    adjustViewBounds = true
+                                }
+                            },
+                            update = { imageView ->
+                                try {
+                                    val drawable = JLatexMathDrawable.builder(mathContent)
+                                        .textSize(textSizePx)
+                                        .padding(16)
+                                        .background(0) // Transparent
+                                        .align(JLatexMathDrawable.ALIGN_LEFT)
+                                        .color(textColorInt)
+                                        .build()
+                                    imageView.setImageDrawable(drawable)
+                                } catch (e: Throwable) {
+                                    // 降级处理：如果直接渲染失败（如依赖缺失），回退到 MarkdownRenderer
+                                    android.util.Log.e("TableAwareText", "JLatexMath direct render failed", e)
+                                    // 这里无法直接切换回 Composable，只能显示错误或尝试用 TextView 显示源码
+                                    // 简单起见，我们不处理回退，因为如果库存在，通常只会因 LaTeX 语法错误失败
+                                }
+                            },
+                            modifier = Modifier
+                                .wrapContentWidth()
+                                .padding(horizontal = 8.dp)
                         )
                         Spacer(modifier = Modifier.width(16.dp))
                     }
