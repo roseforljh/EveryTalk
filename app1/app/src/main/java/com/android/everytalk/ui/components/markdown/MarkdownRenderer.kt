@@ -43,6 +43,29 @@ private val ENUM_ITEM_REGEX = Regex("(?<!\n)\\s+([A-DＡ-Ｄ][\\.．、])\\s")
 private fun preprocessAiMarkdown(input: String): String {
     var s = input
 
+    // Fix: Swap bold markers and quotes: **"text"** -> "**text**"
+    // Handles Chinese quotes “”, straight quotes "", and single quotes ''
+    // This ensures that the quotes themselves are not bolded, which is often preferred for CJK typography
+    // Uses DOT_MATCHES_ALL to handle multi-line quoted text
+    val boldQuotePattern = Regex("\\*\\*([“\"'])(.*?)([”\"'])\\*\\*", RegexOption.DOT_MATCHES_ALL)
+    if (s.contains("**")) {
+        s = s.replace(boldQuotePattern) { matchResult ->
+            val openQuote = matchResult.groupValues[1]
+            val content = matchResult.groupValues[2]
+            val closeQuote = matchResult.groupValues[3]
+            "$openQuote**$content**$closeQuote"
+        }
+    }
+
+    // Fix: Convert $$ followed by a digit to escaped single $ (currency fix)
+    // e.g. $$30 -> \$30. This fixes issues where models output double dollars for currency.
+    // We use \$ (escaped dollar) so that subsequent inline math patterns won't pick it up
+    // Markwon will render \$ as a literal $ sign
+    if (s.contains("$$")) {
+        val currencyPattern = Regex("\\$\\$(?=\\d)")
+        s = s.replace(currencyPattern) { "\\$" }
+    }
+
     // Normalize base64 data URIs inside markdown image links: ![...](data:image/...)
     // Many providers insert newlines/spaces in long base64 strings which breaks Markdown parsing.
     if (s.contains("data:image/")) {
@@ -65,7 +88,8 @@ private fun preprocessAiMarkdown(input: String): String {
     // This helps when the inline math parser fails or when we want consistent display.
     // We use a regex that avoids matching existing block math ($$) or escaped dollars (\$).
     // Pattern ensures we match $content$ but not $$content$$
-    val inlineMathPattern = Regex("(?<!\\\\)(?<!\\$)\\$([^$]+?)(?<!\\\\)(?<!\\$)\\$")
+    // Fix: Disallow newlines in inline math content to prevent capturing unrelated dollar signs across lines
+    val inlineMathPattern = Regex("(?<!\\\\)(?<!\\$)\\$([^$\\n]+?)(?<!\\\\)(?<!\\$)\\$")
     if (s.contains("$")) {
         s = s.replace(inlineMathPattern) { matchResult ->
             "$$" + matchResult.groupValues[1] + "$$"
@@ -329,7 +353,8 @@ fun MarkdownRenderer(
             // 缓存优化：尝试从缓存获取 Spanned 对象
             val sp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
             val cacheKey = if (contentKey.isNotBlank() && !isStreaming) {
-                MarkdownSpansCache.generateKey(contentKey, isDark, sp)
+                // Append version suffix to invalidate old cache entries after regex fixes
+                MarkdownSpansCache.generateKey(contentKey + "_v4", isDark, sp)
             } else ""
 
             val cachedSpanned = if (cacheKey.isNotBlank()) MarkdownSpansCache.get(cacheKey) else null

@@ -76,12 +76,34 @@ object ContentParser {
      * @param text 原始文本
      * @return 解析后的内容块列表
      */
+    // Regex to match $$ followed by a digit (currency pattern like $$30)
+    private val CURRENCY_DOUBLE_DOLLAR_REGEX = Regex("\\$\\$(?=\\d)")
+    
+    /**
+     * Preprocess text to fix common formatting issues before parsing
+     * - Converts $$30 (currency) to $30
+     */
+    private fun preprocessText(text: String): String {
+        var result = text
+        // Fix: Convert $$ followed by digit to escaped single $ (currency fix)
+        // e.g. $$30 -> \$30, $$0.04 -> \$0.04
+        // We use \$ (escaped dollar) so that subsequent inline math patterns won't pick it up
+        // Markwon will render \$ as a literal $ sign
+        if (result.contains("$$")) {
+            result = result.replace(CURRENCY_DOUBLE_DOLLAR_REGEX) { "\\$" }
+        }
+        return result
+    }
+    
     fun parseCompleteContent(text: String, isStreaming: Boolean = false): List<ContentPart> {
         if (text.isBlank()) return listOf(ContentPart.Text(text))
         
+        // Preprocess text to fix currency $$ before any parsing
+        val processedText = preprocessText(text)
+        
         try {
             val parts = mutableListOf<ContentPart>()
-            val lines = text.lines()
+            val lines = processedText.lines()
             var currentIndex = 0
             
             Log.d(TAG, "parseCompleteContent: total lines=${lines.size}, isStreaming=$isStreaming")
@@ -190,9 +212,26 @@ object ContentParser {
         val parts = mutableListOf<ContentPart>()
         val line = lines[startIndex]
         
-        val dollarIndex = line.indexOf("$$")
+        var dollarIndex = line.indexOf("$$")
+        
+        // Fix: Skip "$$" if it looks like currency (followed by a digit), e.g. "$$30"
+        // Loop until we find a "$$" that is NOT currency, or run out of "$$"
+        while (dollarIndex != -1) {
+            val isCurrency = if (dollarIndex + 2 < line.length) {
+                line[dollarIndex + 2].isDigit()
+            } else false
+            
+            if (isCurrency) {
+                // This is likely currency, skip it and search for next "$$"
+                dollarIndex = line.indexOf("$$", dollarIndex + 2)
+            } else {
+                // Found a potential math block start
+                break
+            }
+        }
+
         if (dollarIndex == -1) {
-            // Should not happen if called correctly
+            // No valid math block start found (all "$$" were likely currency)
             return listOf(ContentPart.Text(line)) to startIndex + 1
         }
         
