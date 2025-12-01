@@ -108,7 +108,8 @@ fun MarkdownRenderer(
     onLongPress: (() -> Unit)? = null,
     onImageClick: ((String) -> Unit)? = null,
     sender: Sender = Sender.AI,
-    contentKey: String = ""
+    contentKey: String = "",
+    disableVerticalPadding: Boolean = false // 新增参数：允许禁用垂直padding
 ) {
     val context = LocalContext.current
     val isDark = isSystemInDarkTheme()
@@ -155,7 +156,7 @@ fun MarkdownRenderer(
                         1f,  // 减小水平padding
                         resources.displayMetrics
                     ).toInt()
-                    val verticalPaddingPx = TypedValue.applyDimension(
+                    val verticalPaddingPx = if (disableVerticalPadding) 0 else TypedValue.applyDimension(
                         TypedValue.COMPLEX_UNIT_DIP,
                         4f,  // 增加垂直padding以实现视觉居中
                         resources.displayMetrics
@@ -170,7 +171,10 @@ fun MarkdownRenderer(
                         16f,
                         resources.displayMetrics
                     ).toInt()
-                    setPadding(paddingPx, paddingPx, paddingPx, paddingPx)
+                    
+                    val verticalPaddingPx = if (disableVerticalPadding) 0 else paddingPx
+                    
+                    setPadding(paddingPx, verticalPaddingPx, paddingPx, verticalPaddingPx)
                 }
                 
                 // 行间距 - 更小的行间距

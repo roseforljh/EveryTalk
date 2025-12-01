@@ -93,7 +93,8 @@ fun ContentCoordinator(
             recursionDepth = recursionDepth,
             contentKey = contentKey,  // 传递缓存key
             onLongPress = onLongPress,
-            onImageClick = onImageClick
+            onImageClick = onImageClick,
+            sender = sender
         )
         return
     }

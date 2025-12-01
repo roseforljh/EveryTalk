@@ -237,7 +237,11 @@ object ContentParser {
         
         // 1. 提取 $$ 之前的文本
         if (dollarIndex > 0) {
-            parts.add(ContentPart.Text(line.substring(0, dollarIndex)))
+            val prefix = line.substring(0, dollarIndex)
+            // 优化：如果前缀仅为空白字符，则忽略，避免产生空白行导致垂直间距过大
+            if (prefix.isNotBlank()) {
+                parts.add(ContentPart.Text(prefix))
+            }
         }
         
         // 2. 检查是否在同一行闭合

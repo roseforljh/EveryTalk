@@ -32,9 +32,13 @@ import kotlinx.coroutines.withContext
 import com.android.everytalk.util.ContentParseCache
 import com.android.everytalk.ui.components.table.TableUtils
 import android.widget.ImageView
+import android.view.ViewGroup
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.graphics.toArgb
 import ru.noties.jlatexmath.JLatexMathDrawable
+import com.android.everytalk.data.DataClass.Sender
+import android.util.TypedValue
+import androidx.compose.ui.platform.LocalContext
 
 /**
  * 表格感知文本渲染器（优化版 + 跳动修复）
@@ -61,7 +65,8 @@ fun TableAwareText(
     recursionDepth: Int = 0,
     contentKey: String = "",  // 新增：用于缓存key（通常为消息ID）
     onLongPress: (() -> Unit)? = null,
-    onImageClick: ((String) -> Unit)? = null
+    onImageClick: ((String) -> Unit)? = null,
+    sender: Sender = Sender.AI
 ) {
     // 预览状态管理
     var previewState by remember { mutableStateOf<Pair<String, String>?>(null) } // (code, language)
@@ -108,7 +113,16 @@ fun TableAwareText(
 
     // 统一渲染逻辑
     // ContentParser 已经确保解析准确性，UI 层直接渲染即可
-    Column(modifier = modifier.fillMaxWidth()) {
+    // 优化：将垂直 padding 移至外层 Column，内部组件禁用垂直 padding，从而消除组件间的双重间距
+    
+    val context = LocalContext.current
+    val verticalPaddingDp = if (sender == Sender.User) 4.dp else 16.dp
+    
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = verticalPaddingDp) // 在容器层统一添加垂直 padding
+    ) {
         parsedParts.forEach { part ->
             when (part) {
                 is ContentPart.Text -> {
@@ -121,8 +135,10 @@ fun TableAwareText(
                         isStreaming = isStreaming, // 传递流式状态给MarkdownRenderer（用于内部优化）
                         onLongPress = onLongPress,
                         onImageClick = onImageClick,
+                        sender = sender,
                         // 修复缓存冲突：Key 必须包含内容的特征（如长度），因为 index 0 可能从完整文本变为片段
-                        contentKey = if (contentKey.isNotBlank()) "${contentKey}_part_${parsedParts.indexOf(part)}_${part.content.length}" else ""
+                        contentKey = if (contentKey.isNotBlank()) "${contentKey}_part_${parsedParts.indexOf(part)}_${part.content.length}" else "",
+                        disableVerticalPadding = true // 禁用内部垂直 padding，由外层 Column 统一控制
                     )
                 }
                 is ContentPart.Code -> {
@@ -197,6 +213,10 @@ fun TableAwareText(
                         AndroidView(
                             factory = { context ->
                                 ImageView(context).apply {
+                                    layoutParams = ViewGroup.LayoutParams(
+                                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                                        ViewGroup.LayoutParams.WRAP_CONTENT
+                                    )
                                     scaleType = ImageView.ScaleType.FIT_START
                                     adjustViewBounds = true
                                 }
@@ -205,7 +225,7 @@ fun TableAwareText(
                                 try {
                                     val drawable = JLatexMathDrawable.builder(mathContent)
                                         .textSize(textSizePx)
-                                        .padding(16)
+                                        .padding(0) // 移除多余的 padding
                                         .background(0) // Transparent
                                         .align(JLatexMathDrawable.ALIGN_LEFT)
                                         .color(textColorInt)
