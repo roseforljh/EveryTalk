@@ -87,16 +87,22 @@ class StreamingBuffer(
             val timeSinceLastUpdate = currentTime - lastUpdateTime
             val currentBufferSize = buffer.length
             
-            // 🔥 修复：立即触发更新，减少缓冲延迟
-            // 对于流式输出，我们希望内容尽快显示，所以立即触发刷新
-            // Cancel any pending delayed flush since we're flushing now
-            pendingFlushJob?.cancel()
-            pendingFlushJob = null
-            
-            performFlush(currentTime)
-            
-            Log.d(TAG, "[$messageId] 🔥 IMMEDIATE FLUSH: chunk_len=${chunk.length}, " +
-                    "bufferSize=$currentBufferSize, timeSince=${timeSinceLastUpdate}ms")
+            // Check if we should flush based on thresholds
+            if (currentBufferSize >= batchThreshold || timeSinceLastUpdate >= updateInterval) {
+                // Cancel any pending delayed flush since we're flushing now
+                pendingFlushJob?.cancel()
+                pendingFlushJob = null
+                
+                performFlush(currentTime)
+                
+                Log.d(TAG, "[$messageId] Threshold flush: chunk_len=${chunk.length}, " +
+                        "bufferSize=$currentBufferSize, timeSince=${timeSinceLastUpdate}ms")
+            } else {
+                // Schedule delayed flush if not already scheduled
+                if (pendingFlushJob == null) {
+                    scheduleDelayedFlush()
+                }
+            }
         }
     }
     

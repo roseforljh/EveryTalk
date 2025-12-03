@@ -47,13 +47,13 @@ class StreamingMessageStateManager {
     private val pendingJobs: MutableMap<String, Job> = ConcurrentHashMap()
 
     // 阈值：最小字符数、最大等待时间（毫秒）
-    private val MIN_CHARS_TO_FLUSH = 80  // 提升到80字符（快速止血：减少刷新频率）
-    private val DEBOUNCE_MS = 180L  // 提升到180ms（快速止血：延长防抖时间）
-    private val MAX_BUFFER_BEFORE_FORCE = 1024  // 防止无限累计
+    private val MIN_CHARS_TO_FLUSH = 1  // 降低阈值，依赖 StreamingBuffer 和 adaptiveInterval 控制
+    private val DEBOUNCE_MS = 16L  // 降低防抖时间，仅用于合并同一帧的多次更新
+    private val MAX_BUFFER_BEFORE_FORCE = 1024
 
     // 刷新时间限制：最小刷新间隔，避免主线程高频重组
     private val lastFlushTime = ConcurrentHashMap<String, Long>()
-    private val MIN_FLUSH_INTERVAL_MS = 120L  // 提升到120ms
+    private val MIN_FLUSH_INTERVAL_MS = 50L  // 降低最小间隔，允许更流畅的动画 (20fps)
     
     // 自适应策略：根据内容长度动态调整刷新间隔
     private val contentLengthTracker = ConcurrentHashMap<String, Int>()
@@ -98,12 +98,13 @@ class StreamingMessageStateManager {
 
         // 条件1：达到最小长度 -> 立即刷
         // 条件2：缓冲过大 -> 强制刷
-        if (buf.length >= MIN_CHARS_TO_FLUSH || buf.length >= MAX_BUFFER_BEFORE_FORCE) {
+        // 尝试立即刷新（flushNow 内部有时间间隔限制）
+        if (buf.length >= MAX_BUFFER_BEFORE_FORCE) {
             flushNow(messageId)
             return
         }
 
-        // 否则启动/刷新防抖任务
+        // 使用短防抖合并高频调用，主要依赖 flushNow 的时间限制
         pendingJobs.remove(messageId)?.cancel()
         pendingJobs[messageId] = scope.launch {
             delay(DEBOUNCE_MS)
@@ -129,10 +130,10 @@ class StreamingMessageStateManager {
         
         // 内容越长，刷新间隔越大（减少大文本重组开销）
         val adaptiveInterval = when {
-            currentLength < 500 -> MIN_FLUSH_INTERVAL_MS  // 短文本：120ms
-            currentLength < 2000 -> MIN_FLUSH_INTERVAL_MS + 30L  // 中等：150ms
-            currentLength < 5000 -> MIN_FLUSH_INTERVAL_MS + 60L  // 较长：180ms
-            else -> MIN_FLUSH_INTERVAL_MS + 100L  // 超长：220ms
+            currentLength < 500 -> MIN_FLUSH_INTERVAL_MS  // 短文本：50ms
+            currentLength < 2000 -> MIN_FLUSH_INTERVAL_MS + 30L  // 中等：80ms
+            currentLength < 5000 -> MIN_FLUSH_INTERVAL_MS + 60L  // 较长：110ms
+            else -> MIN_FLUSH_INTERVAL_MS + 100L  // 超长：150ms
         }
 
         // 限制刷新频率，避免主线程高频重组导致掉帧/ANR
