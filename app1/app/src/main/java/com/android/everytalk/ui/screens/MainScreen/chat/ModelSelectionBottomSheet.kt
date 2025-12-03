@@ -43,10 +43,15 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Loop
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -450,69 +455,107 @@ fun PlatformSelectionDialog(
         }
     }
 
-    AlertDialog(
+    Dialog(
         onDismissRequest = onDismissRequest,
-        containerColor = MaterialTheme.colorScheme.surfaceDim,
-        modifier = Modifier.graphicsLayer {
-            this.alpha = alpha.value
-            this.scaleX = scale.value
-            this.scaleY = scale.value
-        },
-        title = {
-            Text("切换平台", color = MaterialTheme.colorScheme.onSurface)
-        },
-        text = {
-            LazyColumn(
-                modifier = Modifier.height(300.dp) // 固定高度，可滚动
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth(0.9f)
+                .graphicsLayer {
+                    this.alpha = alpha.value
+                    this.scaleX = scale.value
+                    this.scaleY = scale.value
+                },
+            shape = RoundedCornerShape(28.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF333333))
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                items(sortedPlatforms) { platform ->
-                    ListItem(
-                        headlineContent = { Text(platform, color = MaterialTheme.colorScheme.onSurface) },
-                        modifier = Modifier.clickable { tempSelectedPlatform = platform },
-                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                        trailingContent = {
-                            if (tempSelectedPlatform == platform) {
-                                Icon(
-                                    imageVector = Icons.Filled.CheckCircle,
-                                    contentDescription = "Selected",
-                                    tint = MaterialTheme.colorScheme.onSurface
-                                )
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Filled.RadioButtonUnchecked,
-                                    contentDescription = "Unselected",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                Text(
+                    text = "切换平台",
+                    style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                    color = Color.White,
+                    modifier = Modifier.align(Alignment.Start)
+                )
+                
+                Spacer(modifier = Modifier.height(16.dp))
+
+                LazyColumn(
+                    modifier = Modifier.height(300.dp)
+                ) {
+                    items(sortedPlatforms) { platform ->
+                        ListItem(
+                            headlineContent = { Text(platform, color = Color.White) },
+                            modifier = Modifier.clickable { tempSelectedPlatform = platform },
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                            trailingContent = {
+                                if (tempSelectedPlatform == platform) {
+                                    Icon(
+                                        imageVector = Icons.Filled.CheckCircle,
+                                        contentDescription = "Selected",
+                                        tint = Color.White
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Filled.RadioButtonUnchecked,
+                                        contentDescription = "Unselected",
+                                        tint = Color.Gray
+                                    )
+                                }
                             }
-                        }
-                    )
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // 取消按钮
+                    OutlinedButton(
+                        onClick = onDismissRequest,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = Color(0xFFFF5252)
+                        ),
+                        border = BorderStroke(1.dp, Color(0xFFFF5252))
+                    ) {
+                        Text(
+                            text = "取消",
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                        )
+                    }
+
+                    // 确定按钮
+                    Button(
+                        onClick = { tempSelectedPlatform?.let { onConfirm(it) } },
+                        enabled = tempSelectedPlatform != null && tempSelectedPlatform != currentPlatform,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color.White,
+                            contentColor = Color.Black,
+                            disabledContainerColor = Color.Gray,
+                            disabledContentColor = Color.LightGray
+                        )
+                    ) {
+                        Text(
+                            text = "确定",
+                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                        )
+                    }
                 }
             }
-        },
-        dismissButton = {
-            TextButton(
-                onClick = onDismissRequest,
-                shape = RoundedCornerShape(20.dp),
-                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp)
-            ) {
-                Text("取消", fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.error)
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = { tempSelectedPlatform?.let { onConfirm(it) } },
-                enabled = tempSelectedPlatform != null && tempSelectedPlatform != currentPlatform,
-                shape = RoundedCornerShape(20.dp),
-                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                    disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                )
-            ) {
-                Text("确定切换", fontWeight = FontWeight.Bold)
-            }
         }
-    )
+    }
 }
