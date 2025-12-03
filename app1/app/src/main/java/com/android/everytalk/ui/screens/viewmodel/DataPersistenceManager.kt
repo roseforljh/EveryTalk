@@ -248,31 +248,79 @@ class DataPersistenceManager(
                     Log.i(TAG, "loadInitialData: 已创建默认快手图像配置")
                 }
                 
-                // 自动创建 Modal Z-Image-Turbo 默认配置（如果不存在）
-                val hasModalImageConfig = loadedImageGenConfigs.any {
+                // 自动创建或更新 Modal Z-Image-Turbo 默认配置
+                // 目标：与快手 Kolors 归并在同一个"默认"平台下
+                
+                // 1. 先找到现有的快手配置，以对齐分组字段 (address/key/channel)
+                val kolorsConfig = loadedImageGenConfigs.find {
+                    it.model == "Kwai-Kolors/Kolors" &&
+                    it.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE
+                }
+                
+                val targetAddress = kolorsConfig?.address ?: ""
+                val targetKey = kolorsConfig?.key ?: ""
+                val targetChannel = kolorsConfig?.channel ?: ""
+                val targetProvider = "默认" // 强制归并到"默认"
+
+                val existingModalConfigIndex = loadedImageGenConfigs.indexOfFirst {
                     it.model == "z-image-turbo-modal" &&
                     it.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE
                 }
-                if (!hasModalImageConfig) {
-                    Log.i(TAG, "loadInitialData: 未找到 Modal 图像配置，自动创建...")
+
+                var configsChanged = false
+                val mutableConfigs = loadedImageGenConfigs.toMutableList()
+
+                if (existingModalConfigIndex == -1) {
+                    Log.i(TAG, "loadInitialData: 未找到 Modal 图像配置，自动创建并归并到默认平台...")
                     val modalImageConfig = ApiConfig(
                         id = java.util.UUID.randomUUID().toString(),
                         name = "Z-Image-Turbo (Modal)",
-                        provider = "默认",
-                        address = "",
-                        key = "",
+                        provider = targetProvider,
+                        address = targetAddress,
+                        key = targetKey,
                         model = "z-image-turbo-modal",
                         modalityType = com.android.everytalk.data.DataClass.ModalityType.IMAGE,
-                        channel = "",
+                        channel = targetChannel,
                         isValid = true,
                         numInferenceSteps = 4 // Modal 默认步数
                     )
-                    loadedImageGenConfigs = loadedImageGenConfigs + listOf(modalImageConfig)
-                    Log.i(TAG, "loadInitialData: 已创建 Modal 图像配置")
+                    mutableConfigs.add(modalImageConfig)
+                    configsChanged = true
+                } else {
+                    // 检查是否需要更新（步数不对，或者分组字段与快手不一致）
+                    val existingConfig = mutableConfigs[existingModalConfigIndex]
+                    var needsUpdate = false
+                    var updatedConfig = existingConfig
+
+                    if (existingConfig.numInferenceSteps != 4) {
+                        updatedConfig = updatedConfig.copy(numInferenceSteps = 4)
+                        needsUpdate = true
+                    }
+                    // 强制对齐到快手的分组字段，确保在同一个卡片显示
+                    if (existingConfig.provider != targetProvider ||
+                        existingConfig.address != targetAddress ||
+                        existingConfig.key != targetKey ||
+                        existingConfig.channel != targetChannel) {
+                        updatedConfig = updatedConfig.copy(
+                            provider = targetProvider,
+                            address = targetAddress,
+                            key = targetKey,
+                            channel = targetChannel
+                        )
+                        needsUpdate = true
+                    }
+
+                    if (needsUpdate) {
+                        Log.i(TAG, "loadInitialData: Modal 配置过时或分组未对齐，更新配置...")
+                        mutableConfigs[existingModalConfigIndex] = updatedConfig
+                        configsChanged = true
+                    }
                 }
                 
+                loadedImageGenConfigs = mutableConfigs.toList()
+
                 // 统一保存所有图像配置（包括新增的）
-                if (!hasDefaultImageConfig || !hasModalImageConfig) {
+                if (!hasDefaultImageConfig || configsChanged) {
                     dataSource.saveImageGenApiConfigs(loadedImageGenConfigs)
                     Log.i(TAG, "loadInitialData: 已保存更新后的图像配置列表")
                 }
