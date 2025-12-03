@@ -105,13 +105,10 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            postprocessing {
-                isRemoveUnusedCode = true
-                isObfuscate = true
-                isOptimizeCode = true
-                proguardFiles.clear()
-                proguardFile("proguard-rules.pro")
-            }
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
             signingConfig = signingConfigs.getByName("release")
             // Inject backend configuration for Release
             // 优先级: Gradle Property (-P) > 环境变量 > local.properties
@@ -157,8 +154,10 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        }
     }
     buildFeatures {
         compose = true
@@ -177,6 +176,17 @@ android {
     ndkVersion = "25.2.9519653"
 
 
+    applicationVariants.all {
+        if (buildType.name == "debug") {
+            outputs.all {
+                // Override version code for debug builds to avoid update prompts
+                if (this is com.android.build.gradle.api.ApkVariantOutput) {
+                    this.versionCodeOverride = 9999
+                    this.versionNameOverride = "9999"
+                }
+            }
+        }
+    }
 }
 
 

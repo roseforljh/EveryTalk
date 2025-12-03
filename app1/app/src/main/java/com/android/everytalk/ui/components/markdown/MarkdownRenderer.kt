@@ -48,8 +48,28 @@ private fun preprocessAiMarkdown(input: String): String {
     // This ensures that the quotes themselves are not bolded, which is often preferred for CJK typography
     // Uses DOT_MATCHES_ALL to handle multi-line quoted text
     val boldQuotePattern = Regex("\\*\\*([“\"'])(.*?)([”\"'])\\*\\*", RegexOption.DOT_MATCHES_ALL)
+    // New pattern for **“text**” -> “**text**” (Fixes issue where bold start is inside, end is outside quote)
+    val mixedBoldStartPattern = Regex("\\*\\*([“\"'])(.*?)\\*\\*([”\"'])", RegexOption.DOT_MATCHES_ALL)
+    // New pattern for “**text”** -> “**text**” (Fixes issue where bold start is outside, end is inside quote)
+    val mixedBoldEndPattern = Regex("([“\"'])\\*\\*(.*?)([”\"'])\\*\\*", RegexOption.DOT_MATCHES_ALL)
+
     if (s.contains("**")) {
+        // 1. Handle **"text"** -> "**text**"
         s = s.replace(boldQuotePattern) { matchResult ->
+            val openQuote = matchResult.groupValues[1]
+            val content = matchResult.groupValues[2]
+            val closeQuote = matchResult.groupValues[3]
+            "$openQuote**$content**$closeQuote"
+        }
+        // 2. Handle **"text**" -> "**text**"
+        s = s.replace(mixedBoldStartPattern) { matchResult ->
+            val openQuote = matchResult.groupValues[1]
+            val content = matchResult.groupValues[2]
+            val closeQuote = matchResult.groupValues[3]
+            "$openQuote**$content**$closeQuote"
+        }
+        // 3. Handle "**text"** -> "**text**"
+        s = s.replace(mixedBoldEndPattern) { matchResult ->
             val openQuote = matchResult.groupValues[1]
             val content = matchResult.groupValues[2]
             val closeQuote = matchResult.groupValues[3]
@@ -289,7 +309,7 @@ fun MarkdownRenderer(
                                         val touchSlop = 20
                                         if (x >= (xStart - touchSlop) && x <= (xStart + width + touchSlop)) {
                                             // 命中！查找对应的 source 并触发点击
-                                            val source = if (drawable is AsyncDrawable) drawable.destination else null
+                                            val source = drawable.destination
                                             if (!source.isNullOrEmpty()) {
                                                 android.util.Log.d("MarkdownRenderer", "Geometric Hit: x=$x, imgX=$xStart, w=$width, src=$source")
                                                 onImageClick(source)
@@ -358,7 +378,7 @@ fun MarkdownRenderer(
             val sp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
             val cacheKey = if (contentKey.isNotBlank() && !isStreaming) {
                 // Append version suffix to invalidate old cache entries after regex fixes
-                MarkdownSpansCache.generateKey(contentKey + "_v4", isDark, sp)
+                MarkdownSpansCache.generateKey(contentKey + "_v5", isDark, sp)
             } else ""
 
             val cachedSpanned = if (cacheKey.isNotBlank()) MarkdownSpansCache.get(cacheKey) else null
@@ -405,7 +425,7 @@ fun MarkdownRenderer(
                         val start = text.getSpanStart(span)
                         val end = text.getSpanEnd(span)
                         val drawable = span.drawable
-                        val source: String? = if (drawable is AsyncDrawable) drawable.destination else null
+                        val source: String? = drawable.destination
 
                         // 清理该范围内的历史 ClickableSpan，防止叠加
                         text.getSpans(start, end, ClickableSpan::class.java).forEach { text.removeSpan(it) }

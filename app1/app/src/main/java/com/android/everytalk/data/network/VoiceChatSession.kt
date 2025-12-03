@@ -496,19 +496,14 @@ class VoiceChatSession(
             var inputOffset = 0
             var outputDone = false
             
-            val inputBuffers = encoder.inputBuffers
-            // 注意: outputBuffers 在 API 21+ 已废弃，但为了兼容性使用 getOutputBuffer(index)
+            // 注意: inputBuffers/outputBuffers 在 API 21+ 已废弃，直接使用 getInputBuffer/getOutputBuffer
             
             while (!outputDone) {
                 // 1. 写入输入数据
                 if (inputOffset < pcmData.size) {
                     val inputBufferIndex = encoder.dequeueInputBuffer(10000)
                     if (inputBufferIndex >= 0) {
-                        val inputBuffer = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                            encoder.getInputBuffer(inputBufferIndex)
-                        } else {
-                            inputBuffers[inputBufferIndex]
-                        }
+                        val inputBuffer = encoder.getInputBuffer(inputBufferIndex)
                         
                         inputBuffer?.clear()
                         val chunkSize = minOf(inputBuffer?.capacity() ?: 0, pcmData.size - inputOffset)
@@ -537,11 +532,7 @@ class VoiceChatSession(
                     // ignore
                 } else {
                     // 获取编码后的数据
-                    val outputBuffer = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                        encoder.getOutputBuffer(encoderStatus)
-                    } else {
-                        encoder.outputBuffers[encoderStatus]
-                    }
+                    val outputBuffer = encoder.getOutputBuffer(encoderStatus)
                     
                     if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
                         bufferInfo.size = 0
@@ -823,7 +814,8 @@ class VoiceChatSession(
                             throw e
                         }
                         // 截断日志，防止刷屏
-                        val logLine = if (line != null && line!!.length > 200) line!!.substring(0, 200) + "..." else line
+                        val currentLine = line!!
+                        val logLine = if (currentLine.length > 200) currentLine.substring(0, 200) + "..." else currentLine
                         Log.w(TAG, "Failed to parse stream line: $logLine", e)
                     }
                 }
