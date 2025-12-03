@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.7.12](https://github.com/roseforljh/EveryTalk/compare/v1.7.11...v1.7.12) (2025-12-01)
+
+
+### Bug Fixes
+
+* katex优化 ([3c5537c](https://github.com/roseforljh/EveryTalk/commit/3c5537c8a897328acef3e0620528bdae4dfb696f))
+* 优化数学公式布局空间 ([958a1b2](https://github.com/roseforljh/EveryTalk/commit/958a1b2c94e8d74fd818e93810d95ab92344266f))
+* 修复两个转换问题，把"和**换个位置 **"文本"** 变成" **文本**"；另一个则是$$ ([d6679fd](https://github.com/roseforljh/EveryTalk/commit/d6679fd65e73ade1180c18a33f3155e8a78efff0))
+
 ## [1.7.11](https://github.com/roseforljh/EveryTalk/compare/v1.7.10...v1.7.11) (2025-11-30)
 
 
