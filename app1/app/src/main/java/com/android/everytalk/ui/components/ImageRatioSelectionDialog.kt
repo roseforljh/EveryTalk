@@ -37,52 +37,75 @@ fun ImageRatioSelectionDialog(
     modifier: Modifier = Modifier,
     // 动态参数（可选）：允许展示的比例名称（如 ["1:1","16:9"]），为空则沿用默认集合
     allowedRatioNames: List<String>? = null,
-    // 若为 Seedream 家族可显示清晰度（2K/4K）
+    // 若为 Seedream/Modal 家族可显示清晰度（2K/4K 或 HD/2K）
     family: ModelFamily? = null,
     seedreamQuality: QualityTier = QualityTier.Q2K,
     onQualityChange: ((QualityTier) -> Unit)? = null
 ) {
     // 依据 allowedRatioNames 过滤默认比例集合（始终保留 AUTO）
     val allRatios = remember { ImageRatio.DEFAULT_RATIOS.filter { !it.isAuto } }
-    val filteredRatios = remember(allowedRatioNames, allRatios) {
+    val filteredRatios = remember(allowedRatioNames, allRatios, family) {
         if (allowedRatioNames.isNullOrEmpty()) {
             allRatios
         } else {
-            val names = allowedRatioNames.map { it.trim() }.toSet()
-            val existing = allRatios.filter { r ->
-                val name = r.displayName.trim()
-                name in names
-            }
-            // 对于不在默认集合中的比例（如 3:2），尝试动态解析并添加
-            val existingNames = existing.map { it.displayName.trim() }.toSet()
-            val missing = names - existingNames
-            val dynamic = missing.mapNotNull { name ->
-                val parts = name.split(":")
-                if (parts.size == 2) {
-                    val wRatio = parts[0].toFloatOrNull()
-                    val hRatio = parts[1].toFloatOrNull()
-                    if (wRatio != null && hRatio != null && wRatio > 0 && hRatio > 0) {
-                        // 动态计算分辨率：以 1024 为基准长边，确保生成的 ImageRatio 具有合理的像素尺寸
-                        // 避免直接使用比例整数（如 3x2）导致生成的图片极小
-                        val baseSize = 1024f
-                        val (w, h) = if (wRatio >= hRatio) {
-                            baseSize to (baseSize / wRatio * hRatio)
+            // Modal 特殊处理：使用 ImageGenCapabilities 中的定义重建 ImageRatio
+            if (family == ModelFamily.MODAL_Z_IMAGE) {
+                val caps = ImageGenCapabilities.getCapabilities(family)
+                caps.ratios.filter { it.ratio in allowedRatioNames }.map { opt ->
+                    // 解析 ratio "2K 1:1" -> width/height
+                    // 这里只需要生成一个标识用的 ImageRatio，具体像素值由后端映射
+                    // 为了 UI 预览框能大致正确，我们需要解析后面的 "1:1"
+                    val ratioPart = opt.ratio.substringAfter(" ").trim() // "1:1"
+                    val parts = ratioPart.split(":")
+                    var w = 1024
+                    var h = 1024
+                    if (parts.size == 2) {
+                        val wr = parts[0].toFloatOrNull() ?: 1f
+                        val hr = parts[1].toFloatOrNull() ?: 1f
+                        if (wr >= hr) {
+                            h = (1024 / wr * hr).toInt()
                         } else {
-                            (baseSize / hRatio * wRatio) to baseSize
+                            w = (1024 / hr * wr).toInt()
                         }
-                        ImageRatio(displayName = name, width = w.toInt(), height = h.toInt())
+                    }
+                    ImageRatio(displayName = opt.displayName, width = w, height = h)
+                }
+            } else {
+                val names = allowedRatioNames.map { it.trim() }.toSet()
+                val existing = allRatios.filter { r ->
+                    val name = r.displayName.trim()
+                    name in names
+                }
+                // 对于不在默认集合中的比例（如 3:2），尝试动态解析并添加
+                val existingNames = existing.map { it.displayName.trim() }.toSet()
+                val missing = names - existingNames
+                val dynamic = missing.mapNotNull { name ->
+                    val parts = name.split(":")
+                    if (parts.size == 2) {
+                        val wRatio = parts[0].toFloatOrNull()
+                        val hRatio = parts[1].toFloatOrNull()
+                        if (wRatio != null && hRatio != null && wRatio > 0 && hRatio > 0) {
+                            val baseSize = 1024f
+                            val (w, h) = if (wRatio >= hRatio) {
+                                baseSize to (baseSize / wRatio * hRatio)
+                            } else {
+                                (baseSize / hRatio * wRatio) to baseSize
+                            }
+                            ImageRatio(displayName = name, width = w.toInt(), height = h.toInt())
+                        } else null
                     } else null
-                } else null
+                }
+                existing + dynamic
             }
-            existing + dynamic
         }
     }
  
     // Kolors 专属：将 3:4 比例在展示时展开为两个具体分辨率选项（960×1280 与 768×1024）
     val displayRatios = remember(filteredRatios, family) {
+        val ratios = filteredRatios
         if (family == ModelFamily.KOLORS) {
             buildList {
-                filteredRatios.forEach { r ->
+                ratios.forEach { r ->
                     if (r.displayName.trim() == "3:4") {
                         add(
                             ImageRatio(
@@ -104,7 +127,7 @@ fun ImageRatioSelectionDialog(
                 }
             }
         } else {
-            filteredRatios
+            ratios
         }
     }
  
@@ -135,7 +158,7 @@ fun ImageRatioSelectionDialog(
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp)
                 )
 
-                // 仅 Seedream 家族显示 2K / 4K 清晰度选择（使用 Button 组合以兼容旧版 Material3）
+                // 仅 Seedream 家族显示 2K / 4K 清晰度选择（Modal 已改为直接列出所有选项）
                 if (family == ModelFamily.SEEDREAM) {
                     Row(
                         modifier = Modifier
@@ -150,7 +173,7 @@ fun ImageRatioSelectionDialog(
 
                         if (is2K) {
                             FilledTonalButton(
-                                onClick = { /* no-op when already selected */ },
+                                onClick = { /* no-op */ },
                                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
                             ) { Text("2K") }
                         } else {
@@ -162,7 +185,7 @@ fun ImageRatioSelectionDialog(
 
                         if (is4K) {
                             FilledTonalButton(
-                                onClick = { /* no-op when already selected */ },
+                                onClick = { /* no-op */ },
                                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
                             ) { Text("4K") }
                         } else {

@@ -228,10 +228,11 @@ class DataPersistenceManager(
                 // 自动创建默认图像配置（如果不存在）
                 val hasDefaultImageConfig = loadedImageGenConfigs.any {
                     it.provider.trim().lowercase() in listOf("默认", "default") &&
-                    it.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE
+                    it.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE &&
+                    it.model == "Kwai-Kolors/Kolors"
                 }
                 if (!hasDefaultImageConfig) {
-                    Log.i(TAG, "loadInitialData: 未找到默认图像配置，自动创建...")
+                    Log.i(TAG, "loadInitialData: 未找到默认快手图像配置，自动创建...")
                     val defaultImageConfig = ApiConfig(
                         id = java.util.UUID.randomUUID().toString(),
                         name = "Kwai-Kolors/Kolors",
@@ -244,9 +245,36 @@ class DataPersistenceManager(
                         isValid = true
                     )
                     loadedImageGenConfigs = loadedImageGenConfigs + listOf(defaultImageConfig)
-                    // 立即保存到持久化存储
+                    Log.i(TAG, "loadInitialData: 已创建默认快手图像配置")
+                }
+                
+                // 自动创建 Modal Z-Image-Turbo 默认配置（如果不存在）
+                val hasModalImageConfig = loadedImageGenConfigs.any {
+                    it.model == "z-image-turbo-modal" &&
+                    it.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE
+                }
+                if (!hasModalImageConfig) {
+                    Log.i(TAG, "loadInitialData: 未找到 Modal 图像配置，自动创建...")
+                    val modalImageConfig = ApiConfig(
+                        id = java.util.UUID.randomUUID().toString(),
+                        name = "Z-Image-Turbo (Modal)",
+                        provider = "默认",
+                        address = "",
+                        key = "",
+                        model = "z-image-turbo-modal",
+                        modalityType = com.android.everytalk.data.DataClass.ModalityType.IMAGE,
+                        channel = "",
+                        isValid = true,
+                        numInferenceSteps = 4 // Modal 默认步数
+                    )
+                    loadedImageGenConfigs = loadedImageGenConfigs + listOf(modalImageConfig)
+                    Log.i(TAG, "loadInitialData: 已创建 Modal 图像配置")
+                }
+                
+                // 统一保存所有图像配置（包括新增的）
+                if (!hasDefaultImageConfig || !hasModalImageConfig) {
                     dataSource.saveImageGenApiConfigs(loadedImageGenConfigs)
-                    Log.i(TAG, "loadInitialData: 已创建并保存默认图像配置")
+                    Log.i(TAG, "loadInitialData: 已保存更新后的图像配置列表")
                 }
                 
                 val selectedImageGenConfigId: String? = dataSource.loadSelectedImageGenConfigId()

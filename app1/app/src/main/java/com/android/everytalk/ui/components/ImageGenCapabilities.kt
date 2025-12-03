@@ -22,6 +22,7 @@ object ImageGenCapabilities {
         SEEDREAM,  // 火山系 即梦 Seedream 家族（支持 2K/4K，需 size）
         QWEN,      // 通义千问图像家族（固定分辨率集合，通常用 image_size）
         KOLORS,    // Kolors/Kwai/SiliconFlow 默认图像家族（固定分辨率集合）
+        MODAL_Z_IMAGE, // Modal Z-Image-Turbo 家族
         UNKNOWN
     }
 
@@ -29,6 +30,7 @@ object ImageGenCapabilities {
      * 质量档（仅 Seedream 家族显示）
      */
     enum class QualityTier(val label: String) {
+        HD("HD"),
         Q2K("2K"),
         Q4K("4K")
     }
@@ -71,6 +73,7 @@ object ImageGenCapabilities {
      * - Seedream 家族: "doubao", "seedream", "volces"
      * - Qwen 家族: "qwen", "qwen-image", "qwen-vl"
      * - Kolors 家族: "kolors", "kwai", "siliconflow"
+     * - Modal Z-Image: "z-image-turbo"
      */
     @JvmStatic
     fun detectFamily(
@@ -88,6 +91,7 @@ object ImageGenCapabilities {
         }
 
         return when {
+            containsAny("z-image-turbo") -> ModelFamily.MODAL_Z_IMAGE
             containsAny("gemini", "google") -> ModelFamily.GEMINI
             containsAny("doubao", "seedream", "volces") -> ModelFamily.SEEDREAM
             containsAny("qwen", "qwen-image", "qwen-vl") -> ModelFamily.QWEN
@@ -126,6 +130,18 @@ object ImageGenCapabilities {
         ar("9:16")
     )
 
+    // Modal Z-Image-Turbo (合并了分辨率档位与比例)
+    // 注意：displayName 必须包含 "2K"/"HD" 和比例，以便后端解析
+    private val RATIOS_MODAL_Z_IMAGE: List<AspectRatioOption> = listOf(
+        ar("2K 1:1"),
+        ar("2K 16:9"),
+        ar("2K 9:16"),
+        ar("2K 4:3"),
+        ar("HD 1:1"),
+        ar("HD 16:9"),
+        ar("HD 9:16")
+    )
+
     // UNKNOWN：保留空表示“走应用现有默认比例集”
     private val RATIOS_UNKNOWN_USE_DEFAULT: List<AspectRatioOption> = emptyList()
 
@@ -149,6 +165,10 @@ object ImageGenCapabilities {
         ModelFamily.KOLORS -> FamilyCapabilities(
             ratios = RATIOS_KOLORS,
             supportsQuality = false
+        )
+        ModelFamily.MODAL_Z_IMAGE -> FamilyCapabilities(
+            ratios = RATIOS_MODAL_Z_IMAGE,
+            supportsQuality = false // 不需要二级分组，直接在列表中展示
         )
         ModelFamily.UNKNOWN -> FamilyCapabilities(
             ratios = RATIOS_UNKNOWN_USE_DEFAULT,
@@ -195,6 +215,7 @@ object ImageGenCapabilities {
         return when (quality) {
             QualityTier.Q2K -> SEEDREAM_SIZES_2K[key] ?: emptyList()
             QualityTier.Q4K -> SEEDREAM_SIZES_4K[key] ?: emptyList()
+            QualityTier.HD -> emptyList() // Seedream 不使用 HD
         }
     }
 
