@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.14](https://github.com/roseforljh/EveryTalk/compare/v1.7.13...v1.7.14) (2025-12-03)
+
+
+### Bug Fixes
+
+* 图像模式默认模型新增z-image ([af6504e](https://github.com/roseforljh/EveryTalk/commit/af6504eed674bead393c639b9869bc1af48d1134))
+
 ## [1.7.13](https://github.com/roseforljh/EveryTalk/compare/v1.7.12...v1.7.13) (2025-12-03)
 
 
