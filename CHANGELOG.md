@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.15](https://github.com/roseforljh/EveryTalk/compare/v1.7.14...v1.7.15) (2025-12-03)
+
+
+### Bug Fixes
+
+* bug ([e5626ab](https://github.com/roseforljh/EveryTalk/commit/e5626ab8882170bdd6c063b4981468fefd7b1046))
+
 ## [1.7.14](https://github.com/roseforljh/EveryTalk/compare/v1.7.13...v1.7.14) (2025-12-03)
 
 
