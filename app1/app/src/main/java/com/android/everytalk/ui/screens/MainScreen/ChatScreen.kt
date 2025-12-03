@@ -460,16 +460,20 @@ fun ChatScreen(
                 onDismissRequest = { showAiMessageOptionsBottomSheet = false },
                 sheetState = aiMessageOptionsBottomSheetState,
                 onOptionSelected = { option ->
+                    // 🔥 关键修复：从 ViewModel 获取最新的消息对象，而不是使用长按时捕获的可能已过期的快照
+                    // 这解决了“刚生成的消息内容为空”的问题，因为长按时的 Message 对象可能尚未包含流式传输完成后的最终文本
+                    val latestMessage = viewModel.getMessageById(selectedMessageForOptions!!.id) ?: selectedMessageForOptions!!
+                    
                     when (option) {
-                        AiMessageOption.SELECT_TEXT -> viewModel.showSelectableTextDialog(selectedMessageForOptions!!.text)
-                        AiMessageOption.COPY_FULL_TEXT -> viewModel.copyToClipboard(selectedMessageForOptions!!.text)
+                        AiMessageOption.SELECT_TEXT -> viewModel.showSelectableTextDialog(latestMessage.text)
+                        AiMessageOption.COPY_FULL_TEXT -> viewModel.copyToClipboard(latestMessage.text)
                         AiMessageOption.REGENERATE -> {
                             // 确保键盘隐藏，避免重新回答时弹出输入法
                             keyboardController?.hide()
-                            viewModel.regenerateAiResponse(selectedMessageForOptions!!)
+                            viewModel.regenerateAiResponse(latestMessage)
                             // 不立即滚动，让regenerateAiResponse内部的逻辑处理滚动
                         }
-                        AiMessageOption.EXPORT_TEXT -> viewModel.exportMessageText(selectedMessageForOptions!!.text)
+                        AiMessageOption.EXPORT_TEXT -> viewModel.exportMessageText(latestMessage.text)
                     }
                     coroutineScope.launch {
                         aiMessageOptionsBottomSheetState.hide()
@@ -634,6 +638,9 @@ private fun AboutDialog(
 
  @Composable
  internal fun SelectableTextDialog(textToDisplay: String, onDismissRequest: () -> Unit) {
+    // 强制重组：当 textToDisplay 变化时，确保内部状态更新
+    val currentText by rememberUpdatedState(textToDisplay)
+    
     Dialog(
         onDismissRequest = onDismissRequest,
         properties = DialogProperties(
@@ -654,12 +661,40 @@ private fun AboutDialog(
             }
         }
 
+        // 计算固定高度，避免 wrapContent 和 fillMaxSize 的冲突
+        // 或者是使用 fillMaxWidth + heightIn，但内部必须使用 weight 或 verticalScroll 来撑开
+        // 之前的失败表明：Card(heightIn) -> Box(fillMaxSize) -> SelectionContainer(fillMaxSize) -> Column(verticalScroll)
+        // 这种组合下，Column虽然可滚动，但如果没有足够内容撑开，或者父容器计算高度为0，就会空白。
+        // 但 Text 是有内容的。
+        // 可能是 SelectionContainer 的尺寸测量问题。
+        
+        // 尝试：不使用 fillMaxSize，而是让 Box/SelectionContainer 自适应内容高度，同时限制最大高度。
+        // 但 Card 已经限制了 max height。
+        
+        // 另一种可能：Dialog 的 window 布局参数问题。
+        
+        // 让我们尝试最稳健的布局：
+        // Card (fillMaxWidth, heightIn)
+        //   Box (fillMaxSize)  <-- 关键：确保 Box 填满 Card
+        //     SelectionContainer (fillMaxSize) <-- 关键：确保 SelectionContainer 填满 Box
+        //       Box (fillMaxSize, verticalScroll) <-- 关键：滚动容器
+        //         Text
+        
+        // 之前的代码似乎就是这样。为什么还是空白？
+        // 也许是因为 alpha 动画初始值为 0？不，动画会执行到 1。
+        
+        // 让我们尝试移除 SelectionContainer 看看内容是否显示，以隔离问题。
+        // 或者，给 Card 一个最小高度。
+        
         Card(
             shape = RoundedCornerShape(28.dp),
             modifier = Modifier
                 .fillMaxWidth(0.92f)
                 .padding(vertical = 24.dp)
-                .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.75f)
+                .heightIn(
+                    min = 200.dp, // 给定一个最小高度，确保不为0
+                    max = LocalConfiguration.current.screenHeightDp.dp * 0.75f
+                )
                 .graphicsLayer {
                     this.alpha = alpha.value
                     this.scaleX = scale.value
@@ -670,11 +705,11 @@ private fun AboutDialog(
             // 直接显示内容，移除顶部标题栏
             Box(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .padding(20.dp)
+                    .fillMaxSize() // 填满 Card 的大小（由 min/max height 和内容共同决定）
+                    .padding(12.dp)
             ) {
                 val scrollState = rememberScrollState()
-                val scrimHeight = 32.dp // 加大模糊效果高度
+                val scrimHeight = 24.dp // 加大模糊效果高度
                 val scrimColor = MaterialTheme.colorScheme.surface
                 
                 // 自定义文本选择颜色
@@ -684,20 +719,32 @@ private fun AboutDialog(
                 )
                 
                 CompositionLocalProvider(LocalTextSelectionColors provides customTextSelectionColors) {
+                    // 关键修改：SelectionContainer 包裹 Text，而 Scroll 在 SelectionContainer 外部（或内部，取决于需求）
+                    // 为了让选择手柄跟随滚动，Scroll 应该在 SelectionContainer 内部。
+                    // 但是，如果 Scroll 在 SelectionContainer 内部，SelectionContainer 需要有确定的大小。
+                    
+                    // 尝试：SelectionContainer (fillMaxSize) -> Column (verticalScroll) -> Text
+                    // 这样 SelectionContainer 占据了 Box 的剩余空间（扣除 padding 和 scrim），
+                    // 内部 Column 负责滚动。
+                    
                     SelectionContainer(
                         modifier = Modifier
                             .fillMaxSize()
-                            .verticalScroll(scrollState)
                             .padding(vertical = scrimHeight)
                     ) {
-                        // 显示AI输出的原始格式（保留Markdown标记），使文本可以被正确选择
-                        androidx.compose.material3.Text(
-                            text = textToDisplay,
-                            style = MaterialTheme.typography.bodyLarge.copy(
-                                color = MaterialTheme.colorScheme.onSurface
-                            ),
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .verticalScroll(scrollState)
+                        ) {
+                             androidx.compose.material3.Text(
+                                 text = currentText,
+                                 style = MaterialTheme.typography.bodyLarge.copy(
+                                     color = MaterialTheme.colorScheme.onSurface
+                                 ),
+                                 modifier = Modifier.fillMaxWidth()
+                             )
+                        }
                     }
                 }
                 
