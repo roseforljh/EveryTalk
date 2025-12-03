@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.7.13](https://github.com/roseforljh/EveryTalk/compare/v1.7.12...v1.7.13) (2025-12-03)
+
+
+### Bug Fixes
+
+* md格式优化 ([e83c783](https://github.com/roseforljh/EveryTalk/commit/e83c78372b8e15fceba51eca7d015a4ed6c4e3e8))
+* 修复 StreamingBuffer.kt：恢复了节流逻辑。现在它会严格遵守 120ms 或 30 个字符的阈值进行刷新，不再对每个字符都立即刷新。这确保了数据以稳定的节奏流向 UI。 ([81852fa](https://github.com/roseforljh/EveryTalk/commit/81852fa51dacd675253448d79ea15d956ec49d9d))
+
 ## [1.7.12](https://github.com/roseforljh/EveryTalk/compare/v1.7.11...v1.7.12) (2025-12-01)
 
 
