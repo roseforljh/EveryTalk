@@ -813,7 +813,7 @@ fun ImageGenerationInputArea(
     }
 
     if (showParamsDialog && onChangeImageParams != null) {
-        var stepsText by remember(currentImageSteps) { mutableStateOf((currentImageSteps ?: 17).toString()) }
+        var stepsText by remember(currentImageSteps) { mutableStateOf((currentImageSteps ?: 30).toString()) }
         var guidanceText by remember(currentImageGuidance) { mutableStateOf((currentImageGuidance ?: 7.5f).toString()) }
 
         AlertDialog(
@@ -839,7 +839,7 @@ fun ImageGenerationInputArea(
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                         shape = RoundedCornerShape(8.dp),
-                        placeholder = { Text("推荐值: 17") },
+                        placeholder = { Text("推荐值: 30") },
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedContainerColor = Color.Transparent,
                             unfocusedContainerColor = Color.Transparent,
@@ -848,7 +848,7 @@ fun ImageGenerationInputArea(
                         )
                     )
                     Text(
-                        text = "推荐值: 17 (范围 1-30)",
+                        text = "推荐值: 30 (范围 1-50)",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 4.dp, bottom = 16.dp)
@@ -890,7 +890,7 @@ fun ImageGenerationInputArea(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        val finalSteps = stepsText.toIntOrNull()?.coerceIn(1, 30) ?: 17
+                        val finalSteps = stepsText.toIntOrNull()?.coerceIn(1, 50) ?: 30
                         val finalGuidance = guidanceText.toFloatOrNull()?.coerceIn(1f, 10f) ?: 7.5f
                         onChangeImageParams(finalSteps, finalGuidance)
                         showParamsDialog = false
