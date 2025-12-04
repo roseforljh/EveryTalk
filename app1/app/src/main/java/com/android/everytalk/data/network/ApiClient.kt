@@ -222,17 +222,17 @@ object ApiClient {
                     // 允许所有主机名验证（用于本地开发）
                     config {
                         connectTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
-                        readTimeout(300, java.util.concurrent.TimeUnit.SECONDS)
-                        writeTimeout(300, java.util.concurrent.TimeUnit.SECONDS)
+                        readTimeout(1800, java.util.concurrent.TimeUnit.SECONDS)
+                        writeTimeout(1800, java.util.concurrent.TimeUnit.SECONDS)
                     }
                 }
                 install(ContentNegotiation) {
                     json(jsonParser)
                 }
                 install(HttpTimeout) {
-                    requestTimeoutMillis = 300_000
+                    requestTimeoutMillis = 1800_000
                     connectTimeoutMillis = 60_000  // VPN环境下增加连接超时到120秒
-                    socketTimeoutMillis = 300_000
+                    socketTimeoutMillis = 1800_000
                 }
                 install(HttpCache) {
                     // 更积极的缓存策略
