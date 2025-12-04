@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.7.17](https://github.com/roseforljh/EveryTalk/compare/v1.7.16...v1.7.17) (2025-12-04)
+
+
+### Bug Fixes
+
+* 优化ui ([fd21316](https://github.com/roseforljh/EveryTalk/commit/fd2131687a2c275e52b25b44e94dfda64935ca01))
+* 加大步数 ([7d91417](https://github.com/roseforljh/EveryTalk/commit/7d914170f32601fe90b5af69390b71ff6544e599))
+* 增加图像模式超时时间限制 ([5d00aae](https://github.com/roseforljh/EveryTalk/commit/5d00aae8b62eebdae3ebe381955a6124798f3add))
+
 ## [1.7.16](https://github.com/roseforljh/EveryTalk/compare/v1.7.15...v1.7.16) (2025-12-04)
 
 
