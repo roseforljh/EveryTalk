@@ -1089,6 +1089,39 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         configFacade.clearSelectedConfig(isImageGen)
     }
 
+    /**
+     * 更新当前选中的图像生成配置的推理步数（numInferenceSteps）。
+     * 仅在存在选中图像配置时生效，并会同步更新配置列表与持久化存储。
+     */
+    fun updateImageNumInferenceStepsForSelectedConfig(steps: Int) {
+        val clamped = steps.coerceIn(1, 20)
+        viewModelScope.launch(Dispatchers.Main.immediate) {
+            val current = stateHolder._selectedImageGenApiConfig.value ?: return@launch
+            val updated = current.copy(numInferenceSteps = clamped)
+
+            // 更新当前选中配置
+            stateHolder._selectedImageGenApiConfig.value = updated
+
+            // 在图像配置列表中替换对应项
+            val currentList = stateHolder._imageGenApiConfigs.value
+            val index = currentList.indexOfFirst { it.id == current.id }
+            if (index >= 0) {
+                val mutable = currentList.toMutableList()
+                mutable[index] = updated
+                stateHolder._imageGenApiConfigs.value = mutable.toList()
+            }
+
+            // 异步持久化更新后的图像配置列表
+            launch(Dispatchers.IO) {
+                try {
+                    persistenceManager.saveApiConfigs(stateHolder._imageGenApiConfigs.value, isImageGen = true)
+                } catch (e: Exception) {
+                    Log.e("AppViewModel", "Failed to persist updated image numInferenceSteps", e)
+                }
+            }
+        }
+    }
+ 
     fun saveApiConfigs() {
         configFacade.saveApiConfigs()
     }

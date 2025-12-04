@@ -274,7 +274,11 @@ fun ImageGenerationInputArea(
     selectedImageRatio: ImageRatio = ImageRatio.DEFAULT_SELECTED,
     onImageRatioChanged: (ImageRatio) -> Unit = {},
     // 在选择比例后，把解析出的最终分辨率（如 "960x1280"）回传给上层；无法解析时传 null
-    onResolvedImageSize: (String?) -> Unit = {}
+    onResolvedImageSize: (String?) -> Unit = {},
+    // 当前图像推理步数（仅在 z-image 模型下使用）
+    currentImageSteps: Int? = null,
+    // 更新当前图像推理步数的回调
+    onChangeImageSteps: ((Int) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -313,6 +317,11 @@ fun ImageGenerationInputArea(
         if (r.isEmpty()) null else r.map { it.ratio }
     }
 
+    // 当前图像模型是否支持图像编辑（z-image 不支持上传/编辑本地图片）
+    val supportsImageEditing: Boolean = remember(detectedFamily) {
+        detectedFamily != ModelFamily.MODAL_Z_IMAGE
+    }
+
     // 当模型家族变化导致可用比例列表变更时，校验当前选中比例是否合法
     // 若当前比例不在新模型的允许列表中（且非 AUTO），则重置为 AUTO
     LaunchedEffect(allowedRatioNames) {
@@ -326,10 +335,20 @@ fun ImageGenerationInputArea(
     var seedreamQuality by remember(detectedFamily) {
         mutableStateOf(QualityTier.Q2K)
     }
-
+ 
     var showImageSelectionPanel by remember { mutableStateOf(false) }
     // 记录外点关闭的时间戳，用于忽略随后紧邻的按钮抬起点击，避免“先关后又开”
     var lastImagePanelDismissAt by remember { mutableStateOf(0L) }
+
+    // 步数调整对话框状态
+    var showStepsDialog by remember { mutableStateOf(false) }
+
+    // 当当前图像模型不支持图像编辑时，确保关闭相册选择面板
+    LaunchedEffect(supportsImageEditing) {
+        if (!supportsImageEditing && showImageSelectionPanel) {
+            showImageSelectionPanel = false
+        }
+    }
     var tempCameraImageUri by remember { mutableStateOf<Uri?>(null) }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
@@ -529,12 +548,14 @@ fun ImageGenerationInputArea(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = onToggleImagePanel) {
-                            Icon(
-                                Icons.Outlined.Image,
-                                if (showImageSelectionPanel) "Close image options" else "Select image",
-                                tint = MaterialTheme.colorScheme.primary
-                            )
+                        if (supportsImageEditing) {
+                            IconButton(onClick = onToggleImagePanel) {
+                                Icon(
+                                    Icons.Outlined.Image,
+                                    if (showImageSelectionPanel) "Close image options" else "Select image",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
                         }
                         
                         // 比例选择按钮（按家族动态候选；仅 Seedream 显示 2K/4K 清晰度）
@@ -547,6 +568,25 @@ fun ImageGenerationInputArea(
                             seedreamQuality = seedreamQuality,
                             onQualityChange = { seedreamQuality = it }
                         )
+
+                        // z-image 模型下的推理步数调节按钮
+                        if (detectedFamily == ModelFamily.MODAL_Z_IMAGE && onChangeImageSteps != null) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            AssistChip(
+                                onClick = { showStepsDialog = true },
+                                label = {
+                                    Text(
+                                        text = "步数 ${currentImageSteps ?: 4}"
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Tune,
+                                        contentDescription = "调整推理步数"
+                                    )
+                                }
+                            )
+                        }
                     }
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -640,6 +680,98 @@ fun ImageGenerationInputArea(
                     }
                 }
             }
+        }
+
+        if (showStepsDialog && onChangeImageSteps != null) {
+            var stepsValue by remember(currentImageSteps) { mutableFloatStateOf((currentImageSteps ?: 4).toFloat()) }
+            var stepsText by remember(currentImageSteps) { mutableStateOf((currentImageSteps ?: 4).toString()) }
+
+            AlertDialog(
+                onDismissRequest = { showStepsDialog = false },
+                title = { Text("调整推理步数") },
+                text = {
+                    Column {
+                        Text(
+                            text = "步数越高生成越慢，但细节可能更丰富 (1-20)\n推荐步数为 4",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 16.dp)
+                        )
+                        
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Slider(
+                                value = stepsValue,
+                                onValueChange = {
+                                    stepsValue = it
+                                    stepsText = it.toInt().toString()
+                                },
+                                valueRange = 1f..20f,
+                                steps = 19,
+                                modifier = Modifier.weight(1f),
+                                colors = SliderDefaults.colors(
+                                    thumbColor = Color.White,
+                                    activeTrackColor = Color.White,
+                                    inactiveTrackColor = Color.White.copy(alpha = 0.3f),
+                                    activeTickColor = Color.Transparent,
+                                    inactiveTickColor = Color.Transparent
+                                )
+                            )
+                            
+                            Spacer(modifier = Modifier.width(12.dp))
+                            
+                            OutlinedTextField(
+                                value = stepsText,
+                                onValueChange = { newValue: String ->
+                                    if (newValue.all { char -> char.isDigit() }) {
+                                        stepsText = newValue
+                                        val num = newValue.toIntOrNull()
+                                        if (num != null) {
+                                            stepsValue = num.coerceIn(1, 20).toFloat()
+                                        }
+                                    }
+                                },
+                                modifier = Modifier
+                                    .width(56.dp)
+                                    .height(48.dp),
+                                singleLine = true,
+                                shape = CircleShape,
+                                textStyle = LocalTextStyle.current.copy(
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                ),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                    focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                                )
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            val finalSteps = stepsValue.toInt().coerceIn(1, 20)
+                            onChangeImageSteps(finalSteps)
+                            showStepsDialog = false
+                        },
+                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.primary)
+                    ) {
+                        Text("确定")
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = { showStepsDialog = false },
+                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant)
+                    ) {
+                        Text("取消")
+                    }
+                }
+            )
         }
     }
 

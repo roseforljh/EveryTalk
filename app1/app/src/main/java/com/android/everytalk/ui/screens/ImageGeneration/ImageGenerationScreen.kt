@@ -273,7 +273,11 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                     }
                 },
                 selectedImageRatio = selectedImageRatio,
-                onImageRatioChanged = { viewModel.stateHolder._selectedImageRatio.value = it }
+                onImageRatioChanged = { viewModel.stateHolder._selectedImageRatio.value = it },
+                currentImageSteps = selectedApiConfig?.numInferenceSteps,
+                onChangeImageSteps = { steps ->
+                    viewModel.updateImageNumInferenceStepsForSelectedConfig(steps)
+                }
             )
         }
     }

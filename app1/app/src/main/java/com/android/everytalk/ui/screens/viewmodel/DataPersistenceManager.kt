@@ -288,12 +288,13 @@ class DataPersistenceManager(
                     mutableConfigs.add(modalImageConfig)
                     configsChanged = true
                 } else {
-                    // 检查是否需要更新（步数不对，或者分组字段与快手不一致）
+                    // 检查是否需要更新（仅在步数为 null 时补默认值，或分组字段与快手不一致）
                     val existingConfig = mutableConfigs[existingModalConfigIndex]
                     var needsUpdate = false
                     var updatedConfig = existingConfig
-
-                    if (existingConfig.numInferenceSteps != 4) {
+ 
+                    // 仅当尚未设置步数时，补齐默认值 4；不再覆盖用户自定义配置
+                    if (existingConfig.numInferenceSteps == null) {
                         updatedConfig = updatedConfig.copy(numInferenceSteps = 4)
                         needsUpdate = true
                     }
