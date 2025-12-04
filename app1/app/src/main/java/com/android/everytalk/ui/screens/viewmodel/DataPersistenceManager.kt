@@ -10,6 +10,7 @@ import com.android.everytalk.data.local.SharedPreferencesDataSource
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import com.android.everytalk.data.DataClass.GenerationConfig
+import com.android.everytalk.data.DataClass.VoiceBackendConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -339,6 +340,37 @@ class DataPersistenceManager(
                      stateHolder._imageGenApiConfigs.value = loadedImageGenConfigs
                      stateHolder._selectedImageGenApiConfig.value = selectedImageGenConfig
                  }
+
+                // 加载语音后端配置
+                var loadedVoiceConfigs = dataSource.loadVoiceBackendConfigs()
+                
+                // 自动创建默认语音配置（如果不存在）
+                val hasDefaultVoiceConfig = loadedVoiceConfigs.any {
+                    it.provider.trim().lowercase() in listOf("默认", "default")
+                }
+                if (!hasDefaultVoiceConfig) {
+                    Log.i(TAG, "loadInitialData: 未找到默认语音配置，自动创建...")
+                    val defaultVoiceConfig = com.android.everytalk.data.DataClass.VoiceBackendConfig.createDefault()
+                    loadedVoiceConfigs = loadedVoiceConfigs + listOf(defaultVoiceConfig)
+                    dataSource.saveVoiceBackendConfigs(loadedVoiceConfigs)
+                    Log.i(TAG, "loadInitialData: 已创建默认语音配置")
+                }
+                
+                val selectedVoiceConfigId: String? = dataSource.loadSelectedVoiceConfigId()
+                var selectedVoiceConfig: com.android.everytalk.data.DataClass.VoiceBackendConfig? = null
+                if (selectedVoiceConfigId != null) {
+                    selectedVoiceConfig = loadedVoiceConfigs.find { it.id == selectedVoiceConfigId }
+                }
+                if (selectedVoiceConfig == null && loadedVoiceConfigs.isNotEmpty()) {
+                    selectedVoiceConfig = loadedVoiceConfigs.first()
+                    dataSource.saveSelectedVoiceConfigId(selectedVoiceConfig.id)
+                }
+                
+                withContext(Dispatchers.Main.immediate) {
+                    stateHolder._voiceBackendConfigs.value = loadedVoiceConfigs
+                    stateHolder._selectedVoiceConfig.value = selectedVoiceConfig
+                }
+                Log.i(TAG, "loadInitialData: 已加载 ${loadedVoiceConfigs.size} 个语音配置")
 
                 // 第二阶段：异步加载历史数据（延迟加载）
                 launch {
@@ -962,6 +994,79 @@ class DataPersistenceManager(
            } catch (e: Exception) {
                Log.e(TAG, "loadExpandedGroupKeys failed", e)
                emptySet()
+           }
+       }
+   }
+
+   // ========= 语音配置 =========
+   
+   /**
+    * 保存语音后端配置列表
+    */
+   suspend fun saveVoiceBackendConfigs(configs: List<VoiceBackendConfig>) {
+       withContext(Dispatchers.IO) {
+           try {
+               dataSource.saveVoiceBackendConfigs(configs)
+               Log.d(TAG, "saveVoiceBackendConfigs: 已保存 ${configs.size} 个语音配置")
+           } catch (e: Exception) {
+               Log.e(TAG, "saveVoiceBackendConfigs 失败", e)
+           }
+       }
+   }
+
+   /**
+    * 加载语音后端配置列表
+    */
+   suspend fun loadVoiceBackendConfigs(): List<VoiceBackendConfig> {
+       return withContext(Dispatchers.IO) {
+           try {
+               dataSource.loadVoiceBackendConfigs()
+           } catch (e: Exception) {
+               Log.e(TAG, "loadVoiceBackendConfigs 失败", e)
+               emptyList()
+           }
+       }
+   }
+
+   /**
+    * 保存当前选中的语音配置ID
+    */
+   suspend fun saveSelectedVoiceConfigId(configId: String?) {
+       withContext(Dispatchers.IO) {
+           try {
+               dataSource.saveSelectedVoiceConfigId(configId)
+               Log.d(TAG, "saveSelectedVoiceConfigId: 已保存选中的语音配置ID '$configId'")
+           } catch (e: Exception) {
+               Log.e(TAG, "saveSelectedVoiceConfigId 失败", e)
+           }
+       }
+   }
+
+   /**
+    * 加载当前选中的语音配置ID
+    */
+   suspend fun loadSelectedVoiceConfigId(): String? {
+       return withContext(Dispatchers.IO) {
+           try {
+               dataSource.loadSelectedVoiceConfigId()
+           } catch (e: Exception) {
+               Log.e(TAG, "loadSelectedVoiceConfigId 失败", e)
+               null
+           }
+       }
+   }
+
+   /**
+    * 清除所有语音配置
+    */
+   suspend fun clearVoiceBackendConfigs() {
+       withContext(Dispatchers.IO) {
+           try {
+               dataSource.clearVoiceBackendConfigs()
+               dataSource.saveSelectedVoiceConfigId(null)
+               Log.d(TAG, "clearVoiceBackendConfigs: 已清除所有语音配置")
+           } catch (e: Exception) {
+               Log.e(TAG, "clearVoiceBackendConfigs 失败", e)
            }
        }
    }

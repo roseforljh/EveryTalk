@@ -11,6 +11,7 @@ import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.data.DataClass.GenerationConfig
+import com.android.everytalk.data.DataClass.VoiceBackendConfig
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.util.ScrollController
 import kotlinx.coroutines.Job
@@ -354,6 +355,12 @@ val _isStreamingPaused = MutableStateFlow(false)
     val _selectedImageGenApiConfig = MutableStateFlow<ApiConfig?>(null)
     // 图像输出宽高比（默认 AUTO）
     val _selectedImageRatio = MutableStateFlow(com.android.everytalk.data.DataClass.ImageRatio.DEFAULT_SELECTED)
+    
+    // ========= 语音配置状态 =========
+    /** 语音后端配置列表 */
+    val _voiceBackendConfigs = MutableStateFlow<List<VoiceBackendConfig>>(emptyList())
+    /** 当前选中的语音配置 */
+    val _selectedVoiceConfig = MutableStateFlow<VoiceBackendConfig?>(null)
  
  
      val _snackbarMessage =

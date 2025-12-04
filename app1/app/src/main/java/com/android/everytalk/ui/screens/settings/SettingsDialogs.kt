@@ -565,7 +565,10 @@ internal fun AddNewFullConfigDialog(
                                                 "深度求索",
                                                 "openrouter",
                                                 "硅基流动",
-                                                "siliconflow"
+                                                "siliconflow",
+                                                "siliconflow",
+                                                "seedream",
+                                                "gemini"
                                             )
                                             val canDelete = !nonDeletableProviders.contains(lower)
                                             if (canDelete) {

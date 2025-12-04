@@ -12,6 +12,8 @@ import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Upload
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -25,7 +27,7 @@ import com.android.everytalk.statecontroller.AppViewModel
 
 /**
  * 语音输入屏幕 - 重构版
- * 
+ *
  * 职责清晰分离：
  * - VoiceConfigManager: 管理所有配置读取和校验
  * - VoiceSessionController: 管理录音会话生命周期
@@ -59,6 +61,7 @@ fun VoiceInputScreen(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     
+
     val sessionController = rememberVoiceSessionController(
         context = context,
         viewModel = viewModel,
@@ -157,6 +160,7 @@ fun VoiceInputScreen(
                     }
                 },
                 actions = {
+                    
                     IconButton(onClick = { showSttChatSettingsDialog = true }) {
                         Icon(
                             Icons.Default.Build,

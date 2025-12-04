@@ -7,7 +7,6 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.ImportExport
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -24,7 +23,6 @@ import com.android.everytalk.ui.screens.settings.AddNewFullConfigDialog
 import com.android.everytalk.ui.screens.settings.AddProviderDialog
 import com.android.everytalk.ui.screens.settings.ConfirmDeleteDialog
 import com.android.everytalk.ui.screens.settings.EditConfigDialog
-import com.android.everytalk.ui.screens.settings.ImportExportDialog
 import com.android.everytalk.ui.screens.settings.SettingsScreenContent
 import java.util.UUID
 import com.android.everytalk.ui.screens.settings.DialogTextFieldColors
@@ -85,57 +83,6 @@ fun ImageGenerationSettingsScreen(
     var configToEdit by remember { mutableStateOf<ApiConfig?>(null) }
     var showConfirmDeleteProviderDialog by remember { mutableStateOf(false) }
     var providerToDelete by remember { mutableStateOf<String?>(null) }
-    var showImportExportDialog by remember { mutableStateOf(false) }
-    val context = LocalContext.current
-    var exportData by remember { mutableStateOf<Pair<String, String>?>(null) }
-
-    val exportSettingsLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/json"),
-        onResult = { uri ->
-            uri?.let { fileUri ->
-                exportData?.second?.let { jsonContent ->
-                    try {
-                        context.contentResolver.openFileDescriptor(fileUri, "w")?.use { pfd ->
-                            java.io.FileOutputStream(pfd.fileDescriptor).use { outputStream ->
-                                outputStream.channel.truncate(0) // 强制清空文件
-                                outputStream.write(jsonContent.toByteArray())
-                            }
-                        }
-                        viewModel.showSnackbar("配置已导出")
-                    } catch (e: Exception) {
-                        Log.e("SettingsScreen", "导出失败", e)
-                        viewModel.showSnackbar("导出失败: ${e.message}")
-                    } finally {
-                        exportData = null
-                    }
-                }
-            }
-        }
-    )
-
-    val importSettingsLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent(),
-        onResult = { uri ->
-            uri?.let {
-                try {
-                    context.contentResolver.openInputStream(it)?.use { inputStream ->
-                        val jsonContent = inputStream.bufferedReader().use { reader -> reader.readText() }
-                        viewModel.importSettings(jsonContent, isImageGen = true)
-                    }
-                } catch (e: Exception) {
-                    viewModel.showToast("导入失败: ${e.message}")
-                }
-            }
-        }
-    )
-
-    LaunchedEffect(Unit) {
-        viewModel.settingsExportRequest.collect { data ->
-            exportData = data
-            exportSettingsLauncher.launch(data.first)
-        }
-    }
-
     LaunchedEffect(savedConfigs, selectedConfigForApp) {
         // 固定使用图像配置选择逻辑
         val currentSelected = selectedConfigForApp
@@ -173,13 +120,6 @@ fun ImageGenerationSettingsScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { showImportExportDialog = true }) {
-                        Icon(
-                            imageVector = Icons.Default.ImportExport,
-                            contentDescription = "导入/导出配置",
-                            tint = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface,
@@ -239,7 +179,7 @@ fun ImageGenerationSettingsScreen(
                 val providerKey = selectedProvider.lowercase().trim()
                 newFullConfigAddress = SettingsDefaults.imageDefaultApiAddresses[providerKey] ?: ""
             },
-            allProviders = allProviders,
+            allProviders = SettingsDefaults.imageDefaultApiAddresses.keys.toList().filter { it !in listOf("默认", "default") },
             onShowAddCustomProviderDialog = { showAddCustomProviderDialog = true },
             onDeleteProvider = { providerNameToDelete ->
                 providerToDelete = providerNameToDelete
@@ -426,20 +366,6 @@ fun ImageGenerationSettingsScreen(
             },
             title = "删除平台",
             text = "您确定要删除模型平台 “$providerToDelete” 吗？\n\n这将同时删除所有使用此平台的配置。此操作不可撤销。"
-        )
-    }
-    if (showImportExportDialog) {
-        ImportExportDialog(
-            onDismissRequest = { showImportExportDialog = false },
-            onExport = {
-                viewModel.exportSettings(isImageGen = true)
-                showImportExportDialog = false
-            },
-            onImport = {
-                importSettingsLauncher.launch("application/json")
-                showImportExportDialog = false
-            },
-            isExportEnabled = savedConfigs.isNotEmpty()
         )
     }
 }

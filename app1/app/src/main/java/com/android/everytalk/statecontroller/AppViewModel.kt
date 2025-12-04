@@ -76,12 +76,6 @@ import com.android.everytalk.statecontroller.controller.ProviderController
 class AppViewModel(application: Application, private val dataSource: SharedPreferencesDataSource) :
         AndroidViewModel(application) {
 
-    @Keep
-    @Serializable
-    private data class ExportedSettings(
-            val apiConfigs: List<ApiConfig>,
-            val customProviders: Set<String> = emptySet()
-    )
 
     private val json = Json {
         prettyPrint = true
@@ -347,6 +341,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
 
    // 控制器：设置导入/导出
    private val settingsController = SettingsController(
+       context = application.applicationContext,
        stateHolder = stateHolder,
        persistenceManager = persistenceManager,
        providerManager = providerManager,
@@ -1175,12 +1170,12 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         messageContentController.onAiMessageFullTextChanged(messageId, currentFullText)
     }
 
-    fun exportSettings(isImageGen: Boolean = false) {
-        settingsController.exportSettings(isImageGen)
+    fun exportSettings() {
+        settingsController.exportSettings()
     }
 
-    fun importSettings(jsonContent: String, isImageGen: Boolean = false) {
-        settingsController.importSettings(jsonContent, isImageGen)
+    fun importSettings(jsonContent: String) {
+        settingsController.importSettings(jsonContent)
     }
 
     // 应用暂停或停止时保存当前对话状态

@@ -25,15 +25,10 @@ import java.util.UUID
 object SettingsDefaults {
     // 图像模式默认地址
     val imageDefaultApiAddresses: Map<String, String> = mapOf(
-        "即梦" to "https://ark.cn-beijing.volces.com/api/v3/images/generations",
-        "seedream" to "https://ark.cn-beijing.volces.com/api/v3/images/generations",
-        "doubao" to "https://ark.cn-beijing.volces.com/api/v3/images/generations",
-        // 硅基流动（SiliconFlow）图像生成默认地址
-        "硅基流动" to "https://api.siliconflow.cn/v1/images/generations",
-        "siliconflow" to "https://api.siliconflow.cn/v1/images/generations",
-        "默认" to "",
-        "default" to "",
-        "nano banana" to ""
+        "SiliconFlow" to "https://api.siliconflow.cn/v1/images/generations",
+        "OpenAI Compatible" to "",
+        "Gemini" to "",
+        "SeeDream" to "https://ark.cn-beijing.volces.com/api/v3/images/generations"
     )
     // 文本模式默认地址
     val textDefaultApiAddresses: Map<String, String> = mapOf(
@@ -160,7 +155,7 @@ fun SettingsScreen(
                 try {
                     context.contentResolver.openInputStream(it)?.use { inputStream ->
                         val jsonContent = inputStream.bufferedReader().use { reader -> reader.readText() }
-                        viewModel.importSettings(jsonContent, isImageGen = isInImageMode)
+                        viewModel.importSettings(jsonContent)
                     }
                 } catch (e: Exception) {
                     viewModel.showToast("导入失败: ${e.message}")
@@ -526,14 +521,16 @@ fun SettingsScreen(
         ImportExportDialog(
             onDismissRequest = { showImportExportDialog = false },
             onExport = {
-                viewModel.exportSettings(isImageGen = isInImageMode)
+                viewModel.exportSettings()
                 showImportExportDialog = false
             },
             onImport = {
                 importSettingsLauncher.launch("application/json")
                 showImportExportDialog = false
             },
-            isExportEnabled = if (isInImageMode) imageConfigs.isNotEmpty() else textConfigs.isNotEmpty()
+            isExportEnabled = (textConfigs + imageConfigs).any {
+                it.provider.trim().lowercase() !in listOf("默认", "default")
+            }
         )
     }
 }

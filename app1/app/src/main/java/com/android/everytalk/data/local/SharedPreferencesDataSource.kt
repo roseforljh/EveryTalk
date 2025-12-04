@@ -5,6 +5,7 @@ import androidx.core.content.edit
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.GenerationConfig
+import com.android.everytalk.data.DataClass.VoiceBackendConfig
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.SetSerializer
@@ -32,6 +33,9 @@ private const val KEY_PINNED_TEXT_IDS = "pinned_text_ids_v1"
 private const val KEY_PINNED_IMAGE_IDS = "pinned_image_ids_v1"
 // 新增：分组展开状态持久化键
 private const val KEY_EXPANDED_GROUP_KEYS = "expanded_group_keys_v1"
+// 新增：语音配置持久化键
+private const val KEY_VOICE_BACKEND_CONFIGS = "voice_backend_configs_v1"
+private const val KEY_SELECTED_VOICE_CONFIG_ID = "selected_voice_config_id_v1"
 
 
 private val json = Json {
@@ -60,6 +64,9 @@ class SharedPreferencesDataSource(context: Context) {
     // 新增：置顶集合序列化器（Set<String>）
     private val pinnedIdsSerializer: KSerializer<Set<String>> =
         SetSerializer(String.serializer())
+    // 新增：语音配置序列化器
+    private val voiceBackendConfigListSerializer: KSerializer<List<VoiceBackendConfig>> =
+        ListSerializer(VoiceBackendConfig.serializer())
 
     private fun <T> saveData(key: String, value: T, serializer: KSerializer<T>) {
         try {
@@ -219,4 +226,33 @@ fun clearImageGenerationHistory() = remove(KEY_IMAGE_GENERATION_HISTORY)
 
    fun loadExpandedGroupKeys(): Set<String> =
        loadData(KEY_EXPANDED_GROUP_KEYS, pinnedIdsSerializer, emptySet())
+
+   // ========= 语音配置 =========
+   
+   /**
+    * 保存语音后端配置列表
+    */
+   fun saveVoiceBackendConfigs(configs: List<VoiceBackendConfig>) =
+       saveData(KEY_VOICE_BACKEND_CONFIGS, configs, voiceBackendConfigListSerializer)
+
+   /**
+    * 加载语音后端配置列表
+    */
+   fun loadVoiceBackendConfigs(): List<VoiceBackendConfig> =
+       loadData(KEY_VOICE_BACKEND_CONFIGS, voiceBackendConfigListSerializer, emptyList())
+
+   /**
+    * 保存当前选中的语音配置ID
+    */
+   fun saveSelectedVoiceConfigId(configId: String?) = saveString(KEY_SELECTED_VOICE_CONFIG_ID, configId)
+
+   /**
+    * 加载当前选中的语音配置ID
+    */
+   fun loadSelectedVoiceConfigId(): String? = getString(KEY_SELECTED_VOICE_CONFIG_ID, null)
+
+   /**
+    * 清除所有语音配置
+    */
+   fun clearVoiceBackendConfigs() = remove(KEY_VOICE_BACKEND_CONFIGS)
 }
