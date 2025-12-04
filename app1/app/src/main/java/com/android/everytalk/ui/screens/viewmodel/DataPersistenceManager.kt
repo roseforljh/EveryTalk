@@ -249,7 +249,7 @@ class DataPersistenceManager(
                     Log.i(TAG, "loadInitialData: 已创建默认快手图像配置")
                 }
                 
-                // 自动创建或更新 Modal Z-Image-Turbo 默认配置
+                // 自动创建或更新 Modal Z-Image-Turbo 和 Qwen-Image-Edit 默认配置
                 // 目标：与快手 Kolors 归并在同一个"默认"平台下
                 
                 // 1. 先找到现有的快手配置，以对齐分组字段 (address/key/channel)
@@ -263,13 +263,14 @@ class DataPersistenceManager(
                 val targetChannel = kolorsConfig?.channel ?: ""
                 val targetProvider = "默认" // 强制归并到"默认"
 
-                val existingModalConfigIndex = loadedImageGenConfigs.indexOfFirst {
+                var configsChanged = false
+                val mutableConfigs = loadedImageGenConfigs.toMutableList()
+
+                // === Modal Z-Image-Turbo 处理 ===
+                val existingModalConfigIndex = mutableConfigs.indexOfFirst {
                     it.model == "z-image-turbo-modal" &&
                     it.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE
                 }
-
-                var configsChanged = false
-                val mutableConfigs = loadedImageGenConfigs.toMutableList()
 
                 if (existingModalConfigIndex == -1) {
                     Log.i(TAG, "loadInitialData: 未找到 Modal 图像配置，自动创建并归并到默认平台...")
@@ -315,6 +316,57 @@ class DataPersistenceManager(
                     if (needsUpdate) {
                         Log.i(TAG, "loadInitialData: Modal 配置过时或分组未对齐，更新配置...")
                         mutableConfigs[existingModalConfigIndex] = updatedConfig
+                        configsChanged = true
+                    }
+                }
+
+                // === Modal Qwen-Image-Edit 处理 ===
+                val existingQwenConfigIndex = mutableConfigs.indexOfFirst {
+                    it.model == "qwen-image-edit-modal" &&
+                    it.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE
+                }
+
+                if (existingQwenConfigIndex == -1) {
+                    Log.i(TAG, "loadInitialData: 未找到 Qwen Image Edit 配置，自动创建并归并到默认平台...")
+                    val qwenConfig = ApiConfig(
+                        id = java.util.UUID.randomUUID().toString(),
+                        name = "Qwen Image Edit",
+                        provider = targetProvider,
+                        address = targetAddress,
+                        key = targetKey,
+                        model = "qwen-image-edit-modal",
+                        modalityType = com.android.everytalk.data.DataClass.ModalityType.IMAGE,
+                        channel = targetChannel,
+                        isValid = true,
+                        numInferenceSteps = 30 // Qwen 默认步数
+                    )
+                    mutableConfigs.add(qwenConfig)
+                    configsChanged = true
+                } else {
+                    val existingConfig = mutableConfigs[existingQwenConfigIndex]
+                    var needsUpdate = false
+                    var updatedConfig = existingConfig
+
+                    if (existingConfig.numInferenceSteps == null) {
+                        updatedConfig = updatedConfig.copy(numInferenceSteps = 30)
+                        needsUpdate = true
+                    }
+                    if (existingConfig.provider != targetProvider ||
+                        existingConfig.address != targetAddress ||
+                        existingConfig.key != targetKey ||
+                        existingConfig.channel != targetChannel) {
+                        updatedConfig = updatedConfig.copy(
+                            provider = targetProvider,
+                            address = targetAddress,
+                            key = targetKey,
+                            channel = targetChannel
+                        )
+                        needsUpdate = true
+                    }
+
+                    if (needsUpdate) {
+                        Log.i(TAG, "loadInitialData: Qwen 配置过时或分组未对齐，更新配置...")
+                        mutableConfigs[existingQwenConfigIndex] = updatedConfig
                         configsChanged = true
                     }
                 }

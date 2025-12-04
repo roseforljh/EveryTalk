@@ -1121,6 +1121,45 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
             }
         }
     }
+
+    /**
+     * 更新当前选中的图像生成配置的推理步数和引导系数。
+     * 用于 Qwen-Image-Edit 等需要调节这两个参数的模型。
+     */
+    fun updateImageGenerationParamsForSelectedConfig(steps: Int, guidance: Float) {
+        val clampedSteps = steps.coerceIn(1, 50)
+        // guidance 通常在 1.0 到 20.0 之间，这里给个宽松范围
+        val clampedGuidance = guidance.coerceIn(1.0f, 30.0f)
+        
+        viewModelScope.launch(Dispatchers.Main.immediate) {
+            val current = stateHolder._selectedImageGenApiConfig.value ?: return@launch
+            val updated = current.copy(
+                numInferenceSteps = clampedSteps,
+                guidanceScale = clampedGuidance
+            )
+
+            // 更新当前选中配置
+            stateHolder._selectedImageGenApiConfig.value = updated
+
+            // 在图像配置列表中替换对应项
+            val currentList = stateHolder._imageGenApiConfigs.value
+            val index = currentList.indexOfFirst { it.id == current.id }
+            if (index >= 0) {
+                val mutable = currentList.toMutableList()
+                mutable[index] = updated
+                stateHolder._imageGenApiConfigs.value = mutable.toList()
+            }
+
+            // 异步持久化更新后的图像配置列表
+            launch(Dispatchers.IO) {
+                try {
+                    persistenceManager.saveApiConfigs(stateHolder._imageGenApiConfigs.value, isImageGen = true)
+                } catch (e: Exception) {
+                    Log.e("AppViewModel", "Failed to persist updated image params", e)
+                }
+            }
+        }
+    }
  
     fun saveApiConfigs() {
         configFacade.saveApiConfigs()

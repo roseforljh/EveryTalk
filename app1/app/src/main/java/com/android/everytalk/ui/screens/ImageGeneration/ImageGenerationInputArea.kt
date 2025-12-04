@@ -13,6 +13,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -278,7 +279,11 @@ fun ImageGenerationInputArea(
     // 当前图像推理步数（仅在 z-image 模型下使用）
     currentImageSteps: Int? = null,
     // 更新当前图像推理步数的回调
-    onChangeImageSteps: ((Int) -> Unit)? = null
+    onChangeImageSteps: ((Int) -> Unit)? = null,
+    // 当前图像引导系数（仅在 Qwen-Image-Edit 模型下使用）
+    currentImageGuidance: Float? = null,
+    // 更新当前图像参数（步数+引导系数）的回调
+    onChangeImageParams: ((Int, Float) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -342,6 +347,8 @@ fun ImageGenerationInputArea(
 
     // 步数调整对话框状态
     var showStepsDialog by remember { mutableStateOf(false) }
+    // 参数调整对话框状态 (Qwen Edit)
+    var showParamsDialog by remember { mutableStateOf(false) }
 
     // 当当前图像模型不支持图像编辑时，确保关闭相册选择面板
     LaunchedEffect(supportsImageEditing) {
@@ -558,16 +565,22 @@ fun ImageGenerationInputArea(
                             }
                         }
                         
+                        // Qwen-Image-Edit 模型下的参数调节按钮
+                        val isQwenEdit = selectedApiConfig?.model?.contains("Image-Edit", ignoreCase = true) == true
+
                         // 比例选择按钮（按家族动态候选；仅 Seedream 显示 2K/4K 清晰度）
-                        ImageRatioSelector(
-                            selectedRatio = selectedImageRatio,
-                            onRatioChanged = onImageRatioChanged,
-                            modifier = Modifier.padding(start = 4.dp),
-                            allowedRatioNames = allowedRatioNames,
-                            family = detectedFamily,
-                            seedreamQuality = seedreamQuality,
-                            onQualityChange = { seedreamQuality = it }
-                        )
+                        // Qwen-Image-Edit 模型不显示分辨率选择
+                        if (!isQwenEdit) {
+                            ImageRatioSelector(
+                                selectedRatio = selectedImageRatio,
+                                onRatioChanged = onImageRatioChanged,
+                                modifier = Modifier.padding(start = 4.dp),
+                                allowedRatioNames = allowedRatioNames,
+                                family = detectedFamily,
+                                seedreamQuality = seedreamQuality,
+                                onQualityChange = { seedreamQuality = it }
+                            )
+                        }
 
                         // z-image 模型下的推理步数调节按钮
                         if (detectedFamily == ModelFamily.MODAL_Z_IMAGE && onChangeImageSteps != null) {
@@ -585,6 +598,30 @@ fun ImageGenerationInputArea(
                                         contentDescription = "调整推理步数"
                                     )
                                 }
+                            )
+                        }
+
+                        if (isQwenEdit && onChangeImageParams != null) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            AssistChip(
+                                onClick = { showParamsDialog = true },
+                                label = {
+                                    Text(
+                                        text = "参数调节",
+                                        color = Color(0xFFFF9800)
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Tune,
+                                        contentDescription = "调整生成参数",
+                                        tint = Color(0xFFFF9800)
+                                    )
+                                },
+                                border = BorderStroke(
+                                    width = 1.dp,
+                                    color = Color(0xFFFF9800).copy(alpha = 0.5f)
+                                )
                             )
                         }
                     }
@@ -773,6 +810,97 @@ fun ImageGenerationInputArea(
                 }
             )
         }
+    }
+
+    if (showParamsDialog && onChangeImageParams != null) {
+        var stepsText by remember(currentImageSteps) { mutableStateOf((currentImageSteps ?: 17).toString()) }
+        var guidanceText by remember(currentImageGuidance) { mutableStateOf((currentImageGuidance ?: 7.5f).toString()) }
+
+        AlertDialog(
+            onDismissRequest = { showParamsDialog = false },
+            containerColor = if (isSystemInDarkTheme()) Color(0xFF2C2C2C) else Color(0xFFF0F0F0),
+            title = { Text("调整生成参数") },
+            text = {
+                Column {
+                    // 推理步数
+                    Text(
+                        text = "推理步数 (Steps)",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(bottom = 4.dp)
+                    )
+                    OutlinedTextField(
+                        value = stepsText,
+                        onValueChange = { newValue ->
+                            if (newValue.all { it.isDigit() }) {
+                                stepsText = newValue
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        shape = RoundedCornerShape(8.dp),
+                        placeholder = { Text("推荐值: 17") },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                            focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                            unfocusedTextColor = MaterialTheme.colorScheme.onSurface
+                        )
+                    )
+                    Text(
+                        text = "推荐值: 17 (范围 1-30)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp, bottom = 16.dp)
+                    )
+
+                    // 引导系数
+                    Text(
+                        text = "引导系数 (Guidance)",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(bottom = 4.dp)
+                    )
+                    OutlinedTextField(
+                        value = guidanceText,
+                        onValueChange = { newValue ->
+                            if (newValue.all { it.isDigit() || it == '.' }) {
+                                guidanceText = newValue
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        shape = RoundedCornerShape(8.dp),
+                        placeholder = { Text("推荐值: 7.5") },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                            focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                            unfocusedTextColor = MaterialTheme.colorScheme.onSurface
+                        )
+                    )
+                    Text(
+                        text = "推荐值: 7.5 (范围 1.0-10.0)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val finalSteps = stepsText.toIntOrNull()?.coerceIn(1, 30) ?: 17
+                        val finalGuidance = guidanceText.toFloatOrNull()?.coerceIn(1f, 10f) ?: 7.5f
+                        onChangeImageParams(finalSteps, finalGuidance)
+                        showParamsDialog = false
+                    }
+                ) { Text("确定") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showParamsDialog = false }) { Text("取消") }
+            }
+        )
     }
 
     DisposableEffect(Unit) {

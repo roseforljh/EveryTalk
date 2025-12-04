@@ -277,6 +277,10 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                 currentImageSteps = selectedApiConfig?.numInferenceSteps,
                 onChangeImageSteps = { steps ->
                     viewModel.updateImageNumInferenceStepsForSelectedConfig(steps)
+                },
+                currentImageGuidance = selectedApiConfig?.guidanceScale,
+                onChangeImageParams = { steps, guidance ->
+                    viewModel.updateImageGenerationParamsForSelectedConfig(steps, guidance)
                 }
             )
         }
