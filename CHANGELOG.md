@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.7.16](https://github.com/roseforljh/EveryTalk/compare/v1.7.15...v1.7.16) (2025-12-04)
+
+
+### Bug Fixes
+
+* 查看文本bug修复 ([4699daf](https://github.com/roseforljh/EveryTalk/commit/4699dafb2f373d898c652a50f1ff24cc61526391))
+* 统一导入导出逻辑 ([eb24503](https://github.com/roseforljh/EveryTalk/commit/eb24503ba515ee8281f5dd4095562305142a13fe))
+* 美化UI ([0dc4953](https://github.com/roseforljh/EveryTalk/commit/0dc495333220f063094570adecaca24a021e55e5))
+* 自定义z-image步数 ([93e60ba](https://github.com/roseforljh/EveryTalk/commit/93e60baf24fa427ca86e723a817ac0a38e7754ca))
+
 ## [1.7.15](https://github.com/roseforljh/EveryTalk/compare/v1.7.14...v1.7.15) (2025-12-03)
 
 
