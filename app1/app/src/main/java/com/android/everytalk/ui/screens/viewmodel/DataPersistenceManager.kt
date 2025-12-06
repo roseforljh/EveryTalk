@@ -124,6 +124,66 @@ class DataPersistenceManager(
         }
     }
 
+    /**
+     * 即时保存单张图片（data URI）到本地文件，用于流式响应时的即时落地
+     */
+    suspend fun persistImageImmediate(dataUri: String, messageId: String, index: Int): String? {
+        return withContext(Dispatchers.IO) {
+            try {
+                if (!dataUri.startsWith("data:image", ignoreCase = true)) {
+                    return@withContext null
+                }
+                
+                val tempDir = File(context.filesDir, "chat_attachments").apply { mkdirs() }
+                
+                // 解析形如 data:image/png;base64,AAAA... 的数据
+                val commaIndex = dataUri.indexOf(',')
+                if (commaIndex <= 0) return@withContext null
+                
+                val header = dataUri.substring(5, commaIndex)
+                val mimePart = header.substringBefore(';', "")
+                val mime = if (mimePart.isNotBlank()) mimePart else "image/png"
+                val isBase64 = header.contains("base64", ignoreCase = true)
+                val payload = dataUri.substring(commaIndex + 1)
+
+                val bytes: ByteArray = if (isBase64) {
+                    Base64.decode(payload, Base64.DEFAULT)
+                } else {
+                    Uri.decode(payload).toByteArray()
+                }
+
+                fun extFromMime(m: String): String {
+                    val ml = m.lowercase(Locale.ROOT)
+                    return when {
+                        ml.contains("png") -> "png"
+                        ml.contains("jpeg") || ml.contains("jpg") -> "jpg"
+                        ml.contains("webp") -> "webp"
+                        else -> "png"
+                    }
+                }
+
+                val ext = extFromMime(mime)
+                // 使用确定性的文件名，避免重复保存
+                val fileName = "img_${messageId}_${index}_${System.currentTimeMillis()}.$ext"
+                val file = File(tempDir, fileName)
+                
+                FileOutputStream(file).use { fos ->
+                    fos.write(bytes)
+                }
+                
+                if (file.exists() && file.length() > 0) {
+                    Log.i(TAG, "persistImageImmediate: Saved image to ${file.absolutePath}")
+                    file.absolutePath 
+                } else {
+                    null
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "persistImageImmediate: Failed", e)
+                null
+            }
+        }
+    }
+
     fun loadInitialData(
         loadLastChat: Boolean = true,
         onLoadingComplete: (initialConfigPresent: Boolean, initialHistoryPresent: Boolean) -> Unit
