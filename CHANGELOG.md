@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.18](https://github.com/roseforljh/EveryTalk/compare/v1.7.17...v1.7.18) (2025-12-06)
+
+
+### Bug Fixes
+
+* 图像模式两个默认模型的持久化问题修复 ([d5a1ab1](https://github.com/roseforljh/EveryTalk/commit/d5a1ab1828f3cd380428bbea889ef9bbe8306f97))
+
 ## [1.7.17](https://github.com/roseforljh/EveryTalk/compare/v1.7.16...v1.7.17) (2025-12-04)
 
 
