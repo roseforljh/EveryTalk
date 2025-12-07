@@ -12,6 +12,16 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.ensureActive
 import okhttp3.MediaType.Companion.toMediaType
 import com.android.everytalk.config.PerformanceConfig
+import com.android.everytalk.data.network.direct.SttDirectClient
+import com.android.everytalk.data.network.direct.TtsDirectClient
+import com.android.everytalk.data.network.direct.VoiceChatDirectSession
+import io.ktor.client.*
+import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.plugins.*
+import io.ktor.client.plugins.contentnegotiation.*
+import io.ktor.client.plugins.websocket.*
+import io.ktor.serialization.kotlinx.json.*
+import kotlinx.serialization.json.Json
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -60,8 +70,8 @@ class VoiceChatSession(
     private val ttsModel: String = "",
     private val voiceName: String = "Kore",
     
-    // 新增：是否使用实时流式模式（仅阿里云支持）
-    private val useRealtimeStreaming: Boolean = false,
+    // 直连模式强制开启，不再支持后端中转
+    private val useDirectMode: Boolean = true,
     
     private val onVolumeChanged: ((Float) -> Unit)? = null,
     private val onTranscriptionReceived: ((String) -> Unit)? = null, // 识别到的文字回调
@@ -71,12 +81,35 @@ class VoiceChatSession(
     private var isRecording: Boolean = false
     private val pcmBuffer = ByteArrayOutputStream(256 * 1024)
     
-    // 实时流式会话代理
-    private var realtimeSession: RealtimeVoiceChatSession? = null
+    // 直连会话
+    private var directSession: VoiceChatDirectSession? = null
     
-    // 网络请求控制
-    @Volatile
-    private var currentCall: okhttp3.Call? = null
+    // Ktor HTTP 客户端（用于直连模式）
+    private val ktorClient: HttpClient by lazy {
+        HttpClient(OkHttp) {
+            engine {
+                config {
+                    connectTimeout(30, TimeUnit.SECONDS)
+                    readTimeout(300, TimeUnit.SECONDS)
+                    writeTimeout(120, TimeUnit.SECONDS)
+                }
+            }
+            install(ContentNegotiation) {
+                json(Json {
+                    ignoreUnknownKeys = true
+                    isLenient = true
+                })
+            }
+            install(HttpTimeout) {
+                requestTimeoutMillis = Long.MAX_VALUE
+                connectTimeoutMillis = 60_000
+                socketTimeoutMillis = Long.MAX_VALUE
+            }
+            install(WebSockets) {
+                pingIntervalMillis = 30_000
+            }
+        }
+    }
     
     // 音频播放控制
     @Volatile
@@ -93,29 +126,6 @@ class VoiceChatSession(
 
     companion object {
         private const val TAG = "VoiceChatSession"
-        // 接口路径（编译时混淆）
-        private val API_PATH = buildString {
-            append("/voice")
-            append("-chat")
-            append("/complete")
-        }
-
-        // 全局单例 OkHttpClient，复用连接池以减少握手延迟
-        private val okHttpClient: OkHttpClient by lazy {
-            OkHttpClient.Builder()
-                .connectTimeout(10, TimeUnit.SECONDS)
-                .readTimeout(45, TimeUnit.SECONDS)
-                .writeTimeout(15, TimeUnit.SECONDS)
-                .retryOnConnectionFailure(false)
-                .connectionPool(
-                    okhttp3.ConnectionPool(
-                        maxIdleConnections = 5,
-                        keepAliveDuration = 5,
-                        TimeUnit.MINUTES
-                    )
-                )
-                .build()
-        }
     }
 
     /**
@@ -124,13 +134,6 @@ class VoiceChatSession(
     suspend fun startRecording() = withContext(Dispatchers.IO) {
         if (isRecording) return@withContext
         
-        // 检查是否启用实时流式模式（仅阿里云支持）
-        if (useRealtimeStreaming && sttPlatform == "Aliyun") {
-            Log.i(TAG, "Starting Realtime Streaming Mode")
-            startRealtimeSession()
-            return@withContext
-        }
-
         val recorder = createAudioRecord()
             ?: throw IllegalStateException("AudioRecord init failed. Check RECORD_AUDIO permission.")
 
@@ -195,59 +198,6 @@ class VoiceChatSession(
         }
     }
     
-    private suspend fun startRealtimeSession() {
-        isRecording = true
-        
-        // 构建 WebSocket URL
-        val baseUrl = com.android.everytalk.BuildConfig.VOICE_BACKEND_URL
-        val wsUrl = baseUrl
-            .replace("https://", "wss://")
-            .replace("http://", "ws://") + "/voice-chat/realtime"
-            
-        realtimeSession = RealtimeVoiceChatSession(
-            wsUrl = wsUrl,
-            chatHistory = chatHistory,
-            systemPrompt = systemPrompt,
-            sttPlatform = sttPlatform,
-            sttApiKey = sttApiKey,
-            sttApiUrl = sttApiUrl,
-            sttModel = sttModel,
-            chatPlatform = chatPlatform,
-            chatApiKey = chatApiKey,
-            chatApiUrl = chatApiUrl,
-            chatModel = chatModel,
-            ttsPlatform = ttsPlatform,
-            ttsApiKey = ttsApiKey,
-            ttsApiUrl = ttsApiUrl,
-            ttsModel = ttsModel,
-            voiceName = voiceName,
-            onVolumeChanged = onVolumeChanged,
-            onPartialTranscription = onTranscriptionReceived,
-            onFinalTranscription = onTranscriptionReceived,
-            onChatDelta = { delta, full ->
-                // 实时流式模式下，Chat回复也是流式的
-                // 这里我们只回调增量，或者根据需要回调全量
-                // VoiceChatSession 的 onResponseReceived 通常期望最终结果
-                // 但为了实时性，我们可以回调全量文本
-                onResponseReceived?.invoke(full)
-            },
-            onComplete = { user, assistant ->
-                // 对话完成
-                Log.i(TAG, "Realtime session completed")
-            },
-            onError = { error ->
-                Log.e(TAG, "Realtime session error: $error")
-                // 通过回调通知 UI 显示错误
-                onResponseReceived?.invoke("实时对话错误: $error")
-                // 停止录音状态
-                isRecording = false
-            },
-            onResponseReceived = onResponseReceived
-        )
-        
-        realtimeSession?.start()
-    }
-
     /**
      * 取消录音
      * 停止录音并丢弃数据，不进行后续处理
@@ -256,13 +206,6 @@ class VoiceChatSession(
         if (!isRecording) return@withContext
         
         isRecording = false
-        
-        if (realtimeSession != null) {
-            realtimeSession?.cancel()
-            realtimeSession = null
-            Log.i(TAG, "Realtime session cancelled")
-            return@withContext
-        }
         
         try {
             audioRecord?.stop()
@@ -281,17 +224,6 @@ class VoiceChatSession(
      */
     fun stopPlayback() {
         shouldStopPlayback = true
-        
-        if (realtimeSession != null) {
-            realtimeSession?.cancel()
-            realtimeSession = null
-        }
-        
-        // 取消网络请求
-        try {
-            currentCall?.cancel()
-        } catch (_: Throwable) {}
-        currentCall = null
         
         // 停止标准播放
         currentAudioTrack?.let { track ->
@@ -340,30 +272,15 @@ class VoiceChatSession(
     suspend fun stopRecordingAndProcess(): VoiceChatResult = withContext(Dispatchers.IO) {
         isRecording = false
         
-        if (realtimeSession != null) {
-            Log.i(TAG, "Stopping realtime session recording")
-            val session = realtimeSession
-            session?.stopRecording()
-            
-            // 等待实时会话完成
-            // 阿里云 TTS 使用串行处理（max_concurrent=2），长文本可能需要较长时间
-            // 因此增加超时时间到 180 秒，避免因超时导致连接被过早关闭
-            val result = session?.awaitCompletion(180000L) ?: Pair("", "")
-            Log.i(TAG, "Realtime session completed: user='${result.first}', assistant='${result.second}'")
-            
-            // 清理会话引用
-            realtimeSession = null
-            
-            return@withContext VoiceChatResult(
-                userText = result.first,
-                assistantText = result.second,
-                audioData = ByteArray(0), // 实时模式下音频已经播放完毕
-                audioFormat = "pcm",
-                sampleRate = 24000,
-                isRealtimeMode = true  // 标记为实时模式，避免误触发 TTS 配额警告
-            )
-        }
+        // 直连模式处理（强制）
+        Log.i(TAG, "Using Direct Mode (no backend proxy)")
+        return@withContext stopRecordingAndProcessDirect()
+    }
 
+    /**
+     * 直连模式处理：停止录音并使用直连 API 处理
+     */
+    private suspend fun stopRecordingAndProcessDirect(): VoiceChatResult {
         // 停止录音
         try {
             audioRecord?.stop()
@@ -378,187 +295,98 @@ class VoiceChatSession(
             throw IllegalStateException("No audio data recorded")
         }
 
-        Log.i(TAG, "Recorded ${pcmData.size} bytes of PCM data")
+        Log.i(TAG, "Recorded ${pcmData.size} bytes of PCM data for direct mode")
 
-        // 基于 PCM 数据估算录音时长（毫秒）
-        val totalSamples = pcmData.size / 2 // 16-bit PCM: 2 bytes per sample
-        val recordDurationMs = if (sampleRate > 0) {
-            (totalSamples * 1000L) / sampleRate
-        } else {
-            0L
-        }
-        val isShortUtterance =
-            recordDurationMs in 1..PerformanceConfig.VOICE_SHORT_UTTERANCE_MAX_DURATION_MS
-
-        // 尝试将 PCM 编码为 AAC (m4a) 以减小上传体积
-        // 短语音直接走 WAV 上传以降低首包延迟；长语音保留 AAC 压缩策略
-        var uploadFile: File? = null
-        var mimeType = "audio/wav"
-        
-        // 强制使用 WAV 格式以确保最大兼容性（Opus/Ogg 在部分后端服务兼容性不佳）
-        Log.i(TAG, "Using WAV format for maximum compatibility (duration=${recordDurationMs}ms)")
-
-        val tempWavFile = File.createTempFile("voice_chat_", ".wav")
-        tempWavFile.outputStream().use { out ->
-            writeWavHeader(out, pcmData.size, sampleRate, 1, 16)
-            out.write(pcmData)
-        }
-        uploadFile = tempWavFile
-        mimeType = "audio/wav"
-        Log.i(TAG, "Saved PCM as WAV: ${uploadFile.length()} bytes")
-
+        // 创建 WAV 文件用于 STT
+        val tempWavFile = File.createTempFile("voice_chat_direct_", ".wav")
         try {
-            // 构建对话历史JSON
-            val historyJson = JSONArray()
-            chatHistory.forEach { (role, content) ->
-                historyJson.put(JSONObject().apply {
-                    put("role", role)
-                    put("content", content)
-                })
+            tempWavFile.outputStream().use { out ->
+                writeWavHeader(out, pcmData.size, sampleRate, 1, 16)
+                out.write(pcmData)
             }
-
-            // 使用全局单例 client 复用连接
-            val client = okHttpClient
-
-            val requestBodyBuilder = MultipartBody.Builder()
-                .setType(MultipartBody.FORM)
-                .addFormDataPart(
-                    "audio",
-                    "recording.${if (mimeType == "audio/mp4") "m4a" else "wav"}",
-                    uploadFile.asRequestBody(mimeType.toMediaType())
-                )
-                .addFormDataPart("chat_history", historyJson.toString())
-                .addFormDataPart("system_prompt", systemPrompt)
-                
-                // STT
-                .addFormDataPart("stt_platform", sttPlatform)
-                .addFormDataPart("stt_api_key", sttApiKey)
-                .addFormDataPart("stt_api_url", sttApiUrl)
-                .addFormDataPart("stt_model", sttModel)
-                
-                // Chat
-                .addFormDataPart("chat_platform", chatPlatform)
-                .addFormDataPart("chat_api_key", chatApiKey)
-                .addFormDataPart("chat_api_url", chatApiUrl)
-                .addFormDataPart("chat_model", chatModel)
-                
-                // TTS
-                .addFormDataPart("voice_platform", ttsPlatform)
-                .addFormDataPart("voice_name", voiceName)
-                .addFormDataPart("tts_api_key", ttsApiKey)
-                .addFormDataPart("tts_api_url", ttsApiUrl)
-                .addFormDataPart("tts_model", ttsModel)
-
-            // 默认启用流式以优化延迟 (支持 Google/OpenAI/Minimax/SiliconFlow)
-            requestBodyBuilder.addFormDataPart("stream", "true")
-
-            val requestBody = requestBodyBuilder.build()
-
-            // 使用配置的URL和混淆的路径
-            val baseUrl = com.android.everytalk.BuildConfig.VOICE_BACKEND_URL
-            val apiUrl = baseUrl + API_PATH
             
-            // 生成签名头
-            // 注意：MultipartBody 的内容签名比较复杂，这里简化处理，只对空 body 进行签名
-            // 后端中间件应该配置为对 multipart/form-data 请求放宽 body 校验，或者只校验 path/method/timestamp
-            // 根据 RequestSignatureUtil 的实现，body 为 null 时 bodyHash 为空字符串
-            val signatureHeaders = RequestSignatureUtil.generateSignatureHeaders(
-                method = "POST",
-                path = API_PATH,
-                body = null // MultipartBody 难以在此处获取完整字符串，且包含二进制文件
+            val wavData = tempWavFile.readBytes()
+            Log.i(TAG, "Created WAV file: ${wavData.size} bytes")
+            
+            // 创建直连会话
+            val audioChunks = mutableListOf<ByteArray>()
+            var userText = ""
+            var assistantText = ""
+            
+            directSession = VoiceChatDirectSession(
+                httpClient = ktorClient,
+                sttConfig = SttDirectClient.SttConfig(
+                    platform = sttPlatform,
+                    apiKey = sttApiKey,
+                    apiUrl = sttApiUrl.ifBlank { null },
+                    model = sttModel
+                ),
+                chatPlatform = chatPlatform,
+                chatApiKey = chatApiKey,
+                chatApiUrl = chatApiUrl.ifBlank { null },
+                chatModel = chatModel,
+                systemPrompt = systemPrompt,
+                chatHistory = chatHistory,
+                ttsConfig = TtsDirectClient.TtsConfig(
+                    platform = ttsPlatform,
+                    apiKey = ttsApiKey,
+                    apiUrl = ttsApiUrl.ifBlank { null },
+                    model = ttsModel,
+                    voiceName = voiceName
+                ),
+                onTranscription = { text ->
+                    userText = text
+                    onTranscriptionReceived?.invoke(text)
+                },
+                onResponseDelta = { _, full ->
+                    assistantText = full
+                    onResponseReceived?.invoke(full)
+                },
+                onAudioChunk = { chunk ->
+                    audioChunks.add(chunk)
+                    // 实时播放音频块
+                    if (streamAudioPlayer == null) {
+                        val audioFormat = TtsDirectClient.getAudioFormat(ttsPlatform)
+                        streamAudioPlayer = StreamAudioPlayer(audioFormat.sampleRate)
+                        streamAudioPlayer?.start()
+                    }
+                    // onAudioChunk 现在是 suspend 函数，直接调用即可，无需 runBlocking
+                    streamAudioPlayer?.write(chunk)
+                },
+                onError = { error ->
+                    Log.e(TAG, "Direct mode error: $error")
+                },
+                onComplete = { user, assistant ->
+                    Log.i(TAG, "Direct mode completed: user='${user.take(50)}...', assistant='${assistant.take(50)}...'")
+                }
             )
             
-            val requestBuilder = Request.Builder()
-                .url(apiUrl)
-                .post(requestBody)
+            // 执行直连处理
+            val result = directSession?.process(wavData, "audio/wav")
+                ?: throw Exception("Direct session process failed")
             
-            // 添加签名头
-            signatureHeaders.forEach { (key, value) ->
-                requestBuilder.addHeader(key, value)
-            }
+            // 等待播放完成
+            streamAudioPlayer?.close()
+            streamAudioPlayer = null
             
-            val request = requestBuilder.build()
-
-            Log.i(TAG, "Sending voice chat request to: $apiUrl")
+            directSession = null
             
-            val call = client.newCall(request)
-            currentCall = call
-            
-            val response = try {
-                call.execute()
-            } catch (e: Exception) {
-                if (call.isCanceled()) {
-                    throw java.util.concurrent.CancellationException("Request cancelled")
-                }
-                throw e
-            } finally {
-                currentCall = null
-            }
-
-            if (!response.isSuccessful) {
-                val errorBody = response.body?.string() ?: "Unknown error"
-                Log.e(TAG, "Voice chat request failed: ${response.code} - $errorBody")
-                throw Exception("Voice chat failed: ${response.code} - $errorBody")
-            }
-
-            val contentType = response.header("Content-Type")
-            
-            // 判断是否为流式响应 (NDJSON)
-            if (contentType?.contains("application/x-ndjson") == true) {
-                return@withContext handleStreamingResponse(response)
-            }
-
-            // 原有非流式逻辑
-            val responseBody = response.body?.string() ?: throw Exception("Empty response")
-            val jsonResponse = JSONObject(responseBody)
-
-            val userText = jsonResponse.getString("user_text")
-            val assistantText = jsonResponse.getString("assistant_text")
-            val audioBase64 = jsonResponse.optString("audio_base64", "")
-            val audioFormat = jsonResponse.optString("audio_format", "wav")
-            val sampleRate = jsonResponse.optInt("sample_rate", 24000)
-
-            Log.i(TAG, "Voice chat completed successfully")
-            Log.i(TAG, "User: $userText")
-            Log.i(TAG, "Assistant: $assistantText")
-
-            // 回调识别和回复文字
-            withContext(Dispatchers.Main) {
-                onTranscriptionReceived?.invoke(userText)
-                onResponseReceived?.invoke(assistantText)
-            }
-
-            // 解码并播放音频数据（如果有）
-            val audioData = if (audioBase64.isNotEmpty()) {
-                try {
-                    val decoded = android.util.Base64.decode(audioBase64, android.util.Base64.DEFAULT)
-                    // 播放音频
-                    playAudio(decoded, sampleRate)
-                    decoded
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed to decode/play audio (TTS quota exhausted?)", e)
-                    ByteArray(0)
-                }
-            } else {
-                Log.w(TAG, "No audio data (TTS quota exhausted), text-only mode")
-                ByteArray(0)
-            }
-
-            VoiceChatResult(
-                userText = userText,
-                assistantText = assistantText,
-                audioData = audioData,
-                audioFormat = audioFormat,
-                sampleRate = sampleRate
+            return VoiceChatResult(
+                userText = result.userText,
+                assistantText = result.assistantText,
+                audioData = result.audioData,
+                audioFormat = result.audioFormat,
+                sampleRate = result.sampleRate,
+                isRealtimeMode = false
             )
+            
         } finally {
             // 清理临时文件
             try {
-                uploadFile?.delete()
+                tempWavFile.delete()
             } catch (_: Throwable) {}
         }
     }
-
 
     /**
      * 播放音频数据
@@ -728,255 +556,6 @@ class VoiceChatSession(
             (value and 0xFF).toByte(),
             ((value shr 8) and 0xFF).toByte()
         )
-    }
-    /**
-     * 处理流式响应
-     */
-    private suspend fun handleStreamingResponse(response: okhttp3.Response): VoiceChatResult {
-        Log.i(TAG, "Starting streaming response processing")
-        
-        var userText = ""
-        var assistantText = ""
-        val fullAudioData = ByteArrayOutputStream()
-        var sampleRate = 24000
-        var audioFormat = "pcm"  // 默认 PCM，后端会下发实际格式
-        var audioPlayer: StreamAudioPlayer? = null
-        var opusDecoder: OpusStreamDecoder? = null
-        shouldStopPlayback = false
-        
-        try {
-            response.body?.byteStream()?.use { inputStream ->
-                val reader = BufferedReader(java.io.InputStreamReader(inputStream))
-                var line: String?
-                
-                while (reader.readLine().also { line = it } != null && !shouldStopPlayback) {
-                    // 检查协程是否已取消，如果取消则抛出 CancellationException
-                    kotlin.coroutines.coroutineContext.ensureActive()
-
-                    if (line.isNullOrBlank()) continue
-                    
-                    try {
-                        val json = JSONObject(line)
-                        val type = json.optString("type")
-                        
-                        when (type) {
-                            "meta" -> {
-                                userText = json.optString("user_text", "")
-                                assistantText = json.optString("assistant_text", "")
-                                
-                                // 更新采样率 (如果后端下发)
-                                val sr = json.optInt("sample_rate", 0)
-                                if (sr > 0) {
-                                    sampleRate = sr
-                                    Log.i(TAG, "Updated sample rate from stream meta: $sampleRate")
-                                }
-                                
-                                // 获取音频格式
-                                val format = json.optString("audio_format", "")
-                                if (format.isNotEmpty()) {
-                                    audioFormat = format
-                                    Log.i(TAG, "Audio format from stream meta: $audioFormat")
-                                }
-                                
-                                // 立即回调文字
-                                withContext(Dispatchers.Main) {
-                                    if (userText.isNotEmpty()) onTranscriptionReceived?.invoke(userText)
-                                    if (assistantText.isNotEmpty()) onResponseReceived?.invoke(assistantText)
-                                }
-                            }
-                            "audio" -> {
-                                val b64Data = json.optString("data", "")
-                                if (b64Data.isNotEmpty()) {
-                                    val chunk = android.util.Base64.decode(b64Data, android.util.Base64.DEFAULT)
-                                    if (chunk.isNotEmpty()) {
-                                        fullAudioData.write(chunk)
-                                        
-                                        // 根据音频格式选择处理方式
-                                        when (audioFormat) {
-                                            "opus" -> {
-                                                // Opus 格式需要解码
-                                                if (opusDecoder == null) {
-                                                    opusDecoder = OpusStreamDecoder(sampleRate)
-                                                    audioPlayer = StreamAudioPlayer(sampleRate)
-                                                    streamAudioPlayer = audioPlayer
-                                                    audioPlayer?.start()
-                                                }
-                                                // 解码并写入播放器
-                                                val pcmData = opusDecoder?.decode(chunk)
-                                                if (pcmData != null && pcmData.isNotEmpty()) {
-                                                    audioPlayer?.write(pcmData)
-                                                }
-                                            }
-                                            else -> {
-                                                // PCM/WAV 直接播放
-                                                if (audioPlayer == null) {
-                                                    audioPlayer = StreamAudioPlayer(sampleRate)
-                                                    streamAudioPlayer = audioPlayer
-                                                    audioPlayer?.start()
-                                                }
-                                                audioPlayer?.write(chunk)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            "ping" -> {
-                                // 保持连接活跃，忽略
-                            }
-                            "error" -> {
-                                val msg = json.optString("message", "Unknown error")
-                                Log.e(TAG, "Stream error: $msg")
-                            }
-                        }
-                    } catch (e: Exception) {
-                        // 取消类异常（包括 JobCancellationException）直接向上抛出，避免当成解析错误刷屏
-                        if (e is java.util.concurrent.CancellationException ||
-                            e.javaClass.name.contains("CancellationException")) {
-                            throw e
-                        }
-                        // 截断日志，防止刷屏
-                        val currentLine = line!!
-                        val logLine = if (currentLine.length > 200) currentLine.substring(0, 200) + "..." else currentLine
-                        Log.w(TAG, "Failed to parse stream line: $logLine", e)
-                    }
-                }
-            }
-        } finally {
-            // 释放解码器
-            opusDecoder?.release()
-            // 等待播放完成并释放
-            audioPlayer?.close()
-            streamAudioPlayer = null
-        }
-        
-        return VoiceChatResult(
-            userText = userText,
-            assistantText = assistantText,
-            audioData = fullAudioData.toByteArray(),
-            audioFormat = audioFormat,
-            sampleRate = sampleRate
-        )
-    }
-    
-    /**
-     * Opus 流式解码器
-     * 使用 MediaCodec 解码 Opus 音频流
-     */
-    private inner class OpusStreamDecoder(private val sampleRate: Int) {
-        private var decoder: MediaCodec? = null
-        private val outputBuffer = ByteArrayOutputStream()
-        private var isConfigured = false
-        
-        init {
-            try {
-                decoder = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_AUDIO_OPUS)
-                
-                val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_OPUS, sampleRate, 1)
-                // Opus 解码需要 CSD (Codec Specific Data)
-                // 对于标准 Opus，需要设置 csd-0, csd-1, csd-2
-                // csd-0: OpusHead
-                // csd-1: OpusTags (可选)
-                // csd-2: Seek preroll
-                
-                // 标准 OpusHead for mono 48kHz (最常见配置)
-                // 但是我们使用的是 24kHz，需要调整
-                val opusHead = byteArrayOf(
-                    'O'.code.toByte(), 'p'.code.toByte(), 'u'.code.toByte(), 's'.code.toByte(),
-                    'H'.code.toByte(), 'e'.code.toByte(), 'a'.code.toByte(), 'd'.code.toByte(),
-                    1, // version
-                    1, // channel count
-                    0, 0, // pre-skip (little endian)
-                    (sampleRate and 0xFF).toByte(), // sample rate (little endian)
-                    ((sampleRate shr 8) and 0xFF).toByte(),
-                    ((sampleRate shr 16) and 0xFF).toByte(),
-                    ((sampleRate shr 24) and 0xFF).toByte(),
-                    0, 0, // output gain
-                    0  // channel mapping family
-                )
-                format.setByteBuffer("csd-0", java.nio.ByteBuffer.wrap(opusHead))
-                
-                // csd-1: OpusTags (简化版)
-                val opusTags = byteArrayOf(
-                    'O'.code.toByte(), 'p'.code.toByte(), 'u'.code.toByte(), 's'.code.toByte(),
-                    'T'.code.toByte(), 'a'.code.toByte(), 'g'.code.toByte(), 's'.code.toByte(),
-                    0, 0, 0, 0, // vendor string length
-                    0, 0, 0, 0  // user comment list length
-                )
-                format.setByteBuffer("csd-1", java.nio.ByteBuffer.wrap(opusTags))
-                
-                // csd-2: Seek preroll (3840 samples for Opus)
-                val seekPreroll = java.nio.ByteBuffer.allocate(8)
-                seekPreroll.order(java.nio.ByteOrder.nativeOrder())
-                seekPreroll.putLong(3840 * 1000000L / sampleRate) // nanoseconds
-                seekPreroll.flip()
-                format.setByteBuffer("csd-2", seekPreroll)
-                
-                decoder?.configure(format, null, null, 0)
-                decoder?.start()
-                isConfigured = true
-                
-                Log.i(TAG, "OpusStreamDecoder initialized for $sampleRate Hz")
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to initialize Opus decoder", e)
-                decoder = null
-            }
-        }
-        
-        /**
-         * 解码 Opus 数据块
-         * @return PCM 数据，如果解码失败返回原始数据（降级为直接播放）
-         */
-        fun decode(opusData: ByteArray): ByteArray {
-            val dec = decoder
-            if (dec == null || !isConfigured) {
-                // 解码器不可用，返回原始数据（可能导致播放失败，但不会崩溃）
-                Log.w(TAG, "Opus decoder not available, returning raw data")
-                return opusData
-            }
-            
-            outputBuffer.reset()
-            
-            try {
-                // 写入输入数据
-                val inputIndex = dec.dequeueInputBuffer(10000)
-                if (inputIndex >= 0) {
-                    val inputBuffer = dec.getInputBuffer(inputIndex)
-                    inputBuffer?.clear()
-                    inputBuffer?.put(opusData)
-                    dec.queueInputBuffer(inputIndex, 0, opusData.size, 0, 0)
-                }
-                
-                // 读取输出数据
-                val bufferInfo = MediaCodec.BufferInfo()
-                var outputIndex = dec.dequeueOutputBuffer(bufferInfo, 10000)
-                
-                while (outputIndex >= 0) {
-                    val outputBuffer = dec.getOutputBuffer(outputIndex)
-                    if (outputBuffer != null && bufferInfo.size > 0) {
-                        val pcmChunk = ByteArray(bufferInfo.size)
-                        outputBuffer.get(pcmChunk)
-                        this.outputBuffer.write(pcmChunk)
-                    }
-                    dec.releaseOutputBuffer(outputIndex, false)
-                    outputIndex = dec.dequeueOutputBuffer(bufferInfo, 0)
-                }
-                
-                return this.outputBuffer.toByteArray()
-            } catch (e: Exception) {
-                Log.e(TAG, "Opus decode error", e)
-                return opusData // 降级返回原始数据
-            }
-        }
-        
-        fun release() {
-            try {
-                decoder?.stop()
-                decoder?.release()
-            } catch (e: Exception) {
-                Log.w(TAG, "Error releasing Opus decoder", e)
-            }
-            decoder = null
-        }
     }
 
     /**

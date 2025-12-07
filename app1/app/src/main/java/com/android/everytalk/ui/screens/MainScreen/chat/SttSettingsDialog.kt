@@ -69,8 +69,9 @@ fun SttSettingsDialog(
     var expanded by remember { mutableStateOf(false) }
     
     // 实时流式模式开关（仅阿里云支持）
-    val savedRealtimeStreaming = remember { prefs.getBoolean("stt_realtime_streaming", false) }
-    var useRealtimeStreaming by remember { mutableStateOf(savedRealtimeStreaming) }
+    // 直连模式下不再支持后端实时流式，因此隐藏此选项
+    // val savedRealtimeStreaming = remember { prefs.getBoolean("stt_realtime_streaming", false) }
+    // var useRealtimeStreaming by remember { mutableStateOf(savedRealtimeStreaming) }
     
     val platforms = listOf("Google", "OpenAI", "SiliconFlow", "Aliyun")
     
@@ -283,6 +284,8 @@ fun SttSettingsDialog(
                 )
                 
                 // 实时流式模式开关（仅阿里云显示）
+                // 直连模式下不再支持后端实时流式，因此隐藏此选项
+                /*
                 if (selectedPlatform == "Aliyun") {
                     Card(
                         colors = CardDefaults.cardColors(
@@ -332,6 +335,7 @@ fun SttSettingsDialog(
                         }
                     }
                 }
+                */
                 
                 // 底部按钮
                 Row(
@@ -366,7 +370,7 @@ fun SttSettingsDialog(
                                 editor.putString("stt_api_url_${selectedPlatform}", apiUrl.trim())
                                 editor.putString("stt_model_${selectedPlatform}", model.trim())
                                 // 保存实时流式模式设置
-                                editor.putBoolean("stt_realtime_streaming", useRealtimeStreaming)
+                                // editor.putBoolean("stt_realtime_streaming", useRealtimeStreaming)
                                 editor.apply()
                             }
                             onDismiss()

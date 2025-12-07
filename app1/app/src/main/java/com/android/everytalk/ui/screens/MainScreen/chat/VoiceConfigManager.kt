@@ -28,7 +28,10 @@ data class VoiceConfig(
     val voiceName: String,
     
     // 实时流式模式（仅阿里云 STT 支持）
-    val useRealtimeStreaming: Boolean = false
+    val useRealtimeStreaming: Boolean = false,
+    
+    // 直连模式（绕过后端代理）
+    val useDirectMode: Boolean = false
 )
 
 class VoiceConfigManager(private val context: Context) {
@@ -55,6 +58,9 @@ class VoiceConfigManager(private val context: Context) {
         // 实时流式模式（仅阿里云支持）
         val useRealtimeStreaming = prefs.getBoolean("stt_realtime_streaming", false) && sttPlatform == "Aliyun"
         
+        // 直连模式
+        val useDirectMode = prefs.getBoolean("voice_direct_mode", true)
+        
         // Chat配置
         val chatPlatform = prefs.getString("chat_platform", "Google") ?: "Google"
         val chatApiUrl = prefs.getString("chat_api_url_${chatPlatform}", null) 
@@ -68,13 +74,19 @@ class VoiceConfigManager(private val context: Context) {
         
         // TTS配置
         val ttsPlatform = prefs.getString("voice_platform", "Gemini") ?: "Gemini"
-        val ttsApiUrl = prefs.getString("voice_base_url_${ttsPlatform}", null) 
+        val ttsApiUrl = prefs.getString("voice_base_url_${ttsPlatform}", null)
             ?: prefs.getString("voice_base_url", "")?.trim() ?: ""
-        val ttsModel = prefs.getString("voice_chat_model_${ttsPlatform}", null) 
+        val ttsModel = prefs.getString("voice_chat_model_${ttsPlatform}", null)
             ?: prefs.getString("voice_chat_model", "")?.trim() ?: ""
         
-        // 确保voiceName对当前平台有效
-        val voiceName = prefs.getString("voice_name_${ttsPlatform}", null) ?: getDefaultVoiceName(ttsPlatform)
+        // 确保 voiceName 对当前平台有效；优先平台专属，其次全局，再兜底默认
+        val platformSpecificVoice = prefs.getString("voice_name_${ttsPlatform}", null)
+        val globalVoice = prefs.getString("voice_name", null)
+        val defaultVoice = getDefaultVoiceName(ttsPlatform)
+        val voiceName = platformSpecificVoice ?: globalVoice ?: defaultVoice
+        
+        // 调试日志：输出音色读取详情
+        android.util.Log.d("VoiceConfigManager", "TTS Config: platform=$ttsPlatform, voice_name_$ttsPlatform=$platformSpecificVoice, voice_name(global)=$globalVoice, default=$defaultVoice, final=$voiceName")
         
         val ttsApiKey = when (ttsPlatform) {
             "OpenAI" -> prefs.getString("voice_key_OpenAI", "") ?: ""
@@ -98,7 +110,8 @@ class VoiceConfigManager(private val context: Context) {
             ttsApiUrl = ttsApiUrl,
             ttsModel = ttsModel,
             voiceName = voiceName,
-            useRealtimeStreaming = useRealtimeStreaming
+            useRealtimeStreaming = useRealtimeStreaming,
+            useDirectMode = useDirectMode
         )
     }
     

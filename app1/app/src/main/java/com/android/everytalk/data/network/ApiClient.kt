@@ -18,6 +18,7 @@ import io.ktor.client.plugins.HttpRequestTimeoutException
 import io.ktor.client.plugins.cache.HttpCache
 import io.ktor.client.plugins.cache.storage.FileStorage
 import io.ktor.client.plugins.contentnegotiation.*
+import io.ktor.client.plugins.websocket.*
 import io.ktor.client.request.*
 import io.ktor.client.request.forms.*
 import io.ktor.client.statement.*
@@ -249,6 +250,10 @@ object ApiClient {
                     // 更积极的缓存策略
                     publicStorage(FileStorage(cacheFile))
                     privateStorage(FileStorage(File(context.cacheDir, "ktor_private_cache")))
+                }
+                // WebSocket 支持（用于阿里云实时语音识别等）
+                install(WebSockets) {
+                    pingIntervalMillis = 30_000  // 30秒心跳
                 }
                 // 添加更详细的日志记录
                 install(io.ktor.client.plugins.logging.Logging) {

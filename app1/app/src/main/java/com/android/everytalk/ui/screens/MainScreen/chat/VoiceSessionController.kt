@@ -76,11 +76,18 @@ class VoiceSessionController(
             voiceName = config.voiceName,
             
             // 传入实时流式配置
-            useRealtimeStreaming = config.useRealtimeStreaming,
+            // useRealtimeStreaming = config.useRealtimeStreaming,
+            
+            // 传入直连模式配置
+            // useDirectMode = config.useDirectMode,
             
             onVolumeChanged = onVolumeChanged,
             onTranscriptionReceived = onTranscriptionReceived,
             onResponseReceived = onResponseReceived
+        )
+        android.util.Log.i(
+            "VoiceSessionController",
+            "VoiceSession created: ttsPlatform=${config.ttsPlatform}, voice=${config.voiceName}, directMode=true, realtime=false"
         )
         
         currentSession = session
@@ -123,6 +130,8 @@ class VoiceSessionController(
                 
                 // 只有在非实时模式且没有音频数据时才显示 TTS 配额警告
                 if (!hasAudio) {
+                    // 如果没有抛出异常但也没有音频，可能是静音或者未知错误，暂时提示配额问题
+                    // 理想情况下应该区分是静音还是错误
                     onTtsQuotaWarning(true)
                     kotlinx.coroutines.delay(3000)
                     onTtsQuotaWarning(false)
@@ -135,7 +144,17 @@ class VoiceSessionController(
             } catch (t: Throwable) {
                 android.util.Log.e("VoiceSessionController", "Voice chat failed", t)
                 onTranscriptionReceived("")
-                onResponseReceived("处理失败: ${t.message}")
+                
+                // 检查是否是 TTS 配额错误
+                val errorMsg = t.message ?: ""
+                if (errorMsg.contains("40000001") || errorMsg.contains("DAILY_LIMIT_EXCEEDED") || errorMsg.contains("FREE_TRIAL_EXPIRED")) {
+                    onResponseReceived("TTS 配额已用完或试用期已过")
+                    onTtsQuotaWarning(true)
+                    kotlinx.coroutines.delay(3000)
+                    onTtsQuotaWarning(false)
+                } else {
+                    onResponseReceived("处理失败: $errorMsg")
+                }
             } finally {
                 // 只有当 currentSession 仍然是当前处理的 session 时才置空
                 // 避免 race condition：如果用户在处理过程中开始了新录音，currentSession 已经被更新，此时不应置空

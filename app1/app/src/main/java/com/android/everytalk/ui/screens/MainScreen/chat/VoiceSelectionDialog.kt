@@ -30,10 +30,30 @@ fun VoiceSelectionDialog(
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("voice_settings", android.content.Context.MODE_PRIVATE) }
-    val ttsPlatform = remember { prefs.getString("voice_platform", "Gemini") ?: "Gemini" }
-    val savedVoice = remember { prefs.getString("voice_name_${ttsPlatform}", null) ?: prefs.getString("voice_name", "Kore") ?: "Kore" }
     
-    var selectedVoice by remember { mutableStateOf(savedVoice) }
+    // 不使用 remember 缓存 ttsPlatform，确保每次打开对话框都读取最新的平台设置
+    val ttsPlatform = prefs.getString("voice_platform", "Gemini") ?: "Gemini"
+    
+    // 获取默认音色的辅助函数
+    fun getDefaultVoiceName(platform: String): String {
+        return when (platform) {
+            "SiliconFlow" -> "alex"
+            "Minimax" -> "male-qn-qingse"
+            "OpenAI" -> "alloy"
+            "Aliyun" -> "Cherry"
+            else -> "Kore" // Gemini
+        }
+    }
+    
+    // 不使用 remember 缓存 savedVoice，确保读取最新值
+    val savedVoice = prefs.getString("voice_name_${ttsPlatform}", null)
+        ?: prefs.getString("voice_name", null)
+        ?: getDefaultVoiceName(ttsPlatform)
+    
+    var selectedVoice by remember(ttsPlatform) { mutableStateOf(savedVoice) }
+    
+    // 调试日志：对话框打开时输出当前配置
+    android.util.Log.d("VoiceSelectionDialog", "Dialog opened: ttsPlatform=$ttsPlatform, savedVoice=$savedVoice, selectedVoice=$selectedVoice")
     
     // 阿里云音色分类选项卡状态
     var aliyunCategory by remember { mutableStateOf(0) } // 0=国内, 1=国外, 2=乡音
@@ -342,13 +362,25 @@ fun VoiceSelectionDialog(
                 // 确定按钮
                 Button(
                     onClick = {
+                        // 调试日志：点击确定按钮时输出
+                        android.util.Log.i("VoiceSelectionDialog", "Confirm button clicked! Saving: voice=$selectedVoice, platform=$ttsPlatform")
+                        
                         // 保存选择
-                        runCatching {
+                        try {
                             val editor = prefs.edit()
                             editor.putString("voice_name_${ttsPlatform}", selectedVoice)
-                            // 可选：更新全局，作为默认
-                            // editor.putString("voice_name", selectedVoice)
-                            editor.apply()
+                            // 同步更新全局默认，避免缺失平台键时回落错误音色
+                            editor.putString("voice_name", selectedVoice)
+                            val success = editor.commit() // 使用 commit() 同步保存并返回结果
+                            
+                            // 调试日志：保存结果
+                            android.util.Log.i("VoiceSelectionDialog", "Voice saved: success=$success, voice=$selectedVoice, platform=$ttsPlatform, key=voice_name_${ttsPlatform}")
+                            
+                            // 验证保存结果
+                            val verifyValue = prefs.getString("voice_name_${ttsPlatform}", null)
+                            android.util.Log.i("VoiceSelectionDialog", "Verify after save: voice_name_${ttsPlatform}=$verifyValue")
+                        } catch (e: Exception) {
+                            android.util.Log.e("VoiceSelectionDialog", "Failed to save voice", e)
                         }
                         onDismiss()
                     },

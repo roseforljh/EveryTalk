@@ -229,6 +229,7 @@ android {
         implementation("io.ktor:ktor-client-content-negotiation:3.3.2")
         implementation("io.ktor:ktor-serialization-kotlinx-json:3.3.2")
         implementation("io.ktor:ktor-client-logging:3.3.2")
+        implementation("io.ktor:ktor-client-websockets:3.3.2")  // WebSocket 支持，用于阿里云实时语音识别
 
         // SLF4J - Ktor logging 的间接依赖,必须保留
         implementation("org.slf4j:slf4j-nop:2.0.17")
