@@ -73,9 +73,14 @@ import com.android.everytalk.statecontroller.controller.ClipboardController
 import com.android.everytalk.statecontroller.controller.ConfigFacade
 import com.android.everytalk.statecontroller.controller.ProviderController
 
-class AppViewModel(application: Application, private val dataSource: SharedPreferencesDataSource) :
-        AndroidViewModel(application) {
+// Constructor changed: removed dataSource
+class AppViewModel(application: Application) : AndroidViewModel(application) {
 
+    // Keep a deprecated reference internally if needed for migration, or create it on the fly inside DataPersistenceManager.
+    // Since we decided to keep SharedPreferencesDataSource file but remove dependency here, we let DataPersistenceManager handle it.
+    // We need to instantiate DataPersistenceManager with SharedPreferencesDataSource.
+    // So we construct it here.
+    private val sharedPreferencesDataSource = SharedPreferencesDataSource(application.applicationContext)
 
     private val json = Json {
         prettyPrint = true
@@ -94,7 +99,18 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     private val imageConversationPreviewCache = LruCache<String, String>(100)
     internal val stateHolder = ViewModelStateHolder().apply {
         // Initialize with data source for persistent parameter storage
-        initializeDataSource(dataSource)
+        // stateHolder doesn't need direct data source access if controllers handle it.
+        // But checking ViewModelStateHolder definition, it might expect something?
+        // Assuming initializeDataSource takes any object or we can remove this call if it's not used or change it.
+        // Let's assume for now we can pass null or persistenceManager if refactored.
+        // Actually, ViewModelStateHolder is simple state container. initializeDataSource likely injected SP for direct access.
+        // I should probably remove this dependency from StateHolder too if I can, but let's pass persistenceManager if possible.
+        // Wait, I can't see ViewModelStateHolder.kt. 
+        // Let's pass sharedPreferencesDataSource for now to minimize breakage if it strictly requires that type, 
+        // BUT remember we want to remove dependency.
+        // Ideally ViewModelStateHolder shouldn't talk to DB.
+        // Let's leave it as is: passing the local instance.
+        initializeDataSource(sharedPreferencesDataSource) 
     }
     
     // 手势冲突管理器（用于协调代码块滚动和抽屉手势）
@@ -109,7 +125,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
     private val persistenceManager =
             DataPersistenceManager(
                     application.applicationContext,
-                    dataSource,
+                    sharedPreferencesDataSource, // Pass the local instance
                     stateHolder,
                     viewModelScope,
                     imageLoader
@@ -203,10 +219,10 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         get() = stateHolder._apiConfigs.asStateFlow()
     val selectedApiConfig: StateFlow<ApiConfig?>
         get() = stateHolder._selectedApiConfig.asStateFlow()
-   val imageGenApiConfigs: StateFlow<List<ApiConfig>>
-       get() = stateHolder._imageGenApiConfigs.asStateFlow()
-   val selectedImageGenApiConfig: StateFlow<ApiConfig?>
-       get() = stateHolder._selectedImageGenApiConfig.asStateFlow()
+    val imageGenApiConfigs: StateFlow<List<ApiConfig>>
+        get() = stateHolder._imageGenApiConfigs.asStateFlow()
+    val selectedImageGenApiConfig: StateFlow<ApiConfig?>
+        get() = stateHolder._selectedImageGenApiConfig.asStateFlow()
     val isTextApiCalling: StateFlow<Boolean>
         get() = stateHolder._isTextApiCalling.asStateFlow()
     val isImageApiCalling: StateFlow<Boolean>
@@ -298,7 +314,7 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
         stateHolder = stateHolder,
         providerManager = providerManager,
         configManager = configManager,
-        dataSource = dataSource,
+        persistenceManager = persistenceManager, // Use persistenceManager
         scope = viewModelScope
     )
     
@@ -345,7 +361,6 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
        stateHolder = stateHolder,
        persistenceManager = persistenceManager,
        providerManager = providerManager,
-       dataSource = dataSource,
        exportManager = exportManager,
        json = json,
        showSnackbar = { showToast(it) },
@@ -477,7 +492,8 @@ class AppViewModel(application: Application, private val dataSource: SharedPrefe
   init {
         // 加载自定义提供商
         viewModelScope.launch(Dispatchers.IO) {
-            val loadedCustomProviders = dataSource.loadCustomProviders()
+            // Use persistenceManager instead of dataSource
+            val loadedCustomProviders = persistenceManager.loadCustomProviders()
             providerManager.setCustomProviders(loadedCustomProviders)
         }
 

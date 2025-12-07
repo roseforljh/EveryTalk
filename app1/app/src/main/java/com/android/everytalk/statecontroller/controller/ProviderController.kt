@@ -1,10 +1,10 @@
 package com.android.everytalk.statecontroller.controller
 
 import com.android.everytalk.data.DataClass.ApiConfig
-import com.android.everytalk.data.local.SharedPreferencesDataSource
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import com.android.everytalk.statecontroller.viewmodel.ProviderManager
 import com.android.everytalk.ui.screens.viewmodel.ConfigManager
+import com.android.everytalk.ui.screens.viewmodel.DataPersistenceManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -18,7 +18,8 @@ class ProviderController(
     private val stateHolder: ViewModelStateHolder,
     private val providerManager: ProviderManager,
     private val configManager: ConfigManager,
-    private val dataSource: SharedPreferencesDataSource,
+    // Removed dataSource: SharedPreferencesDataSource
+    private val persistenceManager: DataPersistenceManager,
     private val scope: CoroutineScope
 ) {
 
@@ -31,7 +32,7 @@ class ProviderController(
         val updated = current + trimmed
         providerManager.setCustomProviders(updated)
         scope.launch(Dispatchers.IO) {
-            dataSource.saveCustomProviders(updated)
+            persistenceManager.saveCustomProviders(updated)
         }
     }
 
@@ -47,7 +48,7 @@ class ProviderController(
         val updated = current - providerName
         providerManager.setCustomProviders(updated)
         scope.launch(Dispatchers.IO) {
-            dataSource.saveCustomProviders(updated)
+            persistenceManager.saveCustomProviders(updated)
         }
     }
 }

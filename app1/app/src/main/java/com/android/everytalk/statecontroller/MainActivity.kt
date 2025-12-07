@@ -37,7 +37,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import com.android.everytalk.data.local.SharedPreferencesDataSource
+// Removed SharedPreferencesDataSource import
 import com.android.everytalk.data.network.ApiClient
 import com.android.everytalk.navigation.Screen
 import com.android.everytalk.ui.screens.MainScreen.AppDrawerContent
@@ -48,13 +48,12 @@ import com.android.everytalk.ui.theme.App1Theme
 import kotlinx.coroutines.flow.collectLatest
 
 class AppViewModelFactory(
-    private val application: Application,
-    private val dataSource: SharedPreferencesDataSource
+    private val application: Application
 ) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(AppViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
-            return AppViewModel(application, dataSource) as T
+            return AppViewModel(application) as T
         }
         throw IllegalArgumentException("未知的 ViewModel 类: ${modelClass.name}")
     }
@@ -66,7 +65,7 @@ private val defaultDrawerWidth = 320.dp
 class MainActivity : ComponentActivity() {
 
     private var fileContentToSave: String? = null
-   private lateinit var appViewModel: AppViewModel
+    private lateinit var appViewModel: AppViewModel
     private val createDocument = registerForActivityResult(ActivityResultContracts.CreateDocument("text/markdown")) { uri ->
         uri?.let {
             fileContentToSave?.let { content ->
@@ -116,8 +115,7 @@ class MainActivity : ComponentActivity() {
 
                     appViewModel = viewModel(
                         factory = AppViewModelFactory(
-                            application,
-                            SharedPreferencesDataSource(applicationContext)
+                            application
                         )
                     )
 

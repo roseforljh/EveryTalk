@@ -40,6 +40,18 @@ class DataPersistenceManager(
     // 迁移标志位
     private val KEY_MIGRATION_COMPLETED = "migration_to_room_completed_v1"
 
+    suspend fun loadCustomProviders(): Set<String> {
+        return withContext(Dispatchers.IO) {
+            roomDataSource.loadCustomProviders()
+        }
+    }
+
+    suspend fun saveCustomProviders(providers: Set<String>) {
+        withContext(Dispatchers.IO) {
+            roomDataSource.saveCustomProviders(providers)
+        }
+    }
+
     /**
      * 将消息中的 data:image;base64,... 图片落盘为本地文件，并将 URL 替换为 file:// 或绝对路径
      * 这样可避免把巨大 Base64 串写入 SharedPreferences 导致超限/丢失，重启后可稳定恢复。
@@ -284,6 +296,13 @@ class DataPersistenceManager(
                             roomDataSource.saveExpandedGroupKeys(expandedGroupKeys)
                             Log.i(TAG, "loadInitialData: 已迁移 ${expandedGroupKeys.size} 个展开状态到 Room")
                         }
+
+                        // 迁移 Custom Providers
+                        val customProviders = dataSource.loadCustomProviders()
+                        if (customProviders.isNotEmpty()) {
+                            roomDataSource.saveCustomProviders(customProviders)
+                            Log.i(TAG, "loadInitialData: 已迁移 ${customProviders.size} 个自定义提供商到 Room")
+                        }
                         
                         // 标记迁移完成
                         dataSource.saveString(KEY_MIGRATION_COMPLETED, "true")
@@ -307,8 +326,8 @@ class DataPersistenceManager(
                 // 第一阶段：快速加载API配置（优先级最高）
                 Log.d(TAG, "loadInitialData: 阶段1 - 加载API配置...")
                 var loadedConfigs: List<ApiConfig> = if (stateHolder._apiConfigs.value.isEmpty()) {
-                    Log.d(TAG, "loadInitialData: API配置缓存未命中。从dataSource加载...")
-                    dataSource.loadApiConfigs()
+                    Log.d(TAG, "loadInitialData: API配置缓存未命中。从RoomDataSource加载...")
+                    roomDataSource.loadApiConfigs()
                 } else {
                     Log.d(TAG, "loadInitialData: API配置缓存命中。使用现有数据。")
                     stateHolder._apiConfigs.value
@@ -341,7 +360,7 @@ class DataPersistenceManager(
                     }
                     loadedConfigs = loadedConfigs + newDefaultConfigs
                     // 立即保存到持久化存储
-                    dataSource.saveApiConfigs(loadedConfigs)
+                    roomDataSource.saveApiConfigs(loadedConfigs)
                     Log.i(TAG, "loadInitialData: 已创建并保存 ${newDefaultConfigs.size} 个默认文本配置")
                 }
                 
@@ -362,20 +381,20 @@ class DataPersistenceManager(
 
                 if (updatedConfigs != loadedConfigs) {
                     loadedConfigs = updatedConfigs
-                    dataSource.saveApiConfigs(loadedConfigs)
+                    roomDataSource.saveApiConfigs(loadedConfigs)
                     Log.i(TAG, "loadInitialData: 已保存更新后的API配置")
                 }
 
                 initialConfigPresent = loadedConfigs.isNotEmpty()
 
-                Log.d(TAG, "loadInitialData: 调用 dataSource.loadSelectedConfigId()...")
-                val selectedConfigId: String? = dataSource.loadSelectedConfigId()
+                Log.d(TAG, "loadInitialData: 调用 roomDataSource.loadSelectedConfigId()...")
+                val selectedConfigId: String? = roomDataSource.loadSelectedConfigId()
                 var selectedConfigFromDataSource: ApiConfig? = null
                 if (selectedConfigId != null) {
                     selectedConfigFromDataSource = loadedConfigs.find { it.id == selectedConfigId }
                     if (selectedConfigFromDataSource == null && loadedConfigs.isNotEmpty()) {
                         Log.w(TAG, "loadInitialData: 持久化的选中配置ID '$selectedConfigId' 在当前配置列表中未找到。将清除持久化的选中ID。")
-                        dataSource.saveSelectedConfigId(null)
+                        roomDataSource.saveSelectedConfigId(null)
                     }
                 }
 
@@ -383,7 +402,7 @@ class DataPersistenceManager(
                 if (finalSelectedConfig == null && loadedConfigs.isNotEmpty()) {
                     finalSelectedConfig = loadedConfigs.first()
                     Log.i(TAG, "loadInitialData: 无有效选中配置或之前未选中，默认选择第一个: ID='${finalSelectedConfig.id}', 模型='${finalSelectedConfig.model}'。将保存此选择。")
-                    dataSource.saveSelectedConfigId(finalSelectedConfig.id)
+                    roomDataSource.saveSelectedConfigId(finalSelectedConfig.id)
                 }
 
                 // 立即更新API配置到UI，让用户可以开始使用
@@ -394,7 +413,7 @@ class DataPersistenceManager(
                 }
 
                 // Load image generation configs
-                var loadedImageGenConfigs: List<ApiConfig> = dataSource.loadImageGenApiConfigs()
+                var loadedImageGenConfigs: List<ApiConfig> = roomDataSource.loadImageGenApiConfigs()
                 
                 // 自动创建默认图像配置（如果不存在）
                 val hasDefaultImageConfig = loadedImageGenConfigs.any {
@@ -545,18 +564,18 @@ class DataPersistenceManager(
 
                 // 统一保存所有图像配置（包括新增的）
                 if (!hasDefaultImageConfig || configsChanged) {
-                    dataSource.saveImageGenApiConfigs(loadedImageGenConfigs)
+                    roomDataSource.saveImageGenApiConfigs(loadedImageGenConfigs)
                     Log.i(TAG, "loadInitialData: 已保存更新后的图像配置列表")
                 }
                 
-                val selectedImageGenConfigId: String? = dataSource.loadSelectedImageGenConfigId()
+                val selectedImageGenConfigId: String? = roomDataSource.loadSelectedImageGenConfigId()
                 var selectedImageGenConfig: ApiConfig? = null
                 if (selectedImageGenConfigId != null) {
                     selectedImageGenConfig = loadedImageGenConfigs.find { it.id == selectedImageGenConfigId }
                 }
                 if (selectedImageGenConfig == null && loadedImageGenConfigs.isNotEmpty()) {
                     selectedImageGenConfig = loadedImageGenConfigs.first()
-                    dataSource.saveSelectedImageGenConfigId(selectedImageGenConfig.id)
+                    roomDataSource.saveSelectedImageGenConfigId(selectedImageGenConfig.id)
                 }
  
                  withContext(Dispatchers.Main.immediate) {
@@ -565,7 +584,7 @@ class DataPersistenceManager(
                  }
 
                 // 加载语音后端配置
-                var loadedVoiceConfigs = dataSource.loadVoiceBackendConfigs()
+                var loadedVoiceConfigs = roomDataSource.loadVoiceBackendConfigs()
                 
                 // 自动创建默认语音配置（如果不存在）
                 val hasDefaultVoiceConfig = loadedVoiceConfigs.any {
@@ -575,18 +594,18 @@ class DataPersistenceManager(
                     Log.i(TAG, "loadInitialData: 未找到默认语音配置，自动创建...")
                     val defaultVoiceConfig = com.android.everytalk.data.DataClass.VoiceBackendConfig.createDefault()
                     loadedVoiceConfigs = loadedVoiceConfigs + listOf(defaultVoiceConfig)
-                    dataSource.saveVoiceBackendConfigs(loadedVoiceConfigs)
+                    roomDataSource.saveVoiceBackendConfigs(loadedVoiceConfigs)
                     Log.i(TAG, "loadInitialData: 已创建默认语音配置")
                 }
                 
-                val selectedVoiceConfigId: String? = dataSource.loadSelectedVoiceConfigId()
+                val selectedVoiceConfigId: String? = roomDataSource.loadSelectedVoiceConfigId()
                 var selectedVoiceConfig: com.android.everytalk.data.DataClass.VoiceBackendConfig? = null
                 if (selectedVoiceConfigId != null) {
                     selectedVoiceConfig = loadedVoiceConfigs.find { it.id == selectedVoiceConfigId }
                 }
                 if (selectedVoiceConfig == null && loadedVoiceConfigs.isNotEmpty()) {
                     selectedVoiceConfig = loadedVoiceConfigs.first()
-                    dataSource.saveSelectedVoiceConfigId(selectedVoiceConfig.id)
+                    roomDataSource.saveSelectedVoiceConfigId(selectedVoiceConfig.id)
                 }
                 
                 withContext(Dispatchers.Main.immediate) {
@@ -611,12 +630,6 @@ class DataPersistenceManager(
                             Log.d(TAG, "loadInitialData: 从 Room 加载历史数据...")
                             // 优先从 Room 加载
                             var historyRaw = roomDataSource.loadChatHistory()
-                            
-                            // 如果 Room 为空但迁移未标记完成（极端情况），尝试从 SP 加载作为后备
-                            if (historyRaw.isEmpty() && dataSource.getString(KEY_MIGRATION_COMPLETED, "false") != "true") {
-                                Log.w(TAG, "loadInitialData: Room 为空，尝试从 SharedPreferences 加载后备数据")
-                                historyRaw = dataSource.loadChatHistory()
-                            }
                             
                             // 分批处理历史数据，避免一次性处理大量数据
                             historyRaw.chunked(10).flatMap { chunk ->
@@ -683,11 +696,6 @@ class DataPersistenceManager(
                    // 优先从 Room 加载
                    var loadedImageGenHistory = roomDataSource.loadImageGenerationHistory()
                    
-                   // 后备逻辑
-                   if (loadedImageGenHistory.isEmpty() && dataSource.getString(KEY_MIGRATION_COMPLETED, "false") != "true") {
-                       loadedImageGenHistory = dataSource.loadImageGenerationHistory()
-                   }
-                   
                    // 🔥 增强：启动时完整性检查与修复
                    // 1. 将历史中的 data:image 与 http(s) 图片统一落盘并替换为本地路径
                    // 2. 检查本地文件是否存在，如果不存在则尝试恢复或标记
@@ -728,11 +736,7 @@ class DataPersistenceManager(
                    // 异步回写修复后的历史，避免后续重复转换
                    launch(Dispatchers.IO) {
                        try {
-                           // 同时保存到 Room 和 SP（为了安全，暂时双写，或者只写 Room）
-                           // 既然已迁移到 Room，优先写 Room
                            roomDataSource.saveImageGenerationHistory(convertedImageGenHistory)
-                           // 如果迁移未标记完成，也写回 SP 以防万一？
-                           // 不，既然已经加载出来了，说明数据源是可用的。
                            Log.i(TAG, "✅ Image generation history integrity check and persistence completed")
                        } catch (e: Exception) {
                            Log.w(TAG, "Failed to persist converted image generation history", e)
@@ -748,14 +752,8 @@ class DataPersistenceManager(
                     Log.d(TAG, "loadInitialData: Phase 3 - Loading last open chats...")
                     // 从 Room 加载最后打开的会话
                     var lastOpenChat = roomDataSource.loadLastOpenChat()
-                    if (lastOpenChat.isEmpty() && dataSource.getString(KEY_MIGRATION_COMPLETED, "false") != "true") {
-                        lastOpenChat = dataSource.loadLastOpenChat()
-                    }
                     
                     var lastOpenImageGenChat = roomDataSource.loadLastOpenImageGenerationChat()
-                    if (lastOpenImageGenChat.isEmpty() && dataSource.getString(KEY_MIGRATION_COMPLETED, "false") != "true") {
-                        lastOpenImageGenChat = dataSource.loadLastOpenImageGenerationChat()
-                    }
                     
                     // 将“最后打开的图像会话”里的 data:image 与 http(s) 转为本地文件并替换
                     val finalLastOpenImageGen = persistInlineAndRemoteImages(lastOpenImageGenChat)
@@ -840,9 +838,6 @@ class DataPersistenceManager(
             // 清除 Room 数据库中的历史
             roomDataSource.clearChatHistory()
             roomDataSource.clearImageGenerationHistory()
-            // 同时清除 SP 中的历史（兼容性）
-            dataSource.clearChatHistory()
-            dataSource.clearImageGenerationHistory()
             Log.i(TAG, "clearAllChatHistory: Room 和 SP 中的聊天历史已清除。")
         }
     }
@@ -850,13 +845,13 @@ class DataPersistenceManager(
     suspend fun saveApiConfigs(configsToSave: List<ApiConfig>, isImageGen: Boolean = false) {
         withContext(Dispatchers.IO) {
             if (isImageGen) {
-                Log.d(TAG, "saveApiConfigs: 保存 ${configsToSave.size} 个图像生成 API 配置到 dataSource...")
-                dataSource.saveImageGenApiConfigs(configsToSave)
-                Log.i(TAG, "saveApiConfigs: 图像生成 API 配置已通过 dataSource 保存。")
+                Log.d(TAG, "saveApiConfigs: 保存 ${configsToSave.size} 个图像生成 API 配置到 RoomDataSource...")
+                roomDataSource.saveImageGenApiConfigs(configsToSave)
+                Log.i(TAG, "saveApiConfigs: 图像生成 API 配置已通过 RoomDataSource 保存。")
             } else {
-                Log.d(TAG, "saveApiConfigs: 保存 ${configsToSave.size} 个 API 配置到 dataSource...")
-                dataSource.saveApiConfigs(configsToSave)
-                Log.i(TAG, "saveApiConfigs: API 配置已通过 dataSource 保存。")
+                Log.d(TAG, "saveApiConfigs: 保存 ${configsToSave.size} 个 API 配置到 RoomDataSource...")
+                roomDataSource.saveApiConfigs(configsToSave)
+                Log.i(TAG, "saveApiConfigs: API 配置已通过 RoomDataSource 保存。")
             }
         }
     }
@@ -884,13 +879,13 @@ class DataPersistenceManager(
     suspend fun saveSelectedConfigIdentifier(configId: String?, isImageGen: Boolean = false) {
         withContext(Dispatchers.IO) {
             if (isImageGen) {
-                Log.d(TAG, "saveSelectedConfigIdentifier: 保存选中的图像生成配置ID '$configId' 到 dataSource...")
-                dataSource.saveSelectedImageGenConfigId(configId)
-                Log.i(TAG, "saveSelectedConfigIdentifier: 选中的图像生成配置ID已通过 dataSource 保存。")
+                Log.d(TAG, "saveSelectedConfigIdentifier: 保存选中的图像生成配置ID '$configId' 到 RoomDataSource...")
+                roomDataSource.saveSelectedImageGenConfigId(configId)
+                Log.i(TAG, "saveSelectedConfigIdentifier: 选中的图像生成配置ID已通过 RoomDataSource 保存。")
             } else {
-                Log.d(TAG, "saveSelectedConfigIdentifier: 保存选中配置ID '$configId' 到 dataSource...")
-                dataSource.saveSelectedConfigId(configId)
-                Log.i(TAG, "saveSelectedConfigIdentifier: 选中配置ID已通过 dataSource 保存。")
+                Log.d(TAG, "saveSelectedConfigIdentifier: 保存选中配置ID '$configId' 到 RoomDataSource...")
+                roomDataSource.saveSelectedConfigId(configId)
+                Log.i(TAG, "saveSelectedConfigIdentifier: 选中配置ID已通过 RoomDataSource 保存。")
             }
         }
     }
@@ -899,7 +894,7 @@ class DataPersistenceManager(
     suspend fun saveConversationParameters(parameters: Map<String, GenerationConfig>) {
         withContext(Dispatchers.IO) {
             try {
-                dataSource.saveConversationParameters(parameters)
+                roomDataSource.saveConversationParameters(parameters)
                 Log.d(TAG, "saveConversationParameters: 已持久化 ${parameters.size} 个会话参数映射")
             } catch (e: Exception) {
                 Log.e(TAG, "saveConversationParameters 失败", e)
@@ -909,465 +904,465 @@ class DataPersistenceManager(
 
     suspend fun clearAllApiConfigData() {
         withContext(Dispatchers.IO) {
-            Log.d(TAG, "clearAllApiConfigData: 请求 dataSource 清除API配置并取消选中...")
-            dataSource.clearApiConfigs()
-            dataSource.saveSelectedConfigId(null) // 确保选中的也被清掉
-            dataSource.clearImageGenApiConfigs()
-            dataSource.saveSelectedImageGenConfigId(null)
-            Log.i(TAG, "clearAllApiConfigData: API配置数据已通过 dataSource 清除。")
+            Log.d(TAG, "clearAllApiConfigData: 请求 RoomDataSource 清除API配置并取消选中...")
+            roomDataSource.clearApiConfigs()
+            roomDataSource.saveSelectedConfigId(null) // 确保选中的也被清掉
+            roomDataSource.clearImageGenApiConfigs()
+            roomDataSource.saveSelectedImageGenConfigId(null)
+            Log.i(TAG, "clearAllApiConfigData: API配置数据已通过 RoomDataSource 清除。")
         }
     }
-   suspend fun saveLastOpenChat(messages: List<Message>, isImageGeneration: Boolean = false) {
-       android.util.Log.d("DataPersistenceManager", "=== SAVE LAST OPEN CHAT START ===")
-       android.util.Log.d("DataPersistenceManager", "Saving ${messages.size} messages, isImageGeneration: $isImageGeneration")
-       
-       messages.forEachIndexed { index, message ->
-           android.util.Log.d("DataPersistenceManager", "Message $index (${message.id}): text length=${message.text.length}, parts=${message.parts.size}, contentStarted=${message.contentStarted}")
-           android.util.Log.d("DataPersistenceManager", "  Text preview: '${message.text.take(50)}${if (message.text.length > 50) "..." else ""}'")
-           android.util.Log.d("DataPersistenceManager", "  Sender: ${message.sender}, IsError: ${message.isError}")
-           message.parts.forEachIndexed { partIndex, part ->
-               android.util.Log.d("DataPersistenceManager", "  Part $partIndex: ${part::class.simpleName}")
-           }
-       }
-       
-       // 修复：确保AI消息的文本内容不会丢失
-       val processedMessages = messages.map { message ->
-           if (message.sender == com.android.everytalk.data.DataClass.Sender.AI &&
-               message.contentStarted &&
-               message.text.isBlank() &&
-               message.parts.isNotEmpty()) {
-               
-               android.util.Log.w("DataPersistenceManager", "Fixing AI message with blank text but has parts: ${message.id}")
-               
-               // 尝试从parts重建文本内容
-               val rebuiltText = message.parts.filterIsInstance<com.android.everytalk.ui.components.MarkdownPart.Text>()
-                   .joinToString("") { it.content }
-               
-               if (rebuiltText.isNotBlank()) {
-                   android.util.Log.d("DataPersistenceManager", "Rebuilt text from parts: length=${rebuiltText.length}")
-                   message.copy(text = rebuiltText)
-               } else {
-                   // 如果无法重建，至少保留一个占位符
-                   android.util.Log.w("DataPersistenceManager", "Could not rebuild text from parts, using placeholder")
-                   message.copy(text = "...")
-               }
-           } else {
-               message
-           }
-       }
-       
-       withContext(Dispatchers.IO) {
-           Log.d(TAG, "saveLastOpenChat: Saving ${processedMessages.size} messages for isImageGen=$isImageGeneration to Room")
-           try {
-               val finalMessages = if (isImageGeneration) {
-                   // 对"最后打开的图像会话"统一进行 data:image 与 http(s) 落盘与替换
-                   persistInlineAndRemoteImages(processedMessages)
-               } else {
-                   processedMessages
-               }
-               // 使用 Room 保存最后打开的会话
-               if (isImageGeneration) {
-                   roomDataSource.saveLastOpenImageGenerationChat(finalMessages)
-                   android.util.Log.d("DataPersistenceManager", "Image chat saved to Room successfully")
-               } else {
-                   roomDataSource.saveLastOpenChat(finalMessages)
-                   android.util.Log.d("DataPersistenceManager", "Text chat saved to Room successfully")
-               }
-           } catch (e: Exception) {
-               android.util.Log.e("DataPersistenceManager", "Failed to save last open chat to Room", e)
-           }
-       }
-       android.util.Log.d("DataPersistenceManager", "=== SAVE LAST OPEN CHAT END ===")
-   }
+    suspend fun saveLastOpenChat(messages: List<Message>, isImageGeneration: Boolean = false) {
+        android.util.Log.d("DataPersistenceManager", "=== SAVE LAST OPEN CHAT START ===")
+        android.util.Log.d("DataPersistenceManager", "Saving ${messages.size} messages, isImageGeneration: $isImageGeneration")
+        
+        messages.forEachIndexed { index, message ->
+            android.util.Log.d("DataPersistenceManager", "Message $index (${message.id}): text length=${message.text.length}, parts=${message.parts.size}, contentStarted=${message.contentStarted}")
+            android.util.Log.d("DataPersistenceManager", "  Text preview: '${message.text.take(50)}${if (message.text.length > 50) "..." else ""}'")
+            android.util.Log.d("DataPersistenceManager", "  Sender: ${message.sender}, IsError: ${message.isError}")
+            message.parts.forEachIndexed { partIndex, part ->
+                android.util.Log.d("DataPersistenceManager", "  Part $partIndex: ${part::class.simpleName}")
+            }
+        }
+        
+        // 修复：确保AI消息的文本内容不会丢失
+        val processedMessages = messages.map { message ->
+            if (message.sender == com.android.everytalk.data.DataClass.Sender.AI &&
+                message.contentStarted &&
+                message.text.isBlank() &&
+                message.parts.isNotEmpty()) {
+                
+                android.util.Log.w("DataPersistenceManager", "Fixing AI message with blank text but has parts: ${message.id}")
+                
+                // 尝试从parts重建文本内容
+                val rebuiltText = message.parts.filterIsInstance<com.android.everytalk.ui.components.MarkdownPart.Text>()
+                    .joinToString("") { it.content }
+                
+                if (rebuiltText.isNotBlank()) {
+                    android.util.Log.d("DataPersistenceManager", "Rebuilt text from parts: length=${rebuiltText.length}")
+                    message.copy(text = rebuiltText)
+                } else {
+                    // 如果无法重建，至少保留一个占位符
+                    android.util.Log.w("DataPersistenceManager", "Could not rebuild text from parts, using placeholder")
+                    message.copy(text = "...")
+                }
+            } else {
+                message
+            }
+        }
+        
+        withContext(Dispatchers.IO) {
+            Log.d(TAG, "saveLastOpenChat: Saving ${processedMessages.size} messages for isImageGen=$isImageGeneration to Room")
+            try {
+                val finalMessages = if (isImageGeneration) {
+                    // 对"最后打开的图像会话"统一进行 data:image 与 http(s) 落盘与替换
+                    persistInlineAndRemoteImages(processedMessages)
+                } else {
+                    processedMessages
+                }
+                // 使用 Room 保存最后打开的会话
+                if (isImageGeneration) {
+                    roomDataSource.saveLastOpenImageGenerationChat(finalMessages)
+                    android.util.Log.d("DataPersistenceManager", "Image chat saved to Room successfully")
+                } else {
+                    roomDataSource.saveLastOpenChat(finalMessages)
+                    android.util.Log.d("DataPersistenceManager", "Text chat saved to Room successfully")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("DataPersistenceManager", "Failed to save last open chat to Room", e)
+            }
+        }
+        android.util.Log.d("DataPersistenceManager", "=== SAVE LAST OPEN CHAT END ===")
+    }
 
-   suspend fun clearLastOpenChat(isImageGeneration: Boolean = false) {
-       withContext(Dispatchers.IO) {
-           // 使用 Room 清除最后打开的会话
-           if (isImageGeneration) {
-               roomDataSource.saveLastOpenImageGenerationChat(emptyList())
-           } else {
-               roomDataSource.saveLastOpenChat(emptyList())
-           }
-           Log.d(TAG, "Cleared last open chat for isImageGeneration=$isImageGeneration from Room")
-       }
-   }
-   suspend fun deleteMediaFilesForMessages(conversations: List<List<Message>>) {
-       withContext(Dispatchers.IO) {
-           Log.d(TAG, "Starting deletion of media files for ${conversations.size} conversations.")
-           var deletedFilesCount = 0
-           val allFilePathsToDelete = mutableSetOf<String>()
-           val allHttpUrisToClearFromCache = mutableSetOf<String>()
-           val chatAttachmentsDirPath = File(context.filesDir, "chat_attachments").absolutePath
+    suspend fun clearLastOpenChat(isImageGeneration: Boolean = false) {
+        withContext(Dispatchers.IO) {
+            // 使用 Room 清除最后打开的会话
+            if (isImageGeneration) {
+                roomDataSource.saveLastOpenImageGenerationChat(emptyList())
+            } else {
+                roomDataSource.saveLastOpenChat(emptyList())
+            }
+            Log.d(TAG, "Cleared last open chat for isImageGeneration=$isImageGeneration from Room")
+        }
+    }
+    suspend fun deleteMediaFilesForMessages(conversations: List<List<Message>>) {
+        withContext(Dispatchers.IO) {
+            Log.d(TAG, "Starting deletion of media files for ${conversations.size} conversations.")
+            var deletedFilesCount = 0
+            val allFilePathsToDelete = mutableSetOf<String>()
+            val allHttpUrisToClearFromCache = mutableSetOf<String>()
+            val chatAttachmentsDirPath = File(context.filesDir, "chat_attachments").absolutePath
 
-           conversations.forEach { conversation ->
-               conversation.forEach { message ->
-                   message.attachments.forEach { attachment ->
-                       val path = when (attachment) {
-                           is SelectedMediaItem.ImageFromUri -> attachment.filePath
-                           is SelectedMediaItem.GenericFile -> attachment.filePath
-                           is SelectedMediaItem.Audio -> attachment.data
-                           is SelectedMediaItem.ImageFromBitmap -> attachment.filePath
-                       }
-                       if (!path.isNullOrBlank()) {
-                           // 用户触发删除：始终释放占用空间
-                           allFilePathsToDelete.add(path)
-                       }
-                   }
+            conversations.forEach { conversation ->
+                conversation.forEach { message ->
+                    message.attachments.forEach { attachment ->
+                        val path = when (attachment) {
+                            is SelectedMediaItem.ImageFromUri -> attachment.filePath
+                            is SelectedMediaItem.GenericFile -> attachment.filePath
+                            is SelectedMediaItem.Audio -> attachment.data
+                            is SelectedMediaItem.ImageFromBitmap -> attachment.filePath
+                        }
+                        if (!path.isNullOrBlank()) {
+                            // 用户触发删除：始终释放占用空间
+                            allFilePathsToDelete.add(path)
+                        }
+                    }
 
-                   // 处理消息中的图片URL
-                   message.imageUrls?.forEach { urlString ->
-                       try {
-                           val uri = Uri.parse(urlString)
-                           if (uri.scheme == "http" || uri.scheme == "https") {
-                               allHttpUrisToClearFromCache.add(urlString)
-                           } else {
-                               val path = uri.path
-                               if (path != null) {
-                                   // 用户触发删除：始终释放占用空间
-                                   allFilePathsToDelete.add(path)
-                               }
-                           }
-                       } catch (e: Exception) {
-                           // Fallback for non-URI strings that might be file paths
-                           val file = File(urlString)
-                           if (file.exists()) {
-                               // 用户触发删除：始终释放占用空间
-                               allFilePathsToDelete.add(urlString)
-                           }
-                       }
-                   }
-                   
-                   // 增强：处理消息中可能包含的其他媒体文件路径
-                   // 检查消息文本中是否包含本地文件路径
-                   val localFilePattern = Regex("file://[^\\s]+|/data/data/[^\\s]+|/storage/[^\\s]+")
-                   localFilePattern.findAll(message.text).forEach { match ->
-                       val filePath = match.value.removePrefix("file://")
-                       val file = File(filePath)
-                       if (file.exists() && (file.name.contains("chat_attachments") ||
-                           filePath.contains(context.filesDir.absolutePath))) {
-                           // 用户触发删除：始终释放占用空间
-                           allFilePathsToDelete.add(filePath)
-                       }
-                   }
-               }
-           }
+                    // 处理消息中的图片URL
+                    message.imageUrls?.forEach { urlString ->
+                        try {
+                            val uri = Uri.parse(urlString)
+                            if (uri.scheme == "http" || uri.scheme == "https") {
+                                allHttpUrisToClearFromCache.add(urlString)
+                            } else {
+                                val path = uri.path
+                                if (path != null) {
+                                    // 用户触发删除：始终释放占用空间
+                                    allFilePathsToDelete.add(path)
+                                }
+                            }
+                        } catch (e: Exception) {
+                            // Fallback for non-URI strings that might be file paths
+                            val file = File(urlString)
+                            if (file.exists()) {
+                                // 用户触发删除：始终释放占用空间
+                                allFilePathsToDelete.add(urlString)
+                            }
+                        }
+                    }
+                    
+                    // 增强：处理消息中可能包含的其他媒体文件路径
+                    // 检查消息文本中是否包含本地文件路径
+                    val localFilePattern = Regex("file://[^\\s]+|/data/data/[^\\s]+|/storage/[^\\s]+")
+                    localFilePattern.findAll(message.text).forEach { match ->
+                        val filePath = match.value.removePrefix("file://")
+                        val file = File(filePath)
+                        if (file.exists() && (file.name.contains("chat_attachments") ||
+                            filePath.contains(context.filesDir.absolutePath))) {
+                            // 用户触发删除：始终释放占用空间
+                            allFilePathsToDelete.add(filePath)
+                        }
+                    }
+                }
+            }
 
-           // 删除文件
-           allFilePathsToDelete.forEach { path ->
-               try {
-                   val file = File(path)
-                   if (file.exists()) {
-                       if (file.delete()) {
-                           Log.d(TAG, "Successfully deleted media file: $path")
-                           deletedFilesCount++
-                       } else {
-                           Log.w(TAG, "Failed to delete media file: $path")
-                       }
-                   } else {
-                       Log.w(TAG, "Media file to delete does not exist: $path")
-                   }
-               } catch (e: SecurityException) {
-                   Log.e(TAG, "Security exception deleting media file: $path", e)
-               } catch (e: Exception) {
-                   Log.e(TAG, "Error deleting media file: $path", e)
-               }
-           }
+            // 删除文件
+            allFilePathsToDelete.forEach { path ->
+                try {
+                    val file = File(path)
+                    if (file.exists()) {
+                        if (file.delete()) {
+                            Log.d(TAG, "Successfully deleted media file: $path")
+                            deletedFilesCount++
+                        } else {
+                            Log.w(TAG, "Failed to delete media file: $path")
+                        }
+                    } else {
+                        Log.w(TAG, "Media file to delete does not exist: $path")
+                    }
+                } catch (e: SecurityException) {
+                    Log.e(TAG, "Security exception deleting media file: $path", e)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error deleting media file: $path", e)
+                }
+            }
 
-           // 清理图片缓存
-           allFilePathsToDelete.forEach { path ->
-               imageLoader.diskCache?.remove(path)
-               imageLoader.diskCache?.remove("file://$path")
-           }
+            // 清理图片缓存
+            allFilePathsToDelete.forEach { path ->
+                imageLoader.diskCache?.remove(path)
+                imageLoader.diskCache?.remove("file://$path")
+            }
 
-           allHttpUrisToClearFromCache.forEach { url ->
-               imageLoader.diskCache?.remove(url)
-           }
+            allHttpUrisToClearFromCache.forEach { url ->
+                imageLoader.diskCache?.remove(url)
+            }
 
-           Log.d(TAG, "Finished media file deletion. Total files deleted: $deletedFilesCount")
-       }
-   }
+            Log.d(TAG, "Finished media file deletion. Total files deleted: $deletedFilesCount")
+        }
+    }
 
-   /**
-    * 清理孤立的附件文件与临时缓存（已删除会话但文件仍存在的情况），并回收图片缓存
-    *
-    * 覆盖范围：
-    * - cacheDir/preview_cache 预览生成的临时文件
-    * - cacheDir/share_images 分享生成的临时文件
-    * - Coil 内存/磁盘缓存（在清空历史或大批删除后统一清理，防止残留占用）
-    *
-    * 注意：不再自动删除 filesDir/chat_attachments 下的文件（包括AI生成图片）。
-    * 这些文件仅在“用户删除会话/历史”时释放，以符合“仅手动删除才清理”的预期。
-    */
-   suspend fun cleanupOrphanedAttachments() {
-       withContext(Dispatchers.IO) {
-           try {
-               val chatAttachmentsDir = File(context.filesDir, "chat_attachments")
-               val previewCacheDir = File(context.cacheDir, "preview_cache")
-               val shareImagesDir = File(context.cacheDir, "share_images")
+    /**
+     * 清理孤立的附件文件与临时缓存（已删除会话但文件仍存在的情况），并回收图片缓存
+     *
+     * 覆盖范围：
+     * - cacheDir/preview_cache 预览生成的临时文件
+     * - cacheDir/share_images 分享生成的临时文件
+     * - Coil 内存/磁盘缓存（在清空历史或大批删除后统一清理，防止残留占用）
+     *
+     * 注意：不再自动删除 filesDir/chat_attachments 下的文件（包括AI生成图片）。
+     * 这些文件仅在“用户删除会话/历史”时释放，以符合“仅手动删除才清理”的预期。
+     */
+    suspend fun cleanupOrphanedAttachments() {
+        withContext(Dispatchers.IO) {
+            try {
+                val chatAttachmentsDir = File(context.filesDir, "chat_attachments")
+                val previewCacheDir = File(context.cacheDir, "preview_cache")
+                val shareImagesDir = File(context.cacheDir, "share_images")
 
-               // 1) 统计当前仍被引用的附件路径（仅 filesDir/chat_attachments 管理的持久附件）
-               val allActiveFilePaths = mutableSetOf<String>()
-               runCatching {
-                   val textHistory = stateHolder._historicalConversations.value
-                   val imageHistory = stateHolder._imageGenerationHistoricalConversations.value
-                   val currentTextMessages = stateHolder.messages.toList()
-                   val currentImageMessages = stateHolder.imageGenerationMessages.toList()
+                // 1) 统计当前仍被引用的附件路径（仅 filesDir/chat_attachments 管理的持久附件）
+                val allActiveFilePaths = mutableSetOf<String>()
+                runCatching {
+                    val textHistory = stateHolder._historicalConversations.value
+                    val imageHistory = stateHolder._imageGenerationHistoricalConversations.value
+                    val currentTextMessages = stateHolder.messages.toList()
+                    val currentImageMessages = stateHolder.imageGenerationMessages.toList()
 
-                   listOf(textHistory, imageHistory, listOf(currentTextMessages), listOf(currentImageMessages))
-                       .flatten()
-                       .forEach { conversation ->
-                           conversation.forEach { message ->
-                               message.attachments.forEach { attachment ->
-                                   val path = when (attachment) {
-                                       is SelectedMediaItem.ImageFromUri -> attachment.filePath
-                                       is SelectedMediaItem.GenericFile -> attachment.filePath
-                                       is SelectedMediaItem.Audio -> attachment.data
-                                       is SelectedMediaItem.ImageFromBitmap -> attachment.filePath
-                                   }
-                                   if (!path.isNullOrBlank()) {
-                                       allActiveFilePaths.add(path)
-                                   }
-                               }
-                           }
-                       }
-               }.onFailure { e ->
-                   Log.w(TAG, "Failed to collect active file paths for orphan cleanup", e)
-               }
+                    listOf(textHistory, imageHistory, listOf(currentTextMessages), listOf(currentImageMessages))
+                        .flatten()
+                        .forEach { conversation ->
+                            conversation.forEach { message ->
+                                message.attachments.forEach { attachment ->
+                                    val path = when (attachment) {
+                                        is SelectedMediaItem.ImageFromUri -> attachment.filePath
+                                        is SelectedMediaItem.GenericFile -> attachment.filePath
+                                        is SelectedMediaItem.Audio -> attachment.data
+                                        is SelectedMediaItem.ImageFromBitmap -> attachment.filePath
+                                    }
+                                    if (!path.isNullOrBlank()) {
+                                        allActiveFilePaths.add(path)
+                                    }
+                                }
+                            }
+                        }
+                }.onFailure { e ->
+                    Log.w(TAG, "Failed to collect active file paths for orphan cleanup", e)
+                }
 
-               // 2) 执行 chat_attachments 的孤儿文件清理
-               // 删除那些不在 allActiveFilePaths 中的文件
-               var orphanedCount = 0
-               if (chatAttachmentsDir.exists()) {
-                   chatAttachmentsDir.listFiles()?.forEach { file ->
-                       if (file.isFile && !allActiveFilePaths.contains(file.absolutePath)) {
-                           try {
-                               if (file.delete()) {
-                                   orphanedCount++
-                                   Log.d(TAG, "Deleted orphaned attachment: ${file.name}")
-                               }
-                           } catch (e: Exception) {
-                               Log.w(TAG, "Failed to delete orphaned attachment: ${file.name}", e)
-                           }
-                       }
-                   }
-                   if (orphanedCount > 0) {
-                       Log.i(TAG, "Cleaned up $orphanedCount orphaned attachment file(s) in chat_attachments.")
-                   }
-               }
+                // 2) 执行 chat_attachments 的孤儿文件清理
+                // 删除那些不在 allActiveFilePaths 中的文件
+                var orphanedCount = 0
+                if (chatAttachmentsDir.exists()) {
+                    chatAttachmentsDir.listFiles()?.forEach { file ->
+                        if (file.isFile && !allActiveFilePaths.contains(file.absolutePath)) {
+                            try {
+                                if (file.delete()) {
+                                    orphanedCount++
+                                    Log.d(TAG, "Deleted orphaned attachment: ${file.name}")
+                                }
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Failed to delete orphaned attachment: ${file.name}", e)
+                            }
+                        }
+                    }
+                    if (orphanedCount > 0) {
+                        Log.i(TAG, "Cleaned up $orphanedCount orphaned attachment file(s) in chat_attachments.")
+                    }
+                }
 
-               // 3) 清空预览/分享产生的临时缓存（cacheDir），这些文件不持久化引用，直接安全删除
-               fun clearCacheDir(dir: File, label: String): Int {
-                   if (!dir.exists()) return 0
-                   var count = 0
-                   dir.listFiles()?.forEach { f ->
-                       try {
-                           if (f.isFile) {
-                               if (f.delete()) count++
-                           } else {
-                               if (f.deleteRecursively()) count++
-                           }
-                       } catch (e: Exception) {
-                           Log.w(TAG, "Failed to delete cache file in $label: ${f.absolutePath}", e)
-                       }
-                   }
-                   Log.d(TAG, "Cleared $count files from $label")
-                   return count
-               }
-               val clearedPreview = clearCacheDir(previewCacheDir, "preview_cache")
-               val clearedShare = clearCacheDir(shareImagesDir, "share_images")
+                // 3) 清空预览/分享产生的临时缓存（cacheDir），这些文件不持久化引用，直接安全删除
+                fun clearCacheDir(dir: File, label: String): Int {
+                    if (!dir.exists()) return 0
+                    var count = 0
+                    dir.listFiles()?.forEach { f ->
+                        try {
+                            if (f.isFile) {
+                                if (f.delete()) count++
+                            } else {
+                                if (f.deleteRecursively()) count++
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed to delete cache file in $label: ${f.absolutePath}", e)
+                        }
+                    }
+                    Log.d(TAG, "Cleared $count files from $label")
+                    return count
+                }
+                val clearedPreview = clearCacheDir(previewCacheDir, "preview_cache")
+                val clearedShare = clearCacheDir(shareImagesDir, "share_images")
 
-               // 4) 统一清理 Coil 内存/磁盘缓存，避免 URL/请求键不匹配导致的残留
-               runCatching {
-                   imageLoader.memoryCache?.clear()
-                   Log.d(TAG, "Coil memory cache cleared")
-               }.onFailure { e -> Log.w(TAG, "Failed to clear Coil memory cache", e) }
+                // 4) 统一清理 Coil 内存/磁盘缓存，避免 URL/请求键不匹配导致的残留
+                runCatching {
+                    imageLoader.memoryCache?.clear()
+                    Log.d(TAG, "Coil memory cache cleared")
+                }.onFailure { e -> Log.w(TAG, "Failed to clear Coil memory cache", e) }
 
-               runCatching {
-                   imageLoader.diskCache?.clear()
-                   Log.d(TAG, "Coil disk cache cleared")
-               }.onFailure { e -> Log.w(TAG, "Failed to clear Coil disk cache", e) }
+                runCatching {
+                    imageLoader.diskCache?.clear()
+                    Log.d(TAG, "Coil disk cache cleared")
+                }.onFailure { e -> Log.w(TAG, "Failed to clear Coil disk cache", e) }
 
-               Log.i(TAG, "Cleanup completed. Deleted $orphanedCount orphaned files. Cleared preview=$clearedPreview, share=$clearedShare cache files.")
-           } catch (e: Exception) {
-               Log.e(TAG, "Error during orphaned file cleanup", e)
-           }
-       }
-   }
+                Log.i(TAG, "Cleanup completed. Deleted $orphanedCount orphaned files. Cleared preview=$clearedPreview, share=$clearedShare cache files.")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error during orphaned file cleanup", e)
+            }
+        }
+    }
 
-   // ========= 置顶集合：文本与图像 =========
-   suspend fun savePinnedIds(ids: Set<String>, isImageGeneration: Boolean) {
-       withContext(Dispatchers.IO) {
-           try {
-               // 使用 Room 保存置顶状态
-               if (isImageGeneration) {
-                   roomDataSource.savePinnedImageIds(ids)
-               } else {
-                   roomDataSource.savePinnedTextIds(ids)
-               }
-               Log.d(TAG, "savePinnedIds: saved ${ids.size} ids for isImageGen=$isImageGeneration to Room")
-           } catch (e: Exception) {
-               Log.e(TAG, "savePinnedIds failed", e)
-           }
-       }
-   }
-   
-   /**
-    * 保存分组信息。使用 Mutex 确保并发安全。
-    * 已迁移到 Room 数据库
-    */
-   suspend fun saveConversationGroups(groups: Map<String, List<String>>) {
-       conversationGroupsSaveMutex.withLock {
-           withContext(Dispatchers.IO) {
-               roomDataSource.saveConversationGroups(groups)
-           }
-       }
-   }
+    // ========= 置顶集合：文本与图像 =========
+    suspend fun savePinnedIds(ids: Set<String>, isImageGeneration: Boolean) {
+        withContext(Dispatchers.IO) {
+            try {
+                // 使用 Room 保存置顶状态
+                if (isImageGeneration) {
+                    roomDataSource.savePinnedImageIds(ids)
+                } else {
+                    roomDataSource.savePinnedTextIds(ids)
+                }
+                Log.d(TAG, "savePinnedIds: saved ${ids.size} ids for isImageGen=$isImageGeneration to Room")
+            } catch (e: Exception) {
+                Log.e(TAG, "savePinnedIds failed", e)
+            }
+        }
+    }
+    
+    /**
+     * 保存分组信息。使用 Mutex 确保并发安全。
+     * 已迁移到 Room 数据库
+     */
+    suspend fun saveConversationGroups(groups: Map<String, List<String>>) {
+        conversationGroupsSaveMutex.withLock {
+            withContext(Dispatchers.IO) {
+                roomDataSource.saveConversationGroups(groups)
+            }
+        }
+    }
 
-   /**
-    * 加载分组信息。
-    * 已迁移到 Room 数据库
-    */
-   suspend fun loadConversationGroups(): Map<String, List<String>> {
-       return withContext(Dispatchers.IO) {
-           roomDataSource.loadConversationGroups()
-       }
-   }
+    /**
+     * 加载分组信息。
+     * 已迁移到 Room 数据库
+     */
+    suspend fun loadConversationGroups(): Map<String, List<String>> {
+        return withContext(Dispatchers.IO) {
+            roomDataSource.loadConversationGroups()
+        }
+    }
 
-   /**
-    * 原子性地更新分组信息。
-    * 此方法确保更新操作是串行的，避免并发修改导致的数据丢失。
-    * @param updateLambda 一个接收当前分组 Map 并返回新分组 Map 的函数。
-    * @return 更新后的分组 Map。
-    */
-   suspend fun updateConversationGroups(updateLambda: (Map<String, List<String>>) -> Map<String, List<String>>): Map<String, List<String>> {
-       return conversationGroupsSaveMutex.withLock {
-           val currentGroups = loadConversationGroups()
-           val updatedGroups = updateLambda(currentGroups)
-           withContext(Dispatchers.IO) {
-               roomDataSource.saveConversationGroups(updatedGroups)
-           }
-           updatedGroups
-       }
-   }
+    /**
+     * 原子性地更新分组信息。
+     * 此方法确保更新操作是串行的，避免并发修改导致的数据丢失。
+     * @param updateLambda 一个接收当前分组 Map 并返回新分组 Map 的函数。
+     * @return 更新后的分组 Map。
+     */
+    suspend fun updateConversationGroups(updateLambda: (Map<String, List<String>>) -> Map<String, List<String>>): Map<String, List<String>> {
+        return conversationGroupsSaveMutex.withLock {
+            val currentGroups = loadConversationGroups()
+            val updatedGroups = updateLambda(currentGroups)
+            withContext(Dispatchers.IO) {
+                roomDataSource.saveConversationGroups(updatedGroups)
+            }
+            updatedGroups
+        }
+    }
 
-   suspend fun loadPinnedIds(isImageGeneration: Boolean): Set<String> {
-       return withContext(Dispatchers.IO) {
-           try {
-               // 使用 Room 加载置顶状态
-               if (isImageGeneration) {
-                   roomDataSource.loadPinnedImageIds()
-               } else {
-                   roomDataSource.loadPinnedTextIds()
-               }
-           } catch (e: Exception) {
-               Log.e(TAG, "loadPinnedIds failed", e)
-               emptySet()
-           }
-       }
-   }
+    suspend fun loadPinnedIds(isImageGeneration: Boolean): Set<String> {
+        return withContext(Dispatchers.IO) {
+            try {
+                // 使用 Room 加载置顶状态
+                if (isImageGeneration) {
+                    roomDataSource.loadPinnedImageIds()
+                } else {
+                    roomDataSource.loadPinnedTextIds()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "loadPinnedIds failed", e)
+                emptySet()
+            }
+        }
+    }
 
-   // ========= 分组展开状态 =========
-   
-   /**
-    * 保存分组展开状态
-    * 已迁移到 Room 数据库
-    */
-   suspend fun saveExpandedGroupKeys(keys: Set<String>) {
-       withContext(Dispatchers.IO) {
-           try {
-               roomDataSource.saveExpandedGroupKeys(keys)
-               Log.d(TAG, "saveExpandedGroupKeys: saved ${keys.size} expanded group keys to Room")
-           } catch (e: Exception) {
-               Log.e(TAG, "saveExpandedGroupKeys failed", e)
-           }
-       }
-   }
-   
-   /**
-    * 加载分组展开状态
-    * 已迁移到 Room 数据库
-    */
-   suspend fun loadExpandedGroupKeys(): Set<String> {
-       return withContext(Dispatchers.IO) {
-           try {
-               roomDataSource.loadExpandedGroupKeys()
-           } catch (e: Exception) {
-               Log.e(TAG, "loadExpandedGroupKeys failed", e)
-               emptySet()
-           }
-       }
-   }
+    // ========= 分组展开状态 =========
+    
+    /**
+     * 保存分组展开状态
+     * 已迁移到 Room 数据库
+     */
+    suspend fun saveExpandedGroupKeys(keys: Set<String>) {
+        withContext(Dispatchers.IO) {
+            try {
+                roomDataSource.saveExpandedGroupKeys(keys)
+                Log.d(TAG, "saveExpandedGroupKeys: saved ${keys.size} expanded group keys to Room")
+            } catch (e: Exception) {
+                Log.e(TAG, "saveExpandedGroupKeys failed", e)
+            }
+        }
+    }
+    
+    /**
+     * 加载分组展开状态
+     * 已迁移到 Room 数据库
+     */
+    suspend fun loadExpandedGroupKeys(): Set<String> {
+        return withContext(Dispatchers.IO) {
+            try {
+                roomDataSource.loadExpandedGroupKeys()
+            } catch (e: Exception) {
+                Log.e(TAG, "loadExpandedGroupKeys failed", e)
+                emptySet()
+            }
+        }
+    }
 
-   // ========= 语音配置 =========
-   
-   /**
-    * 保存语音后端配置列表
-    */
-   suspend fun saveVoiceBackendConfigs(configs: List<VoiceBackendConfig>) {
-       withContext(Dispatchers.IO) {
-           try {
-               dataSource.saveVoiceBackendConfigs(configs)
-               Log.d(TAG, "saveVoiceBackendConfigs: 已保存 ${configs.size} 个语音配置")
-           } catch (e: Exception) {
-               Log.e(TAG, "saveVoiceBackendConfigs 失败", e)
-           }
-       }
-   }
+    // ========= 语音配置 =========
+    
+    /**
+     * 保存语音后端配置列表
+     */
+    suspend fun saveVoiceBackendConfigs(configs: List<VoiceBackendConfig>) {
+        withContext(Dispatchers.IO) {
+            try {
+                roomDataSource.saveVoiceBackendConfigs(configs)
+                Log.d(TAG, "saveVoiceBackendConfigs: 已保存 ${configs.size} 个语音配置")
+            } catch (e: Exception) {
+                Log.e(TAG, "saveVoiceBackendConfigs 失败", e)
+            }
+        }
+    }
 
-   /**
-    * 加载语音后端配置列表
-    */
-   suspend fun loadVoiceBackendConfigs(): List<VoiceBackendConfig> {
-       return withContext(Dispatchers.IO) {
-           try {
-               dataSource.loadVoiceBackendConfigs()
-           } catch (e: Exception) {
-               Log.e(TAG, "loadVoiceBackendConfigs 失败", e)
-               emptyList()
-           }
-       }
-   }
+    /**
+     * 加载语音后端配置列表
+     */
+    suspend fun loadVoiceBackendConfigs(): List<VoiceBackendConfig> {
+        return withContext(Dispatchers.IO) {
+            try {
+                roomDataSource.loadVoiceBackendConfigs()
+            } catch (e: Exception) {
+                Log.e(TAG, "loadVoiceBackendConfigs 失败", e)
+                emptyList()
+            }
+        }
+    }
 
-   /**
-    * 保存当前选中的语音配置ID
-    */
-   suspend fun saveSelectedVoiceConfigId(configId: String?) {
-       withContext(Dispatchers.IO) {
-           try {
-               dataSource.saveSelectedVoiceConfigId(configId)
-               Log.d(TAG, "saveSelectedVoiceConfigId: 已保存选中的语音配置ID '$configId'")
-           } catch (e: Exception) {
-               Log.e(TAG, "saveSelectedVoiceConfigId 失败", e)
-           }
-       }
-   }
+    /**
+     * 保存当前选中的语音配置ID
+     */
+    suspend fun saveSelectedVoiceConfigId(configId: String?) {
+        withContext(Dispatchers.IO) {
+            try {
+                roomDataSource.saveSelectedVoiceConfigId(configId)
+                Log.d(TAG, "saveSelectedVoiceConfigId: 已保存选中的语音配置ID '$configId'")
+            } catch (e: Exception) {
+                Log.e(TAG, "saveSelectedVoiceConfigId 失败", e)
+            }
+        }
+    }
 
-   /**
-    * 加载当前选中的语音配置ID
-    */
-   suspend fun loadSelectedVoiceConfigId(): String? {
-       return withContext(Dispatchers.IO) {
-           try {
-               dataSource.loadSelectedVoiceConfigId()
-           } catch (e: Exception) {
-               Log.e(TAG, "loadSelectedVoiceConfigId 失败", e)
-               null
-           }
-       }
-   }
+    /**
+     * 加载当前选中的语音配置ID
+     */
+    suspend fun loadSelectedVoiceConfigId(): String? {
+        return withContext(Dispatchers.IO) {
+            try {
+                roomDataSource.loadSelectedVoiceConfigId()
+            } catch (e: Exception) {
+                Log.e(TAG, "loadSelectedVoiceConfigId 失败", e)
+                null
+            }
+        }
+    }
 
-   /**
-    * 清除所有语音配置
-    */
-   suspend fun clearVoiceBackendConfigs() {
-       withContext(Dispatchers.IO) {
-           try {
-               dataSource.clearVoiceBackendConfigs()
-               dataSource.saveSelectedVoiceConfigId(null)
-               Log.d(TAG, "clearVoiceBackendConfigs: 已清除所有语音配置")
-           } catch (e: Exception) {
-               Log.e(TAG, "clearVoiceBackendConfigs 失败", e)
-           }
-       }
-   }
+    /**
+     * 清除所有语音配置
+     */
+    suspend fun clearVoiceBackendConfigs() {
+        withContext(Dispatchers.IO) {
+            try {
+                roomDataSource.clearVoiceBackendConfigs()
+                roomDataSource.saveSelectedVoiceConfigId(null)
+                Log.d(TAG, "clearVoiceBackendConfigs: 已清除所有语音配置")
+            } catch (e: Exception) {
+                Log.e(TAG, "clearVoiceBackendConfigs 失败", e)
+            }
+        }
+    }
 }

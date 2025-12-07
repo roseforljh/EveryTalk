@@ -26,7 +26,7 @@ class SettingsController(
     private val stateHolder: ViewModelStateHolder,
     private val persistenceManager: DataPersistenceManager,
     private val providerManager: ProviderManager,
-    private val dataSource: com.android.everytalk.data.local.SharedPreferencesDataSource,
+    // Removed dataSource: com.android.everytalk.data.local.SharedPreferencesDataSource
     private val exportManager: ExportManager,
     private val json: Json,
     private val showSnackbar: (String) -> Unit,
@@ -68,8 +68,6 @@ class SettingsController(
             val currentVoiceConfigs = stateHolder._voiceBackendConfigs.value.toMutableList()
             
             // 检查是否已存在相同配置（简单判断：如果列表为空则添加，否则更新第一个或添加）
-            // 这里简化处理：将当前 Legacy 配置作为最新的“当前配置”添加或更新到列表
-            // 实际逻辑：找到当前选中的配置并更新它，或者如果没选中，就创建一个新的
             val selectedId = stateHolder._selectedVoiceConfig.value?.id
             if (selectedId != null) {
                 val index = currentVoiceConfigs.indexOfFirst { it.id == selectedId }
@@ -83,7 +81,6 @@ class SettingsController(
                 if (currentVoiceConfigs.isEmpty()) {
                     currentVoiceConfigs.add(currentLegacyConfig)
                 }
-                // 如果有列表但没选中，通常不会发生，或者可以忽略
             }
             
             val voiceConfigsToExport = currentVoiceConfigs.toList()
@@ -96,7 +93,6 @@ class SettingsController(
             )
             
             // 强制使用 encodeDefaults = true 的 Json 实例，确保空列表/Map 也能被序列化输出
-            // 这样用户在导出的 JSON 中能明确看到这些字段的存在
             val exportJson = Json(json) {
                 encodeDefaults = true
                 prettyPrint = true
@@ -140,7 +136,6 @@ class SettingsController(
                 //    - 插入导入的非默认配置
                 
                 // --- 处理通用配置 (文本 + 音频/语音) ---
-                // 音频配置目前与文本配置共用 _apiConfigs 列表
                 val currentMainDefaults = stateHolder._apiConfigs.value.filter {
                     it.provider.trim().lowercase() in listOf("默认", "default")
                 }
@@ -163,7 +158,7 @@ class SettingsController(
                 // 更新通用配置 (文本 + 音频)
                 stateHolder._apiConfigs.value = newMainConfigs
                 persistenceManager.saveApiConfigs(newMainConfigs, isImageGen = false)
-                // 修正选中项（如果当前选中的被删除了，重置为第一个）
+                // 修正选中项
                 val currentSelectedMain = stateHolder._selectedApiConfig.value
                 if (currentSelectedMain != null && newMainConfigs.none { it.id == currentSelectedMain.id }) {
                     val newSel = newMainConfigs.firstOrNull()
@@ -185,7 +180,8 @@ class SettingsController(
                 // 更新自定义提供商
                 val newCustomProviders = importedSettings.customProviders
                 providerManager.setCustomProviders(newCustomProviders)
-                dataSource.saveCustomProviders(newCustomProviders)
+                // dataSource.saveCustomProviders(newCustomProviders) -> Using persistenceManager
+                persistenceManager.saveCustomProviders(newCustomProviders)
                 
                 // 更新会话生成参数
                 val newConversationParams = importedSettings.conversationParameters
@@ -199,10 +195,8 @@ class SettingsController(
                     it.id.isNotBlank()
                 }
                 if (importedVoiceConfigs.isNotEmpty()) {
-                    // 语音配置采用“导入即覆盖”策略：完全以导入内容为准
                     val newVoiceConfigs = importedVoiceConfigs
 
-                    // 尝试保留原来选中的配置ID，否则选中第一个
                     val previousSelectedId = stateHolder._selectedVoiceConfig.value?.id
                     val newSelected = newVoiceConfigs.find { it.id == previousSelectedId }
                         ?: newVoiceConfigs.firstOrNull()
@@ -212,7 +206,6 @@ class SettingsController(
                     persistenceManager.saveVoiceBackendConfigs(newVoiceConfigs)
                     persistenceManager.saveSelectedVoiceConfigId(newSelected?.id)
                     
-                    // 关键同步：将导入后选中的配置写入 Legacy SharedPreferences，以便 UI 立即生效
                     if (newSelected != null) {
                         syncVoiceConfigToLegacyPrefs(newSelected)
                     }
@@ -234,7 +227,6 @@ class SettingsController(
     private fun createVoiceConfigFromLegacyPrefs(): VoiceBackendConfig {
         val prefs = context.getSharedPreferences("voice_settings", android.content.Context.MODE_PRIVATE)
         
-        // STT
         val sttPlatform = prefs.getString("stt_platform", "Google") ?: "Google"
         val sttApiUrl = prefs.getString("stt_api_url_${sttPlatform}", null)
             ?: prefs.getString("stt_api_url", "")?.trim() ?: ""
@@ -246,7 +238,6 @@ class SettingsController(
             else -> prefs.getString("stt_key_Google", "") ?: ""
         }.trim()
 
-        // Chat
         val chatPlatform = prefs.getString("chat_platform", "Google") ?: "Google"
         val chatApiUrl = prefs.getString("chat_api_url_${chatPlatform}", null)
             ?: prefs.getString("chat_api_url", "")?.trim() ?: ""
@@ -257,7 +248,6 @@ class SettingsController(
             else -> prefs.getString("chat_key_Google", "") ?: ""
         }.trim()
 
-        // TTS
         val ttsPlatform = prefs.getString("voice_platform", "Gemini") ?: "Gemini"
         val ttsApiUrl = prefs.getString("voice_base_url_${ttsPlatform}", null)
             ?: prefs.getString("voice_base_url", "")?.trim() ?: ""
@@ -296,7 +286,6 @@ class SettingsController(
         val prefs = context.getSharedPreferences("voice_settings", android.content.Context.MODE_PRIVATE)
         val editor = prefs.edit()
 
-        // STT
         editor.putString("stt_platform", config.sttPlatform)
         editor.putString("stt_api_url_${config.sttPlatform}", config.sttApiUrl)
         editor.putString("stt_model_${config.sttPlatform}", config.sttModel)
@@ -306,7 +295,6 @@ class SettingsController(
             else -> editor.putString("stt_key_Google", config.sttApiKey)
         }
 
-        // Chat
         editor.putString("chat_platform", config.chatPlatform)
         editor.putString("chat_api_url_${config.chatPlatform}", config.chatApiUrl)
         editor.putString("chat_model_${config.chatPlatform}", config.chatModel)
@@ -315,7 +303,6 @@ class SettingsController(
             else -> editor.putString("chat_key_Google", config.chatApiKey)
         }
 
-        // TTS
         editor.putString("voice_platform", config.ttsPlatform)
         editor.putString("voice_base_url_${config.ttsPlatform}", config.ttsApiUrl)
         editor.putString("voice_chat_model_${config.ttsPlatform}", config.ttsModel)
