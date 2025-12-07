@@ -293,35 +293,17 @@ class VoiceChatSession(
         var uploadFile: File? = null
         var mimeType = "audio/wav"
         
-        if (!isShortUtterance) {
-            try {
-                val tempAacFile = File.createTempFile("voice_chat_", ".m4a")
-                val success = encodePcmToAac(pcmData, tempAacFile, sampleRate)
-                if (success && tempAacFile.length() > 0) {
-                    uploadFile = tempAacFile
-                    mimeType = "audio/mp4" // m4a
-                    Log.i(TAG, "Encoded PCM to AAC: ${pcmData.size} -> ${uploadFile.length()} bytes (duration=${recordDurationMs}ms)")
-                } else {
-                    tempAacFile.delete()
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "AAC encoding failed, falling back to WAV", e)
-            }
-        } else {
-            Log.i(TAG, "Short utterance ($recordDurationMs ms), skip AAC and upload as WAV")
-        }
+        // 强制使用 WAV 格式以确保最大兼容性（Opus/Ogg 在部分后端服务兼容性不佳）
+        Log.i(TAG, "Using WAV format for maximum compatibility (duration=${recordDurationMs}ms)")
 
-        // 如果 AAC 编码失败或未执行，使用 WAV
-        if (uploadFile == null) {
-            val tempWavFile = File.createTempFile("voice_chat_", ".wav")
-            tempWavFile.outputStream().use { out ->
-                writeWavHeader(out, pcmData.size, sampleRate, 1, 16)
-                out.write(pcmData)
-            }
-            uploadFile = tempWavFile
-            mimeType = "audio/wav"
-            Log.i(TAG, "Saved PCM as WAV: ${uploadFile.length()} bytes")
+        val tempWavFile = File.createTempFile("voice_chat_", ".wav")
+        tempWavFile.outputStream().use { out ->
+            writeWavHeader(out, pcmData.size, sampleRate, 1, 16)
+            out.write(pcmData)
         }
+        uploadFile = tempWavFile
+        mimeType = "audio/wav"
+        Log.i(TAG, "Saved PCM as WAV: ${uploadFile.length()} bytes")
 
         try {
             // 构建对话历史JSON
@@ -475,94 +457,6 @@ class VoiceChatSession(
         }
     }
 
-    /**
-     * 使用 MediaCodec 将 PCM 编码为 AAC (M4A)
-     */
-    private fun encodePcmToAac(pcmData: ByteArray, outputFile: File, sampleRate: Int): Boolean {
-        try {
-            val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, sampleRate, 1)
-            format.setInteger(MediaFormat.KEY_BIT_RATE, 32000) // 32kbps for STT is sufficient and faster
-            format.setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
-            
-            val encoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
-            encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-            encoder.start()
-
-            val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-            var trackIndex = -1
-            var muxerStarted = false
-            
-            val bufferInfo = MediaCodec.BufferInfo()
-            var inputOffset = 0
-            var outputDone = false
-            
-            // 注意: inputBuffers/outputBuffers 在 API 21+ 已废弃，直接使用 getInputBuffer/getOutputBuffer
-            
-            while (!outputDone) {
-                // 1. 写入输入数据
-                if (inputOffset < pcmData.size) {
-                    val inputBufferIndex = encoder.dequeueInputBuffer(10000)
-                    if (inputBufferIndex >= 0) {
-                        val inputBuffer = encoder.getInputBuffer(inputBufferIndex)
-                        
-                        inputBuffer?.clear()
-                        val chunkSize = minOf(inputBuffer?.capacity() ?: 0, pcmData.size - inputOffset)
-                        inputBuffer?.put(pcmData, inputOffset, chunkSize)
-                        
-                        inputOffset += chunkSize
-                        
-                        val flags = if (inputOffset >= pcmData.size) MediaCodec.BUFFER_FLAG_END_OF_STREAM else 0
-                        encoder.queueInputBuffer(inputBufferIndex, 0, chunkSize, System.nanoTime() / 1000, flags)
-                    }
-                }
-                
-                // 2. 读取输出数据
-                var encoderStatus = encoder.dequeueOutputBuffer(bufferInfo, 10000)
-                if (encoderStatus == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                    if (inputOffset >= pcmData.size) {
-                        // 输入已结束，但这只是暂时没有输出，继续循环等待 EOS
-                    }
-                } else if (encoderStatus == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                    if (muxerStarted) throw IllegalStateException("format changed twice")
-                    val newFormat = encoder.outputFormat
-                    trackIndex = muxer.addTrack(newFormat)
-                    muxer.start()
-                    muxerStarted = true
-                } else if (encoderStatus < 0) {
-                    // ignore
-                } else {
-                    // 获取编码后的数据
-                    val outputBuffer = encoder.getOutputBuffer(encoderStatus)
-                    
-                    if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
-                        bufferInfo.size = 0
-                    }
-                    
-                    if (bufferInfo.size != 0) {
-                        if (!muxerStarted) throw IllegalStateException("muxer hasn't started")
-                        outputBuffer?.position(bufferInfo.offset)
-                        outputBuffer?.limit(bufferInfo.offset + bufferInfo.size)
-                        muxer.writeSampleData(trackIndex, outputBuffer!!, bufferInfo)
-                    }
-                    
-                    encoder.releaseOutputBuffer(encoderStatus, false)
-                    
-                    if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                        outputDone = true
-                    }
-                }
-            }
-            
-            encoder.stop()
-            encoder.release()
-            muxer.stop()
-            muxer.release()
-            return true
-        } catch (e: Exception) {
-            Log.e(TAG, "MediaCodec exception", e)
-            return false
-        }
-    }
 
     /**
      * 播放音频数据
@@ -743,7 +637,9 @@ class VoiceChatSession(
         var assistantText = ""
         val fullAudioData = ByteArrayOutputStream()
         var sampleRate = 24000
+        var audioFormat = "pcm"  // 默认 PCM，后端会下发实际格式
         var audioPlayer: StreamAudioPlayer? = null
+        var opusDecoder: OpusStreamDecoder? = null
         shouldStopPlayback = false
         
         try {
@@ -773,6 +669,13 @@ class VoiceChatSession(
                                     Log.i(TAG, "Updated sample rate from stream meta: $sampleRate")
                                 }
                                 
+                                // 获取音频格式
+                                val format = json.optString("audio_format", "")
+                                if (format.isNotEmpty()) {
+                                    audioFormat = format
+                                    Log.i(TAG, "Audio format from stream meta: $audioFormat")
+                                }
+                                
                                 // 立即回调文字
                                 withContext(Dispatchers.Main) {
                                     if (userText.isNotEmpty()) onTranscriptionReceived?.invoke(userText)
@@ -786,16 +689,32 @@ class VoiceChatSession(
                                     if (chunk.isNotEmpty()) {
                                         fullAudioData.write(chunk)
                                         
-                                        // 初始化播放器（收到第一包音频时）
-                                        if (audioPlayer == null) {
-                                            // Minimax 流式通常是 24000 或 32000，这里假设 24000，后续可优化
-                                            audioPlayer = StreamAudioPlayer(sampleRate)
-                                            streamAudioPlayer = audioPlayer
-                                            audioPlayer?.start()
+                                        // 根据音频格式选择处理方式
+                                        when (audioFormat) {
+                                            "opus" -> {
+                                                // Opus 格式需要解码
+                                                if (opusDecoder == null) {
+                                                    opusDecoder = OpusStreamDecoder(sampleRate)
+                                                    audioPlayer = StreamAudioPlayer(sampleRate)
+                                                    streamAudioPlayer = audioPlayer
+                                                    audioPlayer?.start()
+                                                }
+                                                // 解码并写入播放器
+                                                val pcmData = opusDecoder?.decode(chunk)
+                                                if (pcmData != null && pcmData.isNotEmpty()) {
+                                                    audioPlayer?.write(pcmData)
+                                                }
+                                            }
+                                            else -> {
+                                                // PCM/WAV 直接播放
+                                                if (audioPlayer == null) {
+                                                    audioPlayer = StreamAudioPlayer(sampleRate)
+                                                    streamAudioPlayer = audioPlayer
+                                                    audioPlayer?.start()
+                                                }
+                                                audioPlayer?.write(chunk)
+                                            }
                                         }
-                                        
-                                        // 写入播放器
-                                        audioPlayer?.write(chunk)
                                     }
                                 }
                             }
@@ -821,6 +740,8 @@ class VoiceChatSession(
                 }
             }
         } finally {
+            // 释放解码器
+            opusDecoder?.release()
             // 等待播放完成并释放
             audioPlayer?.close()
             streamAudioPlayer = null
@@ -830,9 +751,130 @@ class VoiceChatSession(
             userText = userText,
             assistantText = assistantText,
             audioData = fullAudioData.toByteArray(),
-            audioFormat = "pcm",
+            audioFormat = audioFormat,
             sampleRate = sampleRate
         )
+    }
+    
+    /**
+     * Opus 流式解码器
+     * 使用 MediaCodec 解码 Opus 音频流
+     */
+    private inner class OpusStreamDecoder(private val sampleRate: Int) {
+        private var decoder: MediaCodec? = null
+        private val outputBuffer = ByteArrayOutputStream()
+        private var isConfigured = false
+        
+        init {
+            try {
+                decoder = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_AUDIO_OPUS)
+                
+                val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_OPUS, sampleRate, 1)
+                // Opus 解码需要 CSD (Codec Specific Data)
+                // 对于标准 Opus，需要设置 csd-0, csd-1, csd-2
+                // csd-0: OpusHead
+                // csd-1: OpusTags (可选)
+                // csd-2: Seek preroll
+                
+                // 标准 OpusHead for mono 48kHz (最常见配置)
+                // 但是我们使用的是 24kHz，需要调整
+                val opusHead = byteArrayOf(
+                    'O'.code.toByte(), 'p'.code.toByte(), 'u'.code.toByte(), 's'.code.toByte(),
+                    'H'.code.toByte(), 'e'.code.toByte(), 'a'.code.toByte(), 'd'.code.toByte(),
+                    1, // version
+                    1, // channel count
+                    0, 0, // pre-skip (little endian)
+                    (sampleRate and 0xFF).toByte(), // sample rate (little endian)
+                    ((sampleRate shr 8) and 0xFF).toByte(),
+                    ((sampleRate shr 16) and 0xFF).toByte(),
+                    ((sampleRate shr 24) and 0xFF).toByte(),
+                    0, 0, // output gain
+                    0  // channel mapping family
+                )
+                format.setByteBuffer("csd-0", java.nio.ByteBuffer.wrap(opusHead))
+                
+                // csd-1: OpusTags (简化版)
+                val opusTags = byteArrayOf(
+                    'O'.code.toByte(), 'p'.code.toByte(), 'u'.code.toByte(), 's'.code.toByte(),
+                    'T'.code.toByte(), 'a'.code.toByte(), 'g'.code.toByte(), 's'.code.toByte(),
+                    0, 0, 0, 0, // vendor string length
+                    0, 0, 0, 0  // user comment list length
+                )
+                format.setByteBuffer("csd-1", java.nio.ByteBuffer.wrap(opusTags))
+                
+                // csd-2: Seek preroll (3840 samples for Opus)
+                val seekPreroll = java.nio.ByteBuffer.allocate(8)
+                seekPreroll.order(java.nio.ByteOrder.nativeOrder())
+                seekPreroll.putLong(3840 * 1000000L / sampleRate) // nanoseconds
+                seekPreroll.flip()
+                format.setByteBuffer("csd-2", seekPreroll)
+                
+                decoder?.configure(format, null, null, 0)
+                decoder?.start()
+                isConfigured = true
+                
+                Log.i(TAG, "OpusStreamDecoder initialized for $sampleRate Hz")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to initialize Opus decoder", e)
+                decoder = null
+            }
+        }
+        
+        /**
+         * 解码 Opus 数据块
+         * @return PCM 数据，如果解码失败返回原始数据（降级为直接播放）
+         */
+        fun decode(opusData: ByteArray): ByteArray {
+            val dec = decoder
+            if (dec == null || !isConfigured) {
+                // 解码器不可用，返回原始数据（可能导致播放失败，但不会崩溃）
+                Log.w(TAG, "Opus decoder not available, returning raw data")
+                return opusData
+            }
+            
+            outputBuffer.reset()
+            
+            try {
+                // 写入输入数据
+                val inputIndex = dec.dequeueInputBuffer(10000)
+                if (inputIndex >= 0) {
+                    val inputBuffer = dec.getInputBuffer(inputIndex)
+                    inputBuffer?.clear()
+                    inputBuffer?.put(opusData)
+                    dec.queueInputBuffer(inputIndex, 0, opusData.size, 0, 0)
+                }
+                
+                // 读取输出数据
+                val bufferInfo = MediaCodec.BufferInfo()
+                var outputIndex = dec.dequeueOutputBuffer(bufferInfo, 10000)
+                
+                while (outputIndex >= 0) {
+                    val outputBuffer = dec.getOutputBuffer(outputIndex)
+                    if (outputBuffer != null && bufferInfo.size > 0) {
+                        val pcmChunk = ByteArray(bufferInfo.size)
+                        outputBuffer.get(pcmChunk)
+                        this.outputBuffer.write(pcmChunk)
+                    }
+                    dec.releaseOutputBuffer(outputIndex, false)
+                    outputIndex = dec.dequeueOutputBuffer(bufferInfo, 0)
+                }
+                
+                return this.outputBuffer.toByteArray()
+            } catch (e: Exception) {
+                Log.e(TAG, "Opus decode error", e)
+                return opusData // 降级返回原始数据
+            }
+        }
+        
+        fun release() {
+            try {
+                decoder?.stop()
+                decoder?.release()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error releasing Opus decoder", e)
+            }
+            decoder = null
+        }
     }
 
     /**

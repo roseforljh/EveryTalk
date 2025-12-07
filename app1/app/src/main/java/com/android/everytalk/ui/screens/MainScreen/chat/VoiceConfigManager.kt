@@ -45,6 +45,7 @@ class VoiceConfigManager(private val context: Context) {
         val sttApiKey = when (sttPlatform) {
             "OpenAI" -> prefs.getString("stt_key_OpenAI", "") ?: ""
             "SiliconFlow" -> prefs.getString("stt_key_SiliconFlow", "") ?: ""
+            "Aliyun" -> prefs.getString("stt_key_Aliyun", "") ?: ""
             else -> prefs.getString("stt_key_Google", "") ?: ""
         }.trim()
         
@@ -102,7 +103,8 @@ class VoiceConfigManager(private val context: Context) {
         if (config.sttModel.isEmpty()) {
             return "请配置 STT 模型名称"
         }
-        if (config.sttPlatform != "Google" && config.sttApiUrl.isEmpty()) {
+        // Google和Aliyun不需要强制校验API URL
+        if (config.sttPlatform != "Google" && config.sttPlatform != "Aliyun" && config.sttApiUrl.isEmpty()) {
             return "请配置 STT API 地址"
         }
         

@@ -33,6 +33,7 @@ fun SttSettingsDialog(
         return when (platform) {
             "OpenAI" -> savedKeyOpenAI
             "SiliconFlow" -> prefs.getString("stt_key_SiliconFlow", "") ?: ""
+            "Aliyun" -> prefs.getString("stt_key_Aliyun", "") ?: ""
             else -> savedKeyGoogle
         }.trim()
     }
@@ -43,6 +44,7 @@ fun SttSettingsDialog(
         
         return when (platform) {
             "SiliconFlow" -> "https://api.siliconflow.cn/v1/audio/transcriptions"
+            "Aliyun" -> "https://dashscope.aliyuncs.com"  // 阿里云占位地址（后端SDK会自动处理）
             else -> defaultApiUrl
         }
     }
@@ -53,6 +55,7 @@ fun SttSettingsDialog(
         
         return when (platform) {
             "SiliconFlow" -> "FunAudioLLM/SenseVoiceSmall"
+            "Aliyun" -> "fun-asr-realtime"
             else -> defaultModel
         }
     }
@@ -63,7 +66,7 @@ fun SttSettingsDialog(
     var model by remember { mutableStateOf(resolveModelFor(selectedPlatform)) }
     var expanded by remember { mutableStateOf(false) }
     
-    val platforms = listOf("Google", "OpenAI", "SiliconFlow")
+    val platforms = listOf("Google", "OpenAI", "SiliconFlow", "Aliyun")
     
     // 自定义模型管理
     val customModelsKey = "custom_models_stt_${selectedPlatform}"
@@ -217,6 +220,8 @@ fun SttSettingsDialog(
                                 Text("将使用你配置的 OpenAI API 地址", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             } else if (selectedPlatform == "SiliconFlow") {
                                 Text("默认: https://api.siliconflow.cn/v1/audio/transcriptions", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            } else if (selectedPlatform == "Aliyun") {
+                                Text("阿里云使用SDK自动连接，此地址仅为占位符", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             } else {
                                 // 智能提示最终使用的完整URL
                                 val finalUrl = if (selectedPlatform == "OpenAI" && apiUrl.isNotBlank()) {
@@ -297,6 +302,7 @@ fun SttSettingsDialog(
                                 when (selectedPlatform) {
                                     "OpenAI" -> editor.putString("stt_key_OpenAI", apiKey)
                                     "SiliconFlow" -> editor.putString("stt_key_SiliconFlow", apiKey)
+                                    "Aliyun" -> editor.putString("stt_key_Aliyun", apiKey)
                                     else -> editor.putString("stt_key_Google", apiKey)
                                 }
                                 // 按平台保存
