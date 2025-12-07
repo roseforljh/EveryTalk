@@ -38,9 +38,10 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
-    // Kotlin Serialization 插件，版本与 Kotlin 2.2.21 对齐
+    // Kotlin Serialization 插件
     id("org.jetbrains.kotlin.plugin.serialization") version libs.versions.kotlin.get()
-    // 已移除 KAPT（工程内未使用 ksp 配置/符号处理器，避免阻塞 Kotlin 2.2.21 升级）
+    // 使用 KSP2（Gradle 插件在顶层声明版本，这里只启用插件即可）
+    alias(libs.plugins.ksp)
 }
 
 android {
@@ -274,4 +275,9 @@ android {
         // 直接声明底层解码库，避免额外模块解析失败
         implementation("pl.droidsonroids.gif:android-gif-drawable:1.2.29")
         implementation("com.caverock:androidsvg:1.4")
+
+        // ===== Room Database =====
+        implementation(libs.room.runtime)
+        implementation(libs.room.ktx)
+        ksp(libs.room.compiler)
     }

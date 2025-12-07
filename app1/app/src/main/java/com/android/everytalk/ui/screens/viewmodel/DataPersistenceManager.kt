@@ -7,6 +7,7 @@ import com.android.everytalk.data.DataClass.ApiConfig
 import java.io.File
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.local.SharedPreferencesDataSource
+import com.android.everytalk.data.database.RoomDataSource
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import com.android.everytalk.data.DataClass.GenerationConfig
@@ -32,6 +33,12 @@ class DataPersistenceManager(
 ) {
     private val TAG = "PersistenceManager"
     private val conversationGroupsSaveMutex = kotlinx.coroutines.sync.Mutex()
+    
+    // Room 数据源
+    private val roomDataSource by lazy { RoomDataSource(context) }
+    
+    // 迁移标志位
+    private val KEY_MIGRATION_COMPLETED = "migration_to_room_completed_v1"
 
     /**
      * 将消息中的 data:image;base64,... 图片落盘为本地文件，并将 URL 替换为 file:// 或绝对路径
@@ -220,6 +227,83 @@ class DataPersistenceManager(
             var initialHistoryPresent = false
 
             try {
+                // 阶段 0: 数据迁移 (SharedPreferences -> Room)
+                // 检查是否已完成迁移
+                val migrationCompleted = dataSource.getString(KEY_MIGRATION_COMPLETED, "false") == "true"
+                if (!migrationCompleted) {
+                    Log.i(TAG, "loadInitialData: 检测到尚未迁移到 Room 数据库，开始迁移...")
+                    try {
+                        // 1. 迁移聊天历史
+                        val chatHistory = dataSource.loadChatHistory()
+                        if (chatHistory.isNotEmpty()) {
+                            roomDataSource.saveChatHistory(chatHistory)
+                            Log.i(TAG, "loadInitialData: 已迁移 ${chatHistory.size} 条聊天历史到 Room")
+                        }
+                        
+                        // 2. 迁移图像生成历史
+                        val imageHistory = dataSource.loadImageGenerationHistory()
+                        if (imageHistory.isNotEmpty()) {
+                            roomDataSource.saveImageGenerationHistory(imageHistory)
+                            Log.i(TAG, "loadInitialData: 已迁移 ${imageHistory.size} 条图像生成历史到 Room")
+                        }
+                        
+                        // 3. 迁移最后打开的聊天
+                        val lastOpenChat = dataSource.loadLastOpenChat()
+                        if (lastOpenChat.isNotEmpty()) {
+                            roomDataSource.saveLastOpenChat(lastOpenChat)
+                        }
+                        
+                        val lastOpenImageChat = dataSource.loadLastOpenImageGenerationChat()
+                        if (lastOpenImageChat.isNotEmpty()) {
+                            roomDataSource.saveLastOpenImageGenerationChat(lastOpenImageChat)
+                        }
+                        
+                        // 4. 迁移置顶状态
+                        val pinnedTextIds = dataSource.loadPinnedTextIds()
+                        if (pinnedTextIds.isNotEmpty()) {
+                            roomDataSource.savePinnedTextIds(pinnedTextIds)
+                            Log.i(TAG, "loadInitialData: 已迁移 ${pinnedTextIds.size} 个文本置顶ID到 Room")
+                        }
+                        
+                        val pinnedImageIds = dataSource.loadPinnedImageIds()
+                        if (pinnedImageIds.isNotEmpty()) {
+                            roomDataSource.savePinnedImageIds(pinnedImageIds)
+                            Log.i(TAG, "loadInitialData: 已迁移 ${pinnedImageIds.size} 个图像置顶ID到 Room")
+                        }
+                        
+                        // 5. 迁移分组信息
+                        val conversationGroups = dataSource.loadConversationGroups()
+                        if (conversationGroups.isNotEmpty()) {
+                            roomDataSource.saveConversationGroups(conversationGroups)
+                            Log.i(TAG, "loadInitialData: 已迁移 ${conversationGroups.size} 个分组到 Room")
+                        }
+                        
+                        // 6. 迁移展开状态
+                        val expandedGroupKeys = dataSource.loadExpandedGroupKeys()
+                        if (expandedGroupKeys.isNotEmpty()) {
+                            roomDataSource.saveExpandedGroupKeys(expandedGroupKeys)
+                            Log.i(TAG, "loadInitialData: 已迁移 ${expandedGroupKeys.size} 个展开状态到 Room")
+                        }
+                        
+                        // 标记迁移完成
+                        dataSource.saveString(KEY_MIGRATION_COMPLETED, "true")
+                        Log.i(TAG, "loadInitialData: 数据迁移完成")
+                        
+                        // 7. 清理 SP 中的历史数据（迁移成功后立即清理）
+                        Log.i(TAG, "loadInitialData: 开始清理 SP 中的历史数据...")
+                        dataSource.clearChatHistory()
+                        dataSource.clearImageGenerationHistory()
+                        // 清理最后打开的会话
+                        dataSource.saveLastOpenChat(emptyList())
+                        dataSource.saveLastOpenImageGenerationChat(emptyList())
+                        Log.i(TAG, "loadInitialData: SP 历史数据清理完成")
+                        
+                    } catch (e: Exception) {
+                        Log.e(TAG, "loadInitialData: 数据迁移失败，将继续使用 SharedPreferences (部分或全部)", e)
+                        // 不标记完成，下次启动再试
+                    }
+                }
+
                 // 第一阶段：快速加载API配置（优先级最高）
                 Log.d(TAG, "loadInitialData: 阶段1 - 加载API配置...")
                 var loadedConfigs: List<ApiConfig> = if (stateHolder._apiConfigs.value.isEmpty()) {
@@ -524,8 +608,16 @@ class DataPersistenceManager(
                         // 检查是否需要加载历史数据
                         val shouldLoadHistory = stateHolder._historicalConversations.value.isEmpty()
                         val loadedHistory = if (shouldLoadHistory) {
-                            Log.d(TAG, "loadInitialData: 从dataSource加载历史数据...")
-                            val historyRaw = dataSource.loadChatHistory()
+                            Log.d(TAG, "loadInitialData: 从 Room 加载历史数据...")
+                            // 优先从 Room 加载
+                            var historyRaw = roomDataSource.loadChatHistory()
+                            
+                            // 如果 Room 为空但迁移未标记完成（极端情况），尝试从 SP 加载作为后备
+                            if (historyRaw.isEmpty() && dataSource.getString(KEY_MIGRATION_COMPLETED, "false") != "true") {
+                                Log.w(TAG, "loadInitialData: Room 为空，尝试从 SharedPreferences 加载后备数据")
+                                historyRaw = dataSource.loadChatHistory()
+                            }
+                            
                             // 分批处理历史数据，避免一次性处理大量数据
                             historyRaw.chunked(10).flatMap { chunk ->
                                 chunk.map { conversation ->
@@ -588,7 +680,13 @@ class DataPersistenceManager(
                     }
 
                    // Load image generation history
-                   val loadedImageGenHistory = dataSource.loadImageGenerationHistory()
+                   // 优先从 Room 加载
+                   var loadedImageGenHistory = roomDataSource.loadImageGenerationHistory()
+                   
+                   // 后备逻辑
+                   if (loadedImageGenHistory.isEmpty() && dataSource.getString(KEY_MIGRATION_COMPLETED, "false") != "true") {
+                       loadedImageGenHistory = dataSource.loadImageGenerationHistory()
+                   }
                    
                    // 🔥 增强：启动时完整性检查与修复
                    // 1. 将历史中的 data:image 与 http(s) 图片统一落盘并替换为本地路径
@@ -630,7 +728,11 @@ class DataPersistenceManager(
                    // 异步回写修复后的历史，避免后续重复转换
                    launch(Dispatchers.IO) {
                        try {
-                           dataSource.saveImageGenerationHistory(convertedImageGenHistory)
+                           // 同时保存到 Room 和 SP（为了安全，暂时双写，或者只写 Room）
+                           // 既然已迁移到 Room，优先写 Room
+                           roomDataSource.saveImageGenerationHistory(convertedImageGenHistory)
+                           // 如果迁移未标记完成，也写回 SP 以防万一？
+                           // 不，既然已经加载出来了，说明数据源是可用的。
                            Log.i(TAG, "✅ Image generation history integrity check and persistence completed")
                        } catch (e: Exception) {
                            Log.w(TAG, "Failed to persist converted image generation history", e)
@@ -644,14 +746,23 @@ class DataPersistenceManager(
                 // Phase 3: Load last open chats if needed
                 if (loadLastChat) {
                     Log.d(TAG, "loadInitialData: Phase 3 - Loading last open chats...")
-                    val lastOpenChat = dataSource.loadLastOpenChat()
-                    val lastOpenImageGenChat = dataSource.loadLastOpenImageGenerationChat()
+                    // 从 Room 加载最后打开的会话
+                    var lastOpenChat = roomDataSource.loadLastOpenChat()
+                    if (lastOpenChat.isEmpty() && dataSource.getString(KEY_MIGRATION_COMPLETED, "false") != "true") {
+                        lastOpenChat = dataSource.loadLastOpenChat()
+                    }
+                    
+                    var lastOpenImageGenChat = roomDataSource.loadLastOpenImageGenerationChat()
+                    if (lastOpenImageGenChat.isEmpty() && dataSource.getString(KEY_MIGRATION_COMPLETED, "false") != "true") {
+                        lastOpenImageGenChat = dataSource.loadLastOpenImageGenerationChat()
+                    }
+                    
                     // 将“最后打开的图像会话”里的 data:image 与 http(s) 转为本地文件并替换
                     val finalLastOpenImageGen = persistInlineAndRemoteImages(lastOpenImageGenChat)
                     // 异步回写，确保下次启动直接使用文件路径
                     launch(Dispatchers.IO) {
                         try {
-                            dataSource.saveLastOpenImageGenerationChat(finalLastOpenImageGen)
+                            roomDataSource.saveLastOpenImageGenerationChat(finalLastOpenImageGen)
                         } catch (e: Exception) {
                             Log.w(TAG, "Failed to persist converted last-open image chat", e)
                         }
@@ -725,10 +836,14 @@ class DataPersistenceManager(
 
     suspend fun clearAllChatHistory() {
         withContext(Dispatchers.IO) {
-            Log.d(TAG, "clearAllChatHistory: 请求 dataSource 清除聊天历史...")
+            Log.d(TAG, "clearAllChatHistory: 请求清除聊天历史...")
+            // 清除 Room 数据库中的历史
+            roomDataSource.clearChatHistory()
+            roomDataSource.clearImageGenerationHistory()
+            // 同时清除 SP 中的历史（兼容性）
             dataSource.clearChatHistory()
             dataSource.clearImageGenerationHistory()
-            Log.i(TAG, "clearAllChatHistory: dataSource 已清除聊天历史。")
+            Log.i(TAG, "clearAllChatHistory: Room 和 SP 中的聊天历史已清除。")
         }
     }
 
@@ -748,19 +863,20 @@ class DataPersistenceManager(
 
     suspend fun saveChatHistory(historyToSave: List<List<Message>>, isImageGeneration: Boolean = false) {
         withContext(Dispatchers.IO) {
-            Log.d(TAG, "saveChatHistory: 保存 ${historyToSave.size} 条对话到 dataSource...")
+            Log.d(TAG, "saveChatHistory: 保存 ${historyToSave.size} 条对话到 Room...")
             val finalHistory = if (isImageGeneration) {
-                // 将 data:image 与 http(s) 图片先落盘，替换为本地路径，避免SP超限与远端URL过期
+                // 将 data:image 与 http(s) 图片先落盘，替换为本地路径，避免远端URL过期
                 historyToSave.map { conv -> persistInlineAndRemoteImages(conv) }
             } else {
                 historyToSave
             }
+            // 使用 Room 保存历史
             if (isImageGeneration) {
-                dataSource.saveImageGenerationHistory(finalHistory)
+                roomDataSource.saveImageGenerationHistory(finalHistory)
             } else {
-                dataSource.saveChatHistory(finalHistory)
+                roomDataSource.saveChatHistory(finalHistory)
             }
-            Log.i(TAG, "saveChatHistory: 聊天历史已通过 dataSource 保存。")
+            Log.i(TAG, "saveChatHistory: 聊天历史已通过 Room 保存。")
         }
     }
 
@@ -841,23 +957,24 @@ class DataPersistenceManager(
        }
        
        withContext(Dispatchers.IO) {
-           Log.d(TAG, "saveLastOpenChat: Saving ${processedMessages.size} messages for isImageGen=$isImageGeneration")
+           Log.d(TAG, "saveLastOpenChat: Saving ${processedMessages.size} messages for isImageGen=$isImageGeneration to Room")
            try {
                val finalMessages = if (isImageGeneration) {
-                   // 对“最后打开的图像会话”统一进行 data:image 与 http(s) 落盘与替换
+                   // 对"最后打开的图像会话"统一进行 data:image 与 http(s) 落盘与替换
                    persistInlineAndRemoteImages(processedMessages)
                } else {
                    processedMessages
                }
+               // 使用 Room 保存最后打开的会话
                if (isImageGeneration) {
-                   dataSource.saveLastOpenImageGenerationChat(finalMessages)
-                   android.util.Log.d("DataPersistenceManager", "Image chat saved successfully")
+                   roomDataSource.saveLastOpenImageGenerationChat(finalMessages)
+                   android.util.Log.d("DataPersistenceManager", "Image chat saved to Room successfully")
                } else {
-                   dataSource.saveLastOpenChat(finalMessages)
-                   android.util.Log.d("DataPersistenceManager", "Text chat saved successfully")
+                   roomDataSource.saveLastOpenChat(finalMessages)
+                   android.util.Log.d("DataPersistenceManager", "Text chat saved to Room successfully")
                }
            } catch (e: Exception) {
-               android.util.Log.e("DataPersistenceManager", "Failed to save last open chat", e)
+               android.util.Log.e("DataPersistenceManager", "Failed to save last open chat to Room", e)
            }
        }
        android.util.Log.d("DataPersistenceManager", "=== SAVE LAST OPEN CHAT END ===")
@@ -865,12 +982,13 @@ class DataPersistenceManager(
 
    suspend fun clearLastOpenChat(isImageGeneration: Boolean = false) {
        withContext(Dispatchers.IO) {
+           // 使用 Room 清除最后打开的会话
            if (isImageGeneration) {
-               dataSource.saveLastOpenImageGenerationChat(emptyList())
+               roomDataSource.saveLastOpenImageGenerationChat(emptyList())
            } else {
-               dataSource.saveLastOpenChat(emptyList())
+               roomDataSource.saveLastOpenChat(emptyList())
            }
-           Log.d(TAG, "Cleared last open chat for isImageGeneration=$isImageGeneration")
+           Log.d(TAG, "Cleared last open chat for isImageGeneration=$isImageGeneration from Room")
        }
    }
    suspend fun deleteMediaFilesForMessages(conversations: List<List<Message>>) {
@@ -1080,12 +1198,13 @@ class DataPersistenceManager(
    suspend fun savePinnedIds(ids: Set<String>, isImageGeneration: Boolean) {
        withContext(Dispatchers.IO) {
            try {
+               // 使用 Room 保存置顶状态
                if (isImageGeneration) {
-                   dataSource.savePinnedImageIds(ids)
+                   roomDataSource.savePinnedImageIds(ids)
                } else {
-                   dataSource.savePinnedTextIds(ids)
+                   roomDataSource.savePinnedTextIds(ids)
                }
-               Log.d(TAG, "savePinnedIds: saved ${ids.size} ids for isImageGen=$isImageGeneration")
+               Log.d(TAG, "savePinnedIds: saved ${ids.size} ids for isImageGen=$isImageGeneration to Room")
            } catch (e: Exception) {
                Log.e(TAG, "savePinnedIds failed", e)
            }
@@ -1094,21 +1213,23 @@ class DataPersistenceManager(
    
    /**
     * 保存分组信息。使用 Mutex 确保并发安全。
+    * 已迁移到 Room 数据库
     */
    suspend fun saveConversationGroups(groups: Map<String, List<String>>) {
        conversationGroupsSaveMutex.withLock {
            withContext(Dispatchers.IO) {
-               dataSource.saveConversationGroups(groups)
+               roomDataSource.saveConversationGroups(groups)
            }
        }
    }
 
    /**
     * 加载分组信息。
+    * 已迁移到 Room 数据库
     */
    suspend fun loadConversationGroups(): Map<String, List<String>> {
        return withContext(Dispatchers.IO) {
-           dataSource.loadConversationGroups()
+           roomDataSource.loadConversationGroups()
        }
    }
 
@@ -1123,7 +1244,7 @@ class DataPersistenceManager(
            val currentGroups = loadConversationGroups()
            val updatedGroups = updateLambda(currentGroups)
            withContext(Dispatchers.IO) {
-               dataSource.saveConversationGroups(updatedGroups)
+               roomDataSource.saveConversationGroups(updatedGroups)
            }
            updatedGroups
        }
@@ -1132,10 +1253,11 @@ class DataPersistenceManager(
    suspend fun loadPinnedIds(isImageGeneration: Boolean): Set<String> {
        return withContext(Dispatchers.IO) {
            try {
+               // 使用 Room 加载置顶状态
                if (isImageGeneration) {
-                   dataSource.loadPinnedImageIds()
+                   roomDataSource.loadPinnedImageIds()
                } else {
-                   dataSource.loadPinnedTextIds()
+                   roomDataSource.loadPinnedTextIds()
                }
            } catch (e: Exception) {
                Log.e(TAG, "loadPinnedIds failed", e)
@@ -1148,12 +1270,13 @@ class DataPersistenceManager(
    
    /**
     * 保存分组展开状态
+    * 已迁移到 Room 数据库
     */
    suspend fun saveExpandedGroupKeys(keys: Set<String>) {
        withContext(Dispatchers.IO) {
            try {
-               dataSource.saveExpandedGroupKeys(keys)
-               Log.d(TAG, "saveExpandedGroupKeys: saved ${keys.size} expanded group keys")
+               roomDataSource.saveExpandedGroupKeys(keys)
+               Log.d(TAG, "saveExpandedGroupKeys: saved ${keys.size} expanded group keys to Room")
            } catch (e: Exception) {
                Log.e(TAG, "saveExpandedGroupKeys failed", e)
            }
@@ -1162,11 +1285,12 @@ class DataPersistenceManager(
    
    /**
     * 加载分组展开状态
+    * 已迁移到 Room 数据库
     */
    suspend fun loadExpandedGroupKeys(): Set<String> {
        return withContext(Dispatchers.IO) {
            try {
-               dataSource.loadExpandedGroupKeys()
+               roomDataSource.loadExpandedGroupKeys()
            } catch (e: Exception) {
                Log.e(TAG, "loadExpandedGroupKeys failed", e)
                emptySet()
