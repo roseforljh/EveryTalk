@@ -104,13 +104,21 @@ class RealtimeVoiceChatSession(
     companion object {
         private const val TAG = "RealtimeVoiceChat"
         
-        // 全局 OkHttpClient
+        // 全局 OkHttpClient - 优化跨境 WebSocket 连接
         private val okHttpClient: OkHttpClient by lazy {
             OkHttpClient.Builder()
-                .connectTimeout(30, TimeUnit.SECONDS)
+                .connectTimeout(15, TimeUnit.SECONDS)  // 减少连接超时，快速失败
                 .readTimeout(0, TimeUnit.MILLISECONDS) // WebSocket 无超时
-                .writeTimeout(30, TimeUnit.SECONDS)
-                .pingInterval(0, TimeUnit.SECONDS) // 禁用协议层 Ping，使用应用层心跳
+                .writeTimeout(15, TimeUnit.SECONDS)    // 减少写超时
+                .pingInterval(0, TimeUnit.SECONDS)     // 禁用协议层 Ping，使用应用层心跳
+                // 连接池优化：复用连接减少握手延迟
+                .connectionPool(okhttp3.ConnectionPool(
+                    5,   // 最大空闲连接数
+                    3,   // 保持活跃时间
+                    TimeUnit.MINUTES
+                ))
+                // 启用 HTTP/2（OkHttp 对 WSS 默认支持 HTTP/2 升级）
+                .protocols(listOf(okhttp3.Protocol.HTTP_2, okhttp3.Protocol.HTTP_1_1))
                 .build()
         }
     }
