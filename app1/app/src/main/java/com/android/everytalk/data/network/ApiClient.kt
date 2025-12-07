@@ -219,11 +219,22 @@ object ApiClient {
             val cacheFile = File(context.cacheDir, "ktor_http_cache")
             client = HttpClient(io.ktor.client.engine.okhttp.OkHttp) {
                 engine {
-                    // 允许所有主机名验证（用于本地开发）
+                    // 跨境延迟优化配置
                     config {
-                        connectTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
-                        readTimeout(1800, java.util.concurrent.TimeUnit.SECONDS)
-                        writeTimeout(1800, java.util.concurrent.TimeUnit.SECONDS)
+                        // 超时配置：跨境场景适当增加
+                        connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                        readTimeout(300, java.util.concurrent.TimeUnit.SECONDS)   // 5分钟，适合长时间流式响应
+                        writeTimeout(120, java.util.concurrent.TimeUnit.SECONDS)  // 2分钟，适合大文件上传
+                        
+                        // 连接池配置：复用连接减少握手延迟
+                        connectionPool(okhttp3.ConnectionPool(
+                            10,  // 最大空闲连接数
+                            5,   // 连接保持活跃时间
+                            java.util.concurrent.TimeUnit.MINUTES
+                        ))
+                        
+                        // 启用 HTTP/2 + HTTP/1.1 回退（OkHttp 默认支持）
+                        protocols(listOf(okhttp3.Protocol.HTTP_2, okhttp3.Protocol.HTTP_1_1))
                     }
                 }
                 install(ContentNegotiation) {
