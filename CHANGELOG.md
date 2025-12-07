@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.7.19](https://github.com/roseforljh/EveryTalk/compare/v1.7.18...v1.7.19) (2025-12-07)
+
+
+### Bug Fixes
+
+* bug fix ([ff9e802](https://github.com/roseforljh/EveryTalk/commit/ff9e8024532c2dc737e74f3995115ee9214d35e4))
+* 优化网络 ([b3d20f8](https://github.com/roseforljh/EveryTalk/commit/b3d20f80ff48b64138161cf9ad33e075add61a53))
+
 ## [1.7.18](https://github.com/roseforljh/EveryTalk/compare/v1.7.17...v1.7.18) (2025-12-07)
 
 
