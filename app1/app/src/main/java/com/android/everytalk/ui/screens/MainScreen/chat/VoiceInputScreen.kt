@@ -60,7 +60,6 @@ fun VoiceInputScreen(
     // ========== 核心控制器 ==========
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    
 
     val sessionController = rememberVoiceSessionController(
         context = context,

@@ -424,6 +424,142 @@ class VoiceChatDirectSession(
     }
     
     /**
+     * 使用已有的用户文本执行 Chat → TTS 流程（跳过 STT）
+     *
+     * 用于实时 STT 模式：STT 已经在录音过程中完成，这里只需要执行 Chat + TTS
+     *
+     * @param userText 已识别的用户文本
+     * @return VoiceChatResult 包含回复文本、音频数据
+     */
+    suspend fun processWithUserText(
+        userText: String
+    ): VoiceChatResult = withContext(Dispatchers.IO) {
+        Log.i(TAG, "Processing with existing user text: ${userText.take(50)}...")
+        
+        // 重置状态
+        splitter.reset()
+        sentenceBuffer = ""
+        fullAssistantText = ""
+        isCancelled = false
+        
+        val audioChunks = mutableListOf<ByteArray>()
+        
+        try {
+            // 直接开始 Chat + TTS (跳过 STT)
+            Log.i(TAG, "Starting Chat + TTS parallel processing...")
+            val chatStartTime = System.currentTimeMillis()
+            
+            // 创建 TTS 执行器
+            val ttsExecutor: suspend (String) -> Flow<ByteArray> = { text ->
+                TtsDirectClient.synthesizeStream(httpClient, ttsConfig, text)
+            }
+            
+            // 创建预测性 TTS 处理器
+            val ttsProcessor = PredictiveTTSProcessor(
+                ttsExecutor = ttsExecutor,
+                maxConcurrent = 5,
+                maxRetry = 2,
+                taskTimeout = 30_000L,
+                firstTaskTimeout = 15_000L
+            )
+            
+            var sequenceId = 0
+            
+            // 启动 TTS 音频收集协程
+            val audioCollectorJob = launch {
+                ttsProcessor.yieldAudioInOrder().collect { chunk ->
+                    if (!isCancelled && chunk.isNotEmpty()) {
+                        audioChunks.add(chunk)
+                        onAudioChunk?.invoke(chunk)
+                    }
+                }
+            }
+            
+            // 流式处理 Chat 响应
+            try {
+                streamChatResponse(userText).collect { token ->
+                    if (isCancelled) {
+                        return@collect
+                    }
+                    
+                    sentenceBuffer += token
+                    fullAssistantText += token
+                    
+                    // 回调增量文本
+                    withContext(Dispatchers.Main) {
+                        onResponseDelta?.invoke(token, fullAssistantText)
+                    }
+                    
+                    // 使用智能分割器分割文本
+                    val result = splitter.split(sentenceBuffer)
+                    
+                    // 处理每个可发送的片段
+                    for (segment in result.segments) {
+                        if (segment.isNotBlank()) {
+                            val cleanSegment = stripMarkdownForTts(segment)
+                            ttsProcessor.submitTask(sequenceId, cleanSegment)
+                            sequenceId++
+                        }
+                    }
+                    
+                    // 更新 buffer 为剩余内容
+                    sentenceBuffer = result.remainder
+                }
+                
+                // 处理剩余 buffer
+                if (sentenceBuffer.isNotBlank()) {
+                    val cleanSegment = stripMarkdownForTts(sentenceBuffer)
+                    ttsProcessor.submitTask(sequenceId, cleanSegment)
+                    sequenceId++
+                }
+                
+                // 标记输入完成
+                ttsProcessor.markInputComplete()
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "Chat 流处理错误", e)
+                ttsProcessor.markInputComplete()
+                throw e
+            }
+            
+            // 等待 TTS 音频收集完成
+            audioCollectorJob.join()
+            
+            // 清理 TTS 处理器
+            ttsProcessor.cleanup()
+            
+            val chatElapsed = System.currentTimeMillis() - chatStartTime
+            Log.i(TAG, "Chat + TTS completed (${chatElapsed}ms)")
+            
+            // 回调完成
+            withContext(Dispatchers.Main) {
+                onComplete?.invoke(userText, fullAssistantText)
+            }
+            
+            // 获取音频格式
+            val audioFormat = TtsDirectClient.getAudioFormat(ttsConfig.platform)
+            
+            VoiceChatResult(
+                userText = userText,
+                assistantText = fullAssistantText,
+                audioData = mergeAudioChunks(audioChunks),
+                audioFormat = audioFormat.format,
+                sampleRate = audioFormat.sampleRate
+            )
+            
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            Log.i(TAG, "语音对话被取消")
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "语音对话处理失败", e)
+            withContext(Dispatchers.Main) {
+                onError?.invoke(e.message ?: "未知错误")
+            }
+            throw e
+        }
+    }
+    
+    /**
      * 合并音频块
      */
     private fun mergeAudioChunks(chunks: List<ByteArray>): ByteArray {

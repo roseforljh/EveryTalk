@@ -10,11 +10,18 @@ import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.MediaType.Companion.toMediaType
 import com.android.everytalk.config.PerformanceConfig
 import com.android.everytalk.data.network.direct.SttDirectClient
 import com.android.everytalk.data.network.direct.TtsDirectClient
 import com.android.everytalk.data.network.direct.VoiceChatDirectSession
+import com.android.everytalk.data.network.direct.AliyunRealtimeSttClient
 import io.ktor.client.*
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.*
@@ -33,6 +40,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.TimeUnit
 import java.io.BufferedReader
+import java.util.concurrent.atomic.AtomicBoolean
 import com.android.everytalk.security.RequestSignatureUtil
 
 /**
@@ -73,6 +81,9 @@ class VoiceChatSession(
     // 直连模式强制开启，不再支持后端中转
     private val useDirectMode: Boolean = true,
     
+    // 实时 STT 模式（仅阿里云支持）
+    private val useRealtimeStt: Boolean = false,
+    
     private val onVolumeChanged: ((Float) -> Unit)? = null,
     private val onTranscriptionReceived: ((String) -> Unit)? = null, // 识别到的文字回调
     private val onResponseReceived: ((String) -> Unit)? = null  // AI回复文字回调
@@ -83,6 +94,19 @@ class VoiceChatSession(
     
     // 直连会话
     private var directSession: VoiceChatDirectSession? = null
+    
+    // 阿里云实时 STT 客户端（每次录音创建新的客户端）
+    private var aliyunRealtimeSttClient: AliyunRealtimeSttClient? = null
+    private var realtimeSttJob: Job? = null
+    private val realtimeSttScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    
+    // 零等待录音：音频缓冲区（用于在 WebSocket 连接建立前缓存音频数据）
+    private val pendingAudioBuffer = mutableListOf<ByteArray>()
+    private val pendingBufferMutex = Mutex()
+    private val isWebSocketReady = AtomicBoolean(false)
+    
+    // 最大缓冲大小：5 秒音频 @ 16kHz 16bit mono = 160KB
+    private val maxPendingBufferSize = 5 * 16000 * 2
     
     // Ktor HTTP 客户端（用于直连模式）
     private val ktorClient: HttpClient by lazy {
@@ -130,6 +154,14 @@ class VoiceChatSession(
 
     /**
      * 开始录音
+     *
+     * 如果启用了实时 STT 模式且平台是阿里云，会同时启动实时语音识别。
+     *
+     * 【零等待录音优化】
+     * 按下录音按钮后立即启动 AudioRecord，不等待 WebSocket 连接。
+     * 在 WebSocket 连接建立前，音频数据会被缓存到本地。
+     * 连接建立后，先发送缓冲的音频，再实时发送后续音频。
+     * 这样用户按下按钮后立即看到录音动画，无需等待网络。
      */
     suspend fun startRecording() = withContext(Dispatchers.IO) {
         if (isRecording) return@withContext
@@ -139,9 +171,20 @@ class VoiceChatSession(
 
         audioRecord = recorder
         pcmBuffer.reset()
+        
+        // 重置零等待录音状态
+        pendingBufferMutex.withLock {
+            pendingAudioBuffer.clear()
+        }
+        isWebSocketReady.set(false)
 
+        // 如果是阿里云且启用实时 STT
+        val shouldUseRealtimeStt = useRealtimeStt && sttPlatform.equals("Aliyun", ignoreCase = true)
+
+        // 【关键优化】先启动录音，再启动 WebSocket 连接（并行）
         try {
             recorder.startRecording()
+            Log.i(TAG, "AudioRecord started immediately (zero-wait mode)")
         } catch (e: Exception) {
             Log.e(TAG, "startRecording failed: ${e.message}", e)
             audioRecord = null
@@ -150,8 +193,53 @@ class VoiceChatSession(
 
         isRecording = true
 
+        if (shouldUseRealtimeStt) {
+            Log.i(TAG, "Starting Aliyun Realtime STT with zero-wait buffering...")
+
+            // 创建新的 STT 客户端
+            aliyunRealtimeSttClient = AliyunRealtimeSttClient(
+                httpClient = ktorClient,
+                apiKey = sttApiKey,
+                model = sttModel.ifEmpty { "fun-asr-realtime" },
+                sampleRate = sampleRate,
+                format = "pcm"
+            )
+
+            // 在后台启动实时 STT 会话（不阻塞录音）
+            realtimeSttJob = realtimeSttScope.launch {
+                aliyunRealtimeSttClient?.start(
+                    onReady = {
+                        Log.i(TAG, "WebSocket ready, flushing pending audio buffer...")
+                        
+                        // WebSocket 连接成功，发送缓冲的音频数据
+                        realtimeSttScope.launch {
+                            flushPendingAudioBuffer()
+                        }
+                        
+                        // 标记 WebSocket 已就绪
+                        isWebSocketReady.set(true)
+                        
+                        // 通知 UI（可选，因为录音已经开始了）
+                        // onResponseReceived?.invoke("连接已建立")
+                    },
+                    onPartial = { text ->
+                        // 收到 partial 结果时，清除提示文本，并实时更新识别结果
+                        onResponseReceived?.invoke("")
+                        onTranscriptionReceived?.invoke(text)
+                    },
+                    onFinal = { text ->
+                        onTranscriptionReceived?.invoke(text)
+                    },
+                    onError = { error ->
+                        Log.e(TAG, "Realtime STT error: $error")
+                        onResponseReceived?.invoke("识别错误: $error")
+                    }
+                )
+            }
+        }
+
         // 启动读取循环
-        val readBuf = ByteArray(2048)
+        val readBuf = ByteArray(3200) // 100ms @ 16kHz 16bit mono = 3200 bytes
         var lastVolumeUpdateTime = 0L
 
         try {
@@ -159,9 +247,24 @@ class VoiceChatSession(
                 val n = recorder.read(readBuf, 0, readBuf.size)
                 
                 if (n > 0) {
+                    // 始终写入 pcmBuffer（用于后续可能的离线 STT 或备份）
                     pcmBuffer.write(readBuf, 0, n)
+                    
+                    // 如果启用了实时 STT
+                    if (shouldUseRealtimeStt && aliyunRealtimeSttClient != null) {
+                        val audioChunk = if (n < readBuf.size) readBuf.copyOf(n) else readBuf.clone()
+                        
+                        // 【零等待录音核心逻辑】
+                        if (isWebSocketReady.get()) {
+                            // WebSocket 已就绪，直接发送
+                            aliyunRealtimeSttClient?.sendAudio(audioChunk)
+                        } else {
+                            // WebSocket 未就绪，缓存音频数据
+                            bufferAudioChunk(audioChunk)
+                        }
+                    }
 
-                    // 计算音量（RMS）并回调给UI（降低频率 + 抽样以减少CPU开销）
+                    // 计算音量（RMS）并回调给UI
                     val currentTime = System.currentTimeMillis()
                     if (onVolumeChanged != null &&
                         currentTime - lastVolumeUpdateTime >= PerformanceConfig.VOICE_RECORD_VOLUME_UPDATE_INTERVAL_MS
@@ -199,6 +302,58 @@ class VoiceChatSession(
     }
     
     /**
+     * 将音频块添加到待发送缓冲区
+     * 如果缓冲区已满（超过 5 秒音频），丢弃最旧的数据
+     */
+    private suspend fun bufferAudioChunk(chunk: ByteArray) {
+        pendingBufferMutex.withLock {
+            // 计算当前缓冲区大小
+            val currentSize = pendingAudioBuffer.sumOf { it.size }
+            
+            if (currentSize + chunk.size > maxPendingBufferSize) {
+                // 缓冲区即将溢出，丢弃最旧的数据
+                var sizeToRemove = chunk.size
+                while (sizeToRemove > 0 && pendingAudioBuffer.isNotEmpty()) {
+                    val oldest = pendingAudioBuffer.removeAt(0)
+                    sizeToRemove -= oldest.size
+                }
+                Log.w(TAG, "Pending audio buffer overflow, dropped oldest chunks")
+            }
+            
+            pendingAudioBuffer.add(chunk)
+            
+            if (pendingAudioBuffer.size % 10 == 0) {
+                Log.d(TAG, "Buffering audio: ${pendingAudioBuffer.size} chunks, ~${currentSize / 1024}KB")
+            }
+        }
+    }
+    
+    /**
+     * 发送缓冲区中的所有音频数据
+     * 在 WebSocket 连接建立后调用
+     */
+    private suspend fun flushPendingAudioBuffer() {
+        val chunksToSend: List<ByteArray>
+        
+        pendingBufferMutex.withLock {
+            chunksToSend = pendingAudioBuffer.toList()
+            pendingAudioBuffer.clear()
+        }
+        
+        if (chunksToSend.isNotEmpty()) {
+            val totalBytes = chunksToSend.sumOf { it.size }
+            val durationMs = (totalBytes.toFloat() / (sampleRate * 2) * 1000).toLong()
+            Log.i(TAG, "Flushing ${chunksToSend.size} buffered audio chunks (${totalBytes / 1024}KB, ~${durationMs}ms)")
+            
+            for (chunk in chunksToSend) {
+                aliyunRealtimeSttClient?.sendAudio(chunk)
+            }
+            
+            Log.i(TAG, "Buffered audio flushed successfully")
+        }
+    }
+    
+    /**
      * 取消录音
      * 停止录音并丢弃数据，不进行后续处理
      */
@@ -206,6 +361,18 @@ class VoiceChatSession(
         if (!isRecording) return@withContext
         
         isRecording = false
+        
+        // 清理零等待录音缓冲区
+        pendingBufferMutex.withLock {
+            pendingAudioBuffer.clear()
+        }
+        isWebSocketReady.set(false)
+        
+        // 取消实时 STT
+        aliyunRealtimeSttClient?.cancel()
+        aliyunRealtimeSttClient = null
+        realtimeSttJob?.cancel()
+        realtimeSttJob = null
         
         try {
             audioRecord?.stop()
@@ -251,6 +418,16 @@ class VoiceChatSession(
     fun forceRelease() {
         // 优先停止播放，确保退出时不会继续发声
         stopPlayback()
+        
+        // 清理零等待录音缓冲区（非协程版本，直接清理）
+        pendingAudioBuffer.clear()
+        isWebSocketReady.set(false)
+        
+        // 取消实时 STT
+        aliyunRealtimeSttClient?.cancel()
+        aliyunRealtimeSttClient = null
+        realtimeSttJob?.cancel()
+        realtimeSttJob = null
 
         if (!isRecording && audioRecord == null) return
         
@@ -272,9 +449,126 @@ class VoiceChatSession(
     suspend fun stopRecordingAndProcess(): VoiceChatResult = withContext(Dispatchers.IO) {
         isRecording = false
         
+        // 检查是否使用实时 STT 模式
+        val shouldUseRealtimeStt = useRealtimeStt && sttPlatform.equals("Aliyun", ignoreCase = true)
+        
+        if (shouldUseRealtimeStt && aliyunRealtimeSttClient != null) {
+            Log.i(TAG, "Using Realtime STT mode - finishing STT and processing")
+            return@withContext stopRecordingAndProcessWithRealtimeStt()
+        }
+        
         // 直连模式处理（强制）
         Log.i(TAG, "Using Direct Mode (no backend proxy)")
         return@withContext stopRecordingAndProcessDirect()
+    }
+    
+    /**
+     * 使用实时 STT 模式处理：获取实时 STT 的最终结果，然后执行 Chat + TTS
+     */
+    private suspend fun stopRecordingAndProcessWithRealtimeStt(): VoiceChatResult {
+        // 停止录音
+        try {
+            audioRecord?.stop()
+        } catch (_: Throwable) {}
+        try {
+            audioRecord?.release()
+        } catch (_: Throwable) {}
+        audioRecord = null
+        
+        // 等待实时 STT 完成并获取最终文本
+        val userText = aliyunRealtimeSttClient?.finishAndWait() ?: ""
+
+        // 清理实时 STT 客户端
+        aliyunRealtimeSttClient = null
+        realtimeSttJob?.cancel()
+        realtimeSttJob = null
+        
+        Log.i(TAG, "Realtime STT final result: $userText")
+        
+        if (userText.isBlank()) {
+            throw IllegalStateException("语音识别失败：未能识别出文字")
+        }
+        
+        // 通知 UI 最终的识别结果
+        withContext(Dispatchers.Main) {
+            onTranscriptionReceived?.invoke(userText)
+        }
+        
+        // 使用已有的 userText 执行 Chat + TTS（跳过 STT 步骤）
+        return processWithExistingUserText(userText)
+    }
+    
+    /**
+     * 使用已有的用户文本执行 Chat + TTS（跳过 STT）
+     */
+    private suspend fun processWithExistingUserText(userText: String): VoiceChatResult {
+        val audioChunks = mutableListOf<ByteArray>()
+        var assistantText = ""
+        
+        directSession = VoiceChatDirectSession(
+            httpClient = ktorClient,
+            sttConfig = SttDirectClient.SttConfig(
+                platform = sttPlatform,
+                apiKey = sttApiKey,
+                apiUrl = sttApiUrl.ifBlank { null },
+                model = sttModel
+            ),
+            chatPlatform = chatPlatform,
+            chatApiKey = chatApiKey,
+            chatApiUrl = chatApiUrl.ifBlank { null },
+            chatModel = chatModel,
+            systemPrompt = systemPrompt,
+            chatHistory = chatHistory,
+            ttsConfig = TtsDirectClient.TtsConfig(
+                platform = ttsPlatform,
+                apiKey = ttsApiKey,
+                apiUrl = ttsApiUrl.ifBlank { null },
+                model = ttsModel,
+                voiceName = voiceName
+            ),
+            onTranscription = { _ ->
+                // 已经有 userText，忽略 STT 回调
+            },
+            onResponseDelta = { _, full ->
+                assistantText = full
+                onResponseReceived?.invoke(full)
+            },
+            onAudioChunk = { chunk ->
+                audioChunks.add(chunk)
+                // 实时播放音频块
+                if (streamAudioPlayer == null) {
+                    val audioFormat = TtsDirectClient.getAudioFormat(ttsPlatform)
+                    streamAudioPlayer = StreamAudioPlayer(audioFormat.sampleRate)
+                    streamAudioPlayer?.start()
+                }
+                streamAudioPlayer?.write(chunk)
+            },
+            onError = { error ->
+                Log.e(TAG, "Direct mode error: $error")
+            },
+            onComplete = { user, assistant ->
+                Log.i(TAG, "Direct mode completed: user='${user.take(50)}...', assistant='${assistant.take(50)}...'")
+            }
+        )
+        
+        // 执行 Chat + TTS（使用已有的 userText）
+        val result = directSession?.processWithUserText(userText)
+            ?: throw Exception("Direct session process failed")
+        
+        // 等待播放完成
+        streamAudioPlayer?.close()
+        streamAudioPlayer = null
+        
+        directSession = null
+        
+        return VoiceChatResult(
+            userText = userText,
+            assistantText = result.assistantText,
+            audioData = result.audioData,
+            audioFormat = result.audioFormat,
+            sampleRate = result.sampleRate,
+            isRealtimeMode = true
+        )
     }
 
     /**

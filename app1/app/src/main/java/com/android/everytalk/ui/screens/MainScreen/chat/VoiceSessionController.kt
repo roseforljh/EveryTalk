@@ -6,13 +6,22 @@ import androidx.compose.runtime.remember
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.network.VoiceChatSession
+import com.android.everytalk.data.network.direct.AliyunSttConnectionManager
 import com.android.everytalk.statecontroller.AppViewModel
+import io.ktor.client.*
+import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.plugins.*
+import io.ktor.client.plugins.contentnegotiation.*
+import io.ktor.client.plugins.websocket.*
+import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
 import java.util.concurrent.CancellationException
+import java.util.concurrent.TimeUnit
 
 /**
  * 语音会话控制器
@@ -32,6 +41,87 @@ class VoiceSessionController(
     private var currentSession: VoiceChatSession? = null
     private var processingJob: Job? = null
     private val configManager = VoiceConfigManager(context)
+    private var preconnectJob: Job? = null
+    
+    // 共享的 Ktor 客户端（用于预连接和录音）
+    private val sharedKtorClient: HttpClient by lazy {
+        HttpClient(OkHttp) {
+            engine {
+                config {
+                    connectTimeout(30, TimeUnit.SECONDS)
+                    readTimeout(300, TimeUnit.SECONDS)
+                    writeTimeout(120, TimeUnit.SECONDS)
+                }
+            }
+            install(ContentNegotiation) {
+                json(Json {
+                    ignoreUnknownKeys = true
+                    isLenient = true
+                })
+            }
+            install(HttpTimeout) {
+                requestTimeoutMillis = Long.MAX_VALUE
+                connectTimeoutMillis = 60_000
+                socketTimeoutMillis = Long.MAX_VALUE
+            }
+            install(WebSockets) {
+                pingIntervalMillis = 30_000
+            }
+        }
+    }
+    
+    /**
+     * 预连接阿里云 STT WebSocket
+     *
+     * 在用户进入聊天页面时调用，提前建立 WebSocket 连接。
+     * 这样当用户按下录音按钮时，连接已经就绪，可以立即发送音频。
+     */
+    fun preconnectSttIfNeeded() {
+        val config = configManager.loadConfig()
+        
+        // 只有启用阿里云实时 STT 时才预连接
+        if (!config.useRealtimeStreaming || !config.sttPlatform.equals("Aliyun", ignoreCase = true)) {
+            return
+        }
+        
+        // 验证配置
+        if (config.sttApiKey.isEmpty()) {
+            android.util.Log.w("VoiceSessionController", "Aliyun STT API key not configured, skipping preconnect")
+            return
+        }
+        
+        // 取消之前的预连接任务
+        preconnectJob?.cancel()
+        
+        preconnectJob = coroutineScope.launch(Dispatchers.IO) {
+            try {
+                android.util.Log.i("VoiceSessionController", "Starting Aliyun STT preconnect...")
+                
+                // 初始化连接管理器
+                AliyunSttConnectionManager.initialize(sharedKtorClient)
+                
+                // 预连接（这会在后台建立 WebSocket 并等待 task-started）
+                AliyunSttConnectionManager.ensureConnected(
+                    apiKey = config.sttApiKey,
+                    model = config.sttModel.ifEmpty { "fun-asr-realtime" },
+                    sampleRate = 16000
+                )
+                
+                android.util.Log.i("VoiceSessionController", "Aliyun STT preconnect completed")
+            } catch (e: Exception) {
+                android.util.Log.e("VoiceSessionController", "Aliyun STT preconnect failed: ${e.message}", e)
+            }
+        }
+    }
+    
+    /**
+     * 关闭预连接
+     */
+    fun shutdownPreconnect() {
+        preconnectJob?.cancel()
+        preconnectJob = null
+        AliyunSttConnectionManager.shutdown()
+    }
     
     /**
      * 启动录音会话
@@ -54,6 +144,9 @@ class VoiceSessionController(
         // 构建系统提示词
         val systemPrompt = buildSystemPrompt()
         
+        // 判断是否启用实时 STT（仅阿里云平台支持）
+        val useRealtimeStt = config.useRealtimeStreaming && config.sttPlatform.equals("Aliyun", ignoreCase = true)
+        
         // 创建会话
         val session = VoiceChatSession(
             chatHistory = chatHistory,
@@ -75,11 +168,8 @@ class VoiceSessionController(
             ttsModel = config.ttsModel,
             voiceName = config.voiceName,
             
-            // 传入实时流式配置
-            // useRealtimeStreaming = config.useRealtimeStreaming,
-            
-            // 传入直连模式配置
-            // useDirectMode = config.useDirectMode,
+            // 传入实时 STT 配置（仅阿里云支持）
+            useRealtimeStt = useRealtimeStt,
             
             onVolumeChanged = onVolumeChanged,
             onTranscriptionReceived = onTranscriptionReceived,
@@ -87,7 +177,7 @@ class VoiceSessionController(
         )
         android.util.Log.i(
             "VoiceSessionController",
-            "VoiceSession created: ttsPlatform=${config.ttsPlatform}, voice=${config.voiceName}, directMode=true, realtime=false"
+            "VoiceSession created: sttPlatform=${config.sttPlatform}, ttsPlatform=${config.ttsPlatform}, voice=${config.voiceName}, realtimeStt=$useRealtimeStt"
         )
         
         currentSession = session

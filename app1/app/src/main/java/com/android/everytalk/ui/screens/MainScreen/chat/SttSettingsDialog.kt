@@ -68,10 +68,9 @@ fun SttSettingsDialog(
     var model by remember { mutableStateOf(resolveModelFor(selectedPlatform)) }
     var expanded by remember { mutableStateOf(false) }
     
-    // 实时流式模式开关（仅阿里云支持）
-    // 直连模式下不再支持后端实时流式，因此隐藏此选项
-    // val savedRealtimeStreaming = remember { prefs.getBoolean("stt_realtime_streaming", false) }
-    // var useRealtimeStreaming by remember { mutableStateOf(savedRealtimeStreaming) }
+    // 实时流式模式开关（仅阿里云支持）- 现在支持直连实时 STT
+    val savedRealtimeStreaming = remember { prefs.getBoolean("stt_realtime_streaming", false) }
+    var useRealtimeStreaming by remember { mutableStateOf(savedRealtimeStreaming) }
     
     val platforms = listOf("Google", "OpenAI", "SiliconFlow", "Aliyun")
     
@@ -283,9 +282,7 @@ fun SttSettingsDialog(
                     }
                 )
                 
-                // 实时流式模式开关（仅阿里云显示）
-                // 直连模式下不再支持后端实时流式，因此隐藏此选项
-                /*
+                // 实时流式模式开关（仅阿里云显示）- 直连实时 STT
                 if (selectedPlatform == "Aliyun") {
                     Card(
                         colors = CardDefaults.cardColors(
@@ -315,7 +312,7 @@ fun SttSettingsDialog(
                                 )
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = "边说边识别，大幅降低延迟",
+                                    text = "边说边识别，实时显示文字（直连阿里云）",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -335,7 +332,6 @@ fun SttSettingsDialog(
                         }
                     }
                 }
-                */
                 
                 // 底部按钮
                 Row(
@@ -370,7 +366,7 @@ fun SttSettingsDialog(
                                 editor.putString("stt_api_url_${selectedPlatform}", apiUrl.trim())
                                 editor.putString("stt_model_${selectedPlatform}", model.trim())
                                 // 保存实时流式模式设置
-                                // editor.putBoolean("stt_realtime_streaming", useRealtimeStreaming)
+                                editor.putBoolean("stt_realtime_streaming", useRealtimeStreaming)
                                 editor.apply()
                             }
                             onDismiss()

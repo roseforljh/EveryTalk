@@ -178,18 +178,18 @@ object PerformanceConfig {
      * 阿里云 TTS 首句预缓冲时长（毫秒）
      * 阿里云流式模式下，首个音频块后可能有较长等待，需要更大缓冲
      */
-    const val VOICE_STREAM_ALIYUN_FIRST_CHUNK_PREBUFFER_MS = 200L
+    const val VOICE_STREAM_ALIYUN_FIRST_CHUNK_PREBUFFER_MS = 90L
     
     /**
      * 阿里云 TTS 正常预缓冲时长（毫秒）
      */
-    const val VOICE_STREAM_ALIYUN_PREBUFFER_MS = 300L
+    const val VOICE_STREAM_ALIYUN_PREBUFFER_MS = 180L
     
     /**
      * 阿里云 TTS Underrun 后的预缓冲时长（毫秒）
      * 发生 Underrun 后使用更保守的缓冲策略
      */
-    const val VOICE_STREAM_ALIYUN_UNDERRUN_PREBUFFER_MS = 500L
+    const val VOICE_STREAM_ALIYUN_UNDERRUN_PREBUFFER_MS = 260L
 
     /**
      * 流式播放在 close() 阶段的最大等待时间（毫秒）
