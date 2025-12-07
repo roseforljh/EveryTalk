@@ -135,7 +135,7 @@ object PerformanceConfig {
 
     /**
      * 录音阶段音量回调的时间间隔（毫秒）
-     * 数值越小波形越“丝滑”，但 CPU/主线程开销越大；推荐 50–80ms
+     * 数值越小波形越"丝滑"，但 CPU/主线程开销越大；推荐 50–80ms
      */
     const val VOICE_RECORD_VOLUME_UPDATE_INTERVAL_MS = 60L
 
@@ -152,10 +152,44 @@ object PerformanceConfig {
     const val VOICE_SHORT_UTTERANCE_MAX_DURATION_MS = 3_000L
 
     /**
-     * 流式播放预缓冲时长（毫秒）
+     * 流式播放预缓冲时长（毫秒）- 默认值
      * 从首次收到音频到开始播放之间的最小缓冲时间，用于平衡首音延迟和 Underrun 风险
      */
     const val VOICE_STREAM_PREBUFFER_MS = 50L
+    
+    /**
+     * 流式播放首句预缓冲时长（毫秒）- 默认值（适用于 Gemini、Minimax 等高并发平台）
+     * 首句使用更激进的预缓冲策略，减少首字延迟
+     * 风险：可能增加 Underrun 概率，但首句通常较短，风险可控
+     */
+    const val VOICE_STREAM_FIRST_CHUNK_PREBUFFER_MS = 20L
+    
+    /**
+     * 流式播放 Underrun 后的预缓冲时长（毫秒）- 默认值
+     * 发生过 Underrun 后增加缓冲时间以提高稳定性
+     */
+    const val VOICE_STREAM_UNDERRUN_PREBUFFER_MS = 100L
+    
+    // ===== 阿里云 TTS 专用配置 =====
+    // 阿里云 TTS 使用流式边生成边发送模式，但音频块之间可能有较大间隔
+    // 因此需要使用更大的预缓冲来避免 Underrun
+    
+    /**
+     * 阿里云 TTS 首句预缓冲时长（毫秒）
+     * 阿里云流式模式下，首个音频块后可能有较长等待，需要更大缓冲
+     */
+    const val VOICE_STREAM_ALIYUN_FIRST_CHUNK_PREBUFFER_MS = 200L
+    
+    /**
+     * 阿里云 TTS 正常预缓冲时长（毫秒）
+     */
+    const val VOICE_STREAM_ALIYUN_PREBUFFER_MS = 300L
+    
+    /**
+     * 阿里云 TTS Underrun 后的预缓冲时长（毫秒）
+     * 发生 Underrun 后使用更保守的缓冲策略
+     */
+    const val VOICE_STREAM_ALIYUN_UNDERRUN_PREBUFFER_MS = 500L
 
     /**
      * 流式播放在 close() 阶段的最大等待时间（毫秒）

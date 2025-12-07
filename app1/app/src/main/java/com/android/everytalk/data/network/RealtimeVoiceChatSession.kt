@@ -79,6 +79,7 @@ class RealtimeVoiceChatSession(
     private var streamAudioPlayer: StreamAudioPlayer? = null
     private var currentSampleRate = 24000
     private var currentAudioFormat = "pcm"
+    private var currentTtsPlatform = "Gemini"  // 服务端 TTS 平台，用于动态调整预缓冲策略
     
     // 音频写入队列，避免阻塞 WebSocket 消息处理线程
     // 使用 UNLIMITED 容量防止突发数据导致丢包（TTS 可能瞬间返回大量数据块）
@@ -459,9 +460,11 @@ class RealtimeVoiceChatSession(
                     // 音频格式信息
                     val format = json.optString("audio_format", "pcm")
                     val sampleRate = json.optInt("sample_rate", 24000)
+                    val ttsPlatform = json.optString("tts_platform", "Gemini")
                     currentAudioFormat = format
                     currentSampleRate = sampleRate
-                    Log.i(TAG, "音频格式: $format, 采样率: $sampleRate")
+                    currentTtsPlatform = ttsPlatform
+                    Log.i(TAG, "音频格式: $format, 采样率: $sampleRate, TTS平台: $ttsPlatform")
                 }
                 
                 "chat_delta" -> {
@@ -482,7 +485,9 @@ class RealtimeVoiceChatSession(
                         
                         // 初始化播放器和音频写入协程（如果需要）
                         if (streamAudioPlayer == null && !isCancelled) {
-                            streamAudioPlayer = StreamAudioPlayer(currentSampleRate)
+                            // 根据 TTS 平台选择不同的预缓冲策略
+                            val isAliyun = currentTtsPlatform.equals("Aliyun", ignoreCase = true)
+                            streamAudioPlayer = StreamAudioPlayer(currentSampleRate, isAliyun)
                             streamAudioPlayer?.start()
                             
                             // 启动音频写入协程，从队列中读取音频数据并写入播放器
@@ -585,15 +590,28 @@ class RealtimeVoiceChatSession(
     
     /**
      * 流式音频播放器
-     * 线程安全：使用 synchronized 和 volatile 保护对 audioTrack 的访问
+     *
+     * 特性：
+     * - 线程安全：使用 synchronized 和 volatile 保护对 audioTrack 的访问
+     * - 动态预缓冲：首句使用更激进的策略减少延迟，发生 Underrun 后增加缓冲
+     * - 首字延迟优化：首次播放使用更小的预缓冲阈值
+     * - 平台适配：阿里云 TTS 使用更大的预缓冲策略
      */
-    private inner class StreamAudioPlayer(private val sampleRate: Int) {
+    private inner class StreamAudioPlayer(
+        private val sampleRate: Int,
+        private val isAliyunPlatform: Boolean = false  // 是否为阿里云平台
+    ) {
         @Volatile
         private var audioTrack: AudioTrack? = null
         private val bufferSize: Int
         private var totalWrittenBytes = 0
         private var isBuffering = true
-        private var nextPlayThreshold = ((sampleRate * 2L * PerformanceConfig.VOICE_STREAM_PREBUFFER_MS) / 1000L).toInt()
+        
+        // 动态预缓冲策略
+        private var isFirstChunk = true  // 是否是首个音频块
+        private var underrunCount = 0    // Underrun 计数
+        private var nextPlayThreshold = calculatePrebufferThreshold(isFirst = true, hadUnderrun = false)
+        
         private var leftoverByte: Byte? = null
         private var lastVolumeUpdateTime = 0L
         
@@ -606,6 +624,40 @@ class RealtimeVoiceChatSession(
         
         // 同步锁，保护对 audioTrack 的访问
         private val trackLock = Any()
+        
+        /**
+         * 计算预缓冲阈值（字节数）
+         *
+         * 动态策略：
+         * - 阿里云平台：使用更大的预缓冲阈值（边生成边发送，音频块间隔较大）
+         * - 其他平台：使用较小的预缓冲阈值（并行处理，音频块较连续）
+         *
+         * 各平台配置：
+         * - 阿里云首句：VOICE_STREAM_ALIYUN_FIRST_CHUNK_PREBUFFER_MS (200ms)
+         * - 阿里云正常：VOICE_STREAM_ALIYUN_PREBUFFER_MS (300ms)
+         * - 阿里云Underrun：VOICE_STREAM_ALIYUN_UNDERRUN_PREBUFFER_MS (500ms)
+         * - 其他首句：VOICE_STREAM_FIRST_CHUNK_PREBUFFER_MS (20ms)
+         * - 其他正常：VOICE_STREAM_PREBUFFER_MS (50ms)
+         * - 其他Underrun：VOICE_STREAM_UNDERRUN_PREBUFFER_MS (100ms)
+         */
+        private fun calculatePrebufferThreshold(isFirst: Boolean, hadUnderrun: Boolean): Int {
+            val prebufferMs = if (isAliyunPlatform) {
+                // 阿里云使用更大的预缓冲策略
+                when {
+                    isFirst && !hadUnderrun -> PerformanceConfig.VOICE_STREAM_ALIYUN_FIRST_CHUNK_PREBUFFER_MS
+                    hadUnderrun -> PerformanceConfig.VOICE_STREAM_ALIYUN_UNDERRUN_PREBUFFER_MS
+                    else -> PerformanceConfig.VOICE_STREAM_ALIYUN_PREBUFFER_MS
+                }
+            } else {
+                // 其他平台使用默认策略
+                when {
+                    isFirst && !hadUnderrun -> PerformanceConfig.VOICE_STREAM_FIRST_CHUNK_PREBUFFER_MS
+                    hadUnderrun -> PerformanceConfig.VOICE_STREAM_UNDERRUN_PREBUFFER_MS
+                    else -> PerformanceConfig.VOICE_STREAM_PREBUFFER_MS
+                }
+            }
+            return ((sampleRate * 2L * prebufferMs) / 1000L).toInt()
+        }
         
         init {
             val channelConfig = AudioFormat.CHANNEL_OUT_MONO
@@ -630,6 +682,20 @@ class RealtimeVoiceChatSession(
                 .setBufferSizeInBytes(bufferSize)
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
+            
+            val firstPrebufferMs = if (isAliyunPlatform)
+                PerformanceConfig.VOICE_STREAM_ALIYUN_FIRST_CHUNK_PREBUFFER_MS
+            else
+                PerformanceConfig.VOICE_STREAM_FIRST_CHUNK_PREBUFFER_MS
+            val normalPrebufferMs = if (isAliyunPlatform)
+                PerformanceConfig.VOICE_STREAM_ALIYUN_PREBUFFER_MS
+            else
+                PerformanceConfig.VOICE_STREAM_PREBUFFER_MS
+            
+            Log.d(TAG, "StreamAudioPlayer 初始化: sampleRate=$sampleRate, " +
+                      "platform=${if (isAliyunPlatform) "Aliyun" else "Default"}, " +
+                      "firstPrebuffer=${firstPrebufferMs}ms, " +
+                      "normalPrebuffer=${normalPrebufferMs}ms")
         }
         
         fun start() {
@@ -724,7 +790,19 @@ class RealtimeVoiceChatSession(
                                 try {
                                     track.play()
                                     isBuffering = false
-                                    Log.i(TAG, "预缓冲完成，开始播放")
+                                    
+                                    // 记录首次播放
+                                    if (isFirstChunk) {
+                                        val prebufferMs = if (isAliyunPlatform)
+                                            PerformanceConfig.VOICE_STREAM_ALIYUN_FIRST_CHUNK_PREBUFFER_MS
+                                        else
+                                            PerformanceConfig.VOICE_STREAM_FIRST_CHUNK_PREBUFFER_MS
+                                        Log.i(TAG, "首句预缓冲完成，开始播放 (阈值=${nextPlayThreshold}字节, " +
+                                                  "prebuffer=${prebufferMs}ms, platform=${if (isAliyunPlatform) "Aliyun" else "Default"})")
+                                        isFirstChunk = false
+                                    } else {
+                                        Log.i(TAG, "预缓冲完成，开始播放 (阈值=${nextPlayThreshold}字节)")
+                                    }
                                 } catch (e: Exception) {
                                     Log.e(TAG, "播放失败: ${e.message}")
                                 }
@@ -732,10 +810,12 @@ class RealtimeVoiceChatSession(
                         } else {
                             try {
                                 if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
-                                    Log.w(TAG, "检测到 Underrun，重新缓冲")
+                                    underrunCount++
+                                    Log.w(TAG, "检测到 Underrun (第${underrunCount}次)，使用增强缓冲")
                                     isBuffering = true
+                                    // 发生 Underrun 后使用更大的预缓冲阈值
                                     nextPlayThreshold = totalWrittenBytes +
-                                        ((sampleRate * 2L * PerformanceConfig.VOICE_STREAM_PREBUFFER_MS) / 1000L).toInt()
+                                        calculatePrebufferThreshold(isFirst = false, hadUnderrun = true)
                                 }
                             } catch (_: Exception) {}
                         }
