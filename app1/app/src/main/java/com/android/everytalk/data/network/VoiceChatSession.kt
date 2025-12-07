@@ -345,8 +345,10 @@ class VoiceChatSession(
             val session = realtimeSession
             session?.stopRecording()
             
-            // 等待实时会话完成（最多等待 30 秒）
-            val result = session?.awaitCompletion(30000L) ?: Pair("", "")
+            // 等待实时会话完成
+            // 阿里云 TTS 使用串行处理（max_concurrent=2），长文本可能需要较长时间
+            // 因此增加超时时间到 180 秒，避免因超时导致连接被过早关闭
+            val result = session?.awaitCompletion(180000L) ?: Pair("", "")
             Log.i(TAG, "Realtime session completed: user='${result.first}', assistant='${result.second}'")
             
             // 清理会话引用

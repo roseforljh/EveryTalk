@@ -28,6 +28,7 @@ fun VoiceSettingsDialog(
     val savedKeyOpenAI = remember { prefs.getString("voice_key_OpenAI", "") ?: "" }
     val savedKeyMinimax = remember { prefs.getString("voice_key_Minimax", "") ?: "" }
     val savedKeySiliconFlow = remember { prefs.getString("voice_key_SiliconFlow", "") ?: "" }
+    val savedKeyAliyun = remember { prefs.getString("voice_key_Aliyun", "") ?: "" }
     
     // 旧全局默认值
     val defaultBaseUrl = remember { prefs.getString("voice_base_url", "") ?: "" }
@@ -39,6 +40,7 @@ fun VoiceSettingsDialog(
             "OpenAI" -> savedKeyOpenAI
             "Minimax" -> savedKeyMinimax
             "SiliconFlow" -> savedKeySiliconFlow
+            "Aliyun" -> savedKeyAliyun
             else -> savedKeyGemini
         }.trim()
     }
@@ -49,6 +51,7 @@ fun VoiceSettingsDialog(
         
         return when (platform) {
             "SiliconFlow" -> "https://api.siliconflow.cn/v1/audio/speech"
+            "Aliyun" -> "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
             else -> defaultBaseUrl
         }
     }
@@ -59,6 +62,7 @@ fun VoiceSettingsDialog(
         
         return when (platform) {
             "SiliconFlow" -> "IndexTeam/IndexTTS-2"
+            "Aliyun" -> ""
             else -> defaultChatModel
         }
     }
@@ -73,7 +77,7 @@ fun VoiceSettingsDialog(
     var chatModel by remember { mutableStateOf(resolveModelFor(selectedPlatform)) }
     var expanded by remember { mutableStateOf(false) }
     
-    val platforms = listOf("Gemini", "OpenAI", "Minimax", "SiliconFlow")
+    val platforms = listOf("Gemini", "OpenAI", "Minimax", "SiliconFlow", "Aliyun")
     
     // 预设模型列表
     // 自定义模型管理
@@ -223,10 +227,17 @@ fun VoiceSettingsDialog(
                         onValueChange = { if (selectedPlatform != "Gemini") baseUrl = it },
                         enabled = selectedPlatform != "Gemini",
                         modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("例如 https://api.minimaxi.com/v1/t2a_v2") },
+                        placeholder = {
+                            Text(
+                                if (selectedPlatform == "Aliyun") "例如 wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+                                else "例如 https://api.minimaxi.com/v1/t2a_v2"
+                            )
+                        },
                         supportingText = {
                             if (selectedPlatform == "Gemini") {
                                 Text("自动使用 https://generativelanguage.googleapis.com", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            } else if (selectedPlatform == "Aliyun") {
+                                Text("默认: wss://dashscope.aliyuncs.com/api-ws/v1/realtime", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             } else if (baseUrl.isNotEmpty() && !baseUrl.startsWith("http")) {
                                 Text("请填写完整的 http(s) 地址", color = MaterialTheme.colorScheme.error)
                             } else if (selectedPlatform == "Minimax" && baseUrl.isBlank()) {
@@ -334,6 +345,7 @@ fun VoiceSettingsDialog(
                                     "OpenAI" -> editor.putString("voice_key_OpenAI", apiKey)
                                     "Minimax" -> editor.putString("voice_key_Minimax", apiKey)
                                     "SiliconFlow" -> editor.putString("voice_key_SiliconFlow", apiKey)
+                                    "Aliyun" -> editor.putString("voice_key_Aliyun", apiKey)
                                     else -> editor.putString("voice_key_Gemini", apiKey)
                                 }
                                 // 保存该平台特定的 Base URL 和 Model

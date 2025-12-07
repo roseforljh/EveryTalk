@@ -152,13 +152,17 @@ class VoiceSessionController(
      * 停止当前播放或处理
      */
     fun stopPlayback() {
+        // 先保存当前会话的引用，避免被 finally 块置空后无法调用
+        val session = currentSession
+        
         // 如果正在处理中，取消处理任务
         if (processingJob?.isActive == true) {
             processingJob?.cancel()
             processingJob = null
         }
-        // 停止音频播放
-        currentSession?.stopPlayback()
+        
+        // 使用保存的引用停止音频播放
+        session?.stopPlayback()
     }
     
     /**

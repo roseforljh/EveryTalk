@@ -80,6 +80,7 @@ class VoiceConfigManager(private val context: Context) {
             "OpenAI" -> prefs.getString("voice_key_OpenAI", "") ?: ""
             "Minimax" -> prefs.getString("voice_key_Minimax", "") ?: ""
             "SiliconFlow" -> prefs.getString("voice_key_SiliconFlow", "") ?: ""
+            "Aliyun" -> prefs.getString("voice_key_Aliyun", "") ?: ""
             else -> prefs.getString("voice_key_Gemini", "") ?: ""
         }.trim()
         
@@ -144,6 +145,9 @@ class VoiceConfigManager(private val context: Context) {
         if (config.ttsPlatform == "SiliconFlow" && config.ttsApiKey.isEmpty()) {
             return "请配置 SiliconFlow API Key"
         }
+        if (config.ttsPlatform == "Aliyun" && config.ttsApiKey.isEmpty()) {
+            return "请配置阿里云 API Key"
+        }
         
         // 后端地址校验
         if (com.android.everytalk.BuildConfig.VOICE_BACKEND_URL.isEmpty()) {
@@ -161,6 +165,7 @@ class VoiceConfigManager(private val context: Context) {
             "SiliconFlow" -> "alex"
             "Minimax" -> "male-qn-qingse"
             "OpenAI" -> "alloy"
+            "Aliyun" -> "Cherry" // 阿里云默认音色：芊悦
             else -> "Kore" // Gemini
         }
     }

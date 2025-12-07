@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.MainScreen.chat
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -283,29 +284,52 @@ fun SttSettingsDialog(
                 
                 // 实时流式模式开关（仅阿里云显示）
                 if (selectedPlatform == "Aliyun") {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isDarkTheme)
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            else
+                                MaterialTheme.colorScheme.surface
+                        ),
+                        border = if (!isDarkTheme) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant) else null,
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "实时流式识别",
-                                style = MaterialTheme.typography.labelLarge.copy(
-                                    fontWeight = FontWeight.SemiBold
-                                ),
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = "边说边识别，大幅降低延迟",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "实时流式识别",
+                                    style = MaterialTheme.typography.titleMedium.copy(
+                                        fontWeight = FontWeight.SemiBold
+                                    ),
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "边说边识别，大幅降低延迟",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = useRealtimeStreaming,
+                                onCheckedChange = { useRealtimeStreaming = it },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                                    checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                    checkedBorderColor = Color.Transparent,
+                                    uncheckedThumbColor = if (isDarkTheme) Color.White else MaterialTheme.colorScheme.outline,
+                                    uncheckedTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                    uncheckedBorderColor = if (isDarkTheme) Color.Transparent else MaterialTheme.colorScheme.outline
+                                )
                             )
                         }
-                        Switch(
-                            checked = useRealtimeStreaming,
-                            onCheckedChange = { useRealtimeStreaming = it }
-                        )
                     }
                 }
                 

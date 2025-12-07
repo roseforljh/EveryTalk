@@ -5,6 +5,7 @@ import android.util.Base64
 import android.util.Log
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.*
 import okhttp3.*
 import okio.ByteString
@@ -78,6 +79,11 @@ class RealtimeVoiceChatSession(
     private var streamAudioPlayer: StreamAudioPlayer? = null
     private var currentSampleRate = 24000
     private var currentAudioFormat = "pcm"
+    
+    // 音频写入队列，避免阻塞 WebSocket 消息处理线程
+    // 使用 UNLIMITED 容量防止突发数据导致丢包（TTS 可能瞬间返回大量数据块）
+    private val audioQueue = Channel<ByteArray>(capacity = Channel.UNLIMITED)
+    private var audioWriterJob: Job? = null
     
     // 协程作用域
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -156,16 +162,16 @@ class RealtimeVoiceChatSession(
     
     /**
      * 等待会话完成并返回结果
-     * @param timeoutMs 超时时间（毫秒），默认 30 秒
+     * @param timeoutMs 超时时间（毫秒），默认 120 秒（阿里云TTS串行处理可能较慢）
      * @return 用户文本和助手文本的 Pair，如果超时或取消则返回空字符串
      */
-    suspend fun awaitCompletion(timeoutMs: Long = 30000L): Pair<String, String> {
+    suspend fun awaitCompletion(timeoutMs: Long = 120000L): Pair<String, String> {
         return try {
             withTimeout(timeoutMs) {
                 completionDeferred.await()
             }
         } catch (e: TimeoutCancellationException) {
-            Log.w(TAG, "等待会话完成超时")
+            Log.w(TAG, "等待会话完成超时 (${timeoutMs}ms)")
             Pair("", "")
         } catch (e: Exception) {
             Log.w(TAG, "等待会话完成时出错: ${e.message}")
@@ -198,6 +204,11 @@ class RealtimeVoiceChatSession(
             audioRecord?.release()
         } catch (_: Exception) {}
         audioRecord = null
+        
+        // 关闭音频队列
+        audioQueue.close()
+        audioWriterJob?.cancel()
+        audioWriterJob = null
         
         // 停止播放
         streamAudioPlayer?.forceStop()
@@ -462,27 +473,45 @@ class RealtimeVoiceChatSession(
                 }
                 
                 "audio" -> {
+                    // 如果已取消，忽略所有音频消息
+                    if (isCancelled) return
+                    
                     val audioData = json.optString("data", "")
                     if (audioData.isNotEmpty()) {
                         val decoded = Base64.decode(audioData, Base64.DEFAULT)
                         
-                        // 初始化播放器（如果需要）
-                        if (streamAudioPlayer == null) {
+                        // 初始化播放器和音频写入协程（如果需要）
+                        if (streamAudioPlayer == null && !isCancelled) {
                             streamAudioPlayer = StreamAudioPlayer(currentSampleRate)
                             streamAudioPlayer?.start()
+                            
+                            // 启动音频写入协程，从队列中读取音频数据并写入播放器
+                            audioWriterJob = scope.launch(Dispatchers.IO) {
+                                try {
+                                    for (chunk in audioQueue) {
+                                        if (isCancelled) break
+                                        streamAudioPlayer?.writeBlocking(chunk)
+                                    }
+                                } catch (e: Exception) {
+                                    if (e !is kotlinx.coroutines.channels.ClosedReceiveChannelException) {
+                                        Log.w(TAG, "音频写入协程错误: ${e.message}")
+                                    }
+                                }
+                            }
                         }
                         
-                        // 直接写入音频数据（不使用新协程，避免与 close() 的竞态条件）
-                        // handleMessage 已经在 IO 线程上执行，可以直接写入
-                        try {
-                            streamAudioPlayer?.writeBlocking(decoded)
-                        } catch (e: Exception) {
-                            Log.w(TAG, "写入音频数据时出错: ${e.message}")
+                        // 将音频数据放入队列，不阻塞 WebSocket 消息处理
+                        // 使用 trySend 放入无限容量队列，确保不丢包
+                        val result = audioQueue.trySend(decoded)
+                        if (result.isFailure) {
+                            Log.e(TAG, "音频写入队列失败，这不应该发生 (UNLIMITED channel)")
                         }
                         
-                        // 回调
-                        scope.launch(Dispatchers.Main) {
-                            onAudioReceived?.invoke(decoded, currentSampleRate)
+                        // 回调（仅在未取消时）
+                        if (!isCancelled) {
+                            scope.launch(Dispatchers.Main) {
+                                onAudioReceived?.invoke(decoded, currentSampleRate)
+                            }
                         }
                     }
                 }
@@ -497,30 +526,40 @@ class RealtimeVoiceChatSession(
                     
                     isCompleted = true
                     
-                    // 在当前线程等待音频播放完成（handleMessage 已在 IO 线程上）
-                    try {
-                        streamAudioPlayer?.close()
-                    } catch (e: Exception) {
-                        Log.w(TAG, "关闭音频播放器时出错: ${e.message}")
-                    }
-                    streamAudioPlayer = null
+                    // 关闭音频队列
+                    audioQueue.close()
                     
-                    Log.i(TAG, "音频播放完成，发送回调")
-                    
-                    // 安全地调用回调
-                    scope.launch(Dispatchers.Main) {
+                    // 启动协程等待音频写入和播放完成
+                    // 必须在协程中等待，因为 join() 是 suspend 函数
+                    scope.launch(Dispatchers.IO) {
                         try {
-                            if (!isCancelled) {
-                                onComplete?.invoke(userText, assistantText)
-                                onVolumeChanged?.invoke(0f)
-                            }
+                            // 等待所有音频数据写入播放器
+                            audioWriterJob?.join()
+                            
+                            // 等待音频播放完成
+                            streamAudioPlayer?.close()
                         } catch (e: Exception) {
-                            Log.w(TAG, "回调执行时出错: ${e.message}")
+                            Log.w(TAG, "关闭音频播放流程出错: ${e.message}")
+                        } finally {
+                            streamAudioPlayer = null
+                            Log.i(TAG, "音频播放完成，发送回调")
+                            
+                            // 安全地调用回调
+                            withContext(Dispatchers.Main) {
+                                try {
+                                    if (!isCancelled) {
+                                        onComplete?.invoke(userText, assistantText)
+                                        onVolumeChanged?.invoke(0f)
+                                    }
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "回调执行时出错: ${e.message}")
+                                }
+                            }
+                            
+                            // 通知等待者会话已完成
+                            completionDeferred.complete(Pair(userText, assistantText))
                         }
                     }
-                    
-                    // 通知等待者会话已完成
-                    completionDeferred.complete(Pair(userText, assistantText))
                 }
                 
                 "error" -> {
@@ -822,12 +861,24 @@ class RealtimeVoiceChatSession(
         
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
             Log.i(TAG, "WebSocket 已关闭: $code $reason")
+            // 如果会话尚未完成，通知等待者连接已关闭
+            // 这样 awaitCompletion 就不会一直等待直到超时
+            if (!isCompleted && !completionDeferred.isCompleted) {
+                Log.i(TAG, "连接关闭时会话尚未完成，通知等待者")
+                completionDeferred.complete(Pair("", ""))
+            }
         }
         
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
             Log.e(TAG, "WebSocket 错误: ${t.message}", t)
             scope.launch(Dispatchers.Main) {
                 onError?.invoke("连接错误: ${t.message}")
+            }
+            // 如果会话尚未完成，通知等待者连接已失败
+            // 这样 awaitCompletion 就不会一直等待直到超时
+            if (!isCompleted && !completionDeferred.isCompleted) {
+                Log.i(TAG, "连接失败时会话尚未完成，通知等待者")
+                completionDeferred.complete(Pair("", ""))
             }
         }
     }
