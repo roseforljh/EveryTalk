@@ -109,6 +109,12 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
 
     // 标记是否刚关闭编辑对话框，用于防止输入框重新获焦时自动滚动到底部
     var justClosedEditDialog by remember { mutableStateOf(false) }
+    
+    LaunchedEffect(Unit) {
+        // 强制同步模式状态为 IMAGE
+        viewModel.simpleModeManager.setIntendedMode(SimpleModeManager.ModeType.IMAGE)
+    }
+
     LaunchedEffect(showEditDialog) {
         if (!showEditDialog) {
             justClosedEditDialog = true
@@ -174,13 +180,7 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                     ?: selectedApiConfig?.model ?: "选择配置",
                 onMenuClick = { coroutineScope.launch { viewModel.drawerState.open() } },
                 onSettingsClick = {
-                    val currentMode = viewModel.getCurrentMode()
-                    val targetScreen = if (currentMode == SimpleModeManager.ModeType.IMAGE) {
-                        Screen.IMAGE_GENERATION_SETTINGS_SCREEN
-                    } else {
-                        Screen.SETTINGS_SCREEN
-                    }
-                    navController.navigate(targetScreen)
+                    navController.navigate(Screen.IMAGE_GENERATION_SETTINGS_SCREEN)
                 },
                 onTitleClick = { showModelSelection = true },
                 onSystemPromptClick = {},

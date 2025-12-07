@@ -164,6 +164,8 @@ fun ChatScreen(
 
 
     LaunchedEffect(Unit) {
+        // 强制同步模式状态为 TEXT，确保从图像模式左滑返回时状态正确
+        viewModel.simpleModeManager.setIntendedMode(SimpleModeManager.ModeType.TEXT)
         viewModel.scrollToBottomEvent.collect {
             scrollStateManager.jumpToBottom()
         }
@@ -255,15 +257,7 @@ fun ChatScreen(
                     ?: selectedApiConfig?.model ?: "选择配置",
                 onMenuClick = { coroutineScope.launch { viewModel.drawerState.open() } },
                 onSettingsClick = {
-                    // 根据应用的当前模式状态决定跳转到哪个设置页面
-                    // 使用更可靠的模式检测，基于uiModeFlow而不是消息内容
-                    val currentMode = viewModel.getCurrentMode()
-                    val targetScreen = if (currentMode == SimpleModeManager.ModeType.IMAGE) {
-                        Screen.IMAGE_GENERATION_SETTINGS_SCREEN
-                    } else {
-                        Screen.SETTINGS_SCREEN
-                    }
-                    navController.navigate(targetScreen) {
+                    navController.navigate(Screen.SETTINGS_SCREEN) {
                         popUpTo(navController.graph.findStartDestination().id) {
                             saveState = true
                         }
