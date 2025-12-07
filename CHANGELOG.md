@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.7.18](https://github.com/roseforljh/EveryTalk/compare/v1.7.17...v1.7.18) (2025-12-07)
+
+
+### Bug Fixes
+
+* 加快阿里云tts输出首字的速度 ([9ed2f47](https://github.com/roseforljh/EveryTalk/commit/9ed2f470eaa74d0cee5464dd06e190a2a2519b48))
+* 可能修复了持久化问题 ([fb4fbfe](https://github.com/roseforljh/EveryTalk/commit/fb4fbfe77cd567d3d213a0db1bfbd1a6897770be))
+* 图像模式两个默认模型的持久化问题修复 ([d5a1ab1](https://github.com/roseforljh/EveryTalk/commit/d5a1ab1828f3cd380428bbea889ef9bbe8306f97))
+* 图片持久化的问题 ([c7f6111](https://github.com/roseforljh/EveryTalk/commit/c7f6111659c6574857a67fc1fa8c123de00bb7a3))
+* 适配fun-asr ([f2ce72f](https://github.com/roseforljh/EveryTalk/commit/f2ce72f212be2b1b2cfcdcd60a8611db08d234d3))
+* 适配阿里云tts ([d982757](https://github.com/roseforljh/EveryTalk/commit/d982757493d6e37bc4671fd3dcd230f0dcab9a48))
+* 阿里云stt实时输出 ([8171fff](https://github.com/roseforljh/EveryTalk/commit/8171fffb75e6003d746723b4bcde8d5aa2b0ed28))
+
 ## [1.7.17](https://github.com/roseforljh/EveryTalk/compare/v1.7.16...v1.7.17) (2025-12-04)
 
 
