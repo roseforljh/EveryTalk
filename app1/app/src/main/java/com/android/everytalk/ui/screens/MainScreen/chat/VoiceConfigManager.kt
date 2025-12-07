@@ -25,7 +25,10 @@ data class VoiceConfig(
     val ttsApiKey: String,
     val ttsApiUrl: String,
     val ttsModel: String,
-    val voiceName: String
+    val voiceName: String,
+    
+    // 实时流式模式（仅阿里云 STT 支持）
+    val useRealtimeStreaming: Boolean = false
 )
 
 class VoiceConfigManager(private val context: Context) {
@@ -38,9 +41,9 @@ class VoiceConfigManager(private val context: Context) {
     fun loadConfig(): VoiceConfig {
         // STT配置
         val sttPlatform = prefs.getString("stt_platform", "Google") ?: "Google"
-        val sttApiUrl = prefs.getString("stt_api_url_${sttPlatform}", null) 
+        val sttApiUrl = prefs.getString("stt_api_url_${sttPlatform}", null)
             ?: prefs.getString("stt_api_url", "")?.trim() ?: ""
-        val sttModel = prefs.getString("stt_model_${sttPlatform}", null) 
+        val sttModel = prefs.getString("stt_model_${sttPlatform}", null)
             ?: prefs.getString("stt_model", "")?.trim() ?: ""
         val sttApiKey = when (sttPlatform) {
             "OpenAI" -> prefs.getString("stt_key_OpenAI", "") ?: ""
@@ -48,6 +51,9 @@ class VoiceConfigManager(private val context: Context) {
             "Aliyun" -> prefs.getString("stt_key_Aliyun", "") ?: ""
             else -> prefs.getString("stt_key_Google", "") ?: ""
         }.trim()
+        
+        // 实时流式模式（仅阿里云支持）
+        val useRealtimeStreaming = prefs.getBoolean("stt_realtime_streaming", false) && sttPlatform == "Aliyun"
         
         // Chat配置
         val chatPlatform = prefs.getString("chat_platform", "Google") ?: "Google"
@@ -90,8 +96,20 @@ class VoiceConfigManager(private val context: Context) {
             ttsApiKey = ttsApiKey,
             ttsApiUrl = ttsApiUrl,
             ttsModel = ttsModel,
-            voiceName = voiceName
+            voiceName = voiceName,
+            useRealtimeStreaming = useRealtimeStreaming
         )
+    }
+    
+    /**
+     * 获取 WebSocket 实时语音对话地址
+     */
+    fun getRealtimeWebSocketUrl(): String {
+        val baseUrl = com.android.everytalk.BuildConfig.VOICE_BACKEND_URL
+        // 将 http/https 转换为 ws/wss
+        return baseUrl
+            .replace("https://", "wss://")
+            .replace("http://", "ws://") + "/voice-chat/realtime"
     }
     
     /**

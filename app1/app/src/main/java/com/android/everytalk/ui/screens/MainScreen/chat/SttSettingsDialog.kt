@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -65,6 +66,10 @@ fun SttSettingsDialog(
     var apiUrl by remember { mutableStateOf(resolveApiUrlFor(selectedPlatform)) }
     var model by remember { mutableStateOf(resolveModelFor(selectedPlatform)) }
     var expanded by remember { mutableStateOf(false) }
+    
+    // 实时流式模式开关（仅阿里云支持）
+    val savedRealtimeStreaming = remember { prefs.getBoolean("stt_realtime_streaming", false) }
+    var useRealtimeStreaming by remember { mutableStateOf(savedRealtimeStreaming) }
     
     val platforms = listOf("Google", "OpenAI", "SiliconFlow", "Aliyun")
     
@@ -276,6 +281,34 @@ fun SttSettingsDialog(
                     }
                 )
                 
+                // 实时流式模式开关（仅阿里云显示）
+                if (selectedPlatform == "Aliyun") {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "实时流式识别",
+                                style = MaterialTheme.typography.labelLarge.copy(
+                                    fontWeight = FontWeight.SemiBold
+                                ),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "边说边识别，大幅降低延迟",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = useRealtimeStreaming,
+                            onCheckedChange = { useRealtimeStreaming = it }
+                        )
+                    }
+                }
+                
                 // 底部按钮
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -308,6 +341,8 @@ fun SttSettingsDialog(
                                 // 按平台保存
                                 editor.putString("stt_api_url_${selectedPlatform}", apiUrl.trim())
                                 editor.putString("stt_model_${selectedPlatform}", model.trim())
+                                // 保存实时流式模式设置
+                                editor.putBoolean("stt_realtime_streaming", useRealtimeStreaming)
                                 editor.apply()
                             }
                             onDismiss()

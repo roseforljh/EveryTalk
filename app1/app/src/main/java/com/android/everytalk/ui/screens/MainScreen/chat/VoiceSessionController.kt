@@ -75,6 +75,9 @@ class VoiceSessionController(
             ttsModel = config.ttsModel,
             voiceName = config.voiceName,
             
+            // 传入实时流式配置
+            useRealtimeStreaming = config.useRealtimeStreaming,
+            
             onVolumeChanged = onVolumeChanged,
             onTranscriptionReceived = onTranscriptionReceived,
             onResponseReceived = onResponseReceived
@@ -113,11 +116,12 @@ class VoiceSessionController(
                 // 保存对话到历史
                 saveToHistory(result.userText, result.assistantText)
                 
-                // 检查是否有音频
-                val hasAudio = result.audioData.isNotEmpty()
+                // 检查是否有音频（实时模式下音频是边播边放的，audioData 为空是正常的）
+                val hasAudio = result.audioData.isNotEmpty() || result.isRealtimeMode
                 android.util.Log.i("VoiceSessionController",
-                    "Voice chat completed - User: '${result.userText}', AI: '${result.assistantText}', HasAudio: $hasAudio")
+                    "Voice chat completed - User: '${result.userText}', AI: '${result.assistantText}', HasAudio: $hasAudio, IsRealtimeMode: ${result.isRealtimeMode}")
                 
+                // 只有在非实时模式且没有音频数据时才显示 TTS 配额警告
                 if (!hasAudio) {
                     onTtsQuotaWarning(true)
                     kotlinx.coroutines.delay(3000)

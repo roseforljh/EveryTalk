@@ -60,6 +60,9 @@ class VoiceChatSession(
     private val ttsModel: String = "",
     private val voiceName: String = "Kore",
     
+    // 新增：是否使用实时流式模式（仅阿里云支持）
+    private val useRealtimeStreaming: Boolean = false,
+    
     private val onVolumeChanged: ((Float) -> Unit)? = null,
     private val onTranscriptionReceived: ((String) -> Unit)? = null, // 识别到的文字回调
     private val onResponseReceived: ((String) -> Unit)? = null  // AI回复文字回调
@@ -67,6 +70,9 @@ class VoiceChatSession(
     private var audioRecord: AudioRecord? = null
     private var isRecording: Boolean = false
     private val pcmBuffer = ByteArrayOutputStream(256 * 1024)
+    
+    // 实时流式会话代理
+    private var realtimeSession: RealtimeVoiceChatSession? = null
     
     // 网络请求控制
     @Volatile
@@ -117,6 +123,13 @@ class VoiceChatSession(
      */
     suspend fun startRecording() = withContext(Dispatchers.IO) {
         if (isRecording) return@withContext
+        
+        // 检查是否启用实时流式模式（仅阿里云支持）
+        if (useRealtimeStreaming && sttPlatform == "Aliyun") {
+            Log.i(TAG, "Starting Realtime Streaming Mode")
+            startRealtimeSession()
+            return@withContext
+        }
 
         val recorder = createAudioRecord()
             ?: throw IllegalStateException("AudioRecord init failed. Check RECORD_AUDIO permission.")
@@ -181,6 +194,59 @@ class VoiceChatSession(
             Log.e(TAG, "Recording loop error", t)
         }
     }
+    
+    private suspend fun startRealtimeSession() {
+        isRecording = true
+        
+        // 构建 WebSocket URL
+        val baseUrl = com.android.everytalk.BuildConfig.VOICE_BACKEND_URL
+        val wsUrl = baseUrl
+            .replace("https://", "wss://")
+            .replace("http://", "ws://") + "/voice-chat/realtime"
+            
+        realtimeSession = RealtimeVoiceChatSession(
+            wsUrl = wsUrl,
+            chatHistory = chatHistory,
+            systemPrompt = systemPrompt,
+            sttPlatform = sttPlatform,
+            sttApiKey = sttApiKey,
+            sttApiUrl = sttApiUrl,
+            sttModel = sttModel,
+            chatPlatform = chatPlatform,
+            chatApiKey = chatApiKey,
+            chatApiUrl = chatApiUrl,
+            chatModel = chatModel,
+            ttsPlatform = ttsPlatform,
+            ttsApiKey = ttsApiKey,
+            ttsApiUrl = ttsApiUrl,
+            ttsModel = ttsModel,
+            voiceName = voiceName,
+            onVolumeChanged = onVolumeChanged,
+            onPartialTranscription = onTranscriptionReceived,
+            onFinalTranscription = onTranscriptionReceived,
+            onChatDelta = { delta, full ->
+                // 实时流式模式下，Chat回复也是流式的
+                // 这里我们只回调增量，或者根据需要回调全量
+                // VoiceChatSession 的 onResponseReceived 通常期望最终结果
+                // 但为了实时性，我们可以回调全量文本
+                onResponseReceived?.invoke(full)
+            },
+            onComplete = { user, assistant ->
+                // 对话完成
+                Log.i(TAG, "Realtime session completed")
+            },
+            onError = { error ->
+                Log.e(TAG, "Realtime session error: $error")
+                // 通过回调通知 UI 显示错误
+                onResponseReceived?.invoke("实时对话错误: $error")
+                // 停止录音状态
+                isRecording = false
+            },
+            onResponseReceived = onResponseReceived
+        )
+        
+        realtimeSession?.start()
+    }
 
     /**
      * 取消录音
@@ -190,6 +256,13 @@ class VoiceChatSession(
         if (!isRecording) return@withContext
         
         isRecording = false
+        
+        if (realtimeSession != null) {
+            realtimeSession?.cancel()
+            realtimeSession = null
+            Log.i(TAG, "Realtime session cancelled")
+            return@withContext
+        }
         
         try {
             audioRecord?.stop()
@@ -208,6 +281,11 @@ class VoiceChatSession(
      */
     fun stopPlayback() {
         shouldStopPlayback = true
+        
+        if (realtimeSession != null) {
+            realtimeSession?.cancel()
+            realtimeSession = null
+        }
         
         // 取消网络请求
         try {
@@ -261,6 +339,28 @@ class VoiceChatSession(
      */
     suspend fun stopRecordingAndProcess(): VoiceChatResult = withContext(Dispatchers.IO) {
         isRecording = false
+        
+        if (realtimeSession != null) {
+            Log.i(TAG, "Stopping realtime session recording")
+            val session = realtimeSession
+            session?.stopRecording()
+            
+            // 等待实时会话完成（最多等待 30 秒）
+            val result = session?.awaitCompletion(30000L) ?: Pair("", "")
+            Log.i(TAG, "Realtime session completed: user='${result.first}', assistant='${result.second}'")
+            
+            // 清理会话引用
+            realtimeSession = null
+            
+            return@withContext VoiceChatResult(
+                userText = result.first,
+                assistantText = result.second,
+                audioData = ByteArray(0), // 实时模式下音频已经播放完毕
+                audioFormat = "pcm",
+                sampleRate = 24000,
+                isRealtimeMode = true  // 标记为实时模式，避免误触发 TTS 配额警告
+            )
+        }
 
         // 停止录音
         try {
@@ -1113,6 +1213,7 @@ data class VoiceChatResult(
     val assistantText: String,     // AI回复
     val audioData: ByteArray,      // 音频数据
     val audioFormat: String,       // 音频格式
-    val sampleRate: Int            // 采样率
+    val sampleRate: Int,           // 采样率
+    val isRealtimeMode: Boolean = false  // 是否为实时流式模式（实时模式下音频已边播边放，audioData 为空是正常的）
 )
 
