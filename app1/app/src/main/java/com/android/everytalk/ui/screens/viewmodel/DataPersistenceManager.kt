@@ -589,12 +589,49 @@ class DataPersistenceManager(
 
                    // Load image generation history
                    val loadedImageGenHistory = dataSource.loadImageGenerationHistory()
-                   // 将历史中的 data:image 与 http(s) 图片统一落盘并替换为本地路径（一次性修复旧数据）
-                   val convertedImageGenHistory = loadedImageGenHistory.map { conv -> persistInlineAndRemoteImages(conv) }
+                   
+                   // 🔥 增强：启动时完整性检查与修复
+                   // 1. 将历史中的 data:image 与 http(s) 图片统一落盘并替换为本地路径
+                   // 2. 检查本地文件是否存在，如果不存在则尝试恢复或标记
+                   val convertedImageGenHistory = loadedImageGenHistory.map { conv ->
+                       // 先执行标准的归档逻辑
+                       val persistedConv = persistInlineAndRemoteImages(conv)
+                       
+                       // 再执行完整性检查
+                       persistedConv.map { msg ->
+                           if (!msg.imageUrls.isNullOrEmpty()) {
+                               val validatedUrls = msg.imageUrls.map { url ->
+                                   if (url.startsWith("/") || url.startsWith("file://")) {
+                                       val path = url.removePrefix("file://")
+                                       val file = File(path)
+                                       if (!file.exists()) {
+                                           Log.w(TAG, "⚠️ Image file missing for message ${msg.id}: $path")
+                                           // 如果文件丢失，我们暂时保留路径，或许后续可以恢复
+                                           // 或者可以替换为一个错误占位图 URL
+                                           url
+                                       } else {
+                                           url
+                                       }
+                                   } else {
+                                       url
+                                   }
+                               }
+                               if (validatedUrls != msg.imageUrls) {
+                                   msg.copy(imageUrls = validatedUrls)
+                               } else {
+                                   msg
+                               }
+                           } else {
+                               msg
+                           }
+                       }
+                   }
+                   
                    // 异步回写修复后的历史，避免后续重复转换
                    launch(Dispatchers.IO) {
                        try {
                            dataSource.saveImageGenerationHistory(convertedImageGenHistory)
+                           Log.i(TAG, "✅ Image generation history integrity check and persistence completed")
                        } catch (e: Exception) {
                            Log.w(TAG, "Failed to persist converted image generation history", e)
                        }

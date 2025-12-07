@@ -280,7 +280,27 @@ class ApiHandler(
                         }
 
                         if (imageUrls.isNotEmpty()) {
-                            // 成功获取图片，先更新消息为远端URL
+                            // 🔥 关键修复：同步归档图片，确保图片保存成功后再更新消息
+                            // 先在 IO 线程完成归档，再更新消息，避免异步导致的数据不一致
+                            logger.debug("[ImageGen] 🖼️ Starting synchronous image archival for ${imageUrls.size} images")
+                            
+                            val archivedUrls = withContext(Dispatchers.IO) {
+                                try {
+                                    val archived = archiveImageUrlsForMessage(applicationContextForApiClient, aiMessageId, imageUrls)
+                                    if (archived.isNotEmpty()) {
+                                        logger.debug("[ImageGen] 🖼️ Successfully archived ${archived.size} images to local storage")
+                                        archived
+                                    } else {
+                                        logger.warn("[ImageGen] 🖼️ Archive returned empty, falling back to original URLs")
+                                        imageUrls
+                                    }
+                                } catch (e: Exception) {
+                                    logger.warn("[ImageGen] 🖼️ Archive failed: ${e.message}, falling back to original URLs")
+                                    imageUrls
+                                }
+                            }
+                            
+                            // 使用归档后的本地路径（或回退到原始URL）更新消息
                             withContext(Dispatchers.Main.immediate) {
                                 val messageList = stateHolder.imageGenerationMessages
                                 val index = messageList.indexOfFirst { it.id == aiMessageId }
@@ -291,7 +311,7 @@ class ApiHandler(
                                     logger.debug("[ImageGen] 🖼️ Current message - ID: ${currentMessage.id}, hasImageUrls: ${currentMessage.imageUrls?.isNotEmpty()}, text: '${currentMessage.text.take(50)}...'")
                                     
                                     val updatedMessage = currentMessage.copy(
-                                        imageUrls = imageUrls,
+                                        imageUrls = archivedUrls, // 使用归档后的本地路径
                                         text = responseText ?: currentMessage.text,
                                         contentStarted = true,
                                         isError = false
@@ -301,14 +321,12 @@ class ApiHandler(
                                     messageList.removeAt(index)
                                     messageList.add(index, updatedMessage)
                                     
-                                    logger.debug("[ImageGen] 🖼️ Updated message with ${imageUrls.size} image URLs at index $index")
-                                    logger.debug("[ImageGen] 🖼️ Updated message imageUrls: ${updatedMessage.imageUrls}")
+                                    logger.debug("[ImageGen] 🖼️ Updated message with ${archivedUrls.size} archived image URLs at index $index")
+                                    logger.debug("[ImageGen] 🖼️ Archived URLs: ${archivedUrls.map { it.take(50) + "..." }}")
                                     logger.debug("[ImageGen] 🖼️ Message list size after update: ${messageList.size}")
                                     
                                     // 🔥 强制触发状态变化，确保Flow重新计算
-                                    if (isImageGeneration) {
-                                        stateHolder.isImageConversationDirty.value = true
-                                    }
+                                    stateHolder.isImageConversationDirty.value = true
                                     
                                     logger.debug("[ImageGen] 🖼️ Marked conversation as dirty to trigger UI update")
                                 } else {
@@ -317,31 +335,13 @@ class ApiHandler(
                                 }
                             }
 
-                            // ⚙️ 后台归档：将 http/https 或 data:image 统一落盘为本地文件并替换消息中的链接
-                            viewModelScope.launch(Dispatchers.IO) {
+                            // 🔥 归档完成后立即强制保存历史，确保本地路径持久化
+                            withContext(Dispatchers.IO) {
                                 try {
-                                    val archived = archiveImageUrlsForMessage(applicationContextForApiClient, aiMessageId, imageUrls)
-                                    if (archived.isNotEmpty()) {
-                                        withContext(Dispatchers.Main.immediate) {
-                                            val messageList = stateHolder.imageGenerationMessages
-                                            val idx = messageList.indexOfFirst { it.id == aiMessageId }
-                                            if (idx != -1) {
-                                                val cur = messageList[idx]
-                                                val newMsg = cur.copy(imageUrls = archived)
-                                                messageList.removeAt(idx)
-                                                messageList.add(idx, newMsg)
-                                                stateHolder.isImageConversationDirty.value = true
-                                            }
-                                        }
-                                        // 归档完成后立即保存一次历史，确保路径持久
-                                        historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = true)
-                                    } else {
-                                        // 若归档失败，至少保存当前状态
-                                        historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true)
-                                    }
+                                    historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = true)
+                                    logger.debug("[ImageGen] 🖼️ History saved with archived image paths")
                                 } catch (e: Exception) {
-                                    logger.warn("[ImageGen] Archive image urls failed: ${e.message}")
-                                    historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = true)
+                                    logger.warn("[ImageGen] 🖼️ Failed to save history: ${e.message}")
                                 }
                             }
                         } else {
