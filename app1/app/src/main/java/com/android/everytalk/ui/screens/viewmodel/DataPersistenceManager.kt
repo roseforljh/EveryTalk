@@ -1100,55 +1100,13 @@ class DataPersistenceManager(
                 val previewCacheDir = File(context.cacheDir, "preview_cache")
                 val shareImagesDir = File(context.cacheDir, "share_images")
 
-                // 1) 统计当前仍被引用的附件路径（仅 filesDir/chat_attachments 管理的持久附件）
-                val allActiveFilePaths = mutableSetOf<String>()
-                runCatching {
-                    val textHistory = stateHolder._historicalConversations.value
-                    val imageHistory = stateHolder._imageGenerationHistoricalConversations.value
-                    val currentTextMessages = stateHolder.messages.toList()
-                    val currentImageMessages = stateHolder.imageGenerationMessages.toList()
-
-                    listOf(textHistory, imageHistory, listOf(currentTextMessages), listOf(currentImageMessages))
-                        .flatten()
-                        .forEach { conversation ->
-                            conversation.forEach { message ->
-                                message.attachments.forEach { attachment ->
-                                    val path = when (attachment) {
-                                        is SelectedMediaItem.ImageFromUri -> attachment.filePath
-                                        is SelectedMediaItem.GenericFile -> attachment.filePath
-                                        is SelectedMediaItem.Audio -> attachment.data
-                                        is SelectedMediaItem.ImageFromBitmap -> attachment.filePath
-                                    }
-                                    if (!path.isNullOrBlank()) {
-                                        allActiveFilePaths.add(path)
-                                    }
-                                }
-                            }
-                        }
-                }.onFailure { e ->
-                    Log.w(TAG, "Failed to collect active file paths for orphan cleanup", e)
-                }
-
-                // 2) 执行 chat_attachments 的孤儿文件清理
-                // 删除那些不在 allActiveFilePaths 中的文件
-                var orphanedCount = 0
-                if (chatAttachmentsDir.exists()) {
-                    chatAttachmentsDir.listFiles()?.forEach { file ->
-                        if (file.isFile && !allActiveFilePaths.contains(file.absolutePath)) {
-                            try {
-                                if (file.delete()) {
-                                    orphanedCount++
-                                    Log.d(TAG, "Deleted orphaned attachment: ${file.name}")
-                                }
-                            } catch (e: Exception) {
-                                Log.w(TAG, "Failed to delete orphaned attachment: ${file.name}", e)
-                            }
-                        }
-                    }
-                    if (orphanedCount > 0) {
-                        Log.i(TAG, "Cleaned up $orphanedCount orphaned attachment file(s) in chat_attachments.")
-                    }
-                }
+                // 1) [DISABLED] 统计当前仍被引用的附件路径
+                // 2) [DISABLED] 执行 chat_attachments 的孤儿文件清理
+                // 修改说明：已禁用自动清理孤儿文件，以防止因数据加载延迟或匹配错误导致的图片误删。
+                // 图片文件现在仅在用户显式删除会话或清空历史时才会删除。
+                
+                val orphanedCount = 0
+                Log.i(TAG, "cleanupOrphanedAttachments: Orphan cleanup for chat_attachments is DISABLED. Skipping.")
 
                 // 3) 清空预览/分享产生的临时缓存（cacheDir），这些文件不持久化引用，直接安全删除
                 fun clearCacheDir(dir: File, label: String): Int {
