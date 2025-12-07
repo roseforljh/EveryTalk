@@ -115,6 +115,32 @@ class DataPersistenceManager(
                     if (url.startsWith("data:image", ignoreCase = true)) {
                         val saved = saveDataUri(url, "img_${msg.id}_${idx}")
                         saved ?: url
+                    } else if (url.startsWith("http", ignoreCase = true)) {
+                        // 修复：对于 http/https 图片，尝试下载并保存为本地文件
+                        // 这样可以避免远端 URL 过期导致图片无法显示
+                        val pair = tryDownload(url)
+                        if (pair != null) {
+                            val (bytes, mime) = pair
+                            val ext = extFromMime(mime)
+                            val fileName = "img_${msg.id}_${idx}_${System.currentTimeMillis()}.$ext"
+                            val file = File(tempDir, fileName)
+                            try {
+                                FileOutputStream(file).use { fos ->
+                                    fos.write(bytes)
+                                }
+                                if (file.exists() && file.length() > 0) {
+                                    Log.i(TAG, "Downloaded remote image to ${file.absolutePath}")
+                                    file.absolutePath
+                                } else {
+                                    url
+                                }
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Failed to save downloaded image", e)
+                                url
+                            }
+                        } else {
+                            url
+                        }
                     } else {
                         url
                     }

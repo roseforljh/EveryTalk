@@ -948,15 +948,6 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
         return out
     }
 
-    // 暴露此方法供外部使用（即时保存）
-    suspend fun persistImageImmediate(dataUri: String, messageId: String, index: Int): String? {
-        // 由于 archiveImageUrlsForMessage 是 private 的，且包含批量逻辑，我们在这里直接调用 persistenceManager 的新方法
-        // 但 ApiHandler 没有直接持有 persistenceManager，而是通过 historyManager 或其他方式交互
-        // 这里我们可以通过 historyManager 访问 persistenceManager，或者直接在 ApiHandler 中注入 PersistenceManager
-        // 实际上，archiveImageUrlsForMessage 是内部方法，我们修改它来使用新的 persistImageImmediate 逻辑
-        return null // 占位，实际逻辑在下面修改 archiveImageUrlsForMessage 时体现
-    }
- 
     // 预编译的正则表达式，避免重复编译
     private val HTML_TAG_REGEX = Regex("<[^>]*>")
     private val PUNCTUATION_WHITESPACE_REGEX = Regex("[\\p{Punct}\\s]+")
