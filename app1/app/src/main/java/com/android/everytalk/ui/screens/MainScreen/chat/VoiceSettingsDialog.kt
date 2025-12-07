@@ -51,7 +51,7 @@ fun VoiceSettingsDialog(
         
         return when (platform) {
             "SiliconFlow" -> "https://api.siliconflow.cn/v1/audio/speech"
-            "Aliyun" -> "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+            "Aliyun" -> "https://dashscope.aliyuncs.com/api/v1"
             else -> defaultBaseUrl
         }
     }
@@ -229,7 +229,7 @@ fun VoiceSettingsDialog(
                         modifier = Modifier.fillMaxWidth(),
                         placeholder = {
                             Text(
-                                if (selectedPlatform == "Aliyun") "例如 wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+                                if (selectedPlatform == "Aliyun") "例如 https://dashscope.aliyuncs.com/api/v1"
                                 else "例如 https://api.minimaxi.com/v1/t2a_v2"
                             )
                         },
@@ -237,7 +237,7 @@ fun VoiceSettingsDialog(
                             if (selectedPlatform == "Gemini") {
                                 Text("自动使用 https://generativelanguage.googleapis.com", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             } else if (selectedPlatform == "Aliyun") {
-                                Text("默认: wss://dashscope.aliyuncs.com/api-ws/v1/realtime", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("默认: https://dashscope.aliyuncs.com/api/v1", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             } else if (baseUrl.isNotEmpty() && !baseUrl.startsWith("http")) {
                                 Text("请填写完整的 http(s) 地址", color = MaterialTheme.colorScheme.error)
                             } else if (selectedPlatform == "Minimax" && baseUrl.isBlank()) {
