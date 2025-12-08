@@ -481,9 +481,10 @@ object ImageGenerationDirectClient {
                     "4:5", "5:4", "9:16", "16:9", "21:9"
                 )
                 val hasValidAspectRatio = request.aspectRatio?.let { it in supportedRatios } == true
-                // 放宽限制：只要 geminiImageSize 非空，就尝试写入 imageSize
-                // 用户反馈 Gemini 2.5 也能接收分辨率参数
-                val hasImageSize = !request.geminiImageSize.isNullOrBlank()
+                // 恢复限制：仅 Gemini 3 Pro Image 支持 imageSize 参数
+                // Gemini 2.5 Flash Image 收到此参数会报 400 INVALID_ARGUMENT
+                val isGemini3Pro = ImageGenCapabilities.isGemini3ProImage(request.model)
+                val hasImageSize = isGemini3Pro && !request.geminiImageSize.isNullOrBlank()
 
                 if (hasValidAspectRatio || hasImageSize) {
                     putJsonObject("imageConfig") {
@@ -594,8 +595,9 @@ object ImageGenerationDirectClient {
                     "4:5", "5:4", "9:16", "16:9", "21:9"
                 )
                 val hasValidAspectRatio = request.aspectRatio?.let { it in supportedRatios } == true
-                // 放宽限制：只要 geminiImageSize 非空，就尝试写入 imageSize
-                val hasImageSize = !request.geminiImageSize.isNullOrBlank()
+                // 恢复限制：仅 Gemini 3 Pro Image 支持 imageSize 参数
+                val isGemini3Pro = ImageGenCapabilities.isGemini3ProImage(request.model)
+                val hasImageSize = isGemini3Pro && !request.geminiImageSize.isNullOrBlank()
 
                 if (hasValidAspectRatio || hasImageSize) {
                     putJsonObject("imageConfig") {

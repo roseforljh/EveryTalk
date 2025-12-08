@@ -245,15 +245,13 @@ object ImageGenCapabilities {
      */
     @JvmStatic
     fun getGeminiSupportedSizes(modelName: String?): List<GeminiImageSizeTier> {
-        // 放宽限制：只要是 Gemini 图像模型，都允许尝试选择 2K/4K
-        // 用户反馈 Gemini 2.5 也能接收分辨率参数
-        return if (modelName != null) {
-            listOf(
+        return when {
+            isGemini3ProImage(modelName) -> listOf(
                 GeminiImageSizeTier.SIZE_2K,
                 GeminiImageSizeTier.SIZE_4K
             )
-        } else {
-            emptyList()
+            // 其他模型不支持尺寸选择（2.5 Flash 仅 1K，无 UI）
+            else -> emptyList()
         }
     }
 
