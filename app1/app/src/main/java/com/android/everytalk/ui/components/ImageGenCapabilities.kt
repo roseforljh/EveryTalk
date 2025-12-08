@@ -119,10 +119,13 @@ object ImageGenCapabilities {
 
     private val RATIOS_SEEDREAM: List<AspectRatioOption> = listOf(
         ar("1:1"),
+        ar("4:3"),
+        ar("3:4"),
         ar("16:9"),
         ar("9:16"),
-        ar("4:3"),
-        ar("3:4")
+        ar("3:2"),
+        ar("2:3"),
+        ar("21:9")
     )
 
     private val RATIOS_QWEN: List<AspectRatioOption> = listOf(
@@ -193,27 +196,49 @@ object ImageGenCapabilities {
 
     /**
      * Seedream 2K / 4K 清晰度下，不同比例对应的推荐精确尺寸。
-     * 来源（用户提供）：
-     * - 1:1  -> 2K: 2048x2048, 4K: 4096x4096
-     * - 16:9 -> 2K: 2048x1152, 4K: 3840x2160
-     * - 9:16 -> 2K: 1152x2048, 4K: 2160x3840
-     * - 4:3  -> 2K: 2048x1536, 4K: 4096x3072
-     * - 3:4  -> 2K: 1536x2048, 4K: 3072x4096
+     * 来源（官方文档）：
+     * 1:1   -> 2048x2048
+     * 4:3   -> 2304x1728
+     * 3:4   -> 1728x2304
+     * 16:9  -> 2560x1440
+     * 9:16  -> 1440x2560
+     * 3:2   -> 2496x1664
+     * 2:3   -> 1664x2496
+     * 21:9  -> 3024x1296
+     */
+    /**
+     * Seedream 2K / 4K 清晰度下，不同比例对应的推荐精确尺寸。
+     * 来源（官方文档）：
+     * 1:1   -> 2048x2048
+     * 4:3   -> 2304x1728
+     * 3:4   -> 1728x2304
+     * 16:9  -> 2560x1440
+     * 9:16  -> 1440x2560
+     * 3:2   -> 2496x1664
+     * 2:3   -> 1664x2496
+     * 21:9  -> 3024x1296
      */
     private val SEEDREAM_SIZES_2K: Map<String, List<SizeOption>> = mapOf(
         "1:1" to listOf(sz(2048, 2048)),
-        "16:9" to listOf(sz(2048, 1152)),
-        "9:16" to listOf(sz(1152, 2048)),
-        "4:3" to listOf(sz(2048, 1536)),
-        "3:4" to listOf(sz(1536, 2048))
+        "4:3" to listOf(sz(2304, 1728)),
+        "3:4" to listOf(sz(1728, 2304)),
+        "16:9" to listOf(sz(2560, 1440)),
+        "9:16" to listOf(sz(1440, 2560)),
+        "3:2" to listOf(sz(2496, 1664)),
+        "2:3" to listOf(sz(1664, 2496)),
+        "21:9" to listOf(sz(3024, 1296))
     )
 
+    // 4K 推荐值 (基于 2K 推荐值翻倍，总像素需在 [921600, 16777216] 范围内)
     private val SEEDREAM_SIZES_4K: Map<String, List<SizeOption>> = mapOf(
         "1:1" to listOf(sz(4096, 4096)),
-        "16:9" to listOf(sz(3840, 2160)),
-        "9:16" to listOf(sz(2160, 3840)),
-        "4:3" to listOf(sz(4096, 3072)),
-        "3:4" to listOf(sz(3072, 4096))
+        "4:3" to listOf(sz(4608, 3456)), // 按2倍长宽计算，而非1.414倍
+        "3:4" to listOf(sz(3456, 4608)),
+        "16:9" to listOf(sz(5120, 2880)),
+        "9:16" to listOf(sz(2880, 5120)),
+        "3:2" to listOf(sz(4992, 3328)),
+        "2:3" to listOf(sz(3328, 4992)),
+        "21:9" to listOf(sz(6048, 2592))
     )
 
     /**

@@ -111,7 +111,15 @@ object ImageGenerationDirectClient {
     ): ImageGenerationResponse {
         Log.i(TAG, "🔄 启动 Seedream 图像生成直连模式")
         
-        val baseUrl = request.apiAddress.trimEnd('/').takeIf { it.isNotBlank() }
+        // 清理 URL：移除尾部的 '#' 和 '/v1/images/generations' 等多余路径
+        val rawUrl = request.apiAddress
+            .trimEnd('/')
+            .removeSuffix("#")
+            .removeSuffix("/v1/images/generations")
+            .removeSuffix("#")
+            .trimEnd('/')
+        
+        val baseUrl = rawUrl.takeIf { it.isNotBlank() }
             ?: "https://ark.cn-beijing.volces.com/api/v3/images/generations"
             
         Log.d(TAG, "直连 URL: $baseUrl")
@@ -494,7 +502,15 @@ object ImageGenerationDirectClient {
     ): ImageGenerationResponse {
         Log.i(TAG, "🔄 启动 Seedream 图像生成（带参考图）直连模式")
         
-        val baseUrl = request.apiAddress.trimEnd('/').takeIf { it.isNotBlank() }
+        // 清理 URL：移除尾部的 '#' 和 '/v1/images/generations' 等多余路径
+        val rawUrl = request.apiAddress
+            .trimEnd('/')
+            .removeSuffix("#")
+            .removeSuffix("/v1/images/generations")
+            .removeSuffix("#")
+            .trimEnd('/')
+        
+        val baseUrl = rawUrl.takeIf { it.isNotBlank() }
             ?: "https://ark.cn-beijing.volces.com/api/v3/images/generations"
             
         Log.d(TAG, "直连 URL: $baseUrl")
@@ -524,6 +540,11 @@ object ImageGenerationDirectClient {
             put("model", request.model)
             put("prompt", request.prompt)
             put("response_format", "url")
+            // 显式关闭水印，强制默认为 false，除非明确为 true
+            // 注意：Seedream API 默认值为 true，所以必须显式传 false
+            val enableWatermark = request.watermark == true
+            put("watermark", enableWatermark)
+            Log.d(TAG, "Seedream watermark set to: $enableWatermark (req=${request.watermark})")
             
             val sizeVal = request.imageSize?.takeIf { it.isNotBlank() } ?: "2k"
             put("size", mapSeedreamSize(sizeVal, request.aspectRatio))
@@ -593,7 +614,10 @@ object ImageGenerationDirectClient {
             put("model", request.model)
             put("prompt", request.prompt)
             put("response_format", "url")
-            put("watermark", request.watermark ?: false)
+            // 显式关闭水印，强制默认为 false
+            val enableWatermark = request.watermark == true
+            put("watermark", enableWatermark)
+            Log.d(TAG, "Seedream watermark set to: $enableWatermark (req=${request.watermark})")
             
             // 尺寸处理：优先使用 size 字段，其次是 imageSize
             // Seedream 支持 "2K", "4K" 或 "WxH"
@@ -609,34 +633,55 @@ object ImageGenerationDirectClient {
     }
 
     private fun mapSeedreamSize(size: String, aspectRatio: String?): String {
-        val s = size.lowercase()
-        // 如果已经是 2k/4k，直接返回
-        if (s == "2k" || s == "4k") {
-            // 这里可以进一步根据 aspectRatio 细化为具体分辨率，但 Seedream API 似乎直接支持 "2k" + 比例?
-            // 或者如果只传 "2k"，它默认是 1:1 的 2k。
-            // 简单起见，如果传了 2k/4k，我们尝试映射到具体像素以更精确控制
-            return when (s) {
-                "2k" -> when (aspectRatio) {
-                    "16:9" -> "2048x1152"
-                    "9:16" -> "1152x2048"
-                    "4:3" -> "2048x1536"
-                    "3:4" -> "1536x2048"
-                    else -> "2048x2048" // 1:1
+        var s = size.lowercase().trim()
+        
+        // 检查是否为具体像素值，如果像素过小（小于 2K 级别的 3,686,400），强制升级为 2K 档位
+        // 这是为了兼容 Seedream 4.5 等高分辨率模型
+        if (s.contains("x")) {
+            val parts = s.split("x")
+            if (parts.size == 2) {
+                val w = parts[0].toIntOrNull() ?: 0
+                val h = parts[1].toIntOrNull() ?: 0
+                // 3686400 是 2560x1440 的像素数，也是 Seedream 4.5 的推荐最小值
+                if (w * h < 3686400) {
+                    s = "2k"
+                } else {
+                    return s
                 }
-                "4k" -> when (aspectRatio) {
-                    "16:9" -> "3840x2160"
-                    "9:16" -> "2160x3840"
-                    "4:3" -> "4096x3072"
-                    "3:4" -> "3072x4096"
-                    else -> "4096x4096" // 1:1
-                }
-                else -> "1024x1024"
             }
         }
-        // 如果是 WxH 格式，直接返回
-        if (s.contains("x")) return size
-        
-        return "1024x1024"
+
+        // 如果不是 4k，默认都视为 2k 处理（包括 1k、hd、或者被强制升级的低像素值）
+        if (s != "4k") {
+            s = "2k"
+        }
+
+        // 根据官方文档适配 Seedream 2K/4K 分辨率
+        return when (s) {
+            "2k" -> when (aspectRatio) {
+                "1:1" -> "2048x2048"
+                "4:3" -> "2304x1728"
+                "3:4" -> "1728x2304"
+                "16:9" -> "2560x1440"
+                "9:16" -> "1440x2560"
+                "3:2" -> "2496x1664"
+                "2:3" -> "1664x2496"
+                "21:9" -> "3024x1296"
+                else -> "2048x2048"
+            }
+            "4k" -> when (aspectRatio) {
+                "1:1" -> "4096x4096"
+                "4:3" -> "4608x3456"
+                "3:4" -> "3456x4608"
+                "16:9" -> "5120x2880"
+                "9:16" -> "2880x5120"
+                "3:2" -> "4992x3328"
+                "2:3" -> "3328x4992"
+                "21:9" -> "6048x2592"
+                else -> "4096x4096"
+            }
+            else -> "2048x2048"
+        }
     }
     
     private fun parseGeminiImageResponse(responseText: String): ImageGenerationResponse {

@@ -1062,8 +1062,36 @@ object ApiClient {
                         client, effectiveImgReq, inputImageBase64, qwenUrls, qwenSecret
                     )
                 }
-                isGemini -> ImageGenerationDirectClient.generateImageGemini(client, effectiveImgReq)
-                isSeedream -> ImageGenerationDirectClient.generateImageSeedream(client, effectiveImgReq)
+                isGemini -> {
+                    // Check if there are input images for editing
+                    val inputImages = extractInputImages(chatRequest)
+                    if (inputImages.isNotEmpty()) {
+                        // Use the first image for Gemini editing (Gemini supports single reference image)
+                        val (base64, mimeType) = inputImages.first()
+                        android.util.Log.i("ApiClient", "🔄 Gemini 图像编辑模式: 检测到 ${inputImages.size} 张输入图片")
+                        ImageGenerationDirectClient.generateImageGeminiWithReference(
+                            client, effectiveImgReq, base64, mimeType
+                        )
+                    } else {
+                        ImageGenerationDirectClient.generateImageGemini(client, effectiveImgReq)
+                    }
+                }
+                isSeedream -> {
+                    // Check if there are input images for editing
+                    val inputImages = extractInputImages(chatRequest)
+                    if (inputImages.isNotEmpty()) {
+                        // Convert to data URIs for Seedream
+                        val dataUris = inputImages.map { (base64, mimeType) ->
+                            "data:$mimeType;base64,$base64"
+                        }
+                        android.util.Log.i("ApiClient", "🔄 Seedream 图像编辑模式: 检测到 ${inputImages.size} 张输入图片")
+                        ImageGenerationDirectClient.generateImageSeedreamWithReference(
+                            client, effectiveImgReq, dataUris
+                        )
+                    } else {
+                        ImageGenerationDirectClient.generateImageSeedream(client, effectiveImgReq)
+                    }
+                }
                 else -> ImageGenerationDirectClient.generateImageOpenAI(client, effectiveImgReq)
             }
         } catch (e: Exception) {
@@ -1092,6 +1120,41 @@ object ApiClient {
         }
         android.util.Log.w("ApiClient", "未找到输入图片")
         return null
+    }
+
+    /**
+     * 从 ChatRequest 中提取所有输入图片的 Base64 数据和 MIME 类型
+     * 用于 Gemini 和 Seedream 图像编辑等需要输入图片的场景
+     * @return List of Pair(base64Data, mimeType)
+     */
+    private fun extractInputImages(chatRequest: ChatRequest): List<Pair<String, String>> {
+        val images = mutableListOf<Pair<String, String>>()
+        
+        // 遍历消息，查找包含图片的 PartsApiMessage（从最后一条开始）
+        for (msg in chatRequest.messages.reversed()) {
+            if (msg is com.android.everytalk.data.DataClass.PartsApiMessage && msg.role == "user") {
+                for (part in msg.parts) {
+                    if (part is com.android.everytalk.data.DataClass.ApiContentPart.InlineData) {
+                        if (part.mimeType.startsWith("image/")) {
+                            android.util.Log.d("ApiClient", "找到输入图片: mimeType=${part.mimeType}, base64长度=${part.base64Data.length}")
+                            images.add(Pair(part.base64Data, part.mimeType))
+                        }
+                    }
+                }
+                // 只处理最后一条用户消息中的图片
+                if (images.isNotEmpty()) {
+                    break
+                }
+            }
+        }
+        
+        if (images.isEmpty()) {
+            android.util.Log.d("ApiClient", "未找到输入图片")
+        } else {
+            android.util.Log.i("ApiClient", "共找到 ${images.size} 张输入图片")
+        }
+        
+        return images
     }
 }
 
