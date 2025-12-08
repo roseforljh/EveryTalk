@@ -47,6 +47,12 @@ plugins {
 android {
     namespace = "com.android.everytalk"
     compileSdk = 36
+
+    lint {
+        // 禁用 Release 构建的 Lint 检查，以绕过 Kotlin 2.1.0 与 Android Lint 的兼容性问题
+        // 当 Android Gradle Plugin 更新并修复此问题后，可以移除此配置
+        checkReleaseBuilds = false
+    }
     // 建议与 targetSdk 和 Compose BOM 推荐的 SDK 版本对齐
 
     defaultConfig {
