@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.8.1](https://github.com/roseforljh/EveryTalk/compare/v1.8.0...v1.8.1) (2025-12-08)
+
+
+### Bug Fixes
+
+* bug fix ([ec078af](https://github.com/roseforljh/EveryTalk/commit/ec078af4bf03eade225feeaf26720ef42cb6b2dd))
+* 修复即梦等模型的图像编辑能力 ([fc3eaee](https://github.com/roseforljh/EveryTalk/commit/fc3eaee3eb73b2e22e032a338fb54f3f079e0e23))
+* 适配Gemini3 ([811fa92](https://github.com/roseforljh/EveryTalk/commit/811fa92ab2b89050f31d01d6b850beda7d40f73d))
+
 ## [1.8.0](https://github.com/roseforljh/EveryTalk/compare/v1.7.20...v1.8.0) (2025-12-08)
 
 
