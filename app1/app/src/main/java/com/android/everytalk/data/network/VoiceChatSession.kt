@@ -42,7 +42,6 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 import java.io.BufferedReader
 import java.util.concurrent.atomic.AtomicBoolean
-import com.android.everytalk.security.RequestSignatureUtil
 
 /**
  * 语音对话会话（新流程）：STT → Chat → TTS
@@ -78,9 +77,6 @@ class VoiceChatSession(
     private val ttsApiUrl: String = "",
     private val ttsModel: String = "",
     private val voiceName: String = "Kore",
-    
-    // 直连模式强制开启，不再支持后端中转
-    private val useDirectMode: Boolean = true,
     
     // 实时 STT 模式（仅阿里云支持）
     private val useRealtimeStt: Boolean = false,
@@ -494,8 +490,8 @@ class VoiceChatSession(
             return@withContext stopRecordingAndProcessWithRealtimeStt()
         }
         
-        // 直连模式处理（强制）
-        Log.i(TAG, "Using Direct Mode (no backend proxy)")
+        // 直连模式处理
+        Log.i(TAG, "Using Direct Mode")
         return@withContext stopRecordingAndProcessDirect()
     }
     

@@ -4,12 +4,10 @@ import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
-import com.android.everytalk.config.BackendConfig
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.ImageGenerationResponse
 import com.android.everytalk.data.DataClass.GitHubRelease
 import com.android.everytalk.models.SelectedMediaItem
-import com.android.everytalk.util.RequestSignatureUtil
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.plugins.*
@@ -408,21 +406,6 @@ object ApiClient {
             
             android.util.Log.d("ApiClient", "开始执行POST请求到: $backendProxyUrl")
             
-            // 🔐 生成请求签名
-            // 注意: 对于 multipart/form-data 请求,我们使用空字符串作为 body
-            // 因为 multipart 的边界和编码在客户端和服务端可能不同
-            val requestPath = try {
-                java.net.URI(backendProxyUrl).path
-            } catch (e: Exception) {
-                "/chat"  // 默认路径
-            }
-            val signatureHeaders = RequestSignatureUtil.generateSignatureHeaders(
-                method = "POST",
-                path = requestPath,
-                body = ""  // multipart 请求使用空字符串
-            )
-            android.util.Log.d("ApiClient", "🔐 已生成签名头 (multipart): X-Signature=${signatureHeaders["X-Signature"]?.take(20)}..., X-Timestamp=${signatureHeaders["X-Timestamp"]}")
-            
             client.preparePost(backendProxyUrl) {
                 accept(ContentType.Text.EventStream)
                 timeout {
@@ -430,9 +413,6 @@ object ApiClient {
                     connectTimeoutMillis = 60_000  // 增加连接超时到60秒
                     socketTimeoutMillis = Long.MAX_VALUE
                 }
-                // 🔐 添加签名头
-                header("X-Signature", signatureHeaders["X-Signature"]!!)
-                header("X-Timestamp", signatureHeaders["X-Timestamp"]!!)
                 setBody(multiPartData)
 
             }.execute { receivedResponse ->

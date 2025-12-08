@@ -153,3 +153,7 @@
 # AndroidSVG
 -keep class com.caverock.androidsvg.** { *; }
 -dontwarn com.caverock.androidsvg.**
+
+# ===== PDFBox (Fix R8 missing classes) =====
+-dontwarn com.gemalto.jp2.**
+-dontwarn com.tom_roush.pdfbox.**
