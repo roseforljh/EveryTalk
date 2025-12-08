@@ -75,7 +75,10 @@ fun ImageRatioSelector(
     family: ModelFamily? = null,
     // 新增：仅 Seedream 有效的清晰度状态与回调
     seedreamQuality: QualityTier = QualityTier.Q2K,
-    onQualityChange: ((QualityTier) -> Unit)? = null
+    onQualityChange: ((QualityTier) -> Unit)? = null,
+    // 新增：Gemini 尺寸状态与回调
+    geminiImageSize: String? = null,
+    onGeminiImageSizeChange: ((String) -> Unit)? = null
 ) {
     var showDialog by remember { mutableStateOf(false) }
     
@@ -95,7 +98,9 @@ fun ImageRatioSelector(
             allowedRatioNames = allowedRatioNames,
             family = family,
             seedreamQuality = seedreamQuality,
-            onQualityChange = onQualityChange
+            onQualityChange = onQualityChange,
+            geminiImageSize = geminiImageSize,
+            onGeminiImageSizeChange = onGeminiImageSizeChange
         )
     }
 }

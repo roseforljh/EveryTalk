@@ -514,6 +514,15 @@ private data class AttachmentProcessingResult(
                 stateHolder.conversationApiConfigIds.value = currentMap
                 // 这里仅更新内存状态，HistoryManager.saveCurrentChatToHistoryIfNeededInternal 会负责持久化
             }
+        } else {
+            // 图像模式：绑定当前图像会话ID与配置ID
+            val conversationId = stateHolder._currentImageGenerationConversationId.value
+            val currentMap = stateHolder.conversationApiConfigIds.value.toMutableMap()
+            if (currentMap[conversationId] != currentConfig.id) {
+                currentMap[conversationId] = currentConfig.id
+                stateHolder.conversationApiConfigIds.value = currentMap
+                // 这里仅更新内存状态，HistoryManager 会负责持久化
+            }
         }
         
         Log.d("MessageSender", "✅ Using config: ${currentConfig.model} (${currentConfig.provider})")
@@ -868,7 +877,9 @@ private data class AttachmentProcessingResult(
                             // 额外兜底：把最近若干轮文本摘要也发给后端，确保“该会话独立记忆”不依赖服务端状态
                             history = historyForStatelessMemory.ifEmpty { null },
                             // 禁用水印（针对 Seedream 直连）
-                            watermark = false
+                            watermark = false,
+                            // 将配置中的 imageSize (1K/2K/4K) 传递给 Gemini 专用字段
+                            geminiImageSize = if (modelIsGeminiType) currentConfig.imageSize else null
                         )
                     } else null
                 )

@@ -281,6 +281,9 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                 currentImageGuidance = selectedApiConfig?.guidanceScale,
                 onChangeImageParams = { steps, guidance ->
                     viewModel.updateImageGenerationParamsForSelectedConfig(steps, guidance)
+                },
+                onGeminiImageSizeChanged = { size ->
+                    viewModel.updateGeminiImageSizeForSelectedConfig(size)
                 }
             )
         }

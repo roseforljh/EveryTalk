@@ -40,7 +40,10 @@ fun ImageRatioSelectionDialog(
     // 若为 Seedream/Modal 家族可显示清晰度（2K/4K 或 HD/2K）
     family: ModelFamily? = null,
     seedreamQuality: QualityTier = QualityTier.Q2K,
-    onQualityChange: ((QualityTier) -> Unit)? = null
+    onQualityChange: ((QualityTier) -> Unit)? = null,
+    // 新增：Gemini 尺寸状态与回调
+    geminiImageSize: String? = null,
+    onGeminiImageSizeChange: ((String) -> Unit)? = null
 ) {
     // 依据 allowedRatioNames 过滤默认比例集合（始终保留 AUTO）
     val allRatios = remember { ImageRatio.DEFAULT_RATIOS.filter { !it.isAuto } }
@@ -191,6 +194,53 @@ fun ImageRatioSelectionDialog(
                         } else {
                             OutlinedButton(
                                 onClick = { onQualityChange?.invoke(QualityTier.Q4K) },
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                            ) { Text("4K") }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
+                // 仅 Gemini 家族且支持尺寸选择时，显示 2K / 4K 选择
+                if (family == ModelFamily.GEMINI && onGeminiImageSizeChange != null) {
+                    // 检查是否支持尺寸选择（仅 3 Pro Image）
+                    // 这里我们假设上层已经做了 isGemini3ProImage 的判断，或者我们在这里不做严格判断，
+                    // 而是依赖传入的 geminiImageSize 是否非空来决定是否显示？
+                    // 为了稳妥，我们还是依赖 ImageGenCapabilities 的判断逻辑，但这里没有 modelName。
+                    // 方案：上层传入的 onGeminiImageSizeChange 不为 null 即表示支持。
+                    
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp)
+                            .heightIn(min = 40.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val currentSize = geminiImageSize ?: "2K" // 默认 2K
+                        val is2K = currentSize == "2K"
+                        val is4K = currentSize == "4K"
+
+                        if (is2K) {
+                            FilledTonalButton(
+                                onClick = { /* no-op */ },
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                            ) { Text("2K") }
+                        } else {
+                            OutlinedButton(
+                                onClick = { onGeminiImageSizeChange("2K") },
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                            ) { Text("2K") }
+                        }
+
+                        if (is4K) {
+                            FilledTonalButton(
+                                onClick = { /* no-op */ },
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                            ) { Text("4K") }
+                        } else {
+                            OutlinedButton(
+                                onClick = { onGeminiImageSizeChange("4K") },
                                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
                             ) { Text("4K") }
                         }

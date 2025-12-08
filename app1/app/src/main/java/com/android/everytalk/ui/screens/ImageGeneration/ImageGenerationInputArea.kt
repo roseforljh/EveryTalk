@@ -283,7 +283,9 @@ fun ImageGenerationInputArea(
     // 当前图像引导系数（仅在 Qwen-Image-Edit 模型下使用）
     currentImageGuidance: Float? = null,
     // 更新当前图像参数（步数+引导系数）的回调
-    onChangeImageParams: ((Int, Float) -> Unit)? = null
+    onChangeImageParams: ((Int, Float) -> Unit)? = null,
+    // 新增：Gemini 尺寸变更回调
+    onGeminiImageSizeChanged: ((String) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -474,7 +476,6 @@ fun ImageGenerationInputArea(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            // 与文本模式一致：外层统一消费 IME 与系统栏 Insets，避免跳动
             .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBarsIgnoringVisibility))
     ) {
         Column(
@@ -578,7 +579,9 @@ fun ImageGenerationInputArea(
                                 allowedRatioNames = allowedRatioNames,
                                 family = detectedFamily,
                                 seedreamQuality = seedreamQuality,
-                                onQualityChange = { seedreamQuality = it }
+                                onQualityChange = { seedreamQuality = it },
+                                geminiImageSize = selectedApiConfig?.imageSize,
+                                onGeminiImageSizeChange = onGeminiImageSizeChanged
                             )
                         }
 

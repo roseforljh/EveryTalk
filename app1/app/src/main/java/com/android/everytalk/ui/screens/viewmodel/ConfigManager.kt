@@ -58,9 +58,25 @@ class ConfigManager(
                     stateHolder._selectedApiConfig.value = finalConfig
                 }
                 persistenceManager.saveSelectedConfigIdentifier(finalConfig.id, isImageGen)
+
+                // 绑定到当前会话
+                if (isImageGen) {
+                    val currentImageConversationId = stateHolder._currentImageGenerationConversationId.value
+                    val currentMapping = stateHolder.conversationApiConfigIds.value.toMutableMap()
+                    currentMapping[currentImageConversationId] = finalConfig.id
+                    stateHolder.conversationApiConfigIds.value = currentMapping
+                    persistenceManager.saveConversationApiConfigIds(currentMapping)
+                } else {
+                    val currentConversationId = stateHolder._currentConversationId.value
+                    val currentMapping = stateHolder.conversationApiConfigIds.value.toMutableMap()
+                    currentMapping[currentConversationId] = finalConfig.id
+                    stateHolder.conversationApiConfigIds.value = currentMapping
+                    persistenceManager.saveConversationApiConfigIds(currentMapping)
+                }
+
                 Log.d(
                     TAG_CM,
-                    "Added and selected new config: ${finalConfig.model}. Selection saved."
+                    "Added and selected new config: ${finalConfig.model}. Selection saved and bound to session."
                 )
             }
         }

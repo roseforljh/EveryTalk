@@ -40,7 +40,11 @@ data class ImageGenRequest(
    val history: List<Map<String, String>>? = null,
    // 新增：Seedream 水印控制
    @SerialName("watermark")
-   val watermark: Boolean? = false
+   val watermark: Boolean? = false,
+   // 新增：Gemini 3 Pro Image 专用尺寸档位（"1K"|"2K"|"4K"）
+   // 仅对 gemini-3-pro-image-preview 模型生效，gemini-2.5-flash-image 固定为 1K
+   @SerialName("gemini_image_size")
+   val geminiImageSize: String? = null
 )
 
 @Serializable

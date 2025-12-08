@@ -428,7 +428,9 @@ class SimpleModeManager(
                 stateHolder._selectedImageGenApiConfig.value = config
                 Log.d(TAG, "Restored selected image gen config: ${config.model}")
             } else {
-                Log.w(TAG, "Saved image config ID $savedConfigId not found in current configs.")
+                // 如果找不到绑定的配置（可能被删除），则清空当前选择，避免串台
+                stateHolder._selectedImageGenApiConfig.value = null
+                Log.w(TAG, "Saved image config ID $savedConfigId not found in current configs. Cleared selection.")
             }
         }
         

@@ -6,6 +6,7 @@ import com.android.everytalk.data.DataClass.ImageGenRequest
 import com.android.everytalk.data.DataClass.ImageGenerationResponse
 import com.android.everytalk.data.DataClass.ImageUrl
 import com.android.everytalk.data.DataClass.Timings
+import com.android.everytalk.ui.components.ImageGenCapabilities
 import io.ktor.client.*
 import io.ktor.client.plugins.timeout
 import io.ktor.client.request.*
@@ -474,19 +475,27 @@ object ImageGenerationDirectClient {
                     add("IMAGE")
                     add("TEXT")
                 }
-                request.aspectRatio?.let { ar ->
-                    // Gemini 仅支持特定的宽高比，过滤不支持的值以避免 API 错误
-                    val supportedRatios = setOf(
-                        "1:1", "2:3", "3:2", "3:4", "4:3",
-                        "4:5", "5:4", "9:16", "16:9", "21:9"
-                    )
-                    if (ar in supportedRatios) {
-                        putJsonObject("imageConfig") {
-                            put("aspectRatio", ar)
+                // 构建 imageConfig（aspectRatio + imageSize）
+                val supportedRatios = setOf(
+                    "1:1", "2:3", "3:2", "3:4", "4:3",
+                    "4:5", "5:4", "9:16", "16:9", "21:9"
+                )
+                val hasValidAspectRatio = request.aspectRatio?.let { it in supportedRatios } == true
+                // 放宽限制：只要 geminiImageSize 非空，就尝试写入 imageSize
+                // 用户反馈 Gemini 2.5 也能接收分辨率参数
+                val hasImageSize = !request.geminiImageSize.isNullOrBlank()
+
+                if (hasValidAspectRatio || hasImageSize) {
+                    putJsonObject("imageConfig") {
+                        if (hasValidAspectRatio) {
+                            put("aspectRatio", request.aspectRatio!!)
                         }
-                    } else {
-                        Log.w(TAG, "Gemini 不支持宽高比 '$ar'，已忽略该参数（将使用默认 1:1）")
+                        if (hasImageSize) {
+                            put("imageSize", request.geminiImageSize!!)
+                        }
                     }
+                } else if (!request.aspectRatio.isNullOrBlank() && !hasValidAspectRatio) {
+                    Log.w(TAG, "Gemini 不支持宽高比 '${request.aspectRatio}'，已忽略该参数（将使用默认 1:1）")
                 }
             }
         }.toString()
@@ -579,20 +588,26 @@ object ImageGenerationDirectClient {
                     add("IMAGE")
                     add("TEXT")
                 }
-                // 宽高比配置
-                request.aspectRatio?.let { ar ->
-                    // Gemini 仅支持特定的宽高比，过滤不支持的值以避免 API 错误（回退到纯文本）
-                    val supportedRatios = setOf(
-                        "1:1", "2:3", "3:2", "3:4", "4:3",
-                        "4:5", "5:4", "9:16", "16:9", "21:9"
-                    )
-                    if (ar in supportedRatios) {
-                        putJsonObject("imageConfig") {
-                            put("aspectRatio", ar)
+                // 宽高比 + 尺寸配置
+                val supportedRatios = setOf(
+                    "1:1", "2:3", "3:2", "3:4", "4:3",
+                    "4:5", "5:4", "9:16", "16:9", "21:9"
+                )
+                val hasValidAspectRatio = request.aspectRatio?.let { it in supportedRatios } == true
+                // 放宽限制：只要 geminiImageSize 非空，就尝试写入 imageSize
+                val hasImageSize = !request.geminiImageSize.isNullOrBlank()
+
+                if (hasValidAspectRatio || hasImageSize) {
+                    putJsonObject("imageConfig") {
+                        if (hasValidAspectRatio) {
+                            put("aspectRatio", request.aspectRatio!!)
                         }
-                    } else {
-                        Log.w(TAG, "Gemini 不支持宽高比 '$ar'，已忽略该参数（将使用默认 1:1）")
+                        if (hasImageSize) {
+                            put("imageSize", request.geminiImageSize!!)
+                        }
                     }
+                } else if (!request.aspectRatio.isNullOrBlank() && !hasValidAspectRatio) {
+                    Log.w(TAG, "Gemini 不支持宽高比 '${request.aspectRatio}'，已忽略该参数（将使用默认 1:1）")
                 }
             }
         }.toString()

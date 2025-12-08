@@ -27,12 +27,21 @@ object ImageGenCapabilities {
     }
 
     /**
-     * 质量档（仅 Seedream 家族显示）
+     * 质量档（Seedream 家族和 Gemini 3 Pro Image 使用）
      */
     enum class QualityTier(val label: String) {
         HD("HD"),
+        Q1K("1K"), // Seedream 默认/兼容
         Q2K("2K"),
         Q4K("4K")
+    }
+
+    /**
+     * Gemini 图像尺寸档位（仅 gemini-3-pro-image-preview 支持 2K/4K）
+     */
+    enum class GeminiImageSizeTier(val apiValue: String, val displayName: String) {
+        SIZE_2K("2K", "2K"),
+        SIZE_4K("4K", "4K")
     }
 
     /**
@@ -54,12 +63,17 @@ object ImageGenCapabilities {
 
     /**
      * 家族能力汇总：
-     * - ratios: 家族可展示的比例枚举；为空表示“沿用应用内既有默认比例集”
-     * - supportsQuality: 是否显示清晰度（2K/4K），仅 Seedream = true
+     * - ratios: 家族可展示的比例枚举；为空表示"沿用应用内既有默认比例集"
+     * - supportsQuality: 是否显示清晰度（2K/4K），Seedream = true
+     * - supportsGeminiImageSize: 是否显示 Gemini 专用尺寸档位（1K/2K/4K）
+     * - maxInputImages: 最大输入图片数量（Gemini 3 Pro Image = 14，其他默认 1 或按需）
      */
     data class FamilyCapabilities(
         val ratios: List<AspectRatioOption>,
-        val supportsQuality: Boolean
+        val supportsQuality: Boolean,
+        // 是否显示 Gemini 专用尺寸档位（2K/4K），如果为 false 则 UI 隐藏选择器
+        val supportsGeminiImageSize: Boolean = false,
+        val maxInputImages: Int = 1
     )
 
     /**
@@ -162,34 +176,99 @@ object ImageGenCapabilities {
     private val RATIOS_UNKNOWN_USE_DEFAULT: List<AspectRatioOption> = emptyList()
 
     /**
-     * 获取家族能力（比例候选 + 是否支持清晰度）
+     * 获取家族能力（比例候选 + 是否支持清晰度 + Gemini 尺寸档位 + 最大输入图片数）
      */
     @JvmStatic
     fun getCapabilities(family: ModelFamily): FamilyCapabilities = when (family) {
         ModelFamily.GEMINI -> FamilyCapabilities(
             ratios = RATIOS_GEMINI,
-            supportsQuality = false
+            supportsQuality = false,
+            supportsGeminiImageSize = true, // Gemini 3 Pro Image 支持 1K/2K/4K
+            maxInputImages = 14 // Gemini 3 Pro Image 最多支持 14 张图片
         )
         ModelFamily.SEEDREAM -> FamilyCapabilities(
             ratios = RATIOS_SEEDREAM,
-            supportsQuality = true
+            supportsQuality = true,
+            supportsGeminiImageSize = false,
+            maxInputImages = 1
         )
         ModelFamily.QWEN -> FamilyCapabilities(
             ratios = RATIOS_QWEN,
-            supportsQuality = false
+            supportsQuality = false,
+            supportsGeminiImageSize = false,
+            maxInputImages = 1
         )
         ModelFamily.KOLORS -> FamilyCapabilities(
             ratios = RATIOS_KOLORS,
-            supportsQuality = false
+            supportsQuality = false,
+            supportsGeminiImageSize = false,
+            maxInputImages = 1
         )
         ModelFamily.MODAL_Z_IMAGE -> FamilyCapabilities(
             ratios = RATIOS_MODAL_Z_IMAGE,
-            supportsQuality = false // 不需要二级分组，直接在列表中展示
+            supportsQuality = false, // 不需要二级分组，直接在列表中展示
+            supportsGeminiImageSize = false,
+            maxInputImages = 0 // Modal Z-Image 不支持图像编辑
         )
         ModelFamily.UNKNOWN -> FamilyCapabilities(
             ratios = RATIOS_UNKNOWN_USE_DEFAULT,
-            supportsQuality = false
+            supportsQuality = false,
+            supportsGeminiImageSize = false,
+            maxInputImages = 1
         )
+    }
+
+    /**
+     * 判断模型是否为 Gemini 3 Pro Image（支持 2K/4K 和最多 14 张图片）
+     */
+    @JvmStatic
+    fun isGemini3ProImage(modelName: String?): Boolean {
+        if (modelName == null) return false
+        val lower = modelName.lowercase()
+        return lower.contains("gemini-3-pro-image") || lower.contains("gemini-3-pro-image-preview")
+    }
+
+    /**
+     * 判断模型是否为 Gemini 2.5 Flash Image（仅支持 1K）
+     */
+    @JvmStatic
+    fun isGemini25FlashImage(modelName: String?): Boolean {
+        if (modelName == null) return false
+        val lower = modelName.lowercase()
+        return lower.contains("gemini-2.5-flash-image") || lower.contains("gemini-2-5-flash-image")
+    }
+
+    /**
+     * 获取 Gemini 模型支持的尺寸档位列表
+     * - gemini-3-pro-image-preview: 支持 1K/2K/4K
+     * - gemini-2.5-flash-image: 仅支持 1K
+     */
+    @JvmStatic
+    fun getGeminiSupportedSizes(modelName: String?): List<GeminiImageSizeTier> {
+        // 放宽限制：只要是 Gemini 图像模型，都允许尝试选择 2K/4K
+        // 用户反馈 Gemini 2.5 也能接收分辨率参数
+        return if (modelName != null) {
+            listOf(
+                GeminiImageSizeTier.SIZE_2K,
+                GeminiImageSizeTier.SIZE_4K
+            )
+        } else {
+            emptyList()
+        }
+    }
+
+    /**
+     * 获取 Gemini 模型的最大输入图片数量
+     * - gemini-3-pro-image-preview: 最多 14 张
+     * - gemini-2.5-flash-image: 最多 3 张
+     */
+    @JvmStatic
+    fun getGeminiMaxInputImages(modelName: String?): Int {
+        return when {
+            isGemini3ProImage(modelName) -> 14
+            isGemini25FlashImage(modelName) -> 3
+            else -> 1
+        }
     }
 
     // -------- 尺寸映射（仅 Seedream 家族使用）--------
@@ -254,6 +333,7 @@ object ImageGenCapabilities {
             QualityTier.Q2K -> SEEDREAM_SIZES_2K[key] ?: emptyList()
             QualityTier.Q4K -> SEEDREAM_SIZES_4K[key] ?: emptyList()
             QualityTier.HD -> emptyList() // Seedream 不使用 HD
+            QualityTier.Q1K -> emptyList() // Seedream 不使用 1K
         }
     }
 
