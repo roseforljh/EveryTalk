@@ -7,6 +7,7 @@ import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.os.Build
 import android.util.Log
+import com.android.everytalk.util.AudioTestUtil
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.ensureActive
@@ -86,7 +87,8 @@ class VoiceChatSession(
     
     private val onVolumeChanged: ((Float) -> Unit)? = null,
     private val onTranscriptionReceived: ((String) -> Unit)? = null, // 识别到的文字回调
-    private val onResponseReceived: ((String) -> Unit)? = null  // AI回复文字回调
+    private val onResponseReceived: ((String) -> Unit)? = null,  // AI回复文字回调
+    private val onWebSocketStateChanged: ((WebSocketState) -> Unit)? = null  // WebSocket 状态回调
 ) {
     private var audioRecord: AudioRecord? = null
     private var isRecording: Boolean = false
@@ -148,6 +150,16 @@ class VoiceChatSession(
     private val channelConfig = AudioFormat.CHANNEL_IN_MONO
     private val audioFormat = AudioFormat.ENCODING_PCM_16BIT
 
+    /**
+     * WebSocket 连接状态
+     */
+    enum class WebSocketState {
+        DISCONNECTED,   // 未连接
+        CONNECTING,     // 正在连接
+        CONNECTED,      // 已连接
+        ERROR           // 连接错误
+    }
+    
     companion object {
         private const val TAG = "VoiceChatSession"
     }
@@ -205,11 +217,21 @@ class VoiceChatSession(
                 format = "pcm"
             )
 
+            // 通知 UI WebSocket 正在连接
+            withContext(Dispatchers.Main) {
+                onWebSocketStateChanged?.invoke(WebSocketState.CONNECTING)
+            }
+            
             // 在后台启动实时 STT 会话（不阻塞录音）
             realtimeSttJob = realtimeSttScope.launch {
                 aliyunRealtimeSttClient?.start(
                     onReady = {
                         Log.i(TAG, "WebSocket ready, flushing pending audio buffer...")
+                        
+                        // 通知 UI WebSocket 已连接
+                        kotlinx.coroutines.MainScope().launch {
+                            onWebSocketStateChanged?.invoke(WebSocketState.CONNECTED)
+                        }
                         
                         // WebSocket 连接成功，发送缓冲的音频数据
                         realtimeSttScope.launch {
@@ -218,9 +240,6 @@ class VoiceChatSession(
                         
                         // 标记 WebSocket 已就绪
                         isWebSocketReady.set(true)
-                        
-                        // 通知 UI（可选，因为录音已经开始了）
-                        // onResponseReceived?.invoke("连接已建立")
                     },
                     onPartial = { text ->
                         // 收到 partial 结果时，清除提示文本，并实时更新识别结果
@@ -232,6 +251,10 @@ class VoiceChatSession(
                     },
                     onError = { error ->
                         Log.e(TAG, "Realtime STT error: $error")
+                        // 通知 UI WebSocket 错误
+                        kotlinx.coroutines.MainScope().launch {
+                            onWebSocketStateChanged?.invoke(WebSocketState.ERROR)
+                        }
                         onResponseReceived?.invoke("识别错误: $error")
                     }
                 )
@@ -345,11 +368,20 @@ class VoiceChatSession(
             val durationMs = (totalBytes.toFloat() / (sampleRate * 2) * 1000).toLong()
             Log.i(TAG, "Flushing ${chunksToSend.size} buffered audio chunks (${totalBytes / 1024}KB, ~${durationMs}ms)")
             
-            for (chunk in chunksToSend) {
-                aliyunRealtimeSttClient?.sendAudio(chunk)
+            try {
+                for (chunk in chunksToSend) {
+                    // 检查是否仍在录音状态，避免在停止后继续发送
+                    if (!isRecording && !isWebSocketReady.get()) {
+                        Log.w(TAG, "Recording stopped during flush, aborting")
+                        break
+                    }
+                    aliyunRealtimeSttClient?.sendAudio(chunk)
+                }
+                Log.i(TAG, "Buffered audio flushed successfully")
+            } catch (e: Exception) {
+                Log.w(TAG, "Error flushing audio buffer: ${e.message}")
+                // 不抛出异常，避免崩溃
             }
-            
-            Log.i(TAG, "Buffered audio flushed successfully")
         }
     }
     
@@ -367,6 +399,11 @@ class VoiceChatSession(
             pendingAudioBuffer.clear()
         }
         isWebSocketReady.set(false)
+        
+        // 通知 UI WebSocket 已断开
+        withContext(Dispatchers.Main) {
+            onWebSocketStateChanged?.invoke(WebSocketState.DISCONNECTED)
+        }
         
         // 取消实时 STT
         aliyunRealtimeSttClient?.cancel()
@@ -475,6 +512,18 @@ class VoiceChatSession(
         } catch (_: Throwable) {}
         audioRecord = null
         
+        // 【关键修复】给音频系统时间从录音模式切换到播放模式
+        // 某些 OPPO/Realme 设备在录音结束后立即播放可能导致 AudioTrack 无法正常工作
+        // 根据设备类型动态调整等待时间
+        val isProblematicDevice = AudioTestUtil.isKnownProblematicDevice()
+        val delayMs = if (isProblematicDevice) {
+            PerformanceConfig.VOICE_RECORD_TO_PLAYBACK_DELAY_OPPO_MS
+        } else {
+            PerformanceConfig.VOICE_RECORD_TO_PLAYBACK_DELAY_MS
+        }
+        Log.i(TAG, "Waiting for audio system mode switch... (${delayMs}ms, isProblematicDevice=$isProblematicDevice)")
+        kotlinx.coroutines.delay(delayMs)
+        
         // 等待实时 STT 完成并获取最终文本
         val userText = aliyunRealtimeSttClient?.finishAndWait() ?: ""
 
@@ -482,6 +531,11 @@ class VoiceChatSession(
         aliyunRealtimeSttClient = null
         realtimeSttJob?.cancel()
         realtimeSttJob = null
+        
+        // 通知 UI WebSocket 已断开
+        withContext(Dispatchers.Main) {
+            onWebSocketStateChanged?.invoke(WebSocketState.DISCONNECTED)
+        }
         
         Log.i(TAG, "Realtime STT final result: $userText")
         
@@ -854,43 +908,66 @@ class VoiceChatSession(
 
     /**
      * 流式音频播放器
+     *
+     * 【增强版】包含以下优化：
+     * - 静音预热：在正式播放前写入静音数据唤醒音频通路
+     * - 详细日志：记录 AudioTrack 状态变化，便于调试
+     * - 设备适配：针对 OPPO/Realme 等设备的特殊处理
      */
-    private inner class StreamAudioPlayer(private val sampleRate: Int) {
+    private inner class StreamAudioPlayer(private val inputSampleRate: Int) {
         private var audioTrack: AudioTrack? = null
         private val bufferSize: Int
         
+        // 目标采样率：强制使用 48000Hz (Android 原生最安全采样率)
+        // 解决部分设备 (OnePlus/OPPO) 在非标准采样率 (如 32kHz) 下 AudioTrack 卡死的问题
+        private val targetSampleRate = 48000
+        
         // 预缓冲配置
         private var totalWrittenBytes = 0
-        private var isBuffering = true
-        // 按配置的预缓冲时长计算需要写入的字节数
-        private var nextPlayThreshold =
-            ((sampleRate * 2L * PerformanceConfig.VOICE_STREAM_PREBUFFER_MS) / 1000L).toInt()
+        private var isBuffering = true // 初始状态为缓冲
         
         // 字节对齐缓冲 (处理奇数包)
         private var leftoverByte: Byte? = null
 
         // 音量计算
         private var lastVolumeUpdateTime = 0L
+        
+        // 设备信息
+        private val isProblematicDevice = AudioTestUtil.isKnownProblematicDevice()
 
         init {
-            val channelConfig = AudioFormat.CHANNEL_OUT_MONO
+            // 【关键修复 1】强制使用双声道输出 (Stereo)
+            // 解决 Mono 模式下部分设备驱动不工作的问题
+            val channelConfig = AudioFormat.CHANNEL_OUT_STEREO
             val audioFormat = AudioFormat.ENCODING_PCM_16BIT
-            val minBufSize = AudioTrack.getMinBufferSize(sampleRate, channelConfig, audioFormat)
-            // 缓冲区大小调整：1秒左右，兼顾稳定性和延迟
-            bufferSize = maxOf(minBufSize * 2, sampleRate * 2 * 1)
             
-            Log.i("StreamAudioPlayer", "Init AudioTrack: sampleRate=$sampleRate, minBuf=$minBufSize, actualBuf=$bufferSize")
+            // 【关键修复 2】强制使用 48kHz 采样率
+            // 解决 32kHz/24kHz 在部分设备上导致 playbackHeadPosition 不动的问题
+            
+            // 缓冲区计算：Stereo (2ch) * 16bit (2bytes) = 4 bytes/frame
+            val minBufSize = AudioTrack.getMinBufferSize(targetSampleRate, channelConfig, audioFormat)
+            // 缓冲区大小调整：使用较小的倍数 (2x minBuf) 以减少延迟并避免某些设备的 buffer 协商问题
+            // 之前使用 1秒 (targetSampleRate * 4) 可能过大导致驱动行为异常
+            bufferSize = maxOf(minBufSize * 2, targetSampleRate * 4 / 2)
+            
+            Log.i("StreamAudioPlayer", "=== AudioTrack 初始化 (Resample: $inputSampleRate -> $targetSampleRate, Stereo) ===")
+            Log.i("StreamAudioPlayer", "参数: targetSampleRate=$targetSampleRate, minBuf=$minBufSize, actualBuf=$bufferSize")
+            Log.i("StreamAudioPlayer", "设备: ${Build.MANUFACTURER} ${Build.MODEL}, isProblematic=$isProblematicDevice")
 
             audioTrack = AudioTrack.Builder()
                 .setAudioAttributes(
                     AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        // 【关键修复】使用 CONTENT_TYPE_MUSIC 而非 SPEECH
+                        // 某些设备 (如 OnePlus/OPPO) 对 SPEECH 类型的流有特殊的路由或处理逻辑
+                        // 可能导致 AudioTrack 写入成功但无法播放 (head stuck at 0)
+                        // MUSIC 类型通常走标准媒体通道，兼容性最好
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                         .build()
                 )
                 .setAudioFormat(
                     AudioFormat.Builder()
-                        .setSampleRate(sampleRate)
+                        .setSampleRate(targetSampleRate)
                         .setEncoding(audioFormat)
                         .setChannelMask(channelConfig)
                         .build()
@@ -898,14 +975,31 @@ class VoiceChatSession(
                 .setBufferSizeInBytes(bufferSize)
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
+            
+            val state = audioTrack?.state
+            val actualSampleRate = audioTrack?.sampleRate
+            val playState = audioTrack?.playState
+            
+            if (state != AudioTrack.STATE_INITIALIZED) {
+                Log.e("StreamAudioPlayer", "AudioTrack 初始化失败! state=$state, playState=$playState")
+            } else {
+                Log.i("StreamAudioPlayer", "AudioTrack 初始化成功: state=$state, sampleRate=$actualSampleRate, playState=$playState")
+            }
         }
         
         @Volatile
         private var forceStop = false
         
         fun start() {
-            // 不再立即播放，由 write() 中的预缓冲逻辑触发
-            // audioTrack?.play()
+            // 【关键修复】立即启动播放
+            // 不要等待数据写入后再 play()，这在某些设备上会导致死锁或状态异常
+            // AudioTrack 在没有数据时会自动处于 Underrun 状态，写入数据后会立即发声
+            try {
+                audioTrack?.play()
+                Log.i("StreamAudioPlayer", "start() 调用，AudioTrack 已设置为 PLAYING 状态")
+            } catch (e: Exception) {
+                Log.e("StreamAudioPlayer", "start() 播放失败", e)
+            }
         }
         
         fun forceStop() {
@@ -921,14 +1015,13 @@ class VoiceChatSession(
             if (forceStop) return
             val track = audioTrack ?: return
             
-            // 计算音量并回调
+            // 计算音量并回调 (使用原始 Mono 数据计算)
             val currentTime = System.currentTimeMillis()
             if (onVolumeChanged != null && currentTime - lastVolumeUpdateTime >= 50) {
                 lastVolumeUpdateTime = currentTime
                 
-                // 简单的 RMS 计算 (只取一部分样本以提高性能)
                 var sum = 0.0
-                val step = 4 // 步长，减少计算量
+                val step = 4
                 var i = 0
                 while (i < data.size - 1) {
                     val sample = (data[i].toInt() and 0xFF) or (data[i + 1].toInt() shl 8)
@@ -940,89 +1033,87 @@ class VoiceChatSession(
                 val sampleCount = data.size / (2 * step)
                 if (sampleCount > 0) {
                     val rms = kotlin.math.sqrt(sum / sampleCount)
-                    // 调整归一化系数，让波形更明显
                     val normalizedVolume = (rms / 2000.0).coerceIn(0.0, 1.0).toFloat()
-                    
                     withContext(Dispatchers.Main) {
                         onVolumeChanged?.invoke(normalizedVolume)
                     }
                 }
             }
 
-            // 处理字节对齐 (16-bit PCM 必须偶数写入)
-            var dataToWrite = data
+            // 处理字节对齐
+            var dataToProcess = data
             
             // 1. 如果有上次剩余的字节，拼接到开头
             if (leftoverByte != null) {
                 val newData = ByteArray(data.size + 1)
                 newData[0] = leftoverByte!!
                 System.arraycopy(data, 0, newData, 1, data.size)
-                dataToWrite = newData
+                dataToProcess = newData
                 leftoverByte = null
             }
             
-            // 2. 如果当前数据长度是奇数，剥离最后一个字节留给下次
-            if (dataToWrite.size % 2 != 0) {
-                leftoverByte = dataToWrite[dataToWrite.size - 1]
-                dataToWrite = dataToWrite.copyOfRange(0, dataToWrite.size - 1)
+            // 2. 如果当前数据长度是奇数，剥离最后一个字节
+            if (dataToProcess.size % 2 != 0) {
+                leftoverByte = dataToProcess[dataToProcess.size - 1]
+                dataToProcess = dataToProcess.copyOfRange(0, dataToProcess.size - 1)
             }
             
-            if (dataToWrite.isEmpty()) return
+            if (dataToProcess.isEmpty()) return
 
-            // 循环写入，确保所有数据都被写入 AudioTrack
-            // AudioTrack.write() 可能因缓冲区满而返回小于请求的字节数
-            var offset = 0
-            val totalToWrite = dataToWrite.size
-            var retryCount = 0
-            val maxRetries = 100 // 防止无限循环
+            // 【关键处理】重采样 + 声道扩展
+            // 1. Resample: inputSampleRate -> 48000Hz
+            // 2. Mono -> Stereo
             
-            while (offset < totalToWrite && !forceStop && retryCount < maxRetries) {
+            val resampledData = if (inputSampleRate != targetSampleRate) {
+                resample(dataToProcess, inputSampleRate, targetSampleRate)
+            } else {
+                dataToProcess
+            }
+
+            // Mono (16-bit) -> Stereo (16-bit)
+            // 输入: [L-low, L-high]
+            // 输出: [L-low, L-high, L-low, L-high] (即 Left=Right)
+            val stereoData = ByteArray(resampledData.size * 2)
+            for (i in 0 until resampledData.size / 2) {
+                val low = resampledData[i * 2]
+                val high = resampledData[i * 2 + 1]
+                
+                // Left channel
+                stereoData[i * 4] = low
+                stereoData[i * 4 + 1] = high
+                
+                // Right channel (duplicated)
+                stereoData[i * 4 + 2] = low
+                stereoData[i * 4 + 3] = high
+            }
+
+            // 循环写入 Stereo 数据
+            var offset = 0
+            val totalToWrite = stereoData.size
+            
+            while (offset < totalToWrite && !forceStop) {
                 val remaining = totalToWrite - offset
-                val written = track.write(dataToWrite, offset, remaining)
+                val written = track.write(stereoData, offset, remaining)
                 
                 if (written > 0) {
                     offset += written
                     totalWrittenBytes += written
-                    retryCount = 0 // 重置重试计数
                     
-                    // 检查播放状态，处理 Underrun 自动恢复
-                    if (isBuffering) {
-                        // 缓冲阶段：达到阈值才播放
-                        if (totalWrittenBytes >= nextPlayThreshold) {
-                            try {
-                                track.play()
-                                isBuffering = false
-                                Log.i("StreamAudioPlayer", "Buffering complete ($totalWrittenBytes bytes), starting playback. Head: ${track.playbackHeadPosition}")
-                            } catch (e: Exception) {
-                                Log.e("StreamAudioPlayer", "Failed to start playback", e)
-                            }
-                        }
-                    } else {
-                        // 播放阶段：检查是否意外停止 (Underrun)
-                        if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
-                            Log.w(
-                                "StreamAudioPlayer",
-                                "Underrun detected (state=${track.playState}, head=${track.playbackHeadPosition}, written=$totalWrittenBytes), pausing to re-buffer"
-                            )
-                            isBuffering = true
-                            // 重新缓冲指定时长的数据
-                            nextPlayThreshold =
-                                totalWrittenBytes + ((sampleRate * 2L * PerformanceConfig.VOICE_STREAM_PREBUFFER_MS) / 1000L).toInt()
+                    // 检查播放状态，如果处于停止状态则重新启动
+                    if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
+                        try {
+                            track.play()
+                            Log.i("StreamAudioPlayer", "AudioTrack restarted from non-playing state")
+                        } catch (e: Exception) {
+                            Log.e("StreamAudioPlayer", "Failed to restart playback", e)
                         }
                     }
                 } else if (written == 0) {
-                    // 缓冲区满，等待一小段时间后重试
-                    retryCount++
                     kotlinx.coroutines.delay(10)
                 } else {
-                    // 写入错误
-                    Log.e("StreamAudioPlayer", "AudioTrack.write returned error: $written")
+                    Log.e("StreamAudioPlayer", "AudioTrack.write error: $written")
                     break
                 }
-            }
-            
-            if (offset < totalToWrite) {
-                Log.w("StreamAudioPlayer", "Failed to write all data: wrote $offset / $totalToWrite bytes")
             }
         }
         
@@ -1032,48 +1123,70 @@ class VoiceChatSession(
                 
                 if (forceStop) {
                     Log.i("StreamAudioPlayer", "Playback force stopped by user")
-                    // track.stop() // Already handled in forceStop
                     track.release()
                     return
                 }
-                
-                // 1. 确保处于播放状态
-                if (totalWrittenBytes > 0 && (isBuffering || track.playState != AudioTrack.PLAYSTATE_PLAYING)) {
-                    track.play()
-                    Log.i("StreamAudioPlayer", "Force starting playback in close()")
+
+                // 【关键修复】写入静音 Padding
+                // 在停止前写入约 200ms 的静音数据，将硬件缓冲区中的有效音频"挤"出来
+                // 这能解决部分设备尾音被吞或 playbackHeadPosition 不更新到最后的问题
+                try {
+                    val paddingMs = 200
+                    val paddingBytes = (targetSampleRate * 4 * paddingMs) / 1000 // Stereo: 4 bytes/frame
+                    val paddingData = ByteArray(paddingBytes) // 全 0 即静音
+                    track.write(paddingData, 0, paddingBytes)
+                    Log.i("StreamAudioPlayer", "Written ${paddingBytes} bytes of silence padding")
+                    
+                    // 计入总写入量，以便后续等待逻辑包含这段 Padding
+                    totalWrittenBytes += paddingBytes
+                } catch (e: Exception) {
+                    Log.w("StreamAudioPlayer", "Failed to write padding", e)
                 }
                 
-                // 2. 阻塞等待播放完成 (防止尾部截断)
-                val totalFrames = totalWrittenBytes / 2 // 16-bit = 2 bytes per frame
+                // 阻塞等待播放完成
+                // Stereo 模式下: 1 frame = 2 channels * 16bit = 4 bytes
+                val totalFrames = totalWrittenBytes / 4
                 var waitedMs = 0
                 val timeoutMs = PerformanceConfig.VOICE_STREAM_CLOSE_TIMEOUT_MS.toInt()
                 var lastPosition = -1L
                 var positionStuckCount = 0
                 
+                // 启动等待
+                val startupGraceMs = 1000
+                var startupWaitMs = 0
+                
                 Log.i("StreamAudioPlayer", "Waiting for playback completion. Total frames: $totalFrames")
 
-                // 只有当实际写入了数据才等待
                 if (totalFrames > 0) {
-                    while (waitedMs < timeoutMs && !forceStop) {
-                        // 检查 Track 状态
-                        if (track.playState == AudioTrack.PLAYSTATE_STOPPED) {
-                            Log.i("StreamAudioPlayer", "AudioTrack stopped unexpectedly")
-                            break
+                    // 1. 等待播放启动 (head > 0)
+                    while (startupWaitMs < startupGraceMs && !forceStop) {
+                        val currentPosition = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
+                        if (currentPosition > 0) break
+                        
+                        // 如果还没开始且不在播放状态，尝试再次 play
+                        if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
+                            try { track.play() } catch (_: Exception) {}
                         }
                         
-                        // 检查播放进度
+                        Thread.sleep(50)
+                        startupWaitMs += 50
+                    }
+                    
+                    // 2. 等待播放结束
+                    while (waitedMs < timeoutMs && !forceStop) {
                         val currentPosition = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
                         
-                        if (currentPosition >= totalFrames) {
+                        // 允许 5% 的误差，加上 Padding 后通常能完整播放有效音频
+                        if (currentPosition >= totalFrames * 0.95) {
                             Log.i("StreamAudioPlayer", "Playback completed naturally ($currentPosition / $totalFrames)")
                             break
                         }
                         
-                        // 检测卡死：如果进度条长时间不动
+                        // 卡死检测
                         if (currentPosition == lastPosition) {
                             positionStuckCount++
-                            if (positionStuckCount > 20) { // 1秒不动
-                                Log.w("StreamAudioPlayer", "Playback stuck at $currentPosition / $totalFrames for 1s, aborting wait")
+                            if (positionStuckCount > 30) { // 1.5s 不动则超时
+                                Log.w("StreamAudioPlayer", "Playback stuck at $currentPosition / $totalFrames, aborting wait")
                                 break
                             }
                         } else {
@@ -1099,6 +1212,39 @@ class VoiceChatSession(
                 audioTrack = null
             }
         }
+    }
+
+    /**
+     * 简单的线性插值重采样 (16-bit PCM Mono)
+     */
+    private fun resample(input: ByteArray, inRate: Int, outRate: Int): ByteArray {
+        if (inRate == outRate) return input
+        
+        val inputShorts = ShortArray(input.size / 2)
+        java.nio.ByteBuffer.wrap(input).order(java.nio.ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(inputShorts)
+        
+        val ratio = inRate.toDouble() / outRate
+        val outputLength = (inputShorts.size / ratio).toInt()
+        val outputShorts = ShortArray(outputLength)
+        
+        for (i in 0 until outputLength) {
+            val inputIndex = i * ratio
+            val index1 = inputIndex.toInt()
+            val index2 = minOf(index1 + 1, inputShorts.size - 1)
+            val fraction = inputIndex - index1
+            
+            val val1 = inputShorts[index1]
+            val val2 = inputShorts[index2]
+            
+            // 线性插值
+            val interpolated = (val1 + fraction * (val2 - val1)).toInt().toShort()
+            outputShorts[i] = interpolated
+        }
+        
+        val outputBytes = ByteArray(outputShorts.size * 2)
+        java.nio.ByteBuffer.wrap(outputBytes).order(java.nio.ByteOrder.LITTLE_ENDIAN).asShortBuffer().put(outputShorts)
+        
+        return outputBytes
     }
 }
 

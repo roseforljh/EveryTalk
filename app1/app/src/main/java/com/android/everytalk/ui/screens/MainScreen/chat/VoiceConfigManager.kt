@@ -54,6 +54,11 @@ class VoiceConfigManager(
             )
         }
         
+        // 如果音色为空，使用当前 TTS 平台的默认音色
+        val effectiveVoiceName = config.voiceName.ifBlank {
+            getDefaultVoiceName(config.ttsPlatform)
+        }
+        
         return VoiceConfig(
             sttPlatform = config.sttPlatform,
             sttApiKey = config.sttApiKey,
@@ -67,7 +72,7 @@ class VoiceConfigManager(
             ttsApiKey = config.ttsApiKey,
             ttsApiUrl = config.ttsApiUrl,
             ttsModel = config.ttsModel,
-            voiceName = config.voiceName,
+            voiceName = effectiveVoiceName,
             // 从配置中读取实时流式模式设置（仅阿里云 STT 支持）
             useRealtimeStreaming = config.useRealtimeStreaming
         )

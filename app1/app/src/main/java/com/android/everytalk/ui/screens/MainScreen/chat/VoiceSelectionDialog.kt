@@ -101,18 +101,30 @@ fun VoiceSelectionDialog(
         "Sulafat" to "温暖"
     )
 
-    // Minimax 音色 (示例)
+    // Minimax 音色
     val minimaxVoices = listOf(
+        // ⭐ 强烈推荐 - 最像真人
+        "Chinese (Mandarin)_Warm_Bestie" to "⭐ 温暖闺蜜 - 亲切暖风、生活化",
+        "Chinese (Mandarin)_Gentle_Senior" to "⭐ 温柔学姐 - 自然柔和",
+        "Chinese (Mandarin)_Sweet_Lady" to "⭐ 甜美女声 - 自然甜、真人感强",
+        
+        // 🎙️ 沉稳自然（专业主播风格）
+        "Chinese (Mandarin)_Mature_Woman" to "傲娇御姐 - 稳定、有存在感",
+        "female-yujie" to "御姐音色 - 稳定自然、略带磁性",
+        
+        // 🎧 亲和真实（朋友聊天风格）
+        "Chinese (Mandarin)_Warm_Girl" to "温暖少女 - 亲和自然",
+        "Chinese (Mandarin)_Crisp_Girl" to "清脆少女 - 清新自然",
+        "qiaopi_mengmei" to "俏皮萌妹 - 活泼可爱",
+        
+        // 🎙️ 男声推荐
+        "Chinese (Mandarin)_Gentleman" to "温润男声 - 自然成熟",
+        "Chinese (Mandarin)_Lyrical_Voice" to "抒情男声 - 情感丰富",
+        "male-qn-jingying" to "精英青年 - 自然稳定",
+        
+        // 其他音色
         "male-qn-qingse" to "青涩男声",
-        "male-qn-jingying" to "精英男声",
-        "female-shaonv" to "少女音",
-        "female-yujie" to "御姐音",
-        "presenter_male" to "男主持人",
-        "presenter_female" to "女主持人",
-        "audiobook_male_1" to "有声书男1",
-        "audiobook_male_2" to "有声书男2",
-        "audiobook_female_1" to "有声书女1",
-        "audiobook_female_2" to "有声书女2"
+        "female-shaonv" to "少女音"
     )
 
     // OpenAI 音色

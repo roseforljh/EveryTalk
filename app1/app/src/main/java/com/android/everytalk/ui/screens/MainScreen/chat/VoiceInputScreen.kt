@@ -5,6 +5,9 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -23,6 +26,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.android.everytalk.data.DataClass.ApiConfig
+import com.android.everytalk.data.network.VoiceChatSession
 import com.android.everytalk.statecontroller.AppViewModel
 
 /**
@@ -50,6 +54,7 @@ fun VoiceInputScreen(
     var userText by remember { mutableStateOf("") }
     var assistantText by remember { mutableStateOf("") }
     var showTtsQuotaWarning by remember { mutableStateOf(false) }
+    var webSocketState by remember { mutableStateOf(VoiceChatSession.WebSocketState.DISCONNECTED) }
     
     // 对话框状态
     var showTtsSettingsDialog by remember { mutableStateOf(false) }
@@ -76,7 +81,8 @@ fun VoiceInputScreen(
                 userCancelledPlayback = false
             }
         },
-        onTtsQuotaWarning = { showTtsQuotaWarning = it }
+        onTtsQuotaWarning = { showTtsQuotaWarning = it },
+        onWebSocketStateChanged = { webSocketState = it }
     )
     
     // 监听处理状态变化，自动管理播放状态
@@ -227,6 +233,21 @@ fun VoiceInputScreen(
                 waveCircleColor = waveCircleColor,
                 contentColor = contentColor
             )
+            
+            // WebSocket 状态指示器（仅在录音时显示）
+            AnimatedVisibility(
+                visible = isRecording,
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 16.dp)
+            ) {
+                WebSocketStatusIndicator(
+                    state = webSocketState,
+                    contentColor = contentColor
+                )
+            }
         }
     }
     

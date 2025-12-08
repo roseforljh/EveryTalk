@@ -36,7 +36,8 @@ class VoiceSessionController(
     private val onResponseReceived: (String) -> Unit,
     private val onProcessingChanged: (Boolean) -> Unit,
     private val onRecordingChanged: (Boolean) -> Unit,
-    private val onTtsQuotaWarning: (Boolean) -> Unit
+    private val onTtsQuotaWarning: (Boolean) -> Unit,
+    private val onWebSocketStateChanged: (VoiceChatSession.WebSocketState) -> Unit = {}
 ) {
     private var currentSession: VoiceChatSession? = null
     private var processingJob: Job? = null
@@ -175,7 +176,8 @@ class VoiceSessionController(
             
             onVolumeChanged = onVolumeChanged,
             onTranscriptionReceived = onTranscriptionReceived,
-            onResponseReceived = onResponseReceived
+            onResponseReceived = onResponseReceived,
+            onWebSocketStateChanged = onWebSocketStateChanged
         )
         android.util.Log.i(
             "VoiceSessionController",
@@ -417,7 +419,8 @@ fun rememberVoiceSessionController(
     onResponseReceived: (String) -> Unit,
     onProcessingChanged: (Boolean) -> Unit,
     onRecordingChanged: (Boolean) -> Unit,
-    onTtsQuotaWarning: (Boolean) -> Unit
+    onTtsQuotaWarning: (Boolean) -> Unit,
+    onWebSocketStateChanged: (VoiceChatSession.WebSocketState) -> Unit = {}
 ): VoiceSessionController {
     return remember(context, viewModel, coroutineScope) {
         VoiceSessionController(
@@ -429,7 +432,8 @@ fun rememberVoiceSessionController(
             onResponseReceived = onResponseReceived,
             onProcessingChanged = onProcessingChanged,
             onRecordingChanged = onRecordingChanged,
-            onTtsQuotaWarning = onTtsQuotaWarning
+            onTtsQuotaWarning = onTtsQuotaWarning,
+            onWebSocketStateChanged = onWebSocketStateChanged
         )
     }
 }

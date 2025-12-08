@@ -5,8 +5,12 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -20,6 +24,10 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.CloudSync
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -29,6 +37,7 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.android.everytalk.data.network.VoiceChatSession
 import kotlinx.coroutines.delay
 
 /**
@@ -319,5 +328,84 @@ private fun ConversationTextCard(
                 )
             }
         }
+    }
+}
+
+/**
+ * WebSocket 状态指示器
+ * 显示实时 STT 的 WebSocket 连接状态
+ */
+@Composable
+fun WebSocketStatusIndicator(
+    state: VoiceChatSession.WebSocketState,
+    contentColor: Color,
+    modifier: Modifier = Modifier
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "wsIndicator")
+    
+    // 连接中时的脉冲动画
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.4f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulseAlpha"
+    )
+    
+    val (icon, text, color) = when (state) {
+        VoiceChatSession.WebSocketState.DISCONNECTED -> Triple(
+            Icons.Default.CloudOff,
+            "未连接",
+            contentColor.copy(alpha = 0.5f)
+        )
+        VoiceChatSession.WebSocketState.CONNECTING -> Triple(
+            Icons.Default.CloudSync,
+            "正在连接...",
+            Color(0xFFFF9800) // 橙色
+        )
+        VoiceChatSession.WebSocketState.CONNECTED -> Triple(
+            Icons.Default.Cloud,
+            "已连接",
+            Color(0xFF4CAF50) // 绿色
+        )
+        VoiceChatSession.WebSocketState.ERROR -> Triple(
+            Icons.Default.Warning,
+            "连接错误",
+            Color(0xFFF44336) // 红色
+        )
+    }
+    
+    Row(
+        modifier = modifier
+            .background(
+                color = Color.Black.copy(alpha = 0.6f),
+                shape = RoundedCornerShape(16.dp)
+            )
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = text,
+            modifier = Modifier.size(16.dp),
+            tint = if (state == VoiceChatSession.WebSocketState.CONNECTING) {
+                color.copy(alpha = pulseAlpha)
+            } else {
+                color
+            }
+        )
+        Text(
+            text = text,
+            color = if (state == VoiceChatSession.WebSocketState.CONNECTING) {
+                color.copy(alpha = pulseAlpha)
+            } else {
+                color
+            },
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Medium
+        )
     }
 }

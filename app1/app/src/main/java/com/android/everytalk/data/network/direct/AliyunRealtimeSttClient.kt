@@ -183,14 +183,21 @@ class AliyunRealtimeSttClient(
     
     /**
      * 发送音频数据
-     * 
+     *
      * @param audioData PCM 音频数据块
      */
     suspend fun sendAudio(audioData: ByteArray) {
         if (!isConnected.get() || isClosed.get()) {
             return
         }
-        audioQueue.send(audioData)
+        try {
+            audioQueue.send(audioData)
+        } catch (e: kotlinx.coroutines.channels.ClosedSendChannelException) {
+            // 通道已关闭，忽略此音频块
+            Log.d(TAG, "Audio queue closed, ignoring audio chunk")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to send audio: ${e.message}")
+        }
     }
     
     /**

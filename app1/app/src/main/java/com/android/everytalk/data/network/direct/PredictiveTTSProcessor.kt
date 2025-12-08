@@ -6,6 +6,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.sync.Semaphore
+import com.android.everytalk.util.RateLimiter
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -31,8 +32,9 @@ class PredictiveTTSProcessor(
     private val ttsExecutor: suspend (String) -> Flow<ByteArray>,
     private val maxConcurrent: Int = 5,
     private val maxRetry: Int = 2,
-    private val taskTimeout: Long = 30_000L,
-    private val firstTaskTimeout: Long = 15_000L  // 首句使用更短超时，快速失败
+    private val taskTimeout: Long = 60_000L, // 增加到 60s，适应长文本非流式 TTS
+    private val firstTaskTimeout: Long = 15_000L,  // 首句使用更短超时，快速失败
+    minRequestInterval: Long = 0L // 最小请求间隔 (ms)，用于限流
 ) {
     companion object {
         private const val TAG = "PredictiveTTSProcessor"
@@ -89,9 +91,12 @@ class PredictiveTTSProcessor(
     private var firstTaskStartTime: Long? = null
     private var firstAudioTime: Long? = null
     
+    // 速率限制器
+    private val rateLimiter = RateLimiter(minRequestInterval)
+    
     init {
         Log.i(TAG, "PredictiveTTSProcessor initialized: maxConcurrent=$maxConcurrent, " +
-                "maxRetry=$maxRetry, firstTimeout=$firstTaskTimeout")
+                "maxRetry=$maxRetry, firstTimeout=$firstTaskTimeout, minRequestInterval=$minRequestInterval")
     }
     
     /**
@@ -207,57 +212,79 @@ class PredictiveTTSProcessor(
         
         try {
             task.status = TaskStatus.PROCESSING
-            val startTime = System.currentTimeMillis()
             
-            for (attempt in 0..maxRetry) {
+            // 动态调整最大重试次数：如果是限流错误，允许更多次重试
+            var currentAttempt = 0
+            val limitMaxRetry = 20 // 针对限流的超大重试次数
+            
+            while (true) {
                 try {
-                    Log.i(TAG, "[TTS Task ${task.sequenceId}] 开始处理 (尝试 ${attempt + 1}/${maxRetry + 1})")
+                    Log.i(TAG, "[TTS Task ${task.sequenceId}] 开始处理 (尝试 ${currentAttempt + 1})")
                     
                     withTimeout(taskTimeout) {
                         executeTts(task)
+                    }
+                    
+                    if (task.audioChunks.isEmpty()) {
+                        throw Exception("TTS returned no audio data")
                     }
                     
                     task.status = TaskStatus.COMPLETED
                     
                     val totalBytes = task.audioChunks.sumOf { it.size }
                     Log.i(TAG, "[TTS Task ${task.sequenceId}] ✓ 完成: ${task.audioChunks.size} 块, $totalBytes 字节")
-                    break
+                    break // 成功，退出循环
                     
                 } catch (e: TimeoutCancellationException) {
                     task.error = "Timeout"
-                    Log.w(TAG, "[TTS Task ${task.sequenceId}] ⚠ 超时 (尝试 ${attempt + 1}/${maxRetry + 1})")
+                    Log.w(TAG, "[TTS Task ${task.sequenceId}] ⚠ 超时 (尝试 ${currentAttempt + 1})")
                     
-                    if (attempt < maxRetry) {
+                    if (currentAttempt < maxRetry) {
                         task.retryCount++
-                        delay(500)
+                        currentAttempt++
+                        delay(1000)
                     } else {
                         task.status = TaskStatus.FAILED
-                        Log.e(TAG, "[TTS Task ${task.sequenceId}] ✗ 失败: 重试 ${maxRetry + 1} 次后仍超时")
+                        Log.e(TAG, "[TTS Task ${task.sequenceId}] ✗ 失败: 重试 ${currentAttempt + 1} 次后仍超时")
+                        break
                     }
                     
                 } catch (e: Exception) {
                     task.error = e.message
                     val errorStr = e.message?.lowercase() ?: ""
                     
-                    // 检查是否是限速错误 (429)
-                    val isRateLimit = "429" in errorStr || "rate limit" in errorStr || "too many" in errorStr
+                    // 检查是否是限速错误 (429, 1002)
+                    val isRateLimit = "429" in errorStr || "rate limit" in errorStr || "too many" in errorStr || "1002" in errorStr
                     
-                    Log.w(TAG, "[TTS Task ${task.sequenceId}] ⚠ 错误: $e (尝试 ${attempt + 1}/${maxRetry + 1})")
+                    // 确定当前允许的最大重试次数
+                    val effectiveMaxRetry = if (isRateLimit) limitMaxRetry else maxRetry
                     
-                    if (attempt < maxRetry) {
+                    if (isRateLimit) {
+                        Log.w(TAG, "[TTS Task ${task.sequenceId}] ⚠ 触发限流，通知 RateLimiter 增加退避")
+                        rateLimiter.reportRateLimitError()
+                    }
+                    
+                    Log.w(TAG, "[TTS Task ${task.sequenceId}] ⚠ 错误: $e (尝试 ${currentAttempt + 1})")
+                    
+                    if (currentAttempt < effectiveMaxRetry) {
                         task.retryCount++
+                        currentAttempt++
                         
-                        // 如果是限速错误，使用指数退避
+                        // 如果是限速错误，使用指数退避，但有上限
                         if (isRateLimit) {
-                            val backoffTime = (1 shl attempt) * 1000L  // 1s, 2s, 4s...
-                            Log.i(TAG, "[TTS Task ${task.sequenceId}] 检测到限速，等待 ${backoffTime}ms 后重试")
-                            delay(backoffTime)
+                            // 2s, 4s, 8s, 16s, 30s, 30s...
+                            val backoffTime = (1L shl (currentAttempt.coerceAtMost(5))) * 1000L
+                            val actualBackoff = backoffTime.coerceAtMost(30_000L)
+                            
+                            Log.i(TAG, "[TTS Task ${task.sequenceId}] 检测到限速，等待 ${actualBackoff}ms 后重试")
+                            delay(actualBackoff)
                         } else {
                             delay(500)
                         }
                     } else {
                         task.status = TaskStatus.FAILED
                         Log.e(TAG, "[TTS Task ${task.sequenceId}] ✗ 失败: $e")
+                        break
                     }
                 }
             }
@@ -275,6 +302,9 @@ class PredictiveTTSProcessor(
      * 执行 TTS 合成
      */
     private suspend fun executeTts(task: TTSTask) {
+        // 获取限流许可
+        rateLimiter.acquire()
+        
         task.audioChunks.clear()
         
         ttsExecutor(task.text).collect { chunk ->
@@ -329,6 +359,7 @@ class PredictiveTTSProcessor(
                             task.error?.contains("FREE_TRIAL_EXPIRED") == true) {
                             throw Exception("TTS Error: ${task.error}")
                         }
+                        // 对于其他错误，我们跳过当前任务，继续播放下一个任务，避免整个播放中断
                     }
                     else -> {
                         Log.w(TAG, "[TTS Output $currentId] ⚠ 意外状态: ${task.status}")

@@ -49,8 +49,8 @@ class VoiceChatDirectSession(
         private const val TAG = "VoiceChatDirectSession"
     }
     
-    // 智能分句器
-    private val splitter = SmartSentenceSplitter()
+    // 智能分句器 (延迟初始化，以便根据平台配置)
+    private lateinit var splitter: SmartSentenceSplitter
     
     // 文本缓冲
     private var sentenceBuffer = ""
@@ -72,6 +72,11 @@ class VoiceChatDirectSession(
         mimeType: String
     ): VoiceChatResult = withContext(Dispatchers.IO) {
         Log.i(TAG, "Direct voice chat processing started")
+        
+        // 初始化分句器
+        // Minimax 需要更大的分块以减少请求数 (QPS 限制)
+        val minChunkSize = if (ttsConfig.platform.lowercase() == "minimax") 150 else 0
+        splitter = SmartSentenceSplitter(minChunkSize = minChunkSize)
         
         // 重置状态
         splitter.reset()
@@ -114,13 +119,21 @@ class VoiceChatDirectSession(
                 TtsDirectClient.synthesizeStream(httpClient, ttsConfig, text)
             }
             
+            // 根据平台设置限流策略
+            // Minimax 需要更严格的并发控制和请求间隔
+            val (minRequestInterval, maxConcurrent) = when (ttsConfig.platform.lowercase()) {
+                "minimax" -> 1500L to 2 // 1.5s 间隔, 仅允许 2 个并发任务 (减少排队压力)
+                else -> 0L to 5
+            }
+
             // 创建预测性 TTS 处理器
             val ttsProcessor = PredictiveTTSProcessor(
                 ttsExecutor = ttsExecutor,
-                maxConcurrent = 5,
+                maxConcurrent = maxConcurrent,
                 maxRetry = 2,
                 taskTimeout = 30_000L,
-                firstTaskTimeout = 15_000L
+                firstTaskTimeout = 15_000L,
+                minRequestInterval = minRequestInterval
             )
             
             var sequenceId = 0
@@ -436,6 +449,10 @@ class VoiceChatDirectSession(
     ): VoiceChatResult = withContext(Dispatchers.IO) {
         Log.i(TAG, "Processing with existing user text: ${userText.take(50)}...")
         
+        // 初始化分句器
+        val minChunkSize = if (ttsConfig.platform.lowercase() == "minimax") 150 else 0
+        splitter = SmartSentenceSplitter(minChunkSize = minChunkSize)
+        
         // 重置状态
         splitter.reset()
         sentenceBuffer = ""
@@ -454,13 +471,21 @@ class VoiceChatDirectSession(
                 TtsDirectClient.synthesizeStream(httpClient, ttsConfig, text)
             }
             
+            // 根据平台设置限流策略
+            // Minimax 有较严格的 QPS 限制，需要设置最小请求间隔
+            val minRequestInterval = when (ttsConfig.platform.lowercase()) {
+                "minimax" -> 600L // 600ms 间隔，约 1.6 QPS
+                else -> 0L
+            }
+
             // 创建预测性 TTS 处理器
             val ttsProcessor = PredictiveTTSProcessor(
                 ttsExecutor = ttsExecutor,
                 maxConcurrent = 5,
                 maxRetry = 2,
                 taskTimeout = 30_000L,
-                firstTaskTimeout = 15_000L
+                firstTaskTimeout = 15_000L,
+                minRequestInterval = minRequestInterval
             )
             
             var sequenceId = 0
@@ -590,16 +615,18 @@ class VoiceChatDirectSession(
         // 移除链接
         result = result.replace(Regex("\\[([^\\]]+)\\]\\([^)]+\\)"), "$1")
         
-        // 移除加粗和斜体
+        // 移除加粗和斜体 (注意这里可能会误伤，比如数学公式，但 TTS 通常不读公式)
         result = result.replace(Regex("\\*\\*([^*]+)\\*\\*"), "$1")
-        result = result.replace(Regex("\\*([^*]+)\\*"), "$1")
+        // result = result.replace(Regex("\\*([^*]+)\\*"), "$1") // 单星号有时用于强调，但也可能用于列表，TTS读出来没问题
         result = result.replace(Regex("__([^_]+)__"), "$1")
         result = result.replace(Regex("_([^_]+)_"), "$1")
         
         // 移除标题标记
         result = result.replace(Regex("^#+\\s+", RegexOption.MULTILINE), "")
         
-        // 移除列表标记
+        // 移除列表标记，但保留列表项内容
+        // 这里可能会把列表项变成连续的句子，TTS 可能会读得太快
+        // 我们可以把列表标记替换为逗号或者句号，增加停顿
         result = result.replace(Regex("^[\\-*+]\\s+", RegexOption.MULTILINE), "")
         result = result.replace(Regex("^\\d+\\.\\s+", RegexOption.MULTILINE), "")
         

@@ -25,7 +25,9 @@ class SmartSentenceSplitter(
     private val firstSegmentMinLength: Int = 2,      // 首句最小长度（更激进）
     private val firstSegmentMaxWait: Int = 15,       // 首句最大等待长度
     private val enableImmediateTriggers: Boolean = true,  // 启用立即触发模式
-    private val immediateTriggers: Set<String> = DEFAULT_IMMEDIATE_TRIGGERS
+    private val immediateTriggers: Set<String> = DEFAULT_IMMEDIATE_TRIGGERS,
+    // 最小分块大小（用于强制合并多个句子，减少请求数）
+    private val minChunkSize: Int = 0
 ) {
     companion object {
         private const val TAG = "SmartSentenceSplitter"
@@ -226,6 +228,14 @@ class SmartSentenceSplitter(
             
             if (splitPoint == null || splitPoint <= 0) {
                 // 无法分割或保护模式激活，等待更多内容
+                break
+            }
+            
+            // 检查是否满足最小分块大小（除非是强制分割点且已经很长了）
+            // 如果设置了 minChunkSize，我们希望尽量凑够这么多字再发送
+            if (minChunkSize > 0 && splitPoint < minChunkSize && remaining.length < absoluteMax) {
+                // 虽然找到了分割点，但长度不够，且 buffer 还没满，继续等待更多内容
+                // 注意：如果 remaining 已经很长了 (接近 absoluteMax)，即使 splitPoint 小也得切，防止 buffer 溢出
                 break
             }
             

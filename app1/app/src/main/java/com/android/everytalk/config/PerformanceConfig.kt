@@ -197,6 +197,39 @@ object PerformanceConfig {
      */
     const val VOICE_STREAM_CLOSE_TIMEOUT_MS = 4_000L
     
+    // ===== 语音调试模式配置 =====
+    
+    /**
+     * 是否启用语音调试模式
+     * 开启后会输出详细的 AudioTrack 状态日志，并在设置页显示测试入口
+     * 注意：此为编译时常量，运行时可通过 UserPreference 覆盖
+     */
+    const val VOICE_DEBUG_MODE_DEFAULT = false
+    
+    /**
+     * 录音结束到播放开始的默认等待时间（毫秒）
+     * 用于让音频系统从录音模式切换到播放模式
+     */
+    const val VOICE_RECORD_TO_PLAYBACK_DELAY_MS = 300L
+    
+    /**
+     * OPPO/Realme 等设备的录音到播放延迟（毫秒）
+     * 这些设备可能需要更长的切换时间
+     */
+    const val VOICE_RECORD_TO_PLAYBACK_DELAY_OPPO_MS = 600L
+    
+    /**
+     * AudioTrack 静音预热时长（毫秒）
+     * 在正式播放前写入一小段静音数据，帮助唤醒音频通路
+     */
+    const val VOICE_STREAM_PREWARM_MS = 100L
+    
+    /**
+     * AudioTrack 播放启动等待时间（毫秒）
+     * play() 调用后等待 playbackHeadPosition 开始移动的最大时间
+     */
+    const val VOICE_STREAM_STARTUP_GRACE_MS = 500L
+    
     /**
      * 根据设备性能动态调整配置
      */
