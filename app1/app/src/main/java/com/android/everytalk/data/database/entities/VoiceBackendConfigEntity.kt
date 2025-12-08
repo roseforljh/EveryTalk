@@ -23,6 +23,7 @@ data class VoiceBackendConfigEntity(
     val ttsApiUrl: String,
     val ttsModel: String,
     val voiceName: String,
+    val useRealtimeStreaming: Boolean,
     val isValid: Boolean,
     val createdAt: Long,
     val updatedAt: Long
@@ -46,6 +47,7 @@ fun VoiceBackendConfigEntity.toVoiceBackendConfig(): VoiceBackendConfig {
         ttsApiUrl = ttsApiUrl,
         ttsModel = ttsModel,
         voiceName = voiceName,
+        useRealtimeStreaming = useRealtimeStreaming,
         isValid = isValid,
         createdAt = createdAt,
         updatedAt = updatedAt
@@ -70,6 +72,7 @@ fun VoiceBackendConfig.toEntity(): VoiceBackendConfigEntity {
         ttsApiUrl = ttsApiUrl,
         ttsModel = ttsModel,
         voiceName = voiceName,
+        useRealtimeStreaming = useRealtimeStreaming,
         isValid = isValid,
         createdAt = createdAt,
         updatedAt = updatedAt

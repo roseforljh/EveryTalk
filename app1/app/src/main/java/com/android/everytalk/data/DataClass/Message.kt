@@ -41,7 +41,11 @@ data class Message(
     val outputType: String = "general",
     @Serializable(with = MarkdownPartSerializer::class)
     val parts: List<MarkdownPart> = emptyList(),
-    val executionStatus: String? = null
+    val executionStatus: String? = null,
+    // 新增：记录发送消息时使用的模型名称
+    val modelName: String? = null,
+    // 新增：记录发送消息时使用的提供商名称
+    val providerName: String? = null
 ) : IMessage {
     // 检查消息是否包含内联图片
     fun hasInlineImages(): Boolean {

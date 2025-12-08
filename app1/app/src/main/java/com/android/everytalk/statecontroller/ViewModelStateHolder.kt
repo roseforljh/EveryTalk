@@ -76,17 +76,22 @@ data class PendingConfigParams(
     // 分组展开/折叠状态（默认全部折叠）
     val expandedGroups = MutableStateFlow<Set<String>>(emptySet())
     
-    // DataSource for persistent storage - will be initialized from AppViewModel
-    private var dataSource: com.android.everytalk.data.local.SharedPreferencesDataSource? = null
+    // 持久化回调 - 由 AppViewModel 设置，用于保存会话参数
+    private var onSaveConversationParams: ((Map<String, GenerationConfig>) -> Unit)? = null
     
-    fun initializeDataSource(source: com.android.everytalk.data.local.SharedPreferencesDataSource) {
-        dataSource = source
-        // Load saved parameters when initialized
-        val savedParameters = source.loadConversationParameters()
-        if (savedParameters.isNotEmpty()) {
-            conversationGenerationConfigs.value = savedParameters
+    /**
+     * 初始化持久化回调
+     * @param saveCallback 保存会话参数的回调函数
+     * @param initialParams 初始加载的会话参数（从持久化存储加载）
+     */
+    fun initializePersistence(
+        saveCallback: (Map<String, GenerationConfig>) -> Unit,
+        initialParams: Map<String, GenerationConfig> = emptyMap()
+    ) {
+        onSaveConversationParams = saveCallback
+        if (initialParams.isNotEmpty()) {
+            conversationGenerationConfigs.value = initialParams
         }
-        // 不在此处为当前会话ID自动回填，避免新建会话默认开启 maxTokens
     }
     
     /**
@@ -122,6 +127,9 @@ val _isStreamingPaused = MutableStateFlow(false)
     // 每个会话独立的生成配置参数
     val conversationGenerationConfigs: MutableStateFlow<Map<String, GenerationConfig>> =
         MutableStateFlow(emptyMap())
+
+    // 会话ID -> 使用的API配置ID的映射
+    val conversationApiConfigIds: MutableStateFlow<Map<String, String>> = MutableStateFlow(emptyMap())
     
     // 获取当前会话的生成配置（仅按当前会话ID的内存映射读取）
     fun getCurrentConversationConfig(): GenerationConfig? {
@@ -149,7 +157,7 @@ val _isStreamingPaused = MutableStateFlow(false)
         
         // 仅非空会话才持久化
         if (messages.isNotEmpty()) {
-            dataSource?.saveConversationParameters(currentConfigs)
+            onSaveConversationParams?.invoke(currentConfigs)
         }
     }
     
@@ -159,7 +167,7 @@ val _isStreamingPaused = MutableStateFlow(false)
         val id = _currentConversationId.value
         val cfg = conversationGenerationConfigs.value[id] ?: return
         // 写盘（如果之前未写过，也无害）
-        dataSource?.saveConversationParameters(conversationGenerationConfigs.value)
+        onSaveConversationParams?.invoke(conversationGenerationConfigs.value)
     }
     
     // 放弃一个“仅应用过参数但未发消息”的空会话：
@@ -171,7 +179,7 @@ val _isStreamingPaused = MutableStateFlow(false)
                 val newMap = conversationGenerationConfigs.value.toMutableMap()
                 newMap.remove(id)
                 conversationGenerationConfigs.value = newMap
-                dataSource?.saveConversationParameters(newMap)
+                onSaveConversationParams?.invoke(newMap)
             }
         }
     }
@@ -205,7 +213,7 @@ val _isStreamingPaused = MutableStateFlow(false)
             val keysToKeep = sortedKeys.take(50).toSet()
             val cleanedConfigs = currentConfigs.filterKeys { it in keysToKeep }
             conversationGenerationConfigs.value = cleanedConfigs
-            dataSource?.saveConversationParameters(cleanedConfigs)
+            onSaveConversationParams?.invoke(cleanedConfigs)
         }
     }
 
@@ -232,7 +240,7 @@ val _isStreamingPaused = MutableStateFlow(false)
             newMap.remove(oldId)
             newMap[newId] = cfg
             conversationGenerationConfigs.value = newMap
-            dataSource?.saveConversationParameters(newMap)
+            onSaveConversationParams?.invoke(newMap)
         }
     }
 

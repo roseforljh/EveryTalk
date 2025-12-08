@@ -5,6 +5,8 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.android.everytalk.data.database.daos.ApiConfigDao
 import com.android.everytalk.data.database.daos.ChatDao
 import com.android.everytalk.data.database.daos.SettingsDao
@@ -31,7 +33,7 @@ import com.android.everytalk.data.database.entities.VoiceBackendConfigEntity
         ExpandedGroupEntity::class,
         ConversationParamsEntity::class
     ],
-    version = 1,
+    version = 3,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -52,10 +54,19 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "eztalk_room_database"
                 )
+                .addMigrations(MIGRATION_2_3)
                 .fallbackToDestructiveMigration() // For development only
                 .build()
                 INSTANCE = instance
                 instance
+            }
+        }
+        
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                // Add useRealtimeStreaming column to voice_backend_configs table
+                // SQLite doesn't support BOOLEAN type directly, uses INTEGER (0/1)
+                database.execSQL("ALTER TABLE voice_backend_configs ADD COLUMN useRealtimeStreaming INTEGER NOT NULL DEFAULT 0")
             }
         }
     }

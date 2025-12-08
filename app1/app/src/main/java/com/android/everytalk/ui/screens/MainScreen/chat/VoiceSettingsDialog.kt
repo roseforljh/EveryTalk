@@ -13,76 +13,120 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.android.everytalk.data.DataClass.ApiConfig
+import com.android.everytalk.data.DataClass.VoiceBackendConfig
+import com.android.everytalk.statecontroller.AppViewModel
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun VoiceSettingsDialog(
     selectedApiConfig: ApiConfig?,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    viewModel: AppViewModel? = null
 ) {
-    // 本地持久化：voice_settings
+    if (viewModel == null) {
+        // 如果 ViewModel 不存在（如预览模式），直接返回或显示错误
+        onDismiss()
+        return
+    }
+
     val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences("voice_settings", android.content.Context.MODE_PRIVATE) }
-    val savedPlatform = remember { prefs.getString("voice_platform", null) }
-    val savedKeyGemini = remember { prefs.getString("voice_key_Gemini", "") ?: "" }
-    val savedKeyOpenAI = remember { prefs.getString("voice_key_OpenAI", "") ?: "" }
-    val savedKeyMinimax = remember { prefs.getString("voice_key_Minimax", "") ?: "" }
-    val savedKeySiliconFlow = remember { prefs.getString("voice_key_SiliconFlow", "") ?: "" }
-    val savedKeyAliyun = remember { prefs.getString("voice_key_Aliyun", "") ?: "" }
-    
-    // 旧全局默认值
-    val defaultBaseUrl = remember { prefs.getString("voice_base_url", "") ?: "" }
-    val defaultChatModel = remember { prefs.getString("voice_chat_model", "") ?: "" }
+    val coroutineScope = rememberCoroutineScope()
+    val currentConfig by viewModel.stateHolder._selectedVoiceConfig.collectAsState()
+    val allConfigs by viewModel.stateHolder._voiceBackendConfigs.collectAsState()
 
-    // 辅助函数：根据平台解析配置（优先独立配置，回退到旧全局）
-    fun resolveKeyFor(platform: String): String {
-        return when (platform) {
-            "OpenAI" -> savedKeyOpenAI
-            "Minimax" -> savedKeyMinimax
-            "SiliconFlow" -> savedKeySiliconFlow
-            "Aliyun" -> savedKeyAliyun
-            else -> savedKeyGemini
-        }.trim()
-    }
-    
-    fun resolveBaseUrlFor(platform: String): String {
-        val saved = prefs.getString("voice_base_url_${platform}", null)
-        if (saved != null) return saved
-        
-        return when (platform) {
-            "SiliconFlow" -> "https://api.siliconflow.cn/v1/audio/speech"
-            "Aliyun" -> "https://dashscope.aliyuncs.com/api/v1"
-            else -> defaultBaseUrl
-        }
-    }
-    
-    fun resolveModelFor(platform: String): String {
-        val saved = prefs.getString("voice_chat_model_${platform}", null)
-        if (saved != null) return saved
-        
-        return when (platform) {
-            "SiliconFlow" -> "IndexTeam/IndexTTS-2"
-            "Aliyun" -> ""
-            else -> defaultChatModel
-        }
-    }
+    // 如果没有当前配置，创建一个默认的
+    val effectiveConfig = currentConfig ?: VoiceBackendConfig.createDefault()
 
-    var selectedPlatform by remember {
-        mutableStateOf(savedPlatform ?: "Gemini")
-    }
-    var apiKey by remember {
-        mutableStateOf(resolveKeyFor(selectedPlatform))
-    }
-    var baseUrl by remember { mutableStateOf(resolveBaseUrlFor(selectedPlatform)) }
-    var chatModel by remember { mutableStateOf(resolveModelFor(selectedPlatform)) }
+    // 状态管理
+    var selectedPlatform by remember(effectiveConfig) { mutableStateOf(effectiveConfig.ttsPlatform) }
+    var apiKey by remember(effectiveConfig) { mutableStateOf(effectiveConfig.ttsApiKey) }
+    var baseUrl by remember(effectiveConfig) { mutableStateOf(effectiveConfig.ttsApiUrl) }
+    var chatModel by remember(effectiveConfig) { mutableStateOf(effectiveConfig.ttsModel) }
     var expanded by remember { mutableStateOf(false) }
     
+    // 当平台切换时，从 Room 存储的 allConfigs 中查找对应平台的配置
+    fun loadFieldsForPlatform(platform: String) {
+        // 1. 从 allConfigs 中查找该平台的配置（已持久化到 Room）
+        val existingConfig = allConfigs.find { it.ttsPlatform == platform }
+        
+        if (existingConfig != null) {
+            // 找到了该平台的配置，加载它
+            apiKey = existingConfig.ttsApiKey
+            baseUrl = existingConfig.ttsApiUrl
+            chatModel = existingConfig.ttsModel
+        } else {
+            // 没有找到该平台的配置，使用平台默认值
+            apiKey = ""
+            baseUrl = when (platform) {
+                "SiliconFlow" -> "https://api.siliconflow.cn/v1/audio/speech"
+                "Aliyun" -> "https://dashscope.aliyuncs.com/api/v1"
+                else -> ""
+            }
+            chatModel = when (platform) {
+                "SiliconFlow" -> "IndexTeam/IndexTTS-2"
+                "Aliyun" -> ""
+                else -> ""
+            }
+        }
+    }
+    
+    // 保存当前平台的配置到缓存（在切换平台前调用，仅保存到 allConfigs 列表中供后续加载）
+    fun savePlatformConfigToCache(platform: String) {
+        // 只有当有实际内容时才保存
+        if (apiKey.isBlank() && baseUrl.isBlank() && chatModel.isBlank()) {
+            return
+        }
+        
+        // 查找或创建该平台的配置
+        val existingConfig = allConfigs.find { it.ttsPlatform == platform }
+        
+        val configToSave = if (existingConfig != null) {
+            // 更新现有配置
+            existingConfig.copy(
+                ttsApiKey = apiKey.trim(),
+                ttsApiUrl = baseUrl.trim(),
+                ttsModel = chatModel.trim(),
+                updatedAt = System.currentTimeMillis()
+            )
+        } else {
+            // 创建新配置（为该平台创建独立记录）
+            VoiceBackendConfig(
+                id = java.util.UUID.randomUUID().toString(),
+                name = "${platform} TTS 配置",
+                provider = platform,
+                ttsPlatform = platform,
+                ttsApiKey = apiKey.trim(),
+                ttsApiUrl = baseUrl.trim(),
+                ttsModel = chatModel.trim(),
+                // 保留其他默认值
+                sttPlatform = "Google",
+                chatPlatform = "Google",
+                voiceName = "Kore"
+            )
+        }
+        
+        // 更新配置列表（仅更新内存中的列表）
+        val newConfigs = if (existingConfig != null) {
+            allConfigs.map { if (it.id == configToSave.id) configToSave else it }
+        } else {
+            allConfigs + configToSave
+        }
+        
+        // 保存到 Room（用于平台切换时的配置缓存）
+        viewModel.stateHolder._voiceBackendConfigs.value = newConfigs
+        coroutineScope.launch {
+            viewModel.persistenceManager.saveVoiceBackendConfigs(newConfigs)
+        }
+    }
+
     val platforms = listOf("Gemini", "OpenAI", "Minimax", "SiliconFlow", "Aliyun")
     
-    // 预设模型列表
-    // 自定义模型管理
+    // 自定义模型管理 (存储在 SharedPreferences 中，仅作为 UI 辅助，不影响核心功能)
+    // 使用独立的 preferences 文件避免与旧的 voice_settings 混淆
+    val uiPrefs = remember { context.getSharedPreferences("voice_ui_prefs", android.content.Context.MODE_PRIVATE) }
     val customModelsKey = "custom_models_tts_${selectedPlatform}"
-    val savedCustomModelsStr = remember(selectedPlatform) { prefs.getString(customModelsKey, "") ?: "" }
+    val savedCustomModelsStr = remember(selectedPlatform) { uiPrefs.getString(customModelsKey, "") ?: "" }
     
     var customModels by remember(selectedPlatform) {
         mutableStateOf(
@@ -169,11 +213,13 @@ fun VoiceSettingsDialog(
                                 DropdownMenuItem(
                                     text = { Text(platform) },
                                     onClick = {
-                                        selectedPlatform = platform
-                                        // 实时切换到对应平台的Key
-                                        apiKey = resolveKeyFor(platform)
-                                        baseUrl = resolveBaseUrlFor(platform)
-                                        chatModel = resolveModelFor(platform)
+                                        if (platform != selectedPlatform) {
+                                            // 先保存当前平台的配置到缓存
+                                            savePlatformConfigToCache(selectedPlatform)
+                                            // 然后加载新平台的配置
+                                            loadFieldsForPlatform(platform)
+                                            selectedPlatform = platform
+                                        }
                                         expanded = false
                                     }
                                 )
@@ -285,14 +331,14 @@ fun VoiceSettingsDialog(
                         if (newModel.isNotBlank() && !customModels.contains(newModel)) {
                             val newList = customModels + newModel.trim()
                             customModels = newList
-                            prefs.edit().putString(customModelsKey, newList.joinToString(",")).apply()
+                            uiPrefs.edit().putString(customModelsKey, newList.joinToString(",")).apply()
                             chatModel = newModel.trim()
                         }
                     },
                     onRemoveModel = { modelToRemove ->
                         val newList = customModels - modelToRemove
                         customModels = newList
-                        prefs.edit().putString(customModelsKey, newList.joinToString(",")).apply()
+                        uiPrefs.edit().putString(customModelsKey, newList.joinToString(",")).apply()
                         if (chatModel == modelToRemove) {
                             chatModel = ""
                         }
@@ -329,36 +375,45 @@ fun VoiceSettingsDialog(
                     Button(
                         onClick = {
                             if (chatModel.isBlank()) {
-                                android.widget.Toast.makeText(context, "请填写 TTS 模型名称", android.widget.Toast.LENGTH_SHORT).show()
+                                // 简单提示，实际应使用 Snackbar
                                 return@Button
                             }
                             if (selectedPlatform == "Minimax" && baseUrl.isBlank()) {
-                                android.widget.Toast.makeText(context, "Minimax 平台请填写 API 地址", android.widget.Toast.LENGTH_SHORT).show()
                                 return@Button
                             }
 
-                            // 保存用户选择的平台和对应Key（按平台独立保存）
-                            runCatching {
-                                val editor = prefs.edit()
-                                editor.putString("voice_platform", selectedPlatform)
-                                when (selectedPlatform) {
-                                    "OpenAI" -> editor.putString("voice_key_OpenAI", apiKey)
-                                    "Minimax" -> editor.putString("voice_key_Minimax", apiKey)
-                                    "SiliconFlow" -> editor.putString("voice_key_SiliconFlow", apiKey)
-                                    "Aliyun" -> editor.putString("voice_key_Aliyun", apiKey)
-                                    else -> editor.putString("voice_key_Gemini", apiKey)
+                            coroutineScope.launch {
+                                // 先保存当前平台的配置到缓存
+                                savePlatformConfigToCache(selectedPlatform)
+                                
+                                // 更新当前选中配置的 TTS 部分（保留 STT 和 LLM 的设置）
+                                val configToUpdate = currentConfig ?: effectiveConfig
+                                
+                                val newConfig = configToUpdate.copy(
+                                    ttsPlatform = selectedPlatform,
+                                    ttsApiKey = apiKey.trim(),
+                                    ttsApiUrl = baseUrl.trim(),
+                                    ttsModel = chatModel.trim(),
+                                    updatedAt = System.currentTimeMillis()
+                                )
+                                
+                                // 更新配置列表
+                                val latestConfigs = viewModel.stateHolder._voiceBackendConfigs.value
+                                val configExists = latestConfigs.any { it.id == newConfig.id }
+                                val newConfigs = if (configExists) {
+                                    latestConfigs.map { if (it.id == newConfig.id) newConfig else it }
+                                } else {
+                                    latestConfigs + newConfig
                                 }
-                                // 保存该平台特定的 Base URL 和 Model
-                                editor.putString("voice_base_url_${selectedPlatform}", baseUrl.trim())
-                                editor.putString("voice_chat_model_${selectedPlatform}", chatModel.trim())
                                 
-                                // 兼容性：同时更新全局旧键（可选，视需求而定，这里暂且不覆盖旧键以免污染其他平台回退）
-                                // editor.putString("voice_base_url", baseUrl.trim())
-                                // editor.putString("voice_chat_model", chatModel.trim())
+                                // 保存到 Room
+                                viewModel.stateHolder._voiceBackendConfigs.value = newConfigs
+                                viewModel.stateHolder._selectedVoiceConfig.value = newConfig
+                                viewModel.persistenceManager.saveVoiceBackendConfigs(newConfigs)
+                                viewModel.persistenceManager.saveSelectedVoiceConfigId(newConfig.id)
                                 
-                                editor.apply()
+                                onDismiss()
                             }
-                            onDismiss()
                         },
                         modifier = Modifier
                             .weight(1f)

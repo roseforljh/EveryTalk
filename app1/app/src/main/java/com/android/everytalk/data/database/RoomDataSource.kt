@@ -41,6 +41,8 @@ class RoomDataSource(context: Context) {
     }
 
     suspend fun saveApiConfigs(configs: List<ApiConfig>) {
+        // 修复：先清除旧配置，确保删除操作生效
+        apiConfigDao.clearConfigs(isImageGen = false)
         apiConfigDao.insertConfigs(configs.map { it.toEntity(isImageGenConfig = false) })
     }
 
@@ -49,6 +51,8 @@ class RoomDataSource(context: Context) {
     }
 
     suspend fun saveImageGenApiConfigs(configs: List<ApiConfig>) {
+        // 修复：先清除旧配置，确保删除操作生效
+        apiConfigDao.clearConfigs(isImageGen = true)
         apiConfigDao.insertConfigs(configs.map { it.toEntity(isImageGenConfig = true) })
     }
     
@@ -66,6 +70,8 @@ class RoomDataSource(context: Context) {
     }
 
     suspend fun saveVoiceBackendConfigs(configs: List<VoiceBackendConfig>) {
+        // 修复：先清除旧配置，确保导入时完全替换，与 API 配置行为保持一致
+        voiceConfigDao.clearAll()
         voiceConfigDao.insertAll(configs.map { it.toEntity() })
     }
 
@@ -108,6 +114,15 @@ class RoomDataSource(context: Context) {
         } else {
             settingsDao.insertSetting(SystemSettingEntity(key, value))
         }
+    }
+
+    // --- Generic Settings Access (for flags like default_configs_initialized) ---
+    suspend fun getSetting(key: String, defaultValue: String? = null): String? {
+        return settingsDao.getValue(key) ?: defaultValue
+    }
+
+    suspend fun setSetting(key: String, value: String?) {
+        saveSetting(key, value)
     }
 
     // --- Chat History ---
@@ -291,5 +306,38 @@ class RoomDataSource(context: Context) {
         // or quickly add it if strictly needed. Upsert is safer for now.
         val entities = parameters.map { ConversationParamsEntity(it.key, it.value) }
         settingsDao.insertConversationParams(entities)
+    }
+
+    // --- Conversation Api Config Mapping ---
+    // 持久化会话ID到配置ID的映射，用于恢复会话时的模型选择
+    
+    suspend fun loadConversationApiConfigIds(): Map<String, String> {
+        val jsonString = settingsDao.getValue("conversation_api_config_ids")
+        return if (jsonString != null) {
+            try {
+                json.decodeFromString(
+                    kotlinx.serialization.builtins.MapSerializer(
+                        String.serializer(),
+                        String.serializer()
+                    ),
+                    jsonString
+                )
+            } catch (e: Exception) {
+                emptyMap()
+            }
+        } else {
+            emptyMap()
+        }
+    }
+
+    suspend fun saveConversationApiConfigIds(mapping: Map<String, String>) {
+        val jsonString = json.encodeToString(
+            kotlinx.serialization.builtins.MapSerializer(
+                String.serializer(),
+                String.serializer()
+            ),
+            mapping
+        )
+        saveSetting("conversation_api_config_ids", jsonString)
     }
 }

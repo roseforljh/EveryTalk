@@ -22,17 +22,29 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.android.everytalk.data.DataClass.VoiceBackendConfig
+import com.android.everytalk.statecontroller.AppViewModel
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun VoiceSelectionDialog(
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    viewModel: AppViewModel? = null
 ) {
-    val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences("voice_settings", android.content.Context.MODE_PRIVATE) }
+    if (viewModel == null) {
+        onDismiss()
+        return
+    }
+
+    val coroutineScope = rememberCoroutineScope()
+    val currentConfig by viewModel.stateHolder._selectedVoiceConfig.collectAsState()
+    val allConfigs by viewModel.stateHolder._voiceBackendConfigs.collectAsState()
+
+    // 如果没有当前配置，创建一个默认的
+    val effectiveConfig = currentConfig ?: VoiceBackendConfig.createDefault()
     
-    // 不使用 remember 缓存 ttsPlatform，确保每次打开对话框都读取最新的平台设置
-    val ttsPlatform = prefs.getString("voice_platform", "Gemini") ?: "Gemini"
+    val ttsPlatform = effectiveConfig.ttsPlatform
     
     // 获取默认音色的辅助函数
     fun getDefaultVoiceName(platform: String): String {
@@ -45,10 +57,7 @@ fun VoiceSelectionDialog(
         }
     }
     
-    // 不使用 remember 缓存 savedVoice，确保读取最新值
-    val savedVoice = prefs.getString("voice_name_${ttsPlatform}", null)
-        ?: prefs.getString("voice_name", null)
-        ?: getDefaultVoiceName(ttsPlatform)
+    val savedVoice = effectiveConfig.voiceName.ifBlank { getDefaultVoiceName(ttsPlatform) }
     
     var selectedVoice by remember(ttsPlatform) { mutableStateOf(savedVoice) }
     
@@ -362,27 +371,36 @@ fun VoiceSelectionDialog(
                 // 确定按钮
                 Button(
                     onClick = {
-                        // 调试日志：点击确定按钮时输出
-                        android.util.Log.i("VoiceSelectionDialog", "Confirm button clicked! Saving: voice=$selectedVoice, platform=$ttsPlatform")
-                        
-                        // 保存选择
-                        try {
-                            val editor = prefs.edit()
-                            editor.putString("voice_name_${ttsPlatform}", selectedVoice)
-                            // 同步更新全局默认，避免缺失平台键时回落错误音色
-                            editor.putString("voice_name", selectedVoice)
-                            val success = editor.commit() // 使用 commit() 同步保存并返回结果
+                        coroutineScope.launch {
+                            // 修复：如果 currentConfig 为 null，说明 effectiveConfig 是新创建的默认配置
+                            // 需要检查 allConfigs 中是否已有该配置，如果没有则添加
+                            val configToUpdate = currentConfig ?: effectiveConfig
                             
-                            // 调试日志：保存结果
-                            android.util.Log.i("VoiceSelectionDialog", "Voice saved: success=$success, voice=$selectedVoice, platform=$ttsPlatform, key=voice_name_${ttsPlatform}")
+                            // 更新当前配置的音色
+                            val newConfig = configToUpdate.copy(
+                                voiceName = selectedVoice,
+                                updatedAt = System.currentTimeMillis()
+                            )
                             
-                            // 验证保存结果
-                            val verifyValue = prefs.getString("voice_name_${ttsPlatform}", null)
-                            android.util.Log.i("VoiceSelectionDialog", "Verify after save: voice_name_${ttsPlatform}=$verifyValue")
-                        } catch (e: Exception) {
-                            android.util.Log.e("VoiceSelectionDialog", "Failed to save voice", e)
+                            // 更新列表：如果配置已存在则更新，否则添加
+                            val configExists = allConfigs.any { it.id == newConfig.id }
+                            val newConfigs = if (configExists) {
+                                allConfigs.map {
+                                    if (it.id == newConfig.id) newConfig else it
+                                }
+                            } else {
+                                // 配置不存在，添加到列表
+                                allConfigs + newConfig
+                            }
+                            
+                            // 保存到 Room
+                            viewModel.stateHolder._voiceBackendConfigs.value = newConfigs
+                            viewModel.stateHolder._selectedVoiceConfig.value = newConfig
+                            viewModel.persistenceManager.saveVoiceBackendConfigs(newConfigs)
+                            viewModel.persistenceManager.saveSelectedVoiceConfigId(newConfig.id)
+                            
+                            onDismiss()
                         }
-                        onDismiss()
                     },
                     modifier = Modifier
                         .fillMaxWidth()

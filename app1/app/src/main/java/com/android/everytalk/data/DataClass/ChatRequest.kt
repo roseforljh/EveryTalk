@@ -37,7 +37,10 @@ data class ImageGenRequest(
    // 新增：无状态会话种子——把该会话最近若干轮（user/model 文本）一并发送，后端将用其恢复上下文记忆
    // 结构：[{ "role": "user"|"model", "text": "<纯文本>" }]
    @SerialName("history")
-   val history: List<Map<String, String>>? = null
+   val history: List<Map<String, String>>? = null,
+   // 新增：Seedream 水印控制
+   @SerialName("watermark")
+   val watermark: Boolean? = false
 )
 
 @Serializable
@@ -89,5 +92,9 @@ data class ChatRequest(
 
     // 设备唯一标识符（用于速率限制）
     @SerialName("device_id")
-    val deviceId: String? = null
+    val deviceId: String? = null,
+
+    // 代码执行工具控制：None=auto(智能判断), True=强制开启, False=强制关闭
+    @SerialName("enableCodeExecution")
+    val enableCodeExecution: Boolean? = null
 )

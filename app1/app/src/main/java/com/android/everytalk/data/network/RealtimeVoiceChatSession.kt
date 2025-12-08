@@ -16,20 +16,30 @@ import java.util.concurrent.TimeUnit
 import com.android.everytalk.config.PerformanceConfig
 
 /**
- * 实时语音对话会话
- * 
+ * 实时语音对话会话（已废弃）
+ *
+ * ⚠️ 此类已废弃，不再使用。语音功能已完全迁移到直连模式。
+ *
+ * 保留此类仅供参考，后续版本将删除。
+ * 请使用 VoiceChatSession + AliyunRealtimeSttClient 实现实时语音功能。
+ *
+ * 原功能说明（已废弃）：
  * 实现端到端流式语音对话：
  * 1. 边录音边通过 WebSocket 发送音频块
  * 2. 实时接收 STT 识别结果
  * 3. 实时接收 Chat 回复
  * 4. 实时播放 TTS 音频
- * 
+ *
  * 协议说明：
  * - 客户端发送 init 消息进行初始化
  * - 客户端发送 audio 消息传输音频块（每100ms一次）
  * - 客户端发送 end 消息结束录音
  * - 客户端发送 cancel 消息取消会话
  */
+@Deprecated(
+    message = "后端代理模式已废弃，请使用直连模式 (VoiceChatSession + AliyunRealtimeSttClient)",
+    level = DeprecationLevel.WARNING
+)
 class RealtimeVoiceChatSession(
     private val wsUrl: String,
     private val chatHistory: List<Pair<String, String>> = emptyList(),

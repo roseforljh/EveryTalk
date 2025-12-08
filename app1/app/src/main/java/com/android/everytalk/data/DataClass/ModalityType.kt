@@ -1,8 +1,10 @@
 package com.android.everytalk.data.DataClass
 
 import androidx.annotation.Keep
+import kotlinx.serialization.Serializable
 
 @Keep
+@Serializable
 enum class ModalityType(val displayName: String) {
     TEXT("文本大模型"),
     IMAGE("图像生成"),

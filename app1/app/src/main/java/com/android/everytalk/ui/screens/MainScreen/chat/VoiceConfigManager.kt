@@ -1,11 +1,15 @@
 package com.android.everytalk.ui.screens.MainScreen.chat
 
 import android.content.Context
-import android.content.SharedPreferences
+import com.android.everytalk.statecontroller.ViewModelStateHolder
 
 /**
  * 语音配置管理类
  * 负责读取和校验STT、Chat、TTS的所有配置项
+ * 
+ * 已迁移到 Room 数据库：
+ * - 移除 SharedPreferences 依赖
+ * - 直接从 ViewModelStateHolder 获取当前选中的 VoiceBackendConfig
  */
 data class VoiceConfig(
     // STT配置
@@ -28,102 +32,45 @@ data class VoiceConfig(
     val voiceName: String,
     
     // 实时流式模式（仅阿里云 STT 支持）
-    val useRealtimeStreaming: Boolean = false,
-    
-    // 直连模式（绕过后端代理）
-    val useDirectMode: Boolean = false
+    val useRealtimeStreaming: Boolean = false
 )
 
-class VoiceConfigManager(private val context: Context) {
-    private val prefs: SharedPreferences = 
-        context.getSharedPreferences("voice_settings", Context.MODE_PRIVATE)
-    
+class VoiceConfigManager(
+    private val context: Context,
+    private val stateHolder: ViewModelStateHolder
+) {
     /**
      * 读取所有语音配置
      */
     fun loadConfig(): VoiceConfig {
-        // STT配置
-        val sttPlatform = prefs.getString("stt_platform", "Google") ?: "Google"
-        val sttApiUrl = prefs.getString("stt_api_url_${sttPlatform}", null)
-            ?: prefs.getString("stt_api_url", "")?.trim() ?: ""
-        val sttModel = prefs.getString("stt_model_${sttPlatform}", null)
-            ?: prefs.getString("stt_model", "")?.trim() ?: ""
-        val sttApiKey = when (sttPlatform) {
-            "OpenAI" -> prefs.getString("stt_key_OpenAI", "") ?: ""
-            "SiliconFlow" -> prefs.getString("stt_key_SiliconFlow", "") ?: ""
-            "Aliyun" -> prefs.getString("stt_key_Aliyun", "") ?: ""
-            else -> prefs.getString("stt_key_Google", "") ?: ""
-        }.trim()
-        
-        // 实时流式模式（仅阿里云支持）
-        val useRealtimeStreaming = prefs.getBoolean("stt_realtime_streaming", false) && sttPlatform == "Aliyun"
-        
-        // 直连模式
-        val useDirectMode = prefs.getBoolean("voice_direct_mode", true)
-        
-        // Chat配置
-        val chatPlatform = prefs.getString("chat_platform", "Google") ?: "Google"
-        val chatApiUrl = prefs.getString("chat_api_url_${chatPlatform}", null) 
-            ?: prefs.getString("chat_api_url", "")?.trim() ?: ""
-        val chatModel = prefs.getString("chat_model_${chatPlatform}", null) 
-            ?: prefs.getString("chat_model", "")?.trim() ?: ""
-        val chatApiKey = when (chatPlatform) {
-            "OpenAI" -> prefs.getString("chat_key_OpenAI", "") ?: ""
-            else -> prefs.getString("chat_key_Google", "") ?: ""
-        }.trim()
-        
-        // TTS配置
-        val ttsPlatform = prefs.getString("voice_platform", "Gemini") ?: "Gemini"
-        val ttsApiUrl = prefs.getString("voice_base_url_${ttsPlatform}", null)
-            ?: prefs.getString("voice_base_url", "")?.trim() ?: ""
-        val ttsModel = prefs.getString("voice_chat_model_${ttsPlatform}", null)
-            ?: prefs.getString("voice_chat_model", "")?.trim() ?: ""
-        
-        // 确保 voiceName 对当前平台有效；优先平台专属，其次全局，再兜底默认
-        val platformSpecificVoice = prefs.getString("voice_name_${ttsPlatform}", null)
-        val globalVoice = prefs.getString("voice_name", null)
-        val defaultVoice = getDefaultVoiceName(ttsPlatform)
-        val voiceName = platformSpecificVoice ?: globalVoice ?: defaultVoice
-        
-        // 调试日志：输出音色读取详情
-        android.util.Log.d("VoiceConfigManager", "TTS Config: platform=$ttsPlatform, voice_name_$ttsPlatform=$platformSpecificVoice, voice_name(global)=$globalVoice, default=$defaultVoice, final=$voiceName")
-        
-        val ttsApiKey = when (ttsPlatform) {
-            "OpenAI" -> prefs.getString("voice_key_OpenAI", "") ?: ""
-            "Minimax" -> prefs.getString("voice_key_Minimax", "") ?: ""
-            "SiliconFlow" -> prefs.getString("voice_key_SiliconFlow", "") ?: ""
-            "Aliyun" -> prefs.getString("voice_key_Aliyun", "") ?: ""
-            else -> prefs.getString("voice_key_Gemini", "") ?: ""
-        }.trim()
+        // 从 stateHolder 获取当前选中的语音配置
+        val config = stateHolder._selectedVoiceConfig.value ?: run {
+            // 如果没有选中配置，返回默认值
+            return VoiceConfig(
+                sttPlatform = "Google", sttApiKey = "", sttApiUrl = "", sttModel = "",
+                chatPlatform = "Google", chatApiKey = "", chatApiUrl = "", chatModel = "",
+                ttsPlatform = "Gemini", ttsApiKey = "", ttsApiUrl = "", ttsModel = "",
+                voiceName = "Kore"
+            )
+        }
         
         return VoiceConfig(
-            sttPlatform = sttPlatform,
-            sttApiKey = sttApiKey,
-            sttApiUrl = sttApiUrl,
-            sttModel = sttModel,
-            chatPlatform = chatPlatform,
-            chatApiKey = chatApiKey,
-            chatApiUrl = chatApiUrl,
-            chatModel = chatModel,
-            ttsPlatform = ttsPlatform,
-            ttsApiKey = ttsApiKey,
-            ttsApiUrl = ttsApiUrl,
-            ttsModel = ttsModel,
-            voiceName = voiceName,
-            useRealtimeStreaming = useRealtimeStreaming,
-            useDirectMode = useDirectMode
+            sttPlatform = config.sttPlatform,
+            sttApiKey = config.sttApiKey,
+            sttApiUrl = config.sttApiUrl,
+            sttModel = config.sttModel,
+            chatPlatform = config.chatPlatform,
+            chatApiKey = config.chatApiKey,
+            chatApiUrl = config.chatApiUrl,
+            chatModel = config.chatModel,
+            ttsPlatform = config.ttsPlatform,
+            ttsApiKey = config.ttsApiKey,
+            ttsApiUrl = config.ttsApiUrl,
+            ttsModel = config.ttsModel,
+            voiceName = config.voiceName,
+            // 从配置中读取实时流式模式设置（仅阿里云 STT 支持）
+            useRealtimeStreaming = config.useRealtimeStreaming
         )
-    }
-    
-    /**
-     * 获取 WebSocket 实时语音对话地址
-     */
-    fun getRealtimeWebSocketUrl(): String {
-        val baseUrl = com.android.everytalk.BuildConfig.VOICE_BACKEND_URL
-        // 将 http/https 转换为 ws/wss
-        return baseUrl
-            .replace("https://", "wss://")
-            .replace("http://", "ws://") + "/voice-chat/realtime"
     }
     
     /**
@@ -162,10 +109,7 @@ class VoiceConfigManager(private val context: Context) {
             return "请配置阿里云 API Key"
         }
         
-        // 后端地址校验
-        if (com.android.everytalk.BuildConfig.VOICE_BACKEND_URL.isEmpty()) {
-            return "未配置语音网关地址(VOICE_BACKEND_URL)"
-        }
+        // 已废弃后端模式，语音功能始终使用直连 API
         
         return ""
     }

@@ -7,8 +7,51 @@ BACKEND_URLS_DEBUG="http://your-local-ip:7860/chat"
 ## 生产环境后端地址（多个地址用逗号分隔）
 BACKEND_URLS_RELEASE="https://your-backend-1.com/chat,https://your-backend-2.com/chat"
 
+## 语音服务后端地址
+VOICE_BACKEND_URL_DEBUG="http://your-local-ip:7860"
+VOICE_BACKEND_URL_RELEASE="https://your-voice-backend.com"
+
 ## 签名配置（生产环境）
 storeFile=/path/to/your/keystore.jks
 storePassword=your_store_password
 keyAlias=your_key_alias
 keyPassword=your_key_password
+
+## ============================================
+## 直连模式 API 配置
+## ============================================
+
+## Google Gemini API
+GOOGLE_API_KEY=your-google-api-key
+GOOGLE_API_BASE_URL=https://generativelanguage.googleapis.com
+
+## Google 搜索配置 (Custom Search Engine)
+GOOGLE_CSE_ID=your-cse-id
+GOOGLE_SEARCH_API_KEY=your-google-search-api-key
+
+## OpenAI / 兼容 API
+DEFAULT_OPENAI_API_BASE_URL=https://api.openai.com
+
+## 默认文本 API（当用户选择"默认"提供商时使用）
+DEFAULT_TEXT_API_URL=https://your-api-gateway.com/v1/chat/completions
+DEFAULT_TEXT_API_KEY=sk-your-default-key
+DEFAULT_TEXT_MODELS=gpt-4o,gpt-4o-mini,claude-3-5-sonnet
+
+## SiliconFlow 图像生成
+SILICONFLOW_IMAGE_API_URL=https://api.siliconflow.cn/v1/images/generations
+SILICONFLOW_DEFAULT_IMAGE_MODEL=Kwai-Kolors/Kolors
+SILICONFLOW_API_KEY=sk-your-siliconflow-key
+
+## Seedream (豆包·即梦) 图像生成
+SEEDREAM_API_URL=https://ark.cn-beijing.volces.com/api/v3/images/generations
+
+## Modal Z-Image-Turbo 图像生成（多个地址用逗号分隔）
+## 注意：历史原因配置项名为 VITE_API_URLS，实际用于 Modal 图像服务
+VITE_API_URLS=https://your-modal-endpoint-1.modal.run,https://your-modal-endpoint-2.modal.run
+
+## Qwen 图像编辑（多个地址用逗号分隔）
+QWEN_EDIT_API_URLS=https://your-qwen-edit-endpoint-1.modal.run,https://your-qwen-edit-endpoint-2.modal.run
+QWEN_EDIT_API_SECRET=your-qwen-edit-api-secret
+
+## 智谱 BigModel API（联网搜索）
+ZHIPU_API_KEY=your-zhipu-api-key

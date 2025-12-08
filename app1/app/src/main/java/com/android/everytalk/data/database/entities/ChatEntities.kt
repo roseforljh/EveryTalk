@@ -50,7 +50,9 @@ data class MessageEntity(
     val attachments: List<SelectedMediaItem>,
     val outputType: String,
     val parts: List<MarkdownPart>,
-    val executionStatus: String?
+    val executionStatus: String?,
+    val modelName: String? = null,
+    val providerName: String? = null
 )
 
 fun MessageEntity.toMessage(): Message {
@@ -70,7 +72,9 @@ fun MessageEntity.toMessage(): Message {
         attachments = attachments,
         outputType = outputType,
         parts = parts,
-        executionStatus = executionStatus
+        executionStatus = executionStatus,
+        modelName = modelName,
+        providerName = providerName
     )
 }
 
@@ -92,6 +96,8 @@ fun Message.toEntity(sessionId: String): MessageEntity {
         attachments = attachments,
         outputType = outputType,
         parts = parts,
-        executionStatus = executionStatus
+        executionStatus = executionStatus,
+        modelName = modelName,
+        providerName = providerName
     )
 }

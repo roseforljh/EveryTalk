@@ -504,6 +504,17 @@ private data class AttachmentProcessingResult(
             viewModelScope.launch { showSnackbar(if (isImageGeneration) "请先选择 图像生成 的API配置" else "请先选择 API 配置") }
             return
         }
+
+        // 记录会话使用的配置ID
+        if (!isImageGeneration) {
+            val conversationId = stateHolder._currentConversationId.value
+            val currentMap = stateHolder.conversationApiConfigIds.value.toMutableMap()
+            if (currentMap[conversationId] != currentConfig.id) {
+                currentMap[conversationId] = currentConfig.id
+                stateHolder.conversationApiConfigIds.value = currentMap
+                // 这里仅更新内存状态，HistoryManager.saveCurrentChatToHistoryIfNeededInternal 会负责持久化
+            }
+        }
         
         Log.d("MessageSender", "✅ Using config: ${currentConfig.model} (${currentConfig.provider})")
         Log.d("MessageSender", "=== END SEND MESSAGE DEBUG ===")
@@ -573,7 +584,9 @@ private data class AttachmentProcessingResult(
                 id = "user_${UUID.randomUUID()}", text = textToActuallySend, sender = UiSender.User,
                 timestamp = System.currentTimeMillis(), contentStarted = true,
                 imageUrls = attachmentResult.imageUriStringsForUi,
-                attachments = attachmentResult.processedAttachmentsForUi
+                attachments = attachmentResult.processedAttachmentsForUi,
+                modelName = currentConfig.model,
+                providerName = currentConfig.provider
             )
 
             withContext(Dispatchers.Main.immediate) {
@@ -853,7 +866,9 @@ private data class AttachmentProcessingResult(
                             // 严格会话隔离：把当前图像历史项ID透传到后端
                             conversationId = stateHolder._currentImageGenerationConversationId.value,
                             // 额外兜底：把最近若干轮文本摘要也发给后端，确保“该会话独立记忆”不依赖服务端状态
-                            history = historyForStatelessMemory.ifEmpty { null }
+                            history = historyForStatelessMemory.ifEmpty { null },
+                            // 禁用水印（针对 Seedream 直连）
+                            watermark = false
                         )
                     } else null
                 )

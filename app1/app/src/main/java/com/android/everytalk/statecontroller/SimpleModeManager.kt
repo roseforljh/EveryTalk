@@ -343,6 +343,18 @@ class SimpleModeManager(
             stateHolder.systemPrompts[stableId] = systemPrompt
             Log.d(TAG, "🔥 Set current conversation ID and system prompt.")
 
+            // 恢复会话使用的配置
+            val savedConfigId = stateHolder.conversationApiConfigIds.value[stableId]
+            if (savedConfigId != null) {
+                val config = stateHolder._apiConfigs.value.find { it.id == savedConfigId }
+                if (config != null) {
+                    stateHolder._selectedApiConfig.value = config
+                    Log.d(TAG, "🔥 Restored selected config: ${config.model}")
+                } else {
+                    Log.w(TAG, "🔥 Saved config ID $savedConfigId not found in current configs.")
+                }
+            }
+
             stateHolder.messages.clear()
             stateHolder.messages.addAll(processedMessages)
             Log.d(TAG, "🔥 Loaded messages into state.")
@@ -407,6 +419,18 @@ class SimpleModeManager(
         // 5. 设置对话ID（必须在消息加载前设置）
         val stableId = conversationToLoad.firstOrNull()?.id ?: "image_history_${UUID.randomUUID()}"
         stateHolder._currentImageGenerationConversationId.value = stableId
+        
+        // 🔧 修复：恢复会话使用的图像生成配置
+        val savedConfigId = stateHolder.conversationApiConfigIds.value[stableId]
+        if (savedConfigId != null) {
+            val config = stateHolder._imageGenApiConfigs.value.find { it.id == savedConfigId }
+            if (config != null) {
+                stateHolder._selectedImageGenApiConfig.value = config
+                Log.d(TAG, "Restored selected image gen config: ${config.model}")
+            } else {
+                Log.w(TAG, "Saved image config ID $savedConfigId not found in current configs.")
+            }
+        }
         
         // 6. 处理消息并更新状态
         stateHolder.imageGenerationMessages.clear()

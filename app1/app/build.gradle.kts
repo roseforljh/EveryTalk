@@ -117,32 +117,96 @@ android {
                 "proguard-rules.pro"
             )
             signingConfig = signingConfigs.getByName("release")
-            // Inject backend configuration for Release
-            // 优先级: Gradle Property (-P) > 环境变量 > local.properties
-            val backendUrlsRelease = sanitizeForBuildConfig(
-                (project.findProperty("BACKEND_URLS_RELEASE") as? String)?.takeIf { it.isNotBlank() }
-                    ?: System.getenv("BACKEND_URLS_RELEASE")?.takeIf { it.isNotBlank() }
-                    ?: localProperties.getProperty("BACKEND_URLS_RELEASE")
-                    ?: ""
-            )
-            val voiceBackendUrlRelease = sanitizeForBuildConfig(
-                (project.findProperty("VOICE_BACKEND_URL_RELEASE") as? String)?.takeIf { it.isNotBlank() }
-                    ?: System.getenv("VOICE_BACKEND_URL_RELEASE")?.takeIf { it.isNotBlank() }
-                    ?: localProperties.getProperty("VOICE_BACKEND_URL_RELEASE")
-                    ?: ""
-            )
-            buildConfigField("String", "BACKEND_URLS", "\"${backendUrlsRelease}\"")
-            buildConfigField("String", "VOICE_BACKEND_URL", "\"${voiceBackendUrlRelease}\"")
+            
+            // ⚠️ 后端代理配置已废弃，保留空字符串仅为兼容旧代码
+            // 所有功能已迁移到直连模式，不再需要后端代理
+            buildConfigField("String", "BACKEND_URLS", "\"\"")
+            buildConfigField("String", "VOICE_BACKEND_URL", "\"\"")
             buildConfigField("boolean", "CONCURRENT_REQUEST_ENABLED", "false")
+
+            // 注入默认 API 密钥 (Release)
+            val googleApiKey = sanitizeForBuildConfig(localProperties.getProperty("GOOGLE_API_KEY", ""))
+            val googleApiBaseUrl = sanitizeForBuildConfig(localProperties.getProperty("GOOGLE_API_BASE_URL", ""))
+            val googleCseId = sanitizeForBuildConfig(localProperties.getProperty("GOOGLE_CSE_ID", ""))
+            val defaultOpenaiApiBaseUrl = sanitizeForBuildConfig(localProperties.getProperty("DEFAULT_OPENAI_API_BASE_URL", ""))
+            val siliconFlowApiKey = sanitizeForBuildConfig(localProperties.getProperty("SILICONFLOW_API_KEY", ""))
+            val siliconFlowImageApiUrl = sanitizeForBuildConfig(localProperties.getProperty("SILICONFLOW_IMAGE_API_URL", ""))
+            val siliconFlowDefaultImageModel = sanitizeForBuildConfig(localProperties.getProperty("SILICONFLOW_DEFAULT_IMAGE_MODEL", ""))
+            val defaultTextApiKey = sanitizeForBuildConfig(localProperties.getProperty("DEFAULT_TEXT_API_KEY", ""))
+            val defaultTextApiUrl = sanitizeForBuildConfig(localProperties.getProperty("DEFAULT_TEXT_API_URL", ""))
+            val defaultTextModels = sanitizeForBuildConfig(localProperties.getProperty("DEFAULT_TEXT_MODELS", ""))
+            val viteApiUrls = sanitizeForBuildConfig(localProperties.getProperty("VITE_API_URLS", ""))
+            val qwenEditApiUrls = sanitizeForBuildConfig(localProperties.getProperty("QWEN_EDIT_API_URLS", ""))
+            val qwenEditApiSecret = sanitizeForBuildConfig(localProperties.getProperty("QWEN_EDIT_API_SECRET", ""))
+            val seedreamApiUrl = sanitizeForBuildConfig(localProperties.getProperty("SEEDREAM_API_URL", ""))
+            val googleSearchApiKey = sanitizeForBuildConfig(localProperties.getProperty("GOOGLE_SEARCH_API_KEY", ""))
+            // 智谱 API 配置
+            val zhipuApiKey = sanitizeForBuildConfig(localProperties.getProperty("ZHIPU_API_KEY", ""))
+
+            buildConfigField("String", "GOOGLE_API_KEY", "\"${googleApiKey}\"")
+            buildConfigField("String", "GOOGLE_API_BASE_URL", "\"${googleApiBaseUrl}\"")
+            buildConfigField("String", "GOOGLE_CSE_ID", "\"${googleCseId}\"")
+            buildConfigField("String", "DEFAULT_OPENAI_API_BASE_URL", "\"${defaultOpenaiApiBaseUrl}\"")
+            buildConfigField("String", "SILICONFLOW_API_KEY", "\"${siliconFlowApiKey}\"")
+            buildConfigField("String", "SILICONFLOW_IMAGE_API_URL", "\"${siliconFlowImageApiUrl}\"")
+            buildConfigField("String", "SILICONFLOW_DEFAULT_IMAGE_MODEL", "\"${siliconFlowDefaultImageModel}\"")
+            buildConfigField("String", "DEFAULT_TEXT_API_KEY", "\"${defaultTextApiKey}\"")
+            buildConfigField("String", "DEFAULT_TEXT_API_URL", "\"${defaultTextApiUrl}\"")
+            buildConfigField("String", "DEFAULT_TEXT_MODELS", "\"${defaultTextModels}\"")
+            buildConfigField("String", "VITE_API_URLS", "\"${viteApiUrls}\"")
+            buildConfigField("String", "QWEN_EDIT_API_URLS", "\"${qwenEditApiUrls}\"")
+            buildConfigField("String", "QWEN_EDIT_API_SECRET", "\"${qwenEditApiSecret}\"")
+            buildConfigField("String", "SEEDREAM_API_URL", "\"${seedreamApiUrl}\"")
+            buildConfigField("String", "GOOGLE_SEARCH_API_KEY", "\"${googleSearchApiKey}\"")
+            // 智谱 API 密钥
+            buildConfigField("String", "ZHIPU_API_KEY", "\"${zhipuApiKey}\"")
         }
         debug {
             isProfileable = false // debug 构建也可以设为 profileable,方便测试
-            // Inject backend configuration for Debug
-            val backendUrlsDebug = sanitizeForBuildConfig(localProperties.getProperty("BACKEND_URLS_DEBUG", ""))
-            val voiceBackendUrlDebug = sanitizeForBuildConfig(localProperties.getProperty("VOICE_BACKEND_URL_DEBUG", ""))
-            buildConfigField("String", "BACKEND_URLS", "\"${backendUrlsDebug}\"")
-            buildConfigField("String", "VOICE_BACKEND_URL", "\"${voiceBackendUrlDebug}\"")
+            
+            // ⚠️ 后端代理配置已废弃，保留空字符串仅为兼容旧代码
+            // 所有功能已迁移到直连模式，不再需要后端代理
+            buildConfigField("String", "BACKEND_URLS", "\"\"")
+            buildConfigField("String", "VOICE_BACKEND_URL", "\"\"")
             buildConfigField("boolean", "CONCURRENT_REQUEST_ENABLED", "false")
+
+            // 注入默认 API 密钥 (Debug)
+            val googleApiKey = sanitizeForBuildConfig(localProperties.getProperty("GOOGLE_API_KEY", ""))
+            val googleApiBaseUrl = sanitizeForBuildConfig(localProperties.getProperty("GOOGLE_API_BASE_URL", ""))
+            val googleCseId = sanitizeForBuildConfig(localProperties.getProperty("GOOGLE_CSE_ID", ""))
+            val defaultOpenaiApiBaseUrl = sanitizeForBuildConfig(localProperties.getProperty("DEFAULT_OPENAI_API_BASE_URL", ""))
+            val siliconFlowApiKey = sanitizeForBuildConfig(localProperties.getProperty("SILICONFLOW_API_KEY", ""))
+            val siliconFlowImageApiUrl = sanitizeForBuildConfig(localProperties.getProperty("SILICONFLOW_IMAGE_API_URL", ""))
+            val siliconFlowDefaultImageModel = sanitizeForBuildConfig(localProperties.getProperty("SILICONFLOW_DEFAULT_IMAGE_MODEL", ""))
+            val defaultTextApiKey = sanitizeForBuildConfig(localProperties.getProperty("DEFAULT_TEXT_API_KEY", ""))
+            val defaultTextApiUrl = sanitizeForBuildConfig(localProperties.getProperty("DEFAULT_TEXT_API_URL", ""))
+            val defaultTextModels = sanitizeForBuildConfig(localProperties.getProperty("DEFAULT_TEXT_MODELS", ""))
+            val viteApiUrls = sanitizeForBuildConfig(localProperties.getProperty("VITE_API_URLS", ""))
+            val qwenEditApiUrls = sanitizeForBuildConfig(localProperties.getProperty("QWEN_EDIT_API_URLS", ""))
+            val qwenEditApiSecret = sanitizeForBuildConfig(localProperties.getProperty("QWEN_EDIT_API_SECRET", ""))
+            val seedreamApiUrl = sanitizeForBuildConfig(localProperties.getProperty("SEEDREAM_API_URL", ""))
+            val googleSearchApiKey = sanitizeForBuildConfig(localProperties.getProperty("GOOGLE_SEARCH_API_KEY", ""))
+            // 智谱 API 配置
+            val zhipuApiKey = sanitizeForBuildConfig(localProperties.getProperty("ZHIPU_API_KEY", ""))
+
+            buildConfigField("String", "GOOGLE_API_KEY", "\"${googleApiKey}\"")
+            buildConfigField("String", "GOOGLE_API_BASE_URL", "\"${googleApiBaseUrl}\"")
+            buildConfigField("String", "GOOGLE_CSE_ID", "\"${googleCseId}\"")
+            buildConfigField("String", "DEFAULT_OPENAI_API_BASE_URL", "\"${defaultOpenaiApiBaseUrl}\"")
+            buildConfigField("String", "SILICONFLOW_API_KEY", "\"${siliconFlowApiKey}\"")
+            buildConfigField("String", "SILICONFLOW_IMAGE_API_URL", "\"${siliconFlowImageApiUrl}\"")
+            buildConfigField("String", "SILICONFLOW_DEFAULT_IMAGE_MODEL", "\"${siliconFlowDefaultImageModel}\"")
+            buildConfigField("String", "DEFAULT_TEXT_API_KEY", "\"${defaultTextApiKey}\"")
+            buildConfigField("String", "DEFAULT_TEXT_API_URL", "\"${defaultTextApiUrl}\"")
+            buildConfigField("String", "DEFAULT_TEXT_MODELS", "\"${defaultTextModels}\"")
+            buildConfigField("String", "VITE_API_URLS", "\"${viteApiUrls}\"")
+            buildConfigField("String", "QWEN_EDIT_API_URLS", "\"${qwenEditApiUrls}\"")
+            buildConfigField("String", "QWEN_EDIT_API_SECRET", "\"${qwenEditApiSecret}\"")
+            buildConfigField("String", "SEEDREAM_API_URL", "\"${seedreamApiUrl}\"")
+            buildConfigField("String", "GOOGLE_SEARCH_API_KEY", "\"${googleSearchApiKey}\"")
+            // 智谱 API 密钥
+            buildConfigField("String", "ZHIPU_API_KEY", "\"${zhipuApiKey}\"")
+
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
         }
@@ -282,6 +346,8 @@ android {
         implementation("pl.droidsonroids.gif:android-gif-drawable:1.2.29")
         implementation("com.caverock:androidsvg:1.4")
 
+        // ===== PDF 处理 =====
+        implementation("com.tom-roush:pdfbox-android:2.0.27.0")
         // ===== Room Database =====
         implementation(libs.room.runtime)
         implementation(libs.room.ktx)

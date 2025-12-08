@@ -106,6 +106,13 @@ data class VoiceBackendConfig(
     @SerialName("voice_name")
     val voiceName: String = "Kore",
     
+    // ========== 高级选项 ==========
+    
+    /** 是否使用实时流式 STT（仅阿里云平台支持） */
+    @EncodeDefault
+    @SerialName("use_realtime_streaming")
+    val useRealtimeStreaming: Boolean = false,
+    
     // ========== 元数据 ==========
     
     /** 配置是否有效/启用 */

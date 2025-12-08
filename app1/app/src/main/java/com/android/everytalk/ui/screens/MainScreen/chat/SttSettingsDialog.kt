@@ -14,69 +14,128 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.android.everytalk.data.DataClass.VoiceBackendConfig
+import com.android.everytalk.statecontroller.AppViewModel
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SttSettingsDialog(
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    viewModel: AppViewModel? = null
 ) {
+    if (viewModel == null) {
+        onDismiss()
+        return
+    }
+
     val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences("voice_settings", android.content.Context.MODE_PRIVATE) }
-    
-    val savedPlatform = remember { prefs.getString("stt_platform", "Google") ?: "Google" }
-    val savedKeyGoogle = remember { prefs.getString("stt_key_Google", "") ?: "" }
-    val savedKeyOpenAI = remember { prefs.getString("stt_key_OpenAI", "") ?: "" }
-    
-    // 旧全局默认值
-    val defaultApiUrl = remember { prefs.getString("stt_api_url", "") ?: "" }
-    val defaultModel = remember { prefs.getString("stt_model", "") ?: "" }
+    val coroutineScope = rememberCoroutineScope()
+    val currentConfig by viewModel.stateHolder._selectedVoiceConfig.collectAsState()
+    val allConfigs by viewModel.stateHolder._voiceBackendConfigs.collectAsState()
 
-    fun resolveKeyFor(platform: String): String {
-        return when (platform) {
-            "OpenAI" -> savedKeyOpenAI
-            "SiliconFlow" -> prefs.getString("stt_key_SiliconFlow", "") ?: ""
-            "Aliyun" -> prefs.getString("stt_key_Aliyun", "") ?: ""
-            else -> savedKeyGoogle
-        }.trim()
-    }
-    
-    fun resolveApiUrlFor(platform: String): String {
-        val saved = prefs.getString("stt_api_url_${platform}", null)
-        if (saved != null) return saved
-        
-        return when (platform) {
-            "SiliconFlow" -> "https://api.siliconflow.cn/v1/audio/transcriptions"
-            "Aliyun" -> "https://dashscope.aliyuncs.com"  // 阿里云占位地址（后端SDK会自动处理）
-            else -> defaultApiUrl
-        }
-    }
-    
-    fun resolveModelFor(platform: String): String {
-        val saved = prefs.getString("stt_model_${platform}", null)
-        if (saved != null) return saved
-        
-        return when (platform) {
-            "SiliconFlow" -> "FunAudioLLM/SenseVoiceSmall"
-            "Aliyun" -> "fun-asr-realtime"
-            else -> defaultModel
-        }
-    }
+    // 如果没有当前配置，创建一个默认的
+    val effectiveConfig = currentConfig ?: VoiceBackendConfig.createDefault()
 
-    var selectedPlatform by remember { mutableStateOf(savedPlatform) }
-    var apiKey by remember { mutableStateOf(resolveKeyFor(selectedPlatform)) }
-    var apiUrl by remember { mutableStateOf(resolveApiUrlFor(selectedPlatform)) }
-    var model by remember { mutableStateOf(resolveModelFor(selectedPlatform)) }
+    // 状态管理
+    var selectedPlatform by remember(effectiveConfig) { mutableStateOf(effectiveConfig.sttPlatform) }
+    var apiKey by remember(effectiveConfig) { mutableStateOf(effectiveConfig.sttApiKey) }
+    var apiUrl by remember(effectiveConfig) { mutableStateOf(effectiveConfig.sttApiUrl) }
+    var model by remember(effectiveConfig) { mutableStateOf(effectiveConfig.sttModel) }
     var expanded by remember { mutableStateOf(false) }
     
-    // 实时流式模式开关（仅阿里云支持）- 现在支持直连实时 STT
-    val savedRealtimeStreaming = remember { prefs.getBoolean("stt_realtime_streaming", false) }
-    var useRealtimeStreaming by remember { mutableStateOf(savedRealtimeStreaming) }
+    // 实时流式模式开关（仅阿里云支持）- 从配置中读取
+    var useRealtimeStreaming by remember(effectiveConfig) { mutableStateOf(effectiveConfig.useRealtimeStreaming) }
+    
+    // 当平台切换时，从 Room 存储的 allConfigs 中查找对应平台的配置
+    fun loadFieldsForPlatform(platform: String) {
+        // 1. 从 allConfigs 中查找该平台的配置（已持久化到 Room）
+        val existingConfig = allConfigs.find { it.sttPlatform == platform }
+        
+        if (existingConfig != null) {
+            // 找到了该平台的配置，加载它
+            apiKey = existingConfig.sttApiKey
+            apiUrl = existingConfig.sttApiUrl
+            model = existingConfig.sttModel
+            // 同时加载该配置的实时流式设置
+            useRealtimeStreaming = existingConfig.useRealtimeStreaming
+        } else {
+            // 没有找到该平台的配置，使用平台默认值
+            apiKey = ""
+            apiUrl = when (platform) {
+                "SiliconFlow" -> "https://api.siliconflow.cn/v1/audio/transcriptions"
+                "Aliyun" -> "https://dashscope.aliyuncs.com"
+                "OpenAI" -> "" // OpenAI 需要用户自己填写
+                else -> ""
+            }
+            model = when (platform) {
+                "SiliconFlow" -> "FunAudioLLM/SenseVoiceSmall"
+                "Aliyun" -> "fun-asr-realtime"
+                "OpenAI" -> "whisper-1"
+                else -> ""
+            }
+            // 重置实时流式设置
+            useRealtimeStreaming = false
+        }
+    }
+    
+    // 保存当前平台的配置到缓存（在切换平台前调用，仅保存到 allConfigs 列表中供后续加载）
+    fun savePlatformConfigToCache(platform: String) {
+        // 只有当有实际内容时才保存
+        if (apiKey.isBlank() && apiUrl.isBlank() && model.isBlank()) {
+            return
+        }
+        
+        // 查找或创建该平台的配置
+        val existingConfig = allConfigs.find { it.sttPlatform == platform }
+        
+        val configToSave = if (existingConfig != null) {
+            // 更新现有配置
+            existingConfig.copy(
+                sttApiKey = apiKey.trim(),
+                sttApiUrl = apiUrl.trim(),
+                sttModel = model.trim(),
+                useRealtimeStreaming = if (platform == "Aliyun") useRealtimeStreaming else false,
+                updatedAt = System.currentTimeMillis()
+            )
+        } else {
+            // 创建新配置（为该平台创建独立记录）
+            VoiceBackendConfig(
+                id = java.util.UUID.randomUUID().toString(),
+                name = "${platform} STT 配置",
+                provider = platform,
+                sttPlatform = platform,
+                sttApiKey = apiKey.trim(),
+                sttApiUrl = apiUrl.trim(),
+                sttModel = model.trim(),
+                useRealtimeStreaming = if (platform == "Aliyun") useRealtimeStreaming else false,
+                // 保留其他默认值
+                chatPlatform = "Google",
+                ttsPlatform = "Gemini",
+                voiceName = "Kore"
+            )
+        }
+        
+        // 更新配置列表（仅更新内存中的列表）
+        val newConfigs = if (existingConfig != null) {
+            allConfigs.map { if (it.id == configToSave.id) configToSave else it }
+        } else {
+            allConfigs + configToSave
+        }
+        
+        // 保存到 Room（用于平台切换时的配置缓存）
+        viewModel.stateHolder._voiceBackendConfigs.value = newConfigs
+        coroutineScope.launch {
+            viewModel.persistenceManager.saveVoiceBackendConfigs(newConfigs)
+        }
+    }
     
     val platforms = listOf("Google", "OpenAI", "SiliconFlow", "Aliyun")
     
-    // 自定义模型管理
+    // 自定义模型管理 (存储在 SharedPreferences 中，仅作为 UI 辅助)
+    val uiPrefs = remember { context.getSharedPreferences("voice_ui_prefs", android.content.Context.MODE_PRIVATE) }
     val customModelsKey = "custom_models_stt_${selectedPlatform}"
-    val savedCustomModelsStr = remember(selectedPlatform) { prefs.getString(customModelsKey, "") ?: "" }
+    val savedCustomModelsStr = remember(selectedPlatform) { uiPrefs.getString(customModelsKey, "") ?: "" }
     
     var customModels by remember(selectedPlatform) {
         mutableStateOf(
@@ -160,10 +219,13 @@ fun SttSettingsDialog(
                                 DropdownMenuItem(
                                     text = { Text(platform) },
                                     onClick = {
-                                        selectedPlatform = platform
-                                        apiKey = resolveKeyFor(platform)
-                                        apiUrl = resolveApiUrlFor(platform)
-                                        model = resolveModelFor(platform)
+                                        if (platform != selectedPlatform) {
+                                            // 先保存当前平台的配置到缓存
+                                            savePlatformConfigToCache(selectedPlatform)
+                                            // 然后加载新平台的配置
+                                            loadFieldsForPlatform(platform)
+                                            selectedPlatform = platform
+                                        }
                                         expanded = false
                                     }
                                 )
@@ -268,14 +330,14 @@ fun SttSettingsDialog(
                         if (newModel.isNotBlank() && !customModels.contains(newModel)) {
                             val newList = customModels + newModel.trim()
                             customModels = newList
-                            prefs.edit().putString(customModelsKey, newList.joinToString(",")).apply()
+                            uiPrefs.edit().putString(customModelsKey, newList.joinToString(",")).apply()
                             model = newModel.trim()
                         }
                     },
                     onRemoveModel = { modelToRemove ->
                         val newList = customModels - modelToRemove
                         customModels = newList
-                        prefs.edit().putString(customModelsKey, newList.joinToString(",")).apply()
+                        uiPrefs.edit().putString(customModelsKey, newList.joinToString(",")).apply()
                         if (model == modelToRemove) {
                             model = ""
                         }
@@ -353,23 +415,39 @@ fun SttSettingsDialog(
                     
                     Button(
                         onClick = {
-                            runCatching {
-                                val editor = prefs.edit()
-                                editor.putString("stt_platform", selectedPlatform)
-                                when (selectedPlatform) {
-                                    "OpenAI" -> editor.putString("stt_key_OpenAI", apiKey)
-                                    "SiliconFlow" -> editor.putString("stt_key_SiliconFlow", apiKey)
-                                    "Aliyun" -> editor.putString("stt_key_Aliyun", apiKey)
-                                    else -> editor.putString("stt_key_Google", apiKey)
+                            coroutineScope.launch {
+                                // 先保存当前平台的配置到缓存
+                                savePlatformConfigToCache(selectedPlatform)
+                                
+                                // 更新当前选中配置的 STT 部分（保留 LLM 和 TTS 的设置）
+                                val configToUpdate = currentConfig ?: effectiveConfig
+                                
+                                val newConfig = configToUpdate.copy(
+                                    sttPlatform = selectedPlatform,
+                                    sttApiKey = apiKey.trim(),
+                                    sttApiUrl = apiUrl.trim(),
+                                    sttModel = model.trim(),
+                                    useRealtimeStreaming = if (selectedPlatform == "Aliyun") useRealtimeStreaming else false,
+                                    updatedAt = System.currentTimeMillis()
+                                )
+                                
+                                // 更新配置列表
+                                val latestConfigs = viewModel.stateHolder._voiceBackendConfigs.value
+                                val configExists = latestConfigs.any { it.id == newConfig.id }
+                                val newConfigs = if (configExists) {
+                                    latestConfigs.map { if (it.id == newConfig.id) newConfig else it }
+                                } else {
+                                    latestConfigs + newConfig
                                 }
-                                // 按平台保存
-                                editor.putString("stt_api_url_${selectedPlatform}", apiUrl.trim())
-                                editor.putString("stt_model_${selectedPlatform}", model.trim())
-                                // 保存实时流式模式设置
-                                editor.putBoolean("stt_realtime_streaming", useRealtimeStreaming)
-                                editor.apply()
+                                
+                                // 保存到 Room
+                                viewModel.stateHolder._voiceBackendConfigs.value = newConfigs
+                                viewModel.stateHolder._selectedVoiceConfig.value = newConfig
+                                viewModel.persistenceManager.saveVoiceBackendConfigs(newConfigs)
+                                viewModel.persistenceManager.saveSelectedVoiceConfigId(newConfig.id)
+                                
+                                onDismiss()
                             }
-                            onDismiss()
                         },
                         modifier = Modifier.weight(1f).height(48.dp),
                         shape = RoundedCornerShape(24.dp),

@@ -6,7 +6,6 @@ import android.util.Log
 import com.android.everytalk.data.DataClass.ApiConfig
 import java.io.File
 import com.android.everytalk.data.DataClass.Message
-import com.android.everytalk.data.local.SharedPreferencesDataSource
 import com.android.everytalk.data.database.RoomDataSource
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.statecontroller.ViewModelStateHolder
@@ -19,14 +18,12 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import coil3.ImageLoader
-import com.android.everytalk.util.FileManager
 import android.util.Base64
 import java.io.FileOutputStream
 import java.util.Locale
 
 class DataPersistenceManager(
     private val context: Context,
-    private val dataSource: SharedPreferencesDataSource,
     private val stateHolder: ViewModelStateHolder,
     private val viewModelScope: CoroutineScope,
     private val imageLoader: ImageLoader
@@ -37,8 +34,8 @@ class DataPersistenceManager(
     // Room 数据源
     private val roomDataSource by lazy { RoomDataSource(context) }
     
-    // 迁移标志位
-    private val KEY_MIGRATION_COMPLETED = "migration_to_room_completed_v1"
+    // 默认配置初始化标志位 (存储在 Room 数据库中)
+    private val KEY_DEFAULT_CONFIGS_INITIALIZED = "default_configs_initialized_v1"
 
     suspend fun loadCustomProviders(): Set<String> {
         return withContext(Dispatchers.IO) {
@@ -239,90 +236,6 @@ class DataPersistenceManager(
             var initialHistoryPresent = false
 
             try {
-                // 阶段 0: 数据迁移 (SharedPreferences -> Room)
-                // 检查是否已完成迁移
-                val migrationCompleted = dataSource.getString(KEY_MIGRATION_COMPLETED, "false") == "true"
-                if (!migrationCompleted) {
-                    Log.i(TAG, "loadInitialData: 检测到尚未迁移到 Room 数据库，开始迁移...")
-                    try {
-                        // 1. 迁移聊天历史
-                        val chatHistory = dataSource.loadChatHistory()
-                        if (chatHistory.isNotEmpty()) {
-                            roomDataSource.saveChatHistory(chatHistory)
-                            Log.i(TAG, "loadInitialData: 已迁移 ${chatHistory.size} 条聊天历史到 Room")
-                        }
-                        
-                        // 2. 迁移图像生成历史
-                        val imageHistory = dataSource.loadImageGenerationHistory()
-                        if (imageHistory.isNotEmpty()) {
-                            roomDataSource.saveImageGenerationHistory(imageHistory)
-                            Log.i(TAG, "loadInitialData: 已迁移 ${imageHistory.size} 条图像生成历史到 Room")
-                        }
-                        
-                        // 3. 迁移最后打开的聊天
-                        val lastOpenChat = dataSource.loadLastOpenChat()
-                        if (lastOpenChat.isNotEmpty()) {
-                            roomDataSource.saveLastOpenChat(lastOpenChat)
-                        }
-                        
-                        val lastOpenImageChat = dataSource.loadLastOpenImageGenerationChat()
-                        if (lastOpenImageChat.isNotEmpty()) {
-                            roomDataSource.saveLastOpenImageGenerationChat(lastOpenImageChat)
-                        }
-                        
-                        // 4. 迁移置顶状态
-                        val pinnedTextIds = dataSource.loadPinnedTextIds()
-                        if (pinnedTextIds.isNotEmpty()) {
-                            roomDataSource.savePinnedTextIds(pinnedTextIds)
-                            Log.i(TAG, "loadInitialData: 已迁移 ${pinnedTextIds.size} 个文本置顶ID到 Room")
-                        }
-                        
-                        val pinnedImageIds = dataSource.loadPinnedImageIds()
-                        if (pinnedImageIds.isNotEmpty()) {
-                            roomDataSource.savePinnedImageIds(pinnedImageIds)
-                            Log.i(TAG, "loadInitialData: 已迁移 ${pinnedImageIds.size} 个图像置顶ID到 Room")
-                        }
-                        
-                        // 5. 迁移分组信息
-                        val conversationGroups = dataSource.loadConversationGroups()
-                        if (conversationGroups.isNotEmpty()) {
-                            roomDataSource.saveConversationGroups(conversationGroups)
-                            Log.i(TAG, "loadInitialData: 已迁移 ${conversationGroups.size} 个分组到 Room")
-                        }
-                        
-                        // 6. 迁移展开状态
-                        val expandedGroupKeys = dataSource.loadExpandedGroupKeys()
-                        if (expandedGroupKeys.isNotEmpty()) {
-                            roomDataSource.saveExpandedGroupKeys(expandedGroupKeys)
-                            Log.i(TAG, "loadInitialData: 已迁移 ${expandedGroupKeys.size} 个展开状态到 Room")
-                        }
-
-                        // 迁移 Custom Providers
-                        val customProviders = dataSource.loadCustomProviders()
-                        if (customProviders.isNotEmpty()) {
-                            roomDataSource.saveCustomProviders(customProviders)
-                            Log.i(TAG, "loadInitialData: 已迁移 ${customProviders.size} 个自定义提供商到 Room")
-                        }
-                        
-                        // 标记迁移完成
-                        dataSource.saveString(KEY_MIGRATION_COMPLETED, "true")
-                        Log.i(TAG, "loadInitialData: 数据迁移完成")
-                        
-                        // 7. 清理 SP 中的历史数据（迁移成功后立即清理）
-                        Log.i(TAG, "loadInitialData: 开始清理 SP 中的历史数据...")
-                        dataSource.clearChatHistory()
-                        dataSource.clearImageGenerationHistory()
-                        // 清理最后打开的会话
-                        dataSource.saveLastOpenChat(emptyList())
-                        dataSource.saveLastOpenImageGenerationChat(emptyList())
-                        Log.i(TAG, "loadInitialData: SP 历史数据清理完成")
-                        
-                    } catch (e: Exception) {
-                        Log.e(TAG, "loadInitialData: 数据迁移失败，将继续使用 SharedPreferences (部分或全部)", e)
-                        // 不标记完成，下次启动再试
-                    }
-                }
-
                 // 第一阶段：快速加载API配置（优先级最高）
                 Log.d(TAG, "loadInitialData: 阶段1 - 加载API配置...")
                 var loadedConfigs: List<ApiConfig> = if (stateHolder._apiConfigs.value.isEmpty()) {
@@ -333,28 +246,38 @@ class DataPersistenceManager(
                     stateHolder._apiConfigs.value
                 }
                 
-                // 自动创建默认文本配置（如果不存在）
+                // 检查是否已初始化过默认配置 (从 Room 数据库读取)
+                val defaultConfigsInitialized = roomDataSource.getSetting(KEY_DEFAULT_CONFIGS_INITIALIZED, "false") == "true"
+                
+                // 自动创建默认文本配置（如果不存在且未初始化过）
                 val hasDefaultTextConfig = loadedConfigs.any {
                     it.provider.trim().lowercase() in listOf("默认", "default") &&
                     it.modalityType == com.android.everytalk.data.DataClass.ModalityType.TEXT
                 }
-                if (!hasDefaultTextConfig) {
-                    Log.i(TAG, "loadInitialData: 未找到默认文本配置，自动创建...")
-                    val defaultTextModels = listOf(
-                        "gemini-2.5-pro",
-                        "gemini-2.5-flash",
-                        "gemini-flash-lite-latest"
-                    )
+                
+                if (!hasDefaultTextConfig && !defaultConfigsInitialized) {
+                    Log.i(TAG, "loadInitialData: 未找到默认文本配置且首次初始化，自动创建...")
+                    // 从 BuildConfig 获取默认密钥
+                    val defaultApiKey = com.android.everytalk.BuildConfig.DEFAULT_TEXT_API_KEY
+                    val defaultApiUrl = com.android.everytalk.BuildConfig.DEFAULT_TEXT_API_URL
+                    // 解析模型列表 (逗号分隔)
+                    val rawModels = com.android.everytalk.BuildConfig.DEFAULT_TEXT_MODELS
+                    val defaultTextModels = if (rawModels.isNotBlank()) {
+                        rawModels.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                    } else {
+                        listOf("gemini-2.5-pro", "gemini-2.5-flash", "gemini-flash-lite-latest")
+                    }
+                    
                     val newDefaultConfigs = defaultTextModels.map { modelName ->
                         ApiConfig(
                             id = java.util.UUID.randomUUID().toString(),
                             name = modelName,
                             provider = "默认",
-                            address = "",
-                            key = "",
+                            address = defaultApiUrl,
+                            key = defaultApiKey,
                             model = modelName,
                             modalityType = com.android.everytalk.data.DataClass.ModalityType.TEXT,
-                            channel = "",
+                            channel = "OpenAI兼容", // 默认使用 OpenAI 兼容渠道
                             isValid = true
                         )
                     }
@@ -415,54 +338,76 @@ class DataPersistenceManager(
                 // Load image generation configs
                 var loadedImageGenConfigs: List<ApiConfig> = roomDataSource.loadImageGenApiConfigs()
                 
-                // 自动创建默认图像配置（如果不存在）
+                // 自动创建默认图像配置（如果不存在且未初始化过）
                 val hasDefaultImageConfig = loadedImageGenConfigs.any {
                     it.provider.trim().lowercase() in listOf("默认", "default") &&
                     it.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE &&
                     it.model == "Kwai-Kolors/Kolors"
                 }
-                if (!hasDefaultImageConfig) {
-                    Log.i(TAG, "loadInitialData: 未找到默认快手图像配置，自动创建...")
+                if (!hasDefaultImageConfig && !defaultConfigsInitialized) {
+                    Log.i(TAG, "loadInitialData: 未找到默认快手图像配置且首次初始化，自动创建...")
+                    // 从 BuildConfig 获取 SiliconFlow 配置
+                    val siliconFlowKey = com.android.everytalk.BuildConfig.SILICONFLOW_API_KEY
+                    // 优先使用 BuildConfig 中的配置，回退到默认值
+                    val siliconFlowUrlRaw = com.android.everytalk.BuildConfig.SILICONFLOW_IMAGE_API_URL
+                    // 如果 URL 包含 /v1/images/generations，需要修剪，因为 ImageGenerationDirectClient 会拼接
+                    // ImageGenerationDirectClient 目前是硬编码路径逻辑，我们需要确保传入的是 Base URL
+                    // OpenAI 兼容模式通常期望 Base URL (不带 /v1/...)，或者带 /v1 但不带具体的 endpoint
+                    // 这里我们为了稳妥，传入完整的 Base URL，让 Client 去处理拼接
+                    // 观察 ImageGenerationDirectClient.kt，它会拼接 /v1/images/generations
+                    // 所以我们传入 https://api.siliconflow.cn 即可
+                    
+                    val siliconFlowUrl = if (siliconFlowUrlRaw.contains("/v1/images/generations")) {
+                        siliconFlowUrlRaw.substringBefore("/v1/images/generations")
+                    } else {
+                        "https://api.siliconflow.cn"
+                    }
+                    
+                    val siliconFlowModel = com.android.everytalk.BuildConfig.SILICONFLOW_DEFAULT_IMAGE_MODEL.ifBlank { "Kwai-Kolors/Kolors" }
+                    
                     val defaultImageConfig = ApiConfig(
                         id = java.util.UUID.randomUUID().toString(),
-                        name = "Kwai-Kolors/Kolors",
+                        name = siliconFlowModel,
                         provider = "默认",
-                        address = "",
-                        key = "",
-                        model = "Kwai-Kolors/Kolors",
+                        address = siliconFlowUrl,
+                        key = siliconFlowKey,
+                        model = siliconFlowModel,
                         modalityType = com.android.everytalk.data.DataClass.ModalityType.IMAGE,
-                        channel = "",
+                        channel = "OpenAI兼容", // SiliconFlow 兼容 OpenAI 格式
                         isValid = true
                     )
                     loadedImageGenConfigs = loadedImageGenConfigs + listOf(defaultImageConfig)
                     Log.i(TAG, "loadInitialData: 已创建默认快手图像配置")
                 }
                 
-                // 自动创建或更新 Modal Z-Image-Turbo 和 Qwen-Image-Edit 默认配置
-                // 目标：与快手 Kolors 归并在同一个"默认"平台下
+                // 自动创建 Modal Z-Image-Turbo 和 Qwen-Image-Edit 默认配置（仅首次初始化时）
+                // 修复：不再强制对齐已存在配置的分组字段，避免用户自定义配置被错误归并
                 
-                // 1. 先找到现有的快手配置，以对齐分组字段 (address/key/channel)
+                // 1. 先找到现有的快手配置，以获取默认分组字段 (address/key/channel)
                 val kolorsConfig = loadedImageGenConfigs.find {
                     it.model == "Kwai-Kolors/Kolors" &&
-                    it.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE
+                    it.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE &&
+                    it.provider.trim().lowercase() in listOf("默认", "default")
                 }
                 
                 val targetAddress = kolorsConfig?.address ?: ""
                 val targetKey = kolorsConfig?.key ?: ""
                 val targetChannel = kolorsConfig?.channel ?: ""
-                val targetProvider = "默认" // 强制归并到"默认"
+                val targetProvider = "默认"
 
                 var configsChanged = false
                 val mutableConfigs = loadedImageGenConfigs.toMutableList()
 
                 // === Modal Z-Image-Turbo 处理 ===
-                val existingModalConfigIndex = mutableConfigs.indexOfFirst {
+                // 仅在首次初始化时创建，不再强制修改已存在的配置
+                // 修复：使用更严格的查找条件，避免重复创建
+                val existingModalConfig = mutableConfigs.find {
                     it.model == "z-image-turbo-modal" &&
                     it.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE
                 }
 
-                if (existingModalConfigIndex == -1) {
-                    Log.i(TAG, "loadInitialData: 未找到 Modal 图像配置，自动创建并归并到默认平台...")
+                if (existingModalConfig == null && !defaultConfigsInitialized) {
+                    Log.i(TAG, "loadInitialData: 未找到 Modal 图像配置且首次初始化，自动创建...")
                     val modalImageConfig = ApiConfig(
                         id = java.util.UUID.randomUUID().toString(),
                         name = "Z-Image-Turbo (Modal)",
@@ -477,46 +422,25 @@ class DataPersistenceManager(
                     )
                     mutableConfigs.add(modalImageConfig)
                     configsChanged = true
-                } else {
-                    // 检查是否需要更新（仅在步数为 null 时补默认值，或分组字段与快手不一致）
-                    val existingConfig = mutableConfigs[existingModalConfigIndex]
-                    var needsUpdate = false
-                    var updatedConfig = existingConfig
- 
-                    // 仅当尚未设置步数时，补齐默认值 4；不再覆盖用户自定义配置
-                    if (existingConfig.numInferenceSteps == null) {
-                        updatedConfig = updatedConfig.copy(numInferenceSteps = 4)
-                        needsUpdate = true
-                    }
-                    // 强制对齐到快手的分组字段，确保在同一个卡片显示
-                    if (existingConfig.provider != targetProvider ||
-                        existingConfig.address != targetAddress ||
-                        existingConfig.key != targetKey ||
-                        existingConfig.channel != targetChannel) {
-                        updatedConfig = updatedConfig.copy(
-                            provider = targetProvider,
-                            address = targetAddress,
-                            key = targetKey,
-                            channel = targetChannel
-                        )
-                        needsUpdate = true
-                    }
-
-                    if (needsUpdate) {
-                        Log.i(TAG, "loadInitialData: Modal 配置过时或分组未对齐，更新配置...")
-                        mutableConfigs[existingModalConfigIndex] = updatedConfig
+                } else if (existingModalConfig != null && existingModalConfig.numInferenceSteps == null) {
+                    // 仅补齐默认步数，不修改其他字段
+                    val index = mutableConfigs.indexOf(existingModalConfig)
+                    if (index != -1) {
+                        mutableConfigs[index] = existingModalConfig.copy(numInferenceSteps = 4)
                         configsChanged = true
+                        Log.i(TAG, "loadInitialData: 为 Modal 配置补齐默认步数")
                     }
                 }
 
                 // === Modal Qwen-Image-Edit 处理 ===
-                val existingQwenConfigIndex = mutableConfigs.indexOfFirst {
+                // 仅在首次初始化时创建，不再强制修改已存在的配置
+                val existingQwenConfig = mutableConfigs.find {
                     it.model == "qwen-image-edit-modal" &&
                     it.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE
                 }
 
-                if (existingQwenConfigIndex == -1) {
-                    Log.i(TAG, "loadInitialData: 未找到 Qwen Image Edit 配置，自动创建并归并到默认平台...")
+                if (existingQwenConfig == null && !defaultConfigsInitialized) {
+                    Log.i(TAG, "loadInitialData: 未找到 Qwen Image Edit 配置且首次初始化，自动创建...")
                     val qwenConfig = ApiConfig(
                         id = java.util.UUID.randomUUID().toString(),
                         name = "Qwen Image Edit",
@@ -531,31 +455,26 @@ class DataPersistenceManager(
                     )
                     mutableConfigs.add(qwenConfig)
                     configsChanged = true
-                } else {
-                    val existingConfig = mutableConfigs[existingQwenConfigIndex]
-                    var needsUpdate = false
-                    var updatedConfig = existingConfig
-
-                    if (existingConfig.numInferenceSteps == null) {
-                        updatedConfig = updatedConfig.copy(numInferenceSteps = 30)
-                        needsUpdate = true
+                } else if (existingQwenConfig != null && existingQwenConfig.numInferenceSteps == null) {
+                    // 仅补齐默认步数，不修改其他字段
+                    val index = mutableConfigs.indexOf(existingQwenConfig)
+                    if (index != -1) {
+                        mutableConfigs[index] = existingQwenConfig.copy(numInferenceSteps = 30)
+                        configsChanged = true
+                        Log.i(TAG, "loadInitialData: 为 Qwen 配置补齐默认步数")
                     }
-                    if (existingConfig.provider != targetProvider ||
-                        existingConfig.address != targetAddress ||
-                        existingConfig.key != targetKey ||
-                        existingConfig.channel != targetChannel) {
-                        updatedConfig = updatedConfig.copy(
-                            provider = targetProvider,
-                            address = targetAddress,
-                            key = targetKey,
-                            channel = targetChannel
-                        )
-                        needsUpdate = true
+                }
+                
+                // 修复：去重逻辑，移除完全重复的配置（除了ID不同）
+                // 这可以解决之前版本重复创建导致的配置堆积问题
+                if (mutableConfigs.size > loadedImageGenConfigs.size) {
+                    val uniqueConfigs = mutableConfigs.distinctBy {
+                        "${it.provider}|${it.address}|${it.key}|${it.model}|${it.channel}|${it.modalityType}"
                     }
-
-                    if (needsUpdate) {
-                        Log.i(TAG, "loadInitialData: Qwen 配置过时或分组未对齐，更新配置...")
-                        mutableConfigs[existingQwenConfigIndex] = updatedConfig
+                    if (uniqueConfigs.size < mutableConfigs.size) {
+                        Log.i(TAG, "loadInitialData: 移除 ${mutableConfigs.size - uniqueConfigs.size} 个重复的图像配置")
+                        mutableConfigs.clear()
+                        mutableConfigs.addAll(uniqueConfigs)
                         configsChanged = true
                     }
                 }
@@ -563,9 +482,14 @@ class DataPersistenceManager(
                 loadedImageGenConfigs = mutableConfigs.toList()
 
                 // 统一保存所有图像配置（包括新增的）
-                if (!hasDefaultImageConfig || configsChanged) {
+                if ((!hasDefaultImageConfig && !defaultConfigsInitialized) || configsChanged) {
                     roomDataSource.saveImageGenApiConfigs(loadedImageGenConfigs)
                     Log.i(TAG, "loadInitialData: 已保存更新后的图像配置列表")
+                }
+                
+                // 标记默认配置已初始化 (保存到 Room 数据库)
+                if (!defaultConfigsInitialized) {
+                    roomDataSource.setSetting(KEY_DEFAULT_CONFIGS_INITIALIZED, "true")
                 }
                 
                 val selectedImageGenConfigId: String? = roomDataSource.loadSelectedImageGenConfigId()
@@ -586,12 +510,13 @@ class DataPersistenceManager(
                 // 加载语音后端配置
                 var loadedVoiceConfigs = roomDataSource.loadVoiceBackendConfigs()
                 
-                // 自动创建默认语音配置（如果不存在）
+                // 自动创建默认语音配置（如果不存在且未初始化过）
+                // 注意：语音配置暂时复用同一个初始化标志位，或者如果需要独立控制可以新加
                 val hasDefaultVoiceConfig = loadedVoiceConfigs.any {
                     it.provider.trim().lowercase() in listOf("默认", "default")
                 }
-                if (!hasDefaultVoiceConfig) {
-                    Log.i(TAG, "loadInitialData: 未找到默认语音配置，自动创建...")
+                if (!hasDefaultVoiceConfig && !defaultConfigsInitialized) {
+                    Log.i(TAG, "loadInitialData: 未找到默认语音配置且首次初始化，自动创建...")
                     val defaultVoiceConfig = com.android.everytalk.data.DataClass.VoiceBackendConfig.createDefault()
                     loadedVoiceConfigs = loadedVoiceConfigs + listOf(defaultVoiceConfig)
                     roomDataSource.saveVoiceBackendConfigs(loadedVoiceConfigs)
@@ -644,6 +569,17 @@ class DataPersistenceManager(
                         
                         initialHistoryPresent = loadedHistory.isNotEmpty()
                         Log.i(TAG, "loadInitialData: 历史数据加载完成。数量: ${loadedHistory.size}")
+
+                        // 加载会话配置映射
+                        try {
+                            val mapping = roomDataSource.loadConversationApiConfigIds()
+                            withContext(Dispatchers.Main.immediate) {
+                                stateHolder.conversationApiConfigIds.value = mapping
+                            }
+                            Log.d(TAG, "loadInitialData: 会话配置映射已加载 - 共 ${mapping.size} 条")
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed to load conversation api config mapping", e)
+                        }
 
                         // 自动修复消息parts - 检查并修复有问题的AI消息
                         val repairedHistory = loadedHistory.map { conversation ->
@@ -898,6 +834,28 @@ class DataPersistenceManager(
                 Log.d(TAG, "saveConversationParameters: 已持久化 ${parameters.size} 个会话参数映射")
             } catch (e: Exception) {
                 Log.e(TAG, "saveConversationParameters 失败", e)
+            }
+        }
+    }
+
+    suspend fun loadConversationParameters(): Map<String, GenerationConfig> {
+        return withContext(Dispatchers.IO) {
+            try {
+                roomDataSource.loadConversationParameters()
+            } catch (e: Exception) {
+                Log.e(TAG, "loadConversationParameters 失败", e)
+                emptyMap()
+            }
+        }
+    }
+
+    suspend fun saveConversationApiConfigIds(mapping: Map<String, String>) {
+        withContext(Dispatchers.IO) {
+            try {
+                roomDataSource.saveConversationApiConfigIds(mapping)
+                Log.d(TAG, "saveConversationApiConfigIds: 已持久化 ${mapping.size} 个会话配置映射")
+            } catch (e: Exception) {
+                Log.e(TAG, "saveConversationApiConfigIds 失败", e)
             }
         }
     }

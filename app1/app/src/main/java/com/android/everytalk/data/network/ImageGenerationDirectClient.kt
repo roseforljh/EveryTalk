@@ -1,0 +1,699 @@
+package com.android.everytalk.data.network
+
+import android.util.Base64
+import android.util.Log
+import com.android.everytalk.data.DataClass.ImageGenRequest
+import com.android.everytalk.data.DataClass.ImageGenerationResponse
+import com.android.everytalk.data.DataClass.ImageUrl
+import com.android.everytalk.data.DataClass.Timings
+import io.ktor.client.*
+import io.ktor.client.plugins.timeout
+import io.ktor.client.request.*
+import io.ktor.client.statement.*
+import io.ktor.http.*
+import kotlinx.serialization.json.*
+import kotlin.random.Random
+
+/**
+ * 图像生成直连客户端
+ * 支持 Gemini、OpenAI 兼容、Seedream、Modal Z-Image-Turbo 和 Qwen 图像编辑 API
+ */
+object ImageGenerationDirectClient {
+    private const val TAG = "ImageGenDirectClient"
+    
+    /**
+     * 直连 Gemini 图像生成 API
+     */
+    suspend fun generateImageGemini(
+        client: HttpClient,
+        request: ImageGenRequest
+    ): ImageGenerationResponse {
+        Log.i(TAG, "🔄 启动 Gemini 图像生成直连模式")
+        
+        val rawAddress = request.apiAddress.trimEnd('/').takeIf { it.isNotBlank() }
+            ?: com.android.everytalk.BuildConfig.GOOGLE_API_BASE_URL.trimEnd('/').takeIf { it.isNotBlank() }
+            ?: "https://generativelanguage.googleapis.com"
+
+        // 清理可能存在的 OpenAI 风格路径，提取纯基础 URL
+        val baseUrl = rawAddress
+            .replace(Regex("/v1/images/generations.*$"), "")
+            .replace(Regex("/v1beta/models.*$"), "")
+            .replace(Regex("/v1/.*$"), "")
+            .trimEnd('/')
+
+        val model = request.model
+        val url = "$baseUrl/v1beta/models/$model:generateContent?key=${request.apiKey}"
+        
+        Log.d(TAG, "直连 URL: ${url.substringBefore("?key=")}")
+        
+        val payload = buildGeminiImagePayload(request)
+        
+        val response = client.post(url) {
+            contentType(ContentType.Application.Json)
+            setBody(payload)
+        }
+        
+        if (!response.status.isSuccess()) {
+            val errorBody = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
+            Log.e(TAG, "Gemini 图像生成错误 ${response.status}: $errorBody")
+            throw Exception("Gemini 图像生成错误 ${response.status}: $errorBody")
+        }
+        
+        return parseGeminiImageResponse(response.bodyAsText())
+    }
+    
+    /**
+     * 直连 OpenAI 兼容图像生成 API
+     */
+    suspend fun generateImageOpenAI(
+        client: HttpClient,
+        request: ImageGenRequest
+    ): ImageGenerationResponse {
+        Log.i(TAG, "🔄 启动 OpenAI 兼容图像生成直连模式")
+        
+        val rawAddress = request.apiAddress.trimEnd('/').takeIf { it.isNotBlank() }
+            ?: com.android.everytalk.BuildConfig.DEFAULT_OPENAI_API_BASE_URL.trimEnd('/').takeIf { it.isNotBlank() }
+            ?: "https://api.openai.com"
+        
+        // 如果地址已经包含完整的图像生成端点路径，直接使用；否则追加标准路径
+        val url = if (rawAddress.endsWith("/v1/images/generations") ||
+                      rawAddress.endsWith("/images/generations")) {
+            rawAddress
+        } else {
+            "$rawAddress/v1/images/generations"
+        }
+        
+        Log.d(TAG, "直连 URL: $url")
+        
+        val payload = buildOpenAIImagePayload(request)
+        
+        val response = client.post(url) {
+            contentType(ContentType.Application.Json)
+            header(HttpHeaders.Authorization, "Bearer ${request.apiKey}")
+            setBody(payload)
+        }
+        
+        if (!response.status.isSuccess()) {
+            val errorBody = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
+            Log.e(TAG, "OpenAI 图像生成错误 ${response.status}: $errorBody")
+            throw Exception("OpenAI 图像生成错误 ${response.status}: $errorBody")
+        }
+        
+        return parseOpenAIImageResponse(response.bodyAsText())
+    }
+
+    /**
+     * 直连 Seedream (豆包·即梦) 图像生成 API
+     */
+    suspend fun generateImageSeedream(
+        client: HttpClient,
+        request: ImageGenRequest
+    ): ImageGenerationResponse {
+        Log.i(TAG, "🔄 启动 Seedream 图像生成直连模式")
+        
+        val baseUrl = request.apiAddress.trimEnd('/').takeIf { it.isNotBlank() }
+            ?: "https://ark.cn-beijing.volces.com/api/v3/images/generations"
+            
+        Log.d(TAG, "直连 URL: $baseUrl")
+        
+        val payload = buildSeedreamPayload(request)
+        
+        val response = client.post(baseUrl) {
+            contentType(ContentType.Application.Json)
+            header(HttpHeaders.Authorization, "Bearer ${request.apiKey}")
+            setBody(payload)
+        }
+        
+        if (!response.status.isSuccess()) {
+            val errorBody = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
+            Log.e(TAG, "Seedream 图像生成错误 ${response.status}: $errorBody")
+            throw Exception("Seedream 图像生成错误 ${response.status}: $errorBody")
+        }
+        
+        // Seedream 返回格式兼容 OpenAI (data[].url)
+        return parseOpenAIImageResponse(response.bodyAsText())
+    }
+
+    /**
+     * 直连 Modal Z-Image-Turbo 图像生成 API
+     * Modal 使用 GET 请求 + Query Parameters，返回 JPEG 字节流
+     */
+    suspend fun generateImageModal(
+        client: HttpClient,
+        request: ImageGenRequest,
+        modalUrls: List<String>
+    ): ImageGenerationResponse {
+        Log.i(TAG, "🔄 启动 Modal Z-Image-Turbo 图像生成直连模式")
+        
+        if (modalUrls.isEmpty()) {
+            throw Exception("Modal API URL 列表为空")
+        }
+        
+        // 解析目标尺寸
+        var width = 1024
+        var height = 1024
+        
+        try {
+            val aspectRatio = request.aspectRatio
+            val sizeVal = request.imageSize?.lowercase() ?: "2k"
+            
+            // Modal 支持的尺寸映射
+            val modalSizeMap = mapOf(
+                Pair("2k", "1:1") to Pair(2048, 2048),
+                Pair("2k", "16:9") to Pair(2048, 1152),
+                Pair("2k", "9:16") to Pair(1152, 2048),
+                Pair("2k", "4:3") to Pair(2048, 1536),
+                Pair("hd", "1:1") to Pair(1024, 1024),
+                Pair("hd", "16:9") to Pair(1024, 576),
+                Pair("hd", "9:16") to Pair(576, 1024)
+            )
+            
+            // 解析逻辑：优先尝试从 aspectRatio 中提取 "2K"/"HD" 和比例
+            var targetSizeKey: String? = null
+            var targetRatioKey: String? = null
+            
+            val arClean = (aspectRatio ?: "").trim().uppercase()
+            if (arClean.isNotEmpty()) {
+                // 尝试解析 "2K 1:1" 或 "HD 16:9" 格式
+                for (prefix in listOf("2K", "HD")) {
+                    if (arClean.contains(prefix)) {
+                        targetSizeKey = prefix.lowercase()
+                        // 提取比例部分，移除 "2K"/"HD" 和空格
+                        targetRatioKey = arClean.replace(prefix, "").trim()
+                        break
+                    }
+                }
+                
+                // 如果没找到前缀，假设只传了 "1:1"，则需要结合 sizeVal
+                if (targetSizeKey == null) {
+                    targetRatioKey = arClean
+                }
+            }
+            
+            // 如果 aspectRatio 里没包含档位，尝试从 sizeVal 解析
+            if (targetSizeKey == null) {
+                targetSizeKey = when {
+                    sizeVal in listOf("2k", "4k") -> "2k"
+                    sizeVal in listOf("hd", "1k", "1024x1024") -> "hd"
+                    else -> "2k" // 默认为 2K 档位
+                }
+            }
+            
+            if (targetRatioKey.isNullOrBlank()) {
+                targetRatioKey = "1:1"
+            }
+            
+            // 查找映射
+            modalSizeMap[Pair(targetSizeKey, targetRatioKey)]?.let { (w, h) ->
+                width = w
+                height = h
+            }
+            
+            // 如果没找到精确映射（例如传了 HD 4:3），回退逻辑
+            if (width == 1024 && height == 1024 && targetSizeKey == "hd" && targetRatioKey == "4:3") {
+                // HD 不支持 4:3，回退到 HD 1:1
+                modalSizeMap[Pair("hd", "1:1")]?.let { (w, h) ->
+                    width = w
+                    height = h
+                }
+                Log.w(TAG, "Modal HD 4:3 not supported, fallback to HD 1:1")
+            }
+            
+            Log.i(TAG, "Modal 尺寸解析: '$aspectRatio' + '$sizeVal' -> $width x $height")
+            
+        } catch (e: Exception) {
+            Log.w(TAG, "Modal 尺寸解析失败，使用默认 1024x1024", e)
+        }
+        
+        // 对齐到 8 的倍数
+        width = (width / 8) * 8
+        height = (height / 8) * 8
+        width = maxOf(256, minOf(width, 2048))
+        height = maxOf(256, minOf(height, 2048))
+        
+        val steps = request.numInferenceSteps ?: 4
+        val prompt = request.prompt
+        
+        if (prompt.isBlank()) {
+            throw Exception("提示词为空，无法生成图像")
+        }
+        
+        var lastError: Exception? = null
+        val startTime = System.currentTimeMillis()
+        
+        // 轮询多个 Modal URL
+        for ((idx, modalUrl) in modalUrls.withIndex()) {
+            try {
+                Log.i(TAG, "尝试 Modal URL ${idx + 1}/${modalUrls.size}: $modalUrl")
+                Log.d(TAG, "请求参数: prompt='${prompt.take(50)}...', width=$width, height=$height, steps=$steps")
+                
+                val response = client.get(modalUrl) {
+                    parameter("prompt", prompt)
+                    parameter("width", width)
+                    parameter("height", height)
+                    parameter("steps", steps)
+                    timeout {
+                        requestTimeoutMillis = 1800_000
+                        connectTimeoutMillis = 60_000
+                        socketTimeoutMillis = 1800_000
+                    }
+                }
+                
+                if (!response.status.isSuccess()) {
+                    val errorText = try { response.bodyAsText().take(500) } catch (_: Exception) { "(empty)" }
+                    Log.w(TAG, "Modal URL ${idx + 1} 返回 ${response.status}: $errorText")
+                    lastError = Exception("HTTP ${response.status}: $errorText")
+                    continue
+                }
+                
+                // 获取 JPEG 字节流
+                val jpegBytes = response.readBytes()
+                if (jpegBytes.isEmpty()) {
+                    Log.w(TAG, "Modal URL ${idx + 1} 返回空内容")
+                    lastError = Exception("Empty response body")
+                    continue
+                }
+                
+                // 转为 Data URI
+                val b64Str = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
+                val dataUri = "data:image/jpeg;base64,$b64Str"
+                
+                val elapsedMs = System.currentTimeMillis() - startTime
+                Log.i(TAG, "✓ Modal 图像生成成功，大小=${jpegBytes.size} bytes，耗时=${elapsedMs}ms")
+                
+                return ImageGenerationResponse(
+                    images = listOf(ImageUrl(url = dataUri)),
+                    text = prompt,
+                    timings = Timings(inference = elapsedMs.toInt()),
+                    seed = Random.nextInt()
+                )
+                
+            } catch (e: Exception) {
+                Log.w(TAG, "Modal URL ${idx + 1} 异常: ${e.message}")
+                lastError = e
+                continue
+            }
+        }
+        
+        throw lastError ?: Exception("所有 Modal URL 均失败")
+    }
+
+    /**
+     * 直连 Qwen 图像编辑 API
+     * 基于输入图片进行编辑
+     */
+    suspend fun generateImageQwenEdit(
+        client: HttpClient,
+        request: ImageGenRequest,
+        inputImageBase64: String,
+        qwenUrls: List<String>,
+        apiSecret: String
+    ): ImageGenerationResponse {
+        Log.i(TAG, "🔄 启动 Qwen 图像编辑直连模式")
+        
+        if (qwenUrls.isEmpty()) {
+            throw Exception("Qwen Edit API URL 列表为空")
+        }
+        
+        if (inputImageBase64.isBlank()) {
+            throw Exception("请提供一张图片以进行编辑")
+        }
+        
+        val prompt = request.prompt.takeIf { it.isNotBlank() } ?: "Edit this image"
+        val steps = request.numInferenceSteps ?: 30
+        val guidanceScale = request.guidanceScale ?: 7.5f
+        
+        var lastError: Exception? = null
+        val startTime = System.currentTimeMillis()
+        
+        for ((idx, qwenUrl) in qwenUrls.withIndex()) {
+            try {
+                Log.i(TAG, "尝试 Qwen URL ${idx + 1}/${qwenUrls.size}: $qwenUrl")
+                
+                val payload = buildJsonObject {
+                    put("image_base64", inputImageBase64)
+                    put("prompt", prompt)
+                    put("steps", steps)
+                    put("guidance_scale", guidanceScale)
+                }.toString()
+                
+                val response = client.post(qwenUrl) {
+                    contentType(ContentType.Application.Json)
+                    header("x-api-key", apiSecret)
+                    setBody(payload)
+                    timeout {
+                        requestTimeoutMillis = 1800_000
+                        connectTimeoutMillis = 60_000
+                        socketTimeoutMillis = 1800_000
+                    }
+                }
+                
+                if (!response.status.isSuccess()) {
+                    val errorText = try { response.bodyAsText().take(500) } catch (_: Exception) { "(empty)" }
+                    Log.w(TAG, "Qwen URL ${idx + 1} 返回 ${response.status}: $errorText")
+                    lastError = Exception("HTTP ${response.status}: $errorText")
+                    continue
+                }
+                
+                val responseJson = Json.parseToJsonElement(response.bodyAsText()).jsonObject
+                
+                if (responseJson["status"]?.jsonPrimitive?.contentOrNull != "success") {
+                    val detail = responseJson["detail"]?.jsonPrimitive?.contentOrNull ?: "Unknown error"
+                    Log.w(TAG, "Qwen URL ${idx + 1} 状态非 success: $detail")
+                    lastError = Exception("API Error: $detail")
+                    continue
+                }
+                
+                val resultB64 = responseJson["image_base64"]?.jsonPrimitive?.contentOrNull
+                if (resultB64.isNullOrBlank()) {
+                    lastError = Exception("Empty image_base64 in response")
+                    continue
+                }
+                
+                val elapsedMs = System.currentTimeMillis() - startTime
+                val dataUri = "data:image/png;base64,$resultB64"
+                
+                Log.i(TAG, "✓ Qwen 图像编辑成功，耗时=${elapsedMs}ms")
+                
+                return ImageGenerationResponse(
+                    images = listOf(ImageUrl(url = dataUri)),
+                    text = prompt,
+                    timings = Timings(inference = elapsedMs.toInt()),
+                    seed = Random.nextInt()
+                )
+                
+            } catch (e: Exception) {
+                Log.w(TAG, "Qwen URL ${idx + 1} 异常: ${e.message}")
+                lastError = e
+                continue
+            }
+        }
+        
+        throw lastError ?: Exception("所有 Qwen URL 均失败")
+    }
+
+    /**
+     * 增强版 Gemini 图像生成，支持参考图编辑 (img2img)
+     */
+    suspend fun generateImageGeminiWithReference(
+        client: HttpClient,
+        request: ImageGenRequest,
+        referenceImageBase64: String?,
+        referenceImageMimeType: String = "image/png"
+    ): ImageGenerationResponse {
+        Log.i(TAG, "🔄 启动 Gemini 图像生成（带参考图）直连模式")
+        
+        val rawAddress = request.apiAddress.trimEnd('/').takeIf { it.isNotBlank() }
+            ?: com.android.everytalk.BuildConfig.GOOGLE_API_BASE_URL.trimEnd('/').takeIf { it.isNotBlank() }
+            ?: "https://generativelanguage.googleapis.com"
+
+        // 清理可能存在的 OpenAI 风格路径，提取纯基础 URL
+        val baseUrl = rawAddress
+            .replace(Regex("/v1/images/generations.*$"), "")
+            .replace(Regex("/v1beta/models.*$"), "")
+            .replace(Regex("/v1/.*$"), "")
+            .trimEnd('/')
+
+        val model = request.model
+        val url = "$baseUrl/v1beta/models/$model:generateContent?key=${request.apiKey}"
+        
+        Log.d(TAG, "直连 URL: ${url.substringBefore("?key=")}")
+        
+        val payload = buildGeminiImagePayloadWithReference(request, referenceImageBase64, referenceImageMimeType)
+        
+        val response = client.post(url) {
+            contentType(ContentType.Application.Json)
+            setBody(payload)
+        }
+        
+        if (!response.status.isSuccess()) {
+            val errorBody = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
+            Log.e(TAG, "Gemini 图像生成错误 ${response.status}: $errorBody")
+            throw Exception("Gemini 图像生成错误 ${response.status}: $errorBody")
+        }
+        
+        return parseGeminiImageResponse(response.bodyAsText())
+    }
+    
+    private fun buildGeminiImagePayloadWithReference(
+        request: ImageGenRequest,
+        referenceImageBase64: String?,
+        referenceImageMimeType: String
+    ): String {
+        return buildJsonObject {
+            putJsonArray("contents") {
+                addJsonObject {
+                    put("role", "user")
+                    putJsonArray("parts") {
+                        // 先添加文本提示
+                        addJsonObject {
+                            put("text", request.prompt)
+                        }
+                        // 如果有参考图，添加到 parts
+                        if (!referenceImageBase64.isNullOrBlank()) {
+                            addJsonObject {
+                                putJsonObject("inlineData") {
+                                    put("mimeType", referenceImageMimeType)
+                                    put("data", referenceImageBase64)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            putJsonObject("generationConfig") {
+                putJsonArray("responseModalities") {
+                    add("IMAGE")
+                    add("TEXT")
+                }
+                request.aspectRatio?.let { ar ->
+                    // Gemini 仅支持特定的宽高比，过滤不支持的值以避免 API 错误
+                    val supportedRatios = setOf(
+                        "1:1", "2:3", "3:2", "3:4", "4:3",
+                        "4:5", "5:4", "9:16", "16:9", "21:9"
+                    )
+                    if (ar in supportedRatios) {
+                        putJsonObject("imageConfig") {
+                            put("aspectRatio", ar)
+                        }
+                    } else {
+                        Log.w(TAG, "Gemini 不支持宽高比 '$ar'，已忽略该参数（将使用默认 1:1）")
+                    }
+                }
+            }
+        }.toString()
+    }
+
+    /**
+     * 增强版 Seedream 图像生成，支持参考图编辑
+     */
+    suspend fun generateImageSeedreamWithReference(
+        client: HttpClient,
+        request: ImageGenRequest,
+        referenceImages: List<String>  // Data URI 或 URL 列表
+    ): ImageGenerationResponse {
+        Log.i(TAG, "🔄 启动 Seedream 图像生成（带参考图）直连模式")
+        
+        val baseUrl = request.apiAddress.trimEnd('/').takeIf { it.isNotBlank() }
+            ?: "https://ark.cn-beijing.volces.com/api/v3/images/generations"
+            
+        Log.d(TAG, "直连 URL: $baseUrl")
+        
+        val payload = buildSeedreamPayloadWithReference(request, referenceImages)
+        
+        val response = client.post(baseUrl) {
+            contentType(ContentType.Application.Json)
+            header(HttpHeaders.Authorization, "Bearer ${request.apiKey}")
+            setBody(payload)
+        }
+        
+        if (!response.status.isSuccess()) {
+            val errorBody = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
+            Log.e(TAG, "Seedream 图像生成错误 ${response.status}: $errorBody")
+            throw Exception("Seedream 图像生成错误 ${response.status}: $errorBody")
+        }
+        
+        return parseOpenAIImageResponse(response.bodyAsText())
+    }
+    
+    private fun buildSeedreamPayloadWithReference(
+        request: ImageGenRequest,
+        referenceImages: List<String>
+    ): String {
+        return buildJsonObject {
+            put("model", request.model)
+            put("prompt", request.prompt)
+            put("response_format", "url")
+            
+            val sizeVal = request.imageSize?.takeIf { it.isNotBlank() } ?: "2k"
+            put("size", mapSeedreamSize(sizeVal, request.aspectRatio))
+            
+            // 添加参考图片
+            if (referenceImages.isNotEmpty()) {
+                putJsonArray("image") {
+                    referenceImages.forEach { imageUrl ->
+                        add(imageUrl)
+                    }
+                }
+                Log.i(TAG, "添加 ${referenceImages.size} 张参考图")
+            }
+        }.toString()
+    }
+    
+    private fun buildGeminiImagePayload(request: ImageGenRequest): String {
+        return buildJsonObject {
+            putJsonArray("contents") {
+                addJsonObject {
+                    put("role", "user")
+                    putJsonArray("parts") {
+                        addJsonObject {
+                            put("text", request.prompt)
+                        }
+                    }
+                }
+            }
+            putJsonObject("generationConfig") {
+                // 指定输出图片
+                putJsonArray("responseModalities") {
+                    add("IMAGE")
+                    add("TEXT")
+                }
+                // 宽高比配置
+                request.aspectRatio?.let { ar ->
+                    // Gemini 仅支持特定的宽高比，过滤不支持的值以避免 API 错误（回退到纯文本）
+                    val supportedRatios = setOf(
+                        "1:1", "2:3", "3:2", "3:4", "4:3",
+                        "4:5", "5:4", "9:16", "16:9", "21:9"
+                    )
+                    if (ar in supportedRatios) {
+                        putJsonObject("imageConfig") {
+                            put("aspectRatio", ar)
+                        }
+                    } else {
+                        Log.w(TAG, "Gemini 不支持宽高比 '$ar'，已忽略该参数（将使用默认 1:1）")
+                    }
+                }
+            }
+        }.toString()
+    }
+    
+    private fun buildOpenAIImagePayload(request: ImageGenRequest): String {
+        return buildJsonObject {
+            put("model", request.model)
+            put("prompt", request.prompt)
+            request.imageSize?.let { put("size", it) }
+            request.batchSize?.let { put("n", it) }
+            request.numInferenceSteps?.let { put("num_inference_steps", it) }
+            request.guidanceScale?.let { put("guidance_scale", it) }
+        }.toString()
+    }
+
+    private fun buildSeedreamPayload(request: ImageGenRequest): String {
+        return buildJsonObject {
+            put("model", request.model)
+            put("prompt", request.prompt)
+            put("response_format", "url")
+            put("watermark", request.watermark ?: false)
+            
+            // 尺寸处理：优先使用 size 字段，其次是 imageSize
+            // Seedream 支持 "2K", "4K" 或 "WxH"
+            // 默认使用 2K 而非 1024x1024，以避免低清默认
+            val sizeVal = request.imageSize?.takeIf {
+                it.isNotBlank() && it != "1024x1024"
+            } ?: "2K"
+            put("size", mapSeedreamSize(sizeVal, request.aspectRatio))
+            
+            // 如果是流式
+            // put("stream", false)
+        }.toString()
+    }
+
+    private fun mapSeedreamSize(size: String, aspectRatio: String?): String {
+        val s = size.lowercase()
+        // 如果已经是 2k/4k，直接返回
+        if (s == "2k" || s == "4k") {
+            // 这里可以进一步根据 aspectRatio 细化为具体分辨率，但 Seedream API 似乎直接支持 "2k" + 比例?
+            // 或者如果只传 "2k"，它默认是 1:1 的 2k。
+            // 简单起见，如果传了 2k/4k，我们尝试映射到具体像素以更精确控制
+            return when (s) {
+                "2k" -> when (aspectRatio) {
+                    "16:9" -> "2048x1152"
+                    "9:16" -> "1152x2048"
+                    "4:3" -> "2048x1536"
+                    "3:4" -> "1536x2048"
+                    else -> "2048x2048" // 1:1
+                }
+                "4k" -> when (aspectRatio) {
+                    "16:9" -> "3840x2160"
+                    "9:16" -> "2160x3840"
+                    "4:3" -> "4096x3072"
+                    "3:4" -> "3072x4096"
+                    else -> "4096x4096" // 1:1
+                }
+                else -> "1024x1024"
+            }
+        }
+        // 如果是 WxH 格式，直接返回
+        if (s.contains("x")) return size
+        
+        return "1024x1024"
+    }
+    
+    private fun parseGeminiImageResponse(responseText: String): ImageGenerationResponse {
+        val json = Json { ignoreUnknownKeys = true }
+        val root = json.parseToJsonElement(responseText).jsonObject
+        val images = mutableListOf<ImageUrl>()
+        var text: String? = null
+        
+        root["candidates"]?.jsonArray?.firstOrNull()?.jsonObject?.let { candidate ->
+            candidate["content"]?.jsonObject?.get("parts")?.jsonArray?.forEach { part ->
+                val partObj = part.jsonObject
+                // 提取文本
+                partObj["text"]?.jsonPrimitive?.contentOrNull?.let { t ->
+                    text = t
+                }
+                // 提取图片
+                partObj["inlineData"]?.jsonObject?.let { inlineData ->
+                    val mimeType = inlineData["mimeType"]?.jsonPrimitive?.content ?: "image/png"
+                    val data = inlineData["data"]?.jsonPrimitive?.content ?: ""
+                    if (data.isNotEmpty()) {
+                        images.add(ImageUrl(url = "data:$mimeType;base64,$data"))
+                        Log.i(TAG, "✓ 解析到 Gemini 图片 (${data.length} chars base64)")
+                    }
+                }
+            }
+        }
+        
+        Log.i(TAG, "Gemini 图像生成完成: ${images.size} 张图片")
+        return ImageGenerationResponse(
+            images = images,
+            text = text,
+            timings = Timings(inference = 0),
+            seed = 0
+        )
+    }
+    
+    private fun parseOpenAIImageResponse(responseText: String): ImageGenerationResponse {
+        val json = Json { ignoreUnknownKeys = true }
+        val root = json.parseToJsonElement(responseText).jsonObject
+        val images = mutableListOf<ImageUrl>()
+        
+        root["data"]?.jsonArray?.forEach { item ->
+            val itemObj = item.jsonObject
+            val url = itemObj["url"]?.jsonPrimitive?.contentOrNull
+                ?: itemObj["b64_json"]?.jsonPrimitive?.contentOrNull?.let { "data:image/png;base64,$it" }
+            if (url != null) {
+                images.add(ImageUrl(url = url))
+                Log.i(TAG, "✓ 解析到 OpenAI 图片")
+            }
+        }
+        
+        Log.i(TAG, "OpenAI 图像生成完成: ${images.size} 张图片")
+        return ImageGenerationResponse(
+            images = images,
+            text = null,
+            timings = Timings(inference = 0),
+            seed = 0
+        )
+    }
+}

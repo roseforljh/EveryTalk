@@ -3,63 +3,41 @@ package com.android.everytalk.config
 import com.android.everytalk.BuildConfig
 
 /**
- * Modern, build-aware backend configuration provider.
+ * 后端配置提供器（已废弃）
  *
- * This object safely retrieves backend settings directly from the generated
- * BuildConfig class. This approach eliminates the need for asset-based JSON
- * files, enhancing security and simplifying build variant management.
+ * ⚠️ 此类已废弃。所有功能已迁移到直连模式，不再需要后端代理。
+ *
+ * 保留此类仅为兼容旧代码引用。后续版本将完全移除。
+ *
+ * 直连模式说明：
+ * - 文本对话：直接调用 OpenAI/Gemini 等 API
+ * - 语音功能：使用 VoiceChatSession + AliyunRealtimeSttClient 直连
+ * - 图像生成：使用 ImageGenerationDirectClient 直连
  */
+@Deprecated(
+    message = "后端代理模式已废弃，所有功能已迁移到直连模式",
+    level = DeprecationLevel.WARNING
+)
 object BackendConfig {
 
     /**
-     * A list of backend URLs, populated from the build configuration.
-     * The URLs are parsed from a comma-separated string.
+     * 后端 URL 列表（已废弃，始终返回空列表）
      */
+    @Deprecated("后端代理已废弃，此字段始终为空")
     val backendUrls: List<String> by lazy {
-        val configUrls = BuildConfig.BACKEND_URLS
-        // 避免日志泄露完整后端地址，仅记录数量
-        // android.util.Log.d("BackendConfig", "原始配置URLs: '$configUrls'")
-        android.util.Log.d("BackendConfig", "从 BuildConfig 读取的原始 URLs: '$configUrls'")
-        
-        if (configUrls.isBlank()) {
-            android.util.Log.e("BackendConfig", "BuildConfig.BACKEND_URLS 为空或空白!")
-            emptyList()
-        } else {
-            val urlList = configUrls
-                .split(',')
-                .map { it.trim() }
-                .filter { it.isNotEmpty() }
-            
-            android.util.Log.d("BackendConfig", "解析出的后端URL数量: ${urlList.size}")
-            urlList
-        }
+        android.util.Log.w("BackendConfig", "⚠️ backendUrls 已废弃，所有功能已使用直连模式")
+        emptyList()
     }
 
     /**
-     * Determines if concurrent requests to multiple backends are enabled.
-     * Prefer reading from BuildConfig via reflection to avoid compile-time issues
-     * if the field is absent in some build variants. Defaults to false.
+     * 并发请求开关（已废弃，始终返回 false）
      */
-    val isConcurrentRequestEnabled: Boolean by lazy {
-        try {
-            val field = BuildConfig::class.java.getField("CONCURRENT_REQUEST_ENABLED")
-            field.getBoolean(null)
-        } catch (e: Throwable) {
-            android.util.Log.w(
-                "BackendConfig",
-                "BuildConfig.CONCURRENT_REQUEST_ENABLED 缺失或不可用，使用默认值 false",
-                e
-            )
-            false
-        }
-    }
+    @Deprecated("后端代理已废弃，此字段始终为 false")
+    val isConcurrentRequestEnabled: Boolean = false
 
-    // Default values for other configurations, which were previously in JSON.
-    // These can be moved to BuildConfig fields as well if they need to vary by build type.
+    // 超时配置（保留供直连模式使用）
     const val TIMEOUT_MS: Long = 30000
     const val RACE_TIMEOUT_MS: Long = 10000
     const val FIRST_RESPONSE_TIMEOUT_MS: Long = 17_000
     const val IS_FALLBACK_ENABLED: Boolean = true
-
-
 }

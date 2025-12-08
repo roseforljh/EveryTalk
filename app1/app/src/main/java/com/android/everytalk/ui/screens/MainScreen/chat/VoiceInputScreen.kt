@@ -234,25 +234,29 @@ fun VoiceInputScreen(
     if (showTtsSettingsDialog) {
         VoiceSettingsDialog(
             selectedApiConfig = selectedApiConfig,
-            onDismiss = { showTtsSettingsDialog = false }
+            onDismiss = { showTtsSettingsDialog = false },
+            viewModel = viewModel
         )
     }
     
     if (showSttChatSettingsDialog) {
         SttSettingsDialog(
-            onDismiss = { showSttChatSettingsDialog = false }
+            onDismiss = { showSttChatSettingsDialog = false },
+            viewModel = viewModel
         )
     }
     
     if (showLlmSettingsDialog) {
         LlmSettingsDialog(
-            onDismiss = { showLlmSettingsDialog = false }
+            onDismiss = { showLlmSettingsDialog = false },
+            viewModel = viewModel
         )
     }
     
     if (showVoiceSelectionDialog) {
         VoiceSelectionDialog(
-            onDismiss = { showVoiceSelectionDialog = false }
+            onDismiss = { showVoiceSelectionDialog = false },
+            viewModel = viewModel
         )
     }
 }

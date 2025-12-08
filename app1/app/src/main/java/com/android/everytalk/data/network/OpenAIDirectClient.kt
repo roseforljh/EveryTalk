@@ -38,23 +38,46 @@ object OpenAIDirectClient {
         try {
             Log.i(TAG, "🔄 启动 OpenAI 兼容直连模式")
 
-            // ——— 1) 可选：直连前进行“客户端侧联网搜索注入”，与跳板策略对齐 ———
+           
             // 通过 request.customExtraBody 配置搜索端点与密钥：
             //   customExtraBody = {"webSearchEndpoint":"https://<your-search>/api","webSearchKey":"<key>"}
             var effectiveRequest = request
             if (request.useWebSearch == true) {
-                val endpoint = (request.customExtraBody?.get("webSearchEndpoint") as? String)?.trim()
-                val apiKey = (request.customExtraBody?.get("webSearchKey") as? String)?.trim()
                 val userQuery = extractLastUserText(request).let { it ?: "" }.trim()
 
-                if (!endpoint.isNullOrBlank() && userQuery.isNotBlank()) {
+                if (userQuery.isNotBlank()) {
+                    // 1. 优先检查自定义搜索端点
+                    val endpoint = (request.customExtraBody?.get("webSearchEndpoint") as? String)?.trim()
+                    val customKey = (request.customExtraBody?.get("webSearchKey") as? String)?.trim()
+
+                    // 2. 检查 Google CSE 配置
+                    val googleCseId = com.android.everytalk.BuildConfig.GOOGLE_CSE_ID
+                    val googleApiKey = com.android.everytalk.BuildConfig.GOOGLE_SEARCH_API_KEY
+
+                    var searchResults: List<SearchHit> = emptyList()
+                    var searchSource = "None"
+
                     try {
-                        // 提示 UI：开始联网
-                        send(AppStreamEvent.StatusUpdate("Searching web..."))
-                        val results = tryFetchWebSearch(client, endpoint, apiKey, userQuery)
-                        if (results.isNotEmpty()) {
+                        if (!endpoint.isNullOrBlank()) {
+                            // 使用自定义端点
+                            searchSource = "Custom Endpoint"
+                            send(AppStreamEvent.StatusUpdate("Searching web (Custom)..."))
+                            searchResults = tryFetchWebSearch(client, endpoint, customKey, userQuery)
+                        } else if (googleCseId.isNotBlank() && googleApiKey.isNotBlank()) {
+                            // 使用 Google CSE
+                            searchSource = "Google CSE"
+                            send(AppStreamEvent.StatusUpdate("Searching Google..."))
+                            val results = WebSearchClient.search(client, userQuery, googleApiKey, googleCseId)
+                            searchResults = results.map {
+                                SearchHit(it.title, it.href, it.snippet)
+                            }
+                        } else {
+                            send(AppStreamEvent.StatusUpdate("Web search skipped (no configuration)..."))
+                        }
+
+                        if (searchResults.isNotEmpty()) {
                             // 发送结果事件（UI 可展示来源弹窗）
-                            val listForUi = results.mapIndexed { idx, hit ->
+                            val listForUi = searchResults.mapIndexed { idx, hit ->
                                 WebSearchResult(
                                     index = idx + 1,
                                     title = hit.title,
@@ -65,23 +88,40 @@ object OpenAIDirectClient {
                             send(AppStreamEvent.WebSearchResults(listForUi))
 
                             // 注入到最后一条 user 消息（与跳板注入策略一致，作为前置上下文）
-                            effectiveRequest = injectSearchResultsIntoRequest(request, userQuery, results)
+                            effectiveRequest = injectSearchResultsIntoRequest(request, userQuery, searchResults)
                             send(AppStreamEvent.StatusUpdate("Answering with search results..."))
-                        } else {
+                        } else if (searchSource != "None") {
                             send(AppStreamEvent.StatusUpdate("No search results, answering directly..."))
                         }
                     } catch (e: Exception) {
-                        Log.w(TAG, "Web search failed, skip injection: ${e.message}")
+                        Log.w(TAG, "Web search failed ($searchSource), skip injection: ${e.message}")
                         send(AppStreamEvent.StatusUpdate("Search failed, answering directly..."))
                     }
-                } else {
-                    send(AppStreamEvent.StatusUpdate("Web search skipped (no endpoint configured)..."))
                 }
             }
 
             // ——— 2) 构建 API URL 与请求体（使用可能被注入后的 effectiveRequest） ———
-            val baseUrl = effectiveRequest.apiAddress?.trimEnd('/') ?: "https://api.openai.com"
-            val url = "$baseUrl/v1/chat/completions"
+            var baseUrl = effectiveRequest.apiAddress?.trimEnd('/')?.takeIf { it.isNotBlank() }
+                ?: com.android.everytalk.BuildConfig.DEFAULT_OPENAI_API_BASE_URL.trimEnd('/').takeIf { it.isNotBlank() }
+                ?: "https://api.openai.com"
+
+            // 智谱 BigModel 特殊处理
+            if (baseUrl.contains("bigmodel.cn")) {
+                // 如果用户填写的 URL 不包含 API 路径，尝试自动修正
+                if (!baseUrl.contains("/api/paas/v4")) {
+                     baseUrl = "https://open.bigmodel.cn/api/paas/v4"
+                }
+            }
+
+            // 构建最终 URL
+            val url = if (baseUrl.endsWith("/chat/completions")) {
+                baseUrl
+            } else if (baseUrl.endsWith("/v1")) {
+                "$baseUrl/chat/completions"
+            } else {
+                "$baseUrl/v1/chat/completions"
+            }
+            
             Log.d(TAG, "直连 URL: $url")
 
             val payload = buildOpenAIPayload(effectiveRequest)
@@ -138,6 +178,9 @@ object OpenAIDirectClient {
      * 构建 OpenAI API 请求体
      */
     private fun buildOpenAIPayload(request: ChatRequest): String {
+        // 首先注入系统提示词（如果消息中没有系统消息，则自动注入）
+        val messagesWithSystemPrompt = SystemPromptInjector.smartInjectSystemPrompt(request.messages)
+        Log.i(TAG, "📝 已注入系统提示词，消息数量: ${messagesWithSystemPrompt.size}")
 
         fun audioFormatFromMime(mime: String): String {
             return when (mime.lowercase()) {
@@ -166,7 +209,7 @@ object OpenAIDirectClient {
 
             // 转换消息（支持多模态：text + image_url(data URI) + input_audio）
             putJsonArray("messages") {
-                request.messages.forEach { message ->
+                messagesWithSystemPrompt.forEach { message ->
                     when (message) {
                         is SimpleTextApiMessage -> {
                             addJsonObject {
@@ -251,6 +294,42 @@ object OpenAIDirectClient {
                 config.temperature?.let { put("temperature", it) }
                 config.topP?.let { put("top_p", it) }
                 config.maxOutputTokens?.let { put("max_tokens", it) }
+            }
+
+            // Gemini-in-OpenAI 格式支持 (Gemini 通过 OpenAI 兼容接口调用)
+            val isGemini = request.channel.contains("gemini", ignoreCase = true) ||
+                           request.model.contains("gemini", ignoreCase = true)
+            
+            if (isGemini) {
+                 putJsonObject("extra_body") {
+                    putJsonObject("google") {
+                        // 工具配置
+                        val toolsToAdd = mutableListOf<String>()
+                        if (request.useWebSearch == true) {
+                            toolsToAdd.add("google_search")
+                        }
+                        // 代码执行工具
+                        if (request.enableCodeExecution == true) {
+                             toolsToAdd.add("code_execution")
+                        }
+                        
+                        if (toolsToAdd.isNotEmpty()) {
+                            putJsonArray("tools") {
+                                toolsToAdd.forEach { toolName ->
+                                    addJsonObject { putJsonObject(toolName) {} }
+                                }
+                            }
+                        }
+                        
+                        // thinking_config 支持
+                        request.generationConfig?.thinkingConfig?.let { tc ->
+                            putJsonObject("thinking_config") {
+                                tc.includeThoughts?.let { put("include_thoughts", it) }
+                                tc.thinkingBudget?.let { put("thinking_budget", it) }
+                            }
+                        }
+                    }
+                }
             }
         }.toString()
     }

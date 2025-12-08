@@ -8,7 +8,6 @@ import com.android.everytalk.config.BackendConfig
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.ImageGenerationResponse
 import com.android.everytalk.data.DataClass.GitHubRelease
-import com.android.everytalk.data.local.SharedPreferencesDataSource
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.util.RequestSignatureUtil
 import io.ktor.client.*
@@ -49,7 +48,6 @@ data class ModelInfo(val id: String)
 data class ModelsResponse(val data: List<ModelInfo>)
 
 object ApiClient {
-    private var sharedPreferencesDataSource: SharedPreferencesDataSource? = null
     private const val GITHUB_API_BASE_URL = "https://api.github.com/"
     
     /**
@@ -215,7 +213,6 @@ object ApiClient {
         if (isInitialized) return
         synchronized(this) {
             if (isInitialized) return
-            sharedPreferencesDataSource = SharedPreferencesDataSource(context)
             // 根据构建类型自动选择配置
             val cacheFile = File(context.cacheDir, "ktor_http_cache")
             client = HttpClient(io.ktor.client.engine.okhttp.OkHttp) {
@@ -677,151 +674,72 @@ object ApiClient {
         }
     }
 
+    /**
+     * 强制直连模式 - 直接调用 API 提供商，不经过后端代理
+     * 根据渠道类型自动选择 GeminiDirectClient 或 OpenAIDirectClient
+     */
     @OptIn(ExperimentalCoroutinesApi::class)
     fun streamChatResponse(
         request: ChatRequest,
         attachments: List<SelectedMediaItem>,
         applicationContext: Context
     ): Flow<AppStreamEvent> = channelFlow {
-        // 标记是否遇到 Cloudflare 拦截
-        var cloudflareDetected = false
-        var hasContentEmitted = false
+        android.util.Log.i("ApiClient", "🔄 强制直连模式启动")
+
+        // 1. 针对"默认"提供商进行配置注入（若字段为空）
+        // 这样能确保即使是旧数据或未完整初始化的配置，也能使用 BuildConfig 中的默认值
+        // 默认模型使用 Gemini 渠道，以支持 Google Search 原生工具
+        val effectiveRequest = if (request.provider == "默认" || request.provider == "default") {
+            request.copy(
+                apiAddress = request.apiAddress.takeIf { !it.isNullOrBlank() }
+                    ?: com.android.everytalk.BuildConfig.DEFAULT_TEXT_API_URL,
+                apiKey = request.apiKey.takeIf { it.isNotBlank() }
+                    ?: com.android.everytalk.BuildConfig.DEFAULT_TEXT_API_KEY,
+                // 强制指定默认提供商使用 Gemini 渠道，以确保启用原生工具
+                channel = "Gemini"
+            )
+        } else {
+            request
+        }
+
+        // 2. 判断渠道类型
+        // 修正逻辑：只有明确指定为 Gemini 渠道，或者模型名含 gemini 且非 OpenAI 兼容渠道时，才走 Gemini 原生协议
+        // 这样可以支持通过 OpenAI 兼容接口（如 OneAPI/NewAPI）提供的 Gemini 模型
+        val isGeminiRequest = (effectiveRequest.provider == "gemini" ||
+                effectiveRequest.channel.lowercase().contains("gemini")) &&
+                !effectiveRequest.channel.lowercase().contains("openai") ||
+                (effectiveRequest.model.contains("gemini", ignoreCase = true) &&
+                        !effectiveRequest.channel.lowercase().contains("openai") &&
+                        effectiveRequest.provider != "默认" && effectiveRequest.provider != "default")
+
+        // 构建多模态请求（注入图片附件）
+        val requestForDirect = try {
+            buildDirectMultimodalRequest(effectiveRequest, attachments, applicationContext)
+        } catch (e: Exception) {
+            android.util.Log.w("ApiClient", "构建直连多模态请求失败，使用原始请求: ${e.message}")
+            effectiveRequest
+        }
         
-        // 尝试按顺序连接所有已配置的后端URL，首个成功即使用，失败则自动回退到下一个
-        val backendUrls = BackendConfig.backendUrls
-        if (backendUrls.isEmpty()) {
-            throw IOException("未配置后端代理服务器URL（BackendConfig.backendUrls 为空）。")
-        }
-
-        // 优先尝试非本机地址，最后再尝试 127.0.0.1/localhost，提升真机可连接性
-        val sortedBackends = backendUrls.sortedBy { isLocalHostUrl(it) }
-        android.util.Log.d("ApiClient", "后端地址尝试顺序: $sortedBackends")
-
-        var lastError: Exception? = null
-        var connected = false
-
-        for (raw in sortedBackends) {
-            var base = raw.trimEnd('/')
-            // 兼容错误/混淆配置：统一剥离尾部后再拼接 /chat
-            if (base.endsWith("/chat")) {
-                base = base.removeSuffix("/chat").trimEnd('/')
-            }
-            if (base.endsWith("/v1/images/generations")) {
-                base = base.removeSuffix("/v1/images/generations").trimEnd('/')
-            }
-            if (base.endsWith("/chat/v1/images/generations")) {
-                base = base.removeSuffix("/chat/v1/images/generations").trimEnd('/')
-            }
-            val backendProxyUrl = buildFinalUrl(base, "/chat")
-
-            // 关键修复：若本后端已成功产出任何事件，就视作成功，不再尝试下一个，避免"成功后又因取消而被当失败重试"
-            var anyEventEmitted = false
-            try {
-                android.util.Log.d("ApiClient", "尝试连接后端: $backendProxyUrl (原始地址: $raw)")
-                streamChatResponseInternal(backendProxyUrl, request, attachments, applicationContext)
-                    .collect { event ->
-                        anyEventEmitted = true
-                        
-                        // 🔍 检测 Cloudflare 拦截错误
-                        if (event is AppStreamEvent.Error && 
-                            event.message?.contains("CLOUDFLARE_CHALLENGE_DETECTED") == true) {
-                            android.util.Log.w("ApiClient", "⚠️ 检测到 Cloudflare 拦截，准备自动切换到直连模式")
-                            cloudflareDetected = true
-                            return@collect  // 不发送这个错误事件，准备切换
-                        }
-                        
-                        // 检测是否有 finish 事件且原因是 cloudflare_blocked
-                        if (event is AppStreamEvent.Finish && 
-                            event.reason?.contains("cloudflare") == true) {
-                            android.util.Log.w("ApiClient", "⚠️ 确认 Cloudflare 拦截，触发直连模式")
-                            cloudflareDetected = true
-                            return@collect
-                        }
-                        
-                        // 记录是否已输出内容
-                        if (event is AppStreamEvent.Content || event is AppStreamEvent.Text) {
-                            hasContentEmitted = true
-                        }
-                        
-                        send(event)
-                    }
-                connected = true
-                break
-            } catch (e: Exception) {
-                // 若已经有事件产出（包括 content/content_final/finish），将此次视为成功结束，不再回退到下一个后端
-                if (anyEventEmitted && !cloudflareDetected) {
-                    android.util.Log.d("ApiClient", "本后端已产生事件，尽管捕获异常(${e.message})，视为成功完成，不再回退。")
-                    connected = true
-                    break
-                }
-                
-                // 如果检测到 Cloudflare，跳出循环准备直连
-                if (cloudflareDetected) {
-                    android.util.Log.i("ApiClient", "Cloudflare 拦截已确认，跳出后端尝试循环")
-                    break
-                }
-                
-                lastError = if (e is Exception) e else Exception(e)
-                android.util.Log.w("ApiClient", "连接后端失败，尝试下一个: $backendProxyUrl, 错误: ${e.message}")
-                // 继续尝试下一个地址
-            }
-        }
-
-        // 🚀 自动降级：如果检测到 Cloudflare，切换到直连模式
-        if (cloudflareDetected && !hasContentEmitted && request.apiKey.isNotEmpty()) {
-            val isGeminiRequest = request.provider == "gemini" ||
-                                  request.model.contains("gemini", ignoreCase = true)
-            val isOpenAICompatible = request.provider == "openai" ||
-                                     request.provider == "azure" ||
-                                     request.provider == "openai_compatible"
-
-            // 在进入直连前，将当前消息的图片附件注入为“多模态 parts/content”
-            val requestForDirect = try {
-                buildDirectMultimodalRequest(request, attachments, applicationContext)
-            } catch (e: Exception) {
-                android.util.Log.w("ApiClient", "构建直连多模态请求失败，降级为文本直连: ${e.message}")
-                request
-            }
-            
+        try {
             when {
                 isGeminiRequest -> {
-                    try {
-                        android.util.Log.i("ApiClient", "🔄 自动切换到 Gemini 直连模式（静默降级）")
-                        GeminiDirectClient.streamChatDirect(client, requestForDirect)
-                            .collect { directEvent -> send(directEvent) }
-                        connected = true
-                        android.util.Log.i("ApiClient", "✅ Gemini 直连完成")
-                    } catch (directError: Exception) {
-                        android.util.Log.e("ApiClient", "❌ Gemini 直连失败", directError)
-                        send(AppStreamEvent.Error("跳板和直连均失败: ${directError.message}", null))
-                        send(AppStreamEvent.Finish("all_failed"))
-                        connected = true
-                    }
-                }
-                isOpenAICompatible -> {
-                    try {
-                        android.util.Log.i("ApiClient", "🔄 自动切换到 OpenAI 兼容直连模式（静默降级）")
-                        OpenAIDirectClient.streamChatDirect(client, requestForDirect)
-                            .collect { directEvent -> send(directEvent) }
-                        connected = true
-                        android.util.Log.i("ApiClient", "✅ OpenAI 兼容直连完成")
-                    } catch (directError: Exception) {
-                        android.util.Log.e("ApiClient", "❌ OpenAI 兼容直连失败", directError)
-                        send(AppStreamEvent.Error("跳板和直连均失败: ${directError.message}", null))
-                        send(AppStreamEvent.Finish("all_failed"))
-                        connected = true
-                    }
+                    android.util.Log.i("ApiClient", "🔄 使用 Gemini 直连模式 (model=${effectiveRequest.model})")
+                    GeminiDirectClient.streamChatDirect(client, requestForDirect)
+                        .collect { event -> send(event) }
+                    android.util.Log.i("ApiClient", "✅ Gemini 直连完成")
                 }
                 else -> {
-                    android.util.Log.w("ApiClient", "检测到 Cloudflare 拦截，但不支持该渠道的直连")
-                    send(AppStreamEvent.Error("后端被防火墙拦截。建议更换 API 地址", 403))
-                    send(AppStreamEvent.Finish("cloudflare_blocked"))
+                    // OpenAI 兼容模式（包括 OpenAI、Azure、其他兼容 API）
+                    android.util.Log.i("ApiClient", "🔄 使用 OpenAI 兼容直连模式 (model=${effectiveRequest.model})")
+                    OpenAIDirectClient.streamChatDirect(client, requestForDirect)
+                        .collect { event -> send(event) }
+                    android.util.Log.i("ApiClient", "✅ OpenAI 兼容直连完成")
                 }
             }
-        }
-
-        if (!connected) {
-            throw IOException("所有后端均连接失败。最后错误: ${lastError?.message}", lastError)
+        } catch (e: Exception) {
+            android.util.Log.e("ApiClient", "❌ 直连失败", e)
+            send(AppStreamEvent.Error("直连失败: ${e.message}", null))
+            send(AppStreamEvent.Finish("direct_connection_failed"))
         }
     }.buffer(Channel.BUFFERED).flowOn(Dispatchers.IO)
 
@@ -898,8 +816,9 @@ object ApiClient {
             throw IllegalStateException("ApiClient not initialized. Call initialize() first.")
         }
     
-        // 统一去掉尾部 '#'
+        // 统一去掉尾部 '#' 并清理 apiKey 中的换行符和多余空白
         val baseForModels = apiUrl.trim().removeSuffix("#")
+        val cleanedApiKey = apiKey.trim().replace(Regex("[\\r\\n\\s]+"), "")
         val parsedUri = try { java.net.URI(baseForModels) } catch (_: Exception) { null }
         val hostLower = parsedUri?.host?.lowercase()
         val scheme = parsedUri?.scheme ?: "https"
@@ -910,17 +829,21 @@ object ApiClient {
                 (hostLower?.endsWith("googleapis.com") == true &&
                  baseForModels.contains("generativelanguage", ignoreCase = true))
     
+        // 对于 Gemini 反代，判断是否需要使用 Bearer Token 而非 ?key= 查询参数
+        // 大多数反代服务器期望 Authorization: Bearer 头，而非 Google 官方的 ?key= 格式
+        val useKeyQueryParam = isGoogleOfficialDomain // 只有 Google 官方域名才使用 ?key=
+    
         val url = when {
-            // 只有当是Google官方域名时才强制使用官方地址
+            // 只有当是Google官方域名时才强制使用官方地址 + ?key=
             isGoogleOfficialDomain -> {
-                val googleUrl = "$scheme://generativelanguage.googleapis.com/v1beta/models?key=$apiKey"
-                android.util.Log.i("ApiClient", "检测到 Google Gemini 官方域名，使用官方模型列表端点: $googleUrl")
+                val googleUrl = "$scheme://generativelanguage.googleapis.com/v1beta/models?key=$cleanedApiKey"
+                android.util.Log.i("ApiClient", "检测到 Google Gemini 官方域名，使用官方模型列表端点: ${googleUrl.replace(cleanedApiKey, "***")}")
                 googleUrl
             }
-            // Gemini渠道但非官方域名(如反代),使用用户提供的地址 + Gemini路径
+            // Gemini渠道但非官方域名(如反代),使用用户提供的地址 + Gemini路径，Bearer Token 认证
             isGeminiChannel -> {
-                val geminiProxyUrl = "$baseForModels/v1beta/models?key=$apiKey"
-                android.util.Log.i("ApiClient", "检测到 Gemini 渠道(反代)，使用代理地址: $geminiProxyUrl")
+                val geminiProxyUrl = "$baseForModels/v1beta/models"
+                android.util.Log.i("ApiClient", "检测到 Gemini 渠道(反代)，使用代理地址 + Bearer Token: $geminiProxyUrl")
                 geminiProxyUrl
             }
             // 智谱 BigModel 官方特判
@@ -938,9 +861,9 @@ object ApiClient {
         return try {
             val response = client.get {
                 url(url)
-                // Gemini格式(官方或反代)使用 ?key=API_KEY，不需要 Authorization 头；其余保持 Bearer 头
-                if (!isGoogleOfficialDomain && !isGeminiChannel) {
-                    header(HttpHeaders.Authorization, "Bearer $apiKey")
+                // Google 官方域名使用 ?key=（已在 URL 中）；其余所有情况（包括 Gemini 反代）使用 Bearer Token
+                if (!useKeyQueryParam) {
+                    header(HttpHeaders.Authorization, "Bearer $cleanedApiKey")
                 }
                 header(HttpHeaders.Accept, "application/json")
                 header(HttpHeaders.UserAgent, "KunTalkwithAi/1.0")
@@ -1029,171 +952,166 @@ object ApiClient {
             throw IOException("从 $url 获取模型列表失败: ${e.message}", e)
         }
     }
+    /**
+     * 强制直连模式 - 图像生成直接调用 API 提供商
+     * 根据模型类型自动选择 Gemini 或 OpenAI 兼容的直连客户端
+     */
     suspend fun generateImage(chatRequest: ChatRequest): ImageGenerationResponse {
         if (!isInitialized) {
             throw IllegalStateException("ApiClient not initialized. Call initialize() first.")
         }
+        
         val imgReq = chatRequest.imageGenRequest
             ?: throw IOException("缺少 imageGenRequest 配置，无法发起图像生成。")
 
-        val backendUrls = BackendConfig.backendUrls
-            if (backendUrls.isEmpty()) {
-                throw IOException("No backend URL configured.")
+        android.util.Log.i("ApiClient", "🔄 图像生成强制直连模式启动")
+        
+        // 判断是否为"默认"提供商（需要注入 SiliconFlow 配置）
+        val isDefaultProvider = imgReq.provider?.trim()?.lowercase() in listOf("默认", "default", "") ||
+                                imgReq.provider.isNullOrBlank()
+        
+        // 判断是 Gemini 还是 OpenAI 兼容
+        val isGemini = imgReq.provider?.lowercase()?.contains("gemini") == true ||
+                       imgReq.model.contains("gemini", ignoreCase = true) ||
+                       imgReq.model.contains("imagen", ignoreCase = true)
+        
+        // 增加 Seedream 判断
+        val isSeedream = imgReq.provider?.lowercase()?.contains("seedream") == true ||
+                         imgReq.model.contains("doubao", ignoreCase = true) ||
+                         imgReq.model.contains("seedream", ignoreCase = true)
+
+        // 增加 SiliconFlow 判断（显式指定或通过 API 地址识别）
+        val isSiliconFlow = imgReq.provider?.lowercase()?.contains("silicon") == true ||
+                            imgReq.apiAddress.contains("siliconflow.cn")
+
+        // 增加 Qwen 图像编辑判断（Modal 部署的 Qwen 图像编辑 API）
+        val isQwenEdit = imgReq.model.contains("qwen-image-edit", ignoreCase = true) ||
+                         imgReq.model.contains("qwen-edit", ignoreCase = true) ||
+                         imgReq.model.contains("qwen_edit", ignoreCase = true)
+
+        // 增加 Modal Z-Image-Turbo 判断（无需密钥）
+        val isModalZImage = imgReq.model.contains("z-image-turbo", ignoreCase = true) ||
+                            imgReq.model.contains("z_image_turbo", ignoreCase = true) ||
+                            imgReq.apiAddress.contains("z-image-turbo", ignoreCase = true)
+
+        // 配置注入逻辑：
+        // 1. Modal Z-Image-Turbo / Qwen Edit -> 不注入配置，使用 BuildConfig 中的 URL
+        // 2. "默认"提供商 -> 注入 SiliconFlow 配置（默认图像生成服务）
+        // 3. SiliconFlow 提供商 -> 注入 SiliconFlow 配置
+        // 4. 其他提供商 -> 使用原始配置
+        val effectiveImgReq = when {
+            // Modal Z-Image-Turbo 和 Qwen Edit 不需要配置注入，使用原始配置
+            isModalZImage || isQwenEdit -> {
+                android.util.Log.i("ApiClient", "🔧 检测到 Modal 部署模型，跳过配置注入")
+                imgReq
             }
-        android.util.Log.d("ApiClient", "All backend URLs: ${backendUrls}")
-        // 为图像生成构建候选URL列表（剥离错误尾巴后统一为 /v1/images/generations）
-        val sortedBackends = backendUrls.sortedBy { isLocalHostUrl(it) }
-        val candidateImageUrls = mutableListOf<String>()
-        sortedBackends.forEach { raw ->
-            var base = raw.trimEnd('/')
-            if (base.endsWith("/chat")) {
-                base = base.removeSuffix("/chat").trimEnd('/')
+            // 默认提供商：注入 SiliconFlow 配置
+            isDefaultProvider -> {
+                android.util.Log.i("ApiClient", "🔧 检测到默认提供商，注入 SiliconFlow 配置")
+                imgReq.copy(
+                    apiAddress = imgReq.apiAddress.takeIf { it.isNotBlank() }
+                        ?: com.android.everytalk.BuildConfig.SILICONFLOW_IMAGE_API_URL,
+                    apiKey = imgReq.apiKey.takeIf { it.isNotBlank() }
+                        ?: com.android.everytalk.BuildConfig.SILICONFLOW_API_KEY,
+                    model = imgReq.model.takeIf { it.isNotBlank() }
+                        ?: com.android.everytalk.BuildConfig.SILICONFLOW_DEFAULT_IMAGE_MODEL
+                )
             }
-            if (base.endsWith("/v1/images/generations")) {
-                base = base.removeSuffix("/v1/images/generations").trimEnd('/')
+            // SiliconFlow 提供商
+            isSiliconFlow -> {
+                android.util.Log.i("ApiClient", "🔧 检测到 SiliconFlow 提供商，注入默认配置")
+                imgReq.copy(
+                    apiAddress = imgReq.apiAddress.takeIf { it.isNotBlank() }
+                        ?: com.android.everytalk.BuildConfig.SILICONFLOW_IMAGE_API_URL,
+                    apiKey = imgReq.apiKey.takeIf { it.isNotBlank() }
+                        ?: com.android.everytalk.BuildConfig.SILICONFLOW_API_KEY,
+                    model = imgReq.model.takeIf { it.isNotBlank() }
+                        ?: com.android.everytalk.BuildConfig.SILICONFLOW_DEFAULT_IMAGE_MODEL
+                )
             }
-            if (base.endsWith("/chat/v1/images/generations")) {
-                base = base.removeSuffix("/chat/v1/images/generations").trimEnd('/')
-            }
-            candidateImageUrls.add("$base/v1/images/generations")
+            // 其他提供商：使用原始配置
+            else -> imgReq
         }
-        android.util.Log.d("ApiClient", "Image generation candidate URLs: $candidateImageUrls")
 
-        val promptFromMsg = try {
-            chatRequest.messages.lastOrNull { it.role == "user" }?.let { msg ->
-                when (msg) {
-                    is com.android.everytalk.data.DataClass.SimpleTextApiMessage -> msg.content
-                    is com.android.everytalk.data.DataClass.PartsApiMessage -> msg.parts
-                        .filterIsInstance<com.android.everytalk.data.DataClass.ApiContentPart.Text>()
-                        .joinToString(" ") { it.text }
-                    else -> null
-                }
-            }
-        } catch (_: Exception) { null }
-
-        val finalPrompt = (imgReq.prompt.ifBlank { promptFromMsg ?: "" }).ifBlank {
-            throw IOException("Prompt 为空，无法发起图像生成。")
+        val providerName = when {
+            isModalZImage -> "Modal Z-Image-Turbo"
+            isQwenEdit -> "Qwen Edit (Modal)"
+            isGemini -> "Gemini"
+            isSeedream -> "Seedream"
+            isDefaultProvider || isSiliconFlow -> "SiliconFlow"
+            else -> "OpenAI兼容"
         }
-
-        val payload = buildJsonObject {
-            put("model", imgReq.model)
-            put("prompt", finalPrompt)
-
-            // 检查并添加图片附件，用于图文编辑
-            val imageAttachments = chatRequest.messages
-                .lastOrNull { it.role == "user" }
-                ?.let { msg ->
-                    (msg as? com.android.everytalk.data.DataClass.PartsApiMessage)?.parts
-                        ?.filterIsInstance<com.android.everytalk.data.DataClass.ApiContentPart.InlineData>()
+        
+        android.util.Log.i("ApiClient", "🔄 图像生成使用直连模式 ($providerName)")
+        android.util.Log.d("ApiClient", "Image generation request - Model: ${effectiveImgReq.model}")
+        android.util.Log.d("ApiClient", "Image generation request - API Address: ${effectiveImgReq.apiAddress}")
+        android.util.Log.d("ApiClient", "Image generation request - API Key: ${effectiveImgReq.apiKey.take(10)}...")
+        android.util.Log.d("ApiClient", "Image generation request - Prompt: ${effectiveImgReq.prompt.take(100)}...")
+        
+        return try {
+            when {
+                isModalZImage -> {
+                    // Modal Z-Image-Turbo 无需密钥，使用 GET 请求
+                    val modalUrls = com.android.everytalk.BuildConfig.VITE_API_URLS
+                        .split(",")
+                        .map { it.trim() }
+                        .filter { it.isNotBlank() }
+                    
+                    android.util.Log.i("ApiClient", "🔄 Modal Z-Image-Turbo: 使用 ${modalUrls.size} 个 Modal URL")
+                    ImageGenerationDirectClient.generateImageModal(
+                        client, effectiveImgReq, modalUrls
+                    )
                 }
+                isQwenEdit -> {
+                    // Qwen 图像编辑需要输入图片和专用 Modal API
+                    val qwenUrls = com.android.everytalk.BuildConfig.QWEN_EDIT_API_URLS
+                        .split(",")
+                        .map { it.trim() }
+                        .filter { it.isNotBlank() }
+                    val qwenSecret = com.android.everytalk.BuildConfig.QWEN_EDIT_API_SECRET
+                    
+                    // 从 chatRequest 中提取输入图片的 Base64
+                    val inputImageBase64 = extractInputImageBase64(chatRequest)
+                    
+                    if (inputImageBase64.isNullOrBlank()) {
+                        throw IOException("Qwen 图像编辑需要提供输入图片")
+                    }
+                    
+                    android.util.Log.i("ApiClient", "🔄 Qwen 图像编辑: 使用 ${qwenUrls.size} 个 Modal URL")
+                    ImageGenerationDirectClient.generateImageQwenEdit(
+                        client, effectiveImgReq, inputImageBase64, qwenUrls, qwenSecret
+                    )
+                }
+                isGemini -> ImageGenerationDirectClient.generateImageGemini(client, effectiveImgReq)
+                isSeedream -> ImageGenerationDirectClient.generateImageSeedream(client, effectiveImgReq)
+                else -> ImageGenerationDirectClient.generateImageOpenAI(client, effectiveImgReq)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("ApiClient", "❌ 图像生成直连失败", e)
+            throw IOException("图像生成直连失败: ${e.message}", e)
+        }
+    }
 
-            if (!imageAttachments.isNullOrEmpty()) {
-                val contentsArray = buildJsonArray {
-                    // Gemini's multimodal format requires a list of parts
-                    val textPart = buildJsonObject { put("text", finalPrompt) }
-                    add(textPart)
-
-                    imageAttachments.forEach { attachment ->
-                        val imagePart = buildJsonObject {
-                            put("inline_data", buildJsonObject {
-                                put("mime_type", attachment.mimeType)
-                                put("data", attachment.base64Data)
-                            })
+    /**
+     * 从 ChatRequest 中提取输入图片的 Base64 数据
+     * 用于 Qwen 图像编辑等需要输入图片的场景
+     */
+    private fun extractInputImageBase64(chatRequest: ChatRequest): String? {
+        // 遍历消息，查找包含图片的 PartsApiMessage（从最后一条开始）
+        for (msg in chatRequest.messages.reversed()) {
+            if (msg is com.android.everytalk.data.DataClass.PartsApiMessage && msg.role == "user") {
+                for (part in msg.parts) {
+                    if (part is com.android.everytalk.data.DataClass.ApiContentPart.InlineData) {
+                        if (part.mimeType.startsWith("image/")) {
+                            android.util.Log.d("ApiClient", "找到输入图片: mimeType=${part.mimeType}, base64长度=${part.base64Data.length}")
+                            return part.base64Data
                         }
-                        add(imagePart)
                     }
                 }
-                put("contents", contentsArray)
-            }
-
-            imgReq.imageSize?.let { put("image_size", it) }
-            imgReq.batchSize?.let { put("batch_size", it) }
-            imgReq.numInferenceSteps?.let { put("num_inference_steps", it) }
-            imgReq.guidanceScale?.let { put("guidance_scale", it) }
-            // 新增：可选配置，适配 Google Gemini 文档 + 与后端模型字段对齐（顶层也传）
-            imgReq.responseModalities?.let { list ->
-                if (list.isNotEmpty()) {
-                    // 顶层字段（供后端 Pydantic 直接解析）
-                    put("response_modalities", buildJsonArray { list.forEach { add(it) } })
-                    // 同时在 generationConfig 中重复一份（供直连上游）
-                    put("generationConfig", buildJsonObject {
-                        put("responseModalities", buildJsonArray { list.forEach { add(it) } })
-                        imgReq.aspectRatio?.let { ar ->
-                            put("imageConfig", buildJsonObject { put("aspectRatio", ar) })
-                        }
-                    })
-                }
-            } ?: run {
-                // 未设置 response_modalities 时，若仅有宽高比也写入 generationConfig
-                imgReq.aspectRatio?.let { ar ->
-                    put("generationConfig", buildJsonObject {
-                        put("imageConfig", buildJsonObject { put("aspectRatio", ar) })
-                    })
-                }
-            }
-            // 顶层也传递 aspect_ratio，便于后端直接取用
-            imgReq.aspectRatio?.let { ar -> put("aspect_ratio", ar) }
-            // 强制后端将 http(s) 转为 data:image，避免前端鉴权/过期问题
-            put("forceDataUri", true)
-            // 将上游地址与密钥交由后端代理转发与规范化
-            put("apiAddress", imgReq.apiAddress)
-            put("apiKey", imgReq.apiKey)
-            imgReq.provider?.let { put("provider", it) }
-            imgReq.conversationId?.let { put("conversationId", it) }
-        }
-
-        // 逐个候选地址尝试，首个成功即返回
-        var lastError: Exception? = null
-        for (url in candidateImageUrls) {
-            try {
-                android.util.Log.d("ApiClient", "Image generation request - URL: $url")
-                android.util.Log.d("ApiClient", "Image generation request - Model: ${imgReq.model}")
-                android.util.Log.d("ApiClient", "Image generation request - API Key: ${imgReq.apiKey.take(10)}...")
-                android.util.Log.d("ApiClient", "Image generation request - Payload: ${payload.toString().take(200)}...")
-                
-                // 🔐 生成图像生成请求的签名
-                val imagePath = try {
-                    java.net.URI(url).path
-                } catch (e: Exception) {
-                    "/v1/images/generations"
-                }
-                val payloadString = payload.toString()
-                val imageSignatureHeaders = RequestSignatureUtil.generateSignatureHeaders(
-                    method = "POST",
-                    path = imagePath,
-                    body = payloadString
-                )
-                android.util.Log.d("ApiClient", "🔐 图像生成签名: X-Signature=${imageSignatureHeaders["X-Signature"]?.take(20)}...")
-                
-                val response = client.post(url) {
-                    contentType(ContentType.Application.Json)
-                    header(HttpHeaders.Authorization, "Bearer ${imgReq.apiKey}")
-                    header(HttpHeaders.Accept, "application/json")
-                    // 🔐 添加签名头
-                    header("X-Signature", imageSignatureHeaders["X-Signature"]!!)
-                    header("X-Timestamp", imageSignatureHeaders["X-Timestamp"]!!)
-                    setBody(payload)
-                }
-                
-                if (!response.status.isSuccess()) {
-                    val errTxt = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
-                    android.util.Log.e("ApiClient", "Image generation HTTP ${response.status.value}: $errTxt")
-                    throw IOException("上游错误 ${response.status.value}: ${errTxt.take(300)}")
-                }
-                val bodyText = response.bodyAsText()
-                try {
-                    return jsonParser.decodeFromString<ImageGenerationResponse>(bodyText)
-                } catch (e: SerializationException) {
-                    android.util.Log.e("ApiClient", "ImageGenerationResponse 解析失败，原始响应: ${bodyText.take(500)}", e)
-                    throw IOException("响应解析失败: ${e.message}")
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("ApiClient", "Image generation attempt failed for $url", e)
-                lastError = if (e is Exception) e else Exception(e)
-                // 尝试下一个候选
             }
         }
-        throw IOException("Image generation failed on all backends: ${lastError?.message}", lastError)
+        android.util.Log.w("ApiClient", "未找到输入图片")
+        return null
     }
 }
 
@@ -1203,12 +1121,13 @@ object ApiClient {
  * - OpenAI-compat: messages[].content -> [{"type":"text"}, {"type":"image_url"...}]
  * 实现方式：把最后一条 user SimpleTextApiMessage 升级为 PartsApiMessage 并注入 InlineData
  */
-private fun buildDirectMultimodalRequest(
+private suspend fun buildDirectMultimodalRequest(
     request: ChatRequest,
     attachments: List<com.android.everytalk.models.SelectedMediaItem>,
     context: Context
 ): ChatRequest {
-    val imageInlineParts = mutableListOf<com.android.everytalk.data.DataClass.ApiContentPart.InlineData>()
+    val inlineParts = mutableListOf<com.android.everytalk.data.DataClass.ApiContentPart.InlineData>()
+    val documentTexts = mutableListOf<String>()
 
     attachments.forEach { item ->
         when (item) {
@@ -1219,7 +1138,7 @@ private fun buildDirectMultimodalRequest(
                 }.getOrNull()
                 if (bytes != null && isImageMime(mime)) {
                     val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                    imageInlineParts.add(
+                    inlineParts.add(
                         com.android.everytalk.data.DataClass.ApiContentPart.InlineData(
                             base64Data = b64,
                             mimeType = mime
@@ -1239,7 +1158,7 @@ private fun buildDirectMultimodalRequest(
                 if (ok) {
                     val bytes = baos.toByteArray()
                     val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                    imageInlineParts.add(
+                    inlineParts.add(
                         com.android.everytalk.data.DataClass.ApiContentPart.InlineData(
                             base64Data = b64,
                             mimeType = mime
@@ -1247,20 +1166,37 @@ private fun buildDirectMultimodalRequest(
                     )
                 }
             }
+            is com.android.everytalk.models.SelectedMediaItem.Audio -> {
+                // Audio item already contains base64 data
+                val mime = item.mimeType ?: "audio/3gpp"
+                inlineParts.add(
+                    com.android.everytalk.data.DataClass.ApiContentPart.InlineData(
+                        base64Data = item.data,
+                        mimeType = mime
+                    )
+                )
+            }
             is com.android.everytalk.models.SelectedMediaItem.GenericFile -> {
                 val mime = item.mimeType ?: "application/octet-stream"
-                if (isImageMime(mime)) {
+                if (isImageMime(mime) || isAudioMime(mime) || isVideoMime(mime)) {
                     val bytes = runCatching {
                         context.contentResolver.openInputStream(item.uri)?.use { it.readBytes() }
                     }.getOrNull()
                     if (bytes != null) {
                         val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                        imageInlineParts.add(
+                        inlineParts.add(
                             com.android.everytalk.data.DataClass.ApiContentPart.InlineData(
                                 base64Data = b64,
                                 mimeType = mime
                             )
                         )
+                    }
+                } else {
+                    // 尝试提取文档文本
+                    val text = DocumentProcessor.extractText(context, item.uri, mime)
+                    if (!text.isNullOrBlank()) {
+                        val fileName = item.displayName ?: "Document"
+                        documentTexts.add("--- Begin of document: $fileName ---\n$text\n--- End of document ---")
                     }
                 }
             }
@@ -1268,29 +1204,41 @@ private fun buildDirectMultimodalRequest(
         }
     }
 
-    if (imageInlineParts.isEmpty()) return request
+    if (inlineParts.isEmpty() && documentTexts.isEmpty()) return request
 
     val msgs = request.messages.toMutableList()
     val lastUserIdx = msgs.indexOfLast { it.role == "user" }
     if (lastUserIdx < 0) return request
 
     val lastMsg = msgs[lastUserIdx]
+    
+    // 构造文档文本部分
+    val documentContentParts = documentTexts.map { 
+        com.android.everytalk.data.DataClass.ApiContentPart.Text(it) 
+    }
+
     val newParts = when (lastMsg) {
         is com.android.everytalk.data.DataClass.PartsApiMessage -> {
             val existing = lastMsg.parts.toMutableList()
-            existing.addAll(imageInlineParts)
+            // 先放文档，再放原消息，最后放多媒体
+            existing.addAll(0, documentContentParts)
+            existing.addAll(inlineParts)
             existing.toList()
         }
         is com.android.everytalk.data.DataClass.SimpleTextApiMessage -> {
             val list = mutableListOf<com.android.everytalk.data.DataClass.ApiContentPart>()
+            list.addAll(documentContentParts)
             if (lastMsg.content.isNotBlank()) {
                 list.add(com.android.everytalk.data.DataClass.ApiContentPart.Text(lastMsg.content))
             }
-            list.addAll(imageInlineParts)
+            list.addAll(inlineParts)
             list.toList()
         }
         else -> {
-            imageInlineParts.toList()
+            val list = mutableListOf<com.android.everytalk.data.DataClass.ApiContentPart>()
+            list.addAll(documentContentParts)
+            list.addAll(inlineParts)
+            list.toList()
         }
     }
 
@@ -1306,4 +1254,16 @@ private fun isImageMime(mime: String?): Boolean {
     if (mime == null) return false
     val m = mime.lowercase()
     return m.startsWith("image/")
+}
+
+private fun isAudioMime(mime: String?): Boolean {
+    if (mime == null) return false
+    val m = mime.lowercase()
+    return m.startsWith("audio/")
+}
+
+private fun isVideoMime(mime: String?): Boolean {
+    if (mime == null) return false
+    val m = mime.lowercase()
+    return m.startsWith("video/")
 }

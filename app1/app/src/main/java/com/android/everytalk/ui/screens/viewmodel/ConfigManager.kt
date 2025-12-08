@@ -217,6 +217,25 @@ class ConfigManager(
             viewModelScope.launch {
                 persistenceManager.saveSelectedConfigIdentifier(config.id, isImageGen)
                 Log.d(TAG_CM, "Selected config ID (${config.id}) saved to persistence.")
+                
+                // 🔧 修复：将配置ID绑定到当前会话，确保切换会话时能恢复正确的模型
+                if (!isImageGen) {
+                    // 文本模式：绑定到当前文本会话ID
+                    val currentConversationId = stateHolder._currentConversationId.value
+                    val currentMapping = stateHolder.conversationApiConfigIds.value.toMutableMap()
+                    currentMapping[currentConversationId] = config.id
+                    stateHolder.conversationApiConfigIds.value = currentMapping
+                    persistenceManager.saveConversationApiConfigIds(currentMapping)
+                    Log.d(TAG_CM, "Bound config ${config.id} to text conversation $currentConversationId")
+                } else {
+                    // 图像模式：绑定到当前图像会话ID
+                    val currentImageConversationId = stateHolder._currentImageGenerationConversationId.value
+                    val currentMapping = stateHolder.conversationApiConfigIds.value.toMutableMap()
+                    currentMapping[currentImageConversationId] = config.id
+                    stateHolder.conversationApiConfigIds.value = currentMapping
+                    persistenceManager.saveConversationApiConfigIds(currentMapping)
+                    Log.d(TAG_CM, "Bound config ${config.id} to image conversation $currentImageConversationId")
+                }
             }
         }
         if (isImageGen) {

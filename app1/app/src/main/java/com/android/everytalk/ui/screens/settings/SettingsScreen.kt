@@ -518,10 +518,14 @@ fun SettingsScreen(
         )
     }
     if (showImportExportDialog) {
+        // 获取聊天历史数量
+        val chatHistory by viewModel.historicalConversations.collectAsState()
+        val imageHistory by viewModel.imageGenerationHistoricalConversations.collectAsState()
+        
         ImportExportDialog(
             onDismissRequest = { showImportExportDialog = false },
-            onExport = {
-                viewModel.exportSettings()
+            onExport = { includeHistory ->
+                viewModel.exportSettings(includeHistory)
                 showImportExportDialog = false
             },
             onImport = {
@@ -530,7 +534,9 @@ fun SettingsScreen(
             },
             isExportEnabled = (textConfigs + imageConfigs).any {
                 it.provider.trim().lowercase() !in listOf("默认", "default")
-            }
+            } || chatHistory.isNotEmpty() || imageHistory.isNotEmpty(),
+            chatHistoryCount = chatHistory.size,
+            imageHistoryCount = imageHistory.size
         )
     }
 }

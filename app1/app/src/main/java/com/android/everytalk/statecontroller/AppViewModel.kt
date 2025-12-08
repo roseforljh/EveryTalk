@@ -19,7 +19,6 @@ import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.data.DataClass.GenerationConfig
-import com.android.everytalk.data.local.SharedPreferencesDataSource
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.screens.MainScreen.chat.ChatListItem
 import com.android.everytalk.ui.screens.viewmodel.ConfigManager
@@ -76,12 +75,6 @@ import com.android.everytalk.statecontroller.controller.ProviderController
 // Constructor changed: removed dataSource
 class AppViewModel(application: Application) : AndroidViewModel(application) {
 
-    // Keep a deprecated reference internally if needed for migration, or create it on the fly inside DataPersistenceManager.
-    // Since we decided to keep SharedPreferencesDataSource file but remove dependency here, we let DataPersistenceManager handle it.
-    // We need to instantiate DataPersistenceManager with SharedPreferencesDataSource.
-    // So we construct it here.
-    private val sharedPreferencesDataSource = SharedPreferencesDataSource(application.applicationContext)
-
     private val json = Json {
         prettyPrint = true
         isLenient = true
@@ -97,21 +90,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val historyMutex = Mutex()
     private val textConversationPreviewCache = LruCache<String, String>(100)
     private val imageConversationPreviewCache = LruCache<String, String>(100)
-    internal val stateHolder = ViewModelStateHolder().apply {
-        // Initialize with data source for persistent parameter storage
-        // stateHolder doesn't need direct data source access if controllers handle it.
-        // But checking ViewModelStateHolder definition, it might expect something?
-        // Assuming initializeDataSource takes any object or we can remove this call if it's not used or change it.
-        // Let's assume for now we can pass null or persistenceManager if refactored.
-        // Actually, ViewModelStateHolder is simple state container. initializeDataSource likely injected SP for direct access.
-        // I should probably remove this dependency from StateHolder too if I can, but let's pass persistenceManager if possible.
-        // Wait, I can't see ViewModelStateHolder.kt. 
-        // Let's pass sharedPreferencesDataSource for now to minimize breakage if it strictly requires that type, 
-        // BUT remember we want to remove dependency.
-        // Ideally ViewModelStateHolder shouldn't talk to DB.
-        // Let's leave it as is: passing the local instance.
-        initializeDataSource(sharedPreferencesDataSource) 
-    }
+    internal val stateHolder = ViewModelStateHolder()
     
     // 手势冲突管理器（用于协调代码块滚动和抽屉手势）
     val gestureManager = com.android.everytalk.ui.components.GestureConflictManager()
@@ -122,10 +101,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val imageLoader = ImageLoader.Builder(application.applicationContext)
         .logger(DebugLogger())
         .build()
-    private val persistenceManager =
+    val persistenceManager =
             DataPersistenceManager(
                     application.applicationContext,
-                    sharedPreferencesDataSource, // Pass the local instance
                     stateHolder,
                     viewModelScope,
                     imageLoader
@@ -490,6 +468,23 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
    )
 
   init {
+        // 初始化 StateHolder 的持久化回调
+        viewModelScope.launch(Dispatchers.IO) {
+            // 加载初始会话参数
+            val initialParams = persistenceManager.loadConversationParameters()
+            
+            withContext(Dispatchers.Main) {
+                stateHolder.initializePersistence(
+                    saveCallback = { params ->
+                        viewModelScope.launch(Dispatchers.IO) {
+                            persistenceManager.saveConversationParameters(params)
+                        }
+                    },
+                    initialParams = initialParams
+                )
+            }
+        }
+
         // 加载自定义提供商
         viewModelScope.launch(Dispatchers.IO) {
             // Use persistenceManager instead of dataSource
@@ -1258,8 +1253,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         messageContentController.onAiMessageFullTextChanged(messageId, currentFullText)
     }
 
-    fun exportSettings() {
-        settingsController.exportSettings()
+    fun exportSettings(includeHistory: Boolean = false) {
+        settingsController.exportSettings(includeHistory)
     }
 
     fun importSettings(jsonContent: String) {

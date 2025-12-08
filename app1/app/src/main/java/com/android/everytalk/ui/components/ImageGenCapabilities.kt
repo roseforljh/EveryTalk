@@ -92,6 +92,8 @@ object ImageGenCapabilities {
 
         return when {
             containsAny("z-image-turbo") -> ModelFamily.MODAL_Z_IMAGE
+            // Qwen 图像编辑优先匹配（在通用 Qwen 之前）
+            containsAny("qwen-image-edit", "qwen-edit", "qwen_edit") -> ModelFamily.QWEN
             containsAny("gemini", "google") -> ModelFamily.GEMINI
             containsAny("doubao", "seedream", "volces") -> ModelFamily.SEEDREAM
             containsAny("qwen", "qwen-image", "qwen-vl") -> ModelFamily.QWEN
@@ -102,7 +104,18 @@ object ImageGenCapabilities {
 
     // -------- 家族 → 比例候选 --------
 
-    private val RATIOS_GEMINI_USE_DEFAULT: List<AspectRatioOption> = emptyList() // 走现有默认 ImageRatio.DEFAULT_RATIOS
+    private val RATIOS_GEMINI: List<AspectRatioOption> = listOf(
+        ar("1:1"),
+        ar("2:3"),
+        ar("3:2"),
+        ar("3:4"),
+        ar("4:3"),
+        ar("4:5"),
+        ar("5:4"),
+        ar("9:16"),
+        ar("16:9"),
+        ar("21:9")
+    )
 
     private val RATIOS_SEEDREAM: List<AspectRatioOption> = listOf(
         ar("1:1"),
@@ -151,7 +164,7 @@ object ImageGenCapabilities {
     @JvmStatic
     fun getCapabilities(family: ModelFamily): FamilyCapabilities = when (family) {
         ModelFamily.GEMINI -> FamilyCapabilities(
-            ratios = RATIOS_GEMINI_USE_DEFAULT,
+            ratios = RATIOS_GEMINI,
             supportsQuality = false
         )
         ModelFamily.SEEDREAM -> FamilyCapabilities(

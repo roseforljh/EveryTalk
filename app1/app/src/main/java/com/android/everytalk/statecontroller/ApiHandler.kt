@@ -206,7 +206,9 @@ class ApiHandler(
             sender = Sender.AI,
             // 关键修复：不要在创建时置为 true
             // 仅当首个正文增量到来时再置 true，否则思考框判定条件将被提前终止
-            contentStarted = false
+            contentStarted = false,
+            modelName = requestBody.model,
+            providerName = requestBody.provider
         )
         val aiMessageId = newAiMessage.id
         // Set performance context (mode only; backend/model can be set later if available)

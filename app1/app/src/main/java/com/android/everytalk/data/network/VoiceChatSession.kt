@@ -969,38 +969,60 @@ class VoiceChatSession(
             
             if (dataToWrite.isEmpty()) return
 
-            val written = track.write(dataToWrite, 0, dataToWrite.size)
+            // 循环写入，确保所有数据都被写入 AudioTrack
+            // AudioTrack.write() 可能因缓冲区满而返回小于请求的字节数
+            var offset = 0
+            val totalToWrite = dataToWrite.size
+            var retryCount = 0
+            val maxRetries = 100 // 防止无限循环
             
-            if (written > 0) {
-                totalWrittenBytes += written
+            while (offset < totalToWrite && !forceStop && retryCount < maxRetries) {
+                val remaining = totalToWrite - offset
+                val written = track.write(dataToWrite, offset, remaining)
                 
-                // 检查播放状态，处理 Underrun 自动恢复
-                if (isBuffering) {
-                    // 缓冲阶段：达到阈值才播放
-                    if (totalWrittenBytes >= nextPlayThreshold) {
-                        try {
-                            track.play()
-                            isBuffering = false
-                            Log.i("StreamAudioPlayer", "Buffering complete ($totalWrittenBytes bytes), starting playback. Head: ${track.playbackHeadPosition}")
-                        } catch (e: Exception) {
-                            Log.e("StreamAudioPlayer", "Failed to start playback", e)
+                if (written > 0) {
+                    offset += written
+                    totalWrittenBytes += written
+                    retryCount = 0 // 重置重试计数
+                    
+                    // 检查播放状态，处理 Underrun 自动恢复
+                    if (isBuffering) {
+                        // 缓冲阶段：达到阈值才播放
+                        if (totalWrittenBytes >= nextPlayThreshold) {
+                            try {
+                                track.play()
+                                isBuffering = false
+                                Log.i("StreamAudioPlayer", "Buffering complete ($totalWrittenBytes bytes), starting playback. Head: ${track.playbackHeadPosition}")
+                            } catch (e: Exception) {
+                                Log.e("StreamAudioPlayer", "Failed to start playback", e)
+                            }
+                        }
+                    } else {
+                        // 播放阶段：检查是否意外停止 (Underrun)
+                        if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
+                            Log.w(
+                                "StreamAudioPlayer",
+                                "Underrun detected (state=${track.playState}, head=${track.playbackHeadPosition}, written=$totalWrittenBytes), pausing to re-buffer"
+                            )
+                            isBuffering = true
+                            // 重新缓冲指定时长的数据
+                            nextPlayThreshold =
+                                totalWrittenBytes + ((sampleRate * 2L * PerformanceConfig.VOICE_STREAM_PREBUFFER_MS) / 1000L).toInt()
                         }
                     }
+                } else if (written == 0) {
+                    // 缓冲区满，等待一小段时间后重试
+                    retryCount++
+                    kotlinx.coroutines.delay(10)
                 } else {
-                    // 播放阶段：检查是否意外停止 (Underrun)
-                    if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
-                        Log.w(
-                            "StreamAudioPlayer",
-                            "Underrun detected (state=${track.playState}, head=${track.playbackHeadPosition}, written=$totalWrittenBytes), pausing to re-buffer"
-                        )
-                        isBuffering = true
-                        // 重新缓冲指定时长的数据
-                        nextPlayThreshold =
-                            totalWrittenBytes + ((sampleRate * 2L * PerformanceConfig.VOICE_STREAM_PREBUFFER_MS) / 1000L).toInt()
-                    }
+                    // 写入错误
+                    Log.e("StreamAudioPlayer", "AudioTrack.write returned error: $written")
+                    break
                 }
-            } else {
-                Log.w("StreamAudioPlayer", "AudioTrack.write returned $written")
+            }
+            
+            if (offset < totalToWrite) {
+                Log.w("StreamAudioPlayer", "Failed to write all data: wrote $offset / $totalToWrite bytes")
             }
         }
         

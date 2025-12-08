@@ -340,6 +340,12 @@ class HistoryManager(
  
         if (needsPersistenceSaveOfHistoryList) {
             persistenceManager.saveChatHistory(historicalConversations.value, isImageGeneration)
+            
+            // 文本模式下，同步保存会话配置映射
+            if (!isImageGeneration) {
+                persistenceManager.saveConversationApiConfigIds(stateHolder.conversationApiConfigIds.value)
+            }
+
             if (isImageGeneration) {
                 stateHolder.isImageConversationDirty.value = false
             } else {
@@ -355,14 +361,28 @@ class HistoryManager(
             Log.d(TAG_HM, "Recorded last insert fingerprint (len=${newConversationFingerprint.length}) at=$nowMs")
         }
         
-        if (!isImageGeneration) {
-            val currentId = stateHolder._currentConversationId.value
-            val stableKeyFromMessages =
-                messagesToSave.firstOrNull { it.sender == Sender.User }?.id
-                    ?: messagesToSave.firstOrNull { it.sender == Sender.System && !it.isPlaceholderName }?.id
-                    ?: messagesToSave.firstOrNull()?.id
-            if (stableKeyFromMessages != null) {
-                val stableId = stableKeyFromMessages
+        // 迁移会话ID和配置绑定到稳定key
+        val currentId = if (isImageGeneration) {
+            stateHolder._currentImageGenerationConversationId.value
+        } else {
+            stateHolder._currentConversationId.value
+        }
+        
+        val stableKeyFromMessages = if (isImageGeneration) {
+            // 图像模式：优先使用首条消息ID
+            messagesToSave.firstOrNull()?.id
+        } else {
+            // 文本模式：优先使用首条用户消息ID，其次系统消息ID
+            messagesToSave.firstOrNull { it.sender == Sender.User }?.id
+                ?: messagesToSave.firstOrNull { it.sender == Sender.System && !it.isPlaceholderName }?.id
+                ?: messagesToSave.firstOrNull()?.id
+        }
+        
+        if (stableKeyFromMessages != null) {
+            val stableId = stableKeyFromMessages
+            
+            // 文本模式：迁移会话生成参数（如果存在）
+            if (!isImageGeneration) {
                 val currentConfigs = stateHolder.conversationGenerationConfigs.value
                 val currentConfigForSession = currentConfigs[currentId]
                 if (currentConfigForSession != null) {
@@ -373,12 +393,33 @@ class HistoryManager(
                     }
                     stateHolder.conversationGenerationConfigs.value = newMap
                     persistenceManager.saveConversationParameters(newMap)
-                    stateHolder._currentConversationId.value = stableId
-                    Log.d(TAG_HM, "Migrated parameters from '$currentId' to stable key '$stableId' (prefer first user message) and switched currentConversationId")
+                    Log.d(TAG_HM, "Migrated generation parameters from '$currentId' to stable key '$stableId'")
                 }
-            } else {
-                Log.d(TAG_HM, "Skip parameter migration: no messages to derive a stable key")
             }
+            
+            // 🔧 修复：统一迁移会话绑定的配置ID（文本模式和图像模式都适用）
+            // 这确保即使用户只选择了模型但没有发送消息，配置ID映射也能被正确迁移
+            val currentConfigIds = stateHolder.conversationApiConfigIds.value
+            if (currentConfigIds.containsKey(currentId) && currentId != stableId) {
+                val newConfigIds = currentConfigIds.toMutableMap()
+                newConfigIds[stableId] = currentConfigIds[currentId]!!
+                newConfigIds.remove(currentId)
+                stateHolder.conversationApiConfigIds.value = newConfigIds
+                persistenceManager.saveConversationApiConfigIds(newConfigIds)
+                Log.d(TAG_HM, "Migrated config binding from '$currentId' to stable key '$stableId' (${if (isImageGeneration) "IMAGE" else "TEXT"} mode)")
+            }
+
+            // 切换当前会话ID到稳定key
+            if (currentId != stableId) {
+                if (isImageGeneration) {
+                    stateHolder._currentImageGenerationConversationId.value = stableId
+                } else {
+                    stateHolder._currentConversationId.value = stableId
+                }
+                Log.d(TAG_HM, "Switched ${if (isImageGeneration) "imageGenerationConversationId" else "conversationId"} from '$currentId' to stable key '$stableId'")
+            }
+        } else {
+            Log.d(TAG_HM, "Skip parameter/config migration: no messages to derive a stable key")
         }
 
         // 使用“本次保存后的最终索引”决策 last-open，避免首次入库与瞬时旧值导致的双源重复
