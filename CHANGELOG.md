@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.8.0](https://github.com/roseforljh/EveryTalk/compare/v1.7.20...v1.8.0) (2025-12-08)
+
+
+### Features
+
+* 全局直连！ ([5b24313](https://github.com/roseforljh/EveryTalk/commit/5b24313845a9dc2721900aabb048338fafd7b7a5))
+
+
+### Bug Fixes
+
+* release编译修复、删除废弃代码 ([5f02f1f](https://github.com/roseforljh/EveryTalk/commit/5f02f1ff6fe74a2e8f27f95f71a491b913210a46))
+* 编译 ([29b06c8](https://github.com/roseforljh/EveryTalk/commit/29b06c8188b48ed425037bcf5b2287bb61ab6308))
+* 语音模式minimmax终极优化 ([d89f99e](https://github.com/roseforljh/EveryTalk/commit/d89f99e97e152772e479224792316650218e6f2e))
+
 ## [1.7.20](https://github.com/roseforljh/EveryTalk/compare/v1.7.19...v1.7.20) (2025-12-07)
 
 
