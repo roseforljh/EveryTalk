@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.7.20](https://github.com/roseforljh/EveryTalk/compare/v1.7.19...v1.7.20) (2025-12-07)
+
+
+### Bug Fixes
+
+* room ([8764c07](https://github.com/roseforljh/EveryTalk/commit/8764c079da9ef6bf896011f83301acad2f2ba5a2))
+* STT/TTS 直连客户端，以优化延迟 ([46d458f](https://github.com/roseforljh/EveryTalk/commit/46d458f6118e653cba0fbfc268dacf92903c52f2))
+* 修复设置按钮按钮的导航逻辑 ([0359433](https://github.com/roseforljh/EveryTalk/commit/03594335bbc21945af01d4d774041551cc1d1354))
+* 升级数据库结构 ([acb0b8d](https://github.com/roseforljh/EveryTalk/commit/acb0b8dc64891aa4dce23747bd87092d610d71a7))
+* 改善语音模式llm的prompt ([cd0b2c1](https://github.com/roseforljh/EveryTalk/commit/cd0b2c1813ae2e02bb53a6b5d0b5c8883a690cf3))
+* 移除孤儿文件清理机制 ([609b736](https://github.com/roseforljh/EveryTalk/commit/609b7366054432edc8f67d63d0b2bb855ccc8f9a))
+* 阿里系超低延迟 ([3fbed3c](https://github.com/roseforljh/EveryTalk/commit/3fbed3cbf9bc0530a55b1df413dca1120dcc3e2d))
+
 ## [1.7.19](https://github.com/roseforljh/EveryTalk/compare/v1.7.18...v1.7.19) (2025-12-07)
 
 
