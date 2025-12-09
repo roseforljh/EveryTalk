@@ -28,6 +28,10 @@ import androidx.core.content.ContextCompat
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.network.VoiceChatSession
 import com.android.everytalk.statecontroller.AppViewModel
+import com.android.everytalk.ui.screens.MainScreen.chat.dialog.LlmSettingsDialog
+import com.android.everytalk.ui.screens.MainScreen.chat.dialog.SttSettingsDialog
+import com.android.everytalk.ui.screens.MainScreen.chat.dialog.VoiceSelectionDialog
+import com.android.everytalk.ui.screens.MainScreen.chat.dialog.VoiceSettingsDialog
 import com.android.everytalk.ui.screens.MainScreen.chat.voice.logic.rememberVoiceSessionController
 
 /**
@@ -157,35 +161,47 @@ fun VoiceInputScreen(
             TopAppBar(
                 title = { },
                 navigationIcon = {
-                    IconButton(onClick = { showVoiceSelectionDialog = true }) {
+                    IconButton(
+                        onClick = { showVoiceSelectionDialog = true },
+                        enabled = viewModel != null
+                    ) {
                         Icon(
                             Icons.Default.RecordVoiceOver,
                             contentDescription = "选择音色",
-                            tint = contentColor
+                            tint = if (viewModel != null) contentColor else contentColor.copy(alpha = 0.3f)
                         )
                     }
                 },
                 actions = {
                     
-                    IconButton(onClick = { showSttChatSettingsDialog = true }) {
+                    IconButton(
+                        onClick = { showSttChatSettingsDialog = true },
+                        enabled = viewModel != null
+                    ) {
                         Icon(
                             Icons.Default.Build,
                             contentDescription = "STT配置",
-                            tint = contentColor
+                            tint = if (viewModel != null) contentColor else contentColor.copy(alpha = 0.3f)
                         )
                     }
-                    IconButton(onClick = { showLlmSettingsDialog = true }) {
+                    IconButton(
+                        onClick = { showLlmSettingsDialog = true },
+                        enabled = viewModel != null
+                    ) {
                         Icon(
                             Icons.Default.Face,
                             contentDescription = "LLM配置",
-                            tint = contentColor
+                            tint = if (viewModel != null) contentColor else contentColor.copy(alpha = 0.3f)
                         )
                     }
-                    IconButton(onClick = { showTtsSettingsDialog = true }) {
+                    IconButton(
+                        onClick = { showTtsSettingsDialog = true },
+                        enabled = viewModel != null
+                    ) {
                         Icon(
                             Icons.Default.Settings,
                             contentDescription = "语音设置",
-                            tint = contentColor
+                            tint = if (viewModel != null) contentColor else contentColor.copy(alpha = 0.3f)
                         )
                     }
                 },
@@ -253,6 +269,33 @@ fun VoiceInputScreen(
     }
     
     // ========== 对话框 ==========
-    // 语音模式的细粒度 LLM/STT/语音设置弹窗在当前版本中已移除，
-    // 仅保留状态字段以便后续需要时重新接入设置界面。
+    
+    if (showVoiceSelectionDialog) {
+        VoiceSelectionDialog(
+            onDismiss = { showVoiceSelectionDialog = false },
+            viewModel = viewModel
+        )
+    }
+
+    if (showSttChatSettingsDialog) {
+        SttSettingsDialog(
+            onDismiss = { showSttChatSettingsDialog = false },
+            viewModel = viewModel
+        )
+    }
+    
+    if (showLlmSettingsDialog) {
+        LlmSettingsDialog(
+            onDismiss = { showLlmSettingsDialog = false },
+            viewModel = viewModel
+        )
+    }
+    
+    if (showTtsSettingsDialog) {
+        VoiceSettingsDialog(
+            selectedApiConfig = selectedApiConfig,
+            onDismiss = { showTtsSettingsDialog = false },
+            viewModel = viewModel
+        )
+    }
 }

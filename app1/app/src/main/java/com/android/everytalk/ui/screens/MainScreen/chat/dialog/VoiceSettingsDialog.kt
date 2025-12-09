@@ -19,6 +19,14 @@ import com.android.everytalk.ui.screens.MainScreen.chat.models.DynamicModelSelec
 import com.android.everytalk.ui.screens.MainScreen.chat.voice.logic.VoiceConfigManager
 import kotlinx.coroutines.launch
 
+/**
+ * TTS (语音合成) 配置对话框
+ *
+ * 此对话框用于修改全局的 VoiceBackendConfig 配置。
+ * 复用于：
+ * 1. 语音输入模式 (VoiceInputScreen) 的顶部设置按钮
+ * 2. 应用主设置页面 (SettingsScreen)
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun VoiceSettingsDialog(
