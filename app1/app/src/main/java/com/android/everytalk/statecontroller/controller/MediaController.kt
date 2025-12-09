@@ -8,7 +8,7 @@ import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
 import com.android.everytalk.data.DataClass.Message
-import com.android.everytalk.util.FileManager
+import com.android.everytalk.util.storage.FileManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import android.widget.Toast

@@ -13,7 +13,7 @@ import androidx.lifecycle.viewModelScope
 import coil3.ImageLoader
 import coil3.util.DebugLogger
 import com.android.everytalk.data.DataClass.ApiConfig
-import com.android.everytalk.util.FileManager
+import com.android.everytalk.util.storage.FileManager
 import com.android.everytalk.data.DataClass.GitHubRelease
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
@@ -24,7 +24,7 @@ import com.android.everytalk.ui.screens.MainScreen.chat.ChatListItem
 import com.android.everytalk.ui.screens.viewmodel.ConfigManager
 import com.android.everytalk.ui.screens.viewmodel.DataPersistenceManager
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
-import com.android.everytalk.util.CacheManager
+import com.android.everytalk.util.cache.CacheManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.widget.Toast

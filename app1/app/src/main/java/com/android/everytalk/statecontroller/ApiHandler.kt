@@ -1,7 +1,7 @@
 package com.android.everytalk.statecontroller
 
 import android.content.Context
-import com.android.everytalk.util.FileManager
+import com.android.everytalk.util.storage.FileManager
 import java.io.File
 import java.util.Locale
 import com.android.everytalk.data.DataClass.Message
@@ -14,7 +14,7 @@ import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.models.SelectedMediaItem.Audio
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import com.android.everytalk.util.AppLogger
-import com.android.everytalk.util.PerformanceMonitor
+import com.android.everytalk.util.debug.PerformanceMonitor
 import com.android.everytalk.util.messageprocessor.MessageProcessor
 import io.ktor.client.statement.HttpResponse
 import kotlinx.coroutines.CoroutineScope
@@ -912,7 +912,7 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
         // 假设 HistoryManager 暴露了 persistenceManager 或我们通过依赖注入获取
         // 由于这里无法直接访问 persistenceManager，我们使用原有的 FileManager 逻辑，但增强其稳定性
         
-        val fm = com.android.everytalk.util.FileManager(applicationContext)
+        val fm = com.android.everytalk.util.storage.FileManager(applicationContext)
         val out = mutableListOf<String>()
         for ((idx, url) in urls.withIndex()) {
             val lower = url.lowercase(java.util.Locale.ROOT)

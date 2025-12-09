@@ -1,4 +1,4 @@
-package com.android.everytalk.util
+package com.android.everytalk.util.streaming
 
 import android.util.Log
 

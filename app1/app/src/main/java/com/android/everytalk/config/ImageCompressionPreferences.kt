@@ -2,7 +2,7 @@ package com.android.everytalk.config
 
 import android.content.Context
 import android.content.SharedPreferences
-import com.android.everytalk.util.ImageScaleConfig
+import com.android.everytalk.util.image.ImageScaleConfig
 
 /**
  * 图片压缩偏好设置管理器

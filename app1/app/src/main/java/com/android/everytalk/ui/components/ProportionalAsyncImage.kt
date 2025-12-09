@@ -15,7 +15,7 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.android.everytalk.config.ImageCompressionPreferences
 import com.android.everytalk.util.AppLogger
-import com.android.everytalk.util.ImageScaleCalculator
+import com.android.everytalk.util.image.ImageScaleCalculator
 import java.util.concurrent.ConcurrentHashMap
 
 /**

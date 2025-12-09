@@ -4,7 +4,7 @@ import android.util.Log
 import com.android.everytalk.statecontroller.ApiHandler
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
-import com.android.everytalk.util.CacheManager
+import com.android.everytalk.util.cache.CacheManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch

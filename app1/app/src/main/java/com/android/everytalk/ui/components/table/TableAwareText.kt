@@ -29,7 +29,7 @@ import com.android.everytalk.ui.components.WebPreviewDialog
 import com.android.everytalk.ui.components.markdown.MarkdownRenderer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import com.android.everytalk.util.ContentParseCache
+import com.android.everytalk.util.cache.ContentParseCache
 import com.android.everytalk.ui.components.table.TableUtils
 import android.widget.ImageView
 import android.view.ViewGroup

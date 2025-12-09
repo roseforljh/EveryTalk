@@ -1,4 +1,4 @@
-package com.android.everytalk.util
+package com.android.everytalk.util.streaming
 
 import java.security.MessageDigest
 import java.util.LinkedHashMap

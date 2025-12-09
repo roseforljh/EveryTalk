@@ -1,4 +1,4 @@
-package com.android.everytalk.util
+package com.android.everytalk.util.cache
 
 import android.util.LruCache
 import com.android.everytalk.ui.components.ContentPart

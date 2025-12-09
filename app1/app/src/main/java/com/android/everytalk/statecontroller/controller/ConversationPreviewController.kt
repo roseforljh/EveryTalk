@@ -4,7 +4,7 @@ import android.util.Log
 import androidx.collection.LruCache
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.statecontroller.ViewModelStateHolder
-import com.android.everytalk.util.CacheManager
+import com.android.everytalk.util.cache.CacheManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 

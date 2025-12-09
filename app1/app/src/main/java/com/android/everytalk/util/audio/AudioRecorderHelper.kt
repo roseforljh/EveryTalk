@@ -1,4 +1,4 @@
-package com.android.everytalk.util
+package com.android.everytalk.util.audio
 
 import android.content.Context
 import android.media.MediaRecorder

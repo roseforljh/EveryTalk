@@ -6,6 +6,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.ui.graphics.vector.ImageVector
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Contextual
+import com.android.everytalk.util.serialization.UriSerializer
 
 interface IMediaItem {
     val id: String
@@ -45,7 +47,7 @@ enum class MoreOptionsType(val label: String, val icon: ImageVector, val mimeTyp
 sealed class SelectedMediaItem : IMediaItem {
     @Serializable
     data class ImageFromUri(
-        @Serializable(with = com.android.everytalk.util.UriSerializer::class)
+        @Serializable(with = UriSerializer::class)
         val uri: Uri,
         override val id: String,
         override val mimeType: String = "image/jpeg",
@@ -83,7 +85,7 @@ sealed class SelectedMediaItem : IMediaItem {
 
     @Serializable
     data class GenericFile(
-        @Serializable(with = com.android.everytalk.util.UriSerializer::class)
+        @Serializable(with = UriSerializer::class)
         val uri: Uri,
         override val id: String,
         val displayName: String,

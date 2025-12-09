@@ -1,4 +1,4 @@
-package com.android.everytalk.util // 确保包名正确
+package com.android.everytalk.util.serialization
 
 import android.net.Uri
 import kotlinx.serialization.KSerializer

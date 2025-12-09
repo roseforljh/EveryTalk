@@ -1,5 +1,6 @@
-package com.android.everytalk.util
+package com.android.everytalk.util.streaming
 
+import com.android.everytalk.util.AppLogger
 import kotlinx.coroutines.*
 import java.util.concurrent.atomic.AtomicLong
 

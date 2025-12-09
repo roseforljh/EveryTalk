@@ -1,4 +1,4 @@
-package com.android.everytalk.util
+package com.android.everytalk.util.image
 
 /**
  * 图片缩放配置类

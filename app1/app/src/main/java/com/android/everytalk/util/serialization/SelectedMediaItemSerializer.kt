@@ -1,4 +1,4 @@
-package com.android.everytalk.util
+package com.android.everytalk.util.serialization
 
 import com.android.everytalk.models.SelectedMediaItem
 import kotlinx.serialization.KSerializer

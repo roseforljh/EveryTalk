@@ -1,4 +1,4 @@
-package com.android.everytalk.util
+package com.android.everytalk.util.serialization
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory

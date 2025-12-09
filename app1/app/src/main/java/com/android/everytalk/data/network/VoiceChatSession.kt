@@ -7,7 +7,7 @@ import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.os.Build
 import android.util.Log
-import com.android.everytalk.util.AudioTestUtil
+import com.android.everytalk.util.audio.AudioTestUtil
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.ensureActive

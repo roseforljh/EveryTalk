@@ -1,4 +1,4 @@
-package com.android.everytalk.util
+package com.android.everytalk.util.storage
 
 import android.content.Context
 import kotlinx.coroutines.Dispatchers

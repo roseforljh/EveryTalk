@@ -10,10 +10,11 @@ import android.provider.OpenableColumns
 import android.util.Log
 import androidx.core.content.FileProvider
 import com.android.everytalk.models.SelectedMediaItem
-import com.android.everytalk.util.FileManager
+import com.android.everytalk.util.storage.FileManager
 import com.android.everytalk.data.DataClass.ApiContentPart
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
+import com.android.everytalk.util.image.ImageScaleCalculator
 import com.android.everytalk.data.DataClass.Message as UiMessage
 import com.android.everytalk.data.DataClass.Sender as UiSender
 import com.android.everytalk.data.DataClass.ThinkingConfig
@@ -92,9 +93,9 @@ private data class AttachmentProcessingResult(
 
                 // 根据模式选择缩放配置
                 val config = if (isImageGeneration) {
-                    com.android.everytalk.util.ImageScaleConfig.IMAGE_GENERATION_MODE
+                    com.android.everytalk.util.image.ImageScaleConfig.IMAGE_GENERATION_MODE
                 } else {
-                    com.android.everytalk.util.ImageScaleConfig.CHAT_MODE
+                    com.android.everytalk.util.image.ImageScaleConfig.CHAT_MODE
                 }
 
                 // 首先检查文件大小
@@ -128,12 +129,12 @@ private data class AttachmentProcessingResult(
                 val originalHeight = options.outHeight
                 
                 // 使用新的等比缩放算法计算目标尺寸
-                val (targetWidth, targetHeight) = com.android.everytalk.util.ImageScaleCalculator.calculateProportionalScale(
+                val (targetWidth, targetHeight) = ImageScaleCalculator.calculateProportionalScale(
                     originalWidth, originalHeight, config
                 )
 
                 // 计算合适的采样率以避免内存问题
-                options.inSampleSize = com.android.everytalk.util.ImageScaleCalculator.calculateInSampleSize(
+                options.inSampleSize = ImageScaleCalculator.calculateInSampleSize(
                     originalWidth, originalHeight, targetWidth, targetHeight
                 )
 
@@ -151,7 +152,7 @@ private data class AttachmentProcessingResult(
                     val currentHeight = bitmap.height
                     
                     // 重新计算精确的目标尺寸（基于采样后的实际尺寸）
-                    val (finalWidth, finalHeight) = com.android.everytalk.util.ImageScaleCalculator.calculateProportionalScale(
+                    val (finalWidth, finalHeight) = ImageScaleCalculator.calculateProportionalScale(
                         currentWidth, currentHeight, config
                     )
                     

@@ -1,4 +1,4 @@
-package com.android.everytalk.util
+package com.android.everytalk.util.storage
 
 import android.content.ContentResolver
 import android.content.Context
@@ -8,6 +8,9 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Base64
 import androidx.core.content.FileProvider
+import com.android.everytalk.util.AppLogger
+import com.android.everytalk.util.image.ImageScaleCalculator
+import com.android.everytalk.util.image.ImageScaleConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream

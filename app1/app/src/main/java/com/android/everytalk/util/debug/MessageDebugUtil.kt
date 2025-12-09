@@ -1,4 +1,4 @@
-package com.android.everytalk.util
+package com.android.everytalk.util.debug
 
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.ui.components.MarkdownPart

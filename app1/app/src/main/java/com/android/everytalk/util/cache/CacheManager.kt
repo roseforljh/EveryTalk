@@ -1,8 +1,10 @@
-package com.android.everytalk.util
+package com.android.everytalk.util.cache
 
 import android.content.Context
 import androidx.collection.LruCache
 import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.util.AppLogger
+import com.android.everytalk.util.ConversationNameHelper
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock

@@ -1,4 +1,4 @@
-package com.android.everytalk.util
+package com.android.everytalk.util.debug
 
 import android.util.Log
 import java.util.concurrent.ConcurrentHashMap

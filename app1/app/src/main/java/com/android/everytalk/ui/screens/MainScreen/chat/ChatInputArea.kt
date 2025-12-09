@@ -42,7 +42,7 @@ import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.models.ImageSourceOption
 import com.android.everytalk.models.MoreOptionsType
 import com.android.everytalk.models.SelectedMediaItem
-import com.android.everytalk.util.AudioRecorderHelper
+import com.android.everytalk.util.audio.AudioRecorderHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter

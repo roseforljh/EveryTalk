@@ -7,6 +7,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.StateFlow
 import com.android.everytalk.statecontroller.ViewModelStateHolder
+import com.android.everytalk.util.debug.MessageDebugUtil
 
 /**
  * 承接 AppViewModel 中与“消息内容/流式更新”强相关的职责：
@@ -48,7 +49,7 @@ class MessageContentController(
                 if (messageIndex != -1) {
                     val messageToUpdate = stateHolder.messages[messageIndex]
                     if (messageToUpdate.text != currentFullText) {
-                        com.android.everytalk.util.MessageDebugUtil.logStreamingUpdate(
+                        MessageDebugUtil.logStreamingUpdate(
                             messageId,
                             currentFullText.takeLast(50),
                             currentFullText.length
@@ -59,9 +60,9 @@ class MessageContentController(
 
                         // 一旦AI消息文本变化，立即标记会话为“脏”，确保保存
                         stateHolder.isTextConversationDirty.value = true
-
+                        
                         // 完整性检查（调试）
-                        val issues = com.android.everytalk.util.MessageDebugUtil.checkMessageIntegrity(updatedMessage)
+                        val issues = MessageDebugUtil.checkMessageIntegrity(updatedMessage)
                         if (issues.isNotEmpty()) {
                             android.util.Log.w(
                                 "MessageContentController",
