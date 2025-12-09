@@ -27,12 +27,23 @@ fun sanitizeForBuildConfig(value: String?): String {
     return unquoted.replace("\\", "\\\\").replace("\"", "\\\"")
 }
 
-// 获取配置值：优先从环境变量读取（CI 环境），其次从 local.properties 读取（本地开发）
+// 获取配置值：优先从 Gradle 属性读取（CI -P参数），其次从环境变量读取，最后从 local.properties 读取（本地开发）
 fun getConfigValue(key: String, defaultValue: String = ""): String {
+    // 1. 尝试从 Gradle Project Properties 读取 (CI -Pkey=value)
+    if (project.hasProperty(key)) {
+        val propValue = project.property(key)?.toString()?.trim()
+        if (!propValue.isNullOrBlank()) {
+            return sanitizeForBuildConfig(propValue)
+        }
+    }
+
+    // 2. 尝试从系统环境变量读取
     val envValue = System.getenv(key)?.trim()
     if (!envValue.isNullOrBlank()) {
         return sanitizeForBuildConfig(envValue)
     }
+
+    // 3. 回退到 local.properties
     return sanitizeForBuildConfig(localProperties.getProperty(key, defaultValue))
 }
 
