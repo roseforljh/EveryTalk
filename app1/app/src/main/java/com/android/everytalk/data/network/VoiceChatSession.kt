@@ -92,8 +92,8 @@ class VoiceChatSession(
     
     // 直连会话
     private var directSession: VoiceChatDirectSession? = null
-    
-    // 阿里云实时 STT 客户端（每次录音创建新的客户端）
+     
+    // 阿里云实时 STT 客户端（每次录音独立一个会话，避免跨轮复用导致文本累积）
     private var aliyunRealtimeSttClient: AliyunRealtimeSttClient? = null
     private var realtimeSttJob: Job? = null
     private val realtimeSttScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -155,6 +155,16 @@ class VoiceChatSession(
         CONNECTED,      // 已连接
         ERROR           // 连接错误
     }
+
+    /**
+     * 仅在启用阿里云实时流式时才向 UI 报告 WebSocket 状态
+     * 关闭实时流式开关时，不再展示任何与 WS 相关的提示
+     */
+    private fun notifyWebSocketState(state: WebSocketState) {
+        if (useRealtimeStt && sttPlatform.equals("Aliyun", ignoreCase = true)) {
+            onWebSocketStateChanged?.invoke(state)
+        }
+    }
     
     companion object {
         private const val TAG = "VoiceChatSession"
@@ -188,7 +198,7 @@ class VoiceChatSession(
 
         // 如果是阿里云且启用实时 STT
         val shouldUseRealtimeStt = useRealtimeStt && sttPlatform.equals("Aliyun", ignoreCase = true)
-
+        
         // 【关键优化】先启动录音，再启动 WebSocket 连接（并行）
         try {
             recorder.startRecording()
@@ -198,11 +208,72 @@ class VoiceChatSession(
             audioRecord = null
             throw e
         }
-
+ 
         isRecording = true
-
-        // 移除实时 STT 逻辑，强制使用直连模式
-
+ 
+        // 如果启用了实时 STT，则为本次录音创建独立的 AliyunRealtimeSttClient 会话
+        if (shouldUseRealtimeStt) {
+            // 通知 UI WebSocket 正在连接（仅实时流式模式下才会显示）
+            withContext(Dispatchers.Main) {
+                notifyWebSocketState(WebSocketState.CONNECTING)
+            }
+ 
+            val client = AliyunRealtimeSttClient(
+                httpClient = ktorClient,
+                apiKey = sttApiKey,
+                model = sttModel.ifBlank { "fun-asr-realtime" },
+                sampleRate = sampleRate,
+                format = "pcm"
+            )
+            aliyunRealtimeSttClient = client
+            isWebSocketReady.set(false)
+ 
+            realtimeSttJob = realtimeSttScope.launch {
+                try {
+                    client.start(
+                        onReady = {
+                            Log.i(TAG, "Aliyun realtime STT ready for this session")
+                            isWebSocketReady.set(true)
+                            // 连接就绪后，把零等待缓冲区里的音频补发过去
+                            realtimeSttScope.launch {
+                                flushPendingAudioBuffer()
+                            }
+                            // 回到主线程更新 UI 状态
+                            realtimeSttScope.launch(Dispatchers.Main) {
+                                notifyWebSocketState(WebSocketState.CONNECTED)
+                            }
+                        },
+                        onPartial = { text ->
+                            // 实时 partial，直接刷新 UI 识别文本（主线程）
+                            realtimeSttScope.launch(Dispatchers.Main) {
+                                onTranscriptionReceived?.invoke(text)
+                            }
+                        },
+                        onFinal = { text ->
+                            // 最终文本，同样通过 UI 回调更新（主线程）
+                            realtimeSttScope.launch(Dispatchers.Main) {
+                                onTranscriptionReceived?.invoke(text)
+                            }
+                        },
+                        onError = { errorMsg ->
+                            Log.e(TAG, "Aliyun realtime STT error: $errorMsg")
+                            isWebSocketReady.set(false)
+                            realtimeSttScope.launch(Dispatchers.Main) {
+                                notifyWebSocketState(WebSocketState.ERROR)
+                            }
+                        }
+                    )
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error starting Aliyun realtime STT: ${e.message}", e)
+                    isWebSocketReady.set(false)
+                    // 这里已经在 IO 协程中，切回主线程更新 UI（仅实时模式下才会触发）
+                    realtimeSttScope.launch(Dispatchers.Main) {
+                        notifyWebSocketState(WebSocketState.ERROR)
+                    }
+                }
+            }
+        }
+ 
         // 启动读取循环
         val readBuf = ByteArray(3200) // 100ms @ 16kHz 16bit mono = 3200 bytes
         var lastVolumeUpdateTime = 0L
@@ -210,12 +281,26 @@ class VoiceChatSession(
         try {
             while (isRecording) {
                 val n = recorder.read(readBuf, 0, readBuf.size)
-                
+
                 if (n > 0) {
                     // 始终写入 pcmBuffer（用于后续可能的离线 STT 或备份）
                     pcmBuffer.write(readBuf, 0, n)
+
+                    // 实时 STT：优先发送到阿里云 WebSocket
+                    if (shouldUseRealtimeStt) {
+                        val chunk = readBuf.copyOfRange(0, n)
+                        if (isWebSocketReady.get()) {
+                            try {
+                                aliyunRealtimeSttClient?.sendAudio(chunk)
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Failed to send audio chunk to realtime STT: ${e.message}")
+                            }
+                        } else {
+                            // 连接尚未就绪，写入零等待缓冲区
+                            bufferAudioChunk(chunk)
+                        }
+                    }
                     
-                    // 移除实时 STT 发送逻辑
 
                     // 计算音量（RMS）并回调给UI
                     val currentTime = System.currentTimeMillis()
@@ -300,14 +385,19 @@ class VoiceChatSession(
             
             try {
                 for (chunk in chunksToSend) {
-                    // 检查是否仍在录音状态，避免在停止后继续发送
+                    // 检查是否仍在录音状态或连接仍可用，避免在停止后继续发送
                     if (!isRecording && !isWebSocketReady.get()) {
                         Log.w(TAG, "Recording stopped during flush, aborting")
                         break
                     }
-                    aliyunRealtimeSttClient?.sendAudio(chunk)
+                    try {
+                        aliyunRealtimeSttClient?.sendAudio(chunk)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Error sending buffered audio to realtime STT: ${e.message}")
+                        // 避免因为单块发送失败导致崩溃，继续尝试后续块
+                    }
                 }
-                Log.i(TAG, "Buffered audio flushed successfully")
+                Log.i(TAG, "Buffered audio flushed successfully to AliyunRealtimeSttClient")
             } catch (e: Exception) {
                 Log.w(TAG, "Error flushing audio buffer: ${e.message}")
                 // 不抛出异常，避免崩溃
@@ -330,13 +420,15 @@ class VoiceChatSession(
         }
         isWebSocketReady.set(false)
         
-        // 通知 UI WebSocket 已断开
+        // 通知 UI WebSocket 已断开（仅实时模式下可见）
         withContext(Dispatchers.Main) {
-            onWebSocketStateChanged?.invoke(WebSocketState.DISCONNECTED)
+            notifyWebSocketState(WebSocketState.DISCONNECTED)
         }
         
-        // 取消实时 STT
-        aliyunRealtimeSttClient?.cancel()
+        // 取消本地实时 STT 会话
+        try {
+            aliyunRealtimeSttClient?.cancel()
+        } catch (_: Throwable) {}
         aliyunRealtimeSttClient = null
         realtimeSttJob?.cancel()
         realtimeSttJob = null
@@ -390,8 +482,10 @@ class VoiceChatSession(
         pendingAudioBuffer.clear()
         isWebSocketReady.set(false)
         
-        // 取消实时 STT
-        aliyunRealtimeSttClient?.cancel()
+        // 取消实时 STT 客户端
+        try {
+            aliyunRealtimeSttClient?.cancel()
+        } catch (_: Throwable) {}
         aliyunRealtimeSttClient = null
         realtimeSttJob?.cancel()
         realtimeSttJob = null
@@ -415,12 +509,17 @@ class VoiceChatSession(
      */
     suspend fun stopRecordingAndProcess(): VoiceChatResult = withContext(Dispatchers.IO) {
         isRecording = false
-        
-        // 强制使用直连模式
-        
-        // 直连模式处理
-        Log.i(TAG, "Using Direct Mode")
-        return@withContext stopRecordingAndProcessDirect()
+         
+        // 根据配置决定使用实时 STT 还是直连模式
+        val shouldUseRealtimeStt = useRealtimeStt && sttPlatform.equals("Aliyun", ignoreCase = true) && aliyunRealtimeSttClient != null
+         
+        return@withContext if (shouldUseRealtimeStt) {
+            Log.i(TAG, "Using Realtime STT Mode (Aliyun)")
+            stopRecordingAndProcessWithRealtimeStt()
+        } else {
+            Log.i(TAG, "Using Direct Mode")
+            stopRecordingAndProcessDirect()
+        }
     }
     
     /**
@@ -449,16 +548,24 @@ class VoiceChatSession(
         kotlinx.coroutines.delay(delayMs)
         
         // 等待实时 STT 完成并获取最终文本
-        val userText = aliyunRealtimeSttClient?.finishAndWait() ?: ""
-
+        val userText = try {
+            aliyunRealtimeSttClient?.finishAndWait() ?: ""
+        } catch (e: Exception) {
+            Log.e(TAG, "finishAndWait failed in realtime STT: ${e.message}", e)
+            ""
+        }
+ 
         // 清理实时 STT 客户端
+        try {
+            aliyunRealtimeSttClient?.cancel()
+        } catch (_: Throwable) {}
         aliyunRealtimeSttClient = null
         realtimeSttJob?.cancel()
         realtimeSttJob = null
         
-        // 通知 UI WebSocket 已断开
+        // 通知 UI WebSocket 已断开（仅实时模式下可见）
         withContext(Dispatchers.Main) {
-            onWebSocketStateChanged?.invoke(WebSocketState.DISCONNECTED)
+            notifyWebSocketState(WebSocketState.DISCONNECTED)
         }
         
         Log.i(TAG, "Realtime STT final result: $userText")
