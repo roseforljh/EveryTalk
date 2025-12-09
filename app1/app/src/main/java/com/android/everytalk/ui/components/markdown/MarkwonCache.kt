@@ -5,6 +5,7 @@ import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
 import android.text.style.TypefaceSpan
 import android.text.style.RelativeSizeSpan
+import android.text.style.AbsoluteSizeSpan
 import android.graphics.Typeface
 import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.Markwon
@@ -61,6 +62,17 @@ object MarkwonCache {
                         // 缩小无序/有序列表前面的点和圈（当前 Markwon 版本仅支持像素 Int 宽度）
                         val smallBulletPx = (4f * density).toInt()   // 比默认更小的圆点
                         builder.bulletWidth(smallBulletPx)
+                        
+                        // 强力拉开标题层级差异 (H1~H6)
+                        // 使用 Markwon 原生 Theme 属性控制，确保兼容性
+                        builder.headingTextSizeMultipliers(floatArrayOf(
+                            2.4f, // H1: 极大，醒目
+                            1.9f, // H2: 明显大
+                            1.5f, // H3: 中等大
+                            1.3f, // H4
+                            1.2f, // H5
+                            1.0f  // H6
+                        ))
                     }
                     override fun configureSpansFactory(builder: MarkwonSpansFactory.Builder) {
                         // 代码块略小一号、灰色
@@ -69,19 +81,6 @@ object MarkwonCache {
                                 TypefaceSpan("monospace"),
                                 RelativeSizeSpan(0.85f),
                                 ForegroundColorSpan(android.graphics.Color.parseColor("#9E9E9E"))
-                            )
-                        }
-                        // 标题字号与粗细：对齐 Gemini 风格
-                        builder.setFactory(Heading::class.java) { _, props ->
-                            val level = CoreProps.HEADING_LEVEL.require(props)
-                            val sizeMultiplier = when (level) {
-                                1 -> 1.7f   // 一级标题：明显大，但不过分巨大
-                                2 -> 1.4f   // 二级标题：比正文大一档
-                                else -> 1.2f // 其他级别：略大于正文
-                            }
-                            arrayOf<Any>(
-                                StyleSpan(Typeface.BOLD),
-                                RelativeSizeSpan(sizeMultiplier)
                             )
                         }
                     }

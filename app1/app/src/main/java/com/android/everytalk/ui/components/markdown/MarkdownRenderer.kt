@@ -148,8 +148,8 @@ fun MarkdownRenderer(
     val isDark = isSystemInDarkTheme()
     
     val baseTextSizeSp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
-    // 放大 AI 消息字号，用户消息保持原字号
-    val textSizeSp = if (sender == Sender.AI) baseTextSizeSp * 1.1f else baseTextSizeSp
+    // 统一气泡内文本字号：用户与 AI 一样，整体略小于之前的 AI 放大效果
+    val textSizeSp = baseTextSizeSp * 1.05f
     val markwon = remember(isDark, textSizeSp) {
         MarkwonCache.getOrCreate(
             context = context,
@@ -177,8 +177,8 @@ fun MarkdownRenderer(
             TextView(it).apply {
                 // 统一文本样式（字号）
                 val baseSp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
-                // 放大 AI 消息字号，用户消息保持原字号
-                val sp = if (sender == Sender.AI) baseSp * 1.1f else baseSp
+                // 用户与 AI 使用相同字号，整体略小于之前的 AI 放大效果
+                val sp = baseSp * 1.05f
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
                 setTextColor(finalColor.toArgb())
                 // 稳定基线，减少跳动
@@ -227,8 +227,8 @@ fun MarkdownRenderer(
                     1.0f
                 )
                 
-                // 字符间距 - 用户和 AI 使用不同字距；在保证可读性的前提下，进一步减小 AI 字符左右间距
-                letterSpacing = if (sender == Sender.User) 0.02f else 0.03f
+                // 字符间距 - 统一减小左右间距，使 AI 气泡内文本更紧凑，同时保持用户与 AI 一致
+                letterSpacing = 0.02f
                 
                 // 设置居中对齐 - 对多行文本有效
                 // gravity = Gravity.CENTER_VERTICAL // 移除垂直居中，避免长文/图片显示异常
@@ -397,8 +397,8 @@ fun MarkdownRenderer(
             val sp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
             val cacheKey = if (contentKey.isNotBlank() && !isStreaming) {
                 // Append version suffix to invalidate old cache entries after regex fixes
-                // v7: Restored headers, hard breaks, inline math; removed list fixes that caused issues
-                MarkdownSpansCache.generateKey(contentKey + "_v7", isDark, sp)
+                // v11: Fixed duplicate variables and switched to Theme multipliers for headings
+                MarkdownSpansCache.generateKey(contentKey + "_v11", isDark, sp)
             } else ""
 
             val cachedSpanned = if (cacheKey.isNotBlank()) MarkdownSpansCache.get(cacheKey) else null
