@@ -28,7 +28,11 @@ class MessageProcessor {
      * 直接返回原始AI输出，不做任何格式清理。
      */
     private fun lightweightCleanup(text: String): String {
-        return text
+        // 全角空格归一化，减少排版异常
+        var s = text.replace("\u3000", " ")
+                    .replace("&nbsp;", " ")
+                    .replace("\u00A0", " ")
+        return s
     }
 
     fun getCurrentText(): String = currentTextBuilder.get().toString()

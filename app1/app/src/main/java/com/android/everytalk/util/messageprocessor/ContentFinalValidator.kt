@@ -64,7 +64,7 @@ object ContentFinalValidator {
             return true
         }
 
-        // 🎯 新增：检测格式化改进（换行清理、空白优化）
+        // 新增：检测格式化改进（换行清理、空白优化）
         val formattingImproved = detectFormattingImprovement(currentContent, finalContent)
         if (formattingImproved) {
             Log.d(TAG, "Detected formatting improvement (e.g., newline cleanup); replace.")

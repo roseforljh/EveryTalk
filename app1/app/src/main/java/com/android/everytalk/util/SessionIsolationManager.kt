@@ -7,12 +7,12 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * 🎯 会话隔离管理器 - 统一管理会话级别的资源，确保AI输出不会串流
+ * 会话隔离管理器 - 统一管理会话级别的资源，确保AI输出不会串流
  */
 class SessionIsolationManager {
     private val logger = AppLogger.forComponent("SessionIsolationManager")
     
-    // 🎯 会话级别的资源映射
+    // 会话级别的资源映射
     private val sessionProcessors = ConcurrentHashMap<String, ConcurrentHashMap<String, MessageProcessor>>()
     
     // 活跃会话跟踪
@@ -23,24 +23,24 @@ class SessionIsolationManager {
     private val sessionSwitchMutex = kotlinx.coroutines.sync.Mutex()
     
     /**
-     * 🎯 获取会话的消息处理器
+     * 获取会话的消息处理器
      */
     fun getMessageProcessor(sessionId: String, messageId: String): MessageProcessor {
         val sessionMap = sessionProcessors.getOrPut(sessionId) { ConcurrentHashMap() }
         return sessionMap.getOrPut(messageId) {
             MessageProcessor().apply {
                 initialize(sessionId, messageId)
-                logger.debug("🎯 Created MessageProcessor for session=$sessionId, message=$messageId")
+                logger.debug("Created MessageProcessor for session=$sessionId, message=$messageId")
             }
         }
     }
     
     /**
-     * 🎯 获取会话的块管理器
+     * 获取会话的块管理器
      */
     
     /**
-     * 🎯 切换到新的文本会话
+     * 切换到新的文本会话
      */
     suspend fun switchToTextSession(newSessionId: String) {
         if (!SessionIsolationConfig.ENABLE_STRICT_SESSION_ISOLATION) return
@@ -48,7 +48,7 @@ class SessionIsolationManager {
         sessionSwitchMutex.withLock {
             val oldSession = activeTextSession.getAndSet(newSessionId)
             if (oldSession != null && oldSession != newSessionId) {
-                logger.debug("🎯 Switching text session from $oldSession to $newSessionId")
+                logger.debug("Switching text session from $oldSession to $newSessionId")
                 if (SessionIsolationConfig.FORCE_RESOURCE_CLEANUP_ON_SESSION_SWITCH) {
                     clearSessionResources(oldSession)
                 }
@@ -57,7 +57,7 @@ class SessionIsolationManager {
     }
     
     /**
-     * 🎯 切换到新的图像会话
+     * 切换到新的图像会话
      */
     suspend fun switchToImageSession(newSessionId: String) {
         if (!SessionIsolationConfig.ENABLE_STRICT_SESSION_ISOLATION) return
@@ -65,7 +65,7 @@ class SessionIsolationManager {
         sessionSwitchMutex.withLock {
             val oldSession = activeImageSession.getAndSet(newSessionId)
             if (oldSession != null && oldSession != newSessionId) {
-                logger.debug("🎯 Switching image session from $oldSession to $newSessionId")
+                logger.debug("Switching image session from $oldSession to $newSessionId")
                 if (SessionIsolationConfig.FORCE_RESOURCE_CLEANUP_ON_SESSION_SWITCH) {
                     clearSessionResources(oldSession)
                 }
@@ -74,10 +74,10 @@ class SessionIsolationManager {
     }
     
     /**
-     * 🎯 清理指定会话的所有资源
+     * 清理指定会话的所有资源
      */
     fun clearSessionResources(sessionId: String) {
-        logger.debug("🎯 Clearing all resources for session: $sessionId")
+        logger.debug("Clearing all resources for session: $sessionId")
         
         // 取消所有会话相关的处理器
         sessionProcessors[sessionId]?.values?.forEach { processor ->
@@ -88,14 +88,14 @@ class SessionIsolationManager {
         val processorsRemoved = sessionProcessors.remove(sessionId)?.size ?: 0
         val blockManagersRemoved = 0
         
-        logger.debug("🎯 Cleared session $sessionId: $processorsRemoved processors, $blockManagersRemoved block managers")
+        logger.debug("Cleared session $sessionId: $processorsRemoved processors, $blockManagersRemoved block managers")
     }
     
     /**
-     * 🎯 清理所有会话资源
+     * 清理所有会话资源
      */
     fun clearAllSessions() {
-        logger.debug("🎯 Clearing all session resources")
+        logger.debug("Clearing all session resources")
         
         // 取消所有处理器
         sessionProcessors.values.forEach { sessionMap ->
@@ -108,15 +108,15 @@ class SessionIsolationManager {
         activeTextSession.set(null)
         activeImageSession.set(null)
         
-        logger.debug("🎯 Cleared $totalSessions sessions")
+        logger.debug("Cleared $totalSessions sessions")
     }
     
     /**
-     * 🎯 强制完成指定会话的所有流
+     * 强制完成指定会话的所有流
      */
     
     /**
-     * 🎯 获取会话统计信息
+     * 获取会话统计信息
      */
     fun getSessionStats(): String {
         val totalProcessors = sessionProcessors.values.sumOf { it.size }
@@ -134,7 +134,7 @@ class SessionIsolationManager {
     }
     
     /**
-     * 🎯 执行垃圾回收清理
+     * 执行垃圾回收清理
      */
     fun performGarbageCollection() {
         if (sessionProcessors.size > SessionIsolationConfig.MAX_SESSION_PROCESSOR_CACHE_SIZE) {
@@ -143,7 +143,7 @@ class SessionIsolationManager {
             sessionsToRemove.forEach { sessionId ->
                 clearSessionResources(sessionId)
             }
-            logger.debug("🎯 Performed garbage collection, removed ${sessionsToRemove.size} old sessions")
+            logger.debug("Performed garbage collection, removed ${sessionsToRemove.size} old sessions")
         }
     }
 }

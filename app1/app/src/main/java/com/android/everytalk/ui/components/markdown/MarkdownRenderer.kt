@@ -89,11 +89,28 @@ private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): S
     // 某些模型输出标题时没有换行，导致Markwon无法正确识别
     // 例如: "前文## 标题" -> "前文\n\n## 标题"
     // 只处理 H2-H6 (##-######)，避免误伤 H1 (#) 和 hashtag (#tag)
-    s = s.replace(Regex("(?<!^)(?<!\\n)(#{2,6})(?=[^#])"), "\n\n$1")
-    s = s.replace(Regex("(?<!^)(?<!\\n)(#{1}\\s)"), "\n\n$1") // H1 必须后跟空格才处理
+    // 4.1 修复紧凑标题 (Compact Headers Fix)
+    // 1. 确保标题前有换行
+    // 只处理 H2-H6，避免误伤 H1 (#) 和 hashtag (#tag)
+    s = s.replace(Regex("(?<!^)(?<!\\n)(#{2,6})"), "\n\n$1")
     
-    // 修复标题后缺少空格: "##Title" -> "## Title"
+    // 2. 补全标题后的空格
     s = s.replace(Regex("(?<=^|\\n)(#{1,6})(?=[^#\\s])"), "$1 ")
+    
+    // 3. 针对“标题+正文”粘连（无换行）的情况进行智能处理
+    // 场景：## 引子在古老的沙漠城镇...
+    // 策略A：尝试智能断句。如果前20字符内有标点（：:。？！）或空格，强制换行拆分标题和正文。
+    s = s.replace(Regex("^(#{1,6}\\s+)([^\\n]{1,20}[：:。？！\\s])([^\\n]+)$", RegexOption.MULTILINE)) { mr ->
+        val header = mr.groupValues[1]
+        val potentialTitle = mr.groupValues[2]
+        val body = mr.groupValues[3]
+        "$header$potentialTitle\n\n$body"
+    }
+
+    // 策略B：降级兜底。如果仍未换行且整行超长（>50字符），判定为粘连严重，转义 # 降级为普通文本，防止满屏大字。
+    s = s.replace(Regex("^(#{1,6})(?=\\s.{50,})", RegexOption.MULTILINE)) { mr ->
+        "\\" + mr.groupValues[1]
+    }
 
     // 4.2 紧凑列表（仅限标题行内的第一个 "- "）拆行
     // 典型模式: "## 政策层面- **经济政策**" -> "## 政策层面\n- **经济政策**"
@@ -108,9 +125,38 @@ private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): S
     // 5. 强制换行处理 (Hard Break Enforcement) - 用户明确要求保留
     // Markwon/CommonMark 默认将单个换行符视为空格 (Soft Break)。
     // 将单换行转换为 Markdown 硬换行 (两个空格 + \n)。
+    // 注意：不处理标题行末尾，否则会破坏标题解析（标题行末尾不能有空格）
     val isIsolatedCodeBlock = s.trimStart().startsWith("```")
     if (!isIsolatedCodeBlock) {
-        s = s.replace(Regex("(?<!\\n)(?<!  )\\n(?!\\n)"), "  \n")
+        // 按行处理，排除标题行（以 # 开头的行）
+        val lines = s.lines()
+        val lastIndex = lines.size - 1
+        s = lines.mapIndexed { index, line ->
+            // 标题行检测：以 # 开头（可以有前导空格），后跟空格
+            // 使用 startsWith 检测更可靠
+            val trimmedLine = line.trimStart()
+            val isHeadingLine = trimmedLine.startsWith("# ") ||
+                               trimmedLine.startsWith("## ") ||
+                               trimmedLine.startsWith("### ") ||
+                               trimmedLine.startsWith("#### ") ||
+                               trimmedLine.startsWith("##### ") ||
+                               trimmedLine.startsWith("###### ")
+            // 空行检测
+            val isEmptyLine = line.isBlank()
+            
+            // 调试日志
+            if (trimmedLine.startsWith("#")) {
+                android.util.Log.d("MarkdownPreprocess", "Line ${index}: isHeading=$isHeadingLine, content='${line.take(50)}'")
+            }
+            
+            when {
+                index == lastIndex -> line // 最后一行不添加换行
+                isEmptyLine -> "$line\n" // 空行保持不变
+                isHeadingLine -> "$line\n" // 标题行保持普通换行，不添加尾部空格
+                line.endsWith("  ") -> "$line\n" // 已经有硬换行的保持不变
+                else -> "$line  \n" // 普通行添加硬换行
+            }
+        }.joinToString("")
     }
 
     // 6. 内联数学公式转换 - 用户明确要求保留
@@ -129,6 +175,9 @@ private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): S
     // - 列表符号后自动加空格 - 已移除，会破坏 ** 粗体语法
     // ============================================================================================
 
+    // 调试：打印预处理后的前200个字符，检查标题格式
+    android.util.Log.d("MarkdownPreprocess", "Processed markdown (first 500 chars): ${s.take(500).replace("\n", "\\n")}")
+    
     return s
 }
 @Composable
@@ -396,9 +445,9 @@ fun MarkdownRenderer(
             // 缓存优化：尝试从缓存获取 Spanned 对象
             val sp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
             val cacheKey = if (contentKey.isNotBlank() && !isStreaming) {
-                // Append version suffix to invalidate old cache entries after regex fixes
-                // v11: Fixed duplicate variables and switched to Theme multipliers for headings
-                MarkdownSpansCache.generateKey(contentKey + "_v11", isDark, sp)
+                // Append version suffix to invalidate old cache entries after heading size fixes
+                // v26: Relaxed smart split to include space as separator
+                MarkdownSpansCache.generateKey(contentKey + "_v26", isDark, sp)
             } else ""
 
             val cachedSpanned = if (cacheKey.isNotBlank()) MarkdownSpansCache.get(cacheKey) else null

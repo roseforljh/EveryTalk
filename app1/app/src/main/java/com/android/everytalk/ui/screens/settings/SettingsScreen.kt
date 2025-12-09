@@ -102,7 +102,7 @@ fun SettingsScreen(
     var addModelToKeyTargetModality by remember { mutableStateOf(ModalityType.TEXT) }
     var addModelToKeyNewModelName by remember { mutableStateOf("") }
     
-    // 🔧 新增：手动输入模型对话框状态
+    // 新增：手动输入模型对话框状态
     var showManualModelInputDialog by remember { mutableStateOf(false) }
     var manualModelInputProvider by remember { mutableStateOf("") }
     var manualModelInputAddress by remember { mutableStateOf("") }
@@ -171,7 +171,7 @@ fun SettingsScreen(
         }
     }
     
-    // 🔧 新增：监听手动输入模型请求
+    // 新增：监听手动输入模型请求
     LaunchedEffect(Unit) {
         viewModel.showManualModelInputRequest.collect { request ->
             manualModelInputProvider = request.provider
@@ -247,7 +247,7 @@ fun SettingsScreen(
             apiConfigsByApiKeyAndModality = apiConfigsByApiKeyAndModality,
             isImageMode = isInImageMode,
             onAddFullConfigClick = {
-                // 🆕 文本和图像模式都默认选择"默认"
+                // 文本和图像模式都默认选择"默认"
                 val initialProvider = "默认"
                 newFullConfigProvider = initialProvider
                 newFullConfigKey = ""
@@ -335,7 +335,7 @@ fun SettingsScreen(
                     showAddFullConfigDialog = false
                     viewModel.clearFetchedModels()
                 } else if (isDefaultProvider && !isInImageMode) {
-                    // 🆕 文本模式下的"默认"平台：创建多个默认模型配置
+                    // 文本模式下的"默认"平台：创建多个默认模型配置
                     // 确保所有配置使用相同的 provider、address、key 和 channel，以便在UI上聚合为一个卡片
                     val defaultModels = listOf(
                         "gemini-2.5-pro-1M",
@@ -392,7 +392,7 @@ fun SettingsScreen(
         )
     }
     
-    // 🔧 新增：手动输入模型对话框
+    // 新增：手动输入模型对话框
     if (showManualModelInputDialog) {
         AddModelDialog(
             onDismissRequest = {

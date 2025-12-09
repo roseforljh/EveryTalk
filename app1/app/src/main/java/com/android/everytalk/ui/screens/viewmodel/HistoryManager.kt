@@ -397,7 +397,7 @@ class HistoryManager(
                 }
             }
             
-            // 🔧 修复：统一迁移会话绑定的配置ID（文本模式和图像模式都适用）
+            // 修复：统一迁移会话绑定的配置ID（文本模式和图像模式都适用）
             // 这确保即使用户只选择了模型但没有发送消息，配置ID映射也能被正确迁移
             val currentConfigIds = stateHolder.conversationApiConfigIds.value
             if (currentConfigIds.containsKey(currentId) && currentId != stableId) {
@@ -495,7 +495,7 @@ class HistoryManager(
                         "Due to deletion, LoadedHistoryIndex updated to: $finalLoadedIndexAfterDelete"
                 )
             }
-            // 🔧 修复：删除历史项后，重建 systemPrompts 映射，并保证当前加载会话的会话ID稳定
+            // 修复：删除历史项后，重建 systemPrompts 映射，并保证当前加载会话的会话ID稳定
             runCatching {
                 val currentHistoryFinal = historicalConversations.value
     

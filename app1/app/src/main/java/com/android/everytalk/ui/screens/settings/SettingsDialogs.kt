@@ -260,7 +260,7 @@ internal fun AddProviderDialog(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                "✓",
+                                "",
                                 style = MaterialTheme.typography.titleMedium,
                                 color = MaterialTheme.colorScheme.secondary,
                                 modifier = Modifier.padding(end = 8.dp)
@@ -1228,7 +1228,7 @@ internal fun ConfirmDeleteDialog(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            "⚠️",
+                            "",
                             style = MaterialTheme.typography.titleMedium,
                             modifier = Modifier.padding(end = 8.dp)
                         )
@@ -1409,7 +1409,7 @@ internal fun ImportExportDialog(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                "⚠️",
+                                "",
                                 style = MaterialTheme.typography.titleMedium,
                                 modifier = Modifier.padding(end = 12.dp)
                             )
@@ -1462,7 +1462,7 @@ internal fun ImportExportDialog(
                 
                 // 提示信息
                 Text(
-                    "💡 导出的配置文件可在其他设备导入使用",
+                    "导出的配置文件可在其他设备导入使用",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                     modifier = Modifier.padding(top = 8.dp)
@@ -1573,7 +1573,7 @@ internal fun AddModelDialog(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                "✓",
+                                "",
                                 style = MaterialTheme.typography.titleMedium,
                                 color = MaterialTheme.colorScheme.secondary,
                                 modifier = Modifier.padding(end = 8.dp)

@@ -632,7 +632,7 @@ class DataPersistenceManager(
                    // 优先从 Room 加载
                    var loadedImageGenHistory = roomDataSource.loadImageGenerationHistory()
                    
-                   // 🔥 增强：启动时完整性检查与修复
+                   // 增强：启动时完整性检查与修复
                    // 1. 将历史中的 data:image 与 http(s) 图片统一落盘并替换为本地路径
                    // 2. 检查本地文件是否存在，如果不存在则尝试恢复或标记
                    val convertedImageGenHistory = loadedImageGenHistory.map { conv ->
@@ -647,7 +647,7 @@ class DataPersistenceManager(
                                        val path = url.removePrefix("file://")
                                        val file = File(path)
                                        if (!file.exists()) {
-                                           Log.w(TAG, "⚠️ Image file missing for message ${msg.id}: $path")
+                                           Log.w(TAG, "Image file missing for message ${msg.id}: $path")
                                            // 如果文件丢失，我们暂时保留路径，或许后续可以恢复
                                            // 或者可以替换为一个错误占位图 URL
                                            url
@@ -673,7 +673,7 @@ class DataPersistenceManager(
                    launch(Dispatchers.IO) {
                        try {
                            roomDataSource.saveImageGenerationHistory(convertedImageGenHistory)
-                           Log.i(TAG, "✅ Image generation history integrity check and persistence completed")
+                           Log.i(TAG, "Image generation history integrity check and persistence completed")
                        } catch (e: Exception) {
                            Log.w(TAG, "Failed to persist converted image generation history", e)
                        }

@@ -33,10 +33,10 @@ object MessageDebugUtil {
             // 检查是否有异常截断
             val lastLine = lines.lastOrNull()?.trim() ?: ""
             if (lastLine.isNotEmpty() && !lastLine.endsWith("。") && !lastLine.endsWith("！") && !lastLine.endsWith("？") && !lastLine.endsWith(".")) {
-                android.util.Log.w(TAG, "⚠️ Possible truncation detected - last line doesn't end with punctuation: '$lastLine'")
+                android.util.Log.w(TAG, "Possible truncation detected - last line doesn't end with punctuation: '$lastLine'")
             }
         } else {
-            android.util.Log.w(TAG, "⚠️ Message text is blank!")
+            android.util.Log.w(TAG, "Message text is blank!")
         }
         
         // Parts分析
@@ -73,10 +73,10 @@ object MessageDebugUtil {
             android.util.Log.d(TAG, "Estimated reconstructed length: $reconstructedLength")
             
             if (message.text.length > reconstructedLength * 1.2) {
-                android.util.Log.w(TAG, "⚠️ Original text significantly longer than parts - possible parsing issue")
+                android.util.Log.w(TAG, "Original text significantly longer than parts - possible parsing issue")
             }
         } else {
-            android.util.Log.w(TAG, "⚠️ No parts found!")
+            android.util.Log.w(TAG, "No parts found!")
         }
         
         android.util.Log.d(TAG, "=== End Analysis ===")
@@ -91,7 +91,7 @@ object MessageDebugUtil {
         if (oldMessage.text != newMessage.text) {
             android.util.Log.d(TAG, "Text changed: ${oldMessage.text.length} -> ${newMessage.text.length} chars")
             if (newMessage.text.length < oldMessage.text.length) {
-                android.util.Log.w(TAG, "⚠️ Text got shorter - possible content loss!")
+                android.util.Log.w(TAG, "Text got shorter - possible content loss!")
             }
         }
         
@@ -110,7 +110,7 @@ object MessageDebugUtil {
      * 监控流式更新过程
      */
     fun logStreamingUpdate(messageId: String, textChunk: String, totalLength: Int) {
-        android.util.Log.d(TAG, "🔄 Streaming Update - Message: $messageId")
+        android.util.Log.d(TAG, "Streaming Update - Message: $messageId")
         android.util.Log.d(TAG, "  Chunk: '${textChunk.take(50)}${if (textChunk.length > 50) "..." else ""}'")
         android.util.Log.d(TAG, "  Chunk length: ${textChunk.length}")
         android.util.Log.d(TAG, "  Total length: $totalLength")

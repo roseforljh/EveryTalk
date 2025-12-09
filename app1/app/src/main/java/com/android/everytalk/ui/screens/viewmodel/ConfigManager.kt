@@ -234,7 +234,7 @@ class ConfigManager(
                 persistenceManager.saveSelectedConfigIdentifier(config.id, isImageGen)
                 Log.d(TAG_CM, "Selected config ID (${config.id}) saved to persistence.")
                 
-                // 🔧 修复：将配置ID绑定到当前会话，确保切换会话时能恢复正确的模型
+                // 修复：将配置ID绑定到当前会话，确保切换会话时能恢复正确的模型
                 if (!isImageGen) {
                     // 文本模式：绑定到当前文本会话ID
                     val currentConversationId = stateHolder._currentConversationId.value

@@ -239,7 +239,7 @@ internal fun SettingsScreenContent(
                 )
             }
         } else {
-            // 🆕 将配置分为默认配置和其他配置，确保默认配置始终置顶
+            // 将配置分为默认配置和其他配置，确保默认配置始终置顶
             val allGroups = apiConfigsByApiKeyAndModality.flatMap { (apiKey, configsByModality) ->
                 configsByModality.map { (modalityType, configsForKeyAndModality) ->
                     Triple(apiKey, modalityType, configsForKeyAndModality)
