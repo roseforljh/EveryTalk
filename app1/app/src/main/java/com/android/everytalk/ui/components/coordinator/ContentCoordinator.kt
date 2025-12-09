@@ -31,7 +31,8 @@ fun ContentCoordinator(
     contentKey: String = "",  // 新增：用于缓存key（通常为消息ID）
     onLongPress: (() -> Unit)? = null,
     onImageClick: ((String) -> Unit)? = null, // 新增
-    sender: Sender = Sender.AI  // 新增：发送者信息，默认为AI
+    sender: Sender = Sender.AI,  // 新增：发送者信息，默认为AI
+    disableVerticalPadding: Boolean = false // 新增：允许禁用垂直padding
 ) {
     // 根据发送者决定宽度策略
     val widthModifier = if (sender == Sender.User) {
@@ -58,7 +59,8 @@ fun ContentCoordinator(
             onLongPress = onLongPress,
             onImageClick = onImageClick,
             sender = sender,
-            contentKey = contentKey
+            contentKey = contentKey,
+            disableVerticalPadding = disableVerticalPadding
         )
         return
     }
@@ -111,6 +113,7 @@ fun ContentCoordinator(
         onLongPress = onLongPress,
         onImageClick = onImageClick,
         sender = sender,
-        contentKey = contentKey
+        contentKey = contentKey,
+        disableVerticalPadding = disableVerticalPadding
     )
 }

@@ -47,6 +47,7 @@ import com.android.everytalk.ui.theme.chatColors
 import com.android.everytalk.ui.components.EnhancedMarkdownText
 import com.android.everytalk.ui.components.StableMarkdownText
 import com.android.everytalk.ui.components.markdown.MarkdownRenderer
+import com.android.everytalk.ui.components.WebPreviewDialog
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 
@@ -566,6 +567,21 @@ fun AiMessageItem(
     val shape = RectangleShape
     val aiReplyMessageDescription = stringResource(id = R.string.ai_reply_message)
     
+    // 代码预览状态
+    var previewCode by remember { mutableStateOf<String?>(null) }
+    var previewLanguage by remember { mutableStateOf("text") }
+
+    if (previewCode != null) {
+        WebPreviewDialog(
+            code = previewCode!!,
+            language = previewLanguage,
+            onDismiss = {
+                previewCode = null
+                previewLanguage = "text"
+            }
+        )
+    }
+
     Row(
         modifier = modifier
             .wrapContentWidth(),
@@ -631,6 +647,13 @@ fun AiMessageItem(
                     messageOutputType = messageOutputType,
                     onLongPress = onLongPress,
                     onImageClick = onImageClick,
+                    onCodePreviewRequested = { lang, code ->
+                        previewLanguage = lang
+                        previewCode = code
+                    },
+                    onCodeCopied = {
+                        viewModel.showSnackbar("已复制代码")
+                    },
                     viewModel = viewModel
                 )
             }
