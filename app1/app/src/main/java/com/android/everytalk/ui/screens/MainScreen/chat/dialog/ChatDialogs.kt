@@ -1,7 +1,13 @@
 package com.android.everytalk.ui.screens.MainScreen.chat.dialog
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -42,6 +48,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.background
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.LayoutDirection
@@ -178,17 +187,22 @@ fun ConversationParametersDialog(
     var useCustomMaxTokens by remember(initialMaxTokens) { mutableStateOf(initialMaxTokens != null) }
     var maxTokens by remember(initialMaxTokens) { mutableStateOf(initialMaxTokens?.toString() ?: "64000") }
 
+    val configuration = LocalConfiguration.current
+    val screenHeight = configuration.screenHeightDp.dp
+    val dialogHeight = screenHeight * 0.67f
+
     AlertDialog(
+        modifier = Modifier.height(dialogHeight),
         onDismissRequest = onDismissRequest,
-        title = { 
+        title = {
             Text(
-                "会话参数", 
+                "会话参数",
                 color = MaterialTheme.colorScheme.onSurface,
                 fontWeight = FontWeight.Bold
-            ) 
+            )
         },
         text = {
-            Column {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 // Temperature Slider
                 Text(
                     "Temperature: ${String.format("%.2f", temperature)}",
@@ -337,7 +351,21 @@ fun ConversationParametersDialog(
                 }
                 
                 // Show input field only when switch is enabled
-                if (useCustomMaxTokens) {
+                AnimatedVisibility(
+                    visible = useCustomMaxTokens,
+                    enter = expandVertically(
+                        animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing)
+                    ) + fadeIn(
+                        // 完全等待高度展开结束后再淡入内容，避免 Window Resize 时的抖动
+                        animationSpec = tween(durationMillis = 200, delayMillis = 300)
+                    ),
+                    exit = fadeOut(
+                        animationSpec = tween(durationMillis = 200)
+                    ) + shrinkVertically(
+                        // 等待淡出完全结束后再收缩高度
+                        animationSpec = tween(durationMillis = 300, delayMillis = 200, easing = FastOutSlowInEasing)
+                    )
+                ) {
                     OutlinedTextField(
                         value = maxTokens,
                         onValueChange = { newValue ->

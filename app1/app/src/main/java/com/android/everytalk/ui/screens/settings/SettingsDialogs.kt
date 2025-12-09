@@ -37,6 +37,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.Dp
@@ -453,7 +454,12 @@ internal fun AddNewFullConfigDialog(
         }
     }
 
+    val configuration = LocalConfiguration.current
+    val screenHeight = configuration.screenHeightDp.dp
+    val dialogHeight = screenHeight * 0.8f
+
     AlertDialog(
+        modifier = Modifier.height(dialogHeight),
         shape = RoundedCornerShape(32.dp),
         onDismissRequest = onDismissRequest,
         containerColor = MaterialTheme.colorScheme.surface,
@@ -890,7 +896,12 @@ internal fun EditConfigDialog(
     // 固定的渠道类型选项
     val channelTypes = listOf("OpenAI兼容", "Gemini")
 
+    val configuration = LocalConfiguration.current
+    val screenHeight = configuration.screenHeightDp.dp
+    val dialogHeight = screenHeight * 0.8f
+
     AlertDialog(
+        modifier = Modifier.height(dialogHeight),
         onDismissRequest = onDismissRequest,
         shape = RoundedCornerShape(32.dp),
         containerColor = MaterialTheme.colorScheme.surface,
