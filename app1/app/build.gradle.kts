@@ -145,12 +145,6 @@ android {
             )
             signingConfig = signingConfigs.getByName("release")
             
-            // ⚠️ 后端代理配置已废弃，保留空字符串仅为兼容旧代码
-            // 所有功能已迁移到直连模式，不再需要后端代理
-            buildConfigField("String", "BACKEND_URLS", "\"\"")
-            buildConfigField("String", "VOICE_BACKEND_URL", "\"\"")
-            buildConfigField("boolean", "CONCURRENT_REQUEST_ENABLED", "false")
-
             // 注入直连模式 API 配置 (Release)
             // 优先从环境变量读取（CI 环境），其次从 local.properties 读取（本地开发）
             buildConfigField("String", "GOOGLE_API_KEY", "\"${getConfigValue("GOOGLE_API_KEY")}\"")
@@ -173,12 +167,6 @@ android {
         debug {
             isProfileable = false // debug 构建也可以设为 profileable,方便测试
             
-            // ⚠️ 后端代理配置已废弃，保留空字符串仅为兼容旧代码
-            // 所有功能已迁移到直连模式，不再需要后端代理
-            buildConfigField("String", "BACKEND_URLS", "\"\"")
-            buildConfigField("String", "VOICE_BACKEND_URL", "\"\"")
-            buildConfigField("boolean", "CONCURRENT_REQUEST_ENABLED", "false")
-
             // 注入直连模式 API 配置 (Debug)
             // 优先从环境变量读取（CI 环境），其次从 local.properties 读取（本地开发）
             buildConfigField("String", "GOOGLE_API_KEY", "\"${getConfigValue("GOOGLE_API_KEY")}\"")

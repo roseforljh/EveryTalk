@@ -201,61 +201,7 @@ class VoiceChatSession(
 
         isRecording = true
 
-        if (shouldUseRealtimeStt) {
-            Log.i(TAG, "Starting Aliyun Realtime STT with zero-wait buffering...")
-
-            // 创建新的 STT 客户端
-            aliyunRealtimeSttClient = AliyunRealtimeSttClient(
-                httpClient = ktorClient,
-                apiKey = sttApiKey,
-                model = sttModel.ifEmpty { "fun-asr-realtime" },
-                sampleRate = sampleRate,
-                format = "pcm"
-            )
-
-            // 通知 UI WebSocket 正在连接
-            withContext(Dispatchers.Main) {
-                onWebSocketStateChanged?.invoke(WebSocketState.CONNECTING)
-            }
-            
-            // 在后台启动实时 STT 会话（不阻塞录音）
-            realtimeSttJob = realtimeSttScope.launch {
-                aliyunRealtimeSttClient?.start(
-                    onReady = {
-                        Log.i(TAG, "WebSocket ready, flushing pending audio buffer...")
-                        
-                        // 通知 UI WebSocket 已连接
-                        kotlinx.coroutines.MainScope().launch {
-                            onWebSocketStateChanged?.invoke(WebSocketState.CONNECTED)
-                        }
-                        
-                        // WebSocket 连接成功，发送缓冲的音频数据
-                        realtimeSttScope.launch {
-                            flushPendingAudioBuffer()
-                        }
-                        
-                        // 标记 WebSocket 已就绪
-                        isWebSocketReady.set(true)
-                    },
-                    onPartial = { text ->
-                        // 收到 partial 结果时，清除提示文本，并实时更新识别结果
-                        onResponseReceived?.invoke("")
-                        onTranscriptionReceived?.invoke(text)
-                    },
-                    onFinal = { text ->
-                        onTranscriptionReceived?.invoke(text)
-                    },
-                    onError = { error ->
-                        Log.e(TAG, "Realtime STT error: $error")
-                        // 通知 UI WebSocket 错误
-                        kotlinx.coroutines.MainScope().launch {
-                            onWebSocketStateChanged?.invoke(WebSocketState.ERROR)
-                        }
-                        onResponseReceived?.invoke("识别错误: $error")
-                    }
-                )
-            }
-        }
+        // 移除实时 STT 逻辑，强制使用直连模式
 
         // 启动读取循环
         val readBuf = ByteArray(3200) // 100ms @ 16kHz 16bit mono = 3200 bytes
@@ -269,19 +215,7 @@ class VoiceChatSession(
                     // 始终写入 pcmBuffer（用于后续可能的离线 STT 或备份）
                     pcmBuffer.write(readBuf, 0, n)
                     
-                    // 如果启用了实时 STT
-                    if (shouldUseRealtimeStt && aliyunRealtimeSttClient != null) {
-                        val audioChunk = if (n < readBuf.size) readBuf.copyOf(n) else readBuf.clone()
-                        
-                        // 【零等待录音核心逻辑】
-                        if (isWebSocketReady.get()) {
-                            // WebSocket 已就绪，直接发送
-                            aliyunRealtimeSttClient?.sendAudio(audioChunk)
-                        } else {
-                            // WebSocket 未就绪，缓存音频数据
-                            bufferAudioChunk(audioChunk)
-                        }
-                    }
+                    // 移除实时 STT 发送逻辑
 
                     // 计算音量（RMS）并回调给UI
                     val currentTime = System.currentTimeMillis()
@@ -482,13 +416,7 @@ class VoiceChatSession(
     suspend fun stopRecordingAndProcess(): VoiceChatResult = withContext(Dispatchers.IO) {
         isRecording = false
         
-        // 检查是否使用实时 STT 模式
-        val shouldUseRealtimeStt = useRealtimeStt && sttPlatform.equals("Aliyun", ignoreCase = true)
-        
-        if (shouldUseRealtimeStt && aliyunRealtimeSttClient != null) {
-            Log.i(TAG, "Using Realtime STT mode - finishing STT and processing")
-            return@withContext stopRecordingAndProcessWithRealtimeStt()
-        }
+        // 强制使用直连模式
         
         // 直连模式处理
         Log.i(TAG, "Using Direct Mode")

@@ -362,8 +362,7 @@ class ApiHandler(
                 if (audioBase64 != null) {
                     finalAttachments.add(Audio(id = UUID.randomUUID().toString(), mimeType = mimeType ?: "audio/3gpp", data = audioBase64))
                 }
-                // 修复：所有文本请求（包括Gemini渠道）都统一使用后端代理
-                // 移除了对Gemini渠道的特殊处理，确保所有请求都通过配置的后端代理进行
+                // 强制使用直连模式
                 ApiClient.streamChatResponse(
                     requestBody,
                     finalAttachments,
