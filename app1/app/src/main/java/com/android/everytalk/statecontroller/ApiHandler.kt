@@ -379,6 +379,12 @@ class ApiHandler(
                         .onCompletion { cause ->
                             logger.debug("Stream completed for message $aiMessageId, cause: ${cause?.message}")
                             newEventChannel.close()
+                            
+                            // 🎯 无论成功还是取消/错误，都必须在此处进行最终的同步
+                            // 确保流式缓冲区中的残余内容被刷新并写入消息列表
+                            stateHolder.flushStreamingBuffer(aiMessageId)
+                            stateHolder.syncStreamingMessageToList(aiMessageId, isImageGeneration)
+                            
                             val currentJob = if (isImageGeneration) stateHolder.imageApiJob else stateHolder.textApiJob
                             val isThisJobStillTheCurrentOne = currentJob == thisJob
 
@@ -432,6 +438,11 @@ class ApiHandler(
                             newEventChannel.trySend(appEvent)
                             
                             android.util.Log.i("STREAM_DEBUG", "[ApiHandler] ✅ EVENT PROCESSED at ${System.currentTimeMillis()}: took ${System.currentTimeMillis() - timestamp}ms")
+
+                            // 🎯 如果收到终止事件，主动结束流收集，确保触发 onCompletion 从而重置按钮状态
+                            if (appEvent is AppStreamEvent.Finish || appEvent is AppStreamEvent.StreamEnd || appEvent is AppStreamEvent.Error) {
+                                throw CancellationException("Stream finished with event: ${appEvent::class.simpleName}")
+                            }
                         }
                }
             } catch (e: Exception) {
@@ -468,6 +479,16 @@ class ApiHandler(
                     logger.debug("Cleared StreamingBuffer on cancellation exception for message: $aiMessageId")
                 }
             } finally {
+                // 🎯 最终安全网：如果在 onCompletion 中因异常未执行同步，这里再尝试一次
+                // 但为了避免重复执行，syncStreamingMessageToList 内部有空值检查
+                // 注意：在 finally 中不应抛出异常
+                try {
+                    stateHolder.flushStreamingBuffer(aiMessageId)
+                    stateHolder.syncStreamingMessageToList(aiMessageId, isImageGeneration)
+                } catch (e: Exception) {
+                    logger.warn("Final sync in finally block failed: ${e.message}")
+                }
+
                 val currentJob = if (isImageGeneration) stateHolder.imageApiJob else stateHolder.textApiJob
                 if (currentJob == thisJob) {
                     if (isImageGeneration) {
@@ -685,6 +706,11 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     // 🎯 刷新 StreamingBuffer 确保所有内容已提交（Requirements: 3.3, 7.1, 7.2）
                     stateHolder.flushStreamingBuffer(aiMessageId)
                     logger.debug("Flushed StreamingBuffer for message: $aiMessageId")
+                    
+                    // 🎯 强制 StreamingMessageStateManager 最终 flush (忽略代码块闭合检查)
+                    // 这一步至关重要，确保 UI 层的 StateFlow 接收到最后一段可能被暂缓的文本
+                    stateHolder.streamingMessageStateManager.finalizeMessage(aiMessageId)
+                    logger.debug("Finalized StreamingMessageStateManager for message: $aiMessageId")
                     
                     // 🎯 Task 11: Log performance metrics at stream completion
                     // This provides a summary of streaming performance for debugging

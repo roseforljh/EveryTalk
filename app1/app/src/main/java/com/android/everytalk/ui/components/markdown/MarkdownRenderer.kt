@@ -40,54 +40,31 @@ import com.android.everytalk.ui.components.markdown.MarkdownSpansCache
 private val MULTIPLE_SPACES_REGEX = Regex(" {2,}")
 private val ENUM_ITEM_REGEX = Regex("(?<!\n)\\s+([A-DＡ-Ｄ][\\.．、])\\s")
 
-private fun preprocessAiMarkdown(input: String): String {
+private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): String {
     var s = input
 
-    // Fix: Swap bold markers and quotes: **"text"** -> "**text**"
-    // Handles Chinese quotes “”, straight quotes "", and single quotes ''
-    // This ensures that the quotes themselves are not bolded, which is often preferred for CJK typography
-    // Uses DOT_MATCHES_ALL to handle multi-line quoted text
-    val boldQuotePattern = Regex("\\*\\*([“\"'])(.*?)([”\"'])\\*\\*", RegexOption.DOT_MATCHES_ALL)
-    // New pattern for **“text**” -> “**text**” (Fixes issue where bold start is inside, end is outside quote)
-    val mixedBoldStartPattern = Regex("\\*\\*([“\"'])(.*?)\\*\\*([”\"'])", RegexOption.DOT_MATCHES_ALL)
-    // New pattern for “**text”** -> “**text**” (Fixes issue where bold start is outside, end is inside quote)
-    val mixedBoldEndPattern = Regex("([“\"'])\\*\\*(.*?)([”\"'])\\*\\*", RegexOption.DOT_MATCHES_ALL)
+    // ============================================================================================
+    // 最小化预处理策略 (Minimal Preprocessing Strategy)
+    // ============================================================================================
+    //
+    // 之前的激进结构重写规则（如自动换行、自动缩进、列表拆分等）导致了很多副作用：
+    // - 错误触发代码块（4空格缩进）
+    // - 破坏粗体语法（** 被拆开）
+    // - 渲染结果不可预测
+    //
+    // 现在只保留绝对安全的、不改变文本结构的清理操作。
+    // 要获得干净的 Markdown 排版，应在生成端（Prompt / System Prompt）约束模型输出规范格式。
+    // ============================================================================================
 
-    if (s.contains("**")) {
-        // 1. Handle **"text"** -> "**text**"
-        s = s.replace(boldQuotePattern) { matchResult ->
-            val openQuote = matchResult.groupValues[1]
-            val content = matchResult.groupValues[2]
-            val closeQuote = matchResult.groupValues[3]
-            "$openQuote**$content**$closeQuote"
-        }
-        // 2. Handle **"text**" -> "**text**"
-        s = s.replace(mixedBoldStartPattern) { matchResult ->
-            val openQuote = matchResult.groupValues[1]
-            val content = matchResult.groupValues[2]
-            val closeQuote = matchResult.groupValues[3]
-            "$openQuote**$content**$closeQuote"
-        }
-        // 3. Handle "**text"** -> "**text**"
-        s = s.replace(mixedBoldEndPattern) { matchResult ->
-            val openQuote = matchResult.groupValues[1]
-            val content = matchResult.groupValues[2]
-            val closeQuote = matchResult.groupValues[3]
-            "$openQuote**$content**$closeQuote"
-        }
-    }
-
-    // Fix: Convert $$ followed by a digit to escaped single $ (currency fix)
-    // e.g. $$30 -> \$30. This fixes issues where models output double dollars for currency.
-    // We use \$ (escaped dollar) so that subsequent inline math patterns won't pick it up
-    // Markwon will render \$ as a literal $ sign
+    // 1. 货币符号修复: $$30 -> \$30
+    // Markwon 会将 $$ 解析为数学公式块，导致显示错误。需转义。
     if (s.contains("$$")) {
         val currencyPattern = Regex("\\$\\$(?=\\d)")
         s = s.replace(currencyPattern) { "\\$" }
     }
 
-    // Normalize base64 data URIs inside markdown image links: ![...](data:image/...)
-    // Many providers insert newlines/spaces in long base64 strings which breaks Markdown parsing.
+    // 2. Base64 图片链接清理
+    // 修复 Base64 字符串中可能包含的换行符，防止 Markdown 图片解析失败。
     if (s.contains("data:image/")) {
         val base64ImagePattern = Regex("(\\!\\[[^\\]]*\\]\\()\\s*(data:image\\/[^)]+)\\s*(\\))", setOf(RegexOption.DOT_MATCHES_ALL))
         s = s.replace(base64ImagePattern) { mr ->
@@ -98,23 +75,59 @@ private fun preprocessAiMarkdown(input: String): String {
         }
     }
 
+    // 3. 特殊空格归一化
     s = s.replace("&nbsp;", " ")
         .replace("\u00A0", " ")
         .replace("\u3000", " ")
-    s = s.replace(MULTIPLE_SPACES_REGEX, " ")
-    s = s.replace(ENUM_ITEM_REGEX, "\n- $1 ")
 
-    // Fallback: Convert inline math ($...$) to block math ($$...$$)
-    // This helps when the inline math parser fails or when we want consistent display.
-    // We use a regex that avoids matching existing block math ($$) or escaped dollars (\$).
-    // Pattern ensures we match $content$ but not $$content$$
-    // Fix: Disallow newlines in inline math content to prevent capturing unrelated dollar signs across lines
+    // ============================================================================================
+    // 格式化增强 (Formatting Enhancements)
+    // 只保留用户明确需要的功能，移除会导致问题的列表处理逻辑
+    // ============================================================================================
+
+    // 4.1 修复紧凑标题 (Compact Headers Fix) - 用户明确要求保留
+    // 某些模型输出标题时没有换行，导致Markwon无法正确识别
+    // 例如: "前文## 标题" -> "前文\n\n## 标题"
+    // 只处理 H2-H6 (##-######)，避免误伤 H1 (#) 和 hashtag (#tag)
+    s = s.replace(Regex("(?<!^)(?<!\\n)(#{2,6})(?=[^#])"), "\n\n$1")
+    s = s.replace(Regex("(?<!^)(?<!\\n)(#{1}\\s)"), "\n\n$1") // H1 必须后跟空格才处理
+    
+    // 修复标题后缺少空格: "##Title" -> "## Title"
+    s = s.replace(Regex("(?<=^|\\n)(#{1,6})(?=[^#\\s])"), "$1 ")
+
+    // 4.2 紧凑列表（仅限标题行内的第一个 "- "）拆行
+    // 典型模式: "## 政策层面- **经济政策**" -> "## 政策层面\n- **经济政策**"
+    // 只在标题行内部寻找第一个 "- "，避免影响普通段落和子列表。
+    s = s.replace(
+        Regex("^(#{1,6}[^\\n]*?)(?:\\s*)-\\s", RegexOption.MULTILINE)
+    ) { mr ->
+        val headingPart = mr.groupValues[1].trimEnd()
+        "$headingPart\n- "
+    }
+
+    // 5. 强制换行处理 (Hard Break Enforcement) - 用户明确要求保留
+    // Markwon/CommonMark 默认将单个换行符视为空格 (Soft Break)。
+    // 将单换行转换为 Markdown 硬换行 (两个空格 + \n)。
+    val isIsolatedCodeBlock = s.trimStart().startsWith("```")
+    if (!isIsolatedCodeBlock) {
+        s = s.replace(Regex("(?<!\\n)(?<!  )\\n(?!\\n)"), "  \n")
+    }
+
+    // 6. 内联数学公式转换 - 用户明确要求保留
+    // Convert inline math ($...$) to block math ($$...$$)
     val inlineMathPattern = Regex("(?<!\\\\)(?<!\\$)\\$([^$\\n]+?)(?<!\\\\)(?<!\\$)\\$")
     if (s.contains("$")) {
         s = s.replace(inlineMathPattern) { matchResult ->
             "$$" + matchResult.groupValues[1] + "$$"
         }
     }
+
+    // ============================================================================================
+    // 已移除的功能（会导致代码块和粗体破坏问题）：
+    // - 紧凑列表修复 (Compact Lists Fix) - 已移除，会触发代码块
+    // - 列表项缩进处理 - 已移除，会触发代码块
+    // - 列表符号后自动加空格 - 已移除，会破坏 ** 粗体语法
+    // ============================================================================================
 
     return s
 }
@@ -134,7 +147,9 @@ fun MarkdownRenderer(
     val context = LocalContext.current
     val isDark = isSystemInDarkTheme()
     
-    val textSizeSp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
+    val baseTextSizeSp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
+    // 放大 AI 消息字号，用户消息保持原字号
+    val textSizeSp = if (sender == Sender.AI) baseTextSizeSp * 1.1f else baseTextSizeSp
     val markwon = remember(isDark, textSizeSp) {
         MarkwonCache.getOrCreate(
             context = context,
@@ -161,7 +176,9 @@ fun MarkdownRenderer(
         factory = {
             TextView(it).apply {
                 // 统一文本样式（字号）
-                val sp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
+                val baseSp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
+                // 放大 AI 消息字号，用户消息保持原字号
+                val sp = if (sender == Sender.AI) baseSp * 1.1f else baseSp
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
                 setTextColor(finalColor.toArgb())
                 // 稳定基线，减少跳动
@@ -188,7 +205,7 @@ fun MarkdownRenderer(
                     // 16dp 应该足够容纳大部分溢出的字形
                     val paddingPx = TypedValue.applyDimension(
                         TypedValue.COMPLEX_UNIT_DIP,
-                        16f,
+                        1f,
                         resources.displayMetrics
                     ).toInt()
                     
@@ -197,8 +214,10 @@ fun MarkdownRenderer(
                     setPadding(paddingPx, verticalPaddingPx, paddingPx, verticalPaddingPx)
                 }
                 
-                // 行间距 - 更小的行间距
-                val lineSpacingDp = if (sender == Sender.User) 2f else 3f
+                // 行间距 - 用户与 AI 区分设置
+                // 用户保持略紧凑，AI 适度加大上下行距离
+                // 根据反馈“稍微减文本之间的距离”，将 AI 行间距从 6f 调整为 5f
+                val lineSpacingDp = if (sender == Sender.User) 2f else 5f
                 setLineSpacing(
                     TypedValue.applyDimension(
                         TypedValue.COMPLEX_UNIT_DIP,
@@ -208,7 +227,7 @@ fun MarkdownRenderer(
                     1.0f
                 )
                 
-                // 字符间距 - 更小的字符间距
+                // 字符间距 - 用户和 AI 使用不同字距；在保证可读性的前提下，进一步减小 AI 字符左右间距
                 letterSpacing = if (sender == Sender.User) 0.02f else 0.03f
                 
                 // 设置居中对齐 - 对多行文本有效
@@ -378,7 +397,8 @@ fun MarkdownRenderer(
             val sp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
             val cacheKey = if (contentKey.isNotBlank() && !isStreaming) {
                 // Append version suffix to invalidate old cache entries after regex fixes
-                MarkdownSpansCache.generateKey(contentKey + "_v5", isDark, sp)
+                // v7: Restored headers, hard breaks, inline math; removed list fixes that caused issues
+                MarkdownSpansCache.generateKey(contentKey + "_v7", isDark, sp)
             } else ""
 
             val cachedSpanned = if (cacheKey.isNotBlank()) MarkdownSpansCache.get(cacheKey) else null
@@ -391,7 +411,8 @@ fun MarkdownRenderer(
                 }
             } else {
                 // 未命中缓存：执行完整解析
-                val processed = preprocessAiMarkdown(markdown)
+                // 即使完全移除了差异化逻辑，保留参数接口以便后续扩展，但目前逻辑已统一
+                val processed = preprocessAiMarkdown(markdown, isStreaming)
 
                 // 调试：检查是否包含数学公式
                 if (processed.contains("$")) {

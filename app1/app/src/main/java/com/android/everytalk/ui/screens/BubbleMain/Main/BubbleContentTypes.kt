@@ -90,7 +90,8 @@ internal fun UserOrErrorMessageContent(
     val screenDp = configuration.screenWidthDp.dp
     val screenHeightDp = configuration.screenHeightDp.dp
     
-    val roleMax = if (message.sender == Sender.User) screenDp * 0.71f else screenDp * 0.8f
+    // 用户气泡最大约 71% 屏宽，AI 气泡放宽到约 98% 屏宽，尽量贴近屏幕两侧
+    val roleMax = if (message.sender == Sender.User) screenDp * 0.71f else screenDp * 0.98f
     val appliedMax = roleMax.coerceAtMost(maxWidth)
 
     Box(
@@ -119,9 +120,10 @@ internal fun UserOrErrorMessageContent(
             // 外层包一层容器，内部保持原内容，叠加一个全覆盖的透明手势层，确保父层优先捕获长按
             Box(
                 modifier = Modifier
+                    // 用户保持原来略紧凑，AI 左右仅保留 1dp 安全边距
                     .padding(
-                        horizontal = if (message.sender == Sender.User) 10.dp else 20.dp,
-                        vertical = if (message.sender == Sender.User) 6.dp else 16.dp
+                        horizontal = if (message.sender == Sender.User) 10.dp else 1.dp,
+                        vertical = if (message.sender == Sender.User) 6.dp else 14.dp
                     )
                     .wrapContentWidth()
                     .defaultMinSize(minHeight = 28.dp)

@@ -565,6 +565,7 @@ object ApiClient {
                     
                     val response = client.get {
                         url(url)
+                        // OkHttp 默认重定向可能将 POST 301 转为 GET，这里是 GET 请求所以没问题
                         header(HttpHeaders.Accept, "application/vnd.github.v3+json")
                         header(HttpHeaders.CacheControl, "no-cache")
                         header(HttpHeaders.Pragma, "no-cache")

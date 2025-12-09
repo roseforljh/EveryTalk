@@ -182,10 +182,32 @@ class StreamingMessageStateManager {
      * Finish streaming for a message
      */
     fun finishStreaming(messageId: String): String {
-        // 结束前进行一次最终flush
-        pendingJobs.remove(messageId)?.cancel()
-        flushNow(messageId)
+        return finalizeMessage(messageId)
+    }
 
+    /**
+     * Finalize streaming for a message:
+     * 1. Force flush any pending buffers ignoring debounce and safety checks
+     * 2. Mark as finished (remove from active list)
+     * 3. Return the final complete content
+     */
+    fun finalizeMessage(messageId: String): String {
+        // Cancel pending debounce jobs
+        pendingJobs.remove(messageId)?.cancel()
+        
+        // Force flush pending buffer WITHOUT safety checks (isInsideUnclosedFence)
+        val stateFlow = streamingStates[messageId]
+        val buf = pendingBuffers[messageId]
+        
+        if (stateFlow != null && buf != null && buf.isNotEmpty()) {
+             val delta = buf.toString()
+             stateFlow.value = stateFlow.value + delta
+             // Clear buffer
+             buf.setLength(0)
+             
+             Log.i("STREAM_DEBUG", "[StreamingMessageStateManager] 🏁 Final flush for $messageId: deltaLen=${delta.length}, totalLen=${stateFlow.value.length}")
+        }
+        
         activeStreamingMessages.remove(messageId)
         val finalContent = streamingStates[messageId]?.value ?: ""
         Log.d("StreamingMessageStateManager",
