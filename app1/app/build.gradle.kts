@@ -18,11 +18,18 @@ val localProperties = loadProperties(project)
 fun sanitizeForBuildConfig(value: String?): String {
     if (value == null) return ""
     val trimmed = value.trim()
-    val unquoted = if (trimmed.startsWith("\"") && trimmed.endsWith("\"") && trimmed.length >= 2) {
+    var unquoted = if (trimmed.startsWith("\"") && trimmed.endsWith("\"") && trimmed.length >= 2) {
         trimmed.substring(1, trimmed.length - 1)
     } else {
         trimmed
     }
+
+    // 兼容处理：如果 URL 中包含反斜杠转义（如 https\://），将其还原为正常 URL
+    // 这通常发生在从 local.properties 复制值到 GitHub Secrets 时未去转义的情况
+    if (unquoted.contains("http") && unquoted.contains("\\:")) {
+        unquoted = unquoted.replace("\\:", ":")
+    }
+    
     // Escape backslashes and quotes for Java string literal in BuildConfig.java
     return unquoted.replace("\\", "\\\\").replace("\"", "\\\"")
 }
