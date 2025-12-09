@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.2](https://github.com/roseforljh/EveryTalk/compare/v1.8.1...v1.8.2) (2025-12-09)
+
+
+### Bug Fixes
+
+* 修复缺失的环境变量 ([9a88dcc](https://github.com/roseforljh/EveryTalk/commit/9a88dccb5146edd4cbe4d6af6ed127bea6c30c02))
+
 ## [1.8.1](https://github.com/roseforljh/EveryTalk/compare/v1.8.0...v1.8.1) (2025-12-08)
 
 
