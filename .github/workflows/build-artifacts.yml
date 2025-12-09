@@ -116,7 +116,24 @@ jobs:
           # 智谱 BigModel API（联网搜索）
           ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
         run: |
-          ./gradlew :app:assembleRelease --parallel --build-cache --stacktrace
+          ./gradlew :app:assembleRelease \
+            -PGOOGLE_API_KEY="${{ secrets.GOOGLE_API_KEY }}" \
+            -PGOOGLE_API_BASE_URL="${{ secrets.GOOGLE_API_BASE_URL }}" \
+            -PGOOGLE_CSE_ID="${{ secrets.GOOGLE_CSE_ID }}" \
+            -PGOOGLE_SEARCH_API_KEY="${{ secrets.GOOGLE_SEARCH_API_KEY }}" \
+            -PDEFAULT_OPENAI_API_BASE_URL="${{ secrets.DEFAULT_OPENAI_API_BASE_URL }}" \
+            -PDEFAULT_TEXT_API_KEY="${{ secrets.DEFAULT_TEXT_API_KEY }}" \
+            -PDEFAULT_TEXT_API_URL="${{ secrets.DEFAULT_TEXT_API_URL }}" \
+            -PDEFAULT_TEXT_MODELS="${{ secrets.DEFAULT_TEXT_MODELS }}" \
+            -PSILICONFLOW_API_KEY="${{ secrets.SILICONFLOW_API_KEY }}" \
+            -PSILICONFLOW_IMAGE_API_URL="${{ secrets.SILICONFLOW_IMAGE_API_URL }}" \
+            -PSILICONFLOW_DEFAULT_IMAGE_MODEL="${{ secrets.SILICONFLOW_DEFAULT_IMAGE_MODEL }}" \
+            -PVITE_API_URLS="${{ secrets.VITE_API_URLS }}" \
+            -PQWEN_EDIT_API_URLS="${{ secrets.QWEN_EDIT_API_URLS }}" \
+            -PQWEN_EDIT_API_SECRET="${{ secrets.QWEN_EDIT_API_SECRET }}" \
+            -PSEEDREAM_API_URL="${{ secrets.SEEDREAM_API_URL }}" \
+            -PZHIPU_API_KEY="${{ secrets.ZHIPU_API_KEY }}" \
+            --parallel --build-cache --stacktrace
 
       - name: Upload Android artifacts to Release
         if: startsWith(github.ref, 'refs/tags/')
