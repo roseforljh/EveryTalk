@@ -74,9 +74,21 @@ class VoiceChatDirectSession(
         Log.i(TAG, "Direct voice chat processing started")
         
         // 初始化分句器
-        // Minimax 需要更大的分块以减少请求数 (QPS 限制)
-        val minChunkSize = if (ttsConfig.platform.lowercase() == "minimax") 150 else 0
-        splitter = SmartSentenceSplitter(minChunkSize = minChunkSize)
+        // Minimax 需要更大的分块以减少请求数 (QPS 限制)，同时避免首句过短导致第二句听起来很慢
+        val isMinimax = ttsConfig.platform.lowercase() == "minimax"
+        val minChunkSize = if (isMinimax) 150 else 0
+
+        // 对 Minimax 平台适当提高首句最小长度，避免仅输出 2~3 个字就立刻触发 TTS，
+        // 这样可以让首句包含更完整的一小句，掩盖后续长句 TTS 的生成时间，从而减小“第二个字很慢”的主观感受
+        splitter = if (isMinimax) {
+            SmartSentenceSplitter(
+                firstSegmentMinLength = 6,
+                firstSegmentMaxWait = 25,
+                minChunkSize = minChunkSize
+            )
+        } else {
+            SmartSentenceSplitter(minChunkSize = minChunkSize)
+        }
         
         // 重置状态
         splitter.reset()
@@ -450,8 +462,18 @@ class VoiceChatDirectSession(
         Log.i(TAG, "Processing with existing user text: ${userText.take(50)}...")
         
         // 初始化分句器
-        val minChunkSize = if (ttsConfig.platform.lowercase() == "minimax") 150 else 0
-        splitter = SmartSentenceSplitter(minChunkSize = minChunkSize)
+        val isMinimax = ttsConfig.platform.lowercase() == "minimax"
+        val minChunkSize = if (isMinimax) 150 else 0
+
+        splitter = if (isMinimax) {
+            SmartSentenceSplitter(
+                firstSegmentMinLength = 6,
+                firstSegmentMaxWait = 25,
+                minChunkSize = minChunkSize
+            )
+        } else {
+            SmartSentenceSplitter(minChunkSize = minChunkSize)
+        }
         
         // 重置状态
         splitter.reset()
