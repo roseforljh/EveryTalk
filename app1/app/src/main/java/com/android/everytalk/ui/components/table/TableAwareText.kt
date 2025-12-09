@@ -21,8 +21,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import com.android.everytalk.ui.components.CodeBlock
 import com.android.everytalk.ui.components.ContentParser
 import com.android.everytalk.ui.components.ContentPart
 import com.android.everytalk.ui.components.WebPreviewDialog
@@ -142,38 +142,30 @@ fun TableAwareText(
                     )
                 }
                 is ContentPart.Code -> {
-                    // 代码块部分：始终用 CodeBlock 渲染
-                    // 流式期间可能没有语言标识或未闭合，CodeBlock 需能处理
-                    
-                    // 检查是否支持预览
-                    // 新增 xml：让 ```xml 代码块也显示“预览”按钮（走 html 模板）
-                    val supportedLanguages = setOf(
-                        "mermaid",
-                        "echarts",
-                        "chartjs",
-                        "flowchart",
-                        "flow",
-                        "vega",
-                        "vega-lite",
-                        "html",
-                        "svg",
-                        "xml"
-                    )
-                    val isPreviewSupported = part.language?.lowercase() in supportedLanguages
-                    
-                    CodeBlock(
-                        code = part.content,
-                        language = part.language,
-                        textColor = color,
-                        enableHorizontalScroll = true, // 始终启用滚动
+                    // 代码块部分：不再依赖单独的 CodeBlock 组件，
+                    // 直接用 MarkdownRenderer 渲染三引号代码块，同时使用等宽字体。
+                    val fencedCode = buildString {
+                        append("```")
+                        part.language?.let { append(it) }
+                        append('\n')
+                        append(part.content)
+                        append("\n```")
+                    }
+
+                    MarkdownRenderer(
+                        markdown = fencedCode,
+                        style = style.copy(fontFamily = FontFamily.Monospace),
+                        color = color,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 4.dp),
-                        maxHeight = 600,
-                        onPreviewClick = if (isPreviewSupported) {
-                            { previewState = part.content to (part.language ?: "") }
-                        } else null,
-                        onLongPress = onLongPress
+                            .padding(vertical = 4.dp)
+                            .horizontalScroll(rememberScrollState()),
+                        isStreaming = isStreaming,
+                        onLongPress = onLongPress,
+                        onImageClick = onImageClick,
+                        sender = sender,
+                        contentKey = if (contentKey.isNotBlank()) "${contentKey}_code_${parsedParts.indexOf(part)}_${part.content.length}" else "",
+                        disableVerticalPadding = true
                     )
                 }
                 is ContentPart.Table -> {
