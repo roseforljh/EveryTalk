@@ -100,8 +100,27 @@ jobs:
           SEEDREAM_API_URL: ${{ secrets.SEEDREAM_API_URL }}
           ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
         run: |
-          chmod +x .github/scripts/create_local_properties.sh
-          .github/scripts/create_local_properties.sh
+          echo "Creating local.properties..."
+          cat > ${{ env.APP_DIR }}/local.properties <<EOF
+          sdk.dir=$ANDROID_HOME
+          GOOGLE_API_KEY=$GOOGLE_API_KEY
+          GOOGLE_API_BASE_URL=$GOOGLE_API_BASE_URL
+          GOOGLE_CSE_ID=$GOOGLE_CSE_ID
+          GOOGLE_SEARCH_API_KEY=$GOOGLE_SEARCH_API_KEY
+          DEFAULT_OPENAI_API_BASE_URL=$DEFAULT_OPENAI_API_BASE_URL
+          DEFAULT_TEXT_API_KEY=$DEFAULT_TEXT_API_KEY
+          DEFAULT_TEXT_API_URL=$DEFAULT_TEXT_API_URL
+          DEFAULT_TEXT_MODELS=$DEFAULT_TEXT_MODELS
+          SILICONFLOW_API_KEY=$SILICONFLOW_API_KEY
+          SILICONFLOW_IMAGE_API_URL=$SILICONFLOW_IMAGE_API_URL
+          SILICONFLOW_DEFAULT_IMAGE_MODEL=$SILICONFLOW_DEFAULT_IMAGE_MODEL
+          VITE_API_URLS=$VITE_API_URLS
+          QWEN_EDIT_API_URLS=$QWEN_EDIT_API_URLS
+          QWEN_EDIT_API_SECRET=$QWEN_EDIT_API_SECRET
+          SEEDREAM_API_URL=$SEEDREAM_API_URL
+          ZHIPU_API_KEY=$ZHIPU_API_KEY
+          EOF
+          echo "local.properties created."
 
       - name: Build Release APK
         working-directory: ${{ env.APP_DIR }}
