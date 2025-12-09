@@ -1,4 +1,4 @@
-package com.android.everytalk.ui.screens.MainScreen.chat
+package com.android.everytalk.ui.screens.MainScreen.chat.text.ui
 
 import android.Manifest
 import android.content.Context
@@ -642,7 +642,7 @@ fun ChatInputArea(
         // Get current conversation parameters if they exist
         val currentParams = viewModel.getCurrentConversationParameters()
         
-        ConversationParametersDialog(
+        com.android.everytalk.ui.screens.MainScreen.chat.dialog.ConversationParametersDialog(
             onDismissRequest = { showConversationParamsDialog = false },
             onConfirm = { temperature, topP, maxTokens ->
                 // Save parameters to current conversation

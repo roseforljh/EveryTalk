@@ -34,9 +34,9 @@ import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.ui.components.AppTopBar
 import com.android.everytalk.statecontroller.SimpleModeManager
 import com.android.everytalk.data.DataClass.Message
-import com.android.everytalk.ui.screens.MainScreen.chat.ModelSelectionBottomSheet
-import com.android.everytalk.ui.screens.MainScreen.chat.rememberChatScrollStateManager
-import com.android.everytalk.ui.screens.MainScreen.chat.EditMessageDialog
+import com.android.everytalk.ui.screens.MainScreen.chat.models.ModelSelectionBottomSheet
+import com.android.everytalk.ui.screens.MainScreen.chat.text.state.rememberChatScrollStateManager
+import com.android.everytalk.ui.screens.MainScreen.chat.dialog.EditMessageDialog
 import kotlinx.coroutines.launch
 import com.android.everytalk.ui.components.ScrollToBottomButton
 import androidx.compose.ui.text.font.FontWeight
@@ -240,7 +240,7 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                         while (attempts < 20) {
                             val items = viewModel.imageGenerationChatListItems.value
                             if (items.size > initialCount) {
-                                targetIndex = items.indexOfLast { it is com.android.everytalk.ui.screens.MainScreen.chat.ChatListItem.UserMessage }
+                                targetIndex = items.indexOfLast { it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage }
                                 if (targetIndex != -1) break
                             }
                             kotlinx.coroutines.delay(50)

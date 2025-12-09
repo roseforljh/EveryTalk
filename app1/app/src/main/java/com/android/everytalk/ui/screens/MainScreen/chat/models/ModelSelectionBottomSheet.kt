@@ -1,4 +1,4 @@
-package com.android.everytalk.ui.screens.MainScreen.chat // 建议修改为 com.android.everytalk.ui.screens.mainscreen.chat
+package com.android.everytalk.ui.screens.MainScreen.chat.models
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column

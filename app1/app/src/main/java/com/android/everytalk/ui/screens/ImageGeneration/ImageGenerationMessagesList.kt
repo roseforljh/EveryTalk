@@ -79,8 +79,8 @@ import okhttp3.Request
 import android.graphics.BitmapFactory
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.statecontroller.AppViewModel
-import com.android.everytalk.ui.screens.MainScreen.chat.ChatListItem
-import com.android.everytalk.ui.screens.MainScreen.chat.ChatScrollStateManager
+import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
+import com.android.everytalk.ui.screens.MainScreen.chat.text.state.ChatScrollStateManager
 import com.android.everytalk.ui.screens.BubbleMain.Main.AttachmentsContent
 import com.android.everytalk.ui.screens.BubbleMain.Main.MessageContextMenu
 import com.android.everytalk.ui.screens.BubbleMain.Main.ImageContextMenu

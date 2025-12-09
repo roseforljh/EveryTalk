@@ -1,4 +1,4 @@
-package com.android.everytalk.ui.screens.MainScreen.chat
+package com.android.everytalk.ui.screens.MainScreen.chat.dialog
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -161,51 +161,6 @@ fun EditMessageDialog(
             }
         },
         shape = RoundedCornerShape(28.dp)
-    )
-}
-@Composable
-fun SystemPromptDialog(
-    prompt: String,
-    onDismissRequest: () -> Unit,
-    onPromptChange: (String) -> Unit,
-    onConfirm: () -> Unit,
-    onClear: (() -> Unit)? = null  // 添加一个可选的onClear参数
-) {
-    AlertDialog(
-        onDismissRequest = onDismissRequest,
-        title = { Text("自定义提示") },
-        text = {
-            SelectionContainer {
-                OutlinedTextField(
-                    value = prompt,
-                    onValueChange = onPromptChange,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(225.dp),
-                    label = { Text("设置系统提示") },
-                    shape = RoundedCornerShape(16.dp)
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onConfirm) {
-                Text("确定")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = {
-                if (onClear != null) {
-                    // 如果提供了onClear回调，则调用它
-                    onClear()
-                } else {
-                    // 否则使用默认行为
-                    onPromptChange("")
-                    onConfirm()
-                }
-            }) {
-                Text("清空")
-            }
-        }
     )
 }
 

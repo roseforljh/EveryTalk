@@ -23,7 +23,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.android.everytalk.ui.screens.MainScreen.chat.ChatScrollStateManager
+import com.android.everytalk.ui.screens.MainScreen.chat.text.state.ChatScrollStateManager
 
 @Composable
 fun ScrollToBottomButton(

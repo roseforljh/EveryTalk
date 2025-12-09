@@ -1,4 +1,4 @@
-package com.android.everytalk.ui.screens.MainScreen.chat
+package com.android.everytalk.ui.screens.MainScreen.chat.dialog
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -16,6 +16,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.android.everytalk.data.DataClass.VoiceBackendConfig
 import com.android.everytalk.statecontroller.AppViewModel
+import com.android.everytalk.ui.screens.MainScreen.chat.models.DynamicModelSelector
+import com.android.everytalk.ui.screens.MainScreen.chat.voice.logic.VoiceConfigManager
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)

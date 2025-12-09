@@ -5,7 +5,7 @@ import com.android.everytalk.config.PerformanceConfig
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.statecontroller.ViewModelStateHolder
-import com.android.everytalk.ui.screens.MainScreen.chat.ChatListItem
+import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted

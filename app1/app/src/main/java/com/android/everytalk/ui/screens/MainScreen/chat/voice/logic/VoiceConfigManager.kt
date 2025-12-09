@@ -1,4 +1,4 @@
-package com.android.everytalk.ui.screens.MainScreen.chat
+package com.android.everytalk.ui.screens.MainScreen.chat.voice.logic
 
 import android.content.Context
 import com.android.everytalk.statecontroller.ViewModelStateHolder

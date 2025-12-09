@@ -79,7 +79,7 @@ internal fun UserOrErrorMessageContent(
     maxWidth: Dp,
     onLongPress: (Message, Offset) -> Unit,
     modifier: Modifier = Modifier,
-    scrollStateManager: com.android.everytalk.ui.screens.MainScreen.chat.ChatScrollStateManager
+    scrollStateManager: com.android.everytalk.ui.screens.MainScreen.chat.text.state.ChatScrollStateManager
 ) {
     val haptic = LocalHapticFeedback.current
     var globalPosition by remember { mutableStateOf(Offset.Zero) }
@@ -201,7 +201,7 @@ fun AttachmentsContent(
     onRegenerateRequest: (Message) -> Unit,
     onLongPress: (Message, Offset) -> Unit,
     onImageLoaded: () -> Unit,
-    scrollStateManager: com.android.everytalk.ui.screens.MainScreen.chat.ChatScrollStateManager,
+    scrollStateManager: com.android.everytalk.ui.screens.MainScreen.chat.text.state.ChatScrollStateManager,
     bubbleColor: Color = MaterialTheme.colorScheme.surfaceVariant,
     isAiGenerated: Boolean = false,  // 新增参数标识是否为AI生成
     onImageClick: ((String) -> Unit)? = null   // 新增：图片点击放大回调

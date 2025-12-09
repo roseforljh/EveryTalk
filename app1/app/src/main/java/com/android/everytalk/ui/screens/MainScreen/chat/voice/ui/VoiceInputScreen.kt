@@ -1,4 +1,4 @@
-package com.android.everytalk.ui.screens.MainScreen.chat
+package com.android.everytalk.ui.screens.MainScreen.chat.voice.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -28,6 +28,7 @@ import androidx.core.content.ContextCompat
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.network.VoiceChatSession
 import com.android.everytalk.statecontroller.AppViewModel
+import com.android.everytalk.ui.screens.MainScreen.chat.voice.logic.rememberVoiceSessionController
 
 /**
  * 语音输入屏幕 - 重构版
@@ -252,32 +253,6 @@ fun VoiceInputScreen(
     }
     
     // ========== 对话框 ==========
-    if (showTtsSettingsDialog) {
-        VoiceSettingsDialog(
-            selectedApiConfig = selectedApiConfig,
-            onDismiss = { showTtsSettingsDialog = false },
-            viewModel = viewModel
-        )
-    }
-    
-    if (showSttChatSettingsDialog) {
-        SttSettingsDialog(
-            onDismiss = { showSttChatSettingsDialog = false },
-            viewModel = viewModel
-        )
-    }
-    
-    if (showLlmSettingsDialog) {
-        LlmSettingsDialog(
-            onDismiss = { showLlmSettingsDialog = false },
-            viewModel = viewModel
-        )
-    }
-    
-    if (showVoiceSelectionDialog) {
-        VoiceSelectionDialog(
-            onDismiss = { showVoiceSelectionDialog = false },
-            viewModel = viewModel
-        )
-    }
+    // 语音模式的细粒度 LLM/STT/语音设置弹窗在当前版本中已移除，
+    // 仅保留状态字段以便后续需要时重新接入设置界面。
 }

@@ -1,4 +1,4 @@
-package com.android.everytalk.ui.screens.MainScreen.chat
+package com.android.everytalk.ui.screens.MainScreen.chat.dialog
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable

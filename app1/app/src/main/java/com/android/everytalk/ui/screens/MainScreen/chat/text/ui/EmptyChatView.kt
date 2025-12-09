@@ -1,4 +1,4 @@
-package com.android.everytalk.ui.screens.MainScreen.chat
+package com.android.everytalk.ui.screens.MainScreen.chat.text.ui
 
 import android.util.Log
 import androidx.compose.animation.core.Animatable

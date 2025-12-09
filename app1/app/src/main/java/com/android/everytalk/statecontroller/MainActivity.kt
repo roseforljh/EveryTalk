@@ -521,7 +521,7 @@ class MainActivity : ComponentActivity() {
                                    }
                               ) {
                                   val selectedApiConfig by appViewModel.selectedApiConfig.collectAsState()
-                                  com.android.everytalk.ui.screens.MainScreen.chat.VoiceInputScreen(
+                                  com.android.everytalk.ui.screens.MainScreen.chat.voice.ui.VoiceInputScreen(
                                       onClose = { navController.popBackStack() },
                                       selectedApiConfig = selectedApiConfig,
                                       viewModel = appViewModel

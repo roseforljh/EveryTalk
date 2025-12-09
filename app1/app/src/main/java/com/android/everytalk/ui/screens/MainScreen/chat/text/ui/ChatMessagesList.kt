@@ -1,5 +1,5 @@
 @file:OptIn(ExperimentalFoundationApi::class)
-package com.android.everytalk.ui.screens.MainScreen.chat
+package com.android.everytalk.ui.screens.MainScreen.chat.text.ui
 import com.android.everytalk.R
 
 import androidx.compose.animation.animateContentSize
@@ -52,10 +52,10 @@ import kotlinx.coroutines.delay
 
 @Composable
 fun ChatMessagesList(
-    chatItems: List<ChatListItem>,
+    chatItems: List<com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem>,
     viewModel: AppViewModel,
     listState: LazyListState,
-    scrollStateManager: ChatScrollStateManager,
+    scrollStateManager: com.android.everytalk.ui.screens.MainScreen.chat.text.state.ChatScrollStateManager,
     bubbleMaxWidth: Dp,
     onShowAiMessageOptions: (Message) -> Unit,
     onImageLoaded: () -> Unit,
@@ -101,10 +101,10 @@ fun ChatMessagesList(
     // 构造内容签名：仅结合列表长度和最后一条AI消息的ID
     // 修复：不再包含文本长度，避免流式输出过程中或结束时因长度变化触发强制锚点恢复导致跳动
     val lastAiItem = chatItems.lastOrNull {
-        it is ChatListItem.AiMessage ||
-        it is ChatListItem.AiMessageCode ||
-        it is ChatListItem.AiMessageStreaming ||
-        it is ChatListItem.AiMessageCodeStreaming
+        it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage ||
+        it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCode ||
+        it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageStreaming ||
+        it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCodeStreaming
     }
     val contentSignature = remember(chatItems.size, lastAiItem) {
         "${chatItems.size}_${lastAiItem?.stableId}"
@@ -143,23 +143,23 @@ fun ChatMessagesList(
                     // Merge all AI message types into a single contentType to prevent
                     // item recreation when switching between Streaming/Non-Streaming states.
                     // This allows the inner Composable to handle state transitions smoothly.
-                    is ChatListItem.AiMessage,
-                    is ChatListItem.AiMessageStreaming,
-                    is ChatListItem.AiMessageCode,
-                    is ChatListItem.AiMessageCodeStreaming -> "AiMessage"
+                    is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage,
+                    is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageStreaming,
+                    is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCode,
+                    is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCodeStreaming -> "AiMessage"
                     else -> item::class.java.simpleName
                 }
             }
         ) { index, item ->
             // 根据消息类型决定Box是否占满宽度
-            val isUserMessage = item is ChatListItem.UserMessage ||
-                (item is ChatListItem.ErrorMessage &&
-                 viewModel.getMessageById((item as ChatListItem.ErrorMessage).messageId)?.sender == com.android.everytalk.data.DataClass.Sender.User)
+            val isUserMessage = item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage ||
+                (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.ErrorMessage &&
+                 viewModel.getMessageById((item as com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.ErrorMessage).messageId)?.sender == com.android.everytalk.data.DataClass.Sender.User)
             
             // 父容器统一控制左右对齐，避免子树重组/图片尺寸回调致对齐失效
             val itemAlignment = when (item) {
-                is ChatListItem.UserMessage -> Alignment.CenterEnd
-                is ChatListItem.ErrorMessage -> {
+                is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage -> Alignment.CenterEnd
+                is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.ErrorMessage -> {
                     val message = viewModel.getMessageById(item.messageId)
                     if (message?.sender == com.android.everytalk.data.DataClass.Sender.User) {
                         Alignment.CenterEnd
@@ -181,7 +181,7 @@ fun ChatMessagesList(
 
                     // 用户消息直接渲染，不需要Column包装
                     when (item) {
-                        is ChatListItem.UserMessage -> {
+                        is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage -> {
                             // 使用 Row + Arrangement.End 强制右贴齐，避免任何重组或父对齐变化造成漂移
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -240,7 +240,7 @@ fun ChatMessagesList(
                             }
                         }
 
-                        is ChatListItem.AiMessageReasoning -> {
+                        is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageReasoning -> {
                             val reasoningCompleteMap = viewModel.textReasoningCompleteMap
                             // 放宽显示条件：一旦有推理文本且正文未开始，即显示思考框；
                             // 完成后由 reasoning_finish 控制收起
@@ -284,13 +284,13 @@ fun ChatMessagesList(
                             }
                         }
 
-                        is ChatListItem.AiMessage, is ChatListItem.AiMessageStreaming -> {
-                            val messageId = if (item is ChatListItem.AiMessage) item.messageId else (item as ChatListItem.AiMessageStreaming).messageId
+                        is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage, is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageStreaming -> {
+                            val messageId = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage) item.messageId else (item as com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageStreaming).messageId
                             val message = viewModel.getMessageById(messageId)
                             if (message != null) {
-                                val text = if (item is ChatListItem.AiMessage) item.text else message.text
-                                val hasReasoning = if (item is ChatListItem.AiMessage) item.hasReasoning else (item as ChatListItem.AiMessageStreaming).hasReasoning
-                                val isStreaming = if (item is ChatListItem.AiMessageStreaming) true else (currentStreamingId == message.id)
+                                val text = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage) item.text else message.text
+                                val hasReasoning = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage) item.hasReasoning else (item as com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageStreaming).hasReasoning
+                                val isStreaming = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageStreaming) true else (currentStreamingId == message.id)
                                 val isLastItem = index == chatItems.lastIndex
                                 // Apply min height even for the first conversation (size >= 2) to ensure user message scrolls to top.
                                 val shouldApplyMinHeight = isLastItem && chatItems.size >= 2
@@ -329,13 +329,13 @@ fun ChatMessagesList(
                             }
                         }
 
-                        is ChatListItem.AiMessageCode, is ChatListItem.AiMessageCodeStreaming -> {
-                            val messageId = if (item is ChatListItem.AiMessageCode) item.messageId else (item as ChatListItem.AiMessageCodeStreaming).messageId
+                        is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCode, is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCodeStreaming -> {
+                            val messageId = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCode) item.messageId else (item as com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCodeStreaming).messageId
                             val message = viewModel.getMessageById(messageId)
                             if (message != null) {
-                                val text = if (item is ChatListItem.AiMessageCode) item.text else message.text
-                                val hasReasoning = if (item is ChatListItem.AiMessageCode) item.hasReasoning else (item as ChatListItem.AiMessageCodeStreaming).hasReasoning
-                                val isStreaming = if (item is ChatListItem.AiMessageCodeStreaming) true else (currentStreamingId == message.id)
+                                val text = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCode) item.text else message.text
+                                val hasReasoning = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCode) item.hasReasoning else (item as com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCodeStreaming).hasReasoning
+                                val isStreaming = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCodeStreaming) true else (currentStreamingId == message.id)
                                 val isLastItem = index == chatItems.lastIndex
                                 val shouldApplyMinHeight = isLastItem && chatItems.size >= 2
 
@@ -374,7 +374,7 @@ fun ChatMessagesList(
                             }
                         }
 
-                        is ChatListItem.AiMessageFooter -> {
+                        is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageFooter -> {
                             AiMessageFooterItem(
                                 message = item.message,
                                 viewModel = viewModel,
@@ -382,7 +382,7 @@ fun ChatMessagesList(
                         }
 
 
-                        is ChatListItem.ErrorMessage -> {
+                        is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.ErrorMessage -> {
                             val message = viewModel.getMessageById(item.messageId)
                             if (message != null) {
                                 UserOrErrorMessageContent(
@@ -403,7 +403,7 @@ fun ChatMessagesList(
                             }
                         }
 
-                        is ChatListItem.LoadingIndicator -> {
+                        is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.LoadingIndicator -> {
                             val isLastItem = index == chatItems.lastIndex
                             val shouldApplyMinHeight = isLastItem && chatItems.size >= 2
                             Row(
@@ -437,7 +437,7 @@ fun ChatMessagesList(
                             }
                         }
                         
-                        is ChatListItem.StatusIndicator -> {
+                        is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.StatusIndicator -> {
                             Row(
                                 modifier = Modifier
                                     .padding(
@@ -506,8 +506,8 @@ fun ChatMessagesList(
                         while (attempts < 100) {
                             val currentItems = viewModel.chatListItems.value
                             targetIndex = currentItems.indexOfFirst { item ->
-                                (item is ChatListItem.UserMessage && item.messageId == it.id) ||
-                                (item is ChatListItem.ErrorMessage && item.messageId == it.id)
+                                (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage && item.messageId == it.id) ||
+                                (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.ErrorMessage && item.messageId == it.id)
                             }
                             
                             // We need to ensure that the Loading Indicator (or new AI message) has appeared AFTER the user message.

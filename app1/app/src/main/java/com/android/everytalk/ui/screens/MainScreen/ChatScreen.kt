@@ -56,13 +56,13 @@ import com.android.everytalk.ui.components.AppTopBar
 import com.android.everytalk.ui.components.ScrollToBottomButton
 import com.android.everytalk.ui.components.WebSourcesDialog
 import com.android.everytalk.ui.components.ImagePreviewDialog
-import com.android.everytalk.ui.screens.MainScreen.chat.ChatInputArea
-import com.android.everytalk.ui.screens.MainScreen.chat.ChatMessagesList
-import com.android.everytalk.ui.screens.MainScreen.chat.EditMessageDialog
-import com.android.everytalk.ui.screens.MainScreen.chat.SystemPromptDialog
-import com.android.everytalk.ui.screens.MainScreen.chat.EmptyChatView
-import com.android.everytalk.ui.screens.MainScreen.chat.ModelSelectionBottomSheet
-import com.android.everytalk.ui.screens.MainScreen.chat.rememberChatScrollStateManager
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.ChatInputArea
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.ChatMessagesList
+import com.android.everytalk.ui.screens.MainScreen.chat.dialog.EditMessageDialog
+import com.android.everytalk.ui.screens.MainScreen.chat.dialog.SystemPromptDialog
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.EmptyChatView
+import com.android.everytalk.ui.screens.MainScreen.chat.models.ModelSelectionBottomSheet
+import com.android.everytalk.ui.screens.MainScreen.chat.text.state.rememberChatScrollStateManager
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.delay
@@ -362,7 +362,7 @@ fun ChatScreen(
                         while (attempts < 20) {
                             val items = viewModel.chatListItems.value
                             if (items.size > initialCount) {
-                                targetIndex = items.indexOfLast { it is com.android.everytalk.ui.screens.MainScreen.chat.ChatListItem.UserMessage }
+                                targetIndex = items.indexOfLast { it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage }
                                 if (targetIndex != -1) break
                             }
                             delay(50)

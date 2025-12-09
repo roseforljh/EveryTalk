@@ -1,4 +1,4 @@
-package com.android.everytalk.ui.screens.MainScreen.chat
+package com.android.everytalk.ui.screens.MainScreen.chat.voice.ui
 
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas

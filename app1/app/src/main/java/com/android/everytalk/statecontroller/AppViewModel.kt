@@ -20,7 +20,7 @@ import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.models.SelectedMediaItem
-import com.android.everytalk.ui.screens.MainScreen.chat.ChatListItem
+import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import com.android.everytalk.ui.screens.viewmodel.ConfigManager
 import com.android.everytalk.ui.screens.viewmodel.DataPersistenceManager
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
