@@ -84,18 +84,39 @@ jobs:
         working-directory: ${{ env.APP_DIR }}
         continue-on-error: true
         env:
+          # 签名配置
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           VERSION_NAME: ${{ env.VERSION_NAME }}
-          # 注入后端配置
-          BACKEND_URLS_RELEASE: ${{ secrets.BACKEND_URLS_RELEASE }}
-          VOICE_BACKEND_URL_RELEASE: ${{ secrets.VOICE_BACKEND_URL_RELEASE }}
+          # ===== 直连模式 API 配置 =====
+          # Google Gemini API
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GOOGLE_API_BASE_URL: ${{ secrets.GOOGLE_API_BASE_URL }}
+          # Google 搜索配置
+          GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
+          GOOGLE_SEARCH_API_KEY: ${{ secrets.GOOGLE_SEARCH_API_KEY }}
+          # OpenAI 兼容 API
+          DEFAULT_OPENAI_API_BASE_URL: ${{ secrets.DEFAULT_OPENAI_API_BASE_URL }}
+          # 默认文本 API（"默认"提供商）
+          DEFAULT_TEXT_API_KEY: ${{ secrets.DEFAULT_TEXT_API_KEY }}
+          DEFAULT_TEXT_API_URL: ${{ secrets.DEFAULT_TEXT_API_URL }}
+          DEFAULT_TEXT_MODELS: ${{ secrets.DEFAULT_TEXT_MODELS }}
+          # SiliconFlow 图像生成
+          SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
+          SILICONFLOW_IMAGE_API_URL: ${{ secrets.SILICONFLOW_IMAGE_API_URL }}
+          SILICONFLOW_DEFAULT_IMAGE_MODEL: ${{ secrets.SILICONFLOW_DEFAULT_IMAGE_MODEL }}
+          # Modal Z-Image-Turbo 图像生成
+          VITE_API_URLS: ${{ secrets.VITE_API_URLS }}
+          # Qwen 图像编辑
+          QWEN_EDIT_API_URLS: ${{ secrets.QWEN_EDIT_API_URLS }}
+          QWEN_EDIT_API_SECRET: ${{ secrets.QWEN_EDIT_API_SECRET }}
+          # Seedream (豆包即梦) 图像生成
+          SEEDREAM_API_URL: ${{ secrets.SEEDREAM_API_URL }}
+          # 智谱 BigModel API（联网搜索）
+          ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
         run: |
-          ./gradlew :app:assembleRelease \
-            -PBACKEND_URLS_RELEASE="${{ secrets.BACKEND_URLS_RELEASE }}" \
-            -PVOICE_BACKEND_URL_RELEASE="${{ secrets.VOICE_BACKEND_URL_RELEASE }}" \
-            --parallel --build-cache --stacktrace
+          ./gradlew :app:assembleRelease --parallel --build-cache --stacktrace
 
       - name: Upload Android artifacts to Release
         if: startsWith(github.ref, 'refs/tags/')
