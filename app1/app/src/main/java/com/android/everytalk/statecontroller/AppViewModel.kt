@@ -53,24 +53,24 @@ import com.android.everytalk.statecontroller.viewmodel.DrawerManager
 import com.android.everytalk.statecontroller.viewmodel.ProviderManager
 import com.android.everytalk.statecontroller.viewmodel.ExportManager
 import com.android.everytalk.statecontroller.viewmodel.UpdateManager
-import com.android.everytalk.statecontroller.ui.MessageItemsController
-import com.android.everytalk.statecontroller.controller.SystemPromptController
-import com.android.everytalk.statecontroller.controller.SettingsController
-import com.android.everytalk.statecontroller.controller.HistoryController
-import com.android.everytalk.statecontroller.controller.MediaController
-import com.android.everytalk.statecontroller.controller.MessageContentController
-import com.android.everytalk.statecontroller.controller.ConversationPreviewController
-import com.android.everytalk.statecontroller.controller.ModelAndConfigController
-import com.android.everytalk.statecontroller.controller.RegenerateController
-import com.android.everytalk.statecontroller.controller.StreamingControls
-import com.android.everytalk.statecontroller.ui.UiStateFacade
-import com.android.everytalk.statecontroller.controller.LifecycleCoordinator
-import com.android.everytalk.statecontroller.controller.ScrollStateController
-import com.android.everytalk.statecontroller.controller.AnimationStateController
-import com.android.everytalk.statecontroller.controller.EditMessageController
-import com.android.everytalk.statecontroller.controller.ClipboardController
-import com.android.everytalk.statecontroller.controller.ConfigFacade
-import com.android.everytalk.statecontroller.controller.ProviderController
+import com.android.everytalk.statecontroller.facade.MessageItemsController
+import com.android.everytalk.statecontroller.controller.systemprompt.SystemPromptController
+import com.android.everytalk.statecontroller.controller.config.SettingsController
+import com.android.everytalk.statecontroller.controller.conversation.HistoryController
+import com.android.everytalk.statecontroller.controller.media.MediaController
+import com.android.everytalk.statecontroller.controller.conversation.MessageContentController
+import com.android.everytalk.statecontroller.controller.conversation.ConversationPreviewController
+import com.android.everytalk.statecontroller.controller.config.ModelAndConfigController
+import com.android.everytalk.statecontroller.controller.conversation.RegenerateController
+import com.android.everytalk.statecontroller.controller.conversation.StreamingControls
+import com.android.everytalk.statecontroller.facade.UiStateFacade
+import com.android.everytalk.statecontroller.controller.lifecycle.LifecycleCoordinator
+import com.android.everytalk.statecontroller.controller.conversation.ScrollStateController
+import com.android.everytalk.statecontroller.controller.conversation.AnimationStateController
+import com.android.everytalk.statecontroller.controller.conversation.EditMessageController
+import com.android.everytalk.statecontroller.controller.media.ClipboardController
+import com.android.everytalk.statecontroller.controller.config.ConfigFacade
+import com.android.everytalk.statecontroller.controller.config.ProviderController
 
 // Constructor changed: removed dataSource
 class AppViewModel(application: Application) : AndroidViewModel(application) {

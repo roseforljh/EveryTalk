@@ -1,4 +1,5 @@
-package com.android.everytalk.statecontroller.controller
+package com.android.everytalk.statecontroller.controller.lifecycle
+import com.android.everytalk.statecontroller.controller.conversation.ConversationPreviewController
 
 import android.util.Log
 import com.android.everytalk.statecontroller.ViewModelStateHolder

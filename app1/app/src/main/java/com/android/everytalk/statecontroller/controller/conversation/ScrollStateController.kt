@@ -1,4 +1,4 @@
-package com.android.everytalk.statecontroller.controller
+package com.android.everytalk.statecontroller.controller.conversation
 
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import com.android.everytalk.statecontroller.ConversationScrollState

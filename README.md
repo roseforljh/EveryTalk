@@ -242,6 +242,7 @@ EveryTalk/
 │   │   │   │   └── DataClass/               # 数据模型
 │   │   │   ├── statecontroller/             # 🎮 状态管理
 │   │   │   │   ├── AppViewModel.kt          # 主视图模型
+│   │   │   │   ├── facade/                  # 🌉 UI 状态门面 (原 statecontroller.ui)
 │   │   │   │   ├── StreamingBuffer.kt       # 流式缓冲
 │   │   │   │   └── ViewModelStateHolder.kt  # 状态持有者
 │   │   │   ├── ui/                          # 🎨 UI 层

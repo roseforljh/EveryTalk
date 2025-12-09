@@ -1,4 +1,4 @@
-package com.android.everytalk.statecontroller.controller
+package com.android.everytalk.statecontroller.controller.conversation
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers

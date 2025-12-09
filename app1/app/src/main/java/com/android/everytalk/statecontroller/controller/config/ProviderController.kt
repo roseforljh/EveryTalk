@@ -1,4 +1,4 @@
-package com.android.everytalk.statecontroller.controller
+package com.android.everytalk.statecontroller.controller.config
 
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.statecontroller.ViewModelStateHolder

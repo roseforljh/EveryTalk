@@ -1,4 +1,4 @@
-package com.android.everytalk.statecontroller.ui
+package com.android.everytalk.statecontroller.facade
 
 import androidx.compose.material3.DrawerState
 import androidx.compose.runtime.snapshots.SnapshotStateList

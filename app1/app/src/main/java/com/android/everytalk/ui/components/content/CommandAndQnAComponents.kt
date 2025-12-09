@@ -1,4 +1,4 @@
-package com.android.everytalk.ui.components
+package com.android.everytalk.ui.components.content
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border

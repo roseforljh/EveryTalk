@@ -1,4 +1,4 @@
-package com.android.everytalk.statecontroller.controller
+package com.android.everytalk.statecontroller.controller.media
 
 import android.app.Application
 import android.content.ContentValues

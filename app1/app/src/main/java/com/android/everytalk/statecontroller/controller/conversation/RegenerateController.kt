@@ -1,4 +1,4 @@
-package com.android.everytalk.statecontroller.controller
+package com.android.everytalk.statecontroller.controller.conversation
 
 import android.util.Log
 import com.android.everytalk.data.DataClass.Message
