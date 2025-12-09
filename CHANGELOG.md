@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.8.3](https://github.com/roseforljh/EveryTalk/compare/v1.8.2...v1.8.3) (2025-12-09)
+
+
+### Bug Fixes
+
+* md格式自修复增强、针对一些破垃圾狗屎模型 ([3bf8e37](https://github.com/roseforljh/EveryTalk/commit/3bf8e37ea325f03b4ab795d70992450eff661465))
+* 优化代码结构 ([eb747e5](https://github.com/roseforljh/EveryTalk/commit/eb747e55097c5f0d4447ce22b5382013dfecfefe))
+* 优化目录 ([07a93a4](https://github.com/roseforljh/EveryTalk/commit/07a93a43c0e67f679b8905c0740e04f1ec98a7f5))
+* 优化目录 ([3e227d2](https://github.com/roseforljh/EveryTalk/commit/3e227d22279e46c302b9519b64c5f6438bd86d0a))
+* 修复阿里云stt实时流式的bug ([c167e33](https://github.com/roseforljh/EveryTalk/commit/c167e33d9b1b5605f1acf46a8a4277b8beed60b8))
+* 删除废弃代码 ([beade2e](https://github.com/roseforljh/EveryTalk/commit/beade2e53364f095bc7af9e37cc368b2e2afeacf))
+* 加快tts输出 ([37b6ed4](https://github.com/roseforljh/EveryTalk/commit/37b6ed4f8afaf62f94e3736cc135f0166af98e6c))
+* 处理 URL 中的反斜杠转义 ([9fd734f](https://github.com/roseforljh/EveryTalk/commit/9fd734f84104758faef2b83d3af476b86cbd3eec))
+* 改进交互 ([d6f0453](https://github.com/roseforljh/EveryTalk/commit/d6f0453d3967dc6463bd8b7561f42b85c0e4678b))
+* 文本样式优化 ([ed9b0d5](https://github.com/roseforljh/EveryTalk/commit/ed9b0d571c71a426f321c686d1acd847766821e5))
+* 新代码块样式 ([f553712](https://github.com/roseforljh/EveryTalk/commit/f55371242c961ea1a43dbe2d394e20a542d9af8c))
+* 没座！！！ ([e0cf574](https://github.com/roseforljh/EveryTalk/commit/e0cf574d435a273114535cc3d65c0541c2461af4))
+* 直连编译默认配置常量 ([511080a](https://github.com/roseforljh/EveryTalk/commit/511080a8c8ac64b7bdaf642a2747d22c9b6e1536))
+* 移除废弃代码 ([484ca3e](https://github.com/roseforljh/EveryTalk/commit/484ca3e2fb204334613bb8b4783aaccedeabfdb8))
+* 语音模式修复回调 ([129450b](https://github.com/roseforljh/EveryTalk/commit/129450bcd7e846dae17c7ec9718a2e9a8d3083ad))
+* 语音模式的prompt改为英文 ([6023522](https://github.com/roseforljh/EveryTalk/commit/602352227668c0b01b5d41d65e233ea648d06247))
+
 ## [1.8.2](https://github.com/roseforljh/EveryTalk/compare/v1.8.1...v1.8.2) (2025-12-09)
 
 
