@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.8.4](https://github.com/roseforljh/EveryTalk/compare/v1.8.3...v1.8.4) (2025-12-10)
+
+
+### Bug Fixes
+
+* fix something not goog code ([f8d5428](https://github.com/roseforljh/EveryTalk/commit/f8d5428bb19a85ce59ebf4f3cb5ec96e35ad45ed))
+* Google工具调用 ([de7d0ea](https://github.com/roseforljh/EveryTalk/commit/de7d0ea317db18bd4b5196b1de197826fc969290))
+* qwen-long原生识别文档 ([1e87d02](https://github.com/roseforljh/EveryTalk/commit/1e87d029899b1a61fcf55b48f8eff3a46cf3dc03))
+* 修复代码执行bug ([224fd3b](https://github.com/roseforljh/EveryTalk/commit/224fd3bca3eb2c678e0e2976db9cc3f254b3f616))
+* 更新reamde ([fde034b](https://github.com/roseforljh/EveryTalk/commit/fde034b12f0b059a0998853ef121360f61067929))
+* 添加了 Telegram 通知功能 ([c1c9b86](https://github.com/roseforljh/EveryTalk/commit/c1c9b864cf0c96acc85aa82a1a4f1bb7b10ca030))
+* 用户气泡不转换md格式、优化用户气泡逻辑 ([0f705fa](https://github.com/roseforljh/EveryTalk/commit/0f705fa24267abf8991daaf1be568ef1d1191f23))
+* 识别逻辑严格限制为仅对 qwen-long 模型生效 ([0dd4da2](https://github.com/roseforljh/EveryTalk/commit/0dd4da2ef4e63c5785212d6bf1975460ee0d9c86))
+* 适配统一原生联网搜索 ([ae2afe3](https://github.com/roseforljh/EveryTalk/commit/ae2afe3d16060380e344612cec688943a2ebf21a))
+* 重新回答bug ([e39d16a](https://github.com/roseforljh/EveryTalk/commit/e39d16a4213765e4e43d75e368c7effcd6a6c015))
+* 长按bug修复 ([53c0fff](https://github.com/roseforljh/EveryTalk/commit/53c0fffdebe359ab72e4bae523cf2d781d0a6831))
+
 ## [1.8.3](https://github.com/roseforljh/EveryTalk/compare/v1.8.2...v1.8.3) (2025-12-09)
 
 
