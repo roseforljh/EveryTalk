@@ -13,6 +13,32 @@ object PerformanceConfig {
     const val STATE_DEBOUNCE_DELAY_MS = 300L
     const val BATCH_UPDATE_DELAY_MS = 16L // 一帧时间
     
+    // ===== StreamingBuffer 配置 =====
+    /** 默认更新间隔（毫秒）- 60fps */
+    const val STREAMING_BUFFER_UPDATE_INTERVAL_MS = 16L
+    /** 默认批处理阈值（字符数） */
+    const val STREAMING_BUFFER_BATCH_THRESHOLD = 1
+    /** 自适应模式下的最小更新间隔（毫秒） */
+    const val STREAMING_BUFFER_MIN_INTERVAL_MS = 8L
+    /** 自适应模式下的最大更新间隔（毫秒） */
+    const val STREAMING_BUFFER_MAX_INTERVAL_MS = 100L
+    /** 自适应调整步长（毫秒） */
+    const val STREAMING_BUFFER_ADAPTIVE_STEP_MS = 8L
+    /** 触发调整的累积字符阈值 */
+    const val STREAMING_BUFFER_ADAPTIVE_CHAR_THRESHOLD = 500
+    /** 日志采样间隔（每 N 次 flush 记录一次） */
+    const val STREAMING_BUFFER_LOG_SAMPLE_INTERVAL = 5
+    
+    // ===== 网络超时配置 =====
+    /** 连接超时（毫秒） */
+    const val NETWORK_CONNECT_TIMEOUT_MS = 60_000L
+    /** SSE 流式请求超时（毫秒）- 使用 Long.MAX_VALUE 保持长连接 */
+    const val NETWORK_SSE_REQUEST_TIMEOUT_MS = Long.MAX_VALUE
+    /** SSE 流式 Socket 超时（毫秒） */
+    const val NETWORK_SSE_SOCKET_TIMEOUT_MS = Long.MAX_VALUE
+    /** 普通请求超时（毫秒） */
+    const val NETWORK_DEFAULT_REQUEST_TIMEOUT_MS = 30_000L
+    
     // 缓存配置
     const val TEXT_CACHE_SIZE = 50
     const val IMAGE_CACHE_SIZE = 20

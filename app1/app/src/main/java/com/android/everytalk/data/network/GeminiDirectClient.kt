@@ -4,26 +4,19 @@ import android.util.Log
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.DataClass.PartsApiMessage
+import com.android.everytalk.data.network.NetworkUtils.configureSSERequest
 import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.utils.io.*
-import io.ktor.client.plugins.*
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.*
 
-/**
- * 直连 Gemini API 的客户端
- * 用于在后端服务器被 Cloudflare 拦截时自动降级到直连模式
- */
 object GeminiDirectClient {
     private const val TAG = "GeminiDirectClient"
     
-    /**
-     * 直连 Gemini API 发送聊天请求
-     */
     @OptIn(ExperimentalCoroutinesApi::class)
     suspend fun streamChatDirect(
         client: HttpClient,
@@ -32,7 +25,6 @@ object GeminiDirectClient {
         try {
             Log.i(TAG, "🔄 启动 Gemini 直连模式")
             
-            // 构建 Gemini API URL
             val baseUrl = request.apiAddress?.trimEnd('/')?.takeIf { it.isNotBlank() }
                 ?: com.android.everytalk.BuildConfig.GOOGLE_API_BASE_URL.trimEnd('/').takeIf { it.isNotBlank() }
                 ?: "https://generativelanguage.googleapis.com"
@@ -41,62 +33,38 @@ object GeminiDirectClient {
             
             Log.d(TAG, "直连 URL: ${url.substringBefore("?key=")}")
             
-            // 构建 Gemini 请求体
             val payload = buildGeminiPayload(request)
             
-            // 发送请求（流式执行，避免中间层攒包/缓冲）
             client.preparePost(url) {
                 contentType(ContentType.Application.Json)
                 setBody(payload)
-
-                // 接受 SSE 并禁用透明压缩/缓冲
-                accept(ContentType.Text.EventStream)
-                header(HttpHeaders.Accept, "text/event-stream")
-                header(HttpHeaders.AcceptEncoding, "identity")
-                header(HttpHeaders.CacheControl, "no-cache, no-store, max-age=0, must-revalidate")
-                header(HttpHeaders.Pragma, "no-cache")
-                header(HttpHeaders.Connection, "keep-alive")
-                header("X-Accel-Buffering", "no")
-
-                // 浏览器特征头，提升推流概率
-                header(
-                    "User-Agent",
-                    "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
-                )
-
-                // 与代理流一致的超时配置：保持长连接与持续读取
-                timeout {
-                    requestTimeoutMillis = Long.MAX_VALUE
-                    connectTimeoutMillis = 60_000
-                    socketTimeoutMillis = Long.MAX_VALUE
-                }
+                configureSSERequest()
             }.execute { response ->
                 if (!response.status.isSuccess()) {
-                    val errorBody = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
-                    Log.e(TAG, "Gemini API 错误 ${response.status}: $errorBody")
-                    send(AppStreamEvent.Error("Gemini API 错误: ${response.status}", response.status.value))
-                    send(AppStreamEvent.Finish("api_error"))
+                    val errorBody = try { response.bodyAsText() } catch (_: Exception) { null }
+                    val (error, finish) = NetworkUtils.handleApiError(response.status, errorBody, "Gemini")
+                    send(error)
+                    send(finish)
                     return@execute
                 }
 
                 Log.i(TAG, "✅ Gemini 直连成功，开始接收流")
 
-                // 按行即时解析与转发
                 parseGeminiSSEStream(response.bodyAsChannel())
                     .collect { event ->
                         send(event)
-                        // 让出调度，促进 UI 及时刷新
                         kotlinx.coroutines.yield()
                     }
             }
             
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
-            Log.e(TAG, "直连 Gemini 失败", e)
-            send(AppStreamEvent.Error("直连失败: ${e.message}", null))
-            send(AppStreamEvent.Finish("direct_connection_failed"))
+            val (error, finish) = NetworkUtils.handleConnectionError(e, "Gemini")
+            send(error)
+            send(finish)
         }
         
-        // 结束 channelFlow（不要挂起等待外部关闭，否则上层 onCompletion 不会触发）
         return@channelFlow
     }
     
@@ -580,4 +548,3 @@ object GeminiDirectClient {
         return sb.toString()
     }
 }
-
