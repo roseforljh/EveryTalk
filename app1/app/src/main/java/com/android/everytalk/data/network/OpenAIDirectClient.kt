@@ -42,7 +42,8 @@ object OpenAIDirectClient {
             // 通过 request.customExtraBody 配置搜索端点与密钥：
             //   customExtraBody = {"webSearchEndpoint":"https://<your-search>/api","webSearchKey":"<key>"}
             var effectiveRequest = request
-            if (request.useWebSearch == true) {
+            // 如果启用了 Qwen 原生搜索，则跳过客户端侧的 Google 搜索
+            if (request.useWebSearch == true && request.qwenEnableSearch != true) {
                 val userQuery = extractLastUserText(request).let { it ?: "" }.trim()
 
                 if (userQuery.isNotBlank()) {
@@ -125,6 +126,7 @@ object OpenAIDirectClient {
             Log.d(TAG, "直连 URL: $url")
 
             val payload = buildOpenAIPayload(effectiveRequest)
+            Log.d(TAG, "请求体 Payload: $payload")
 
             // 发送请求（流式执行，禁缓冲/禁压缩）
             client.preparePost(url) {
@@ -164,6 +166,9 @@ object OpenAIDirectClient {
                         kotlinx.coroutines.yield()
                     }
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            Log.d(TAG, "流被取消: ${e.message}")
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "直连失败", e)
             send(AppStreamEvent.Error("直连失败: ${e.message}", null))
@@ -299,34 +304,56 @@ object OpenAIDirectClient {
             // Gemini-in-OpenAI 格式支持 (Gemini 通过 OpenAI 兼容接口调用)
             val isGemini = request.channel.contains("gemini", ignoreCase = true) ||
                            request.model.contains("gemini", ignoreCase = true)
+
+            // Qwen 联网搜索支持
+            val isQwenSearchEnabled = request.qwenEnableSearch == true
             
-            if (isGemini) {
+            // 尝试直接在顶层注入 Qwen 搜索参数（针对某些非严格的兼容接口或 DashScope 原生行为）
+            if (isQwenSearchEnabled) {
+                put("enable_search", true)
+                putJsonObject("search_options") {
+                    put("forced_search", true)
+                    put("search_strategy", "max")
+                }
+            }
+
+            if (isGemini || isQwenSearchEnabled) {
                  putJsonObject("extra_body") {
-                    putJsonObject("google") {
-                        // 工具配置
-                        val toolsToAdd = mutableListOf<String>()
-                        if (request.useWebSearch == true) {
-                            toolsToAdd.add("google_search")
-                        }
-                        // 代码执行工具
-                        if (request.enableCodeExecution == true) {
-                             toolsToAdd.add("code_execution")
-                        }
-                        
-                        if (toolsToAdd.isNotEmpty()) {
-                            putJsonArray("tools") {
-                                toolsToAdd.forEach { toolName ->
-                                    addJsonObject { putJsonObject(toolName) {} }
+                    if (isGemini) {
+                        putJsonObject("google") {
+                            // 工具配置
+                            val toolsToAdd = mutableListOf<String>()
+                            if (request.useWebSearch == true) {
+                                toolsToAdd.add("google_search")
+                            }
+                            // 代码执行工具
+                            if (request.enableCodeExecution == true) {
+                                 toolsToAdd.add("code_execution")
+                            }
+                            
+                            if (toolsToAdd.isNotEmpty()) {
+                                putJsonArray("tools") {
+                                    toolsToAdd.forEach { toolName ->
+                                        addJsonObject { putJsonObject(toolName) {} }
+                                    }
+                                }
+                            }
+                            
+                            // thinking_config 支持
+                            request.generationConfig?.thinkingConfig?.let { tc ->
+                                putJsonObject("thinking_config") {
+                                    tc.includeThoughts?.let { put("include_thoughts", it) }
+                                    tc.thinkingBudget?.let { put("thinking_budget", it) }
                                 }
                             }
                         }
-                        
-                        // thinking_config 支持
-                        request.generationConfig?.thinkingConfig?.let { tc ->
-                            putJsonObject("thinking_config") {
-                                tc.includeThoughts?.let { put("include_thoughts", it) }
-                                tc.thinkingBudget?.let { put("thinking_budget", it) }
-                            }
+                    }
+
+                    if (isQwenSearchEnabled) {
+                        put("enable_search", true)
+                        putJsonObject("search_options") {
+                            put("forced_search", true)
+                            put("search_strategy", "max")
                         }
                     }
                 }

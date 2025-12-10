@@ -784,7 +784,7 @@ private data class AttachmentProcessingResult(
                             )
                         } else null
                     ).let { if (it.temperature != null || it.topP != null || it.maxOutputTokens != null || it.thinkingConfig != null) it else null },
-                    qwenEnableSearch = if (currentConfig.model.lowercase().contains("qwen")) stateHolder._isWebSearchEnabled.value else null,
+                    qwenEnableSearch = if (currentConfig.model.lowercase().contains("qwen") && stateHolder._isWebSearchEnabled.value) true else null,
                     customModelParameters = if (modelIsGeminiType) {
                         // 为Gemini模型添加reasoning_effort参数
                         // 根据模型类型设置不同的思考级别
