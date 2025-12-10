@@ -97,6 +97,11 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+        ndk {
+            // 仅保留 ARM 架构，移除 x86/x86_64 (模拟器用) 以减小 APK 体积
+            // 绝大多数 Android 手机使用 arm64-v8a 或 armeabi-v7a
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a")
+        }
     }
     // Signing configs for release build; values come from local.properties
     signingConfigs {
