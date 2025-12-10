@@ -35,9 +35,9 @@ jobs:
           CAPTION+="<a href=\"$COMMIT_URL\">Commit</a>%0A"
           CAPTION+="<a href=\"$RUN_URL\">Workflow run</a>"
 
-          # 发送文档 (APK)
+          # 发送文档 (APK) - 确保使用 ./ 前缀明确当前目录
           curl -v -F chat_id="$TG_CHAT_ID" \
-               -F document=@app-release.apk \
+               -F document=@./app-release.apk \
                -F parse_mode="HTML" \
                -F caption="$CAPTION" \
                "https://api.telegram.org/bot$TG_TOKEN/sendDocument"
