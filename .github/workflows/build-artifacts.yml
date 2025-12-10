@@ -143,28 +143,33 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Send Telegram Notification
+      - name: Get Commit Message
+        id: get_commit_msg
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          # 获取最近一次提交的信息
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+          echo "COMMIT_MSG<<EOF" >> $GITHUB_ENV
+          echo "$COMMIT_MSG" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      - name: Install Python dependencies
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          pip install requests
+
+      - name: Send Telegram Notification (APK)
         if: startsWith(github.ref, 'refs/tags/')
         env:
           TG_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TELEGRAM_TO }}
-          VERSION_NAME: ${{ env.VERSION_NAME }}
           REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
+          BRANCH: ${{ github.ref_name }}
+          RUN_ID: ${{ github.run_id }}
+          SHA: ${{ github.sha }}
+          APK_DIR: ${{ env.APP_DIR }}/app/build/outputs/apk/release
         run: |
-          # 使用多行字符串并配合 --data-urlencode 自动处理特殊字符和换行
-          MSG="🎉 *EveryTalk 新版本发布！*
-
-          📦 *版本*: \`$VERSION_NAME\`
-
-          🔗 [查看更新日志和下载](https://github.com/$REPO/releases/tag/$TAG)
-
-          #EveryTalk #Update"
-
-          curl -v -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
-            -d "chat_id=$TG_CHAT_ID" \
-            -d "parse_mode=Markdown" \
-            --data-urlencode "text=$MSG"
+          python3 EveryTalk/.github/scripts/send_telegram.py
 
       - name: Upload artifacts for manual runs
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}

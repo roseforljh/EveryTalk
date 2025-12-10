@@ -8,8 +8,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Create Dummy APK
-        # 确保文件创建在当前工作目录
-        run: echo "This is a dummy APK content for testing telegram notification." > ./app-release.apk
+        run: echo "This is a dummy APK content for testing telegram notification." > app-release.apk
 
       - name: Send Test APK Notification
         env:
@@ -22,28 +21,50 @@ jobs:
           SHA: ${{ github.sha }}
           COMMIT_MSG: "feat: implement new telegram notification style with apk file"
         run: |
-          # 构造链接
-          COMMIT_URL="https://github.com/$REPO/commit/$SHA"
-          RUN_URL="https://github.com/$REPO/actions/runs/$RUN_ID"
-          
-          # 构造 Caption (使用 HTML 格式以支持引用块和超链接)
-          # 注意：HTML 标签需要正确闭合
-          
-          CAPTION="<b>EveryTalk</b>%0A"
-          CAPTION+="Branch: $BRANCH%0A"
-          CAPTION+="#ci_$RUN_ID%0A%0A"
-          CAPTION+="<blockquote>$COMMIT_MSG</blockquote>%0A%0A"
-          CAPTION+="<a href=\"$COMMIT_URL\">Commit</a>%0A"
-          CAPTION+="<a href=\"$RUN_URL\">Workflow run</a>"
+          python3 -c "
+          import os
+          import requests
 
-          # 发送文档 (APK)
-          # 获取绝对路径
-          APK_PATH=$(readlink -f app-release.apk)
-          echo "APK absolute path: $APK_PATH"
-          ls -la "$APK_PATH"
+          token = os.environ['TG_TOKEN']
+          chat_id = os.environ['TG_CHAT_ID']
+          repo = os.environ['REPO']
+          branch = os.environ['BRANCH']
+          run_id = os.environ['RUN_ID']
+          sha = os.environ['SHA']
+          commit_msg = os.environ['COMMIT_MSG']
 
-          curl -v -F chat_id="$TG_CHAT_ID" \
-               -F document=@"$APK_PATH" \
-               -F parse_mode="HTML" \
-               -F caption="$CAPTION" \
-               "https://api.telegram.org/bot$TG_TOKEN/sendDocument"
+          commit_url = f'https://github.com/{repo}/commit/{sha}'
+          run_url = f'https://github.com/{repo}/actions/runs/{run_id}'
+          
+          caption = f'''<b>EveryTalk</b>
+          Branch: {branch}
+          #ci_{run_id}
+
+          <blockquote>{commit_msg}</blockquote>
+
+          <a href=\"{commit_url}\">Commit</a>
+          <a href=\"{run_url}\">Workflow run</a>'''
+
+          file_path = 'app-release.apk'
+          
+          print(f'Sending {file_path} to {chat_id}...')
+          
+          with open(file_path, 'rb') as f:
+              files = {'document': f}
+              data = {
+                  'chat_id': chat_id,
+                  'parse_mode': 'HTML',
+                  'caption': caption
+              }
+              response = requests.post(
+                  f'https://api.telegram.org/bot{token}/sendDocument',
+                  data=data,
+                  files=files
+              )
+              
+              print(f'Status Code: {response.status_code}')
+              print(f'Response: {response.text}')
+              
+              if response.status_code != 200:
+                  exit(1)
+          "
