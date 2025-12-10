@@ -292,6 +292,9 @@ fun OptimizedMediaItemsList(
 fun OptimizedControlButtonsRow(
     isWebSearchEnabled: Boolean,
     onToggleWebSearch: () -> Unit,
+    isCodeExecutionEnabled: Boolean = false,
+    onToggleCodeExecution: () -> Unit = {},
+    showCodeExecutionToggle: Boolean = false,
     onToggleImagePanel: () -> Unit,
     onToggleMoreOptionsPanel: () -> Unit,
     showImageSelectionPanel: Boolean,
@@ -350,6 +353,52 @@ fun OptimizedControlButtonsRow(
                     }
                 }
             }
+            
+            if (showCodeExecutionToggle) {
+                Spacer(Modifier.width(8.dp))
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = Color.Transparent,
+                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .height(40.dp)
+                        .then(
+                            if (isCodeExecutionEnabled) {
+                                Modifier.border(width = 1.dp, color = Color(0xFF9C27B0), shape = RoundedCornerShape(50))
+                            } else {
+                                Modifier
+                            }
+                        )
+                        .animateContentSize(
+                            animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing)
+                        )
+                        .clip(RoundedCornerShape(50))
+                        .clickable(onClick = onToggleCodeExecution)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Code,
+                            contentDescription = if (isCodeExecutionEnabled) "代码执行已开启" else "代码执行已关闭",
+                            tint = Color(0xFF9C27B0),
+                            modifier = Modifier.size(25.dp)
+                        )
+                        
+                        if (isCodeExecutionEnabled) {
+                            Spacer(Modifier.width(8.dp))
+                            Icon(
+                                imageVector = Icons.Filled.Close,
+                                contentDescription = "关闭",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
             Spacer(Modifier.width(8.dp))
             IconButton(onClick = onToggleImagePanel) {
                 Icon(

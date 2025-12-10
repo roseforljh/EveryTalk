@@ -418,11 +418,6 @@ internal fun AddNewFullConfigDialog(
    var imageSize by remember { mutableStateOf("1024x1024") }
    var numInferenceSteps by remember { mutableStateOf("20") }
    var guidanceScale by remember { mutableStateOf("7.5") }
-    // 新增：Function Calling 配置
-    var enableCodeExecution by remember { mutableStateOf(false) }
-    var toolsJson by remember { mutableStateOf("") }
-    var showToolsConfig by remember { mutableStateOf(false) }
-
     val isDarkTheme = isSystemInDarkTheme()
     val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
     val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
@@ -712,76 +707,13 @@ internal fun AddNewFullConfigDialog(
                         keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
                         keyboardActions = KeyboardActions(onDone = {
                             if (apiKey.isNotBlank() && provider.isNotBlank() && apiAddress.isNotBlank()) {
-                               onConfirm(provider, apiAddress, apiKey, selectedChannel, imageSize, numInferenceSteps.toIntOrNull(), guidanceScale.toFloatOrNull(), enableCodeExecution, toolsJson.ifBlank { null })
+                               onConfirm(provider, apiAddress, apiKey, selectedChannel, imageSize, numInferenceSteps.toIntOrNull(), guidanceScale.toFloatOrNull(), null, null)
                             }
                         }),
                         shape = DialogShape,
                         colors = DialogTextFieldColors
                     )
 
-                    // 工具配置区域 (仅文本模式)
-                    if (!isImageMode) {
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { showToolsConfig = !showToolsConfig }
-                                .padding(vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                "高级工具配置",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.weight(1f)
-                            )
-                            Icon(
-                                if (showToolsConfig) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                                contentDescription = null
-                            )
-                        }
-                        
-                        AnimatedVisibility(
-                            visible = showToolsConfig,
-                            enter = expandVertically() + fadeIn(),
-                            exit = shrinkVertically() + fadeOut()
-                        ) {
-                            Column(modifier = Modifier.padding(start = 8.dp)) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable { enableCodeExecution = !enableCodeExecution }
-                                        .padding(vertical = 8.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Text(
-                                        "启用代码执行",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                    RadioButton(
-                                        selected = enableCodeExecution,
-                                        onClick = null // null to pass click to parent Row
-                                    )
-                                }
-                                
-                                SettingsFieldLabel("自定义 Tools (JSON)")
-                                OutlinedTextField(
-                                    value = toolsJson,
-                                    onValueChange = { toolsJson = it },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(150.dp)
-                                        .padding(vertical = 8.dp),
-                                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
-                                    placeholder = { Text("[\n  {\n    \"type\": \"function\",\n    \"function\": { ... }\n  }\n]") },
-                                    shape = DialogShape,
-                                    colors = DialogTextFieldColors
-                                )
-                            }
-                        }
-                    }
                 }
             }
         },
@@ -828,8 +760,8 @@ internal fun AddNewFullConfigDialog(
                                 imageSize,
                                 numInferenceSteps.toIntOrNull(),
                                 guidanceScale.toFloatOrNull(),
-                                enableCodeExecution,
-                                toolsJson.ifBlank { null }
+                                null,
+                                null
                             )
                         }
                     },
@@ -881,11 +813,6 @@ internal fun EditConfigDialog(
     var apiAddress by remember { mutableStateOf(representativeConfig.address) }
     var apiKey by remember { mutableStateOf(representativeConfig.key) }
     var selectedChannel by remember { mutableStateOf(representativeConfig.channel) }
-    // 新增：Function Calling 编辑
-    var enableCodeExecution by remember { mutableStateOf(representativeConfig.enableCodeExecution ?: false) }
-    var toolsJson by remember { mutableStateOf(representativeConfig.toolsJson ?: "") }
-    var showToolsConfig by remember { mutableStateOf(false) }
-
     val isDarkTheme = isSystemInDarkTheme()
     val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
     val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
@@ -1050,69 +977,6 @@ internal fun EditConfigDialog(
                     }
                 }
 
-                // 工具配置区域 (仅文本模式)
-                if (representativeConfig.modalityType == ModalityType.TEXT) {
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { showToolsConfig = !showToolsConfig }
-                            .padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            "高级工具配置",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Icon(
-                            if (showToolsConfig) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                            contentDescription = null
-                        )
-                    }
-                    
-                    AnimatedVisibility(
-                        visible = showToolsConfig,
-                        enter = expandVertically() + fadeIn(),
-                        exit = shrinkVertically() + fadeOut()
-                    ) {
-                        Column(modifier = Modifier.padding(start = 8.dp)) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { enableCodeExecution = !enableCodeExecution }
-                                    .padding(vertical = 8.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    "启用代码执行",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                RadioButton(
-                                    selected = enableCodeExecution ?: false,
-                                    onClick = null // null to pass click to parent Row
-                                )
-                            }
-                            
-                            SettingsFieldLabel("自定义 Tools (JSON)")
-                            OutlinedTextField(
-                                value = toolsJson,
-                                onValueChange = { toolsJson = it },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(150.dp)
-                                    .padding(vertical = 8.dp),
-                                textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
-                                placeholder = { Text("[\n  {\n    \"type\": \"function\",\n    \"function\": { ... }\n  }\n]") },
-                                shape = DialogShape,
-                                colors = DialogTextFieldColors
-                            )
-                        }
-                    }
-                }
             }
         },
         confirmButton = {
@@ -1152,8 +1016,8 @@ internal fun EditConfigDialog(
                                 apiAddress,
                                 apiKey,
                                 selectedChannel,
-                                enableCodeExecution,
-                                toolsJson.ifBlank { null }
+                                null,
+                                null
                             )
                         }
                     },

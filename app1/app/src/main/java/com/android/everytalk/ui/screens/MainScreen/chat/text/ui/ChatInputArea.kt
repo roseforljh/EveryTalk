@@ -188,6 +188,8 @@ fun ChatInputArea(
     isApiCalling: Boolean,
     isWebSearchEnabled: Boolean,
     onToggleWebSearch: () -> Unit,
+    isCodeExecutionEnabled: Boolean = false,
+    onToggleCodeExecution: () -> Unit = {},
     onStopApiCall: () -> Unit,
     focusRequester: FocusRequester,
     selectedApiConfig: ApiConfig?,
@@ -490,9 +492,13 @@ fun ChatInputArea(
                 )
 
                 // 使用优化的控制按钮行组件
+                val isGeminiChannel = selectedApiConfig?.channel?.lowercase()?.contains("gemini") == true
                 OptimizedControlButtonsRow(
                     isWebSearchEnabled = isWebSearchEnabled,
                     onToggleWebSearch = onToggleWebSearch,
+                    isCodeExecutionEnabled = isCodeExecutionEnabled,
+                    onToggleCodeExecution = onToggleCodeExecution,
+                    showCodeExecutionToggle = isGeminiChannel,
                     onToggleImagePanel = onToggleImagePanel,
                     onToggleMoreOptionsPanel = onToggleMoreOptionsPanel,
                     showImageSelectionPanel = showImageSelectionPanel,

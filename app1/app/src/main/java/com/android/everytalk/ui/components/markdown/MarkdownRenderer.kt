@@ -65,13 +65,25 @@ private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): S
 
     // 2. Base64 图片链接清理
     // 修复 Base64 字符串中可能包含的换行符，防止 Markdown 图片解析失败。
+    // 增强正则：支持尖括号包裹的 URL (<data:image/...>) 和无尖括号的 URL
     if (s.contains("data:image/")) {
-        val base64ImagePattern = Regex("(\\!\\[[^\\]]*\\]\\()\\s*(data:image\\/[^)]+)\\s*(\\))", setOf(RegexOption.DOT_MATCHES_ALL))
+        // 匹配 ![alt](data:image/...) 或 ![alt](<data:image/...>)
+        // group 1: ![alt](
+        // group 2: < (可选)
+        // group 3: data:image/.... (内容)
+        // group 4: > (可选)
+        // group 5: )
+        val base64ImagePattern = Regex("(\\!\\[[^\\]]*\\]\\()\\s*(<?)(data:image\\/[^)>]+)(>?)\\s*(\\))", setOf(RegexOption.DOT_MATCHES_ALL))
         s = s.replace(base64ImagePattern) { mr ->
             val prefix = mr.groupValues[1]
-            val data = mr.groupValues[2].filter { !it.isWhitespace() }
-            val suffix = mr.groupValues[3]
-            prefix + data + suffix
+            val openAngle = mr.groupValues[2]
+            // 清理 data 中的空白
+            val data = mr.groupValues[3].filter { !it.isWhitespace() }
+            val closeAngle = mr.groupValues[4]
+            val suffix = mr.groupValues[5]
+            
+            // 重新组合，保持原有的尖括号结构（如果存在）
+            prefix + openAngle + data + closeAngle + suffix
         }
     }
 

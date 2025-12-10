@@ -118,26 +118,38 @@ object GeminiDirectClient {
             }
         }.joinToString("\n\n")
         
+        val enableWebSearch = request.useWebSearch == true
+        val enableCodeExecution = shouldEnableCodeExecution(request)
+
         return buildJsonObject {
-            // 添加 systemInstruction（Gemini 原生系统指令字段）
-            if (systemContent.isNotBlank()) {
-                putJsonObject("systemInstruction") {
-                    putJsonArray("parts") {
-                        addJsonObject {
-                            put("text", systemContent)
-                        }
-                    }
-                }
-                Log.i(TAG, "📝 已注入系统指令 (${systemContent.length} 字符)")
-            }
-            
-            // 转换消息格式（排除系统消息，因为已在 systemInstruction 中处理）
+            // 转换消息格式
             // 🔥 修复：合并连续的相同角色消息，防止 Gemini API 报错 400 (INVALID_ARGUMENT)
             // Gemini 要求 user 和 model 必须交替出现，不能有连续的 user 或 model
             val mergedMessages = mutableListOf<com.android.everytalk.data.DataClass.AbstractApiMessage>()
             
+            // 准备系统指令内容
+            var effectiveSystemContent = systemContent
+            if (enableCodeExecution) {
+                // 强化提示：要求模型务必执行代码
+                // Gemini 有时会偷懒只生成代码而不执行，这段提示能显著提高工具调用率
+                val enforcementPrompt = "\n\nIMPORTANT: You have access to a code execution tool. When asked to calculate, plot, or solve problems, you MUST use the code execution tool to run the code and show the results/plots, instead of just writing the code."
+                effectiveSystemContent = if (effectiveSystemContent.isBlank()) enforcementPrompt.trim() else effectiveSystemContent + enforcementPrompt
+            }
+
+            // 添加 systemInstruction（Gemini 原生系统指令字段）
+            if (effectiveSystemContent.isNotBlank()) {
+                putJsonObject("systemInstruction") {
+                    putJsonArray("parts") {
+                        addJsonObject {
+                            put("text", effectiveSystemContent)
+                        }
+                    }
+                }
+                Log.i(TAG, "📝 已注入系统指令 (${effectiveSystemContent.length} 字符)")
+            }
+
             messagesWithSystemPrompt.forEach { message ->
-                if (message.role == "system") return@forEach // 跳过系统消息
+                if (message.role == "system") return@forEach // 跳过系统消息（已处理或降级）
 
                 val lastMsg = mergedMessages.lastOrNull()
                 val currentRole = if (message.role == "assistant") "model" else message.role
@@ -223,19 +235,22 @@ object GeminiDirectClient {
                     config.maxOutputTokens?.let { put("maxOutputTokens", it) }
                     
                     // 添加 thinkingConfig 支持思考过程
-                    config.thinkingConfig?.let { thinkingConfig ->
-                        putJsonObject("thinkingConfig") {
-                            thinkingConfig.includeThoughts?.let { put("includeThoughts", it) }
-                            thinkingConfig.thinkingBudget?.let { put("thinkingBudget", it) }
+                    // 🔥 修复：当启用 code_execution 时，强制禁用 thinkingConfig，避免参数冲突导致 400 INVALID_ARGUMENT
+                    // Thinking 模式和 Code Execution 模式在某些模型/API版本下可能互斥
+                    if (!enableCodeExecution) {
+                        config.thinkingConfig?.let { thinkingConfig ->
+                            putJsonObject("thinkingConfig") {
+                                thinkingConfig.includeThoughts?.let { put("includeThoughts", it) }
+                                thinkingConfig.thinkingBudget?.let { put("thinkingBudget", it) }
+                            }
                         }
+                    } else {
+                         Log.i(TAG, "🚫 已禁用 Thinking Config (与 Code Execution 互斥)")
                     }
                 }
             }
             
             // 添加工具（Web 搜索、代码执行等）
-            val enableWebSearch = request.useWebSearch == true
-            val enableCodeExecution = shouldEnableCodeExecution(request)
-            
             if (enableWebSearch || enableCodeExecution) {
                 putJsonArray("tools") {
                     // Google Search 工具 - 使用 Gemini 原生 google_search (REST API 标准)

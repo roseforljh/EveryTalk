@@ -81,6 +81,7 @@ fun ChatScreen(
     val isApiCalling by viewModel.isTextApiCalling.collectAsState()
     val currentStreamingAiMessageId by viewModel.currentTextStreamingAiMessageId.collectAsState()
     val isWebSearchEnabled by viewModel.isWebSearchEnabled.collectAsState()
+    val isCodeExecutionEnabled by viewModel.isCodeExecutionEnabled.collectAsState()
     val selectedMediaItems = viewModel.selectedMediaItems
     val isLoadingHistory by viewModel.isLoadingHistory.collectAsState()
     val isLoadingHistoryData by viewModel.isLoadingHistoryData.collectAsState()
@@ -385,6 +386,10 @@ fun ChatScreen(
                 isWebSearchEnabled = isWebSearchEnabled,
                 onToggleWebSearch = {
                     viewModel.toggleWebSearchMode(!isWebSearchEnabled)
+                },
+                isCodeExecutionEnabled = isCodeExecutionEnabled,
+                onToggleCodeExecution = {
+                    viewModel.toggleCodeExecutionEnabled()
                 },
                 onStopApiCall = { viewModel.onCancelAPICall() },
                 focusRequester = focusRequester,

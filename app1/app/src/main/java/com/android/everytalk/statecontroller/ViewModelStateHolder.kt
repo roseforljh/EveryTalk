@@ -386,6 +386,7 @@ val _isStreamingPaused = MutableStateFlow(false)
     val _pendingConfigParams = MutableStateFlow<PendingConfigParams?>(null)
 
     val _isWebSearchEnabled = MutableStateFlow(false)
+    val _isCodeExecutionEnabled = MutableStateFlow(false)
 
     val _showSourcesDialog = MutableStateFlow(false)
     val _sourcesForDialog = MutableStateFlow<List<WebSearchResult>>(emptyList())

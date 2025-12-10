@@ -299,6 +299,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     
     val isWebSearchEnabled: StateFlow<Boolean>
         get() = stateHolder._isWebSearchEnabled.asStateFlow()
+    val isCodeExecutionEnabled: StateFlow<Boolean>
+        get() = stateHolder._isCodeExecutionEnabled.asStateFlow()
     val showSourcesDialog: StateFlow<Boolean>
         get() = stateHolder._showSourcesDialog.asStateFlow()
     val sourcesForDialog: StateFlow<List<WebSearchResult>>
@@ -719,6 +721,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun toggleWebSearchMode(enabled: Boolean) {
         stateHolder._isWebSearchEnabled.value = enabled
+    }
+
+    fun toggleCodeExecutionEnabled() {
+        stateHolder._isCodeExecutionEnabled.value = !stateHolder._isCodeExecutionEnabled.value
     }
 
 

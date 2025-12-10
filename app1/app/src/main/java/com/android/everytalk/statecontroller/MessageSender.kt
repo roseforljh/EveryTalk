@@ -742,6 +742,18 @@ private data class AttachmentProcessingResult(
                 // 添加调试日志
                 Log.d("MessageSender", "Channel: ${currentConfig.channel}, isGeminiChannel: $isGeminiChannel, webSearchEnabled: ${stateHolder._isWebSearchEnabled.value}, shouldEnableGoogleSearch: $shouldEnableGoogleSearch")
 
+                // 3. 代码执行启用逻辑 - 用户全权控制
+                val enableCodeExecutionForRequest: Boolean? =
+                    if (!isGeminiChannel) {
+                        null // 非 Gemini 渠道，不支持原生 code_execution，且不显示开关
+                    } else {
+                        // Gemini 渠道下，完全由 UI 开关决定：
+                        // ON -> true (注入工具)
+                        // OFF -> false (不注入)
+                        // 这样就覆盖了底层的自动意图检测逻辑
+                        stateHolder._isCodeExecutionEnabled.value
+                    }
+
                 val chatRequestForApi = ChatRequest(
                     messages = apiMessagesForBackend,
                     provider = providerForRequestBackend,
@@ -751,6 +763,8 @@ private data class AttachmentProcessingResult(
                     model = currentConfig.model,
                     deviceId = com.android.everytalk.util.DeviceIdManager.getDeviceId(application),
                     useWebSearch = stateHolder._isWebSearchEnabled.value,
+                    // 显式传递代码执行开关状态
+                    enableCodeExecution = enableCodeExecutionForRequest,
                     // 新会话未设置时，只回落温度/TopP；maxTokens 一律保持关闭（null）
                     generationConfig = stateHolder.getCurrentConversationConfig() ?: GenerationConfig(
                         temperature = currentConfig.temperature,
@@ -810,10 +824,10 @@ private data class AttachmentProcessingResult(
                         }
                         
                         // 3. 代码执行 (Gemini Native)
-                        if (currentConfig.enableCodeExecution == true) {
-                             Log.d("MessageSender", "启用代码执行工具 (Gemini Native)")
-                             toolsList.add(mapOf("codeExecution" to emptyMap<String, Any>()))
-                        }
+                        // 注意：这里不再通过 currentConfig.enableCodeExecution 判断注入
+                        // 而是依靠 enableCodeExecutionForRequest 传递给 GeminiDirectClient.buildGeminiPayload 统一处理
+                        // 因为 ChatRequest.enableCodeExecution 字段会被序列化传给后端/直连客户端
+                        // 直连客户端会根据这个字段决定是否注入 tools
                         
                         toolsList.ifEmpty { null }
                     },
