@@ -110,9 +110,9 @@ object OpenAIDirectClient {
             }.execute { response ->
                 if (!response.status.isSuccess()) {
                     val errorBody = try { response.bodyAsText() } catch (_: Exception) { null }
-                    val (error, finish) = NetworkUtils.handleApiError(response.status, errorBody, "OpenAI")
-                    send(error)
-                    send(finish)
+                    val result = NetworkUtils.handleApiError(response.status, errorBody, "OpenAI")
+                    send(result.error)
+                    send(result.finish)
                     return@execute
                 }
 
@@ -128,9 +128,9 @@ object OpenAIDirectClient {
             Log.d(TAG, "流被取消: ${e.message}")
             throw e
         } catch (e: Exception) {
-            val (error, finish) = NetworkUtils.handleConnectionError(e, "OpenAI")
-            send(error)
-            send(finish)
+            val result = NetworkUtils.handleConnectionError(e, "OpenAI")
+            send(result.error)
+            send(result.finish)
         }
 
         return@channelFlow
@@ -688,6 +688,8 @@ object OpenAIDirectClient {
             send(AppStreamEvent.Error("流解析失败: ${e.message}", null))
         }
 
-        awaitClose { }
+        awaitClose { 
+            Log.d(TAG, "SSE stream channel closed")
+        }
     }
 }

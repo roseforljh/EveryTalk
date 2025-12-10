@@ -42,9 +42,9 @@ object GeminiDirectClient {
             }.execute { response ->
                 if (!response.status.isSuccess()) {
                     val errorBody = try { response.bodyAsText() } catch (_: Exception) { null }
-                    val (error, finish) = NetworkUtils.handleApiError(response.status, errorBody, "Gemini")
-                    send(error)
-                    send(finish)
+                    val result = NetworkUtils.handleApiError(response.status, errorBody, "Gemini")
+                    send(result.error)
+                    send(result.finish)
                     return@execute
                 }
 
@@ -60,9 +60,9 @@ object GeminiDirectClient {
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
-            val (error, finish) = NetworkUtils.handleConnectionError(e, "Gemini")
-            send(error)
-            send(finish)
+            val result = NetworkUtils.handleConnectionError(e, "Gemini")
+            send(result.error)
+            send(result.finish)
         }
         
         return@channelFlow

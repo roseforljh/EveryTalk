@@ -98,9 +98,15 @@ class StreamingBuffer(
         
         pendingFlushJob = coroutineScope.launch {
             delay(delayUntilNextUpdate)
-            synchronized(buffer) {
-                if (buffer.isNotEmpty()) {
-                    performFlush(System.currentTimeMillis())
+            // 使用单独的同步块，避免在 delay 期间持有锁
+            val shouldFlush = synchronized(buffer) {
+                buffer.isNotEmpty()
+            }
+            if (shouldFlush) {
+                synchronized(buffer) {
+                    if (buffer.isNotEmpty()) {
+                        performFlush(System.currentTimeMillis())
+                    }
                 }
             }
         }

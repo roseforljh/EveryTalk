@@ -6,6 +6,14 @@ import io.ktor.client.plugins.*
 import io.ktor.client.request.*
 import io.ktor.http.*
 
+/**
+ * 错误处理结果，包含 Error 事件和 Finish 事件
+ */
+data class ErrorWithFinish(
+    val error: AppStreamEvent.Error,
+    val finish: AppStreamEvent.Finish
+)
+
 object NetworkUtils {
     private const val TAG = "NetworkUtils"
     
@@ -33,7 +41,7 @@ object NetworkUtils {
         statusCode: HttpStatusCode,
         errorBody: String?,
         apiName: String
-    ): Pair<AppStreamEvent.Error, AppStreamEvent.Finish> {
+    ): ErrorWithFinish {
         val body = errorBody ?: "(no body)"
         Log.e(TAG, "$apiName API 错误 $statusCode: $body")
         
@@ -45,14 +53,16 @@ object NetworkUtils {
             else -> "$apiName API 错误: $statusCode"
         }
         
-        return AppStreamEvent.Error(errorMessage, statusCode.value) to 
-               AppStreamEvent.Finish("api_error")
+        return ErrorWithFinish(
+            AppStreamEvent.Error(errorMessage, statusCode.value),
+            AppStreamEvent.Finish("api_error")
+        )
     }
     
     fun handleConnectionError(
         exception: Exception,
         apiName: String
-    ): Pair<AppStreamEvent.Error, AppStreamEvent.Finish> {
+    ): ErrorWithFinish {
         Log.e(TAG, "$apiName 连接失败", exception)
         
         val errorMessage = when {
@@ -62,7 +72,9 @@ object NetworkUtils {
             else -> "$apiName 连接失败: ${exception.message}"
         }
         
-        return AppStreamEvent.Error(errorMessage, null) to
-               AppStreamEvent.Finish("connection_failed")
+        return ErrorWithFinish(
+            AppStreamEvent.Error(errorMessage, null),
+            AppStreamEvent.Finish("connection_failed")
+        )
     }
 }

@@ -309,7 +309,9 @@ private data class AttachmentProcessingResult(
                 } else {
                     fileExtension = "jpg"; Bitmap.CompressFormat.JPEG
                 }
-                bitmapToSave.compress(compressFormat, JPEG_COMPRESSION_QUALITY, outputStream)
+                // 使用新的 ImageScaleConfig 常量代替已废弃的 JPEG_COMPRESSION_QUALITY
+                val compressionQuality = com.android.everytalk.util.image.ImageScaleConfig.CHAT_MODE.compressionQuality
+                bitmapToSave.compress(compressFormat, compressionQuality, outputStream)
                 val bytes = outputStream.toByteArray()
                 if (!bitmapToSave.isRecycled) {
                     bitmapToSave.recycle()
@@ -549,7 +551,7 @@ private data class AttachmentProcessingResult(
             val providerForRequestBackend = currentConfig.provider
             val isDefaultProvider = currentConfig.provider.trim().lowercase() in listOf("默认", "default")
 
-            // 自动注入“上一轮AI出图”作为参考，以支持“在上一张基础上修改”等编辑语义
+            // 自动注入"上一轮AI出图"作为参考，以支持"在上一张基础上修改"等编辑语义
             if (isImageGeneration && allAttachments.isEmpty()) {
                 val t = textToActuallySend.lowercase()
                 if (hasImageEditKeywords(t)) {
@@ -607,7 +609,7 @@ private data class AttachmentProcessingResult(
                     stateHolder.imageGenerationMessages.add(newUserMessageForUi)
                 } else {
                     stateHolder.messages.add(newUserMessageForUi)
-                    // 首条消息产生后（文本模式），将“待应用参数”落库，满足：空会话不保存；非空会话保存
+                    // 首条消息产生后（文本模式），将"待应用参数"落库，满足：空会话不保存；非空会话保存
                     stateHolder.persistPendingParamsIfNeeded(isImageGeneration = false)
                 }
                 if (!isFromRegeneration) {
@@ -637,7 +639,7 @@ private data class AttachmentProcessingResult(
                 val historyEndIndex = messagesInChatUiSnapshot.indexOfFirst { it.id == newUserMessageForUi.id }
                 val historyUiMessagesRaw = if (historyEndIndex != -1) messagesInChatUiSnapshot.subList(0, historyEndIndex) else messagesInChatUiSnapshot
 
-                // 当“系统提示接入”处于暂停状态时，过滤掉会话历史中的系统消息，避免仍然将 Prompt 注入到请求
+                // 当"系统提示接入"处于暂停状态时，过滤掉会话历史中的系统消息，避免仍然将 Prompt 注入到请求
                 val engagedForThisConversation = stateHolder.systemPromptEngagedState[stateHolder._currentConversationId.value] ?: false
                 val historyUiMessages = if (engagedForThisConversation) {
                     historyUiMessagesRaw
@@ -649,7 +651,7 @@ private data class AttachmentProcessingResult(
                 }
 
                 // 图像会话的稳定会话ID规则：
-                // 第一次消息（historyEndIndex==0 且非从历史加载）时，用“首条用户消息ID”作为 conversationId，
+                // 第一次消息（historyEndIndex==0 且非从历史加载）时，用"首条用户消息ID"作为 conversationId，
                 // 这样重启后根据第一条消息ID恢复，后端会话可继续（与 SimpleModeManager.loadImageHistory 的写法严格一致）。
                 if (isImageGeneration) {
                     val isFirstMessageInThisSession = historyEndIndex == 0
@@ -852,7 +854,7 @@ private data class AttachmentProcessingResult(
                             }
                         }
 
-                        // 构建“无状态历史摘要”，保证每个会话自带记忆（即使后端会话未命中）
+                        // 构建"无状态历史摘要"，保证每个会话自带记忆（即使后端会话未命中）
                         // 仅提取纯文本轮次（user/model），避免把图片当作历史内容。
                         val historyForStatelessMemory: List<Map<String, String>> = run {
                             val maxTurns = 6 // 最近6轮（user/model合计），可按需调整
@@ -886,7 +888,7 @@ private data class AttachmentProcessingResult(
                             // 默认平台：apiAddress/apiKey 留空，由后端从 .env 注入
                             apiAddress = if (isDefaultProvider) "" else upstreamApiForImageGen,
                             apiKey = if (isDefaultProvider) "" else currentConfig.key,
-                            // 渠道控制路由：默认平台传“默认”，非默认按“渠道”字段（OpenAI兼容/Gemini）
+                            // 渠道控制路由：默认平台传"默认"，非默认按"渠道"字段（OpenAI兼容/Gemini）
                             provider = if (isDefaultProvider) currentConfig.provider else currentConfig.channel,
                             responseModalities = listOf("Image"),
                             aspectRatio = stateHolder._selectedImageRatio.value.let { r ->
@@ -894,7 +896,7 @@ private data class AttachmentProcessingResult(
                             },
                             // 严格会话隔离：把当前图像历史项ID透传到后端
                             conversationId = stateHolder._currentImageGenerationConversationId.value,
-                            // 额外兜底：把最近若干轮文本摘要也发给后端，确保“该会话独立记忆”不依赖服务端状态
+                            // 额外兜底：把最近若干轮文本摘要也发给后端，确保"该会话独立记忆"不依赖服务端状态
                             history = historyForStatelessMemory.ifEmpty { null },
                             // 禁用水印（针对 Seedream 直连）
                             watermark = false,
@@ -986,7 +988,7 @@ private suspend fun readTextFromUri(context: Context, uri: Uri): String? {
         return imageKeywords.any { keyword -> t.contains(keyword) }
     }
 
-    // 识别“编辑/基于上一张修改”的语义，用于自动附带上一轮AI图片
+    // 识别"编辑/基于上一张修改"的语义，用于自动附带上一轮AI图片
     private fun hasImageEditKeywords(text: String?): Boolean {
         if (text.isNullOrBlank()) return false
         val t = text.lowercase().trim()
