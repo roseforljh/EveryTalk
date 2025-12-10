@@ -479,7 +479,8 @@ private data class AttachmentProcessingResult(
         audioBase64: String? = null,
         mimeType: String? = null,
         systemPrompt: String? = null,
-        isImageGeneration: Boolean = false
+        isImageGeneration: Boolean = false,
+        manualMessageId: String? = null
     ) {
         val textToActuallySend = messageText.trim()
         val allAttachments = attachments.toMutableList()
@@ -591,7 +592,7 @@ private data class AttachmentProcessingResult(
             val attachmentsForApiClient = attachmentResult.processedAttachmentsForUi
 
             val newUserMessageForUi = UiMessage(
-                id = "user_${UUID.randomUUID()}", text = textToActuallySend, sender = UiSender.User,
+                id = manualMessageId ?: "user_${UUID.randomUUID()}", text = textToActuallySend, sender = UiSender.User,
                 timestamp = System.currentTimeMillis(), contentStarted = true,
                 imageUrls = attachmentResult.imageUriStringsForUi,
                 attachments = attachmentResult.processedAttachmentsForUi,

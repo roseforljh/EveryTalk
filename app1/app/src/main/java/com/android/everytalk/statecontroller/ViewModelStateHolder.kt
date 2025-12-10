@@ -375,6 +375,9 @@ val _isStreamingPaused = MutableStateFlow(false)
          MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 1)
     val _scrollToBottomEvent =
         MutableSharedFlow<Unit>(replay = 0, extraBufferCapacity = 1)
+    // 滚动到指定消息ID的事件（用于重新回答时定位）
+    val _scrollToItemEvent =
+        MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 1)
 
     val _editDialogInputText = MutableStateFlow("")
 

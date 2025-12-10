@@ -38,7 +38,8 @@ class RegenerateController(
         messageText: String,
         isFromRegeneration: Boolean,
         attachments: List<SelectedMediaItem>,
-        isImageGeneration: Boolean
+        isImageGeneration: Boolean,
+        manualMessageId: String?
     ) -> Unit
 ) {
 
@@ -161,12 +162,15 @@ class RegenerateController(
                     historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration)
                 }
 
+                val newUserMessageId = "user_${UUID.randomUUID()}"
+                
                 // 重新发送消息（函数类型禁止命名参数，改为位置参数）
                 sendMessage(
                     originalUserMessageText,
                     true,
                     originalAttachments,
-                    isImageGeneration
+                    isImageGeneration,
+                    newUserMessageId
                 )
 
                 // Clean up the original user message AFTER sending the new one.
@@ -187,7 +191,9 @@ class RegenerateController(
                 }
 
                 if (shouldAutoScroll()) {
-                    triggerScrollToBottom()
+                    // 使用精确滚动定位到新生成的User消息，而不是直接滚动到底部
+                    // 这样用户可以看到User消息和正在生成的AI回复
+                    stateHolder._scrollToItemEvent.tryEmit(newUserMessageId)
                 }
             }
         }

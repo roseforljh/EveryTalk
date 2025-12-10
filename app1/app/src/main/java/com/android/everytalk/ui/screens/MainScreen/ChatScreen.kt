@@ -164,11 +164,31 @@ fun ChatScreen(
     }
 
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(scrollStateManager) {
         // 强制同步模式状态为 TEXT，确保从图像模式左滑返回时状态正确
         viewModel.simpleModeManager.setIntendedMode(SimpleModeManager.ModeType.TEXT)
         viewModel.scrollToBottomEvent.collect {
             scrollStateManager.jumpToBottom()
+        }
+    }
+
+    // 监听滚动到指定消息的事件
+    val chatListItems by viewModel.chatListItems.collectAsState()
+    LaunchedEffect(scrollStateManager, chatListItems) {
+        viewModel.scrollToItemEvent.collect { messageId ->
+            val index = chatListItems.indexOfFirst {
+                when (it) {
+                    is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage -> it.messageId == messageId
+                    is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage -> it.messageId == messageId
+                    is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCode -> it.messageId == messageId
+                    is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageReasoning -> it.message.id == messageId
+                    // 其他类型的消息暂不支持精确滚动定位，或者不需要
+                    else -> false
+                }
+            }
+            if (index != -1) {
+                scrollStateManager.scrollItemToTop(index)
+            }
         }
     }
 

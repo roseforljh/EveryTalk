@@ -228,6 +228,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         get() = stateHolder._snackbarMessage.asSharedFlow()
     val scrollToBottomEvent: SharedFlow<Unit>
         get() = stateHolder._scrollToBottomEvent.asSharedFlow()
+    val scrollToItemEvent: SharedFlow<String>
+        get() = stateHolder._scrollToItemEvent.asSharedFlow()
     val selectedMediaItems: SnapshotStateList<SelectedMediaItem>
         get() = stateHolder.selectedMediaItems
 
@@ -440,12 +442,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
        showSnackbar = ::showSnackbar,
        shouldAutoScroll = { stateHolder.shouldAutoScroll() },
        triggerScrollToBottom = { triggerScrollToBottom() },
-       sendMessage = { messageText, isFromRegeneration, attachments, isImageGeneration ->
+       sendMessage = { messageText, isFromRegeneration, attachments, isImageGeneration, manualMessageId ->
            messageSender.sendMessage(
                messageText = messageText,
                isFromRegeneration = isFromRegeneration,
                attachments = attachments,
-               isImageGeneration = isImageGeneration
+               isImageGeneration = isImageGeneration,
+               manualMessageId = manualMessageId
            )
        }
    )
@@ -896,6 +899,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun triggerScrollToBottom() {
         viewModelScope.launch { stateHolder._scrollToBottomEvent.tryEmit(Unit) }
+    }
+
+    fun triggerScrollToItem(messageId: String) {
+        viewModelScope.launch { stateHolder._scrollToItemEvent.tryEmit(messageId) }
     }
 
     fun onCancelAPICall() {
