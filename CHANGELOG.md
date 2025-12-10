@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.9.1](https://github.com/roseforljh/EveryTalk/compare/v1.9.0...v1.9.1) (2025-12-10)
+
+
+### Bug Fixes
+
+* correct python script path in build workflow ([5acdfa5](https://github.com/roseforljh/EveryTalk/commit/5acdfa5144c38bfa486e2d59114d07b383a81dd7))
+
 ## [1.9.0](https://github.com/roseforljh/EveryTalk/compare/v1.8.4...v1.9.0) (2025-12-10)
 
 
