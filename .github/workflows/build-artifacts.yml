@@ -152,8 +152,19 @@ jobs:
           REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
-          MSG="🎉 *EveryTalk 新版本发布！*%0A%0A📦 *版本*: \`$VERSION_NAME\`%0A%0A🔗 [查看更新日志和下载](https://github.com/$REPO/releases/tag/$TAG)%0A%0A#EveryTalk #Update"
-          curl -s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" -d "chat_id=$TG_CHAT_ID&parse_mode=Markdown&text=$MSG"
+          # 使用多行字符串并配合 --data-urlencode 自动处理特殊字符和换行
+          MSG="🎉 *EveryTalk 新版本发布！*
+
+          📦 *版本*: \`$VERSION_NAME\`
+
+          🔗 [查看更新日志和下载](https://github.com/$REPO/releases/tag/$TAG)
+
+          #EveryTalk #Update"
+
+          curl -v -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
+            -d "chat_id=$TG_CHAT_ID" \
+            -d "parse_mode=Markdown" \
+            --data-urlencode "text=$MSG"
 
       - name: Upload artifacts for manual runs
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
