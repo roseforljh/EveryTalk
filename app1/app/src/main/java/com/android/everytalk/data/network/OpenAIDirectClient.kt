@@ -16,6 +16,9 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.*
+import io.ktor.client.request.forms.*
+import io.ktor.http.content.*
+import android.util.Base64
 
 /**
  * OpenAI 兼容格式直连客户端
@@ -42,6 +45,14 @@ object OpenAIDirectClient {
             // 通过 request.customExtraBody 配置搜索端点与密钥：
             //   customExtraBody = {"webSearchEndpoint":"https://<your-search>/api","webSearchKey":"<key>"}
             var effectiveRequest = request
+
+            // Qwen 文档上传处理
+            if (request.model.contains("qwen", ignoreCase = true)) {
+                effectiveRequest = handleQwenUploads(client, effectiveRequest) { status ->
+                    send(AppStreamEvent.StatusUpdate(status))
+                }
+            }
+
             // 如果启用了 Qwen 原生搜索，则跳过客户端侧的 Google 搜索
             if (request.useWebSearch == true && request.qwenEnableSearch != true) {
                 val userQuery = extractLastUserText(request).let { it ?: "" }.trim()
@@ -126,7 +137,7 @@ object OpenAIDirectClient {
             Log.d(TAG, "直连 URL: $url")
 
             val payload = buildOpenAIPayload(effectiveRequest)
-            Log.d(TAG, "请求体 Payload: $payload")
+            Log.d(TAG, "Payload: $payload")
 
             // 发送请求（流式执行，禁缓冲/禁压缩）
             client.preparePost(url) {
@@ -214,74 +225,149 @@ object OpenAIDirectClient {
 
             // 转换消息（支持多模态：text + image_url(data URI) + input_audio）
             putJsonArray("messages") {
-                messagesWithSystemPrompt.forEach { message ->
-                    when (message) {
-                        is SimpleTextApiMessage -> {
-                            addJsonObject {
-                                put("role", message.role)
-                                put("content", message.content)
+                // 1. 提取 Qwen 文件 ID
+                val qwenFileIds = mutableListOf<String>()
+                messagesWithSystemPrompt.forEach { msg ->
+                    if (msg is PartsApiMessage) {
+                        msg.parts.forEach { part ->
+                            if (part is ApiContentPart.FileUri && part.mimeType == "qwen-file-id") {
+                                qwenFileIds.add(part.uri)
                             }
                         }
-                        is com.android.everytalk.data.DataClass.PartsApiMessage -> {
-                            val parts = message.parts
-                            if (parts.isEmpty()) {
+                    }
+                }
+
+                // 2. 处理消息
+                messagesWithSystemPrompt.forEach { message ->
+                    // 如果是系统消息，且是第一个系统消息，则在其后注入文件 ID 系统消息
+                    // 或者如果还没有注入过文件 ID，且当前不是系统消息，则在当前消息前注入（针对没有系统消息的情况）
+                    
+                    // 简化策略：
+                    // 1. 如果是系统消息 -> 输出系统消息 -> 输出所有文件 ID 系统消息 (仅一次)
+                    // 2. 如果不是系统消息 ->
+                    //    如果还没输出过文件 ID (即没有系统消息) -> 输出所有文件 ID 系统消息 -> 输出当前消息
+                    //    如果已输出过 -> 输出当前消息
+
+                    // 但由于 messagesWithSystemPrompt 必定包含系统消息（SystemPromptInjector 保证），
+                    // 我们只需要在遇到第一个系统消息时，在其后追加文件 ID 消息即可。
+                    // 如果有多个系统消息，我们只在第一个后面追加。
+                    
+                    // 实际上 SystemPromptInjector 会把系统消息放在最前面。
+                    
+                    when (message) {
+                        is SimpleTextApiMessage -> {
+                            if (message.role == "system" && qwenFileIds.isNotEmpty()) {
+                                // 尝试将 fileid 合并到系统消息中，或者紧跟其后
+                                // 官方文档建议单独消息，但为了兼容性，这里保持单独消息策略
                                 addJsonObject {
                                     put("role", message.role)
-                                    put("content", "")
+                                    put("content", message.content)
                                 }
+                                qwenFileIds.forEach { fileId ->
+                                    addJsonObject {
+                                        put("role", "system")
+                                        put("content", "fileid://$fileId")
+                                    }
+                                }
+                                qwenFileIds.clear()
                             } else {
                                 addJsonObject {
                                     put("role", message.role)
-                                    putJsonArray("content") {
-                                        parts.forEach { part ->
-                                            when (part) {
-                                                is com.android.everytalk.data.DataClass.ApiContentPart.Text -> {
-                                                    addJsonObject {
-                                                        put("type", "text")
-                                                        put("text", part.text)
+                                    put("content", message.content)
+                                }
+                            }
+                        }
+                        is com.android.everytalk.data.DataClass.PartsApiMessage -> {
+                            // 过滤掉 qwen-file-id 部分，因为它们已经作为系统消息注入了
+                            val parts = message.parts.filterNot {
+                                it is ApiContentPart.FileUri && it.mimeType == "qwen-file-id"
+                            }
+
+                            if (parts.isEmpty()) {
+                                // 如果过滤后为空（例如只包含文件的消息），且不是系统消息，可能需要跳过或发空内容
+                                // 但为了保持对话结构，发送空内容比较安全，或者如果原意是"请分析此文件"，用户通常会附带文本。
+                                // 如果用户只发了文件，前端通常会生成一个"Sent a file"之类的文本，或者这里发空字符串。
+                                if (message.role != "system") {
+                                     addJsonObject {
+                                        put("role", message.role)
+                                        put("content", "")
+                                    }
+                                }
+                            } else {
+                                // Check if we can simplify to string content (preferred by some models like qwen-long)
+                                val allText = parts.all { it is com.android.everytalk.data.DataClass.ApiContentPart.Text }
+                                if (allText) {
+                                    val textContent = parts.joinToString("\n") { (it as com.android.everytalk.data.DataClass.ApiContentPart.Text).text }
+                                    addJsonObject {
+                                        put("role", message.role)
+                                        put("content", textContent)
+                                    }
+                                } else {
+                                    addJsonObject {
+                                        put("role", message.role)
+                                        putJsonArray("content") {
+                                            parts.forEach { part ->
+                                                when (part) {
+                                                    is com.android.everytalk.data.DataClass.ApiContentPart.Text -> {
+                                                        addJsonObject {
+                                                            put("type", "text")
+                                                            put("text", part.text)
+                                                        }
                                                     }
-                                                }
-                                                is com.android.everytalk.data.DataClass.ApiContentPart.InlineData -> {
-                                                    val mime = part.mimeType
-                                                    if (isAudioMime(mime)) {
-                                                        // OpenAI-compat input_audio
-                                                        addJsonObject {
-                                                            put("type", "input_audio")
-                                                            putJsonObject("input_audio") {
-                                                                put("data", part.base64Data)
-                                                                put("format", audioFormatFromMime(mime))
+                                                    is com.android.everytalk.data.DataClass.ApiContentPart.InlineData -> {
+                                                        val mime = part.mimeType
+                                                        if (isAudioMime(mime)) {
+                                                            // OpenAI-compat input_audio
+                                                            addJsonObject {
+                                                                put("type", "input_audio")
+                                                                putJsonObject("input_audio") {
+                                                                    put("data", part.base64Data)
+                                                                    put("format", audioFormatFromMime(mime))
+                                                                }
                                                             }
-                                                        }
-                                                    } else if (isVideoMime(mime)) {
-                                                        // 视频按后端策略：仍使用 image_url data URI（多数网关接受）
-                                                        val dataUri = "data:${mime};base64,${part.base64Data}"
-                                                        addJsonObject {
-                                                            put("type", "image_url")
-                                                            putJsonObject("image_url") {
-                                                                put("url", dataUri)
+                                                        } else if (isVideoMime(mime)) {
+                                                            // 视频按后端策略：仍使用 image_url data URI（多数网关接受）
+                                                            val dataUri = "data:${mime};base64,${part.base64Data}"
+                                                            addJsonObject {
+                                                                put("type", "image_url")
+                                                                putJsonObject("image_url") {
+                                                                    put("url", dataUri)
+                                                                }
                                                             }
-                                                        }
-                                                    } else {
-                                                        // 图片/其他 → image_url data URI
-                                                        val dataUri = "data:${mime};base64,${part.base64Data}"
-                                                        addJsonObject {
-                                                            put("type", "image_url")
-                                                            putJsonObject("image_url") {
-                                                                put("url", dataUri)
+                                                        } else {
+                                                            // 图片/其他 → image_url data URI
+                                                            val dataUri = "data:${mime};base64,${part.base64Data}"
+                                                            addJsonObject {
+                                                                put("type", "image_url")
+                                                                putJsonObject("image_url") {
+                                                                    put("url", dataUri)
+                                                                }
                                                             }
                                                         }
                                                     }
-                                                }
-                                                is com.android.everytalk.data.DataClass.ApiContentPart.FileUri -> {
-                                                    addJsonObject {
-                                                        put("type", "text")
-                                                        put("text", "[Attachment: ${part.uri}]")
+                                                    is com.android.everytalk.data.DataClass.ApiContentPart.FileUri -> {
+                                                        // 其他类型的文件引用（非 Qwen ID）
+                                                        addJsonObject {
+                                                            put("type", "text")
+                                                            put("text", "[Attachment: ${part.uri}]")
+                                                        }
                                                     }
                                                 }
                                             }
                                         }
                                     }
                                 }
+                            }
+                            
+                            // 如果 PartsMessage 也是 system role (不太常见但可能)，也需要注入
+                            if (message.role == "system" && qwenFileIds.isNotEmpty()) {
+                                qwenFileIds.forEach { fileId ->
+                                    addJsonObject {
+                                        put("role", "system")
+                                        put("content", "fileid://$fileId")
+                                    }
+                                }
+                                qwenFileIds.clear()
                             }
                         }
                         else -> {
@@ -292,6 +378,12 @@ object OpenAIDirectClient {
                         }
                     }
                 }
+                
+                // 防御性编程：如果遍历完所有消息后 qwenFileIds 仍不为空（例如没有系统消息），则追加到最前（但这很难做到因为是流式写入 array）
+                // 或者追加到最后？不，系统消息应该在前。
+                // 由于 SystemPromptInjector.smartInjectSystemPrompt 保证了第一条是 system 消息，所以上面的逻辑应该是覆盖了绝大多数情况。
+                // 唯一例外是 smartInjectSystemPrompt 返回空列表（不可能）或没有 system 消息（如果 forceInject=false 且检测失败？但 smartInject 默认逻辑会注入）。
+                // 假设总有 system 消息。
             }
 
             // 添加参数
@@ -465,6 +557,88 @@ object OpenAIDirectClient {
         return req.copy(messages = msgs)
     }
     
+    /**
+     * 处理 Qwen 模型的文件上传
+     */
+    private suspend fun handleQwenUploads(
+        client: HttpClient,
+        request: ChatRequest,
+        onStatus: suspend (String) -> Unit
+    ): ChatRequest {
+        var hasUploads = false
+        val newMessages = request.messages.map { msg ->
+            if (msg is PartsApiMessage) {
+                val newParts = msg.parts.map { part ->
+                    if (part is ApiContentPart.InlineData && part.mimeType.startsWith("file_upload_marker|")) {
+                        hasUploads = true
+                        // Format: file_upload_marker|mime|filename
+                        val segments = part.mimeType.split("|")
+                        val fileName = segments.getOrNull(2) ?: "unknown_file"
+                        
+                        try {
+                            onStatus("Uploading $fileName to DashScope...")
+                            val bytes = Base64.decode(part.base64Data, Base64.NO_WRAP)
+                            val fileId = uploadFileToDashScope(client, request.apiKey, fileName, bytes)
+                            Log.i(TAG, "Uploaded $fileName, id=$fileId")
+                            
+                            ApiContentPart.FileUri(uri = fileId, mimeType = "qwen-file-id")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to upload file for Qwen", e)
+                            ApiContentPart.Text("[Upload Failed: ${e.message}]")
+                        }
+                    } else {
+                        part
+                    }
+                }
+                msg.copy(parts = newParts)
+            } else {
+                msg
+            }
+        }
+        
+        if (hasUploads) {
+            onStatus("File upload complete, starting generation...")
+        }
+        
+        return request.copy(messages = newMessages)
+    }
+
+    private suspend fun uploadFileToDashScope(
+        client: HttpClient,
+        apiKey: String,
+        fileName: String,
+        fileBytes: ByteArray
+    ): String {
+        // https://dashscope.aliyuncs.com/compatible-mode/v1/files
+        val response = client.submitFormWithBinaryData(
+            url = "https://dashscope.aliyuncs.com/compatible-mode/v1/files",
+            formData = formData {
+                append("file", fileBytes, Headers.build {
+                    append(HttpHeaders.ContentDisposition, "filename=\"$fileName\"")
+                    val mimeType = when (fileName.substringAfterLast('.', "").lowercase()) {
+                        "txt" -> "text/plain"
+                        "pdf" -> "application/pdf"
+                        "doc", "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        "png" -> "image/png"
+                        "jpg", "jpeg" -> "image/jpeg"
+                        else -> "application/octet-stream"
+                    }
+                    append(HttpHeaders.ContentType, mimeType)
+                })
+                append("purpose", "file-extract")
+            }
+        ) {
+            header(HttpHeaders.Authorization, "Bearer $apiKey")
+        }
+
+        if (!response.status.isSuccess()) {
+            throw Exception("Upload failed: ${response.status}")
+        }
+
+        val json = Json.parseToJsonElement(response.bodyAsText()).jsonObject
+        return json["id"]?.jsonPrimitive?.content ?: throw Exception("No file id in response")
+    }
+
     /**
      * 解析 OpenAI SSE 流
      */
