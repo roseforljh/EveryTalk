@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.9.0](https://github.com/roseforljh/EveryTalk/compare/v1.8.4...v1.9.0) (2025-12-10)
+
+
+### Features
+
+* update telegram notification style to send apk with details ([55bbf38](https://github.com/roseforljh/EveryTalk/commit/55bbf3868fcb37cbf8d1c10c750cbabd31b6bd21))
+* upgrade telegram notification to send apk file with details ([246f164](https://github.com/roseforljh/EveryTalk/commit/246f1648703d77df48f370f43228b984755a6159))
+
+
+### Bug Fixes
+
+* force add github workflows and replace telegram action with curl ([a7af25f](https://github.com/roseforljh/EveryTalk/commit/a7af25fb6796108de2d04ddade7691837c96c7de))
+* 修复页面抖动 ([cfef9ea](https://github.com/roseforljh/EveryTalk/commit/cfef9eadbf96c076234e01742824b9cb360f7a43))
+* 减小体积 ([6166c02](https://github.com/roseforljh/EveryTalk/commit/6166c025f1da8ca6c3d11e3159ab12cea9090f17))
+
 ## [1.8.4](https://github.com/roseforljh/EveryTalk/compare/v1.8.3...v1.8.4) (2025-12-10)
 
 
