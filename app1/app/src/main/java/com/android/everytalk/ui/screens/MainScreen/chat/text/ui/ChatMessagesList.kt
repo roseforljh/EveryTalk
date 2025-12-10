@@ -497,42 +497,7 @@ fun ChatMessagesList(
                     // Remove resetScrollState to avoid conflicting scroll animations
                     viewModel.regenerateAiResponse(it, isImageGeneration = false)
                     isContextMenuVisible = false
-                    coroutineScope.launch {
-                        // Wait briefly for the list to update (AI message replaced by loading)
-                        // This ensures we scroll based on the new layout
-                        var attempts = 0
-                        var targetIndex = -1
-                        
-                        // Increase timeout to 5 seconds to be safe against slow UI updates/DB operations
-                        while (attempts < 100) {
-                            val currentItems = viewModel.chatListItems.value
-                            targetIndex = currentItems.indexOfFirst { item ->
-                                (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage && item.messageId == it.id) ||
-                                (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.ErrorMessage && item.messageId == it.id)
-                            }
-                            
-                            // We need to ensure that the Loading Indicator (or new AI message) has appeared AFTER the user message.
-                            // If targetIndex is the last item, it means the AI message/loading hasn't been added yet (or old one removed).
-                            // We wait until there is an item AFTER the user message, which ensures the list has grown/updated
-                            // and the 'shouldApplyMinHeight' logic in the Loading item will trigger, allowing scroll to top.
-                            if (targetIndex != -1 && targetIndex < currentItems.lastIndex) {
-                                // Also verify that the LazyListState has actually updated to include these new items.
-                                // The footer spacer adds 1 to the total count.
-                                val expectedTotalItems = currentItems.size + 1
-                                if (listState.layoutInfo.totalItemsCount >= expectedTotalItems) {
-                                    break
-                                }
-                            }
-                            delay(50)
-                            attempts++
-                        }
-                        
-                        // Give layout a moment to settle (measure the new height of the Loading item)
-                        delay(100)
-                        
-                        // Always scroll to bottom for regenerate action, as requested by user
-                        scrollStateManager.jumpToBottom()
-                    }
+                    // 移除强制滚动到底部，保持用户当前视野位置不变
                 }
             )
         }

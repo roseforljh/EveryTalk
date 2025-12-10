@@ -470,7 +470,8 @@ fun ChatInputArea(
                         .onFocusChanged { focusState ->
                             // 获得焦点时滚动至底部，失去焦点时通知外层
                             if (focusState.isFocused) {
-                                onFocusChange(true)
+                                // 移除自动滚动到底部，避免打扰用户查看历史消息
+                                // onFocusChange(true)
                             } else {
                                 onFocusChange(false)
                             }

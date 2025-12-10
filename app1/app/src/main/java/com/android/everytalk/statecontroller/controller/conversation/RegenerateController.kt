@@ -190,11 +190,10 @@ class RegenerateController(
                     }
                 }
 
-                if (shouldAutoScroll()) {
-                    // 使用精确滚动定位到新生成的User消息，而不是直接滚动到底部
-                    // 这样用户可以看到User消息和正在生成的AI回复
-                    stateHolder._scrollToItemEvent.tryEmit(newUserMessageId)
-                }
+                // 移除强制滚动到新用户消息的逻辑，保持页面原地不动
+                // if (shouldAutoScroll()) {
+                //     stateHolder._scrollToItemEvent.tryEmit(newUserMessageId)
+                // }
             }
         }
     }
