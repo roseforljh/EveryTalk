@@ -1,0 +1,30 @@
+name: Test Telegram Notification
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-notification:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Test Notification
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TELEGRAM_TO }}
+          VERSION_NAME: "Test-Version-1.0"
+          REPO: ${{ github.repository }}
+        run: |
+          # 使用多行字符串并配合 --data-urlencode 自动处理特殊字符和换行
+          MSG="🔔 *EveryTalk 通知测试*
+
+          这是一条测试消息，用于验证 GitHub Actions 通知功能是否正常。
+          如果不需编译 APK 就能收到这条消息，说明配置已修复成功。
+
+          📦 *模拟版本*: \`$VERSION_NAME\`
+          
+          #Test #EveryTalk"
+
+          curl -v -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
+            -d "chat_id=$TG_CHAT_ID" \
+            -d "parse_mode=Markdown" \
+            --data-urlencode "text=$MSG"
