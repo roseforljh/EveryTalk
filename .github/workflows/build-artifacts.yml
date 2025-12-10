@@ -169,7 +169,8 @@ jobs:
           SHA: ${{ github.sha }}
           APK_DIR: ${{ env.APP_DIR }}/app/build/outputs/apk/release
         run: |
-          python3 EveryTalk/.github/scripts/send_telegram.py
+          # 脚本位于仓库根目录的 .github/scripts 下
+          python3 .github/scripts/send_telegram.py
 
       - name: Upload artifacts for manual runs
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
