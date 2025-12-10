@@ -445,11 +445,11 @@ class HistoryManager(
                 } else {
                     stateHolder._currentConversationId.value = stableId
                 }
-                // 触发滚动到底部事件，确保ID切换后，新建的 LazyListState（重置为0）能接收到滚动指令
-                // 这修复了“重新生成第一条消息或首条消息变化时，页面跳回顶部”的问题
-                stateHolder._scrollToBottomEvent.tryEmit(Unit)
+                // 不再触发滚动到底部事件，而是依赖 scrollState 的迁移和 ChatScreen 的恢复逻辑。
+                // 强制触发 jumpToBottom 会导致“重新回答”时的平滑滚动被覆盖为瞬间跳转。
+                // stateHolder._scrollToBottomEvent.tryEmit(Unit)
                 
-                Log.d(TAG_HM, "Switched ${if (isImageGeneration) "imageGenerationConversationId" else "conversationId"} from '$currentId' to stable key '$stableId' and triggered scroll to bottom")
+                Log.d(TAG_HM, "Switched ${if (isImageGeneration) "imageGenerationConversationId" else "conversationId"} from '$currentId' to stable key '$stableId'")
             }
         } else {
             Log.d(TAG_HM, "Skip parameter/config migration: no messages to derive a stable key")

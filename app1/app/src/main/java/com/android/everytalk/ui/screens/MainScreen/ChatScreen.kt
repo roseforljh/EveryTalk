@@ -174,20 +174,35 @@ fun ChatScreen(
 
     // 监听滚动到指定消息的事件
     val chatListItems by viewModel.chatListItems.collectAsState()
-    LaunchedEffect(scrollStateManager, chatListItems) {
+    LaunchedEffect(scrollStateManager) {
         viewModel.scrollToItemEvent.collect { messageId ->
-            val index = chatListItems.indexOfFirst {
-                when (it) {
-                    is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage -> it.messageId == messageId
-                    is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage -> it.messageId == messageId
-                    is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCode -> it.messageId == messageId
-                    is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageReasoning -> it.message.id == messageId
-                    // 其他类型的消息暂不支持精确滚动定位，或者不需要
-                    else -> false
+            // 收到滚动请求时，列表可能尚未更新（StateFlow更新有延迟），因此需要重试等待
+            var attempts = 0
+            var targetIndex = -1
+            while (attempts < 20) {
+                val currentItems = viewModel.chatListItems.value
+                targetIndex = currentItems.indexOfFirst {
+                    when (it) {
+                        is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage -> it.messageId == messageId
+                        is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage -> it.messageId == messageId
+                        is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCode -> it.messageId == messageId
+                        is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageReasoning -> it.message.id == messageId
+                        else -> false
+                    }
                 }
+                
+                if (targetIndex != -1) {
+                    break
+                }
+                delay(50)
+                attempts++
             }
-            if (index != -1) {
-                scrollStateManager.scrollItemToTop(index)
+            
+            if (targetIndex != -1) {
+                scrollStateManager.scrollItemToTop(targetIndex)
+            } else {
+                // 如果找不到目标消息（例如列表更新失败），回退到滚动到底部
+                scrollStateManager.smoothScrollToBottom(isUserAction = true)
             }
         }
     }
@@ -394,7 +409,7 @@ fun ChatScreen(
                         if (targetIndex != -1) {
                             scrollStateManager.scrollItemToTop(targetIndex)
                         } else {
-                            scrollStateManager.smoothScrollToBottom()
+                            scrollStateManager.smoothScrollToBottom(isUserAction = true)
                         }
                     }
                 },
