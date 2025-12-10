@@ -37,12 +37,13 @@ jobs:
           CAPTION+="<a href=\"$RUN_URL\">Workflow run</a>"
 
           # 发送文档 (APK)
-          # 使用 ls -la 确认文件存在
-          ls -la ./app-release.apk
+          # 获取绝对路径
+          APK_PATH=$(readlink -f app-release.apk)
+          echo "APK absolute path: $APK_PATH"
+          ls -la "$APK_PATH"
 
-          # 使用 ./ 前缀明确当前目录，确保 curl 能找到文件
           curl -v -F chat_id="$TG_CHAT_ID" \
-               -F document=@./app-release.apk \
+               -F document=@"$APK_PATH" \
                -F parse_mode="HTML" \
                -F caption="$CAPTION" \
                "https://api.telegram.org/bot$TG_TOKEN/sendDocument"
