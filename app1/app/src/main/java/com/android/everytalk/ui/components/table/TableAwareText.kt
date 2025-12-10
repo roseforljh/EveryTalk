@@ -116,7 +116,10 @@ fun TableAwareText(
     // 优化：将垂直 padding 移至外层 Column，内部组件禁用垂直 padding，从而消除组件间的双重间距
     
     val context = LocalContext.current
-    val verticalPaddingDp = if (sender == Sender.User) 4.dp else 16.dp
+    // 用户气泡外部已有 padding，内部不再添加垂直 padding，避免顶部空白过大
+    // AI 气泡也移除垂直 padding，将空间控制交给具体的渲染组件（如 MarkdownRenderer 的 pre-processing）
+    // 防止出现“顶部空白过大”的问题
+    val verticalPaddingDp = 0.dp
     
     Column(
         modifier = modifier

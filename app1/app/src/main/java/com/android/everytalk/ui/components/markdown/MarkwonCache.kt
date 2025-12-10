@@ -11,6 +11,7 @@ import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.Markwon
 import io.noties.markwon.MarkwonSpansFactory
 import io.noties.markwon.core.CorePlugin
+import io.noties.markwon.core.CoreProps
 import io.noties.markwon.core.MarkwonTheme
 import io.noties.markwon.ext.latex.JLatexMathPlugin
 import io.noties.markwon.image.ImagesPlugin
@@ -35,8 +36,8 @@ object MarkwonCache {
         imageClickListener: ((String) -> Unit)? = null
     ): Markwon {
         val roundedSize = textSize.toInt()
-        // v4: use default heading style from library, invalidate old cache
-        val cacheKey = "v4_dark=${isDark}_size=${roundedSize}"
+        // v6: disabled heading preprocessing + custom heading factory
+        val cacheKey = "v6_dark=${isDark}_size=${roundedSize}"
         
         synchronized(lock) {
             cacheMap[cacheKey]?.let { return it }
@@ -64,10 +65,36 @@ object MarkwonCache {
                         builder.bulletWidth(smallBulletPx)
 
                         // 移除 headingBreakHeight(0) 恢复默认标题样式
+                        // 重新添加 headingBreakHeight(0) 以消除气泡顶部的额外空白
+                        // 标题间的间距由预处理中的换行符控制
+                        builder.headingBreakHeight(0)
                     }
                     override fun configureSpansFactory(builder: MarkwonSpansFactory.Builder) {
-                        // 标题样式完全交给 Markwon 默认实现，
-                        // 这里只自定义代码块样式
+                        // 自定义标题样式：使用纯文本样式模拟，彻底消除 HeadingSpan 可能带来的顶部间距
+                        // 解决 "#越多，顶部空间越大" 的问题
+                        builder.setFactory(org.commonmark.node.Heading::class.java) { _, props ->
+                            val level = CoreProps.HEADING_LEVEL.get(props) ?: 1
+                            val spans = mutableListOf<Any>()
+                            
+                            // 加粗
+                            spans.add(StyleSpan(Typeface.BOLD))
+                            
+                            // 字号调整 (参考 Markwon 默认比例)
+                            val size = when (level) {
+                                1 -> 2.0f
+                                2 -> 1.5f
+                                3 -> 1.17f
+                                4 -> 1.0f
+                                5 -> 0.83f
+                                6 -> 0.67f
+                                else -> 1.0f
+                            }
+                            spans.add(RelativeSizeSpan(size))
+                            
+                            spans.toTypedArray()
+                        }
+
+                        // 自定义代码块样式
                         builder.setFactory(Code::class.java) { _, _ ->
                             arrayOf<Any>(
                                 TypefaceSpan("monospace"),

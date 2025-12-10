@@ -1305,8 +1305,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         modelAndConfigController.clearFetchedModels()
     }
 
-    fun createMultipleConfigs(provider: String, address: String, key: String, modelNames: List<String>, enableCodeExecution: Boolean? = null, toolsJson: String? = null) {
-        modelAndConfigController.createMultipleConfigs(provider, address, key, modelNames, enableCodeExecution, toolsJson)
+    fun createMultipleConfigs(provider: String, address: String, key: String, modelNames: List<String>, channel: String = "OpenAI兼容", enableCodeExecution: Boolean? = null, toolsJson: String? = null) {
+        modelAndConfigController.createMultipleConfigs(provider, address, key, modelNames, channel, enableCodeExecution, toolsJson)
     }
 
     // 新增：用于通知UI显示添加模型对话框的 Flow
@@ -1531,6 +1531,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             address = params.address,
             key = params.key,
             modelNames = models,
+            channel = params.channel,
             enableCodeExecution = params.enableCodeExecution,
             toolsJson = params.toolsJson
         )
@@ -1551,6 +1552,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             address = params.address,
             key = params.key,
             modelNames = selectedModels,
+            channel = params.channel,
             enableCodeExecution = params.enableCodeExecution,
             toolsJson = params.toolsJson
         )

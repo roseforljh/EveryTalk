@@ -59,7 +59,7 @@ class ModelAndConfigController(
         }
     }
 
-    fun createMultipleConfigs(provider: String, address: String, key: String, modelNames: List<String>, enableCodeExecution: Boolean? = null, toolsJson: String? = null) {
+    fun createMultipleConfigs(provider: String, address: String, key: String, modelNames: List<String>, channel: String = "OpenAI兼容", enableCodeExecution: Boolean? = null, toolsJson: String? = null) {
         if (modelNames.isEmpty()) {
             showSnackbar("请至少选择一个模型")
             return
@@ -79,6 +79,7 @@ class ModelAndConfigController(
                         id = UUID.randomUUID().toString(),
                         isValid = true,
                         modalityType = com.android.everytalk.data.DataClass.ModalityType.TEXT,
+                        channel = channel,
                         enableCodeExecution = enableCodeExecution,
                         toolsJson = toolsJson
                     )

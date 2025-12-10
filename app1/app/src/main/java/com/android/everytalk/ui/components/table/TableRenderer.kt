@@ -25,7 +25,7 @@ import com.android.everytalk.ui.components.markdown.MarkdownRenderer
 
 /**
  * 表格渲染器
- * 
+ *
  * 支持：
  * - 自动列宽计算
  * - 水平滚动
@@ -65,7 +65,10 @@ fun TableRenderer(
 
     val cornerRadius = 12.dp
     val tableShape = RoundedCornerShape(cornerRadius)
-
+    
+    // 使用 ScrollState 来支持水平滚动
+    val scrollState = rememberScrollState()
+    
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -81,7 +84,7 @@ fun TableRenderer(
                     )
                 }
             }
-            .horizontalScroll(rememberScrollState()) // 由外层统一提供水平滚动，保证表头与数据行滚动同步
+            .horizontalScroll(scrollState) // 由外层统一提供水平滚动，保证表头与数据行滚动同步
             .background(MaterialTheme.colorScheme.surface)
             .border(1.dp, MaterialTheme.colorScheme.outline, tableShape) // 边框也使用圆角
     ) {

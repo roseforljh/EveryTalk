@@ -14,11 +14,22 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.animation.animateContentSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.TileMode
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Audiotrack
@@ -116,8 +127,27 @@ internal fun UserOrErrorMessageContent(
                     // 存储组件在屏幕中的全局位置
                     globalPosition = coordinates.localToRoot(Offset.Zero)
                 }
+                // 🔥 修复：将长按手势移至 Surface 层，移除覆盖在内容上的透明 Box
+                // 这样内部组件（如表格）的触摸事件就不会被覆盖层拦截
+                .pointerInput(message.id, isError) {
+                    detectTapGestures(
+                        onLongPress = { localOffset ->
+                            haptic.performHapticFeedback(
+                                androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress
+                            )
+                            // localOffset 是相对于 Surface 的，加上 globalPosition 即可
+                            val globalOffset = globalPosition + localOffset
+                            onLongPress(message, globalOffset)
+                        }
+                    )
+                }
         ) {
-            // 外层包一层容器，内部保持原内容，叠加一个全覆盖的透明手势层，确保父层优先捕获长按
+            // 展开/收起状态管理
+            var isExpanded by remember { mutableStateOf(false) }
+            var hasOverflow by remember { mutableStateOf(false) }
+            val maxCollapsedHeight = screenHeightDp * 0.4f // 默认最大高度为屏幕高度的 40%
+            
+            // 使用 Box 作为主容器，让按钮浮动在底部
             Box(
                 modifier = Modifier
                     // 用户保持原来略紧凑，AI 左右仅保留 1dp 安全边距
@@ -127,58 +157,82 @@ internal fun UserOrErrorMessageContent(
                     )
                     .wrapContentWidth()
                     .defaultMinSize(minHeight = 28.dp)
-                    .then(
-                        if (message.sender == Sender.User) {
-                            Modifier
-                                .heightIn(max = screenHeightDp * 0.6f)
-                                .verticalScroll(rememberScrollState())
-                        } else {
-                            Modifier
-                        }
-                    )
             ) {
-                // 原有内容层
                 Box(
-                    contentAlignment = Alignment.CenterStart,
                     modifier = Modifier
                         .wrapContentWidth()
-                ) {
-                    if (showLoadingDots && !isError) {
-                        ThreeDotsLoadingAnimation(
-                            dotColor = contentColor,
-                            modifier = Modifier
-                                .align(Alignment.Center)
-                                .offset(y = (-6).dp)
+                        .animateContentSize() // 🔥 添加流畅的过渡动画
+                        .then(
+                            if (message.sender == Sender.User && !isExpanded) {
+                                Modifier
+                                    .heightIn(max = maxCollapsedHeight)
+                                    .drawWithContent {
+                                        drawContent()
+                                        // 简单检测：如果绘制高度达到了最大限制，认为有溢出
+                                        if (size.height >= maxCollapsedHeight.toPx() - 1f) {
+                                            hasOverflow = true
+                                        }
+                                    }
+                            } else {
+                                Modifier
+                            }
                         )
-                    } else if (displayedText.isNotBlank() || isError) {
-                        EnhancedMarkdownText(
-                            message = message,
-                            modifier = Modifier.wrapContentWidth(),
-                            color = contentColor,
-                            onImageClick = { url -> previewUrl = url }
+                ) {
+                    // 原有内容层
+                    Box(
+                        contentAlignment = Alignment.CenterStart,
+                        modifier = Modifier
+                            .wrapContentWidth()
+                            // 如果显示按钮，给底部留出空间，防止内容被按钮遮挡
+                            .padding(bottom = if (message.sender == Sender.User && (hasOverflow || isExpanded)) 28.dp else 0.dp)
+                    ) {
+                        if (showLoadingDots && !isError) {
+                            ThreeDotsLoadingAnimation(
+                                dotColor = contentColor,
+                                modifier = Modifier
+                                    .align(Alignment.Center)
+                                    .offset(y = (-6).dp)
+                            )
+                        } else if (displayedText.isNotBlank() || isError) {
+                            EnhancedMarkdownText(
+                                message = message,
+                                modifier = Modifier.wrapContentWidth(),
+                                color = contentColor,
+                                onImageClick = { url -> previewUrl = url }
+                            )
+                        }
+                    }
+                }
+                
+                // 展开/收起按钮 - 浮动在底部，带有渐变背景
+                if (message.sender == Sender.User && (hasOverflow || isExpanded)) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .align(Alignment.BottomCenter)
+                            // 显式裁剪为底部圆角，解决点击波纹直角问题，匹配气泡圆角
+                            .clip(RoundedCornerShape(bottomStart = 18.dp, bottomEnd = 18.dp))
+                            .background(
+                                brush = Brush.verticalGradient(
+                                    colors = listOf(
+                                        bubbleColor.copy(alpha = 0f), // 顶部透明
+                                        bubbleColor.copy(alpha = 0.8f), // 中间过渡
+                                        bubbleColor                   // 底部实色
+                                    )
+                                )
+                            )
+                            .clickable { isExpanded = !isExpanded }
+                            .padding(top = 12.dp, bottom = 6.dp), // 减小高度，调整视觉平衡
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (isExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                            contentDescription = if (isExpanded) "收起" else "展开",
+                            tint = contentColor.copy(alpha = 0.7f),
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                 }
-                // 透明手势层：全覆盖，拿到局部偏移并换算为全局坐标，避免子组件拦截导致父层长按无效
-                var overlayGlobal by remember { mutableStateOf(Offset.Zero) }
-                Box(
-                    modifier = Modifier
-                        .matchParentSize()
-                        .onGloballyPositioned { coords ->
-                            overlayGlobal = coords.localToRoot(Offset.Zero)
-                        }
-                        .pointerInput(message.id, isError) {
-                            detectTapGestures(
-                                onLongPress = { localOffset ->
-                                    haptic.performHapticFeedback(
-                                        androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress
-                                    )
-                                    val globalOffset = overlayGlobal + localOffset
-                                    onLongPress(message, globalOffset)
-                                }
-                            )
-                        }
-                )
             }
         }
 

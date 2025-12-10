@@ -36,7 +36,7 @@ object GeminiDirectClient {
             val baseUrl = request.apiAddress?.trimEnd('/')?.takeIf { it.isNotBlank() }
                 ?: com.android.everytalk.BuildConfig.GOOGLE_API_BASE_URL.trimEnd('/').takeIf { it.isNotBlank() }
                 ?: "https://generativelanguage.googleapis.com"
-            val model = request.model
+            val model = request.model.trim()
             val url = "$baseUrl/v1beta/models/$model:streamGenerateContent?key=${request.apiKey}&alt=sse"
             
             Log.d(TAG, "直连 URL: ${url.substringBefore("?key=")}")
@@ -132,46 +132,78 @@ object GeminiDirectClient {
             }
             
             // 转换消息格式（排除系统消息，因为已在 systemInstruction 中处理）
+            // 🔥 修复：合并连续的相同角色消息，防止 Gemini API 报错 400 (INVALID_ARGUMENT)
+            // Gemini 要求 user 和 model 必须交替出现，不能有连续的 user 或 model
+            val mergedMessages = mutableListOf<com.android.everytalk.data.DataClass.AbstractApiMessage>()
+            
+            messagesWithSystemPrompt.forEach { message ->
+                if (message.role == "system") return@forEach // 跳过系统消息
+
+                val lastMsg = mergedMessages.lastOrNull()
+                val currentRole = if (message.role == "assistant") "model" else message.role
+                val lastRole = if (lastMsg?.role == "assistant") "model" else lastMsg?.role
+
+                if (lastMsg != null && currentRole == lastRole) {
+                    // 合并到上一条消息
+                    val mergedParts = mutableListOf<com.android.everytalk.data.DataClass.ApiContentPart>()
+                    
+                    // 提取上一条消息的内容
+                    when (lastMsg) {
+                        is SimpleTextApiMessage -> mergedParts.add(com.android.everytalk.data.DataClass.ApiContentPart.Text(lastMsg.content))
+                        is PartsApiMessage -> mergedParts.addAll(lastMsg.parts)
+                    }
+                    
+                    // 提取当前消息的内容
+                    when (message) {
+                        is SimpleTextApiMessage -> mergedParts.add(com.android.everytalk.data.DataClass.ApiContentPart.Text(message.content))
+                        is PartsApiMessage -> mergedParts.addAll(message.parts)
+                    }
+                    
+                    // 替换上一条消息为合并后的 PartsApiMessage
+                    mergedMessages[mergedMessages.lastIndex] = PartsApiMessage(
+                        id = lastMsg.id, // 保持 ID 不变
+                        role = lastMsg.role,
+                        parts = mergedParts,
+                        name = lastMsg.name
+                    )
+                } else {
+                    mergedMessages.add(message)
+                }
+            }
+
             putJsonArray("contents") {
-                messagesWithSystemPrompt.forEach { message ->
-                    when {
-                        message.role == "system" -> {
-                            // 系统消息已在 systemInstruction 中处理，跳过
-                        }
-                        else -> {
-                            addJsonObject {
-                                put("role", if (message.role == "assistant") "model" else message.role)
-                                putJsonArray("parts") {
-                                    // 处理 content
-                                    when (message) {
-                                        is SimpleTextApiMessage -> {
-                                            if (message.content.isNotEmpty()) {
+                mergedMessages.forEach { message ->
+                    addJsonObject {
+                        put("role", if (message.role == "assistant") "model" else message.role)
+                        putJsonArray("parts") {
+                            // 处理 content
+                            when (message) {
+                                is SimpleTextApiMessage -> {
+                                    if (message.content.isNotEmpty()) {
+                                        addJsonObject {
+                                            put("text", message.content)
+                                        }
+                                    }
+                                }
+                                is PartsApiMessage -> {
+                                    message.parts.forEach { part ->
+                                        when (part) {
+                                            is com.android.everytalk.data.DataClass.ApiContentPart.Text -> {
                                                 addJsonObject {
-                                                    put("text", message.content)
+                                                    put("text", part.text)
                                                 }
                                             }
-                                        }
-                                        is PartsApiMessage -> {
-                                            message.parts.forEach { part ->
-                                                when (part) {
-                                                    is com.android.everytalk.data.DataClass.ApiContentPart.Text -> {
-                                                        addJsonObject {
-                                                            put("text", part.text)
-                                                        }
+                                            is com.android.everytalk.data.DataClass.ApiContentPart.InlineData -> {
+                                                addJsonObject {
+                                                    putJsonObject("inlineData") {
+                                                        put("mimeType", part.mimeType)
+                                                        put("data", part.base64Data)
                                                     }
-                                                    is com.android.everytalk.data.DataClass.ApiContentPart.InlineData -> {
-                                                        addJsonObject {
-                                                            putJsonObject("inlineData") {
-                                                                put("mimeType", part.mimeType)
-                                                                put("data", part.base64Data)
-                                                            }
-                                                        }
-                                                    }
-                                                    is com.android.everytalk.data.DataClass.ApiContentPart.FileUri -> {
-                                                        addJsonObject {
-                                                            put("text", "[Image: ${part.uri}]")
-                                                        }
-                                                    }
+                                                }
+                                            }
+                                            is com.android.everytalk.data.DataClass.ApiContentPart.FileUri -> {
+                                                addJsonObject {
+                                                    put("text", "[Image: ${part.uri}]")
                                                 }
                                             }
                                         }
@@ -213,7 +245,8 @@ object GeminiDirectClient {
                     }
                     // 代码执行工具
                     if (enableCodeExecution) {
-                        addJsonObject { putJsonObject("codeExecution") {} }
+                        // 🔥 修复：Gemini REST API 使用 snake_case (code_execution)
+                        addJsonObject { putJsonObject("code_execution") {} }
                         Log.i(TAG, "💻 启用代码执行工具")
                     }
                 }

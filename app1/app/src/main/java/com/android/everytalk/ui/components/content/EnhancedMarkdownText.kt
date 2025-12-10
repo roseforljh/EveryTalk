@@ -107,102 +107,87 @@ fun EnhancedMarkdownText(
     Box(
         modifier = modifier.then(widthModifier)
     ) {
-        // 仅对 AI 消息启用代码块卡片分段渲染
-        if (message.sender == Sender.AI) {
-            // 解析内容片段
-            val parts = remember(content) {
-                // 始终使用 parseCompleteContent，因为流式中间态也需要正确渲染已闭合的代码块
-                // ContentParser 内部逻辑已足够健壮
-                ContentParser.parseCompleteContent(content, isStreaming)
-            }
+        // 对所有消息启用分段渲染，以支持代码块和表格的横向滚动
+        // 解析内容片段
+        val parts = remember(content) {
+            // 始终使用 parseCompleteContent，因为流式中间态也需要正确渲染已闭合的代码块
+            // ContentParser 内部逻辑已足够健壮
+            ContentParser.parseCompleteContent(content, isStreaming)
+        }
 
-            androidx.compose.foundation.layout.Column(
-                modifier = widthModifier
-            ) {
-                parts.forEachIndexed { index, part ->
-                    when (part) {
-                        is ContentPart.Code -> {
-                            // 渲染代码块卡片
-                            val clipboard = LocalClipboardManager.current
-                            CodeBlockCard(
-                                language = part.language,
-                                code = part.content,
-                                modifier = Modifier.padding(vertical = 4.dp),
-                                onPreviewRequested = if (onCodePreviewRequested != null) {
-                                    { onCodePreviewRequested(part.language ?: "", part.content) }
-                                } else null,
-                                onCopy = {
-                                    clipboard.setText(AnnotatedString(part.content))
-                                    onCodeCopied?.invoke()
-                                }
-                            )
-                        }
-                        is ContentPart.Text -> {
-                            // 渲染普通文本
-                            // 注意：这里需要为每个片段生成唯一的 contentKey，避免缓存冲突
-                            // 使用 message.id + index
-                            ContentCoordinator(
-                                text = part.content,
-                                style = style,
-                                color = textColor,
-                                isStreaming = isStreaming && index == parts.lastIndex, // 只有最后一段可能是流式未完成
-                                modifier = widthModifier,
-                                contentKey = "${message.id}_part_$index",
-                                onLongPress = onLongPress,
-                                onImageClick = onImageClick,
-                                sender = message.sender,
-                                disableVerticalPadding = true // 禁用垂直padding，由Column控制间距
-                            )
-                        }
-                        is ContentPart.Table -> {
-                            // 表格暂按文本处理（ContentCoordinator 内部可能还有表格处理逻辑，或者直接渲染 markdown 表格）
-                            // 如果 ContentCoordinator 支持 Table 对象更好，但目前看它只接受 text
-                            // 这里把表格行拼回 markdown
-                            val tableMarkdown = part.lines.joinToString("\n")
-                            ContentCoordinator(
-                                text = tableMarkdown,
-                                style = style,
-                                color = textColor,
-                                isStreaming = isStreaming && index == parts.lastIndex,
-                                modifier = widthModifier,
-                                contentKey = "${message.id}_part_$index",
-                                onLongPress = onLongPress,
-                                onImageClick = onImageClick,
-                                sender = message.sender,
-                                disableVerticalPadding = true
-                            )
-                        }
-                        is ContentPart.Math -> {
-                            // 数学公式暂按文本处理
-                            ContentCoordinator(
-                                text = part.content,
-                                style = style,
-                                color = textColor,
-                                isStreaming = isStreaming && index == parts.lastIndex,
-                                modifier = widthModifier,
-                                contentKey = "${message.id}_part_$index",
-                                onLongPress = onLongPress,
-                                onImageClick = onImageClick,
-                                sender = message.sender,
-                                disableVerticalPadding = true
-                            )
-                        }
+        androidx.compose.foundation.layout.Column(
+            modifier = widthModifier
+        ) {
+            parts.forEachIndexed { index, part ->
+                when (part) {
+                    is ContentPart.Code -> {
+                        // 渲染代码块卡片
+                        val clipboard = LocalClipboardManager.current
+                        CodeBlockCard(
+                            language = part.language,
+                            code = part.content,
+                            modifier = Modifier.padding(vertical = 4.dp),
+                            onPreviewRequested = if (onCodePreviewRequested != null) {
+                                { onCodePreviewRequested(part.language ?: "", part.content) }
+                            } else null,
+                            onCopy = {
+                                clipboard.setText(AnnotatedString(part.content))
+                                onCodeCopied?.invoke()
+                            }
+                        )
+                    }
+                    is ContentPart.Text -> {
+                        // 渲染普通文本
+                        // 注意：这里需要为每个片段生成唯一的 contentKey，避免缓存冲突
+                        // 使用 message.id + index
+                        ContentCoordinator(
+                            text = part.content,
+                            style = style,
+                            color = textColor,
+                            isStreaming = isStreaming && index == parts.lastIndex, // 只有最后一段可能是流式未完成
+                            modifier = widthModifier,
+                            contentKey = "${message.id}_part_$index",
+                            onLongPress = onLongPress,
+                            onImageClick = onImageClick,
+                            sender = message.sender,
+                            disableVerticalPadding = true // 禁用垂直padding，由Column控制间距
+                        )
+                    }
+                    is ContentPart.Table -> {
+                        // 表格暂按文本处理（ContentCoordinator 内部可能还有表格处理逻辑，或者直接渲染 markdown 表格）
+                        // 如果 ContentCoordinator 支持 Table 对象更好，但目前看它只接受 text
+                        // 这里把表格行拼回 markdown
+                        val tableMarkdown = part.lines.joinToString("\n")
+                        ContentCoordinator(
+                            text = tableMarkdown,
+                            style = style,
+                            color = textColor,
+                            isStreaming = isStreaming && index == parts.lastIndex,
+                            modifier = widthModifier,
+                            contentKey = "${message.id}_part_$index",
+                            onLongPress = onLongPress,
+                            onImageClick = onImageClick,
+                            sender = message.sender,
+                            disableVerticalPadding = true
+                        )
+                    }
+                    is ContentPart.Math -> {
+                        // 数学公式暂按文本处理
+                        ContentCoordinator(
+                            text = part.content,
+                            style = style,
+                            color = textColor,
+                            isStreaming = isStreaming && index == parts.lastIndex,
+                            modifier = widthModifier,
+                            contentKey = "${message.id}_part_$index",
+                            onLongPress = onLongPress,
+                            onImageClick = onImageClick,
+                            sender = message.sender,
+                            disableVerticalPadding = true
+                        )
                     }
                 }
             }
-        } else {
-            // 用户消息保持原有逻辑（整体渲染）
-            ContentCoordinator(
-                text = content,
-                style = style,
-                color = textColor,
-                isStreaming = isStreaming,
-                modifier = widthModifier,
-                contentKey = message.id,
-                onLongPress = onLongPress,
-                onImageClick = onImageClick,
-                sender = message.sender
-            )
         }
     }
 }

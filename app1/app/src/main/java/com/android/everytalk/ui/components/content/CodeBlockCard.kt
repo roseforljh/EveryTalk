@@ -2,6 +2,8 @@ package com.android.everytalk.ui.components.content
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -119,6 +121,12 @@ fun CodeBlockCard(
                     .background(bg)
                     .padding(12.dp)
             ) {
+                // 使用 horizontalScroll 允许水平滚动
+                // 默认情况下，Modifier.horizontalScroll 会处理触摸拦截，
+                // 因此如果内容确实比容器宽，它应该可以滑动。
+                // 如果外层有 Drawer 拦截，可能需要处理嵌套滚动或手势优先级。
+                val scrollState = rememberScrollState()
+                
                 Text(
                     text = code,
                     style = MaterialTheme.typography.bodyMedium.copy(
@@ -127,7 +135,9 @@ fun CodeBlockCard(
                         lineHeight = 18.sp
                     ),
                     color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(scrollState)
                 )
             }
         }

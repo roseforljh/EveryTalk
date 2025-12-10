@@ -85,42 +85,26 @@ private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): S
     // 只保留用户明确需要的功能，移除会导致问题的列表处理逻辑
     // ============================================================================================
 
-    // 4.1 修复紧凑标题 (Compact Headers Fix) - 用户明确要求保留
-    // 某些模型输出标题时没有换行，导致Markwon无法正确识别
-    // 例如: "前文## 标题" -> "前文\n\n## 标题"
-    // 只处理 H2-H6 (##-######)，避免误伤 H1 (#) 和 hashtag (#tag)
-    // 4.1 修复紧凑标题 (Compact Headers Fix)
-    // 1. 确保标题前有换行
-    // 只处理 H2-H6，避免误伤 H1 (#) 和 hashtag (#tag)
-    s = s.replace(Regex("(?<!^)(?<!\\n)(#{2,6})"), "\n\n$1")
+    // 4.1 修复紧凑标题 (Compact Headers Fix) - 已禁用
+    // 之前的逻辑会在标题前添加 \n\n，导致顶部空间过大
+    // 现在只保留补全标题后空格的逻辑
+    // s = s.replace(Regex("(?<!^)(?<!\\n)(#{2,6})"), "\n\n$1")  // 已禁用：导致顶部空间过大
     
-    // 2. 补全标题后的空格
+    // 2. 补全标题后的空格（保留：不会导致额外空间）
     s = s.replace(Regex("(?<=^|\\n)(#{1,6})(?=[^#\\s])"), "$1 ")
     
-    // 3. 针对“标题+正文”粘连（无换行）的情况进行智能处理
-    // 场景：## 引子在古老的沙漠城镇...
-    // 策略A：尝试智能断句。如果前20字符内有标点（：:。？！）或空格，强制换行拆分标题和正文。
-    s = s.replace(Regex("^(#{1,6}\\s+)([^\\n]{1,20}[：:。？！\\s])([^\\n]+)$", RegexOption.MULTILINE)) { mr ->
-        val header = mr.groupValues[1]
-        val potentialTitle = mr.groupValues[2]
-        val body = mr.groupValues[3]
-        "$header$potentialTitle\n\n$body"
-    }
+    // 3. 针对"标题+正文"粘连的智能处理 - 已禁用
+    // 这些逻辑会在标题后添加 \n\n，可能导致额外空间
+    // s = s.replace(Regex("^(#{1,6}\\s+)([^\\n]{1,20}[：:。？！\\s])([^\\n]+)$", RegexOption.MULTILINE)) { ... }  // 已禁用
 
-    // 策略B：降级兜底。如果仍未换行且整行超长（>50字符），判定为粘连严重，转义 # 降级为普通文本，防止满屏大字。
+    // 策略B：降级兜底 - 保留（不会添加额外空间，只是转义）
     s = s.replace(Regex("^(#{1,6})(?=\\s.{50,})", RegexOption.MULTILINE)) { mr ->
         "\\" + mr.groupValues[1]
     }
 
-    // 4.2 紧凑列表（仅限标题行内的第一个 "- "）拆行
-    // 典型模式: "## 政策层面- **经济政策**" -> "## 政策层面\n- **经济政策**"
-    // 只在标题行内部寻找第一个 "- "，避免影响普通段落和子列表。
-    s = s.replace(
-        Regex("^(#{1,6}[^\\n]*?)(?:\\s*)-\\s", RegexOption.MULTILINE)
-    ) { mr ->
-        val headingPart = mr.groupValues[1].trimEnd()
-        "$headingPart\n- "
-    }
+    // 4.2 紧凑列表 - 已禁用
+    // 这个逻辑会在标题后添加换行，可能导致额外空间
+    // s = s.replace(Regex("^(#{1,6}[^\\n]*?)(?:\\s*)-\\s", RegexOption.MULTILINE)) { ... }  // 已禁用
 
     // 5. 强制换行处理 (Hard Break Enforcement) - 用户明确要求保留
     // Markwon/CommonMark 默认将单个换行符视为空格 (Soft Break)。
@@ -144,15 +128,24 @@ private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): S
             // 空行检测
             val isEmptyLine = line.isBlank()
             
+            // 表格行与未闭合粗体检测 (Table & Unbalanced Bold Protection)
+            // 在流式传输时，表格行可能被分片传输，此时插入硬换行会破坏表格结构（如 | **容器编 \n 排** |）
+            // 同样，未闭合的粗体如果在中间被插入换行，也会导致粗体失效。
+            val isTableLine = line.contains("|")
+            // 简单检测：奇数个 ** 意味着该行内有未闭合的粗体标记
+            val hasUnbalancedBold = line.split("**").size % 2 == 0
+            
             // 调试日志
-            if (trimmedLine.startsWith("#")) {
-                android.util.Log.d("MarkdownPreprocess", "Line ${index}: isHeading=$isHeadingLine, content='${line.take(50)}'")
+            if (trimmedLine.startsWith("#") || (isStreaming && (isTableLine || hasUnbalancedBold))) {
+                android.util.Log.d("MarkdownPreprocess", "Line ${index}: isHeading=$isHeadingLine, isTable=$isTableLine, unbalancedBold=$hasUnbalancedBold, streaming=$isStreaming, content='${line.take(50)}'")
             }
             
             when {
                 index == lastIndex -> line // 最后一行不添加换行
                 isEmptyLine -> "$line\n" // 空行保持不变
                 isHeadingLine -> "$line\n" // 标题行保持普通换行，不添加尾部空格
+                // 流式阶段保护：如果是表格行或包含未闭合粗体，禁止自动添加硬换行，防止破坏结构
+                isStreaming && (isTableLine || hasUnbalancedBold) -> "$line\n"
                 line.endsWith("  ") -> "$line\n" // 已经有硬换行的保持不变
                 else -> "$line  \n" // 普通行添加硬换行
             }
@@ -174,6 +167,10 @@ private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): S
     // - 列表项缩进处理 - 已移除，会触发代码块
     // - 列表符号后自动加空格 - 已移除，会破坏 ** 粗体语法
     // ============================================================================================
+
+    // 7. 移除文本开头的多余换行符 (Remove leading newlines)
+    // 防止因标题预处理或其他原因导致顶部出现不必要的空白
+    s = s.trimStart('\n')
 
     // 调试：打印预处理后的前200个字符，检查标题格式
     android.util.Log.d("MarkdownPreprocess", "Processed markdown (first 500 chars): ${s.take(500).replace("\n", "\\n")}")
@@ -446,8 +443,8 @@ fun MarkdownRenderer(
             val sp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
             val cacheKey = if (contentKey.isNotBlank() && !isStreaming) {
                 // Append version suffix to invalidate old cache entries after heading size fixes
-                // v26: Relaxed smart split to include space as separator
-                MarkdownSpansCache.generateKey(contentKey + "_v26", isDark, sp)
+                // v27: Disabled heading preprocessing that caused top spacing issues
+                MarkdownSpansCache.generateKey(contentKey + "_v27", isDark, sp)
             } else ""
 
             val cachedSpanned = if (cacheKey.isNotBlank()) MarkdownSpansCache.get(cacheKey) else null
