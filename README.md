@@ -16,6 +16,7 @@
   <a href="https://github.com/roseforljh/EveryTalk/releases/latest"><img src="https://img.shields.io/github/v/release/roseforljh/EveryTalk?style=for-the-badge&label=release" alt="GitHub release (latest by date)"></a>
   <a href="https://github.com/roseforljh/EveryTalk/blob/main/LICENSE.md"><img src="https://img.shields.io/github/license/roseforljh/EveryTalk?style=for-the-badge" alt="GitHub"></a>
   <a href="https://github.com/roseforljh/EveryTalk/stargazers"><img src="https://img.shields.io/github/stars/roseforljh/EveryTalk?style=for-the-badge" alt="GitHub stars"></a>
+  <a href="https://t.me/+EKxpszVkOBc1MGJl"><img src="https://img.shields.io/badge/Telegram-Join%20Group-blue?style=for-the-badge&logo=telegram" alt="Telegram Group"></a>
 </p>
 
 ---
@@ -41,16 +42,24 @@
 - **🤖 全模型兼容**: 无缝接入 OpenAI、Google Gemini、Anthropic Claude、本地 Ollama 等任意兼容 API
 - **⚡ 极速流式响应**: 毫秒级流式输出，打字机效果丝般顺滑，配备智能去重与内容缓冲机制
 - **🧠 推理过程可视化**: 支持 o1/o3 等推理模型的思考过程实时展示，让 AI 决策透明化
-- **🌐 智能联网搜索**: 实时获取最新信息，自动整合搜索结果，并标注信息来源
+- **🌐 深度联网搜索**:
+  - **Google/OpenAI**: 支持标准的 Web Search 插件
+  - **Qwen**: 深度集成通义千问联网搜索能力，支持新闻/学术多模式切换
+- **🐍 代码解释器 (Code Execution)**:
+  - **Gemini**: 自动识别需要计算或数据处理的场景，在沙箱环境中运行 Python 代码并展示结果
 - **🔄 智能降级机制**: 遇到 Cloudflare 拦截自动切换直连模式，确保服务永不中断
 - **📐 数学公式渲染**: 支持 LaTeX 数学公式（$...$内联、$$...$$块级），离线渲染，深浅色主题自适应
 
 ### 🎨 多模态交互
-- **🖼️ 图文混合对话**: 支持图片上传、识别与分析，实现真正的多模态理解
+- **🖼️ 视觉理解 (Vision)**:
+  - **图片识别**: 支持 GPT-4o, Gemini 1.5 Pro, Claude 3.5 Sonnet 等主流视觉模型
+  - **文档解析**: 智能识别 PDF、Word、Excel 等文档内容，直接与文档对话
 - **🎭 AI 图像生成**: 集成 DALL·E、Gemini Imagen 等主流图像生成模型
+- **🎙️ 实时语音对话 (Live Voice)**:
+  - **OpenAI**: 支持标准 TTS/STT 组合
+  - **Gemini**: 原生多模态音频流输入输出（低延迟）
+  - **Azure/Aliyun**: 接入云端高拟真语音合成服务
 - **🎨 图像编辑增强**: 支持图文混合编辑，智能图片压缩与优化
-- **🎙️ 语音实时对话**: STT → Chat → TTS 完整语音交互链路，支持多种音色选择
-- **📁 文件智能处理**: 支持多种文件格式上传与解析
 
 ### ⚙️ 高级定制
 - **🎛️ 深度参数控制**: Temperature、Top-P、Max Tokens 等参数精细调节
@@ -58,6 +67,7 @@
 - **🔧 多配置快速切换**: 保存多套 API 配置，一键切换不同模型
 - **🎨 图像比例预设**: 支持 1:1、16:9、9:16 等多种图像生成比例
 - **💾 会话历史管理**: 完整的对话历史记录与搜索功能
+- **☁️ 自动更新推送**: 每次发布新版本，自动通过 Telegram 频道推送通知
 
 ### 🛡️ 安全与性能
 - **🔒 本地数据存储**: 所有配置和聊天记录仅存储在本地，零数据上传
@@ -96,28 +106,21 @@
 2.  下载最新版本的 `app-release.apk` 文件。
 3.  在您的安卓设备上允许"安装未知来源的应用",然后点击 APK 文件进行安装。
 
-### 1.1 自动发版与安装包获取
+### 1.1 自动发版与 Telegram 通知
 
-以下流程已在仓库中自动配置完成（工作流见 [.github/workflows/release-please.yml](.github/workflows/release-please.yml:1)、[.github/workflows/build-artifacts.yml](.github/workflows/build-artifacts.yml:1)）：
+项目已配置完整的 CI/CD 流程（见 [.github/workflows/build-artifacts.yml](.github/workflows/build-artifacts.yml)）：
 
-1. 推送任意提交到 `main`/`master` 分支  
-   - 机器人会自动创建“发版 PR”，其中包含自动生成的版本号与 Changelog。
-2. 在 GitHub 上审阅并合并该“发版 PR”  
-   - 合并后将自动创建新的 Release 与 Tag。
-3. 打开最新的 Release 页面，下载安装包  
-   - 入口：项目页 → Releases → 最新版本  
-   - 你将看到以下附件（Assets）：  
-     - Android 安装包：`app-release.apk`（若未签名将提供 `debug` APK）  
-     - 应用商店包：`*.aab`（若构建成功）  
-     - 后端打包：`ET-Backend-code.tar.gz`
-4. 可选：配置 Android 签名（建议用于生成可分发的 release APK/AAB）  
-   - 仓库 → Settings → Secrets and variables → Actions → New repository secret  
-   - 添加以下 Secrets：  
-     - `ANDROID_KEYSTORE_BASE64`：将你的 `everytalk-release.jks` 用 base64 编码后的字符串  
-     - `ANDROID_KEYSTORE_PASSWORD`  
-     - `ANDROID_KEY_ALIAS`  
-     - `ANDROID_KEY_PASSWORD`  
-   - 构建脚本会自动读取这些变量并完成签名；未设置时会回退上传 `debug` APK 以便测试。
+1. **自动发版**：
+   - 合并 Release PR 后，自动构建 Release APK 和 AAB。
+   - 自动上传构建产物到 GitHub Releases。
+
+2. **Telegram 通知**：
+   - 构建完成后，机器人会自动向配置的 Telegram 频道发送新版本通知。
+   - 通知包含：版本号、更新日志链接、下载地址。
+
+3. **配置方法**：
+   - 在仓库 Settings → Secrets 中配置 `TELEGRAM_TOKEN` (Bot Token) 和 `TELEGRAM_TO` (频道 ID/用户名)。
+   - 配置 Android 签名密钥 (可选) 以生成正式签名的 APK。
 ### 2. 配置模型
 
 首次启动应用后,您需要配置连接 AI 模型的 API。
@@ -463,7 +466,8 @@ X-Timestamp: Unix timestamp
 
 **A:** 欢迎通过以下方式反馈：
 1. [GitHub Issues](https://github.com/roseforljh/EveryTalk/issues)：提交 Bug 报告或功能建议
-2. 提供以下信息有助于快速定位问题：
+2. 加入我们的 [Telegram 交流群](https://t.me/+EKxpszVkOBc1MGJl) 直接反馈
+3. 提供以下信息有助于快速定位问题：
    - 设备型号和 Android 版本
    - 应用版本号
    - 详细的复现步骤
