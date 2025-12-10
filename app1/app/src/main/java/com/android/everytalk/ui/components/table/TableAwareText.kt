@@ -64,7 +64,7 @@ fun TableAwareText(
     modifier: Modifier = Modifier,
     recursionDepth: Int = 0,
     contentKey: String = "",  // 新增：用于缓存key（通常为消息ID）
-    onLongPress: (() -> Unit)? = null,
+    onLongPress: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null,
     onImageClick: ((String) -> Unit)? = null,
     sender: Sender = Sender.AI
 ) {

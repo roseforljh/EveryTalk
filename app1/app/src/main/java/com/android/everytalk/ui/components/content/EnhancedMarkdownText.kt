@@ -48,7 +48,7 @@ fun EnhancedMarkdownText(
     isStreaming: Boolean = false,
     messageOutputType: String = "",
     inTableContext: Boolean = false,
-    onLongPress: (() -> Unit)? = null,
+    onLongPress: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null,
     inSelectionDialog: Boolean = false,
     onImageClick: ((String) -> Unit)? = null, //  新增
     onCodePreviewRequested: ((String, String) -> Unit)? = null, // 新增：代码预览回调 (language, code)

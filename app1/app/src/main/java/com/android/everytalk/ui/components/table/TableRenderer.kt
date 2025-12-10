@@ -44,7 +44,7 @@ fun TableRenderer(
     ),
     cellStyle: TextStyle = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
     contentKey: String = "",
-    onLongPress: (() -> Unit)? = null
+    onLongPress: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null
 ) {
     if (lines.size < 2) return
 
@@ -76,8 +76,8 @@ fun TableRenderer(
             .pointerInput(onLongPress) {
                 if (onLongPress != null) {
                     detectTapGestures(
-                        onLongPress = {
-                            onLongPress()
+                        onLongPress = { offset ->
+                            onLongPress(offset)
                         },
                         // 允许点击穿透，不消费点击事件，以免影响内部可能的点击交互（虽然目前主要是长按）
                         onTap = { /* no-op */ }

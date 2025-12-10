@@ -156,7 +156,8 @@ internal fun UserOrErrorMessageContent(
                         vertical = if (message.sender == Sender.User) 6.dp else 14.dp
                     )
                     .wrapContentWidth()
-                    .defaultMinSize(minHeight = 28.dp)
+                    .defaultMinSize(minHeight = 28.dp),
+                contentAlignment = Alignment.CenterStart
             ) {
                 Box(
                     modifier = Modifier
@@ -198,7 +199,10 @@ internal fun UserOrErrorMessageContent(
                                 message = message,
                                 modifier = Modifier.wrapContentWidth(),
                                 color = contentColor,
-                                onImageClick = { url -> previewUrl = url }
+                                onImageClick = { url -> previewUrl = url },
+                                onLongPress = { offset ->
+                                    onLongPress(message, offset)
+                                }
                             )
                         }
                     }

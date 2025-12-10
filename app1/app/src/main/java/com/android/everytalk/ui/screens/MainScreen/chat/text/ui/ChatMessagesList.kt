@@ -645,7 +645,7 @@ fun AiMessageItem(
                     color = MaterialTheme.colorScheme.onSurface,
                     isStreaming = isStreaming,
                     messageOutputType = messageOutputType,
-                    onLongPress = onLongPress,
+                    onLongPress = { _ -> onLongPress() },
                     onImageClick = onImageClick,
                     onCodePreviewRequested = { lang, code ->
                         previewLanguage = lang

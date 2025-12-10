@@ -29,7 +29,7 @@ fun ContentCoordinator(
     modifier: Modifier = Modifier,
     recursionDepth: Int = 0,
     contentKey: String = "",  // 新增：用于缓存key（通常为消息ID）
-    onLongPress: (() -> Unit)? = null,
+    onLongPress: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null,
     onImageClick: ((String) -> Unit)? = null, // 新增
     sender: Sender = Sender.AI,  // 新增：发送者信息，默认为AI
     disableVerticalPadding: Boolean = false // 新增：允许禁用垂直padding

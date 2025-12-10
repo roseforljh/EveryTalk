@@ -196,7 +196,7 @@ fun MarkdownRenderer(
     style: TextStyle = MaterialTheme.typography.bodyMedium,
     color: Color = Color.Unspecified,
     isStreaming: Boolean = false,
-    onLongPress: (() -> Unit)? = null,
+    onLongPress: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null,
     onImageClick: ((String) -> Unit)? = null,
     sender: Sender = Sender.AI,
     contentKey: String = "",
@@ -294,62 +294,28 @@ fun MarkdownRenderer(
                 // 禁用文本选择但保留长按功能
                 setTextIsSelectable(false)
                 highlightColor = android.graphics.Color.TRANSPARENT
-                // 启用 LinkMovementMethod 以支持 ClickableSpan
-                // ⚠️ 注意：LinkMovementMethod 可能会吞噬触摸事件，导致外层 Compose 的手势（如长按）失效。
-                // 解决方案：
-                // 1. 使用自定义的 LinkMovementMethod，在未点击到 Link 时返回 false。
-                // 2. 或者，在 Compose 层使用 pointerInput 处理所有手势，并手动计算点击位置是否命中 Link。
-                //
-                // 这里我们尝试方案 1 的变体：如果是 LinkMovementMethod，它会处理 onTouchEvent。
-                // 如果点击的是图片，ClickableSpan 会响应。
-                // 如果是长按，LinkMovementMethod 默认不处理长按，但 TextView 的 onTouchEvent 会处理长按。
-                //
-                // 问题在于：如果 movementMethod 不为 null，TextView.onTouchEvent 会调用 movementMethod.onTouchEvent。
-                // LinkMovementMethod.onTouchEvent 在 ACTION_UP 时会执行 ClickableSpan.onClick。
-                // 如果它返回 true，事件就被消费了。
-                //
-                // 为了解决冲突，我们可以：
-                // 仅当 onImageClick 存在时设置 movementMethod。
-                // 并且，我们需要确保长按事件能传递出去。
-                //
-                // 实际上，Compose 的 pointerInput (detectTapGestures) 是在 View 的 onTouchEvent 之前还是之后？
-                // AndroidView 内部是一个 View。Compose 的手势是在 Layout 层面处理的。
-                // 如果 View 消费了事件，Compose 可能就收不到了。
-                //
-                // 让我们尝试一种混合策略：
-                // 保持 movementMethod，但确保 TextView 不会因为 movementMethod 而拦截所有事件。
-                // 或者，我们自定义一个 MovementMethod，只处理点击，不消费其他事件。
-                
-                if (onImageClick != null) {
-                    movementMethod = android.text.method.LinkMovementMethod.getInstance()
-                } else {
-                    movementMethod = null
-                }
-                // linksClickable = false // 这行可能导致 ClickableSpan 不工作？不，这只影响 autoLink。
                 
                 isFocusable = false
                 isFocusableInTouchMode = false
                 
-                // 关键：如果设置了 movementMethod，TextView 会在 onTouchEvent 中处理点击。
-                // 为了让外层 Compose 的长按生效，我们需要 TextView 返回 false (未消费)，
-                // 除非点击中了 ClickableSpan。
-                // 但 LinkMovementMethod 的实现通常会消费事件。
-                //
-                // 替代方案：不使用 LinkMovementMethod，而是在 onTouchEvent 中手动检测 ClickableSpan。
-                // 这样我们可以精确控制事件消费。
-                
-                if (onImageClick != null) {
-                    // 自定义触摸监听：优先检测是否命中 ClickableSpan（图片），
-                    // 如果命中则执行 onClick 并消费事件；
-                    // 否则返回 false 交由父层处理（如长按等）。
+                // 统一处理触摸事件：图片点击 + 长按坐标捕获
+                if (onImageClick != null || onLongPress != null) {
                     movementMethod = null // 禁用 LinkMovementMethod，完全手动接管
                     linksClickable = false
                     isClickable = true
                     isLongClickable = true
+                    
+                    var lastTouchRawX = 0f
+                    var lastTouchRawY = 0f
 
                     setOnTouchListener { v, event ->
-                        // 仅在 ACTION_UP 时检测点击
-                        if (event.action == MotionEvent.ACTION_UP) {
+                        if (event.action == MotionEvent.ACTION_DOWN) {
+                            lastTouchRawX = event.rawX
+                            lastTouchRawY = event.rawY
+                        }
+                        
+                        // 仅在 ACTION_UP 时检测图片点击
+                        if (onImageClick != null && event.action == MotionEvent.ACTION_UP) {
                             val tvLocal = v as TextView
                             val text = tvLocal.text
                             if (text is android.text.Spannable) {
@@ -364,10 +330,8 @@ fun MarkdownRenderer(
                                 val layout = tvLocal.layout
                                 if (layout != null) {
                                     val line = layout.getLineForVertical(y)
-                                    val off = layout.getOffsetForHorizontal(line, x.toFloat())
-
+                                    
                                     // 几何命中测试：直接检查触摸点是否在 ImageSpan 的 bounds 内
-                                    // 这种方式不依赖 getOffsetForHorizontal 的光标位置计算，对图片更准确
                                     val lineStart = layout.getLineStart(line)
                                     val lineEnd = layout.getLineEnd(line)
                                     
@@ -376,19 +340,15 @@ fun MarkdownRenderer(
                                     
                                     for (imageSpan in imageSpans) {
                                         val spanStart = text.getSpanStart(imageSpan)
-                                        // 获取图片在该行的水平位置
                                         val xStart = layout.getPrimaryHorizontal(spanStart)
                                         val drawable = imageSpan.drawable
                                         val bounds = drawable.bounds
                                         val width = bounds.width()
                                         
-                                        // 检查 x 坐标是否在图片范围内 (允许一定的触摸误差)
                                         val touchSlop = 20
                                         if (x >= (xStart - touchSlop) && x <= (xStart + width + touchSlop)) {
-                                            // 命中！查找对应的 source 并触发点击
                                             val source = drawable.destination
                                             if (!source.isNullOrEmpty()) {
-                                                android.util.Log.d("MarkdownRenderer", "Geometric Hit: x=$x, imgX=$xStart, w=$width, src=$source")
                                                 onImageClick(source)
                                                 return@setOnTouchListener true
                                             }
@@ -406,14 +366,11 @@ fun MarkdownRenderer(
                                         if (x >= xStart && x <= (xStart + width)) {
                                             val source = imageSpan.source
                                             if (!source.isNullOrEmpty()) {
-                                                android.util.Log.d("MarkdownRenderer", "Geometric Hit (Standard): src=$source")
                                                 onImageClick(source)
                                                 return@setOnTouchListener true
                                             }
                                         }
                                     }
-
-                                    android.util.Log.d("MarkdownRenderer", "No geometric image hit at line $line, x=$x")
                                 }
                             }
                         }
@@ -421,10 +378,13 @@ fun MarkdownRenderer(
                         false
                     }
 
-                    // 明确提供长按回调
-                    setOnLongClickListener {
-                        onLongPress?.invoke()
-                        true
+                    if (onLongPress != null) {
+                        setOnLongClickListener {
+                            onLongPress.invoke(androidx.compose.ui.geometry.Offset(lastTouchRawX, lastTouchRawY))
+                            true
+                        }
+                    } else {
+                        setOnLongClickListener(null)
                     }
                 } else {
                     movementMethod = null
@@ -432,15 +392,6 @@ fun MarkdownRenderer(
                     setOnTouchListener(null)
                     isClickable = false
                     setOnLongClickListener(null)
-                }
-
-                if (onLongPress != null) {
-                   setOnLongClickListener {
-                       onLongPress.invoke()
-                       true
-                   }
-                } else {
-                   setOnLongClickListener(null)
                 }
             }
         },
