@@ -8,7 +8,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Create Dummy APK
-        run: echo "This is a dummy APK content for testing telegram notification." > app-release.apk
+        # 确保文件创建在当前工作目录
+        run: echo "This is a dummy APK content for testing telegram notification." > ./app-release.apk
 
       - name: Send Test APK Notification
         env:
@@ -35,7 +36,11 @@ jobs:
           CAPTION+="<a href=\"$COMMIT_URL\">Commit</a>%0A"
           CAPTION+="<a href=\"$RUN_URL\">Workflow run</a>"
 
-          # 发送文档 (APK) - 确保使用 ./ 前缀明确当前目录
+          # 发送文档 (APK)
+          # 使用 ls -la 确认文件存在
+          ls -la ./app-release.apk
+
+          # 使用 ./ 前缀明确当前目录，确保 curl 能找到文件
           curl -v -F chat_id="$TG_CHAT_ID" \
                -F document=@./app-release.apk \
                -F parse_mode="HTML" \
