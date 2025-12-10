@@ -492,7 +492,12 @@ fun ChatInputArea(
                 )
 
                 // 使用优化的控制按钮行组件
-                val isGeminiChannel = selectedApiConfig?.channel?.lowercase()?.contains("gemini") == true
+                // 增强 Gemini 渠道检测：要求渠道为 Gemini 且模型名称包含 Gemini
+                val isGeminiChannel = selectedApiConfig?.let { config ->
+                    config.channel.lowercase().contains("gemini") &&
+                    config.model.lowercase().contains("gemini")
+                } == true
+                
                 OptimizedControlButtonsRow(
                     isWebSearchEnabled = isWebSearchEnabled,
                     onToggleWebSearch = onToggleWebSearch,

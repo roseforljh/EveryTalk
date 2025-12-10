@@ -77,7 +77,18 @@ fun ChatScreen(
 ) {
     val messages: List<Message> = viewModel.messages
     val text by viewModel.text.collectAsState()
-    val selectedApiConfig by viewModel.selectedApiConfig.collectAsState()
+    
+    // Dynamic config selection based on mode
+    val uiMode by viewModel.uiModeFlow.collectAsState()
+    val textConfig by viewModel.selectedApiConfig.collectAsState()
+    val imageConfig by viewModel.selectedImageGenApiConfig.collectAsState()
+    
+    val selectedApiConfig by remember(uiMode, textConfig, imageConfig) {
+        derivedStateOf {
+            if (uiMode == SimpleModeManager.ModeType.IMAGE) imageConfig else textConfig
+        }
+    }
+
     val isApiCalling by viewModel.isTextApiCalling.collectAsState()
     val currentStreamingAiMessageId by viewModel.currentTextStreamingAiMessageId.collectAsState()
     val isWebSearchEnabled by viewModel.isWebSearchEnabled.collectAsState()
@@ -214,7 +225,15 @@ fun ChatScreen(
         skipPartiallyExpanded = true
     )
     var showModelSelectionBottomSheet by remember { mutableStateOf(false) }
-    val availableModels by viewModel.apiConfigs.collectAsState()
+    
+    val textModels by viewModel.apiConfigs.collectAsState()
+    val imageModels by viewModel.imageGenApiConfigs.collectAsState()
+    
+    val availableModels by remember(uiMode, textModels, imageModels) {
+        derivedStateOf {
+            if (uiMode == SimpleModeManager.ModeType.IMAGE) imageModels else textModels
+        }
+    }
 
     var showAiMessageOptionsBottomSheet by remember { mutableStateOf(false) }
     var selectedMessageForOptions by remember { mutableStateOf<Message?>(null) }

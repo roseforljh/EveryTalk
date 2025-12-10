@@ -277,7 +277,7 @@ class DataPersistenceManager(
                             key = defaultApiKey,
                             model = modelName,
                             modalityType = com.android.everytalk.data.DataClass.ModalityType.TEXT,
-                            channel = "OpenAI兼容", // 默认使用 OpenAI 兼容渠道
+                            channel = "Gemini", // 默认使用 Gemini 渠道，以启用代码执行等功能
                             isValid = true
                         )
                     }
@@ -288,24 +288,41 @@ class DataPersistenceManager(
                 }
                 
                 // 检查并修复旧的默认配置（如果存在旧模型名称，更新为新名称）
+                // 同时也迁移旧的"OpenAI兼容"渠道到"Gemini"渠道，以启用代码执行按钮
                 val updatedConfigs = loadedConfigs.map { config ->
-                    if (config.provider.trim().lowercase() in listOf("默认", "default") &&
-                        config.modalityType == com.android.everytalk.data.DataClass.ModalityType.TEXT &&
-                        config.model == "gemini-2.5-pro-1M") {
-                        Log.i(TAG, "loadInitialData: 自动更新过期的默认模型配置: gemini-2.5-pro-1M -> gemini-2.5-pro")
-                        config.copy(
-                            name = "gemini-2.5-pro",
-                            model = "gemini-2.5-pro"
-                        )
-                    } else {
-                        config
+                    var newConfig = config
+                    val isDefaultProvider = config.provider.trim().lowercase() in listOf("默认", "default")
+                    val isTextMode = config.modalityType == com.android.everytalk.data.DataClass.ModalityType.TEXT
+                    
+                    if (isDefaultProvider && isTextMode) {
+                        // 1. 更新旧模型名称
+                        if (config.model == "gemini-2.5-pro-1M") {
+                            Log.i(TAG, "loadInitialData: 自动更新过期的默认模型配置: gemini-2.5-pro-1M -> gemini-2.5-pro")
+                            newConfig = newConfig.copy(
+                                name = "gemini-2.5-pro",
+                                model = "gemini-2.5-pro"
+                            )
+                        }
+                        
+                        // 2. 迁移 Gemini 模型的渠道为 "Gemini"
+                        if (newConfig.model.startsWith("gemini") && newConfig.channel != "Gemini") {
+                            Log.i(TAG, "loadInitialData: 自动迁移默认 Gemini 模型渠道: ${newConfig.channel} -> Gemini")
+                            newConfig = newConfig.copy(channel = "Gemini")
+                        }
+                        
+                        // 3. 迁移 Imagen 模型的渠道为 "Gemini" (针对图像配置)
+                        if (newConfig.model.startsWith("imagen") && newConfig.channel != "Gemini") {
+                            Log.i(TAG, "loadInitialData: 自动迁移默认 Imagen 模型渠道: ${newConfig.channel} -> Gemini")
+                            newConfig = newConfig.copy(channel = "Gemini")
+                        }
                     }
+                    newConfig
                 }
 
                 if (updatedConfigs != loadedConfigs) {
                     loadedConfigs = updatedConfigs
                     roomDataSource.saveApiConfigs(loadedConfigs)
-                    Log.i(TAG, "loadInitialData: 已保存更新后的API配置")
+                    Log.i(TAG, "loadInitialData: 已保存更新后的API配置 (含渠道迁移)")
                 }
 
                 initialConfigPresent = loadedConfigs.isNotEmpty()
@@ -342,57 +359,46 @@ class DataPersistenceManager(
                 val hasDefaultImageConfig = loadedImageGenConfigs.any {
                     it.provider.trim().lowercase() in listOf("默认", "default") &&
                     it.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE &&
-                    it.model == "Kwai-Kolors/Kolors"
+                    it.model.startsWith("gemini")
                 }
                 if (!hasDefaultImageConfig && !defaultConfigsInitialized) {
-                    Log.i(TAG, "loadInitialData: 未找到默认快手图像配置且首次初始化，自动创建...")
-                    // 从 BuildConfig 获取 SiliconFlow 配置
-                    val siliconFlowKey = com.android.everytalk.BuildConfig.SILICONFLOW_API_KEY
-                    // 优先使用 BuildConfig 中的配置，回退到默认值
-                    val siliconFlowUrlRaw = com.android.everytalk.BuildConfig.SILICONFLOW_IMAGE_API_URL
-                    // 如果 URL 包含 /v1/images/generations，需要修剪，因为 ImageGenerationDirectClient 会拼接
-                    // ImageGenerationDirectClient 目前是硬编码路径逻辑，我们需要确保传入的是 Base URL
-                    // OpenAI 兼容模式通常期望 Base URL (不带 /v1/...)，或者带 /v1 但不带具体的 endpoint
-                    // 这里我们为了稳妥，传入完整的 Base URL，让 Client 去处理拼接
-                    // 观察 ImageGenerationDirectClient.kt，它会拼接 /v1/images/generations
-                    // 所以我们传入 https://api.siliconflow.cn 即可
+                    Log.i(TAG, "loadInitialData: 未找到默认 Gemini 图像配置且首次初始化，自动创建...")
                     
-                    val siliconFlowUrl = if (siliconFlowUrlRaw.contains("/v1/images/generations")) {
-                        siliconFlowUrlRaw.substringBefore("/v1/images/generations")
-                    } else {
-                        "https://api.siliconflow.cn"
+                    // 使用 Imagen 3 模型作为图像模式默认配置
+                    val defaultApiKey = com.android.everytalk.BuildConfig.DEFAULT_TEXT_API_KEY
+                    val defaultApiUrl = com.android.everytalk.BuildConfig.DEFAULT_TEXT_API_URL
+                    val imagenModels = listOf("imagen-3.0-generate-001")
+                    
+                    val newDefaultImageConfigs = imagenModels.map { modelName ->
+                        ApiConfig(
+                            id = java.util.UUID.randomUUID().toString(),
+                            name = modelName,
+                            provider = "默认",
+                            address = defaultApiUrl,
+                            key = defaultApiKey,
+                            model = modelName,
+                            modalityType = com.android.everytalk.data.DataClass.ModalityType.IMAGE,
+                            channel = "Gemini",
+                            isValid = true
+                        )
                     }
-                    
-                    val siliconFlowModel = com.android.everytalk.BuildConfig.SILICONFLOW_DEFAULT_IMAGE_MODEL.ifBlank { "Kwai-Kolors/Kolors" }
-                    
-                    val defaultImageConfig = ApiConfig(
-                        id = java.util.UUID.randomUUID().toString(),
-                        name = siliconFlowModel,
-                        provider = "默认",
-                        address = siliconFlowUrl,
-                        key = siliconFlowKey,
-                        model = siliconFlowModel,
-                        modalityType = com.android.everytalk.data.DataClass.ModalityType.IMAGE,
-                        channel = "OpenAI兼容", // SiliconFlow 兼容 OpenAI 格式
-                        isValid = true
-                    )
-                    loadedImageGenConfigs = loadedImageGenConfigs + listOf(defaultImageConfig)
-                    Log.i(TAG, "loadInitialData: 已创建默认快手图像配置")
+                    loadedImageGenConfigs = loadedImageGenConfigs + newDefaultImageConfigs
+                    Log.i(TAG, "loadInitialData: 已创建默认 Imagen 图像配置")
                 }
                 
                 // 自动创建 Modal Z-Image-Turbo 和 Qwen-Image-Edit 默认配置（仅首次初始化时）
                 // 修复：不再强制对齐已存在配置的分组字段，避免用户自定义配置被错误归并
                 
-                // 1. 先找到现有的快手配置，以获取默认分组字段 (address/key/channel)
-                val kolorsConfig = loadedImageGenConfigs.find {
-                    it.model == "Kwai-Kolors/Kolors" &&
+                // 1. 先找到现有的 Gemini/Imagen 配置，以获取默认分组字段 (address/key/channel)
+                val geminiConfig = loadedImageGenConfigs.find {
+                    (it.model.startsWith("gemini") || it.model.startsWith("imagen")) &&
                     it.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE &&
                     it.provider.trim().lowercase() in listOf("默认", "default")
                 }
                 
-                val targetAddress = kolorsConfig?.address ?: ""
-                val targetKey = kolorsConfig?.key ?: ""
-                val targetChannel = kolorsConfig?.channel ?: ""
+                val targetAddress = geminiConfig?.address ?: ""
+                val targetKey = geminiConfig?.key ?: ""
+                val targetChannel = geminiConfig?.channel ?: ""
                 val targetProvider = "默认"
 
                 var configsChanged = false

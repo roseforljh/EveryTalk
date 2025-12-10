@@ -737,7 +737,9 @@ private data class AttachmentProcessingResult(
                 }
 
                 // 检查是否为Gemini渠道且开启了联网搜索
-                val isGeminiChannel = currentConfig.channel.lowercase().contains("gemini")
+                // 增强检测：要求渠道为 Gemini 且模型名称包含 Gemini，才视为原生 Gemini 支持环境
+                val isGeminiChannel = currentConfig.channel.lowercase().contains("gemini") &&
+                                      currentConfig.model.lowercase().contains("gemini")
                 val shouldEnableGoogleSearch = isGeminiChannel && stateHolder._isWebSearchEnabled.value
                 
                 // 添加调试日志
@@ -825,10 +827,12 @@ private data class AttachmentProcessingResult(
                         }
                         
                         // 3. 代码执行 (Gemini Native)
-                        // 注意：这里不再通过 currentConfig.enableCodeExecution 判断注入
-                        // 而是依靠 enableCodeExecutionForRequest 传递给 GeminiDirectClient.buildGeminiPayload 统一处理
-                        // 因为 ChatRequest.enableCodeExecution 字段会被序列化传给后端/直连客户端
-                        // 直连客户端会根据这个字段决定是否注入 tools
+                        // 修复：显式注入 code_execution 工具，确保通过代理/后端请求时生效
+                        // (GeminiDirectClient 会忽略此 tools 列表自行构建，因此不会冲突)
+                        if (isGeminiChannel && stateHolder._isCodeExecutionEnabled.value) {
+                            Log.d("MessageSender", "启用代码执行工具 (code_execution)")
+                            toolsList.add(mapOf("code_execution" to emptyMap<String, Any>()))
+                        }
                         
                         toolsList.ifEmpty { null }
                     },
