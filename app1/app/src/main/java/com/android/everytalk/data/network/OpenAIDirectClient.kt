@@ -46,8 +46,8 @@ object OpenAIDirectClient {
             //   customExtraBody = {"webSearchEndpoint":"https://<your-search>/api","webSearchKey":"<key>"}
             var effectiveRequest = request
 
-            // Qwen 文档上传处理
-            if (request.model.contains("qwen", ignoreCase = true)) {
+            // Qwen 文档上传处理 (仅 qwen-long 支持原生文档识别)
+            if (request.model.contains("qwen-long", ignoreCase = true)) {
                 effectiveRequest = handleQwenUploads(client, effectiveRequest) { status ->
                     send(AppStreamEvent.StatusUpdate(status))
                 }
