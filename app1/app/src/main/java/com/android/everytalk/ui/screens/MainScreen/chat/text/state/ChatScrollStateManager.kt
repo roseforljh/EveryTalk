@@ -146,6 +146,15 @@ class ChatScrollStateManager(
         }
     }
 
+    /**
+     * 锁定自动滚动，防止 jumpToBottom 被自动触发。
+     * 用于发送消息时，在 scrollItemToTop 被调用前就阻止 onNewAiMessageAdded 等触发的自动滚动。
+     */
+    fun lockAutoScroll() {
+        preventAutoScroll = true
+        logger.debug("Auto-scroll locked")
+    }
+
     fun jumpToBottom(isUserAction: Boolean = false) {
         jumpToBottomInternal(isUserAction = isUserAction, smooth = false)
     }
@@ -219,7 +228,7 @@ class ChatScrollStateManager(
         }
     }
 
-    fun scrollItemToTop(index: Int) {
+    fun scrollItemToTop(index: Int, scrollDurationMs: Int = 300) {
         logger.debug("Scrolling item $index to top.")
         if (autoScrollJob?.isActive == true) {
             autoScrollJob?.cancel()
@@ -248,28 +257,65 @@ class ChatScrollStateManager(
                 anchorIndex = index
                 anchorScrollOffset = 0
                 
-                // Scroll to the top of the item (offset 0)
                 isProgrammaticScroll = true
                 try {
-                    // Calculate distance to scroll if item is visible
+                    // Check if item is currently visible
                     val layoutInfo = listState.layoutInfo
-                    val visibleItem = layoutInfo.visibleItemsInfo.find { it.index == index }
+                    var visibleItem = layoutInfo.visibleItemsInfo.find { it.index == index }
                     
                     if (visibleItem != null) {
                         // Item is visible, we can use animateScrollBy for custom control
                         val currentOffset = visibleItem.offset
-                        // We want offset to be 0 (top of screen), so we scroll by currentOffset
-                        // Use a longer duration (e.g. 800ms) and CubicBezierEasing for a "heavy/slow" natural feel
-                        listState.animateScrollBy(
-                            value = currentOffset.toFloat(),
-                            animationSpec = tween(
-                                durationMillis = 800,
-                                easing = androidx.compose.animation.core.CubicBezierEasing(0.2f, 0.0f, 0.0f, 1.0f)
+                        if (currentOffset != 0) {
+                            // We want offset to be 0 (top of screen), so we scroll by currentOffset
+                            // Use custom duration and CubicBezierEasing for a "heavy/slow" natural feel
+                            listState.animateScrollBy(
+                                value = currentOffset.toFloat(),
+                                animationSpec = tween(
+                                    durationMillis = scrollDurationMs,
+                                    easing = androidx.compose.animation.core.CubicBezierEasing(0.25f, 0.1f, 0.25f, 1.0f)
+                                )
                             )
-                        )
+                        }
                     } else {
-                        // Fallback if item is somehow not visible (should be rare in this flow)
-                        listState.animateScrollToItem(index, 0)
+                        // Item is NOT visible - we need a two-phase approach:
+                        // Phase 1: Snap to a position where the target item is just barely visible at the BOTTOM of the viewport
+                        //          This minimizes the "teleport" distance and makes the subsequent animation more noticeable
+                        // Phase 2: Animate smoothly from there to bring the item to the top
+                        
+                        // Calculate snap target: we want the item to be at the bottom of the visible area after snap
+                        // So we scroll to (index - visibleItemsCount + 1) to put it near the bottom
+                        val visibleCount = layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)
+                        // Scroll so that `index` will be near the end of visible items, not at the top
+                        val snapTarget = (index - visibleCount + 2).coerceAtLeast(0)
+                        
+                        // Phase 1: Instant snap
+                        listState.scrollToItem(snapTarget, 0)
+                        
+                        // Wait for layout to settle
+                        delay(32)
+                        
+                        // Phase 2: Now the target item should be visible (near the bottom). Animate it to the top.
+                        val updatedLayoutInfo = listState.layoutInfo
+                        visibleItem = updatedLayoutInfo.visibleItemsInfo.find { it.index == index }
+                        
+                        if (visibleItem != null) {
+                            val currentOffset = visibleItem.offset
+                            if (currentOffset != 0) {
+                                // Animate the item from its current position (near bottom) to the top (offset=0)
+                                // This gives a nice "slide up" effect
+                                listState.animateScrollBy(
+                                    value = currentOffset.toFloat(),
+                                    animationSpec = tween(
+                                        durationMillis = scrollDurationMs,
+                                        easing = androidx.compose.animation.core.CubicBezierEasing(0.25f, 0.1f, 0.25f, 1.0f)
+                                    )
+                                )
+                            }
+                        } else {
+                            // Fallback: item still not visible (shouldn't happen), just snap to it
+                            listState.scrollToItem(index, 0)
+                        }
                     }
                 } finally {
                     isProgrammaticScroll = false

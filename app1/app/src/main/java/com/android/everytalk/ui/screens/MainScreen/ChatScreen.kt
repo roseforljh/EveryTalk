@@ -402,6 +402,9 @@ fun ChatScreen(
                     viewModel.onTextChange(it)
                 },
                 onSendMessageRequest = { messageText, _, attachments, mimeType ->
+                    // 立即锁定自动滚动，防止 onNewAiMessageAdded 触发的 jumpToBottom 覆盖后续的 scrollItemToTop
+                    scrollStateManager.lockAutoScroll()
+                    
                     val initialCount = viewModel.chatListItems.value.size
                     viewModel.onSendMessage(messageText = messageText, attachments = attachments, audioBase64 = null, mimeType = mimeType)
                     keyboardController?.hide()
@@ -514,7 +517,7 @@ fun ChatScreen(
                 sheetState = aiMessageOptionsBottomSheetState,
                 onOptionSelected = { option ->
                     // 🔥 关键修复：从 ViewModel 获取最新的消息对象，而不是使用长按时捕获的可能已过期的快照
-                    // 这解决了“刚生成的消息内容为空”的问题，因为长按时的 Message 对象可能尚未包含流式传输完成后的最终文本
+                    // 这解决了"刚生成的消息内容为空"的问题，因为长按时的 Message 对象可能尚未包含流式传输完成后的最终文本
                     val latestMessage = viewModel.getMessageById(selectedMessageForOptions!!.id) ?: selectedMessageForOptions!!
                     
                     when (option) {
@@ -524,7 +527,12 @@ fun ChatScreen(
                             // 确保键盘隐藏，避免重新回答时弹出输入法
                             keyboardController?.hide()
                             viewModel.regenerateAiResponse(latestMessage)
-                            // 不立即滚动，让regenerateAiResponse内部的逻辑处理滚动
+                            
+                            // 重新回答后，直接跳转到底部（因为新的AI回复会在底部生成）
+                            coroutineScope.launch {
+                                delay(100)
+                                scrollStateManager.jumpToBottom(isUserAction = true)
+                            }
                         }
                         AiMessageOption.EXPORT_TEXT -> viewModel.exportMessageText(latestMessage.text)
                     }

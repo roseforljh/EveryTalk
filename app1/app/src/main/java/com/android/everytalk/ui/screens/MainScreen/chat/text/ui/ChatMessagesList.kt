@@ -139,7 +139,7 @@ fun ChatMessagesList(
         itemsIndexed(
             items = chatItems,
             key = { _, item -> item.stableId },
-            contentType = { _, item ->
+            contentType = { _, item -> 
                 when (item) {
                     // Merge all AI message types into a single contentType to prevent
                     // item recreation when switching between Streaming/Non-Streaming states.
@@ -202,9 +202,29 @@ fun ChatMessagesList(
                                                 maxWidth = bubbleMaxWidth * ChatDimensions.USER_BUBBLE_WIDTH_RATIO,
                                                 message = message,
                                                 onEditRequest = { viewModel.requestEditMessage(it) },
-                                                onRegenerateRequest = {
-                                                    viewModel.regenerateAiResponse(it, isImageGeneration = false)
-                                                    scrollStateManager.jumpToBottom()
+                                                onRegenerateRequest = { regeneratedMessage ->
+                                                    // 使用与发送消息相同的动画逻辑
+                                                    scrollStateManager.lockAutoScroll()
+                                                    val initialCount = chatItems.size
+                                                    viewModel.regenerateAiResponse(regeneratedMessage, isImageGeneration = false)
+                                                    coroutineScope.launch {
+                                                        var attempts = 0
+                                                        var targetIndex = -1
+                                                        while (attempts < 20) {
+                                                            val items = viewModel.chatListItems.value
+                                                            if (items.size != initialCount || attempts > 5) {
+                                                                targetIndex = items.indexOfLast { it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage }
+                                                                if (targetIndex != -1) break
+                                                            }
+                                                            delay(50)
+                                                            attempts++
+                                                        }
+                                                        if (targetIndex != -1) {
+                                                            scrollStateManager.scrollItemToTop(targetIndex)
+                                                        } else {
+                                                            scrollStateManager.smoothScrollToBottom(isUserAction = true)
+                                                        }
+                                                    }
                                                 },
                                                 onLongPress = { msg, offset ->
                                                     contextMenuMessage = msg
@@ -493,11 +513,37 @@ fun ChatMessagesList(
                     viewModel.requestEditMessage(it)
                     isContextMenuVisible = false
                 },
-                onRegenerate = {
-                    // Remove resetScrollState to avoid conflicting scroll animations
-                    viewModel.regenerateAiResponse(it, isImageGeneration = false)
+                onRegenerate = { regeneratedMessage ->
+                    // 立即锁定自动滚动，防止 onNewAiMessageAdded 触发的 jumpToBottom 覆盖后续的 scrollItemToTop
+                    scrollStateManager.lockAutoScroll()
+                    
+                    val initialCount = chatItems.size
+                    viewModel.regenerateAiResponse(regeneratedMessage, isImageGeneration = false)
                     isContextMenuVisible = false
-                    // 移除强制滚动到底部，保持用户当前视野位置不变
+                    
+                    // 使用与发送消息相同的动画逻辑：等待列表更新后，将新用户消息滚动到顶部
+                    coroutineScope.launch {
+                        // 等待列表更新（确保找到了新发送的消息）
+                        var attempts = 0
+                        var targetIndex = -1
+                        while (attempts < 20) {
+                            // 需要从 viewModel 获取最新的 chatListItems，因为 chatItems 可能还没更新
+                            val items = viewModel.chatListItems.value
+                            if (items.size != initialCount || attempts > 5) {
+                                targetIndex = items.indexOfLast { it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage }
+                                if (targetIndex != -1) break
+                            }
+                            delay(50)
+                            attempts++
+                        }
+                        
+                        // 将重新生成的用户消息滚动到顶部，以便用户能看到完整的消息内容以及下方正在生成的AI回复
+                        if (targetIndex != -1) {
+                            scrollStateManager.scrollItemToTop(targetIndex)
+                        } else {
+                            scrollStateManager.smoothScrollToBottom(isUserAction = true)
+                        }
+                    }
                 }
             )
         }

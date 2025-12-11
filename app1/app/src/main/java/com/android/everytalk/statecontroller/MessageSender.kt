@@ -616,7 +616,9 @@ private data class AttachmentProcessingResult(
                    stateHolder._text.value = ""
                    stateHolder.clearSelectedMedia()
                 }
-                triggerScrollToBottom()
+                // 注意：不再在此处调用 triggerScrollToBottom()
+                // ChatScreen 和 ImageGenerationScreen 各自有更好的滚动逻辑（scrollItemToTop），
+                // 会在 onSendMessage 回调后执行带动画的平滑滚动
             }
 
             // 🔥 新增：当在新会话中发送第一条消息时，立即将其添加到历史记录中，以便在抽屉中即时可见
