@@ -356,139 +356,81 @@ class DataPersistenceManager(
                 var loadedImageGenConfigs: List<ApiConfig> = roomDataSource.loadImageGenApiConfigs()
                 
                 // 自动创建默认图像配置（如果不存在且未初始化过）
+                // 默认创建三个图像模型：Modal Z-Image-Turbo、Qwen 图像编辑、SiliconFlow
                 val hasDefaultImageConfig = loadedImageGenConfigs.any {
                     it.provider.trim().lowercase() in listOf("默认", "default") &&
-                    it.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE &&
-                    it.model.startsWith("gemini")
+                    it.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE
                 }
                 if (!hasDefaultImageConfig && !defaultConfigsInitialized) {
-                    Log.i(TAG, "loadInitialData: 未找到默认 Gemini 图像配置且首次初始化，自动创建...")
+                    Log.i(TAG, "loadInitialData: 未找到默认图像配置且首次初始化，自动创建三个默认图像模型...")
                     
-                    // 使用 Imagen 3 模型作为图像模式默认配置
-                    val defaultApiKey = com.android.everytalk.BuildConfig.DEFAULT_TEXT_API_KEY
-                    val defaultApiUrl = com.android.everytalk.BuildConfig.DEFAULT_TEXT_API_URL
-                    val imagenModels = listOf("imagen-3.0-generate-001")
+                    val newDefaultImageConfigs = mutableListOf<ApiConfig>()
                     
-                    val newDefaultImageConfigs = imagenModels.map { modelName ->
-                        ApiConfig(
-                            id = java.util.UUID.randomUUID().toString(),
-                            name = modelName,
-                            provider = "默认",
-                            address = defaultApiUrl,
-                            key = defaultApiKey,
-                            model = modelName,
-                            modalityType = com.android.everytalk.data.DataClass.ModalityType.IMAGE,
-                            channel = "Gemini",
-                            isValid = true
-                        )
-                    }
-                    loadedImageGenConfigs = loadedImageGenConfigs + newDefaultImageConfigs
-                    Log.i(TAG, "loadInitialData: 已创建默认 Imagen 图像配置")
-                }
-                
-                // 自动创建 Modal Z-Image-Turbo 和 Qwen-Image-Edit 默认配置（仅首次初始化时）
-                // 修复：不再强制对齐已存在配置的分组字段，避免用户自定义配置被错误归并
-                
-                // 1. 先找到现有的 Gemini/Imagen 配置，以获取默认分组字段 (address/key/channel)
-                val geminiConfig = loadedImageGenConfigs.find {
-                    (it.model.startsWith("gemini") || it.model.startsWith("imagen")) &&
-                    it.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE &&
-                    it.provider.trim().lowercase() in listOf("默认", "default")
-                }
-                
-                val targetAddress = geminiConfig?.address ?: ""
-                val targetKey = geminiConfig?.key ?: ""
-                val targetChannel = geminiConfig?.channel ?: ""
-                val targetProvider = "默认"
-
-                var configsChanged = false
-                val mutableConfigs = loadedImageGenConfigs.toMutableList()
-
-                // === Modal Z-Image-Turbo 处理 ===
-                // 仅在首次初始化时创建，不再强制修改已存在的配置
-                // 修复：使用更严格的查找条件，避免重复创建
-                val existingModalConfig = mutableConfigs.find {
-                    it.model == "z-image-turbo-modal" &&
-                    it.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE
-                }
-
-                if (existingModalConfig == null && !defaultConfigsInitialized) {
-                    Log.i(TAG, "loadInitialData: 未找到 Modal 图像配置且首次初始化，自动创建...")
-                    val modalImageConfig = ApiConfig(
+                    // 1. Modal Z-Image-Turbo 图像生成
+                    newDefaultImageConfigs.add(ApiConfig(
                         id = java.util.UUID.randomUUID().toString(),
                         name = "Z-Image-Turbo (Modal)",
-                        provider = targetProvider,
-                        address = targetAddress,
-                        key = targetKey,
+                        provider = "默认",
+                        address = "",
+                        key = "",
                         model = "z-image-turbo-modal",
                         modalityType = com.android.everytalk.data.DataClass.ModalityType.IMAGE,
-                        channel = targetChannel,
+                        channel = "",
                         isValid = true,
-                        numInferenceSteps = 4 // Modal 默认步数
-                    )
-                    mutableConfigs.add(modalImageConfig)
-                    configsChanged = true
-                } else if (existingModalConfig != null && existingModalConfig.numInferenceSteps == null) {
-                    // 仅补齐默认步数，不修改其他字段
-                    val index = mutableConfigs.indexOf(existingModalConfig)
-                    if (index != -1) {
-                        mutableConfigs[index] = existingModalConfig.copy(numInferenceSteps = 4)
-                        configsChanged = true
-                        Log.i(TAG, "loadInitialData: 为 Modal 配置补齐默认步数")
-                    }
-                }
-
-                // === Modal Qwen-Image-Edit 处理 ===
-                // 仅在首次初始化时创建，不再强制修改已存在的配置
-                val existingQwenConfig = mutableConfigs.find {
-                    it.model == "qwen-image-edit-modal" &&
-                    it.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE
-                }
-
-                if (existingQwenConfig == null && !defaultConfigsInitialized) {
-                    Log.i(TAG, "loadInitialData: 未找到 Qwen Image Edit 配置且首次初始化，自动创建...")
-                    val qwenConfig = ApiConfig(
+                        numInferenceSteps = 4
+                    ))
+                    
+                    // 2. Qwen 图像编辑
+                    newDefaultImageConfigs.add(ApiConfig(
                         id = java.util.UUID.randomUUID().toString(),
                         name = "Qwen Image Edit",
-                        provider = targetProvider,
-                        address = targetAddress,
-                        key = targetKey,
+                        provider = "默认",
+                        address = "",
+                        key = "",
                         model = "qwen-image-edit-modal",
                         modalityType = com.android.everytalk.data.DataClass.ModalityType.IMAGE,
-                        channel = targetChannel,
+                        channel = "",
                         isValid = true,
-                        numInferenceSteps = 30 // Qwen 默认步数
-                    )
-                    mutableConfigs.add(qwenConfig)
-                    configsChanged = true
-                } else if (existingQwenConfig != null && existingQwenConfig.numInferenceSteps == null) {
-                    // 仅补齐默认步数，不修改其他字段
-                    val index = mutableConfigs.indexOf(existingQwenConfig)
-                    if (index != -1) {
-                        mutableConfigs[index] = existingQwenConfig.copy(numInferenceSteps = 30)
-                        configsChanged = true
-                        Log.i(TAG, "loadInitialData: 为 Qwen 配置补齐默认步数")
-                    }
+                        numInferenceSteps = 30
+                    ))
+                    
+                    // 3. SiliconFlow 图像生成 (Kwai-Kolors/Kolors)
+                    newDefaultImageConfigs.add(ApiConfig(
+                        id = java.util.UUID.randomUUID().toString(),
+                        name = "Kwai-Kolors/Kolors",
+                        provider = "默认",
+                        address = "",
+                        key = "",
+                        model = "Kwai-Kolors/Kolors",
+                        modalityType = com.android.everytalk.data.DataClass.ModalityType.IMAGE,
+                        channel = "",
+                        isValid = true
+                    ))
+                    
+                    loadedImageGenConfigs = loadedImageGenConfigs + newDefaultImageConfigs
+                    Log.i(TAG, "loadInitialData: 已创建 ${newDefaultImageConfigs.size} 个默认图像配置")
                 }
                 
                 // 修复：去重逻辑，移除完全重复的配置（除了ID不同）
-                // 这可以解决之前版本重复创建导致的配置堆积问题
-                if (mutableConfigs.size > loadedImageGenConfigs.size) {
-                    val uniqueConfigs = mutableConfigs.distinctBy {
-                        "${it.provider}|${it.address}|${it.key}|${it.model}|${it.channel}|${it.modalityType}"
-                    }
-                    if (uniqueConfigs.size < mutableConfigs.size) {
-                        Log.i(TAG, "loadInitialData: 移除 ${mutableConfigs.size - uniqueConfigs.size} 个重复的图像配置")
-                        mutableConfigs.clear()
-                        mutableConfigs.addAll(uniqueConfigs)
-                        configsChanged = true
+                // 对于"默认"provider的配置，只按model去重，忽略address、key和channel
+                val uniqueImageConfigs = loadedImageGenConfigs.distinctBy { config ->
+                    val isDefaultProvider = config.provider.trim().lowercase() in listOf("默认", "default")
+                    if (isDefaultProvider) {
+                        // 默认配置只按provider和model去重
+                        "default|${config.model}|${config.modalityType}"
+                    } else {
+                        "${config.provider}|${config.address}|${config.key}|${config.model}|${config.channel}|${config.modalityType}"
                     }
                 }
-                
-                loadedImageGenConfigs = mutableConfigs.toList()
+                if (uniqueImageConfigs.size < loadedImageGenConfigs.size) {
+                    Log.i(TAG, "loadInitialData: 移除 ${loadedImageGenConfigs.size - uniqueImageConfigs.size} 个重复的图像配置")
+                    loadedImageGenConfigs = uniqueImageConfigs
+                    // 同时保存去重后的配置
+                    roomDataSource.saveImageGenApiConfigs(loadedImageGenConfigs)
+                }
 
                 // 统一保存所有图像配置（包括新增的）
-                if ((!hasDefaultImageConfig && !defaultConfigsInitialized) || configsChanged) {
+                if (!hasDefaultImageConfig && !defaultConfigsInitialized) {
                     roomDataSource.saveImageGenApiConfigs(loadedImageGenConfigs)
                     Log.i(TAG, "loadInitialData: 已保存更新后的图像配置列表")
                 }

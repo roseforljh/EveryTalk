@@ -82,7 +82,15 @@ fun SettingsScreen(
         }
         
         configsToShow
-            .groupBy { "${it.provider}|${it.address}|${it.channel}|${it.key}" }
+            .groupBy { config ->
+                // 对于"默认"provider，只按provider分组（忽略address、key、channel），所有默认配置在同一个卡片
+                val isDefaultProvider = config.provider.trim().lowercase() in listOf("默认", "default")
+                if (isDefaultProvider) {
+                    "default|||"
+                } else {
+                    "${config.provider}|${config.address}|${config.channel}|${config.key}"
+                }
+            }
             .mapValues { entry ->
                 entry.value.groupBy { it.modalityType }
             }
@@ -430,7 +438,7 @@ fun SettingsScreen(
         )
     }
 
-    // 模型选择对话框（支持“全部添加/手动选择/改为手动输入”）
+    // 模型选择对话框（支持"全部添加/手动选择/改为手动输入"）
     if (showModelSelection) {
         ModelSelectionDialog(
             showDialog = true,

@@ -52,7 +52,15 @@ fun ImageGenerationSettingsScreen(
     // 固定为图像模式的配置分组
     val apiConfigsByApiKeyAndModality = remember(savedConfigs) {
         savedConfigs.filter { it.modalityType == ModalityType.IMAGE }
-            .groupBy { "${it.provider}|${it.address}|${it.channel}|${it.key}" }
+            .groupBy { config ->
+                // 对于"默认"provider，只按provider分组（忽略address、key、channel），所有默认配置在同一个卡片
+                val isDefaultProvider = config.provider.trim().lowercase() in listOf("默认", "default")
+                if (isDefaultProvider) {
+                    "default|||"
+                } else {
+                    "${config.provider}|${config.address}|${config.channel}|${config.key}"
+                }
+            }
             .mapValues { entry ->
                 entry.value.groupBy { it.modalityType }
             }
@@ -133,7 +141,7 @@ fun ImageGenerationSettingsScreen(
             paddingValues = paddingValues,
             apiConfigsByApiKeyAndModality = apiConfigsByApiKeyAndModality,
             onAddFullConfigClick = {
-                // 图像模式新增时默认即为“默认”
+                // 图像模式新增时默认即为"默认"
                 val initialProvider = "默认"
                 newFullConfigProvider = initialProvider
                 newFullConfigKey = ""
@@ -198,7 +206,7 @@ fun ImageGenerationSettingsScreen(
                val pLower = providerTrim.lowercase()
                val isDefaultProvider = pLower in listOf("默认","default")
                if (isDefaultProvider) {
-                   // 选择“默认”时，直接添加 Kolors 配置并关闭弹窗
+                   // 选择"默认"时，直接添加 Kolors 配置并关闭弹窗
                    val config = ApiConfig(
                        id = java.util.UUID.randomUUID().toString(),
                        name = "Kwai-Kolors/Kolors",
@@ -365,7 +373,7 @@ fun ImageGenerationSettingsScreen(
                 providerToDelete = null
             },
             title = "删除平台",
-            text = "您确定要删除模型平台 “$providerToDelete” 吗？\n\n这将同时删除所有使用此平台的配置。此操作不可撤销。"
+            text = "您确定要删除模型平台 \"${providerToDelete}\" 吗？\n\n这将同时删除所有使用此平台的配置。此操作不可撤销。"
         )
     }
 }

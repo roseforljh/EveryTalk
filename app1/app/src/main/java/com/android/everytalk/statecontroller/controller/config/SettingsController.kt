@@ -328,7 +328,7 @@ class SettingsController(
      * 导入API配置（带验证）
      *
      * 目标：
-     * - 保留本地已有的“默认配置卡片”等系统/设备级默认配置
+     * - 保留本地已有的"默认配置卡片"等系统/设备级默认配置
      * - 同时完整合入导出文件中的所有配置（包括 Gemini、默认平台下的自定义模型等）
      * - 通过按 id 去重，避免重复配置
      */
@@ -410,12 +410,19 @@ class SettingsController(
         val mergedImageConfigs = (existingImageConfigs + importedImageConfigs)
             .associateBy { it.id }
             .values
-            .distinctBy {
+            .distinctBy { config ->
                 // 增强去重：如果除了ID外其他关键字段都相同，视为重复配置，保留第一个
-                "${it.provider}|${it.address}|${it.key}|${it.model}|${it.channel}|${it.modalityType}"
+                // 对于"默认"provider的配置，只按model去重，忽略address、key和channel
+                val isDefaultProvider = config.provider.trim().lowercase() in listOf("默认", "default")
+                if (isDefaultProvider) {
+                    // 默认配置只按provider和model去重
+                    "default|${config.model}|${config.modalityType}"
+                } else {
+                    "${config.provider}|${config.address}|${config.key}|${config.model}|${config.channel}|${config.modalityType}"
+                }
             }
             .toList()
-        
+
         Log.i(TAG, "合并后图像配置数: ${mergedImageConfigs.size}")
         mergedImageConfigs.forEachIndexed { index, config ->
             Log.i(TAG, "  合并后图像[$index]: id=${config.id}, name=${config.name}, provider=${config.provider}, channel=${config.channel}")
