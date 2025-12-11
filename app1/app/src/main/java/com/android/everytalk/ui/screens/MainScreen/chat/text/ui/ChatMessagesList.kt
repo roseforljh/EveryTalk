@@ -206,16 +206,26 @@ fun ChatMessagesList(
                                                     // 使用与发送消息相同的动画逻辑
                                                     scrollStateManager.lockAutoScroll()
                                                     val originalMessageId = regeneratedMessage.id
+                                                    val isAiMessage = regeneratedMessage.sender == com.android.everytalk.data.DataClass.Sender.AI
                                                     viewModel.regenerateAiResponse(regeneratedMessage, isImageGeneration = false)
                                                     coroutineScope.launch {
-                                                        // 等待列表更新（寻找新生成的用户消息，它会替换原来的消息）
+                                                        // 等待列表更新（检查原消息是否被移除）
                                                         var attempts = 0
                                                         var targetIndex = -1
                                                         while (attempts < 30) {
                                                             val items = viewModel.chatListItems.value
                                                             // 检查列表是否已更新（原消息被移除，新消息被添加）
-                                                            val hasOriginalMessage = items.any { 
-                                                                it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage && it.messageId == originalMessageId 
+                                                            val hasOriginalMessage = if (isAiMessage) {
+                                                                // 长按 AI 气泡时，检查该 AI 消息是否被移除
+                                                                items.any { 
+                                                                    (it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage && it.messageId == originalMessageId) ||
+                                                                    (it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageStreaming && it.messageId == originalMessageId)
+                                                                }
+                                                            } else {
+                                                                // 长按用户气泡时，检查该用户消息是否被移除
+                                                                items.any { 
+                                                                    it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage && it.messageId == originalMessageId 
+                                                                }
                                                             }
                                                             if (!hasOriginalMessage || attempts > 10) {
                                                                 // 找到最后一个用户消息（即新生成的用户消息）
@@ -524,21 +534,30 @@ fun ChatMessagesList(
                     // 立即锁定自动滚动，防止 onNewAiMessageAdded 触发的 jumpToBottom 覆盖后续的 scrollItemToTop
                     scrollStateManager.lockAutoScroll()
                     
-                    val initialCount = chatItems.size
                     val originalMessageId = regeneratedMessage.id
+                    val isAiMessage = regeneratedMessage.sender == com.android.everytalk.data.DataClass.Sender.AI
                     viewModel.regenerateAiResponse(regeneratedMessage, isImageGeneration = false)
                     isContextMenuVisible = false
                     
                     // 使用与发送消息相同的动画逻辑：等待列表更新后，将新用户消息滚动到顶部
                     coroutineScope.launch {
-                        // 等待列表更新（寻找新生成的用户消息，它会替换原来的消息）
+                        // 等待列表更新（检查原消息是否被移除）
                         var attempts = 0
                         var targetIndex = -1
                         while (attempts < 30) {
                             val items = viewModel.chatListItems.value
                             // 检查列表是否已更新（原消息被移除，新消息被添加）
-                            val hasOriginalMessage = items.any { 
-                                it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage && it.messageId == originalMessageId 
+                            val hasOriginalMessage = if (isAiMessage) {
+                                // 长按 AI 气泡时，检查该 AI 消息是否被移除
+                                items.any { 
+                                    (it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage && it.messageId == originalMessageId) ||
+                                    (it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageStreaming && it.messageId == originalMessageId)
+                                }
+                            } else {
+                                // 长按用户气泡时，检查该用户消息是否被移除
+                                items.any { 
+                                    it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage && it.messageId == originalMessageId 
+                                }
                             }
                             if (!hasOriginalMessage || attempts > 10) {
                                 // 找到最后一个用户消息（即新生成的用户消息）
