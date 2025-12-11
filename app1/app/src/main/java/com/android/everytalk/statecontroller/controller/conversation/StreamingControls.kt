@@ -7,7 +7,7 @@ import kotlinx.coroutines.launch
 
 /**
  * StreamingControls
- * 统一封装流式“暂停/恢复/flush”控制逻辑，避免 AppViewModel 内联流程。
+ * 统一封装流式"暂停/恢复/flush"控制逻辑，避免 AppViewModel 内联流程。
  *
  * 职责：
  * - 切换暂停/恢复状态（文本/图像共用暂停标记）
@@ -49,11 +49,21 @@ class StreamingControls(
 
     private fun flushIfResumed() {
         val isImageMode = isImageModeProvider()
-        // 恢复显示：将当前流式消息累积文本一次性刷新
         scope.launch {
+            // 获取当前流式消息ID
+            val currentStreamingId = if (isImageMode) {
+                stateHolder._currentImageStreamingAiMessageId.value
+            } else {
+                stateHolder._currentTextStreamingAiMessageId.value
+            }
+            
+            // 先同步 StreamingMessageStateManager 中的累积内容到 messages 列表
+            if (!currentStreamingId.isNullOrBlank()) {
+                stateHolder.syncStreamingMessageToList(currentStreamingId, isImageMode)
+            }
+            
+            // 然后调用 ApiHandler 的 flush 方法
             apiHandler.flushPausedStreamingUpdate(isImageGeneration = isImageMode)
-            // 移除流式输出时的自动滚动触发
-            // triggerScrollToBottom()
             showSnackbar("已继续")
         }
     }

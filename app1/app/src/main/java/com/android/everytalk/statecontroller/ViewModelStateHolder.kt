@@ -401,9 +401,17 @@ val _isStreamingPaused = MutableStateFlow(false)
         selectedMediaItems.clear()
     }
 fun addMessage(message: Message, isImageGeneration: Boolean = false) {
-    check(Looper.myLooper() == Looper.getMainLooper()) {
-        "addMessage must be called from the main thread"
+    // SnapshotStateList 操作需要在主线程执行
+    if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
+        kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.Main.immediate) {
+            addMessageInternal(message, isImageGeneration)
+        }
+    } else {
+        addMessageInternal(message, isImageGeneration)
     }
+}
+
+private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
     if (isImageGeneration) {
         imageGenerationMessages.add(message)
         isImageConversationDirty.value = true

@@ -1,14 +1,21 @@
 package com.android.everytalk.util
 
 import android.util.Log
+import com.android.everytalk.BuildConfig
 
 /**
  * 统一的日志工具类，用于减少日志记录的冗余
  * 提供统一的日志格式和标签管理
+ * 
+ * 默认情况下，调试日志仅在 debug build 中启用
+ * 可通过 setDebugEnabled() 手动控制
  */
 object AppLogger {
     private const val APP_TAG = "KunTalk"
-    private var isDebugEnabled = true
+    
+    // 默认根据 BuildConfig.DEBUG 决定是否启用调试日志
+    // Release 版本自动关闭详细调试日志
+    private var isDebugEnabled = BuildConfig.DEBUG
     
     /**
      * 设置是否启用调试日志
@@ -16,6 +23,11 @@ object AppLogger {
     fun setDebugEnabled(enabled: Boolean) {
         isDebugEnabled = enabled
     }
+    
+    /**
+     * 获取当前调试日志是否启用
+     */
+    fun isDebugEnabled(): Boolean = isDebugEnabled
     
     /**
      * 记录调试级别日志
@@ -34,7 +46,9 @@ object AppLogger {
      * @param message 日志消息
      */
     fun info(component: String, message: String) {
-        Log.i("$APP_TAG:$component", message)
+        if (isDebugEnabled) {
+            Log.i("$APP_TAG:$component", message)
+        }
     }
     
     /**
