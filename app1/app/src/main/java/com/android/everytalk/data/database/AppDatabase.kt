@@ -54,11 +54,17 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "eztalk_room_database"
                 )
-                .addMigrations(MIGRATION_2_3)
-                .fallbackToDestructiveMigration() // For development only
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .build()
                 INSTANCE = instance
                 instance
+            }
+        }
+        
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                // 添加版本 1 到 2 的迁移逻辑
+                // 如果没有具体变更，可以是空实现
             }
         }
         

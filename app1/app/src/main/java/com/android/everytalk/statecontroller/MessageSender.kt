@@ -972,22 +972,8 @@ private suspend fun readTextFromUri(context: Context, uri: Uri): String? {
     }
     
     private fun hasImageGenerationKeywords(text: String?): Boolean {
-        if (text.isNullOrBlank()) return false
-        val t = text.lowercase().trim()
-        val imageKeywords = listOf(
-            "画", "绘制", "画个", "画张", "画一张", "来一张", "给我一张", "出一张",
-            "生成图片", "生成", "生成几张", "生成多张", "出图", "图片", "图像",
-            "配图", "背景图", "封面图", "插画", "插图", "海报", "头像", "壁纸",
-            "封面", "表情包", "贴图", "示意图", "场景图", "示例图", "图标",
-            "手绘", "素描", "线稿", "上色", "涂色", "水彩", "油画", "像素画",
-            "漫画", "二次元", "渲染", "p图", "p一张", "制作一张", "做一张", "合成一张",
-            "image", "picture", "pictures", "photo", "photos", "art", "artwork",
-            "illustration", "render", "rendering", "draw", "sketch", "paint",
-            "painting", "watercolor", "oil painting", "pixel art", "comic",
-            "manga", "sticker", "cover", "wallpaper", "avatar", "banner",
-            "logo", "icon", "generate image", "generate a picture"
-        )
-        return imageKeywords.any { keyword -> t.contains(keyword) }
+        // 委托给 ApiHandler 中的实现，避免重复代码
+        return apiHandler.hasImageGenerationKeywords(text)
     }
 
     // 识别"编辑/基于上一张修改"的语义，用于自动附带上一轮AI图片

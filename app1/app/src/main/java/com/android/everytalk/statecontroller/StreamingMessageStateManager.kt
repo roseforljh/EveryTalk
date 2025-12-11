@@ -5,6 +5,7 @@ import com.android.everytalk.util.debug.PerformanceMonitor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -42,7 +43,9 @@ class StreamingMessageStateManager {
     private val activeStreamingMessages = ConcurrentHashMap.newKeySet<String>()
 
     // -------- 新增：最小批量与防抖合并 --------
-    private val scope = CoroutineScope(Dispatchers.Default)
+    // 🔧 修复内存泄漏：使用 SupervisorJob 确保子协程失败不影响父协程，并绑定到可控生命周期
+    private val supervisorJob = SupervisorJob()
+    private val scope = CoroutineScope(Dispatchers.Default + supervisorJob)
     private val pendingBuffers: MutableMap<String, StringBuilder> = ConcurrentHashMap()
     private val pendingJobs: MutableMap<String, Job> = ConcurrentHashMap()
 

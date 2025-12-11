@@ -62,7 +62,6 @@ class ApiHandler(
     private val RETRY_DELAY_MS = 2000L
     private val retryCountMap = mutableMapOf<String, Int>()
 
-
     fun cancelCurrentApiJob(reason: String, isNewMessageSend: Boolean = false, isImageGeneration: Boolean = false) {
         // 关键修复：增强日志，明确显示模式信息
         val modeInfo = if (isImageGeneration) "IMAGE_MODE" else "TEXT_MODE"
@@ -96,7 +95,7 @@ class ApiHandler(
                             onAiMessageFullTextChanged(messageIdBeingCancelled, partialText)
                         }
                         
-                        // 🎯 Save partial content to history on cancellation (Requirements: 7.5)
+                        // 🎯 Save partial content on cancellation (Requirements: 7.5)
                         logger.debug("Saving partial content on user cancellation (${partialText.length} chars)")
                         historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration)
                     }
@@ -421,7 +420,6 @@ class ApiHandler(
                                 thisJob?.cancel(CancellationException("API job 或 streaming ID 已更改，停止收集旧数据块"))
                                 return@collect
                             }
-                            
                             // 🎯 Task 11: Monitor memory usage during long streaming sessions
                             // Check memory periodically to detect potential issues
                             // Requirements: 1.4, 3.4
@@ -509,8 +507,10 @@ class ApiHandler(
         }
     }
 private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: String, isImageGeneration: Boolean = false) {
-        // 获取当前消息ID对应的处理器和块管理器
-        val currentMessageProcessor = messageProcessorMap[aiMessageId] ?: MessageProcessor()
+        // 获取当前消息ID对应的处理器和块管理器，若不存在则创建并加入映射
+        val currentMessageProcessor = synchronized(messageProcessorMap) {
+            messageProcessorMap.getOrPut(aiMessageId) { MessageProcessor() }
+        }
         // 首先，让MessageProcessor处理事件并获取返回结果
         val processedResult = currentMessageProcessor.processStreamEvent(appEvent, aiMessageId)
 
@@ -544,8 +544,8 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                                 updatedMessage = updatedMessage.copy(contentStarted = true)
                                 logger.debug("First content chunk received for message $aiMessageId, setting contentStarted=true")
                             }
-                            // 🛡️ 持久化保护：实时流式期间也触发一次“可合流”的保存（内部1.8s防抖+CONFLATED）
-                            // 目的：即使用户立刻切换会话，当前内容也能落入“最后打开”或历史
+                            // 🛡️ 持久化保护：实时流式期间也触发一次"可合流"的保存（内部1.8s防抖+CONFLATED）
+                            // 目的：即使用户立刻切换会话，当前内容也能落入"最后打开"或历史
                             viewModelScope.launch(Dispatchers.IO) {
                                 try {
                                     historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = isImageGeneration)
@@ -757,7 +757,7 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     
                     // 按用户期望：不要在 finish 事件处强制切 isStreaming=false
                     // 说明：
-                    // - 是否呈现“最终渲染”由渲染层的 looksFinalized 判定决定（MarkdownRenderer）
+                    // - 是否呈现"最终渲染"由渲染层的 looksFinalized 判定决定（MarkdownRenderer）
                     // - 流程收尾的 isApiCalling 状态与 streamingId 归位交由上游 onCompletion 分支处理
                     // - 此处仅记录会话摘要，避免二次清空引发 UI 抖动
                     PerformanceMonitor.onFinish(aiMessageId)
@@ -785,7 +785,7 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                 }
             }
 
-            // 若处于“暂停流式显示”状态，则不更新UI，仅由恢复时一次性刷新
+            // 若处于"暂停流式显示"状态，则不更新UI，仅由恢复时一次性刷新
             if (!stateHolder._isStreamingPaused.value && updatedMessage != currentMessage) {
                 messageList[messageIndex] = updatedMessage
             }
@@ -813,25 +813,10 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
             if (currentRetryCount < MAX_RETRY_ATTEMPTS) {
                 logger.debug("Network error detected, attempting retry ${currentRetryCount + 1}/$MAX_RETRY_ATTEMPTS for message: $messageId")
                 retryCountMap[messageId] = currentRetryCount + 1
-                
                 // 延迟后重试
                 delay(RETRY_DELAY_MS)
-                
-                // 触发重试（通过更新消息状态提示用户）
-                withContext(Dispatchers.Main.immediate) {
-                    val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
-                    val idx = messageList.indexOfFirst { it.id == messageId }
-                    if (idx != -1) {
-                        val msg = messageList[idx]
-                        val retryMessage = msg.copy(
-                            currentWebSearchStage = "正在重试... (${currentRetryCount + 1}/$MAX_RETRY_ATTEMPTS)"
-                        )
-                        messageList[idx] = retryMessage
-                    }
-                }
-                
+                // 这里可以添加重试逻辑，重新发送请求
                 // 注意：实际重试需要在调用方实现，这里只是标记和延迟
-                // 调用方应该检测到重试状态并重新发起请求
                 return
             } else {
                 logger.debug("Max retry attempts reached for message: $messageId")
@@ -976,7 +961,7 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
         val p = promptRaw?.lowercase()?.trim() ?: return false
         if (p.isBlank()) return false
 
-        // 先匹配“仅文本”硬条件，避免被“图片”等词误判
+        // 先匹配"仅文本"硬条件，避免被"图片"等词误判
         val textOnlyHard = listOf(
             // 中文明确仅文本
             "仅返回文本", "只返回文本", "只输出文本", "仅文本", "纯文本", "只输出文字", "只输出结果",
@@ -1072,7 +1057,6 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                 // 延迟后重试
                 kotlinx.coroutines.delay(2000)
                 // 这里可以添加重试逻辑，重新发送请求
-                
             } else {
                 // 达到最大重试次数，显示错误提示
                 val detailedError = error.message ?: "未知错误"

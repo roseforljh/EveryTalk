@@ -267,6 +267,8 @@ object ApiClient {
 
 
 
+
+
     private fun buildFinalUrl(baseAddress: String, defaultPath: String): String {
         val trimmedAddress = baseAddress.trim()
         var finalAddress = when {
@@ -403,7 +405,7 @@ object ApiClient {
                             android.util.Log.d("ApiClient", "SSE event行: '${line.substring(6).trim()}'")
                         }
                         else -> {
-                            // 仅当看起来确为JSON对象/数组时，才尝试非SSE直解析；否则忽略，避免再次因“:ok ...”等抛错
+                            // 仅当看起来确为JSON对象/数组时，才尝试非SSE直解析；否则忽略，避免再次因" :ok ... "等抛错
                             val trimmed = line.trim()
                             if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
                                 android.util.Log.d("ApiClient", "非SSE格式行（JSON回退）: '$trimmed'")
@@ -542,10 +544,7 @@ object ApiClient {
         return listOf(
             GITHUB_API_BASE_URL + "repos/roseforljh/KunTalkwithAi/releases/latest",
             "https://kuntalk-update-checker.onrender.com/latest",
-            "https://kuntalk-backup-updater.vercel.app/latest",
-            // 使用不同的GitHub镜像站点
-            "https://hub.fastgit.xyz/api/repos/roseforljh/KunTalkwithAi/releases/latest",
-            "https://github.com.cnpmjs.org/api/repos/roseforljh/KunTalkwithAi/releases/latest"
+            "https://kuntalk-backup-updater.vercel.app/latest"
         )
     }
 
@@ -723,11 +722,11 @@ object ApiClient {
                         }
     
                         val ids: List<String> = when {
-                            root is JsonObject && root["data"] is JsonArray ->
+                            root is JsonObject && root["data"] is JsonArray -> 
                                 extractFromArray(root["data"]!!.jsonArray)
-                            root is JsonObject && root["models"] is JsonArray ->
+                            root is JsonObject && root["models"] is JsonArray -> 
                                 extractFromArray(root["models"]!!.jsonArray)
-                            root is JsonArray ->
+                            root is JsonArray -> 
                                 extractFromArray(root)
                             else -> emptyList()
                         }
@@ -840,7 +839,7 @@ object ApiClient {
         android.util.Log.i("ApiClient", "🔄 图像生成使用直连模式 ($providerName)")
         android.util.Log.d("ApiClient", "Image generation request - Model: ${effectiveImgReq.model}")
         android.util.Log.d("ApiClient", "Image generation request - API Address: ${effectiveImgReq.apiAddress}")
-        android.util.Log.d("ApiClient", "Image generation request - API Key: ${effectiveImgReq.apiKey.take(10)}...")
+        android.util.Log.d("ApiClient", "Image generation request - API Key: ${if (effectiveImgReq.apiKey.isNotBlank()) "[CONFIGURED]" else "[EMPTY]"}")
         android.util.Log.d("ApiClient", "Image generation request - Prompt: ${effectiveImgReq.prompt.take(100)}...")
         
         return try {
@@ -974,7 +973,7 @@ object ApiClient {
 }
 
 /**
- * 将“当前会话的最后一条 user 消息”与图片附件整合为“直连可消费的多模态消息”
+ * 将"当前会话的最后一条 user 消息"与图片附件整合为"直连可消费的多模态消息"
  * - Gemini: contents.parts -> text + inline_data
  * - OpenAI-compat: messages[].content -> [{"type":"text"}, {"type":"image_url"...}]
  * 实现方式：把最后一条 user SimpleTextApiMessage 升级为 PartsApiMessage 并注入 InlineData

@@ -137,7 +137,7 @@ val _isStreamingPaused = MutableStateFlow(false)
         return conversationGenerationConfigs.value[id]
     }
     
-    // 标记“空会话但已应用过参数（仅在内存映射中）”
+    // 标记"空会话但已应用过参数（仅在内存映射中）"
     // 用于离开/切换会话时判定是否需要丢弃该空会话的会话参数
     fun hasPendingConversationParams(): Boolean {
         val id = _currentConversationId.value
@@ -146,7 +146,7 @@ val _isStreamingPaused = MutableStateFlow(false)
     
     // 更新当前会话的生成配置
     // 规则：
-    // - 点击“应用”后，本会话立刻生效：总是写入当前会话ID的内存映射（UI 和请求立刻可见）
+    // - 点击"应用"后，本会话立刻生效：总是写入当前会话ID的内存映射（UI 和请求立刻可见）
     // - 仅当会话内容不为空时才持久化；空会话不落库
     fun updateCurrentConversationConfig(config: GenerationConfig) {
         val id = _currentConversationId.value
@@ -170,7 +170,7 @@ val _isStreamingPaused = MutableStateFlow(false)
         onSaveConversationParams?.invoke(conversationGenerationConfigs.value)
     }
     
-    // 放弃一个“仅应用过参数但未发消息”的空会话：
+    // 放弃一个"仅应用过参数但未发消息"的空会话：
     // 清除当前会话ID在内存中的参数映射，并同步到持久化（若存在）
     fun abandonEmptyPendingConversation() {
         if (messages.isEmpty()) {
@@ -221,7 +221,7 @@ val _isStreamingPaused = MutableStateFlow(false)
     val textExpandedReasoningStates: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
     val imageExpandedReasoningStates: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
     
-    // 会话ID切换时参数迁移（仅在“尚未开始对话”的空会话场景执行）
+    // 会话ID切换时参数迁移（仅在"尚未开始对话"的空会话场景执行）
     // 解决：用户在空会话开启参数后，内部刷新/切换会话ID导致参数丢失的问题
     fun migrateParamsOnConversationIdChange(newId: String) {
         val oldId = _currentConversationId.value
@@ -286,7 +286,7 @@ val _isStreamingPaused = MutableStateFlow(false)
         
         android.util.Log.d("ViewModelStateHolder", "Cleared all StreamingBuffers and streaming states for text chat")
         
-        // 若当前会话为空且仅“应用未发”，按要求删除该空会话（丢弃pending、不落库）
+        // 若当前会话为空且仅"应用未发"，按要求删除该空会话（丢弃pending、不落库）
         if (messages.isEmpty() && hasPendingConversationParams()) {
             abandonEmptyPendingConversation()
         }
@@ -354,7 +354,7 @@ val _isStreamingPaused = MutableStateFlow(false)
     val _isLoadingHistoryData = MutableStateFlow(false)
     val _currentConversationId = MutableStateFlow<String>("new_chat_${System.currentTimeMillis()}")
     val _currentImageGenerationConversationId = MutableStateFlow<String>("new_image_generation_${System.currentTimeMillis()}")
-    // 待加载的图像历史索引（用于跨页面导航时抑制“新建图像会话”）
+    // 待加载的图像历史索引（用于跨页面导航时抑制"新建图像会话"）
     val _pendingImageHistoryIndex = MutableStateFlow<Int?>(null)
 
      val _apiConfigs = MutableStateFlow<List<ApiConfig>>(emptyList())
@@ -461,7 +461,7 @@ fun addMessage(message: Message, isImageGeneration: Boolean = false) {
         // 初始化已提交长度为0
         streamingLastLengths[messageId] = 0
 
-        // Create new buffer with callback -> 仅追加“增量”，避免反复全量赋值
+        // Create new buffer with callback -> 仅追加"增量"，避免反复全量赋值
         val buffer = StreamingBuffer(
             messageId = messageId,
             updateInterval = 120L,  // 120ms 合理节流
@@ -755,8 +755,13 @@ fun addMessage(message: Message, isImageGeneration: Boolean = false) {
     fun appendContentToMessage(messageId: String, text: String, isImageGeneration: Boolean = false) {
         if (text.isEmpty()) return
 
-        // 始终优先走 StreamingBuffer（节流+合并），避免对 SnapshotStateList 频繁全文写回
-        streamingBuffers[messageId]?.let { buffer ->
+        // 🔧 修复竞态条件：使用 synchronized 保护对 streamingBuffers 的检查和操作
+        // 避免多线程环境下 check-then-act 的竞态问题
+        val buffer = synchronized(streamingBuffers) {
+            streamingBuffers[messageId]
+        }
+        
+        if (buffer != null) {
             buffer.append(text)
             return
         }
