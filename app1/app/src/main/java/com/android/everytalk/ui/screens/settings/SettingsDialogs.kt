@@ -15,11 +15,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -196,6 +198,7 @@ internal fun AddProviderDialog(
     val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
 
     AlertDialog(
+        modifier = Modifier.wrapContentHeight(),
         onDismissRequest = onDismissRequest,
         shape = RoundedCornerShape(32.dp),
         containerColor = MaterialTheme.colorScheme.surface,
@@ -426,6 +429,20 @@ internal fun AddNewFullConfigDialog(
     val providerMenuTransitionState = remember { MutableTransitionState(initialState = false) }
     val channelMenuTransitionState = remember { MutableTransitionState(initialState = false) }
 
+    // 图像模式与文本模式一致：展示所有可用平台
+    val providersToShow = allProviders.filter {
+        val lower = it.trim().lowercase()
+        lower !in listOf("默认", "default", "default_text")
+    }
+    val isDefaultSel = false // 移除默认选项，此变量保持为 false
+    val isGoogleProvider = provider.trim().lowercase() in listOf("google","谷歌")
+    // 当平台为 Google 时，通道锁定为 Gemini
+    LaunchedEffect(provider) {
+        if (isGoogleProvider) {
+            selectedChannel = "Gemini"
+        }
+    }
+
     val shouldShowCustomMenuLogical =
         providerMenuExpanded && allProviders.isNotEmpty() && textFieldAnchorBounds != null
     val shouldShowChannelMenuLogical = channelMenuExpanded && channelTextFieldAnchorBounds != null
@@ -441,7 +458,7 @@ internal fun AddNewFullConfigDialog(
     LaunchedEffect(allProviders) {
         Log.d("DropdownDebug", "AddNewFullConfigDialog: allProviders size: ${allProviders.size}")
     }
-    // 确保进入对话框时不显示“默认”占位值
+    // 确保进入对话框时不显示"默认"占位值
     LaunchedEffect(Unit) {
         val lower = provider.trim().lowercase()
         if (lower in listOf("默认","default","default_text")) {
@@ -449,15 +466,13 @@ internal fun AddNewFullConfigDialog(
         }
     }
 
-    val configuration = LocalConfiguration.current
-    val screenHeight = configuration.screenHeightDp.dp
-    val dialogHeight = screenHeight * 0.8f
-
     AlertDialog(
-        modifier = Modifier.height(dialogHeight),
-        shape = RoundedCornerShape(32.dp),
+        modifier = Modifier.wrapContentHeight(),
         onDismissRequest = onDismissRequest,
+        shape = RoundedCornerShape(32.dp),
         containerColor = MaterialTheme.colorScheme.surface,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurface,
         title = {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -486,316 +501,299 @@ internal fun AddNewFullConfigDialog(
             }
         },
         text = {
-            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                // 图像模式与文本模式一致：展示所有可用平台
-                val providersToShow = allProviders.filter {
-                    val lower = it.trim().lowercase()
-                    lower !in listOf("默认", "default", "default_text")
-                }
-                val isDefaultSel = false // 移除默认选项，此变量保持为 false
-                val isGoogleProvider = provider.trim().lowercase() in listOf("google","谷歌")
-                // 当平台为 Google 时，通道锁定为 Gemini
-                LaunchedEffect(provider) {
-                    if (isGoogleProvider) {
-                        selectedChannel = "Gemini"
-                    }
-                }
-
-                SettingsFieldLabel("模型平台")
-                ExposedDropdownMenuBox(
-                    expanded = providerMenuExpanded && providersToShow.isNotEmpty(),
-                    onExpandedChange = {
-                        if (providersToShow.isNotEmpty()) {
-                            providerMenuExpanded = !providerMenuExpanded
-                        }
-                    },
-                    modifier = Modifier.padding(bottom = 12.dp)
-                ) {
-                    OutlinedTextField(
-                        value = if (provider.trim().lowercase() in listOf("默认","default","default_text")) "" else provider,
-                        onValueChange = {},
-                        readOnly = true,
-                        placeholder = { Text("请选择平台") },
-                        modifier = Modifier
-                            .menuAnchor()
-                            .fillMaxWidth()
-                            .onGloballyPositioned { coordinates ->
-                                textFieldAnchorBounds = coordinates.boundsInWindow()
-                            },
-                        trailingIcon = {
-                            // 统一允许添加自定义平台
-                            IconButton(onClick = {
-                                if (providerMenuExpanded && providersToShow.isNotEmpty()) {
-                                    providerMenuExpanded = false
-                                }
-                                onShowAddCustomProviderDialog()
-                            }) {
-                                Icon(Icons.Outlined.Add, "添加自定义平台")
-                            }
-                        },
-                        shape = DialogShape,
-                        colors = DialogTextFieldColors
-                    )
-
-                    if (providersToShow.isNotEmpty()) {
-                        CustomStyledDropdownMenu(
-                            transitionState = providerMenuTransitionState,
-                            onDismissRequest = {
-                                providerMenuExpanded = false
-                            },
-                            anchorBounds = textFieldAnchorBounds
-                        ) {
-                            providersToShow.forEach { providerItem ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            Text(
-                                                text = providerItem,
-                                                color = MaterialTheme.colorScheme.onSurface,
-                                                modifier = Modifier.weight(1f)
-                                            )
-                                            // 统一删除策略：仅保护部分系统预置平台，其他均可删除
-                                            val lower = providerItem.lowercase().trim()
-                                            val nonDeletableProviders = listOf(
-                                                "openai compatible",
-                                                "google",
-                                                "阿里云百炼",
-                                                "火山引擎",
-                                                "深度求索",
-                                                "openrouter",
-                                                "硅基流动",
-                                                "siliconflow",
-                                                "siliconflow",
-                                                "seedream",
-                                                "gemini"
-                                            )
-                                            val canDelete = !nonDeletableProviders.contains(lower)
-                                            if (canDelete) {
-                                                IconButton(
-                                                    onClick = {
-                                                        onDeleteProvider(providerItem)
-                                                    },
-                                                    modifier = Modifier.size(24.dp)
-                                                ) {
-                                                    Icon(
-                                                        Icons.Filled.Close,
-                                                        contentDescription = "删除 $providerItem",
-                                                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    },
-                                    onClick = {
-                                        // 选平台时若为 Google/谷歌，则锁定渠道为 Gemini
-                                        val low = providerItem.trim().lowercase()
-                                        if (low == "google" || low == "谷歌") {
-                                            selectedChannel = "Gemini"
-                                        }
-                                        onProviderChange(providerItem)
-                                        providerMenuExpanded = false
-                                    },
-                                    colors = MenuDefaults.itemColors(
-                                        textColor = MaterialTheme.colorScheme.onSurface
-                                    )
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // 当选择“默认”时隐藏渠道/地址/密钥等输入
-                if (!isDefaultSel) {
-                    SettingsFieldLabel("渠道")
-                    ExposedDropdownMenuBox(
-                        expanded = channelMenuExpanded,
-                        onExpandedChange = {
-                            if (!isGoogleProvider) {
-                                channelMenuExpanded = !channelMenuExpanded
-                            } else {
-                                channelMenuExpanded = false
-                            }
-                        },
-                        modifier = Modifier.padding(bottom = 12.dp)
-                    ) {
-                        OutlinedTextField(
-                            value = selectedChannel,
-                            onValueChange = {},
-                            readOnly = true,
-                            enabled = !isGoogleProvider, // Google 平台时禁用手动切换
-                            modifier = Modifier
-                                .menuAnchor()
-                                .fillMaxWidth()
-                                .onGloballyPositioned { coordinates ->
-                                    channelTextFieldAnchorBounds = coordinates.boundsInWindow()
-                                },
-                            trailingIcon = {
-                                ExposedDropdownMenuDefaults.TrailingIcon(expanded = channelMenuExpanded)
-                            },
-                            shape = DialogShape,
-                            colors = DialogTextFieldColors
-                        )
-
-                        if (!isGoogleProvider) {
-                            CustomStyledDropdownMenu(
-                                transitionState = channelMenuTransitionState,
-                                onDismissRequest = {
-                                    channelMenuExpanded = false
-                                },
-                                anchorBounds = channelTextFieldAnchorBounds
-                            ) {
-                                channels.forEach { channel ->
-                                    DropdownMenuItem(
-                                        text = { Text(channel) },
-                                        onClick = {
-                                            selectedChannel = channel
-                                            channelMenuExpanded = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    SettingsFieldLabel("API接口地址")
-                    OutlinedTextField(
-                        value = apiAddress,
-                        onValueChange = onApiAddressChange,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 12.dp),
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Next),
-                        shape = DialogShape,
-                        colors = DialogTextFieldColors
-                    )
-                    // 实时预览 + 固定使用说明
-                    if (selectedChannel != "Gemini") {
-                        val fullUrlPreview = remember(apiAddress, provider, selectedChannel) {
-                            buildFullEndpointPreview(apiAddress, provider, selectedChannel)
-                        }
-                        if (fullUrlPreview.isNotEmpty()) {
-                            Text(
-                                text = "预览: $fullUrlPreview",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(start = 12.dp, bottom = 4.dp)
-                            )
-                        }
-                        if (selectedChannel == "OpenAI兼容") {
-                            Text(
-                                text = "用法: 末尾#：直连 ； 末尾/：不加v1 ； 仅域名自动加v1",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(start = 12.dp, bottom = 12.dp)
-                            )
-                        }
-                    }
-
-                    SettingsFieldLabel("API密钥")
-                    OutlinedTextField(
-                        value = apiKey,
-                        onValueChange = onApiKeyChange,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 12.dp),
-                            // .focusRequester(focusRequesterApiKey), // Removed auto-focus
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
-                        keyboardActions = KeyboardActions(onDone = {
-                            if (apiKey.isNotBlank() && provider.isNotBlank() && apiAddress.isNotBlank()) {
-                               onConfirm(provider, apiAddress, apiKey, selectedChannel, imageSize, numInferenceSteps.toIntOrNull(), guidanceScale.toFloatOrNull(), null, null)
-                            }
-                        }),
-                        shape = DialogShape,
-                        colors = DialogTextFieldColors
-                    )
-
-                }
-            }
-        },
-        confirmButton = {
             val canSubmit = apiKey.isNotBlank()
                     && apiAddress.isNotBlank()
                     && provider.isNotBlank()
                     && provider.trim().lowercase() !in listOf("默认","default","default_text")
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                // 取消按钮（红色描边）
-                OutlinedButton(
-                    onClick = onDismissRequest,
+            Column(modifier = Modifier.wrapContentHeight().imePadding()) {
+                Column(
                     modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp),
-                    shape = RoundedCornerShape(24.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                        contentColor = cancelButtonColor
-                    ),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
+                        .weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState())
                 ) {
-                    Text(
-                        text = "取消",
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.SemiBold
+                    SettingsFieldLabel("模型平台")
+                    ExposedDropdownMenuBox(
+                        expanded = providerMenuExpanded && providersToShow.isNotEmpty(),
+                        onExpandedChange = {
+                            if (providersToShow.isNotEmpty()) {
+                                providerMenuExpanded = !providerMenuExpanded
+                            }
+                        },
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = if (provider.trim().lowercase() in listOf("默认","default","default_text")) "" else provider,
+                            onValueChange = {},
+                            readOnly = true,
+                            placeholder = { Text("请选择平台") },
+                            modifier = Modifier
+                                .menuAnchor()
+                                .fillMaxWidth()
+                                .onGloballyPositioned { coordinates -> 
+                                    textFieldAnchorBounds = coordinates.boundsInWindow()
+                                },
+                            trailingIcon = {
+                                // 统一允许添加自定义平台
+                                IconButton(onClick = {
+                                    if (providerMenuExpanded && allProviders.isNotEmpty()) {
+                                        providerMenuExpanded = false
+                                    }
+                                    onShowAddCustomProviderDialog()
+                                }) {
+                                    Icon(Icons.Outlined.Add, "添加自定义平台")
+                                }
+                            },
+                            shape = DialogShape,
+                            colors = DialogTextFieldColors
                         )
-                    )
+
+                        if (providersToShow.isNotEmpty()) {
+                            CustomStyledDropdownMenu(
+                                transitionState = providerMenuTransitionState,
+                                onDismissRequest = {
+                                    providerMenuExpanded = false
+                                },
+                                anchorBounds = textFieldAnchorBounds
+                            ) {
+                                providersToShow.forEach { providerItem ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Text(
+                                                    text = providerItem,
+                                                    color = MaterialTheme.colorScheme.onSurface,
+                                                    modifier = Modifier.weight(1f)
+                                                )
+                                                // 统一删除策略：仅保护部分系统预置平台，其他均可删除
+                                                val lower = providerItem.lowercase().trim()
+                                                val nonDeletableProviders = listOf(
+                                                    "openai compatible",
+                                                    "google",
+                                                    "阿里云百炼",
+                                                    "火山引擎",
+                                                    "深度求索",
+                                                    "openrouter",
+                                                    "硅基流动",
+                                                    "siliconflow",
+                                                    "siliconflow",
+                                                    "seedream",
+                                                    "gemini"
+                                                )
+                                                val canDelete = !nonDeletableProviders.contains(lower)
+                                                if (canDelete) {
+                                                    IconButton(
+                                                        onClick = {
+                                                            onDeleteProvider(providerItem)
+                                                        },
+                                                        modifier = Modifier.size(24.dp)
+                                                    ) {
+                                                        Icon(
+                                                            Icons.Filled.Close,
+                                                            contentDescription = "删除 $providerItem",
+                                                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        onClick = {
+                                            // 选平台时若为 Google/谷歌，则锁定渠道为 Gemini
+                                            val low = providerItem.trim().lowercase()
+                                            if (low == "google" || low == "谷歌") {
+                                                selectedChannel = "Gemini"
+                                            }
+                                            onProviderChange(providerItem)
+                                            providerMenuExpanded = false
+                                        },
+                                        colors = MenuDefaults.itemColors(
+                                            textColor = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // 当选择"默认"时隐藏渠道/地址/密钥等输入
+                    if (!isDefaultSel) {
+                        SettingsFieldLabel("渠道")
+                        ExposedDropdownMenuBox(
+                            expanded = channelMenuExpanded,
+                            onExpandedChange = {
+                                if (!isGoogleProvider) {
+                                    channelMenuExpanded = !channelMenuExpanded
+                                } else {
+                                    channelMenuExpanded = false
+                                }
+                            },
+                            modifier = Modifier.padding(bottom = 12.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = selectedChannel,
+                                onValueChange = {},
+                                readOnly = true,
+                                enabled = !isGoogleProvider, // Google 平台时禁用手动切换
+                                modifier = Modifier
+                                    .menuAnchor()
+                                    .fillMaxWidth()
+                                    .onGloballyPositioned { coordinates -> 
+                                        channelTextFieldAnchorBounds = coordinates.boundsInWindow()
+                                    },
+                                trailingIcon = {
+                                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = channelMenuExpanded)
+                                },
+                                shape = DialogShape,
+                                colors = DialogTextFieldColors
+                            )
+
+                            if (!isGoogleProvider) {
+                                CustomStyledDropdownMenu(
+                                    transitionState = channelMenuTransitionState,
+                                    onDismissRequest = {
+                                        channelMenuExpanded = false
+                                    },
+                                    anchorBounds = channelTextFieldAnchorBounds
+                                ) {
+                                    channels.forEach { channel ->
+                                        DropdownMenuItem(
+                                            text = { Text(channel) },
+                                            onClick = {
+                                                selectedChannel = channel
+                                                channelMenuExpanded = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        SettingsFieldLabel("API接口地址")
+                        OutlinedTextField(
+                            value = apiAddress,
+                            onValueChange = onApiAddressChange,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 12.dp),
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Next),
+                            shape = DialogShape,
+                            colors = DialogTextFieldColors
+                        )
+                        // 实时预览 + 固定使用说明
+                        if (selectedChannel != "Gemini") {
+                            val fullUrlPreview = remember(apiAddress, provider, selectedChannel) {
+                                buildFullEndpointPreview(apiAddress, provider, selectedChannel)
+                            }
+                            if (fullUrlPreview.isNotEmpty()) {
+                                Text(
+                                    text = "预览: $fullUrlPreview",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(start = 12.dp, bottom = 12.dp)
+                                )
+                            }
+                        }
+
+                        SettingsFieldLabel("API密钥")
+                        OutlinedTextField(
+                            value = apiKey,
+                            onValueChange = onApiKeyChange,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 12.dp),
+                                // .focusRequester(focusRequesterApiKey), // Removed auto-focus
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
+                            keyboardActions = KeyboardActions(onDone = {
+                                if (apiKey.isNotBlank() && provider.isNotBlank() && apiAddress.isNotBlank()) {
+                                   onConfirm(provider, apiAddress, apiKey, selectedChannel, imageSize, numInferenceSteps.toIntOrNull(), guidanceScale.toFloatOrNull(), null, null)
+                                }
+                            }),
+                            shape = DialogShape,
+                            colors = DialogTextFieldColors
+                        )
+
+                    }
                 }
 
-                // 确定按钮（与语音模式一致）
-                Button(
-                    onClick = {
-                        if (canSubmit) {
-                            onConfirm(
-                                provider,
-                                apiAddress,
-                                apiKey,
-                                selectedChannel,
-                                imageSize,
-                                numInferenceSteps.toIntOrNull(),
-                                guidanceScale.toFloatOrNull(),
-                                null,
-                                null
-                            )
-                        }
-                    },
-                    enabled = canSubmit,
+                // 底部固定按钮
+                Row(
                     modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp),
-                    shape = RoundedCornerShape(24.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = confirmButtonColor,
-                        contentColor = confirmButtonTextColor,
-                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                    )
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Add,
-                        contentDescription = null,
+                    OutlinedButton(
+                        onClick = onDismissRequest,
                         modifier = Modifier
-                            .size(20.dp)
-                            .padding(end = 4.dp)
-                    )
-                    Text(
-                        text = "确定添加",
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.SemiBold
+                            .weight(1f)
+                            .height(48.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = MaterialTheme.colorScheme.surface,
+                            contentColor = cancelButtonColor
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
+                    ) {
+                        Text(
+                            text = "取消",
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontWeight = FontWeight.SemiBold
+                            )
                         )
-                    )
+                    }
+
+                    Button(
+                        onClick = {
+                            if (canSubmit) {
+                                onConfirm(
+                                    provider,
+                                    apiAddress,
+                                    apiKey,
+                                    selectedChannel,
+                                    imageSize,
+                                    numInferenceSteps.toIntOrNull(),
+                                    guidanceScale.toFloatOrNull(),
+                                    null,
+                                    null
+                                )
+                            }
+                        },
+                        enabled = canSubmit,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = confirmButtonColor,
+                            contentColor = confirmButtonTextColor,
+                            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        )
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Add,
+                            contentDescription = null,
+                            modifier = Modifier
+                                .size(20.dp)
+                                .padding(end = 4.dp)
+                        )
+                        Text(
+                            text = "确定添加",
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        )
+                    }
                 }
             }
         },
-        dismissButton = {},
-        titleContentColor = MaterialTheme.colorScheme.onSurface,
-        textContentColor = MaterialTheme.colorScheme.onSurface
+        confirmButton = {},
+        dismissButton = {}
     )
 }
 
@@ -818,17 +816,19 @@ internal fun EditConfigDialog(
     val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
     val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
 
-    // val focusRequester = remember { FocusRequester() } // Removed auto-focus
-     
-    // 固定的渠道类型选项
     val channelTypes = listOf("OpenAI兼容", "Gemini")
+    
+    var channelMenuExpanded by remember { mutableStateOf(false) }
+    var channelTextFieldAnchorBounds by remember { mutableStateOf<Rect?>(null) }
+    val channelMenuTransitionState = remember { MutableTransitionState(initialState = false) }
+    val shouldShowChannelMenuLogical = channelMenuExpanded && channelTextFieldAnchorBounds != null
 
-    val configuration = LocalConfiguration.current
-    val screenHeight = configuration.screenHeightDp.dp
-    val dialogHeight = screenHeight * 0.8f
+    LaunchedEffect(shouldShowChannelMenuLogical) {
+        channelMenuTransitionState.targetState = shouldShowChannelMenuLogical
+    }
 
     AlertDialog(
-        modifier = Modifier.height(dialogHeight),
+        modifier = Modifier.wrapContentHeight(),
         onDismissRequest = onDismissRequest,
         shape = RoundedCornerShape(32.dp),
         containerColor = MaterialTheme.colorScheme.surface,
@@ -862,192 +862,185 @@ internal fun EditConfigDialog(
             }
         },
         text = {
-            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                SettingsFieldLabel("模型平台")
-                OutlinedTextField(
-                    value = provider,
-                    onValueChange = { provider = it },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 12.dp),
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Next),
-                    shape = DialogShape,
-                    colors = DialogTextFieldColors
-                )
+            val canSubmit = apiKey.isNotBlank() && apiAddress.isNotBlank() && provider.isNotBlank()
 
-                SettingsFieldLabel("API接口地址")
-                OutlinedTextField(
-                    value = apiAddress,
-                    onValueChange = { apiAddress = it },
+            Column(modifier = Modifier.wrapContentHeight().imePadding()) {
+                Column(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 12.dp),
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Next),
-                    shape = DialogShape,
-                    colors = DialogTextFieldColors
-                )
-                // 实时预览 + 固定使用说明
-                if (selectedChannel != "Gemini") {
-                    val fullUrlPreview = remember(apiAddress) {
-                        buildFullEndpointPreview(apiAddress, representativeConfig.provider, null)
-                    }
-                    if (fullUrlPreview.isNotEmpty()) {
-                        Text(
-                            text = "预览: $fullUrlPreview",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(start = 12.dp, bottom = 4.dp)
-                        )
-                    }
-                    if (selectedChannel == "OpenAI兼容") {
-                        Text(
-                            text = "用法: 末尾#：直连 ； 末尾/：不加v1 ； 仅域名自动加v1",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(start = 12.dp, bottom = 12.dp)
-                        )
-                    }
-                }
-                SettingsFieldLabel("API密钥")
-                OutlinedTextField(
-                    value = apiKey,
-                    onValueChange = { apiKey = it },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 12.dp),
-                        // .focusRequester(focusRequester), // Removed auto-focus
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Next),
-                    shape = DialogShape,
-                    colors = DialogTextFieldColors
-                )
-                
-                // 渠道类型选择下拉框
-                var expanded by remember { mutableStateOf(false) }
-                var channelMenuExpanded by remember { mutableStateOf(false) }
-                var channelTextFieldAnchorBounds by remember { mutableStateOf<Rect?>(null) }
-                val channelMenuTransitionState = remember { MutableTransitionState(initialState = false) }
-                val shouldShowChannelMenuLogical = channelMenuExpanded && channelTextFieldAnchorBounds != null
-
-                LaunchedEffect(shouldShowChannelMenuLogical) {
-                    channelMenuTransitionState.targetState = shouldShowChannelMenuLogical
-                }
-
-                SettingsFieldLabel("渠道")
-                ExposedDropdownMenuBox(
-                    expanded = channelMenuExpanded,
-                    onExpandedChange = { channelMenuExpanded = !channelMenuExpanded },
-                    modifier = Modifier.padding(bottom = 12.dp)
+                        .weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState())
                 ) {
+                    SettingsFieldLabel("模型平台")
                     OutlinedTextField(
-                        value = selectedChannel,
-                        onValueChange = {},
-                        readOnly = true,
+                        value = provider,
+                        onValueChange = { provider = it },
                         modifier = Modifier
-                            .menuAnchor()
                             .fillMaxWidth()
-                            .onGloballyPositioned { coordinates ->
-                                channelTextFieldAnchorBounds = coordinates.boundsInWindow()
-                            },
-                        trailingIcon = {
-                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = channelMenuExpanded)
-                        },
+                            .padding(bottom = 12.dp),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Next),
                         shape = DialogShape,
                         colors = DialogTextFieldColors
                     )
 
-                    CustomStyledDropdownMenu(
-                        transitionState = channelMenuTransitionState,
-                        onDismissRequest = {
-                            channelMenuExpanded = false
-                        },
-                        anchorBounds = channelTextFieldAnchorBounds
+                    SettingsFieldLabel("渠道")
+                    ExposedDropdownMenuBox(
+                        expanded = channelMenuExpanded,
+                        onExpandedChange = { channelMenuExpanded = !channelMenuExpanded },
+                        modifier = Modifier.padding(bottom = 12.dp)
                     ) {
-                        channelTypes.forEach { channel ->
-                            DropdownMenuItem(
-                                text = { Text(channel) },
-                                onClick = {
-                                    selectedChannel = channel
-                                    channelMenuExpanded = false
-                                }
+                        OutlinedTextField(
+                            value = selectedChannel,
+                            onValueChange = {},
+                            readOnly = true,
+                            modifier = Modifier
+                                .menuAnchor()
+                                .fillMaxWidth()
+                                .onGloballyPositioned { coordinates -> 
+                                    channelTextFieldAnchorBounds = coordinates.boundsInWindow()
+                                },
+                            trailingIcon = {
+                                ExposedDropdownMenuDefaults.TrailingIcon(expanded = channelMenuExpanded)
+                            },
+                            shape = DialogShape,
+                            colors = DialogTextFieldColors
+                        )
+
+                        CustomStyledDropdownMenu(
+                            transitionState = channelMenuTransitionState,
+                            onDismissRequest = {
+                                channelMenuExpanded = false
+                            },
+                            anchorBounds = channelTextFieldAnchorBounds
+                        ) {
+                            channelTypes.forEach { channel ->
+                                DropdownMenuItem(
+                                    text = { Text(channel) },
+                                    onClick = {
+                                        selectedChannel = channel
+                                        channelMenuExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    SettingsFieldLabel("API接口地址")
+                    OutlinedTextField(
+                        value = apiAddress,
+                        onValueChange = { apiAddress = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Next),
+                        shape = DialogShape,
+                        colors = DialogTextFieldColors
+                    )
+                    if (selectedChannel != "Gemini") {
+                        val fullUrlPreview = remember(apiAddress) {
+                            buildFullEndpointPreview(apiAddress, representativeConfig.provider, null)
+                        }
+                        if (fullUrlPreview.isNotEmpty()) {
+                            Text(
+                                text = "预览: $fullUrlPreview",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(start = 12.dp, bottom = 12.dp)
                             )
                         }
                     }
-                }
 
-            }
-        },
-        confirmButton = {
-            val canSubmit = apiKey.isNotBlank() && apiAddress.isNotBlank() && provider.isNotBlank()
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                // 取消按钮（红色描边）
-                OutlinedButton(
-                    onClick = onDismissRequest,
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp),
-                    shape = RoundedCornerShape(24.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                        contentColor = cancelButtonColor
-                    ),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
-                ) {
-                    Text(
-                        text = "取消",
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.SemiBold
-                        )
+                    SettingsFieldLabel("API密钥")
+                    OutlinedTextField(
+                        value = apiKey,
+                        onValueChange = { apiKey = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = {
+                            if (canSubmit) {
+                                onConfirm(provider, apiAddress, apiKey, selectedChannel, null, null)
+                            }
+                        }),
+                        shape = DialogShape,
+                        colors = DialogTextFieldColors
                     )
                 }
 
-                // 保存按钮（与语音模式一致）
-                Button(
-                    onClick = {
-                        if (canSubmit) {
-                            onConfirm(
-                                provider,
-                                apiAddress,
-                                apiKey,
-                                selectedChannel,
-                                null,
-                                null
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onDismissRequest,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = MaterialTheme.colorScheme.surface,
+                            contentColor = cancelButtonColor
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
+                    ) {
+                        Text(
+                            text = "取消",
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontWeight = FontWeight.SemiBold
                             )
-                        }
-                    },
-                    enabled = canSubmit,
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp),
-                    shape = RoundedCornerShape(24.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = confirmButtonColor,
-                        contentColor = confirmButtonTextColor,
-                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                    )
-                ) {
-                    Text(
-                        text = "保存更新",
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.SemiBold
                         )
-                    )
+                    }
+
+                    Button(
+                        onClick = {
+                            if (canSubmit) {
+                                onConfirm(
+                                    provider,
+                                    apiAddress,
+                                    apiKey,
+                                    selectedChannel,
+                                    null,
+                                    null
+                                )
+                            }
+                        },
+                        enabled = canSubmit,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = confirmButtonColor,
+                            contentColor = confirmButtonTextColor,
+                            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        )
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Check,
+                            contentDescription = null,
+                            modifier = Modifier
+                                .size(20.dp)
+                                .padding(end = 4.dp)
+                        )
+                        Text(
+                            text = "保存更新",
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        )
+                    }
                 }
             }
         },
+        confirmButton = {},
         dismissButton = {}
     )
-
-    // LaunchedEffect(Unit) {
-    //     focusRequester.requestFocus() // Removed auto-focus
-    // }
 }
 
 @Composable
