@@ -205,22 +205,29 @@ fun ChatMessagesList(
                                                 onRegenerateRequest = { regeneratedMessage ->
                                                     // 使用与发送消息相同的动画逻辑
                                                     scrollStateManager.lockAutoScroll()
-                                                    val initialCount = chatItems.size
+                                                    val originalMessageId = regeneratedMessage.id
                                                     viewModel.regenerateAiResponse(regeneratedMessage, isImageGeneration = false)
                                                     coroutineScope.launch {
+                                                        // 等待列表更新（寻找新生成的用户消息，它会替换原来的消息）
                                                         var attempts = 0
                                                         var targetIndex = -1
-                                                        while (attempts < 20) {
+                                                        while (attempts < 30) {
                                                             val items = viewModel.chatListItems.value
-                                                            if (items.size != initialCount || attempts > 5) {
+                                                            // 检查列表是否已更新（原消息被移除，新消息被添加）
+                                                            val hasOriginalMessage = items.any { 
+                                                                it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage && it.messageId == originalMessageId 
+                                                            }
+                                                            if (!hasOriginalMessage || attempts > 10) {
+                                                                // 找到最后一个用户消息（即新生成的用户消息）
                                                                 targetIndex = items.indexOfLast { it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage }
                                                                 if (targetIndex != -1) break
                                                             }
                                                             delay(50)
                                                             attempts++
                                                         }
+                                                        // 将重新生成的用户消息滚动到顶部，动画效果与正常发送消息一致
                                                         if (targetIndex != -1) {
-                                                            scrollStateManager.scrollItemToTop(targetIndex)
+                                                            scrollStateManager.scrollItemToTop(targetIndex, scrollDurationMs = 350)
                                                         } else {
                                                             scrollStateManager.smoothScrollToBottom(isUserAction = true)
                                                         }
@@ -518,18 +525,23 @@ fun ChatMessagesList(
                     scrollStateManager.lockAutoScroll()
                     
                     val initialCount = chatItems.size
+                    val originalMessageId = regeneratedMessage.id
                     viewModel.regenerateAiResponse(regeneratedMessage, isImageGeneration = false)
                     isContextMenuVisible = false
                     
                     // 使用与发送消息相同的动画逻辑：等待列表更新后，将新用户消息滚动到顶部
                     coroutineScope.launch {
-                        // 等待列表更新（确保找到了新发送的消息）
+                        // 等待列表更新（寻找新生成的用户消息，它会替换原来的消息）
                         var attempts = 0
                         var targetIndex = -1
-                        while (attempts < 20) {
-                            // 需要从 viewModel 获取最新的 chatListItems，因为 chatItems 可能还没更新
+                        while (attempts < 30) {
                             val items = viewModel.chatListItems.value
-                            if (items.size != initialCount || attempts > 5) {
+                            // 检查列表是否已更新（原消息被移除，新消息被添加）
+                            val hasOriginalMessage = items.any { 
+                                it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage && it.messageId == originalMessageId 
+                            }
+                            if (!hasOriginalMessage || attempts > 10) {
+                                // 找到最后一个用户消息（即新生成的用户消息）
                                 targetIndex = items.indexOfLast { it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage }
                                 if (targetIndex != -1) break
                             }
@@ -537,9 +549,9 @@ fun ChatMessagesList(
                             attempts++
                         }
                         
-                        // 将重新生成的用户消息滚动到顶部，以便用户能看到完整的消息内容以及下方正在生成的AI回复
+                        // 将重新生成的用户消息滚动到顶部，动画效果与正常发送消息一致
                         if (targetIndex != -1) {
-                            scrollStateManager.scrollItemToTop(targetIndex)
+                            scrollStateManager.scrollItemToTop(targetIndex, scrollDurationMs = 350)
                         } else {
                             scrollStateManager.smoothScrollToBottom(isUserAction = true)
                         }
