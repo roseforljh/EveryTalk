@@ -162,7 +162,6 @@ fun ImageGenerationMessagesList(
     val animatedItems = remember { mutableStateMapOf<String, Boolean>() }
     val density = LocalDensity.current
 
- 
     var isContextMenuVisible by remember { mutableStateOf(false) }
     var contextMenuMessage by remember { mutableStateOf<Message?>(null) }
     var contextMenuPressOffset by remember { mutableStateOf(Offset.Zero) }
@@ -429,6 +428,7 @@ fun ImageGenerationMessagesList(
             }
         }
 
+        // 其他代码保持不变
         contextMenuMessage?.let { message ->
             MessageContextMenu(
                 isVisible = isContextMenuVisible,
@@ -452,11 +452,48 @@ fun ImageGenerationMessagesList(
                     isContextMenuVisible = false
                 },
                 onRegenerate = {
-                    scrollStateManager.resetScrollState()
+                    scrollStateManager.lockAutoScroll()
+                    
+                    val originalMessageId = it.id
+                    val isAiMessage = it.sender == com.android.everytalk.data.DataClass.Sender.AI
                     viewModel.regenerateAiResponse(it, isImageGeneration = true)
                     isContextMenuVisible = false
+                    
+                    // 使用与发送消息相同的动画逻辑：等待列表更新后，将新用户消息滚动到顶部
                     coroutineScope.launch {
-                        scrollStateManager.jumpToBottom()
+                        // 等待列表更新（检查原消息是否被移除）
+                        var attempts = 0
+                        var targetIndex = -1
+                        while (attempts < 30) {
+                            val items = viewModel.imageGenerationChatListItems.value
+                            // 检查列表是否已更新（原消息被移除，新消息被添加）
+                            val hasOriginalMessage = if (isAiMessage) {
+                                // 长按 AI 气泡时，检查该 AI 消息是否被移除
+                                items.any { item: ChatListItem ->
+                                    (item is ChatListItem.AiMessage && item.messageId == originalMessageId) ||
+                                    (item is ChatListItem.AiMessageStreaming && item.messageId == originalMessageId)
+                                }
+                            } else {
+                                // 长按用户气泡时，检查该用户消息是否被移除
+                                items.any { item: ChatListItem ->
+                                    item is ChatListItem.UserMessage && item.messageId == originalMessageId
+                                }
+                            }
+                            if (hasOriginalMessage.not() || attempts > 10) {
+                                // 找到最后一个用户消息（即新生成的用户消息）
+                                targetIndex = items.indexOfLast { item: ChatListItem -> item is ChatListItem.UserMessage }
+                                if (targetIndex != -1) break
+                            }
+                            kotlinx.coroutines.delay(50)
+                            attempts++
+                        }
+                        
+                        // 将重新生成的用户消息滚动到顶部，动画效果与正常发送消息一致
+                        if (targetIndex != -1) {
+                            scrollStateManager.scrollItemToTop(targetIndex, scrollDurationMs = 350)
+                        } else {
+                            scrollStateManager.smoothScrollToBottom(isUserAction = true)
+                        }
                     }
                 }
             )
@@ -592,7 +629,7 @@ fun ImageGenerationMessagesList(
                             val scheme = model.scheme?.lowercase()
                             return@withContext when (scheme) {
                                 "http", "https" -> {
-                                    // 精简：与“长按-下载”一致，直接使用 OkHttp 获取
+                                    // 精简：与"长按-下载"一致，直接使用 OkHttp 获取
                                     httpGetBitmap(model.toString())
                                 }
                                 "content" -> {
@@ -634,7 +671,7 @@ fun ImageGenerationMessagesList(
                             val scheme = uri?.scheme?.lowercase()
                             return@withContext when (scheme) {
                                 "http", "https" -> {
-                                    // 精简：与“长按-下载”一致，直接使用 OkHttp 获取
+                                    // 精简：与"长按-下载"一致，直接使用 OkHttp 获取
                                     httpGetBitmap(s)
                                 }
                                 "content" -> {
@@ -677,7 +714,7 @@ fun ImageGenerationMessagesList(
                                         context.contentResolver.openInputStream(uri!!)?.use {
                                             BitmapFactory.decodeStream(it)
                                         }
-                                    } catch (_: Exception) { null }
+                                    } catch (e: Exception) { null }
                                 }
                                 "file" -> BitmapFactory.decodeFile(uri?.path)
                                 else -> BitmapFactory.decodeFile(s)
@@ -685,7 +722,7 @@ fun ImageGenerationMessagesList(
                         }
                     }
                 } catch (e: Exception) {
-                    android.util.Log.e("ImagePreview", "loadBitmapFromModel error: ${e.message}", e)
+                    android.util.Log.e("ImagePreview", "loadBytesAndMime error: ${e.message}", e)
                     null
                 }?.also {
                     android.util.Log.d("ImagePreview", "Bitmap loaded")
@@ -889,7 +926,7 @@ fun ImageGenerationMessagesList(
                             viewModel.showSnackbar("保存失败")
                             return@launch
                         }
-                        resolver.openOutputStream(uri)?.use { os ->
+                        resolver.openOutputStream(uri)?.use { os -> 
                             os.write(bytes)
                         }
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -971,7 +1008,7 @@ fun ImageGenerationMessagesList(
                 }
             }
 
-            // 选择：把当前预览图片加入“已选择媒体”，供后续发送复用
+            // 选择：把当前预览图片加入"已选择媒体"，供后续发送复用
             fun selectCurrentImage() {
                 scope.launch {
                     try {
@@ -990,7 +1027,7 @@ fun ImageGenerationMessagesList(
                 }
             }
 
-            // 编辑：改为“现在的选择功能”：加入已选择媒体并关闭预览返回
+            // 编辑：改为"现在的选择功能"：加入已选择媒体并关闭预览返回
             fun editCurrentImage() {
                 scope.launch {
                     val uri = ensureCacheFileUri()
@@ -1132,7 +1169,7 @@ fun ImageGenerationMessagesList(
                         baseBitmap = brushBaseBitmap!!,
                         onCancel = { isBrushing = false },
                         onDone = { edited ->
-                            // 将编辑后的图片加入“已选择媒体”，并返回（关闭画笔和预览）
+                            // 将编辑后的图片加入"已选择媒体"，并返回（关闭画笔和预览）
                             scope.launch {
                                 try {
                                     val cacheDir = File(context.cacheDir, "preview_cache").apply { mkdirs() }
@@ -1208,7 +1245,7 @@ private fun BrushEditorOverlay(
                         .height(with(LocalDensity.current) { drawH.toDp() })
                         .align(Alignment.Center)
                 ) {
-                    // 底图：使用 Image 进行渲染，避免依赖 drawImage 扩展
+                    // 画底图
                     Image(
                         bitmap = imageBitmap,
                         contentDescription = null,
@@ -1242,7 +1279,7 @@ private fun BrushEditorOverlay(
                             }
                     ) {
                         // 仅绘制笔画到覆盖层
-                        // 已完成笔画：使用贝塞尔平滑路径，避免“断点”观感
+                        // 已完成笔画：使用贝塞尔平滑路径，避免"断点"观感
                         strokes.forEach { pts ->
                             if (pts.size > 1) {
                                 val path = Path().apply {
@@ -1434,7 +1471,7 @@ private fun BrushEditorOverlay(
 }
 
 /**
- * 底部操作按钮，使用与“历史项点击”一致的Ripple特效
+ * 底部操作按钮，使用与"历史项点击"一致的Ripple特效
  * - 固定图标容器尺寸，防止布局抬高
  * - 单击时显示有界Ripple（白色半透明）
  */
@@ -1533,15 +1570,14 @@ private fun AiMessageItem(
                             color = MaterialTheme.colorScheme.onSurface,
                             isStreaming = isStreaming,
                             messageOutputType = message.outputType,
-                            viewModel = viewModel,  // 🎯 传递viewModel以获取实时流式文本
-                            onImageClick = { url -> onOpenPreview(url) } // 🎯 让Markdown内图片单击可直接预览放大
+                            viewModel = viewModel,
+                            onImageClick = { url -> onOpenPreview(url) }
                         )
                     }
                     android.util.Log.d("AiMessageItem", "🖼️ [RENDER] messageId=${message.id.take(8)}, imageUrls=${message.imageUrls?.size}, text='${text.take(20)}...'")
                     
                     if (message.imageUrls != null && message.imageUrls.isNotEmpty()) {
                         android.util.Log.d("AiMessageItem", "🖼️ [RENDER IMAGE] Showing ${message.imageUrls.size} images")
-                        // Add a little space between text and image
                         if (text.isNotBlank()) {
                             Spacer(modifier = Modifier.height(8.dp))
                         }
@@ -1555,13 +1591,11 @@ private fun AiMessageItem(
                                         else -> Uri.parse(urlStr)
                                     }
                                 } catch (_: Exception) {
-                                    // 回退：尽量解析为 file 路径
                                     if (urlStr.startsWith("/")) Uri.fromFile(File(urlStr)) else Uri.parse(urlStr)
                                 }
                                 SelectedMediaItem.ImageFromUri(safeUri, UUID.randomUUID().toString())
                             },
                             onAttachmentClick = { _ ->
-                                // 单击直接走"长按-查看图片"的同一路径（使用消息里的 URL）
                                 val firstUrl = message.imageUrls.firstOrNull()
                                 if (!firstUrl.isNullOrBlank()) {
                                     onOpenPreview(firstUrl)
@@ -1575,8 +1609,8 @@ private fun AiMessageItem(
                             onImageLoaded = onImageLoaded,
                             bubbleColor = MaterialTheme.chatColors.aiBubble,
                             scrollStateManager = scrollStateManager,
-                            isAiGenerated = true,  // 标识为AI生成的图片
-                            onImageClick = { url -> onOpenPreview(url) }  // 🎯 连接到完整预览功能
+                            isAiGenerated = true,
+                            onImageClick = { url -> onOpenPreview(url) }
                         )
                     }
                 }
