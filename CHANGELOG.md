@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.9.2](https://github.com/roseforljh/EveryTalk/compare/v1.9.1...v1.9.2) (2025-12-11)
+
+
+### Bug Fixes
+
+* ai气泡动画 ([d1cb2a8](https://github.com/roseforljh/EveryTalk/commit/d1cb2a88218cd6bfcce2ba90cba856167e8bbe90))
+* StreamingControls.kt：恢复时同步 StreamingMessageStateManager 累积内容到 messages 列表 ([1c3ac81](https://github.com/roseforljh/EveryTalk/commit/1c3ac8160741581141a0af550872b021ab4a3016))
+* 优化多项潜在问题 ([4152872](https://github.com/roseforljh/EveryTalk/commit/41528722f38b501accb98b86062bf02dd602b93b))
+* 修复潜在bug ([3ad9f92](https://github.com/roseforljh/EveryTalk/commit/3ad9f9274e817258e61c1a11c8d49ed705adb54d))
+* 修复潜在问题 ([51cd368](https://github.com/roseforljh/EveryTalk/commit/51cd36808948c9e412c4099b3e614d80e19382a1))
+* 图像模式滚动优化 ([a7a649e](https://github.com/roseforljh/EveryTalk/commit/a7a649e534cece8b942f997bfb89295feb9d0288))
+* 图像模式默认配置bug修复 ([913a817](https://github.com/roseforljh/EveryTalk/commit/913a817a2269649b63b96ac6390c7b1fa476b6fe))
+* 导入导出bug修复、语音模式模型名称bug修复 ([00f1827](https://github.com/roseforljh/EveryTalk/commit/00f18274312dd973af03fac6e8a4f3ec4a81b1d3))
+* 改善卡片交互 ([4e8f415](https://github.com/roseforljh/EveryTalk/commit/4e8f415110bdb5dd82ec95b04e1ba71d3405704d))
+* 数据库优化 ([d4c49af](https://github.com/roseforljh/EveryTalk/commit/d4c49af99f767da899b948d6baf74ed367b5fb62))
+* 滚动效果优化 ([ef42bf3](https://github.com/roseforljh/EveryTalk/commit/ef42bf359188449a2a8f8d7dce09bceb427cd972))
+* 自适应节流 (StreamingBuffer) - 初期快速响应（16ms），后期根据流速自动调整（8-100ms），避免高速流时过度重组导致 UI 卡顿，同时保证首屏体验 ([3ae8f0b](https://github.com/roseforljh/EveryTalk/commit/3ae8f0b025b1499f9f8408363ec681489eef31b0))
+* 语音模式bug修复 ([ffc80e5](https://github.com/roseforljh/EveryTalk/commit/ffc80e5ef6749e1c06dc307fd990ac584c08f475))
+* 重新回答动画优化 ([c6d46e2](https://github.com/roseforljh/EveryTalk/commit/c6d46e2bec6714312ed35850ce6c5fa9e3049c0c))
+
 ## [1.9.1](https://github.com/roseforljh/EveryTalk/compare/v1.9.0...v1.9.1) (2025-12-10)
 
 
