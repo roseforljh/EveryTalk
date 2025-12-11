@@ -35,13 +35,53 @@ fun LlmSettingsDialog(
     // 如果没有当前配置，创建一个默认的
     val effectiveConfig = currentConfig ?: VoiceBackendConfig.createDefault()
 
-    // 状态管理 - 直接从 effectiveConfig 加载，不从 allConfigs 查找
-    var selectedPlatform by remember(effectiveConfig.id) { mutableStateOf(effectiveConfig.chatPlatform) }
-    var apiKey by remember(effectiveConfig.id) { mutableStateOf(effectiveConfig.chatApiKey) }
-    var apiUrl by remember(effectiveConfig.id) { mutableStateOf(effectiveConfig.chatApiUrl) }
-    var model by remember(effectiveConfig.id) { mutableStateOf(effectiveConfig.chatModel) }
+    // 使用 SharedPreferences 按平台独立存储 LLM 配置
+    val llmPrefs = remember { context.getSharedPreferences("llm_platform_configs", android.content.Context.MODE_PRIVATE) }
+    
+    // 从当前配置获取平台，或默认 Google
+    var selectedPlatform by remember(effectiveConfig.id) { 
+        mutableStateOf(effectiveConfig.chatPlatform.ifBlank { "Google" }) 
+    }
     var expanded by remember { mutableStateOf(false) }
     
+    // 加载当前平台的配置（从 SharedPreferences）
+    fun loadPlatformConfig(platform: String): Triple<String, String, String> {
+        val apiKey = llmPrefs.getString("${platform}_apiKey", "") ?: ""
+        val apiUrl = llmPrefs.getString("${platform}_apiUrl", "") ?: ""
+        val model = llmPrefs.getString("${platform}_model", "") ?: ""
+        return Triple(apiKey, apiUrl, model)
+    }
+    
+    // 初始化时，优先从 VoiceBackendConfig 加载，如果为空则从 SharedPreferences 加载
+    val initialConfig = remember(effectiveConfig.id, selectedPlatform) {
+        if (effectiveConfig.chatPlatform == selectedPlatform && 
+            (effectiveConfig.chatApiKey.isNotBlank() || effectiveConfig.chatModel.isNotBlank())) {
+            Triple(effectiveConfig.chatApiKey, effectiveConfig.chatApiUrl, effectiveConfig.chatModel)
+        } else {
+            loadPlatformConfig(selectedPlatform)
+        }
+    }
+    
+    var apiKey by remember(selectedPlatform) { mutableStateOf(initialConfig.first) }
+    var apiUrl by remember(selectedPlatform) { mutableStateOf(initialConfig.second) }
+    var model by remember(selectedPlatform) { mutableStateOf(initialConfig.third) }
+    
+    // 当平台切换时，加载对应平台的配置
+    LaunchedEffect(selectedPlatform) {
+        val (loadedKey, loadedUrl, loadedModel) = loadPlatformConfig(selectedPlatform)
+        // 只有当 SharedPreferences 中有数据时才覆盖
+        if (loadedKey.isNotBlank() || loadedUrl.isNotBlank() || loadedModel.isNotBlank()) {
+            apiKey = loadedKey
+            apiUrl = loadedUrl
+            model = loadedModel
+        } else if (effectiveConfig.chatPlatform != selectedPlatform) {
+            // 切换到新平台且没有保存的配置，清空
+            apiKey = ""
+            apiUrl = ""
+            model = ""
+        }
+    }
+      
     // 调试日志
     LaunchedEffect(effectiveConfig.id) {
         android.util.Log.d("LlmSettingsDialog", "打开对话框 - 配置ID: ${effectiveConfig.id}, 名称: ${effectiveConfig.name}")
@@ -51,7 +91,7 @@ fun LlmSettingsDialog(
     
     val platforms = listOf("Google", "OpenAI")
     
-    // 自定义模型管理 (存储在 SharedPreferences 中，仅作为 UI 辅助)
+    // 自定义模型管理 (存储在 SharedPreferences 中，按平台分开)
     val uiPrefs = remember { context.getSharedPreferences("voice_ui_prefs", android.content.Context.MODE_PRIVATE) }
     val customModelsKey = "custom_models_chat_${selectedPlatform}"
     val savedCustomModelsStr = remember(selectedPlatform) { uiPrefs.getString(customModelsKey, "") ?: "" }
@@ -62,7 +102,14 @@ fun LlmSettingsDialog(
             else emptyList()
         )
     }
-    val allModels = customModels
+    // 确保当前选中的模型也在列表中（即使不在 SharedPreferences 中）
+    val allModels = remember(customModels, model) {
+        if (model.isNotBlank() && !customModels.contains(model)) {
+            listOf(model) + customModels
+        } else {
+            customModels
+        }
+    }
     
     val isDarkTheme = isSystemInDarkTheme()
     val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
@@ -138,8 +185,21 @@ fun LlmSettingsDialog(
                                 DropdownMenuItem(
                                     text = { Text(platform) },
                                     onClick = {
+                                        // 切换前保存当前平台的配置
+                                        llmPrefs.edit()
+                                            .putString("${selectedPlatform}_apiKey", apiKey)
+                                            .putString("${selectedPlatform}_apiUrl", apiUrl)
+                                            .putString("${selectedPlatform}_model", model)
+                                            .apply()
+                                        
                                         selectedPlatform = platform
                                         expanded = false
+                                        
+                                        // 加载新平台的配置
+                                        val (newKey, newUrl, newModel) = loadPlatformConfig(platform)
+                                        apiKey = newKey
+                                        apiUrl = newUrl
+                                        model = newModel
                                     }
                                 )
                             }
@@ -274,7 +334,19 @@ fun LlmSettingsDialog(
                     Button(
                         onClick = {
                             coroutineScope.launch {
-                                // 更新当前选中配置的 Chat LLM 部分
+                                // 1. 保存当前平台的配置到 SharedPreferences（独立存储）
+                                llmPrefs.edit()
+                                    .putString("${selectedPlatform}_apiKey", apiKey.trim())
+                                    .putString("${selectedPlatform}_apiUrl", apiUrl.trim())
+                                    .putString("${selectedPlatform}_model", model.trim())
+                                    .apply()
+                                
+                                android.util.Log.d("LlmSettingsDialog", "保存平台配置 - 平台: $selectedPlatform")
+                                android.util.Log.d("LlmSettingsDialog", "  API Key 非空: ${apiKey.isNotBlank()}, 长度: ${apiKey.length}")
+                                android.util.Log.d("LlmSettingsDialog", "  API URL: $apiUrl")
+                                android.util.Log.d("LlmSettingsDialog", "  模型: $model")
+                                
+                                // 2. 同时更新当前选中配置的 Chat LLM 部分（用于语音模式）
                                 val newConfig = effectiveConfig.copy(
                                     chatPlatform = selectedPlatform,
                                     chatApiKey = apiKey.trim(),
@@ -283,9 +355,8 @@ fun LlmSettingsDialog(
                                     updatedAt = System.currentTimeMillis()
                                 )
                                 
-                                android.util.Log.d("LlmSettingsDialog", "保存配置 - ID: ${newConfig.id}, 名称: ${newConfig.name}")
+                                android.util.Log.d("LlmSettingsDialog", "保存配置到VoiceBackendConfig - ID: ${newConfig.id}, 名称: ${newConfig.name}")
                                 android.util.Log.d("LlmSettingsDialog", "  Chat: platform=${newConfig.chatPlatform}, model=${newConfig.chatModel}, url=${newConfig.chatApiUrl}")
-                                android.util.Log.d("LlmSettingsDialog", "  Chat API Key 非空: ${newConfig.chatApiKey.isNotBlank()}, 长度: ${newConfig.chatApiKey.length}")
                                 
                                 // 更新配置列表
                                 val latestConfigs = viewModel.stateHolder._voiceBackendConfigs.value

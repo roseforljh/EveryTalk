@@ -127,8 +127,15 @@ fun DynamicModelSelector(
         )
         
         ExposedDropdownMenuBox(
-            expanded = expanded,
-            onExpandedChange = { expanded = it }
+            expanded = expanded && modelList.isNotEmpty(),
+            onExpandedChange = { 
+                if (modelList.isEmpty()) {
+                    // 如果列表为空，点击时直接弹出添加对话框
+                    showAddDialog = true
+                } else {
+                    expanded = it 
+                }
+            }
         ) {
             Column(modifier = Modifier.fillMaxWidth()) {
                 Row(

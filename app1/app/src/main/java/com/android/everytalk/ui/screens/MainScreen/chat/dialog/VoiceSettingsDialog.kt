@@ -30,7 +30,7 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun VoiceSettingsDialog(
-    selectedApiConfig: ApiConfig?,
+    selectedApiConfig: ApiConfig? = null,
     onDismiss: () -> Unit,
     viewModel: AppViewModel? = null
 ) {
@@ -144,7 +144,14 @@ fun VoiceSettingsDialog(
             else emptyList()
         )
     }
-    val allModels = customModels
+    // 确保当前选中的模型也在列表中（即使不在 SharedPreferences 中）
+    val allModels = remember(customModels, chatModel) {
+        if (chatModel.isNotBlank() && !customModels.contains(chatModel)) {
+            listOf(chatModel) + customModels
+        } else {
+            customModels
+        }
+    }
     
     val isDarkTheme = isSystemInDarkTheme()
     val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)

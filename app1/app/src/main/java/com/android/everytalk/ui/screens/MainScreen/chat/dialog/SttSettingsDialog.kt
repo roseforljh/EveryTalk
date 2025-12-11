@@ -145,7 +145,14 @@ fun SttSettingsDialog(
             else emptyList()
         )
     }
-    val allModels = customModels
+    // 确保当前选中的模型也在列表中（即使不在 SharedPreferences 中）
+    val allModels = remember(customModels, model) {
+        if (model.isNotBlank() && !customModels.contains(model)) {
+            listOf(model) + customModels
+        } else {
+            customModels
+        }
+    }
     
     val isDarkTheme = isSystemInDarkTheme()
     val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)

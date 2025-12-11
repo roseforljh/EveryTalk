@@ -217,10 +217,37 @@ class SettingsController(
                 // 2. 导出会话生成参数 (conversationGenerationConfigs)
                 val conversationParams = stateHolder.conversationGenerationConfigs.value
                 
-                // 3. 导出语音后端配置 (STT/Chat/TTS) - 混淆密钥后导出
-                val voiceConfigsToExport = stateHolder._voiceBackendConfigs.value.map { obfuscateVoiceConfig(it) }
+                // 3. 导出语音后端配置 (STT/Chat/TTS) - 混淆密钥后导出，并去重
+                val rawVoiceConfigs = stateHolder._voiceBackendConfigs.value
                 
-                Log.i(TAG, "语音配置数量: ${voiceConfigsToExport.size}")
+                // 基于配置内容去重（忽略id、createdAt、updatedAt）
+                // 使用配置的核心字段作为唯一性判断依据
+                val deduplicatedVoiceConfigs = rawVoiceConfigs
+                    .distinctBy { config ->
+                        // 创建一个基于核心配置内容的唯一键
+                        listOf(
+                            config.name,
+                            config.provider,
+                            config.sttPlatform,
+                            config.sttApiKey,
+                            config.sttApiUrl,
+                            config.sttModel,
+                            config.chatPlatform,
+                            config.chatApiKey,
+                            config.chatApiUrl,
+                            config.chatModel,
+                            config.ttsPlatform,
+                            config.ttsApiKey,
+                            config.ttsApiUrl,
+                            config.ttsModel,
+                            config.voiceName,
+                            config.useRealtimeStreaming
+                        ).joinToString("|")
+                    }
+                
+                val voiceConfigsToExport = deduplicatedVoiceConfigs.map { obfuscateVoiceConfig(it) }
+                
+                Log.i(TAG, "语音配置数量: 原始 ${rawVoiceConfigs.size}, 去重后 ${voiceConfigsToExport.size}")
                 voiceConfigsToExport.forEachIndexed { index, config ->
                     Log.i(TAG, "  语音配置[$index]: id=${config.id}, name=${config.name}, provider=${config.provider}")
                     Log.i(TAG, "    STT: platform=${config.sttPlatform}, model=${config.sttModel}, url=${config.sttApiUrl}")
@@ -696,21 +723,39 @@ class SettingsController(
         }
         
         if (validVoiceConfigs.isNotEmpty()) {
-            // 合并现有配置和导入配置，按ID去重
+            // 创建配置内容的唯一键函数（用于基于内容去重）
+            fun VoiceBackendConfig.contentKey(): String = listOf(
+                name, provider,
+                sttPlatform, sttApiKey, sttApiUrl, sttModel,
+                chatPlatform, chatApiKey, chatApiUrl, chatModel,
+                ttsPlatform, ttsApiKey, ttsApiUrl, ttsModel,
+                voiceName, useRealtimeStreaming
+            ).joinToString("|")
+            
+            // 先对导入的配置进行内容去重
+            val deduplicatedImportConfigs = validVoiceConfigs.distinctBy { it.contentKey() }
+            
+            // 获取现有配置的内容键集合
             val existingConfigs = stateHolder._voiceBackendConfigs.value
-            val idToConfigMap = mutableMapOf<String, VoiceBackendConfig>()
-            existingConfigs.forEach { idToConfigMap[it.id] = it }
-            validVoiceConfigs.forEach { idToConfigMap[it.id] = it }
-            val mergedConfigs = idToConfigMap.values.toList()
+            val existingContentKeys = existingConfigs.map { it.contentKey() }.toSet()
+            
+            // 只添加内容不重复的导入配置
+            val newConfigs = deduplicatedImportConfigs.filter { it.contentKey() !in existingContentKeys }
+            
+            // 合并：保留现有配置 + 新增不重复的导入配置
+            val mergedConfigs = existingConfigs + newConfigs
+            
+            Log.i(TAG, "语音配置导入: 原始 ${validVoiceConfigs.size}, 去重后 ${deduplicatedImportConfigs.size}, 新增 ${newConfigs.size}")
             
             // 关键修复：选择导入的配置作为选中配置
             // 优先选择有完整Chat配置（chatModel非空）的导入配置
-            // 这样可以确保用户导入配置后能看到正确的LLM设置
-            val importedConfigWithChat = validVoiceConfigs.firstOrNull { 
+            val importedConfigWithChat = newConfigs.firstOrNull { 
                 it.chatModel.isNotBlank() || it.chatApiKey.isNotBlank() 
+            } ?: deduplicatedImportConfigs.firstOrNull {
+                it.chatModel.isNotBlank() || it.chatApiKey.isNotBlank()
             }
+            
             val newSelected = importedConfigWithChat 
-                ?: validVoiceConfigs.firstOrNull()
                 ?: stateHolder._selectedVoiceConfig.value
                 ?: mergedConfigs.firstOrNull()
 
@@ -719,11 +764,11 @@ class SettingsController(
             persistenceManager.saveVoiceBackendConfigs(mergedConfigs)
             persistenceManager.saveSelectedVoiceConfigId(newSelected?.id)
             
-            Log.i(TAG, "语音配置导入完成: 导入 ${validVoiceConfigs.size} 个, 合并后总数 ${mergedConfigs.size}")
+            Log.i(TAG, "语音配置导入完成: 合并后总数 ${mergedConfigs.size}")
             Log.i(TAG, "  选中的配置: id=${newSelected?.id}, name=${newSelected?.name}")
             Log.i(TAG, "  选中配置Chat: platform=${newSelected?.chatPlatform}, model=${newSelected?.chatModel}, hasKey=${newSelected?.chatApiKey?.isNotBlank()}")
             
-            result.voiceConfigsImported = validVoiceConfigs.size
+            result.voiceConfigsImported = newConfigs.size
         }
     }
 
