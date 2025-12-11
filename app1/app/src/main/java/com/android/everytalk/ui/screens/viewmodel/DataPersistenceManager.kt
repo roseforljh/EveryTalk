@@ -697,7 +697,7 @@ class DataPersistenceManager(
                     
                     var lastOpenImageGenChat = roomDataSource.loadLastOpenImageGenerationChat()
                     
-                    // 将“最后打开的图像会话”里的 data:image 与 http(s) 转为本地文件并替换
+                    // 将"最后打开的图像会话"里的 data:image 与 http(s) 转为本地文件并替换
                     val finalLastOpenImageGen = persistInlineAndRemoteImages(lastOpenImageGenChat)
                     // 异步回写，确保下次启动直接使用文件路径
                     launch(Dispatchers.IO) {
@@ -714,7 +714,7 @@ class DataPersistenceManager(
                         stateHolder.imageGenerationMessages.clear()
                         stateHolder.imageGenerationMessages.addAll(finalLastOpenImageGen)
 
-                        // 修复：为已恢复的对话补齐推理完成映射，保证“小白点”可见
+                        // 修复：为已恢复的对话补齐推理完成映射，保证"小白点"可见
                         // 文本模式
                         stateHolder.textReasoningCompleteMap.clear()
                         stateHolder.messages.forEach { msg ->
@@ -732,13 +732,13 @@ class DataPersistenceManager(
                             }
                         }
 
-                        // 为“文本模式/图像模式”恢复稳定的会话ID，保证后端多轮会话可延续
+                        // 为"文本模式/图像模式"恢复稳定的会话ID，保证后端多轮会话可延续
                         val textConvId = lastOpenChat.firstOrNull()?.id ?: "new_chat_${System.currentTimeMillis()}"
                         val imageConvId = lastOpenImageGenChat.firstOrNull()?.id ?: "image_resume_${System.currentTimeMillis()}"
                         stateHolder._currentConversationId.value = textConvId
                         stateHolder._currentImageGenerationConversationId.value = imageConvId
 
-                        // 清空历史索引（处于“继续未存档会话”的状态）
+                        // 清空历史索引（处于"继续未存档会话"的状态）
                         stateHolder._loadedHistoryIndex.value = null
                         stateHolder._loadedImageGenerationHistoryIndex.value = null
                     }
@@ -749,7 +749,7 @@ class DataPersistenceManager(
                         stateHolder.imageGenerationMessages.clear()
                         stateHolder._loadedHistoryIndex.value = null
                         stateHolder._loadedImageGenerationHistoryIndex.value = null
-                        // 若未加载“last open chat”，也重置推理完成映射
+                        // 若未加载"last open chat"，也重置推理完成映射
                         stateHolder.textReasoningCompleteMap.clear()
                         stateHolder.imageReasoningCompleteMap.clear()
                     }
@@ -832,7 +832,7 @@ class DataPersistenceManager(
         }
     }
     
-    // 新增：持久化保存“会话ID -> GenerationConfig”映射
+    // 新增：持久化保存"会话ID -> GenerationConfig"映射
     suspend fun saveConversationParameters(parameters: Map<String, GenerationConfig>) {
         withContext(Dispatchers.IO) {
             try {
@@ -880,17 +880,17 @@ class DataPersistenceManager(
         android.util.Log.d("DataPersistenceManager", "=== SAVE LAST OPEN CHAT START ===")
         android.util.Log.d("DataPersistenceManager", "Saving ${messages.size} messages, isImageGeneration: $isImageGeneration")
         
-        messages.forEachIndexed { index, message ->
+        messages.forEachIndexed { index, message -> 
             android.util.Log.d("DataPersistenceManager", "Message $index (${message.id}): text length=${message.text.length}, parts=${message.parts.size}, contentStarted=${message.contentStarted}")
             android.util.Log.d("DataPersistenceManager", "  Text preview: '${message.text.take(50)}${if (message.text.length > 50) "..." else ""}'")
             android.util.Log.d("DataPersistenceManager", "  Sender: ${message.sender}, IsError: ${message.isError}")
-            message.parts.forEachIndexed { partIndex, part ->
+            message.parts.forEachIndexed { partIndex, part -> 
                 android.util.Log.d("DataPersistenceManager", "  Part $partIndex: ${part::class.simpleName}")
             }
         }
         
         // 修复：确保AI消息的文本内容不会丢失
-        val processedMessages = messages.map { message ->
+        val processedMessages = messages.map { message -> 
             if (message.sender == com.android.everytalk.data.DataClass.Sender.AI &&
                 message.contentStarted &&
                 message.text.isBlank() &&
@@ -1050,12 +1050,12 @@ class DataPersistenceManager(
      * 清理孤立的附件文件与临时缓存（已删除会话但文件仍存在的情况），并回收图片缓存
      *
      * 覆盖范围：
+     * - filesDir/chat_attachments 中不再被引用的图片文件
      * - cacheDir/preview_cache 预览生成的临时文件
      * - cacheDir/share_images 分享生成的临时文件
-     * - Coil 内存/磁盘缓存（在清空历史或大批删除后统一清理，防止残留占用）
+     * - Coil 内存/磁盘缓存
      *
-     * 注意：不再自动删除 filesDir/chat_attachments 下的文件（包括AI生成图片）。
-     * 这些文件仅在“用户删除会话/历史”时释放，以符合“仅手动删除才清理”的预期。
+     * 调用时机：清空历史、大批删除后
      */
     suspend fun cleanupOrphanedAttachments() {
         withContext(Dispatchers.IO) {
@@ -1064,15 +1064,88 @@ class DataPersistenceManager(
                 val previewCacheDir = File(context.cacheDir, "preview_cache")
                 val shareImagesDir = File(context.cacheDir, "share_images")
 
-                // 1) [DISABLED] 统计当前仍被引用的附件路径
-                // 2) [DISABLED] 执行 chat_attachments 的孤儿文件清理
-                // 修改说明：已禁用自动清理孤儿文件，以防止因数据加载延迟或匹配错误导致的图片误删。
-                // 图片文件现在仅在用户显式删除会话或清空历史时才会删除。
+                // 1) 收集当前所有会话中被引用的图片路径
+                val referencedPaths = mutableSetOf<String>()
                 
-                val orphanedCount = 0
-                Log.i(TAG, "cleanupOrphanedAttachments: Orphan cleanup for chat_attachments is DISABLED. Skipping.")
+                // 从文本历史会话收集
+                val textHistory = roomDataSource.loadChatHistory()
+                textHistory.forEach { conv ->
+                    conv.forEach { msg ->
+                        msg.imageUrls?.forEach { url ->
+                            val path = url.removePrefix("file://")
+                            if (path.startsWith("/")) {
+                                referencedPaths.add(path)
+                            }
+                        }
+                        msg.attachments.forEach { att ->
+                            val path = when (att) {
+                                is SelectedMediaItem.ImageFromUri -> att.filePath
+                                is SelectedMediaItem.GenericFile -> att.filePath
+                                is SelectedMediaItem.Audio -> att.data
+                                is SelectedMediaItem.ImageFromBitmap -> att.filePath
+                            }
+                            if (!path.isNullOrBlank() && path.startsWith("/")) {
+                                referencedPaths.add(path)
+                            }
+                        }
+                    }
+                }
+                
+                // 从图像生成历史会话收集
+                val imageHistory = roomDataSource.loadImageGenerationHistory()
+                imageHistory.forEach { conv ->
+                    conv.forEach { msg ->
+                        msg.imageUrls?.forEach { url ->
+                            val path = url.removePrefix("file://")
+                            if (path.startsWith("/")) {
+                                referencedPaths.add(path)
+                            }
+                        }
+                    }
+                }
+                
+                // 从最后打开的会话收集
+                val lastOpenChat = roomDataSource.loadLastOpenChat()
+                lastOpenChat.forEach { msg ->
+                    msg.imageUrls?.forEach { url ->
+                        val path = url.removePrefix("file://")
+                        if (path.startsWith("/")) {
+                            referencedPaths.add(path)
+                        }
+                    }
+                }
+                
+                val lastOpenImageChat = roomDataSource.loadLastOpenImageGenerationChat()
+                lastOpenImageChat.forEach { msg ->
+                    msg.imageUrls?.forEach { url ->
+                        val path = url.removePrefix("file://")
+                        if (path.startsWith("/")) {
+                            referencedPaths.add(path)
+                        }
+                    }
+                }
+                
+                Log.d(TAG, "cleanupOrphanedAttachments: Found ${referencedPaths.size} referenced files")
 
-                // 3) 清空预览/分享产生的临时缓存（cacheDir），这些文件不持久化引用，直接安全删除
+                // 2) 清理 chat_attachments 中不再被引用的文件
+                var orphanedCount = 0
+                if (chatAttachmentsDir.exists()) {
+                    chatAttachmentsDir.listFiles()?.forEach { file ->
+                        if (file.isFile && file.absolutePath !in referencedPaths) {
+                            try {
+                                if (file.delete()) {
+                                    orphanedCount++
+                                    Log.d(TAG, "Deleted orphaned file: ${file.absolutePath}")
+                                }
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Failed to delete orphaned file: ${file.absolutePath}", e)
+                            }
+                        }
+                    }
+                }
+                Log.i(TAG, "cleanupOrphanedAttachments: Deleted $orphanedCount orphaned files from chat_attachments")
+
+                // 3) 清空预览/分享产生的临时缓存
                 fun clearCacheDir(dir: File, label: String): Int {
                     if (!dir.exists()) return 0
                     var count = 0
@@ -1093,7 +1166,7 @@ class DataPersistenceManager(
                 val clearedPreview = clearCacheDir(previewCacheDir, "preview_cache")
                 val clearedShare = clearCacheDir(shareImagesDir, "share_images")
 
-                // 4) 统一清理 Coil 内存/磁盘缓存，避免 URL/请求键不匹配导致的残留
+                // 4) 统一清理 Coil 内存/磁盘缓存
                 runCatching {
                     imageLoader.memoryCache?.clear()
                     Log.d(TAG, "Coil memory cache cleared")
@@ -1103,6 +1176,12 @@ class DataPersistenceManager(
                     imageLoader.diskCache?.clear()
                     Log.d(TAG, "Coil disk cache cleared")
                 }.onFailure { e -> Log.w(TAG, "Failed to clear Coil disk cache", e) }
+
+                // 5) 执行数据库 VACUUM 回收 SQLite 空间
+                runCatching {
+                    roomDataSource.vacuumDatabase()
+                    Log.d(TAG, "Database VACUUM completed")
+                }.onFailure { e -> Log.w(TAG, "Failed to VACUUM database", e) }
 
                 Log.i(TAG, "Cleanup completed. Deleted $orphanedCount orphaned files. Cleared preview=$clearedPreview, share=$clearedShare cache files.")
             } catch (e: Exception) {
@@ -1184,7 +1263,7 @@ class DataPersistenceManager(
     }
 
     // ========= 分组展开状态 =========
-    
+
     /**
      * 保存分组展开状态
      * 已迁移到 Room 数据库
@@ -1216,7 +1295,7 @@ class DataPersistenceManager(
     }
 
     // ========= 语音配置 =========
-    
+
     /**
      * 保存语音后端配置列表
      */

@@ -206,12 +206,37 @@ object ImageHistoryManager {
             val historyKey = KEY_PREFIX_HISTORY + conversationId
             val lastImageKey = KEY_PREFIX_LAST_IMAGE + conversationId
             
+            // 先获取历史记录，提取需要删除的图片文件路径
+            val history = loadHistory(context, conversationId)
+            val deletedFileCount = history?.records?.sumOf { record ->
+                record.images.count { imagePath ->
+                    try {
+                        // 只删除本地文件路径（以 / 或 file:// 开头）
+                        if (imagePath.startsWith("/") || imagePath.startsWith("file://")) {
+                            val filePath = imagePath.removePrefix("file://")
+                            val file = java.io.File(filePath)
+                            if (file.exists() && file.isFile) {
+                                val deleted = file.delete()
+                                if (deleted) {
+                                    Log.d(TAG, "删除图片文件: $filePath")
+                                }
+                                deleted
+                            } else false
+                        } else false
+                    } catch (e: Exception) {
+                        Log.w(TAG, "删除图片文件失败: $imagePath", e)
+                        false
+                    }
+                }
+            } ?: 0
+            
+            // 删除元数据
             prefs.edit()
                 .remove(historyKey)
                 .remove(lastImageKey)
                 .apply()
             
-            Log.i(TAG, "删除会话 $conversationId 的历史记录")
+            Log.i(TAG, "删除会话 $conversationId 的历史记录，同时删除 $deletedFileCount 个图片文件")
             true
         } catch (e: Exception) {
             Log.e(TAG, "删除会话历史失败", e)

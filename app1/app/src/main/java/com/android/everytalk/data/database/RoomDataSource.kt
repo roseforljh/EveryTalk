@@ -35,7 +35,7 @@ class RoomDataSource(context: Context) {
     // DataPersistenceManager calls roomDataSource methods as 'suspend' calls inside 'withContext(Dispatchers.IO)'.
     // So RoomDataSource should expose 'suspend' functions.
     
-    // --- Api Configs ---
+    // --- Api Configs --- 
     suspend fun loadApiConfigs(): List<ApiConfig> {
         return apiConfigDao.getConfigs(isImageGen = false).map { it.toApiConfig() }
     }
@@ -339,5 +339,9 @@ class RoomDataSource(context: Context) {
             mapping
         )
         saveSetting("conversation_api_config_ids", jsonString)
+    }
+
+    suspend fun vacuumDatabase() {
+        database.openHelper.writableDatabase.execSQL("VACUUM")
     }
 }
