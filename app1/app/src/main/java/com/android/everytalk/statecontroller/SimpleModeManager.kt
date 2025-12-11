@@ -10,6 +10,10 @@ import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.launch
 
 /**
  * 简化的模式管理器 - 专门解决模式切换问题
@@ -25,9 +29,13 @@ class SimpleModeManager(
     private var _currentMode: ModeType = ModeType.NONE
     private var _lastModeSwitch: Long = 0L
 
-    // 新增：用于UI即时感知的“意图模式”（优先于内容态）
+    // 新增：用于UI即时感知的"意图模式"（优先于内容态）
     private val _uiMode: MutableStateFlow<ModeType> = MutableStateFlow(ModeType.NONE)
     val uiModeFlow: StateFlow<ModeType> = _uiMode.asStateFlow()
+    
+    // 新增：模式切换提示消息
+    private val _modeSwitchMessage: MutableSharedFlow<String> = MutableSharedFlow()
+    val modeSwitchMessage: SharedFlow<String> = _modeSwitchMessage.asSharedFlow()
 
     init {
         // 初始化时根据现有内容态估算一次，避免初次进入时为 NONE
@@ -38,7 +46,7 @@ class SimpleModeManager(
      * 获取当前模式（考虑最近的模式切换）
      */
     fun getCurrentMode(): ModeType {
-        // 优先使用“意图模式”（UI权威来源），避免因保留历史索引导致误判
+        // 优先使用"意图模式"（UI权威来源），避免因保留历史索引导致误判
         val intended = _uiMode.value
         if (intended != ModeType.NONE) return intended
 
@@ -148,7 +156,7 @@ class SimpleModeManager(
         
         Log.d(TAG, "Switched to TEXT mode successfully")
 
-        // 仅在非 forceNew 时，才考虑自动回填“文本模式历史第一个会话”
+        // 仅在非 forceNew 时，才考虑自动回填"文本模式历史第一个会话"
         if (!forceNew) {
             try {
                 val textHistory = stateHolder._historicalConversations.value
@@ -243,7 +251,7 @@ class SimpleModeManager(
         
         Log.d(TAG, "Switched to IMAGE mode successfully")
 
-        // 仅在非 forceNew 时，才考虑自动回填“图像模式历史第一个会话”
+        // 仅在非 forceNew 时，才考虑自动回填"图像模式历史第一个会话"
         if (!forceNew) {
             try {
                 val imageHistory = stateHolder._imageGenerationHistoricalConversations.value
@@ -520,12 +528,28 @@ class SimpleModeManager(
     }
     
     /**
-     * 主动设定“意图模式”（用于导航前/点击抽屉项时先行声明）
+     * 主动设定"意图模式"（用于导航前/点击抽屉项时先行声明）
+     * @param mode 目标模式
+     * @param showToast 是否显示模式切换的Toast提示
      */
-    fun setIntendedMode(mode: ModeType) {
+    fun setIntendedMode(mode: ModeType, showToast: Boolean = false) {
+        val previousMode = _uiMode.value
         _uiMode.value = mode
         _currentMode = mode
         _lastModeSwitch = System.currentTimeMillis()
+        
+        if (showToast && previousMode != mode && mode != ModeType.NONE) {
+            val message = when (mode) {
+                ModeType.TEXT -> "已切换到文本模式"
+                ModeType.IMAGE -> "已切换到图像模式"
+                else -> null
+            }
+            if (message != null) {
+                scope.launch {
+                    _modeSwitchMessage.emit(message)
+                }
+            }
+        }
     }
 
     /**

@@ -169,12 +169,6 @@ private fun safeDeleteTempFile(context: Context, uri: Uri?) {
 
 
 
-
-
-
-
-
-
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ChatInputArea(
@@ -192,11 +186,11 @@ fun ChatInputArea(
     onToggleCodeExecution: () -> Unit = {},
     onStopApiCall: () -> Unit,
     focusRequester: FocusRequester,
-    selectedApiConfig: ApiConfig?,
+    selectedApiConfig: ApiConfig? = null,
     onShowSnackbar: (String) -> Unit,
     imeInsets: WindowInsets,
     density: Density,
-    keyboardController: SoftwareKeyboardController?,
+    keyboardController: SoftwareKeyboardController? = null,
     onFocusChange: (isFocused: Boolean) -> Unit,
     onSendMessage: (messageText: String, isFromRegeneration: Boolean, attachments: List<SelectedMediaItem>, audioBase64: String?, mimeType: String?) -> Unit,
     viewModel: com.android.everytalk.statecontroller.AppViewModel,
@@ -210,7 +204,7 @@ fun ChatInputArea(
     var pendingMessageTextForSend by remember { mutableStateOf<String?>(null) }
     var showImageSelectionPanel by remember { mutableStateOf(false) }
     var showMoreOptionsPanel by remember { mutableStateOf(false) }
-    // 记录由外点关闭触发的时间戳，用于忽略紧随其后的按钮抬起点击，避免“先关后开”
+    // 记录由外点关闭触发的时间戳，用于忽略紧随其后的按钮抬起点击，避免"先关后开"
     var lastImagePanelDismissAt by remember { mutableStateOf(0L) }
     var lastMorePanelDismissAt by remember { mutableStateOf(0L) }
     var showConversationParamsDialog by remember { mutableStateOf(false) }
@@ -522,7 +516,7 @@ fun ChatInputArea(
 
         val yOffsetPx = -chatInputContentHeightPx.toFloat() - with(density) { 8.dp.toPx() }
 
-        // 带入场/退场动画的“相册”面板（使用渲染可见标志以支持退出动画）
+        // 带入场/退场动画的"相册"面板（使用渲染可见标志以支持退出动画）
         var renderImageSelectionPanel by remember { mutableStateOf(false) }
         val imageAlpha = remember { Animatable(0f) }
         val imageScale = remember { Animatable(0.8f) }
@@ -541,19 +535,21 @@ fun ChatInputArea(
         }
 
         if (renderImageSelectionPanel) {
-            val iconButtonApproxWidth = 48.dp
+            // 计算相册按钮在控制栏中的实际位置
+            // 左侧有: 网页搜索按钮(约70dp) + Spacer(8dp) + IconButton位置中心(24dp)
+            val webSearchButtonWidth = 70.dp
             val spacerWidth = 8.dp
-            val columnStartPadding = 8.dp
-            val imageButtonCenterX = columnStartPadding + iconButtonApproxWidth + spacerWidth + (iconButtonApproxWidth / 2)
+            val iconButtonSize = 48.dp
+            val imageButtonCenterX = webSearchButtonWidth + spacerWidth + (iconButtonSize / 2)
             val panelWidthDp = 150.dp
-            val xOffsetForPopup = imageButtonCenterX - (panelWidthDp / 2)
+            val xOffsetForPopup = imageButtonCenterX - (panelWidthDp / 2) + 45.dp // 向右偏移60dp微调
             val xOffsetPx = with(density) { xOffsetForPopup.toPx() }
             Popup(
                 alignment = Alignment.BottomStart,
                 offset = IntOffset(xOffsetPx.toInt(), yOffsetPx.toInt()),
                 onDismissRequest = {
                     lastImagePanelDismissAt = android.os.SystemClock.uptimeMillis()
-                    // 将“目标状态”置为关闭，触发退场动画，动画结束后再移除渲染
+                    // 将"目标状态"置为关闭，触发退场动画，动画结束后再移除渲染
                     if (showImageSelectionPanel) showImageSelectionPanel = false
                 },
                 properties = PopupProperties(
@@ -583,7 +579,7 @@ fun ChatInputArea(
             }
         }
 
-        // 带入场/退场动画的“更多”面板
+        // 带入场/退场动画的"更多"面板
         var renderMoreOptionsPanel by remember { mutableStateOf(false) }
         val moreAlpha = remember { Animatable(0f) }
         val moreScale = remember { Animatable(0.8f) }
@@ -601,13 +597,14 @@ fun ChatInputArea(
         }
 
         if (renderMoreOptionsPanel) {
-            val iconButtonApproxWidth = 48.dp
+            // 计算更多选项按钮在控制栏中的实际位置
+            // 左侧有: 网页搜索按钮(约70dp) + Spacer(8dp) + 相册按钮(48dp) + Spacer(8dp) + IconButton位置中心(24dp)
+            val webSearchButtonWidth = 70.dp
             val spacerWidth = 8.dp
-            val columnStartPadding = 8.dp
-            val tuneButtonCenterX =
-                columnStartPadding + iconButtonApproxWidth + spacerWidth + iconButtonApproxWidth + spacerWidth + (iconButtonApproxWidth / 2)
+            val iconButtonSize = 48.dp
+            val tuneButtonCenterX = webSearchButtonWidth + spacerWidth + iconButtonSize + spacerWidth + (iconButtonSize / 2)
             val panelWidthDp = 150.dp
-            val xOffsetForPopup = tuneButtonCenterX - (panelWidthDp / 2)
+            val xOffsetForPopup = tuneButtonCenterX - (panelWidthDp / 2) + 30.dp // 向右偏移30dp微调
             val xOffsetForMoreOptionsPanelPx = with(density) { xOffsetForPopup.toPx() }
 
             Popup(

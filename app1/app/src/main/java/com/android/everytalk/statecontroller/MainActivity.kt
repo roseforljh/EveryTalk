@@ -212,7 +212,8 @@ class MainActivity : ComponentActivity() {
                                     },
                                     onImageGenerationConversationClick = { index ->
                                         // 先声明意图模式，避免因内容/索引造成的误判
-                                        appViewModel.simpleModeManager.setIntendedMode(SimpleModeManager.ModeType.IMAGE)
+                                        // 跨模式点击时显示 Toast 提示
+                                        appViewModel.simpleModeManager.setIntendedMode(SimpleModeManager.ModeType.IMAGE, showToast = !isImageGenerationMode)
                                         // 跨模式点击时，先跳转到图像生成页
                                         if (!isImageGenerationMode) {
                                             navController.navigate(Screen.IMAGE_GENERATION_SCREEN) {
@@ -241,7 +242,8 @@ class MainActivity : ComponentActivity() {
                                     },
                                     onConversationClick = { index ->
                                         // 先声明意图模式，避免因内容/索引造成的误判
-                                        appViewModel.simpleModeManager.setIntendedMode(SimpleModeManager.ModeType.TEXT)
+                                        // 跨模式点击时显示 Toast 提示
+                                        appViewModel.simpleModeManager.setIntendedMode(SimpleModeManager.ModeType.TEXT, showToast = isImageGenerationMode)
                                         // 跨模式点击时，先跳转到文本聊天页
                                         if (isImageGenerationMode) {
                                             navController.navigate(Screen.CHAT_SCREEN) {
@@ -270,6 +272,8 @@ class MainActivity : ComponentActivity() {
                                     },
                                     onNewChatClick = {
                                         if (isImageGenerationMode) {
+                                            // 从图像模式切换到文本模式，显示 Toast
+                                            appViewModel.simpleModeManager.setIntendedMode(SimpleModeManager.ModeType.TEXT, showToast = true)
                                             coroutineScope.launch { appViewModel.drawerState.close() }
                                             // 🔥 修复：不清除图像模式索引，保持两个模式独立
                                             // appViewModel.stateHolder._loadedImageGenerationHistoryIndex.value = null
@@ -319,6 +323,8 @@ class MainActivity : ComponentActivity() {
                                     },
                                     onAboutClick = { appViewModel.showAboutDialog() },
                                     onImageGenerationClick = {
+                                        // 从文本模式切换到图像模式，显示 Toast
+                                        appViewModel.simpleModeManager.setIntendedMode(SimpleModeManager.ModeType.IMAGE, showToast = !isImageGenerationMode)
                                         coroutineScope.launch { appViewModel.drawerState.close() }
                                         // 🔥 修复：不清除文本模式索引，保持两个模式独立
                                         // appViewModel.stateHolder._loadedHistoryIndex.value = null

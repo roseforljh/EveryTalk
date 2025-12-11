@@ -1,5 +1,6 @@
 package com.android.everytalk.statecontroller.controller.config
 
+import android.util.Base64
 import android.util.Log
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.Message
@@ -29,6 +30,8 @@ import java.util.UUID
  * 1. 支持聊天历史导入导出
  * 2. 增强数据验证逻辑
  * 3. 提供详细错误信息
+ * 4. API密钥混淆保护
+ * 5. 文件大小限制
  */
 class SettingsController(
     private val context: android.content.Context,
@@ -42,9 +45,85 @@ class SettingsController(
 ) {
     companion object {
         private const val TAG = "SettingsController"
-        private const val EXPORT_VERSION = 2
+        private const val EXPORT_VERSION = 3 // 升级版本以支持密钥混淆
         private const val MIN_API_KEY_LENGTH = 10
         private const val MAX_API_KEY_LENGTH = 500
+        private const val MAX_IMPORT_FILE_SIZE = 50 * 1024 * 1024 // 50MB
+        private const val OBFUSCATION_PREFIX = "EZT_OBF_V1:" // 混淆标记前缀
+        
+        // 密钥混淆警告消息
+        const val EXPORT_SECURITY_WARNING = "⚠️ 导出文件包含敏感API密钥，请妥善保管，切勿分享给他人！"
+    }
+
+    // ==================== 密钥混淆工具方法 ====================
+    
+    /**
+     * 混淆API密钥（简单的Base64编码 + XOR混淆）
+     * 注意：这不是加密，仅用于防止密钥明文暴露
+     */
+    private fun obfuscateKey(key: String): String {
+        if (key.isBlank()) return key
+        return try {
+            val xorKey = 0x5A.toByte()
+            val xored = key.toByteArray(Charsets.UTF_8).map { (it.toInt() xor xorKey.toInt()).toByte() }.toByteArray()
+            OBFUSCATION_PREFIX + Base64.encodeToString(xored, Base64.NO_WRAP)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to obfuscate key", e)
+            key
+        }
+    }
+    
+    /**
+     * 还原混淆的API密钥
+     */
+    private fun deobfuscateKey(obfuscatedKey: String): String {
+        if (obfuscatedKey.isBlank()) return obfuscatedKey
+        if (!obfuscatedKey.startsWith(OBFUSCATION_PREFIX)) return obfuscatedKey // 兼容旧版本明文密钥
+        return try {
+            val encoded = obfuscatedKey.removePrefix(OBFUSCATION_PREFIX)
+            val xorKey = 0x5A.toByte()
+            val decoded = Base64.decode(encoded, Base64.NO_WRAP)
+            String(decoded.map { (it.toInt() xor xorKey.toInt()).toByte() }.toByteArray(), Charsets.UTF_8)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to deobfuscate key, returning as-is", e)
+            obfuscatedKey
+        }
+    }
+    
+    /**
+     * 混淆ApiConfig中的密钥
+     */
+    private fun obfuscateApiConfig(config: ApiConfig): ApiConfig {
+        return config.copy(key = obfuscateKey(config.key))
+    }
+    
+    /**
+     * 还原ApiConfig中的密钥
+     */
+    private fun deobfuscateApiConfig(config: ApiConfig): ApiConfig {
+        return config.copy(key = deobfuscateKey(config.key))
+    }
+    
+    /**
+     * 混淆VoiceBackendConfig中的密钥
+     */
+    private fun obfuscateVoiceConfig(config: VoiceBackendConfig): VoiceBackendConfig {
+        return config.copy(
+            sttApiKey = obfuscateKey(config.sttApiKey),
+            chatApiKey = obfuscateKey(config.chatApiKey),
+            ttsApiKey = obfuscateKey(config.ttsApiKey)
+        )
+    }
+    
+    /**
+     * 还原VoiceBackendConfig中的密钥
+     */
+    private fun deobfuscateVoiceConfig(config: VoiceBackendConfig): VoiceBackendConfig {
+        return config.copy(
+            sttApiKey = deobfuscateKey(config.sttApiKey),
+            chatApiKey = deobfuscateKey(config.chatApiKey),
+            ttsApiKey = deobfuscateKey(config.ttsApiKey)
+        )
     }
 
     // ==================== 数据类定义 ====================
@@ -119,14 +198,12 @@ class SettingsController(
     fun exportSettings(includeHistory: Boolean = false) {
         scope.launch(Dispatchers.IO) {
             try {
-                // 1. 导出所有 API 配置 (文本/图像)
-                // 修复：导出所有配置，包括"默认"平台的配置
-                // 每个配置都保留其完整的分组字段 (provider, address, key, channel)
-                val mainConfigsToExport = stateHolder._apiConfigs.value.toList()
-                val imageConfigsToExport = stateHolder._imageGenApiConfigs.value.toList()
+                // 1. 导出所有 API 配置 (文本/图像) - 混淆密钥后导出
+                val mainConfigsToExport = stateHolder._apiConfigs.value.map { obfuscateApiConfig(it) }
+                val imageConfigsToExport = stateHolder._imageGenApiConfigs.value.map { obfuscateApiConfig(it) }
                 val allConfigsToExport = mainConfigsToExport + imageConfigsToExport
                 
-                // 详细日志：记录每个配置的关键信息
+                // 详细日志：记录每个配置的关键信息（不记录密钥）
                 Log.i(TAG, "=== 导出配置开始 ===")
                 Log.i(TAG, "文本配置数量: ${mainConfigsToExport.size}")
                 mainConfigsToExport.forEachIndexed { index, config ->
@@ -140,10 +217,8 @@ class SettingsController(
                 // 2. 导出会话生成参数 (conversationGenerationConfigs)
                 val conversationParams = stateHolder.conversationGenerationConfigs.value
                 
-                // 3. 导出语音后端配置 (STT/Chat/TTS)
-                // 修复：直接导出 stateHolder 中的所有语音配置，不再只导出当前使用的配置
-                // 这样可以确保所有已配置的语音配置都被导出，而不是只导出正在使用的那一个
-                val voiceConfigsToExport = stateHolder._voiceBackendConfigs.value.toList()
+                // 3. 导出语音后端配置 (STT/Chat/TTS) - 混淆密钥后导出
+                val voiceConfigsToExport = stateHolder._voiceBackendConfigs.value.map { obfuscateVoiceConfig(it) }
                 
                 Log.i(TAG, "Exporting voice configs: ${voiceConfigsToExport.size}")
                 
@@ -195,6 +270,11 @@ class SettingsController(
                 
                 Log.i(TAG, "=== 导出配置完成 ===")
                 Log.i(TAG, "总配置数: ${allConfigsToExport.size}, 聊天历史: ${chatHistoryToExport.size}, 图像历史: ${imageHistoryToExport.size}")
+                
+                // 显示安全警告
+                withContext(Dispatchers.Main) {
+                    showSnackbar(EXPORT_SECURITY_WARNING)
+                }
                     
             } catch (e: Exception) {
                 Log.e(TAG, "Export failed", e)
@@ -240,11 +320,31 @@ class SettingsController(
         scope.launch(Dispatchers.IO) {
             val result = ImportResult()
             
+            // 保存当前状态用于回滚
+            val backupState = BackupState(
+                apiConfigs = stateHolder._apiConfigs.value.toList(),
+                imageGenApiConfigs = stateHolder._imageGenApiConfigs.value.toList(),
+                selectedApiConfig = stateHolder._selectedApiConfig.value,
+                selectedImageGenApiConfig = stateHolder._selectedImageGenApiConfig.value,
+                voiceBackendConfigs = stateHolder._voiceBackendConfigs.value.toList(),
+                selectedVoiceConfig = stateHolder._selectedVoiceConfig.value,
+                historicalConversations = stateHolder._historicalConversations.value.toList(),
+                imageGenerationHistoricalConversations = stateHolder._imageGenerationHistoricalConversations.value.toList(),
+                pinnedTextConversationIds = stateHolder.pinnedTextConversationIds.value.toSet(),
+                pinnedImageConversationIds = stateHolder.pinnedImageConversationIds.value.toSet(),
+                conversationGroups = stateHolder.conversationGroups.value.toMap()
+            )
+            
             try {
+                // 0. 文件大小检查
+                if (jsonContent.length > MAX_IMPORT_FILE_SIZE) {
+                    throw IllegalStateException("导入文件过大（最大支持50MB）")
+                }
+                
                 // 1. 解析配置
                 val importedSettings = parseImportedSettings(jsonContent, result)
                 
-                // 2. 验证并导入API配置
+                // 2. 验证并导入API配置（会自动还原混淆的密钥）
                 importApiConfigs(importedSettings, result)
                 
                 // 3. 导入自定义提供商
@@ -253,7 +353,7 @@ class SettingsController(
                 // 4. 导入会话生成参数
                 importConversationParameters(importedSettings, result)
                 
-                // 5. 导入语音后端配置
+                // 5. 导入语音后端配置（会自动还原混淆的密钥）
                 importVoiceConfigs(importedSettings, result)
                 
                 // 6. 导入聊天历史
@@ -262,11 +362,19 @@ class SettingsController(
                 // 7. 导入图像生成历史
                 importImageHistory(importedSettings, result)
                 
-                // 8. 导入置顶状态
+                // 8. 导入置顶状态（带验证）
                 importPinnedIds(importedSettings, result)
                 
-                // 9. 导入分组信息
+                // 9. 导入分组信息（带验证）
                 importConversationGroups(importedSettings, result)
+                
+                // 检查是否有严重错误需要回滚
+                if (result.errors.size > result.configsImported + result.voiceConfigsImported + 
+                    result.chatHistoryImported + result.imageHistoryImported) {
+                    // 错误过多，回滚所有更改
+                    rollbackState(backupState)
+                    result.warnings.add("由于错误过多，已回滚所有更改")
+                }
                 
                 // 显示详细结果
                 withContext(Dispatchers.Main) {
@@ -281,10 +389,14 @@ class SettingsController(
                     "errors=${result.errors.size}, warnings=${result.warnings.size}")
 
             } catch (e: Exception) {
-                Log.e(TAG, "Settings import failed", e)
+                // 发生异常时回滚状态
+                Log.e(TAG, "Settings import failed, rolling back", e)
+                rollbackState(backupState)
+                
                 val errorMessage = when (e) {
-                    is SerializationException -> "JSON格式错误: ${e.message?.take(100)}"
+                    is SerializationException -> "JSON格式错误，请检查文件是否损坏"
                     is IllegalStateException -> e.message ?: "解析失败"
+                    is OutOfMemoryError -> "文件过大，内存不足"
                     else -> "导入失败: ${e.message ?: "未知错误"}"
                 }
                 withContext(Dispatchers.Main) {
@@ -293,35 +405,111 @@ class SettingsController(
             }
         }
     }
+    
+    /**
+     * 备份状态数据类
+     */
+    private data class BackupState(
+        val apiConfigs: List<ApiConfig>,
+        val imageGenApiConfigs: List<ApiConfig>,
+        val selectedApiConfig: ApiConfig?,
+        val selectedImageGenApiConfig: ApiConfig?,
+        val voiceBackendConfigs: List<VoiceBackendConfig>,
+        val selectedVoiceConfig: VoiceBackendConfig?,
+        val historicalConversations: List<List<Message>>,
+        val imageGenerationHistoricalConversations: List<List<Message>>,
+        val pinnedTextConversationIds: Set<String>,
+        val pinnedImageConversationIds: Set<String>,
+        val conversationGroups: Map<String, List<String>>
+    )
+    
+    /**
+     * 回滚状态到备份
+     */
+    private suspend fun rollbackState(backup: BackupState) {
+        Log.i(TAG, "Rolling back to backup state")
+        
+        stateHolder._apiConfigs.value = backup.apiConfigs
+        stateHolder._imageGenApiConfigs.value = backup.imageGenApiConfigs
+        stateHolder._selectedApiConfig.value = backup.selectedApiConfig
+        stateHolder._selectedImageGenApiConfig.value = backup.selectedImageGenApiConfig
+        stateHolder._voiceBackendConfigs.value = backup.voiceBackendConfigs
+        stateHolder._selectedVoiceConfig.value = backup.selectedVoiceConfig
+        stateHolder._historicalConversations.value = backup.historicalConversations
+        stateHolder._imageGenerationHistoricalConversations.value = backup.imageGenerationHistoricalConversations
+        stateHolder.pinnedTextConversationIds.value = backup.pinnedTextConversationIds
+        stateHolder.pinnedImageConversationIds.value = backup.pinnedImageConversationIds
+        stateHolder.conversationGroups.value = backup.conversationGroups
+        
+        // 恢复持久化数据
+        persistenceManager.saveApiConfigs(backup.apiConfigs, isImageGen = false)
+        persistenceManager.saveApiConfigs(backup.imageGenApiConfigs, isImageGen = true)
+        persistenceManager.saveSelectedConfigIdentifier(backup.selectedApiConfig?.id, isImageGen = false)
+        persistenceManager.saveSelectedConfigIdentifier(backup.selectedImageGenApiConfig?.id, isImageGen = true)
+        persistenceManager.saveVoiceBackendConfigs(backup.voiceBackendConfigs)
+        persistenceManager.saveSelectedVoiceConfigId(backup.selectedVoiceConfig?.id)
+        persistenceManager.saveChatHistory(backup.historicalConversations, isImageGeneration = false)
+        persistenceManager.saveChatHistory(backup.imageGenerationHistoricalConversations, isImageGeneration = true)
+        persistenceManager.savePinnedIds(backup.pinnedTextConversationIds, isImageGeneration = false)
+        persistenceManager.savePinnedIds(backup.pinnedImageConversationIds, isImageGeneration = true)
+        persistenceManager.saveConversationGroups(backup.conversationGroups)
+    }
 
     /**
      * 解析导入的设置文件
+     * 支持多版本兼容：v1(List<ApiConfig>), v2(ExportedSettings无密钥混淆), v3(ExportedSettings有密钥混淆)
      */
     private fun parseImportedSettings(
         jsonContent: String,
         result: ImportResult
     ): ExportedSettings {
-        // 尝试新格式
+        // 尝试新格式 (v2/v3)
         try {
             val settings = json.decodeFromString<ExportedSettings>(jsonContent)
-            if (settings.version < EXPORT_VERSION) {
-                result.warnings.add("检测到旧版本格式 (v${settings.version})，已自动兼容")
+            when {
+                settings.version < 2 -> {
+                    result.warnings.add("检测到v1格式，已自动兼容")
+                }
+                settings.version == 2 -> {
+                    result.warnings.add("检测到v2格式（无密钥混淆），已自动兼容")
+                }
+                settings.version > EXPORT_VERSION -> {
+                    result.warnings.add("检测到较新版本格式 (v${settings.version})，部分新功能可能不支持")
+                }
             }
-            return settings
+            // 迁移旧版本数据：为缺失字段设置默认值
+            return migrateSettings(settings)
         } catch (e: SerializationException) {
             Log.d(TAG, "Failed to parse as ExportedSettings, trying legacy format", e)
         }
         
-        // 尝试旧格式兼容 (List<ApiConfig>)
+        // 尝试旧格式兼容 (v1: List<ApiConfig>)
         try {
             val oldList = json.decodeFromString<List<ApiConfig>>(jsonContent)
-            result.warnings.add("检测到旧版本格式，已自动转换")
-            return ExportedSettings(apiConfigs = oldList)
+            result.warnings.add("检测到旧版本格式(v1)，已自动转换")
+            return ExportedSettings(version = 1, apiConfigs = oldList)
         } catch (e: Exception) {
             Log.d(TAG, "Failed to parse as legacy format", e)
         }
         
         throw IllegalStateException("无法解析导入文件。请确保文件是有效的JSON格式，且来自本应用的导出。")
+    }
+    
+    /**
+     * 迁移旧版本设置到当前版本
+     */
+    private fun migrateSettings(settings: ExportedSettings): ExportedSettings {
+        // 目前v2和v3结构相同，只是密钥编码方式不同
+        // 未来如果有字段变更，在这里处理迁移逻辑
+        return settings.copy(
+            // 确保apiConfigs中每个配置都有有效的默认值
+            apiConfigs = settings.apiConfigs.map { config ->
+                config.copy(
+                    toolsJson = config.toolsJson,
+                    enableCodeExecution = config.enableCodeExecution
+                )
+            }
+        )
     }
 
     /**
@@ -331,20 +519,23 @@ class SettingsController(
      * - 保留本地已有的"默认配置卡片"等系统/设备级默认配置
      * - 同时完整合入导出文件中的所有配置（包括 Gemini、默认平台下的自定义模型等）
      * - 通过按 id 去重，避免重复配置
+     * - 自动还原混淆的API密钥
      */
     private suspend fun importApiConfigs(settings: ExportedSettings, result: ImportResult) {
         Log.i(TAG, "=== 导入配置开始 ===")
         Log.i(TAG, "待导入配置总数: ${settings.apiConfigs.size}")
         
-        // 详细记录每个待导入的配置
+        // 详细记录每个待导入的配置（不记录密钥）
         settings.apiConfigs.forEachIndexed { index, config ->
             Log.i(TAG, "  待导入[$index]: id=${config.id}, name=${config.name}, provider=${config.provider}, channel=${config.channel}, model=${config.model}, modalityType=${config.modalityType}")
         }
         
-        // 1) 逐条验证导入的配置（不按 provider 过滤，默认/自定义一视同仁）
+        // 1) 还原混淆的密钥并验证导入的配置
         val validConfigs = settings.apiConfigs.mapNotNull { config ->
-            when (val validationResult = validateApiConfig(config)) {
-                is ValidationResult.Success -> config
+            // 先还原混淆的密钥
+            val deobfuscatedConfig = deobfuscateApiConfig(config)
+            when (val validationResult = validateApiConfig(deobfuscatedConfig)) {
+                is ValidationResult.Success -> deobfuscatedConfig
                 is ValidationResult.Failure -> {
                     validationResult.errors.forEach { error ->
                         result.errors.add("配置 '${config.name}': $error")
@@ -373,18 +564,27 @@ class SettingsController(
         
         Log.i(TAG, "文本配置数: ${importedMainConfigs.size}, 图像配置数: ${importedImageConfigs.size}")
 
-        // 2) 文本配置：将"现有配置 + 导入配置"合并后按 id 去重，并移除完全重复的配置
+        // 2) 文本配置：将"现有配置 + 导入配置"合并后按 id 去重
+        // 改进：先按ID合并（导入的优先），再按内容去重（保留现有的）
         val existingMainConfigs = stateHolder._apiConfigs.value
         Log.i(TAG, "现有文本配置数: ${existingMainConfigs.size}")
         
-        val mergedMainConfigs = (existingMainConfigs + importedMainConfigs)
-            .associateBy { it.id }   // 同 id 以导入的为准
-            .values
-            .distinctBy {
-                // 增强去重：如果除了ID外其他关键字段都相同，视为重复配置，保留第一个
-                "${it.provider}|${it.address}|${it.key}|${it.model}|${it.channel}|${it.modalityType}"
+        // 创建ID到配置的映射，导入的配置会覆盖现有同ID配置
+        val idToConfigMap = mutableMapOf<String, ApiConfig>()
+        existingMainConfigs.forEach { idToConfigMap[it.id] = it }
+        importedMainConfigs.forEach { idToConfigMap[it.id] = it }
+        
+        // 按内容去重，保留第一个遇到的（即现有配置优先）
+        val contentSeen = mutableSetOf<String>()
+        val mergedMainConfigs = idToConfigMap.values.filter { config ->
+            val contentKey = "${config.provider}|${config.address}|${config.key}|${config.model}|${config.channel}|${config.modalityType}"
+            if (contentKey in contentSeen) {
+                false
+            } else {
+                contentSeen.add(contentKey)
+                true
             }
-            .toList()
+        }.toList()
         
         Log.i(TAG, "合并后文本配置数: ${mergedMainConfigs.size}")
         mergedMainConfigs.forEachIndexed { index, config ->
@@ -394,34 +594,38 @@ class SettingsController(
         stateHolder._apiConfigs.value = mergedMainConfigs
         persistenceManager.saveApiConfigs(mergedMainConfigs, isImageGen = false)
 
-        // 选中项：优先保持原来的 id，如不存在则选第一个
+        // 选中项：优先保持原来的 id，如不存在则选第一个，都不存在则为null
         val previousSelectedMainId = stateHolder._selectedApiConfig.value?.id
         val newSelectedMain = when {
-            previousSelectedMainId != null -> mergedMainConfigs.find { it.id == previousSelectedMainId }
+            previousSelectedMainId != null -> mergedMainConfigs.find { it.id == previousSelectedMainId } ?: mergedMainConfigs.firstOrNull()
             else -> mergedMainConfigs.firstOrNull()
         }
         stateHolder._selectedApiConfig.value = newSelectedMain
         persistenceManager.saveSelectedConfigIdentifier(newSelectedMain?.id, isImageGen = false)
 
-        // 3) 图像配置：同样"现有 + 导入"合并 + 去重，并移除完全重复的配置
+        // 3) 图像配置：同样"现有 + 导入"合并 + 去重
         val existingImageConfigs = stateHolder._imageGenApiConfigs.value
         Log.i(TAG, "现有图像配置数: ${existingImageConfigs.size}")
         
-        val mergedImageConfigs = (existingImageConfigs + importedImageConfigs)
-            .associateBy { it.id }
-            .values
-            .distinctBy { config ->
-                // 增强去重：如果除了ID外其他关键字段都相同，视为重复配置，保留第一个
-                // 对于"默认"provider的配置，只按model去重，忽略address、key和channel
-                val isDefaultProvider = config.provider.trim().lowercase() in listOf("默认", "default")
-                if (isDefaultProvider) {
-                    // 默认配置只按provider和model去重
-                    "default|${config.model}|${config.modalityType}"
-                } else {
-                    "${config.provider}|${config.address}|${config.key}|${config.model}|${config.channel}|${config.modalityType}"
-                }
+        val imageIdToConfigMap = mutableMapOf<String, ApiConfig>()
+        existingImageConfigs.forEach { imageIdToConfigMap[it.id] = it }
+        importedImageConfigs.forEach { imageIdToConfigMap[it.id] = it }
+        
+        val imageContentSeen = mutableSetOf<String>()
+        val mergedImageConfigs = imageIdToConfigMap.values.filter { config ->
+            val isDefaultProvider = config.provider.trim().lowercase() in listOf("默认", "default")
+            val contentKey = if (isDefaultProvider) {
+                "default|${config.model}|${config.modalityType}"
+            } else {
+                "${config.provider}|${config.address}|${config.key}|${config.model}|${config.channel}|${config.modalityType}"
             }
-            .toList()
+            if (contentKey in imageContentSeen) {
+                false
+            } else {
+                imageContentSeen.add(contentKey)
+                true
+            }
+        }.toList()
 
         Log.i(TAG, "合并后图像配置数: ${mergedImageConfigs.size}")
         mergedImageConfigs.forEachIndexed { index, config ->
@@ -433,7 +637,7 @@ class SettingsController(
 
         val previousSelectedImageId = stateHolder._selectedImageGenApiConfig.value?.id
         val newSelectedImage = when {
-            previousSelectedImageId != null -> mergedImageConfigs.find { it.id == previousSelectedImageId }
+            previousSelectedImageId != null -> mergedImageConfigs.find { it.id == previousSelectedImageId } ?: mergedImageConfigs.firstOrNull()
             else -> mergedImageConfigs.firstOrNull()
         }
         stateHolder._selectedImageGenApiConfig.value = newSelectedImage
@@ -466,11 +670,14 @@ class SettingsController(
 
     /**
      * 导入语音后端配置（带验证）
+     * 自动还原混淆的API密钥
      */
     private suspend fun importVoiceConfigs(settings: ExportedSettings, result: ImportResult) {
         val validVoiceConfigs = settings.voiceBackendConfigs.mapNotNull { config ->
-            when (val validationResult = validateVoiceConfig(config)) {
-                is ValidationResult.Success -> config
+            // 先还原混淆的密钥
+            val deobfuscatedConfig = deobfuscateVoiceConfig(config)
+            when (val validationResult = validateVoiceConfig(deobfuscatedConfig)) {
+                is ValidationResult.Success -> deobfuscatedConfig
                 is ValidationResult.Failure -> {
                     validationResult.errors.forEach { error ->
                         result.errors.add("语音配置 '${config.name}': $error")
@@ -481,16 +688,21 @@ class SettingsController(
         }
         
         if (validVoiceConfigs.isNotEmpty()) {
-            val previousSelectedId = stateHolder._selectedVoiceConfig.value?.id
-            val newSelected = validVoiceConfigs.find { it.id == previousSelectedId }
-                ?: validVoiceConfigs.firstOrNull()
-
-            stateHolder._voiceBackendConfigs.value = validVoiceConfigs
-            stateHolder._selectedVoiceConfig.value = newSelected
-            persistenceManager.saveVoiceBackendConfigs(validVoiceConfigs)
-            persistenceManager.saveSelectedVoiceConfigId(newSelected?.id)
+            // 合并现有配置和导入配置，按ID去重
+            val existingConfigs = stateHolder._voiceBackendConfigs.value
+            val idToConfigMap = mutableMapOf<String, VoiceBackendConfig>()
+            existingConfigs.forEach { idToConfigMap[it.id] = it }
+            validVoiceConfigs.forEach { idToConfigMap[it.id] = it }
+            val mergedConfigs = idToConfigMap.values.toList()
             
-            // 注意：语音配置现在完全由 Room 数据库管理，不再需要同步到 SharedPreferences
+            val previousSelectedId = stateHolder._selectedVoiceConfig.value?.id
+            val newSelected = mergedConfigs.find { it.id == previousSelectedId }
+                ?: mergedConfigs.firstOrNull()
+
+            stateHolder._voiceBackendConfigs.value = mergedConfigs
+            stateHolder._selectedVoiceConfig.value = newSelected
+            persistenceManager.saveVoiceBackendConfigs(mergedConfigs)
+            persistenceManager.saveSelectedVoiceConfigId(newSelected?.id)
             
             result.voiceConfigsImported = validVoiceConfigs.size
         }
@@ -591,34 +803,64 @@ class SettingsController(
     }
 
     /**
-     * 导入置顶状态
+     * 导入置顶状态（验证会话ID是否存在）
      */
     private suspend fun importPinnedIds(settings: ExportedSettings, result: ImportResult) {
+        // 获取所有存在的会话ID
+        val existingTextConvIds = stateHolder._historicalConversations.value
+            .flatMap { conv -> conv.map { it.id } }.toSet()
+        val existingImageConvIds = stateHolder._imageGenerationHistoricalConversations.value
+            .flatMap { conv -> conv.map { it.id } }.toSet()
+        
         if (settings.pinnedTextIds.isNotEmpty()) {
             val currentPinned = stateHolder.pinnedTextConversationIds.value.toMutableSet()
-            currentPinned.addAll(settings.pinnedTextIds)
+            // 只添加存在的会话ID
+            val validIds = settings.pinnedTextIds.filter { it in existingTextConvIds }
+            val invalidCount = settings.pinnedTextIds.size - validIds.size
+            if (invalidCount > 0) {
+                result.warnings.add("跳过了 $invalidCount 个无效的文本置顶ID")
+            }
+            currentPinned.addAll(validIds)
             stateHolder.pinnedTextConversationIds.value = currentPinned
             persistenceManager.savePinnedIds(currentPinned, isImageGeneration = false)
         }
         
         if (settings.pinnedImageIds.isNotEmpty()) {
             val currentPinned = stateHolder.pinnedImageConversationIds.value.toMutableSet()
-            currentPinned.addAll(settings.pinnedImageIds)
+            // 只添加存在的会话ID
+            val validIds = settings.pinnedImageIds.filter { it in existingImageConvIds }
+            val invalidCount = settings.pinnedImageIds.size - validIds.size
+            if (invalidCount > 0) {
+                result.warnings.add("跳过了 $invalidCount 个无效的图像置顶ID")
+            }
+            currentPinned.addAll(validIds)
             stateHolder.pinnedImageConversationIds.value = currentPinned
             persistenceManager.savePinnedIds(currentPinned, isImageGeneration = true)
         }
     }
 
     /**
-     * 导入分组信息
+     * 导入分组信息（验证会话ID是否存在）
      */
     private suspend fun importConversationGroups(settings: ExportedSettings, result: ImportResult) {
         if (settings.conversationGroups.isNotEmpty()) {
+            // 获取所有存在的会话ID
+            val existingConvIds = (stateHolder._historicalConversations.value +
+                stateHolder._imageGenerationHistoricalConversations.value)
+                .flatMap { conv -> conv.map { it.id } }.toSet()
+            
             val currentGroups = stateHolder.conversationGroups.value.toMutableMap()
+            var invalidIdCount = 0
             settings.conversationGroups.forEach { (groupName, ids) ->
                 val existingIds = currentGroups[groupName]?.toMutableList() ?: mutableListOf()
-                existingIds.addAll(ids.filter { it !in existingIds })
+                // 只添加存在的会话ID
+                val validIds = ids.filter { it in existingConvIds && it !in existingIds }
+                invalidIdCount += ids.count { it !in existingConvIds }
+                existingIds.addAll(validIds)
                 currentGroups[groupName] = existingIds
+            }
+            if (invalidIdCount > 0) {
+                result.warnings.add("分组中跳过了 $invalidIdCount 个无效的会话ID")
             }
             stateHolder.conversationGroups.value = currentGroups
             persistenceManager.saveConversationGroups(currentGroups)
@@ -643,14 +885,17 @@ class SettingsController(
             errors.add("提供商名称不能为空")
         }
         
+        // 验证提供商名称长度和字符
+        if (config.provider.length > 100) {
+            errors.add("提供商名称过长 (最多100个字符)")
+        }
+        
         // 验证URL格式
         if (config.address.isNotBlank() && !isValidUrl(config.address)) {
             errors.add("API地址格式无效")
         }
         
         // 验证API密钥长度 - 仅验证最大长度，不再验证最小长度
-        // 修复：导入/导出应该信任原始配置数据，不应拒绝短密钥
-        // 用户可能使用后端代理、短密钥或自定义密钥方案
         if (config.key.isNotBlank() && config.key.length > MAX_API_KEY_LENGTH) {
             errors.add("API密钥长度过长 (最多${MAX_API_KEY_LENGTH}个字符)")
         }
@@ -660,15 +905,41 @@ class SettingsController(
             errors.add("模型名称不能为空")
         }
         
-        // 验证温度范围
-        if (config.temperature < 0f || config.temperature > 2f) {
-            errors.add("温度值超出范围 (0-2): ${config.temperature}")
+        // 验证模型名称长度和格式
+        if (config.model.length > 200) {
+            errors.add("模型名称过长 (最多200个字符)")
+        }
+        
+        // 验证温度范围 - 扩展范围以支持更多模型
+        if (config.temperature < 0f || config.temperature > 3f) {
+            errors.add("温度值超出范围 (0-3): ${config.temperature}")
+        }
+        
+        // 验证topP范围
+        config.topP?.let { topP ->
+            if (topP < 0f || topP > 1f) {
+                errors.add("topP值超出范围 (0-1): $topP")
+            }
         }
         
         // 验证maxTokens
         config.maxTokens?.let { tokens ->
-            if (tokens < 1 || tokens > 1000000) {
-                errors.add("maxTokens超出范围 (1-1000000): $tokens")
+            if (tokens < 1 || tokens > 10000000) {
+                errors.add("maxTokens超出范围 (1-10000000): $tokens")
+            }
+        }
+        
+        // 验证guidanceScale（图像生成）
+        config.guidanceScale?.let { scale ->
+            if (scale < 0f || scale > 50f) {
+                errors.add("guidanceScale超出范围 (0-50): $scale")
+            }
+        }
+        
+        // 验证numInferenceSteps（图像生成）
+        config.numInferenceSteps?.let { steps ->
+            if (steps < 1 || steps > 1000) {
+                errors.add("numInferenceSteps超出范围 (1-1000): $steps")
             }
         }
         
@@ -687,6 +958,14 @@ class SettingsController(
         
         if (config.id.isBlank()) {
             errors.add("语音配置ID不能为空")
+        }
+        
+        // 验证配置名称
+        if (config.name.isBlank()) {
+            errors.add("语音配置名称不能为空")
+        }
+        if (config.name.length > 100) {
+            errors.add("语音配置名称过长 (最多100个字符)")
         }
         
         // 验证STT配置
@@ -713,12 +992,31 @@ class SettingsController(
 
     /**
      * 验证URL格式
+     * 支持http/https协议，验证host和port有效性
      */
     private fun isValidUrl(url: String): Boolean {
         return try {
             val trimmedUrl = url.trim().trimEnd('#')
+            if (trimmedUrl.isBlank()) return false
+            
             val uri = java.net.URI(trimmedUrl)
-            uri.scheme?.lowercase() in listOf("http", "https") && uri.host != null
+            val scheme = uri.scheme?.lowercase()
+            
+            // 验证协议
+            if (scheme !in listOf("http", "https")) return false
+            
+            // 验证host
+            val host = uri.host
+            if (host.isNullOrBlank()) return false
+            
+            // 验证host不包含非法字符
+            if (host.contains(" ") || host.contains("\t") || host.contains("\n")) return false
+            
+            // 验证port范围（如果指定）
+            val port = uri.port
+            if (port != -1 && (port < 1 || port > 65535)) return false
+            
+            true
         } catch (e: Exception) {
             false
         }
@@ -728,6 +1026,7 @@ class SettingsController(
 
     /**
      * 构建导入结果消息
+     * 提供详细的导入结果信息
      */
     private fun buildImportResultMessage(result: ImportResult): String {
         val sb = StringBuilder()
@@ -751,16 +1050,28 @@ class SettingsController(
             sb.append("成功导入: ${successItems.joinToString(", ")}")
         }
         
-        // 警告信息
+        // 警告信息（显示前3条详情）
         if (result.warnings.isNotEmpty()) {
             if (sb.isNotEmpty()) sb.append("\n")
             sb.append("⚠️ ${result.warnings.size}个警告")
+            if (result.warnings.size <= 3) {
+                result.warnings.forEach { sb.append("\n  - $it") }
+            } else {
+                result.warnings.take(3).forEach { sb.append("\n  - $it") }
+                sb.append("\n  - ...还有${result.warnings.size - 3}个警告")
+            }
         }
         
-        // 错误信息
+        // 错误信息（显示前3条详情）
         if (result.errors.isNotEmpty()) {
             if (sb.isNotEmpty()) sb.append("\n")
             sb.append("❌ ${result.errors.size}个错误")
+            if (result.errors.size <= 3) {
+                result.errors.forEach { sb.append("\n  - $it") }
+            } else {
+                result.errors.take(3).forEach { sb.append("\n  - $it") }
+                sb.append("\n  - ...还有${result.errors.size - 3}个错误")
+            }
         }
         
         return if (sb.isEmpty()) "导入完成，未发现有效数据" else sb.toString()

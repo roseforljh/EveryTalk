@@ -496,6 +496,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val loadedCustomProviders = persistenceManager.loadCustomProviders()
             providerManager.setCustomProviders(loadedCustomProviders)
         }
+        
+        // 监听模式切换消息并显示 Toast
+        viewModelScope.launch {
+            simpleModeManager.modeSwitchMessage.collect { message ->
+                showSnackbar(message)
+            }
+        }
 
         // 优化：分阶段初始化，优先加载关键配置
         // 调整：启用"上次打开会话"的恢复，保证多轮上下文在重启后延续（含图像模式）
@@ -1079,7 +1086,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 mediaController.downloadImage(url)
             } catch (e: Exception) {
-                Log.e("AppViewModel", "Download image failed", e)
+                Log.e("AppViewModel", "Download image失败", e)
                 showSnackbar("图片下载失败: ${e.message}")
             }
         }
@@ -1821,5 +1828,4 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun isGroupExpanded(groupKey: String): Boolean {
         return stateHolder.expandedGroups.value.contains(groupKey)
     }
-    
 }
