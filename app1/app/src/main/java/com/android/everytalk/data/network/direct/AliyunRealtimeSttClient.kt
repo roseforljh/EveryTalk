@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.*
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * 阿里云实时 STT 客户端
@@ -32,6 +33,8 @@ class AliyunRealtimeSttClient(
     companion object {
         private const val TAG = "AliyunRealtimeStt"
         private const val WS_URL = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
+        private const val MAX_RECONNECT_ATTEMPTS = 3
+        private const val RECONNECT_DELAY_MS = 1000L
     }
     
     // 会话状态
@@ -41,6 +44,7 @@ class AliyunRealtimeSttClient(
     private val isConnected = AtomicBoolean(false)
     private val isTaskStarted = AtomicBoolean(false)
     private val isClosed = AtomicBoolean(false)
+    private val reconnectAttempts = AtomicInteger(0)
     
     // 音频数据队列
     private val audioQueue = Channel<ByteArray>(Channel.UNLIMITED)

@@ -6,6 +6,7 @@ import androidx.compose.runtime.remember
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.network.VoiceChatSession
+import com.android.everytalk.data.network.VoiceChatResult
 import com.android.everytalk.data.network.direct.AliyunSttConnectionManager
 import com.android.everytalk.statecontroller.AppViewModel
 import io.ktor.client.*
@@ -29,7 +30,7 @@ import java.util.concurrent.TimeUnit
  */
 class VoiceSessionController(
     private val context: Context,
-    private val viewModel: AppViewModel?,
+    private val viewModel: AppViewModel? = null,
     private val coroutineScope: CoroutineScope,
     private val onVolumeChanged: (Float) -> Unit,
     private val onTranscriptionReceived: (String) -> Unit,
@@ -63,15 +64,17 @@ class VoiceSessionController(
                 })
             }
             install(HttpTimeout) {
-                requestTimeoutMillis = Long.MAX_VALUE
+                requestTimeoutMillis = 10 * 60 * 1000  // 10分钟，用于长时间的 TTS 流式响应
                 connectTimeoutMillis = 60_000
-                socketTimeoutMillis = Long.MAX_VALUE
+                socketTimeoutMillis = 5 * 60 * 1000   // 5分钟，避免僵死连接
             }
             install(WebSockets) {
                 pingIntervalMillis = 30_000
             }
         }
     }
+    
+    private var isClientClosed = false
     
     /**
      * 预连接阿里云 STT WebSocket
@@ -130,6 +133,11 @@ class VoiceSessionController(
      * 启动录音会话
      */
     fun startRecording() {
+        // 【关键修复】在任何操作之前立即重置 WebSocket 状态
+        // 这样可以清除上一次录音（可能是阿里云实时模式）的残留状态
+        // 确保切换到非阿里云平台时不会显示旧的连接状态
+        onWebSocketStateChanged(VoiceChatSession.WebSocketState.DISCONNECTED)
+        
         // 启动新录音前，确保停止之前的播放或处理
         stopPlayback()
 
@@ -412,7 +420,7 @@ Do not refer to yourself as an AI or a model.
 @Composable
 fun rememberVoiceSessionController(
     context: Context,
-    viewModel: AppViewModel?,
+    viewModel: AppViewModel? = null,
     coroutineScope: CoroutineScope,
     onVolumeChanged: (Float) -> Unit,
     onTranscriptionReceived: (String) -> Unit,

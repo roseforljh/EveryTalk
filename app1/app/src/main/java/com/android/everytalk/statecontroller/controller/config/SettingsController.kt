@@ -220,7 +220,15 @@ class SettingsController(
                 // 3. 导出语音后端配置 (STT/Chat/TTS) - 混淆密钥后导出
                 val voiceConfigsToExport = stateHolder._voiceBackendConfigs.value.map { obfuscateVoiceConfig(it) }
                 
-                Log.i(TAG, "Exporting voice configs: ${voiceConfigsToExport.size}")
+                Log.i(TAG, "语音配置数量: ${voiceConfigsToExport.size}")
+                voiceConfigsToExport.forEachIndexed { index, config ->
+                    Log.i(TAG, "  语音配置[$index]: id=${config.id}, name=${config.name}, provider=${config.provider}")
+                    Log.i(TAG, "    STT: platform=${config.sttPlatform}, model=${config.sttModel}, url=${config.sttApiUrl}")
+                    Log.i(TAG, "    Chat: platform=${config.chatPlatform}, model=${config.chatModel}, url=${config.chatApiUrl}")
+                    Log.i(TAG, "    Chat API Key 非空: ${config.chatApiKey.isNotBlank()}, 长度: ${config.chatApiKey.length}")
+                    Log.i(TAG, "    TTS: platform=${config.ttsPlatform}, model=${config.ttsModel}, url=${config.ttsApiUrl}, voice=${config.voiceName}")
+                    Log.i(TAG, "    realtime=${config.useRealtimeStreaming}")
+                }
                 
                 // 4. 导出聊天历史（可选）
                 val chatHistoryToExport = if (includeHistory) {
@@ -695,14 +703,25 @@ class SettingsController(
             validVoiceConfigs.forEach { idToConfigMap[it.id] = it }
             val mergedConfigs = idToConfigMap.values.toList()
             
-            val previousSelectedId = stateHolder._selectedVoiceConfig.value?.id
-            val newSelected = mergedConfigs.find { it.id == previousSelectedId }
+            // 关键修复：选择导入的配置作为选中配置
+            // 优先选择有完整Chat配置（chatModel非空）的导入配置
+            // 这样可以确保用户导入配置后能看到正确的LLM设置
+            val importedConfigWithChat = validVoiceConfigs.firstOrNull { 
+                it.chatModel.isNotBlank() || it.chatApiKey.isNotBlank() 
+            }
+            val newSelected = importedConfigWithChat 
+                ?: validVoiceConfigs.firstOrNull()
+                ?: stateHolder._selectedVoiceConfig.value
                 ?: mergedConfigs.firstOrNull()
 
             stateHolder._voiceBackendConfigs.value = mergedConfigs
             stateHolder._selectedVoiceConfig.value = newSelected
             persistenceManager.saveVoiceBackendConfigs(mergedConfigs)
             persistenceManager.saveSelectedVoiceConfigId(newSelected?.id)
+            
+            Log.i(TAG, "语音配置导入完成: 导入 ${validVoiceConfigs.size} 个, 合并后总数 ${mergedConfigs.size}")
+            Log.i(TAG, "  选中的配置: id=${newSelected?.id}, name=${newSelected?.name}")
+            Log.i(TAG, "  选中配置Chat: platform=${newSelected?.chatPlatform}, model=${newSelected?.chatModel}, hasKey=${newSelected?.chatApiKey?.isNotBlank()}")
             
             result.voiceConfigsImported = validVoiceConfigs.size
         }

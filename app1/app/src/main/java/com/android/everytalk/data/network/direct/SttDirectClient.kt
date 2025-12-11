@@ -178,7 +178,7 @@ object SttDirectClient {
             "${apiUrl.trimEnd('/')}/audio/transcriptions"
         }
         
-        Log.i(TAG, "OpenAI STT: $model at $targetUrl, audio size=${audioData.size}, apiKey prefix=${apiKey.take(8)}...")
+        Log.i(TAG, "OpenAI STT: $model at $targetUrl, audio size=${audioData.size}")
         
         try {
             val response = client.submitFormWithBinaryData(

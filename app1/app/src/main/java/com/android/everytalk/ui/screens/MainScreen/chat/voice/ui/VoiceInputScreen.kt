@@ -33,6 +33,7 @@ import com.android.everytalk.ui.screens.MainScreen.chat.dialog.SttSettingsDialog
 import com.android.everytalk.ui.screens.MainScreen.chat.dialog.VoiceSelectionDialog
 import com.android.everytalk.ui.screens.MainScreen.chat.dialog.VoiceSettingsDialog
 import com.android.everytalk.ui.screens.MainScreen.chat.voice.logic.rememberVoiceSessionController
+import com.android.everytalk.ui.screens.MainScreen.chat.voice.logic.VoiceConfigManager
 
 /**
  * 语音输入屏幕 - 重构版
@@ -104,7 +105,7 @@ fun VoiceInputScreen(
     // ========== 权限管理 ==========
     val requestAudioPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { granted ->
+    ) { granted -> 
         if (granted) {
             sessionController.startRecording()
         } else {
@@ -251,9 +252,20 @@ fun VoiceInputScreen(
                 contentColor = contentColor
             )
             
-            // WebSocket 状态指示器（仅在录音时显示）
+            // WebSocket 状态指示器（仅在阿里云实时流式模式且录音时显示）
+            // 从 viewModel 获取当前配置判断是否为阿里云实时流式模式
+            val currentVoiceConfig by viewModel?.stateHolder?._selectedVoiceConfig?.collectAsState() 
+                ?: remember { mutableStateOf(null) }
+            val isAliyunRealtimeMode by remember {
+                derivedStateOf {
+                    currentVoiceConfig?.let { config ->
+                        config.useRealtimeStreaming && config.sttPlatform.equals("Aliyun", ignoreCase = true)
+                    } ?: false
+                }
+            }
+            
             AnimatedVisibility(
-                visible = isRecording,
+                visible = isRecording && isAliyunRealtimeMode,
                 enter = fadeIn(),
                 exit = fadeOut(),
                 modifier = Modifier

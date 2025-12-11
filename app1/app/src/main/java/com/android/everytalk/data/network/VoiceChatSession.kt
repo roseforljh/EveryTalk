@@ -15,6 +15,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import okhttp3.MediaType.Companion.toMediaType
@@ -88,7 +89,11 @@ class VoiceChatSession(
 ) {
     private var audioRecord: AudioRecord? = null
     private var isRecording: Boolean = false
-    private val pcmBuffer = ByteArrayOutputStream(256 * 1024)
+    private val pcmBuffer = SafeByteArrayOutputStream(256 * 1024)
+    
+    // 录音最大时长（毫秒）
+    private val maxRecordingDurationMs = 5 * 60 * 1000L  // 5分钟
+    private var recordingStartTime = 0L
     
     // 直连会话
     private var directSession: VoiceChatDirectSession? = null
@@ -123,9 +128,9 @@ class VoiceChatSession(
                 })
             }
             install(HttpTimeout) {
-                requestTimeoutMillis = Long.MAX_VALUE
+                requestTimeoutMillis = 10 * 60 * 1000  // 10分钟，用于长时间的 TTS 流式响应
                 connectTimeoutMillis = 60_000
-                socketTimeoutMillis = Long.MAX_VALUE
+                socketTimeoutMillis = 5 * 60 * 1000   // 5分钟，避免僵死连接
             }
             install(WebSockets) {
                 pingIntervalMillis = 30_000
@@ -158,11 +163,15 @@ class VoiceChatSession(
 
     /**
      * 仅在启用阿里云实时流式时才向 UI 报告 WebSocket 状态
-     * 关闭实时流式开关时，不再展示任何与 WS 相关的提示
+     * 关闭实时流式开关时，发送 DISCONNECTED 状态让 UI 隐藏状态指示器
      */
     private fun notifyWebSocketState(state: WebSocketState) {
-        if (useRealtimeStt && sttPlatform.equals("Aliyun", ignoreCase = true)) {
+        val shouldUseRealtimeStt = useRealtimeStt && sttPlatform.equals("Aliyun", ignoreCase = true)
+        if (shouldUseRealtimeStt) {
             onWebSocketStateChanged?.invoke(state)
+        } else {
+            // 非实时模式下，始终发送 DISCONNECTED 状态，让 UI 知道不需要显示连接状态
+            onWebSocketStateChanged?.invoke(WebSocketState.DISCONNECTED)
         }
     }
     
@@ -185,7 +194,7 @@ class VoiceChatSession(
         if (isRecording) return@withContext
         
         val recorder = createAudioRecord()
-            ?: throw IllegalStateException("AudioRecord init failed. Check RECORD_AUDIO permission.")
+            ?: throw VoiceRecognitionException("无法启动录音，请检查麦克风权限是否已开启")
 
         audioRecord = recorder
         pcmBuffer.reset()
@@ -196,8 +205,18 @@ class VoiceChatSession(
         }
         isWebSocketReady.set(false)
 
+        // 记录开始时间，用于后续最大时长检测
+        recordingStartTime = System.currentTimeMillis()
+
         // 如果是阿里云且启用实时 STT
         val shouldUseRealtimeStt = useRealtimeStt && sttPlatform.equals("Aliyun", ignoreCase = true)
+        
+        // 【关键修复】非实时模式下，立即发送 DISCONNECTED 状态，确保 UI 不显示连接状态指示器
+        if (!shouldUseRealtimeStt) {
+            withContext(Dispatchers.Main) {
+                onWebSocketStateChanged?.invoke(WebSocketState.DISCONNECTED)
+            }
+        }
         
         // 【关键优化】先启动录音，再启动 WebSocket 连接（并行）
         try {
@@ -210,7 +229,20 @@ class VoiceChatSession(
         }
  
         isRecording = true
- 
+         
+        // 监控录音最大时长，防止无限录制
+        val monitorJob = CoroutineScope(Dispatchers.Default).launch {
+            while (isRecording) {
+                val elapsedMs = System.currentTimeMillis() - recordingStartTime
+                if (elapsedMs >= maxRecordingDurationMs) {
+                    Log.i(TAG, "Reached max recording duration, stopping recording")
+                    stopRecordingAndProcess()
+                    break
+                }
+                delay(1000)
+            }
+        }
+        
         // 如果启用了实时 STT，则为本次录音创建独立的 AliyunRealtimeSttClient 会话
         if (shouldUseRealtimeStt) {
             // 通知 UI WebSocket 正在连接（仅实时流式模式下才会显示）
@@ -273,7 +305,7 @@ class VoiceChatSession(
                 }
             }
         }
- 
+
         // 启动读取循环
         val readBuf = ByteArray(3200) // 100ms @ 16kHz 16bit mono = 3200 bytes
         var lastVolumeUpdateTime = 0L
@@ -281,6 +313,14 @@ class VoiceChatSession(
         try {
             while (isRecording) {
                 val n = recorder.read(readBuf, 0, readBuf.size)
+                // 退出条件： 你可以在这里加入检测最大录制时长的条件，或者在循环中判断
+                // 实时检测最大时长
+                val elapsedMs = System.currentTimeMillis() - recordingStartTime
+                if (elapsedMs >= maxRecordingDurationMs) {
+                    Log.i(TAG, "Max recording duration reached, stopping recording")
+                    stopRecordingAndProcess()
+                    break
+                }
 
                 if (n > 0) {
                     // 始终写入 pcmBuffer（用于后续可能的离线 STT 或备份）
@@ -336,6 +376,9 @@ class VoiceChatSession(
             }
         } catch (t: Throwable) {
             Log.e(TAG, "Recording loop error", t)
+        } finally {
+            // 关闭录音和监控
+            monitorJob.cancel()
         }
     }
     
@@ -347,7 +390,6 @@ class VoiceChatSession(
         pendingBufferMutex.withLock {
             // 计算当前缓冲区大小
             val currentSize = pendingAudioBuffer.sumOf { it.size }
-            
             if (currentSize + chunk.size > maxPendingBufferSize) {
                 // 缓冲区即将溢出，丢弃最旧的数据
                 var sizeToRemove = chunk.size
@@ -357,9 +399,7 @@ class VoiceChatSession(
                 }
                 Log.w(TAG, "Pending audio buffer overflow, dropped oldest chunks")
             }
-            
             pendingAudioBuffer.add(chunk)
-            
             if (pendingAudioBuffer.size % 10 == 0) {
                 Log.d(TAG, "Buffering audio: ${pendingAudioBuffer.size} chunks, ~${currentSize / 1024}KB")
             }
@@ -372,20 +412,16 @@ class VoiceChatSession(
      */
     private suspend fun flushPendingAudioBuffer() {
         val chunksToSend: List<ByteArray>
-        
         pendingBufferMutex.withLock {
             chunksToSend = pendingAudioBuffer.toList()
             pendingAudioBuffer.clear()
         }
-        
         if (chunksToSend.isNotEmpty()) {
             val totalBytes = chunksToSend.sumOf { it.size }
             val durationMs = (totalBytes.toFloat() / (sampleRate * 2) * 1000).toLong()
             Log.i(TAG, "Flushing ${chunksToSend.size} buffered audio chunks (${totalBytes / 1024}KB, ~${durationMs}ms)")
-            
             try {
                 for (chunk in chunksToSend) {
-                    // 检查是否仍在录音状态或连接仍可用，避免在停止后继续发送
                     if (!isRecording && !isWebSocketReady.get()) {
                         Log.w(TAG, "Recording stopped during flush, aborting")
                         break
@@ -394,13 +430,11 @@ class VoiceChatSession(
                         aliyunRealtimeSttClient?.sendAudio(chunk)
                     } catch (e: Exception) {
                         Log.w(TAG, "Error sending buffered audio to realtime STT: ${e.message}")
-                        // 避免因为单块发送失败导致崩溃，继续尝试后续块
                     }
                 }
                 Log.i(TAG, "Buffered audio flushed successfully to AliyunRealtimeSttClient")
             } catch (e: Exception) {
                 Log.w(TAG, "Error flushing audio buffer: ${e.message}")
-                // 不抛出异常，避免崩溃
             }
         }
     }
@@ -571,7 +605,7 @@ class VoiceChatSession(
         Log.i(TAG, "Realtime STT final result: $userText")
         
         if (userText.isBlank()) {
-            throw IllegalStateException("语音识别失败：未能识别出文字")
+            throw VoiceRecognitionException("未能识别出语音内容，请检查麦克风权限或重试")
         }
         
         // 通知 UI 最终的识别结果
@@ -671,7 +705,7 @@ class VoiceChatSession(
 
         val pcmData = pcmBuffer.toByteArray()
         if (pcmData.isEmpty()) {
-            throw IllegalStateException("No audio data recorded")
+            throw VoiceRecognitionException("录音数据为空，请确保麦克风正常工作")
         }
 
         Log.i(TAG, "Recorded ${pcmData.size} bytes of PCM data for direct mode")
@@ -825,18 +859,14 @@ class VoiceChatSession(
             val totalFrames = audioData.size / 2
             var waitedMs = 0
             val timeoutMs = (totalFrames.toFloat() / sampleRate * 1000).toLong() + 2000 // 理论时长 + 2秒缓冲
-            
             while (waitedMs < timeoutMs && !shouldStopPlayback) {
                 if (track.playState == AudioTrack.PLAYSTATE_STOPPED) break
-                
                 // getPlaybackHeadPosition() 返回的是帧数
                 val currentPosition = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
-                
                 if (currentPosition >= totalFrames) {
                     Log.i(TAG, "Standard playback completed ($currentPosition / $totalFrames)")
                     break
                 }
-                
                 kotlinx.coroutines.delay(50)
                 waitedMs += 50
             }
@@ -850,7 +880,6 @@ class VoiceChatSession(
                 track.release()
             } catch (_: Throwable) {}
             currentAudioTrack = null
-            
             // 播放结束后，将音量归零
             withContext(Dispatchers.Main) {
                 onVolumeChanged?.invoke(0f)
@@ -1125,11 +1154,9 @@ class VoiceChatSession(
             while (offset < totalToWrite && !forceStop) {
                 val remaining = totalToWrite - offset
                 val written = track.write(stereoData, offset, remaining)
-                
                 if (written > 0) {
                     offset += written
                     totalWrittenBytes += written
-                    
                     // 检查播放状态，如果处于停止状态则重新启动
                     if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
                         try {
@@ -1151,13 +1178,11 @@ class VoiceChatSession(
         fun close() {
             try {
                 val track = audioTrack ?: return
-                
                 if (forceStop) {
                     Log.i("StreamAudioPlayer", "Playback force stopped by user")
                     track.release()
                     return
                 }
-
                 // 【关键修复】写入静音 Padding
                 // 在停止前写入约 200ms 的静音数据，将硬件缓冲区中的有效音频"挤"出来
                 // 这能解决部分设备尾音被吞或 playbackHeadPosition 不更新到最后的问题
@@ -1167,13 +1192,11 @@ class VoiceChatSession(
                     val paddingData = ByteArray(paddingBytes) // 全 0 即静音
                     track.write(paddingData, 0, paddingBytes)
                     Log.i("StreamAudioPlayer", "Written ${paddingBytes} bytes of silence padding")
-                    
                     // 计入总写入量，以便后续等待逻辑包含这段 Padding
                     totalWrittenBytes += paddingBytes
                 } catch (e: Exception) {
                     Log.w("StreamAudioPlayer", "Failed to write padding", e)
                 }
-                
                 // 阻塞等待播放完成
                 // Stereo 模式下: 1 frame = 2 channels * 16bit = 4 bytes
                 val totalFrames = totalWrittenBytes / 4
@@ -1181,59 +1204,51 @@ class VoiceChatSession(
                 val timeoutMs = PerformanceConfig.VOICE_STREAM_CLOSE_TIMEOUT_MS.toInt()
                 var lastPosition = -1L
                 var positionStuckCount = 0
-                
                 // 启动等待
-                val startupGraceMs = 1000
+                val startupGraceMs = if (isProblematicDevice) 2000 else 1000  // 问题设备给更长启动时间
                 var startupWaitMs = 0
-                
                 Log.i("StreamAudioPlayer", "Waiting for playback completion. Total frames: $totalFrames")
-
                 if (totalFrames > 0) {
                     // 1. 等待播放启动 (head > 0)
                     while (startupWaitMs < startupGraceMs && !forceStop) {
                         val currentPosition = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
                         if (currentPosition > 0) break
-                        
                         // 如果还没开始且不在播放状态，尝试再次 play
                         if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
                             try { track.play() } catch (_: Exception) {}
                         }
-                        
                         Thread.sleep(50)
                         startupWaitMs += 50
                     }
                     
                     // 2. 等待播放结束
+                    // 问题设备的卡死阈值更高，避免误判
+                    val stuckThreshold = if (isProblematicDevice) 60 else 40  // 3s 或 2s
                     while (waitedMs < timeoutMs && !forceStop) {
                         val currentPosition = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
-                        
                         // 允许 5% 的误差，加上 Padding 后通常能完整播放有效音频
                         if (currentPosition >= totalFrames * 0.95) {
                             Log.i("StreamAudioPlayer", "Playback completed naturally ($currentPosition / $totalFrames)")
                             break
                         }
-                        
                         // 卡死检测
                         if (currentPosition == lastPosition) {
                             positionStuckCount++
-                            if (positionStuckCount > 30) { // 1.5s 不动则超时
-                                Log.w("StreamAudioPlayer", "Playback stuck at $currentPosition / $totalFrames, aborting wait")
+                            if (positionStuckCount > stuckThreshold) {
+                                Log.w("StreamAudioPlayer", "Playback stuck at $currentPosition / $totalFrames after ${positionStuckCount * 50}ms, aborting wait")
                                 break
                             }
                         } else {
                             lastPosition = currentPosition
                             positionStuckCount = 0
                         }
-                        
                         Thread.sleep(50)
                         waitedMs += 50
                     }
                 }
-                
                 if (waitedMs >= timeoutMs) {
                     Log.w("StreamAudioPlayer", "Playback wait timed out. Final pos: ${track.playbackHeadPosition} / $totalFrames")
                 }
-
                 // 3. 释放资源
                 track.stop()
                 track.release()
@@ -1280,14 +1295,73 @@ class VoiceChatSession(
 }
 
 /**
+ * SafeByteArrayOutputStream with maximum容量保护，避免无限增长
+ */
+private class SafeByteArrayOutputStream(
+    initialCapacity: Int,
+    private val maxSize: Int = MAX_RECORDING_BUFFER_SIZE
+) : ByteArrayOutputStream(initialCapacity) {
+    companion object {
+        const val MAX_RECORDING_BUFFER_SIZE = 5 * 60 * 16000 * 2 // 5分钟音频 @ 16kHz 16bit mono = ~9.6MB
+    }
+    
+    @Synchronized
+    override fun write(b: Int) {
+        if (count >= maxSize) return
+        super.write(b)
+    }
+    
+    @Synchronized
+    override fun write(b: ByteArray, off: Int, len: Int) {
+        val availableSpace = maxSize - count
+        if (availableSpace <= 0) return
+        val actualLen = minOf(len, availableSpace)
+        super.write(b, off, actualLen)
+    }
+    
+    fun isAtCapacity(): Boolean = count >= maxSize
+}
+
+/**
+ * 语音识别异常
+ */
+class VoiceRecognitionException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
+/**
+ * 语音处理异常
+ */
+class VoiceProcessingException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
+/**
  * 语音对话结果
  */
 data class VoiceChatResult(
-    val userText: String,          // 用户说的话（识别结果）
-    val assistantText: String,     // AI回复
-    val audioData: ByteArray,      // 音频数据
-    val audioFormat: String,       // 音频格式
-    val sampleRate: Int,           // 采样率
-    val isRealtimeMode: Boolean = false  // 是否为实时流式模式（实时模式下音频已边播边放，audioData 为空是正常的）
-)
+    val userText: String,
+    val assistantText: String,
+    val audioData: ByteArray,
+    val audioFormat: String = "audio/pcm",
+    val sampleRate: Int = 24000,
+    val isRealtimeMode: Boolean = false
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+        other as VoiceChatResult
+        return userText == other.userText && 
+               assistantText == other.assistantText && 
+               audioData.contentEquals(other.audioData) && 
+               audioFormat == other.audioFormat && 
+               sampleRate == other.sampleRate && 
+               isRealtimeMode == other.isRealtimeMode
+    }
 
+    override fun hashCode(): Int {
+        var result = userText.hashCode()
+        result = 31 * result + assistantText.hashCode()
+        result = 31 * result + audioData.contentHashCode()
+        result = 31 * result + audioFormat.hashCode()
+        result = 31 * result + sampleRate
+        result = 31 * result + isRealtimeMode.hashCode()
+        return result
+    }
+}
