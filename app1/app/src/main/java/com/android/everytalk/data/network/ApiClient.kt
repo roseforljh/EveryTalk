@@ -264,25 +264,24 @@ object ApiClient {
         }
     }
 
-
-
-
-
-
     private fun buildFinalUrl(baseAddress: String, defaultPath: String): String {
-        val trimmedAddress = baseAddress.trim()
-        var finalAddress = when {
-            trimmedAddress.endsWith("#") -> trimmedAddress.removeSuffix("#")
-            trimmedAddress.endsWith("/") -> trimmedAddress.removeSuffix("/")
+        val sanitizedDefault = if (defaultPath.startsWith("/")) defaultPath else "/$defaultPath"
+        val trimmedAddress = baseAddress.trim().removeSuffix("#").trimEnd('/')
+        val withScheme = when {
+            trimmedAddress.startsWith("http://") || trimmedAddress.startsWith("https://") -> trimmedAddress
+            trimmedAddress.isNotEmpty() -> "https://$trimmedAddress"
             else -> trimmedAddress
         }
-
-        // 所有构建均保留 http，避免将明文后端误升为 https
-        if (finalAddress.startsWith("http://")) {
-            android.util.Log.i("ApiClient", "Keeping HTTP endpoint: $finalAddress")
-        }
-
-        return finalAddress + defaultPath
+        val uri = try { java.net.URI(withScheme) } catch (_: Exception) { java.net.URI("https://$trimmedAddress") }
+        val existingPath = uri.rawPath ?: ""
+        val finalPath = when {
+            existingPath.isEmpty() -> sanitizedDefault
+            existingPath.contains("/models") -> existingPath
+            existingPath.endsWith("/v1") -> "$existingPath/models"
+            existingPath.endsWith("/") -> existingPath + sanitizedDefault.removePrefix("/")
+            else -> existingPath + sanitizedDefault
+        }.replace(Regex("/{2,}"), "/")
+        return java.net.URI(uri.scheme, uri.userInfo, uri.host, uri.port, finalPath, uri.rawQuery, uri.rawFragment).toString()
     }
 
     private fun getFileNameFromUri(context: Context, uri: Uri): String {
@@ -542,9 +541,7 @@ object ApiClient {
 
     private fun getUpdateUrls(): List<String> {
         return listOf(
-            GITHUB_API_BASE_URL + "repos/roseforljh/KunTalkwithAi/releases/latest",
-            "https://kuntalk-update-checker.onrender.com/latest",
-            "https://kuntalk-backup-updater.vercel.app/latest"
+            GITHUB_API_BASE_URL + "repos/roseforljh/EveryTalk/releases/latest"
         )
     }
 
@@ -568,7 +565,7 @@ object ApiClient {
                         header(HttpHeaders.Accept, "application/vnd.github.v3+json")
                         header(HttpHeaders.CacheControl, "no-cache")
                         header(HttpHeaders.Pragma, "no-cache")
-                        header(HttpHeaders.UserAgent, "KunTalkAI/1.3.7")
+                        header(HttpHeaders.UserAgent, "EveryTalk-Android-App")
                         
                         // VPN环境下的特殊超时配置
                         timeout {
@@ -611,9 +608,14 @@ object ApiClient {
         }
     
         // 统一去掉尾部 '#' 并清理 apiKey 中的换行符和多余空白
-        val baseForModels = apiUrl.trim().removeSuffix("#")
+        val baseForModels = apiUrl.trim().removeSuffix("#").trim()
         val cleanedApiKey = apiKey.trim().replace(Regex("[\\r\\n\\s]+"), "")
-        val parsedUri = try { java.net.URI(baseForModels) } catch (_: Exception) { null }
+        val normalizedBase = when {
+            baseForModels.startsWith("http://") || baseForModels.startsWith("https://") -> baseForModels
+            baseForModels.isNotEmpty() -> "https://$baseForModels"
+            else -> baseForModels
+        }
+        val parsedUri = try { java.net.URI(normalizedBase) } catch (_: Exception) { null }
         val hostLower = parsedUri?.host?.lowercase()
         val scheme = parsedUri?.scheme ?: "https"
     
@@ -636,7 +638,7 @@ object ApiClient {
             }
             // Gemini渠道但非官方域名(如反代),使用用户提供的地址 + Gemini路径，Bearer Token 认证
             isGeminiChannel -> {
-                val geminiProxyUrl = "$baseForModels/v1beta/models"
+                val geminiProxyUrl = "${normalizedBase.trimEnd('/')}/v1beta/models"
                 android.util.Log.i("ApiClient", "检测到 Gemini 渠道(反代)，使用代理地址 + Bearer Token: $geminiProxyUrl")
                 geminiProxyUrl
             }
@@ -647,7 +649,7 @@ object ApiClient {
                 zhipu
             }
             else -> {
-                buildFinalUrl(baseForModels, "/v1/models")
+                buildFinalUrl(normalizedBase, "/v1/models")
             }
         }
         android.util.Log.d("ApiClient", "获取模型列表 - 原始URL: '$apiUrl', 最终请求URL: '$url'")
@@ -660,7 +662,7 @@ object ApiClient {
                     header(HttpHeaders.Authorization, "Bearer $cleanedApiKey")
                 }
                 header(HttpHeaders.Accept, "application/json")
-                header(HttpHeaders.UserAgent, "KunTalkwithAi/1.0")
+                header(HttpHeaders.UserAgent, "EveryTalk/1.0 (Android)")
             }
     
             val responseBody = response.bodyAsText()
