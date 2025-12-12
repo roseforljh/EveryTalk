@@ -71,6 +71,8 @@ import com.android.everytalk.statecontroller.controller.conversation.EditMessage
 import com.android.everytalk.statecontroller.controller.media.ClipboardController
 import com.android.everytalk.statecontroller.controller.config.ConfigFacade
 import com.android.everytalk.statecontroller.controller.config.ProviderController
+import com.android.everytalk.statecontroller.controller.cache.CacheController
+import com.android.everytalk.util.storage.IncrementalBackupManager
 
 // Constructor changed: removed dataSource
 class AppViewModel(application: Application) : AndroidViewModel(application) {
@@ -86,10 +88,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     // 原图文件管理器（用于原样字节落地与下载）
     private val fileManager by lazy { FileManager(application.applicationContext) }
     
+    // 缓存控制器 - 管理预览缓存和缓存预热
+    private val cacheController by lazy { CacheController(cacheManager, viewModelScope) }
+    
+    // 增量备份管理器 - 跟踪脏会话，只保存变更数据
+    val incrementalBackupManager by lazy { IncrementalBackupManager() }
+    
     private val messagesMutex = Mutex()
     private val historyMutex = Mutex()
-    private val textConversationPreviewCache = LruCache<String, String>(100)
-    private val imageConversationPreviewCache = LruCache<String, String>(100)
+    // 使用 CacheController 的缓存
+    private val textConversationPreviewCache get() = cacheController.getTextPreviewCache()
+    private val imageConversationPreviewCache get() = cacheController.getImagePreviewCache()
     internal val stateHolder = ViewModelStateHolder()
     
     // 手势冲突管理器（用于协调代码块滚动和抽屉手势）
@@ -115,8 +124,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     persistenceManager,
                     ::areMessageListsEffectivelyEqual,
                     onHistoryModified = {
-                        textConversationPreviewCache.evictAll()
-                        imageConversationPreviewCache.evictAll()
+                        cacheController.evictAllPreviews()
                     },
                     scope = viewModelScope
             )
@@ -571,13 +579,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         messageSender
         stateHolder.setApiHandler(apiHandler)
         
-        // 启动缓存维护任务
-        viewModelScope.launch {
-            while (true) {
-                delay(60_000) // 每分钟检查一次
-                cacheManager.smartCleanup()
-            }
-        }
+        // 启动缓存维护任务 - 使用 CacheController
+        cacheController.startCacheMaintenanceTask()
        
        // Initialize buffer scope for StreamingBuffer operations
        stateHolder.initializeBufferScope(viewModelScope)

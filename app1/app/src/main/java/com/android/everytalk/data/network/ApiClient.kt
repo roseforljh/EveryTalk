@@ -50,8 +50,15 @@ object ApiClient {
     
     /**
      * Parse backend stream event JSON format and convert to AppStreamEvent
+     * 委托到 StreamEventParser 处理，保持向后兼容
      */
     private fun parseBackendStreamEvent(jsonChunk: String): AppStreamEvent? {
+        return com.android.everytalk.data.network.parser.StreamEventParser.parseBackendStreamEvent(jsonChunk)
+    }
+    
+    // 保留原有解析逻辑作为备用（已迁移到 StreamEventParser）
+    @Deprecated("Use StreamEventParser.parseBackendStreamEvent instead")
+    private fun parseBackendStreamEventLegacy(jsonChunk: String): AppStreamEvent? {
         try {
             // Parse as JsonObject to avoid AnySerializer deserialization issues
             val jsonObject = Json.parseToJsonElement(jsonChunk).jsonObject

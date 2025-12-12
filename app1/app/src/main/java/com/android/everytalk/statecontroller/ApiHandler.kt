@@ -14,6 +14,7 @@ import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.models.SelectedMediaItem.Audio
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import com.android.everytalk.util.AppLogger
+import com.android.everytalk.util.PromptLeakGuard
 import com.android.everytalk.util.debug.PerformanceMonitor
 import com.android.everytalk.util.messageprocessor.MessageProcessor
 import io.ktor.client.statement.HttpResponse
@@ -52,6 +53,9 @@ class ApiHandler(
     private val messageProcessorMap = mutableMapOf<String, MessageProcessor>()
     private var eventChannel: Channel<AppStreamEvent>? = null
     private val processedMessageIds = mutableSetOf<String>()
+    
+    // 🛡️ 防 prompt 泄露：为每个消息创建独立的流式检测器
+    private val promptLeakDetectors = mutableMapOf<String, PromptLeakGuard.StreamingDetector>()
 
     private val USER_CANCEL_PREFIX = "USER_CANCELLED:"
     private val NEW_STREAM_CANCEL_PREFIX = "NEW_STREAM_INITIATED:"
@@ -122,6 +126,8 @@ class ApiHandler(
             logger.debug("Cleared StreamingBuffer on cancellation for message: $messageIdBeingCancelled")
             
             messageProcessorMap.remove(messageIdBeingCancelled)
+            // 🛡️ 清理 prompt 泄露检测器
+            promptLeakDetectors.remove(messageIdBeingCancelled)
         }
 
         if (messageIdBeingCancelled != null) {
@@ -533,11 +539,18 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                         val deltaChunk = appEvent.text
                         // 过滤纯空白内容，防止后端发送大量空格导致卡死
                         if (!deltaChunk.isNullOrEmpty() && deltaChunk.isNotBlank()) {
+                            // 🛡️ 防 prompt 泄露：通过检测器过滤
+                            val leakDetector = promptLeakDetectors.getOrPut(aiMessageId) { PromptLeakGuard.StreamingDetector() }
+                            val filteredChunk = leakDetector.appendAndCheck(deltaChunk)
+                            if (filteredChunk.isEmpty()) {
+                                logger.warn("🛡️ Blocked content chunk due to prompt leak detection for message $aiMessageId")
+                                return@withContext
+                            }
                             // sampling-based performance record
-                            PerformanceMonitor.recordEvent(aiMessageId, "Content", deltaChunk.length)
+                            PerformanceMonitor.recordEvent(aiMessageId, "Content", filteredChunk.length)
                             // 🔍 [STREAM_DEBUG_ANDROID]
-                            android.util.Log.i("STREAM_DEBUG", "[ApiHandler] ✅ Content event received: msgId=$aiMessageId, chunkLen=${deltaChunk.length}, preview='${deltaChunk.take(30)}'")
-                            stateHolder.appendContentToMessage(aiMessageId, deltaChunk, isImageGeneration)
+                            android.util.Log.i("STREAM_DEBUG", "[ApiHandler] ✅ Content event received: msgId=$aiMessageId, chunkLen=${filteredChunk.length}, preview='${filteredChunk.take(30)}'")
+                            stateHolder.appendContentToMessage(aiMessageId, filteredChunk, isImageGeneration)
                             // 🎯 第一个非空内容到来时，标记contentStarted = true
                             // 这样思考框会收起，正式内容开始流式展示
                             if (!currentMessage.contentStarted) {
@@ -590,8 +603,15 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                         val deltaChunk = appEvent.text
                         // 过滤纯空白内容
                         if (!deltaChunk.isNullOrEmpty() && deltaChunk.isNotBlank()) {
-                            PerformanceMonitor.recordEvent(aiMessageId, "Text", deltaChunk.length)
-                            stateHolder.appendContentToMessage(aiMessageId, deltaChunk, isImageGeneration)
+                            // 🛡️ 防 prompt 泄露：通过检测器过滤
+                            val leakDetector = promptLeakDetectors.getOrPut(aiMessageId) { PromptLeakGuard.StreamingDetector() }
+                            val filteredChunk = leakDetector.appendAndCheck(deltaChunk)
+                            if (filteredChunk.isEmpty()) {
+                                logger.warn("🛡️ Blocked text chunk due to prompt leak detection for message $aiMessageId")
+                                return@withContext
+                            }
+                            PerformanceMonitor.recordEvent(aiMessageId, "Text", filteredChunk.length)
+                            stateHolder.appendContentToMessage(aiMessageId, filteredChunk, isImageGeneration)
                             // 🎯 第一个非空文本到来时，标记contentStarted = true
                             if (!currentMessage.contentStarted) {
                                 updatedMessage = updatedMessage.copy(contentStarted = true)
@@ -1143,6 +1163,8 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                 removedCount++
                 logger.debug("✓ Removed inactive processor: $messageId")
             }
+            // 🛡️ 清理 prompt 泄露检测器
+            promptLeakDetectors.remove(messageId)
         }
         
         // 清理已处理的消息ID集合
@@ -1200,6 +1222,8 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                 removedCount++
                 logger.debug("✓ Removed inactive image processor: $messageId")
             }
+            // 🛡️ 清理 prompt 泄露检测器
+            promptLeakDetectors.remove(messageId)
         }
         
         // 清理已处理的消息ID集合

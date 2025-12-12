@@ -19,7 +19,8 @@ class StreamingBuffer(
     private val batchThreshold: Int = PerformanceConfig.STREAMING_BUFFER_BATCH_THRESHOLD,
     private val onUpdate: (String) -> Unit,
     private val coroutineScope: CoroutineScope,
-    private val enableAdaptiveThrottling: Boolean = true
+    private val enableAdaptiveThrottling: Boolean = true,
+    private val enableBatchMerging: Boolean = true // 启用批量合并策略
 ) {
     private val TAG = "StreamingBuffer"
     
@@ -33,6 +34,15 @@ class StreamingBuffer(
     private var lastAdaptiveAdjustTime = 0L
     private var chunksSinceLastAdjust = 0
     private var charsSinceLastAdjust = 0
+    
+    // 批量合并策略：高速流时动态调整最小批量大小
+    private var dynamicBatchThreshold = batchThreshold
+    private var consecutiveHighSpeedFlushes = 0
+    private companion object {
+        const val HIGH_SPEED_CHARS_PER_SECOND = 1500
+        const val MAX_DYNAMIC_BATCH_THRESHOLD = 50
+        const val BATCH_THRESHOLD_INCREMENT = 5
+    }
     
     fun append(chunk: String) {
         if (chunk.isEmpty()) return
@@ -51,7 +61,9 @@ class StreamingBuffer(
                 adjustIntervalIfNeeded(currentTime)
             }
             
-            if (currentBufferSize >= batchThreshold || timeSinceLastUpdate >= updateInterval) {
+            // 使用动态批量阈值（批量合并策略）
+            val effectiveThreshold = if (enableBatchMerging) dynamicBatchThreshold else batchThreshold
+            if (currentBufferSize >= effectiveThreshold || timeSinceLastUpdate >= updateInterval) {
                 pendingFlushJob?.cancel()
                 pendingFlushJob = null
                 performFlush(currentTime)
@@ -84,6 +96,27 @@ class StreamingBuffer(
         if (newInterval != updateInterval) {
             Log.d(TAG, "[$messageId] Adaptive interval: ${updateInterval}ms -> ${newInterval}ms (${charsPerSecond} chars/s)")
             updateInterval = newInterval
+        }
+        
+        // 批量合并策略：高速流时增加批量阈值，减少UI重组次数
+        if (enableBatchMerging) {
+            if (charsPerSecond > HIGH_SPEED_CHARS_PER_SECOND) {
+                consecutiveHighSpeedFlushes++
+                if (consecutiveHighSpeedFlushes >= 3) {
+                    val newThreshold = (dynamicBatchThreshold + BATCH_THRESHOLD_INCREMENT)
+                        .coerceAtMost(MAX_DYNAMIC_BATCH_THRESHOLD)
+                    if (newThreshold != dynamicBatchThreshold) {
+                        Log.d(TAG, "[$messageId] Batch threshold: $dynamicBatchThreshold -> $newThreshold chars")
+                        dynamicBatchThreshold = newThreshold
+                    }
+                }
+            } else {
+                consecutiveHighSpeedFlushes = 0
+                // 低速时逐渐恢复到基础阈值
+                if (dynamicBatchThreshold > batchThreshold) {
+                    dynamicBatchThreshold = (dynamicBatchThreshold - 1).coerceAtLeast(batchThreshold)
+                }
+            }
         }
         
         lastAdaptiveAdjustTime = currentTime
@@ -177,6 +210,9 @@ class StreamingBuffer(
             lastAdaptiveAdjustTime = 0L
             chunksSinceLastAdjust = 0
             charsSinceLastAdjust = 0
+            // 重置批量合并状态
+            dynamicBatchThreshold = batchThreshold
+            consecutiveHighSpeedFlushes = 0
         }
     }
     
@@ -189,6 +225,7 @@ class StreamingBuffer(
                 "totalCharsProcessed" to totalCharsProcessed,
                 "flushCount" to flushCount,
                 "currentInterval" to updateInterval,
+                "dynamicBatchThreshold" to dynamicBatchThreshold,
                 "hasPendingFlush" to (pendingFlushJob?.isActive == true),
                 "timeSinceLastUpdate" to (System.currentTimeMillis() - lastUpdateTime)
             )

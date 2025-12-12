@@ -74,7 +74,8 @@ class MainActivity : ComponentActivity() {
                         outputStream.write(content.toByteArray())
                     }
                     fileContentToSave = null
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    android.util.Log.e("MainActivity", "Failed to save file content", e)
                 }
             }
         }
