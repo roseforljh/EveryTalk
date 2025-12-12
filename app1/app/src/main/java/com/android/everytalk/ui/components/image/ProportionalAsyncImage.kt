@@ -13,9 +13,9 @@ import coil3.compose.AsyncImage
 import coil3.compose.AsyncImagePainter
 import coil3.request.ImageRequest
 import coil3.request.crossfade
-import com.android.everytalk.config.ImageCompressionPreferences
 import com.android.everytalk.util.AppLogger
 import com.android.everytalk.util.image.ImageScaleCalculator
+import com.android.everytalk.util.image.ImageScaleConfig
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -51,18 +51,6 @@ fun ProportionalAsyncImage(
     val context = LocalContext.current
     val density = LocalDensity.current
     val logger = remember { AppLogger.forComponent("ProportionalAsyncImage") }
-    
-    // 获取用户配置
-    val compressionPrefs = remember { ImageCompressionPreferences(context) }
-    val config = remember(isAiGenerated, compressionPrefs.compressionMode) {
-        if (isAiGenerated) {
-            // AI生成的图片使用专门的显示配置
-            compressionPrefs.getAiImageDisplayConfig()
-        } else {
-            // 用户上传的图片使用聊天模式配置
-            compressionPrefs.getChatModeConfig()
-        }
-    }
     
     // 动态计算的显示修饰符
     var calculatedModifier by remember { mutableStateOf(modifier) }
@@ -109,7 +97,11 @@ fun ProportionalAsyncImage(
                     val (targetWidth, targetHeight) = ImageScaleCalculator.calculateProportionalScale(
                         originalWidth,
                         originalHeight,
-                        config.copy(maxDimension = maxWidthPx)
+                        ImageScaleConfig(
+                            maxDimension = maxWidthPx,
+                            preserveAspectRatio = true,
+                            allowUpscale = false
+                        )
                     )
                     
                     // 转换回Dp

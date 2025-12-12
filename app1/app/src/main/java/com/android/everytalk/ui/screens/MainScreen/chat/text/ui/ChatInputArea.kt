@@ -110,34 +110,56 @@ private suspend fun checkFileSizeAndShowError(
 ): Boolean {
     return withContext(Dispatchers.IO) {
         try {
-            var fileSize = 0L
+            val maxFileSize = 50 * 1024 * 1024 // 50MB
+            var fileSize: Long? = null
             context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
                 if (cursor.moveToFirst()) {
                     val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
                     if (sizeIndex != -1) {
-                        fileSize = cursor.getLong(sizeIndex)
+                        val sizeValue = cursor.getLong(sizeIndex)
+                        if (sizeValue > 0) {
+                            fileSize = sizeValue
+                        }
                     }
                 }
             }
-            
-            // 如果无法从cursor获取大小，尝试通过输入流获取
-            if (fileSize <= 0) {
+
+            if (fileSize == null) {
                 try {
-                    context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                        fileSize = inputStream.available().toLong()
+                    val statSize = context.contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize } ?: -1L
+                    if (statSize > 0) {
+                        fileSize = statSize
                     }
                 } catch (e: Exception) {
-                    Log.w("FileSizeCheck", "Failed to get file size from input stream", e)
+                    Log.w("FileSizeCheck", "Failed to get file size from file descriptor", e)
                 }
             }
-            
-            val maxFileSize = 50 * 1024 * 1024 // 50MB
-            if (fileSize > maxFileSize) {
+
+            if (fileSize == null) {
+                try {
+                    context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                        val buffer = ByteArray(8192)
+                        var total = 0L
+                        while (true) {
+                            val read = inputStream.read(buffer)
+                            if (read == -1) break
+                            total += read
+                            if (total > maxFileSize) break
+                        }
+                        fileSize = total
+                    }
+                } catch (e: Exception) {
+                    Log.w("FileSizeCheck", "Failed to get file size by streaming", e)
+                }
+            }
+
+            val size = fileSize ?: 0L
+            if (size > maxFileSize) {
                 val fileSizeFormatted = when {
-                    fileSize < 1024 -> "${fileSize}B"
-                    fileSize < 1024 * 1024 -> "${fileSize / 1024}KB"
-                    fileSize < 1024 * 1024 * 1024 -> "${fileSize / (1024 * 1024)}MB"
-                    else -> "${fileSize / (1024 * 1024 * 1024)}GB"
+                    size < 1024 -> "${size}B"
+                    size < 1024 * 1024 -> "${size / 1024}KB"
+                    size < 1024 * 1024 * 1024 -> "${size / (1024 * 1024)}MB"
+                    else -> "${size / (1024 * 1024 * 1024)}GB"
                 }
                 withContext(Dispatchers.Main) {
                     onShowSnackbar("文件 \"$fileName\" 过大 ($fileSizeFormatted)，最大支持50MB")
