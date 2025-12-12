@@ -33,7 +33,7 @@ class FileManager(private val context: Context) {
     
     companion object {
         private const val CHAT_ATTACHMENTS_DIR = "chat_attachments"
-        private const val MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024 // 50MB 最大文件大小
+        private const val MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024 // 100MB 最大文件大小
         
         // 保留兼容性的常量，但标记为过时
         @Deprecated("Use ImageScaleConfig instead", ReplaceWith("ImageScaleConfig.CHAT_MODE.maxFileSize"))

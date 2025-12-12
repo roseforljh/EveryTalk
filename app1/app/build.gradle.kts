@@ -69,6 +69,8 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization") version libs.versions.kotlin.get()
     // 使用 KSP2（Gradle 插件在顶层声明版本，这里只启用插件即可）
     alias(libs.plugins.ksp)
+    // Hilt 暂不启用 - Kotlin 2.1.0 兼容性问题
+    // alias(libs.plugins.hilt.android)
 }
 
 android {
@@ -336,4 +338,10 @@ android {
         implementation(libs.room.runtime)
         implementation(libs.room.ktx)
         ksp(libs.room.compiler)
+        
+        // ===== Hilt Dependency Injection =====
+        // 暂不启用 - Kotlin 2.1.0 兼容性问题
+        // implementation(libs.hilt.android)
+        // ksp(libs.hilt.compiler)
+        // implementation(libs.hilt.navigation.compose)
     }
