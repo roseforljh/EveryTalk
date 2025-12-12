@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.Environment
 import android.provider.OpenableColumns
 import android.util.Base64
 import androidx.core.content.FileProvider
@@ -29,7 +30,6 @@ import java.util.UUID
  */
 class FileManager(private val context: Context) {
     private val logger = AppLogger.forComponent("FileManager")
-    private val compressionPrefs = com.android.everytalk.config.ImageCompressionPreferences(context)
     
     companion object {
         private const val CHAT_ATTACHMENTS_DIR = "chat_attachments"
@@ -47,7 +47,8 @@ class FileManager(private val context: Context) {
     }
 
     private fun guessExtensionFromMime(mime: String?): String {
-        return when ((mime ?: "").lowercase()) {
+        val normalized = (mime ?: "").substringBefore(';').trim().lowercase()
+        return when (normalized) {
             "image/png" -> "png"
             "image/jpeg", "image/jpg" -> "jpg"
             "image/webp" -> "webp"
@@ -75,11 +76,7 @@ class FileManager(private val context: Context) {
      * @return 对应的图片缩放配置
      */
     private fun getImageConfigForMode(isImageGeneration: Boolean): ImageScaleConfig {
-        return if (isImageGeneration) {
-            compressionPrefs.getImageGenerationModeConfig()
-        } else {
-            compressionPrefs.getChatModeConfig()
-        }
+        return if (isImageGeneration) ImageScaleConfig.IMAGE_GENERATION_MODE else ImageScaleConfig.CHAT_MODE
     }
     
     /**
@@ -89,37 +86,59 @@ class FileManager(private val context: Context) {
      */
     suspend fun checkFileSize(uri: Uri): Pair<Boolean, Long> = withContext(Dispatchers.IO) {
         try {
-            var fileSize = 0L
+            var fileSize: Long? = null
             context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
                 if (cursor.moveToFirst()) {
                     val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
                     if (sizeIndex != -1) {
-                        fileSize = cursor.getLong(sizeIndex)
+                        val sizeValue = cursor.getLong(sizeIndex)
+                        if (sizeValue > 0) {
+                            fileSize = sizeValue
+                        }
                     }
                 }
             }
-            
-            // 如果无法从cursor获取大小，尝试通过输入流获取
-            if (fileSize <= 0) {
+
+            if (fileSize == null) {
+                try {
+                    val statSize = context.contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize } ?: -1L
+                    if (statSize > 0) {
+                        fileSize = statSize
+                    }
+                } catch (_: Exception) {
+                }
+            }
+
+            if (fileSize == null) {
                 try {
                     context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                        fileSize = inputStream.available().toLong()
+                        val buffer = ByteArray(8192)
+                        var total = 0L
+                        while (true) {
+                            val read = inputStream.read(buffer)
+                            if (read == -1) break
+                            total += read
+                            if (total > MAX_FILE_SIZE_BYTES) {
+                                break
+                            }
+                        }
+                        fileSize = total
                     }
-                } catch (e: Exception) {
-                    logger.warn("Failed to get file size from input stream")
+                } catch (_: Exception) {
+                    logger.warn("Failed to get file size")
                 }
             }
-            
-            val isOverLimit = fileSize > MAX_FILE_SIZE_BYTES
+
+            val size = fileSize ?: 0L
+            val isOverLimit = size > MAX_FILE_SIZE_BYTES
             if (isOverLimit) {
-                logger.warn("File size $fileSize bytes exceeds limit $MAX_FILE_SIZE_BYTES bytes")
+                logger.warn("File size $size bytes exceeds limit $MAX_FILE_SIZE_BYTES bytes")
             }
             
-            Pair(isOverLimit, fileSize)
+            Pair(isOverLimit, size)
         } catch (e: Exception) {
             logger.error("Error checking file size", e)
-            // 如果无法检查大小，假设文件过大以确保安全
-            Pair(true, 0L)
+            Pair(false, 0L)
         }
     }
 
@@ -210,7 +229,7 @@ class FileManager(private val context: Context) {
                 )
                 
                 // 只有当目标尺寸与当前尺寸不同时才进行缩放
-                if (finalWidth != currentWidth || finalHeight != currentHeight) {
+                if ((finalWidth != currentWidth || finalHeight != currentHeight) && finalWidth > 0 && finalHeight > 0) {
                     try {
                         val scaledBitmap = Bitmap.createScaledBitmap(bitmap, finalWidth, finalHeight, true)
                         if (scaledBitmap != bitmap) {
@@ -317,7 +336,7 @@ class FileManager(private val context: Context) {
                     currentWidth, currentHeight, config
                 )
                 
-                if (finalWidth != currentWidth || finalHeight != currentHeight && finalWidth > 0 && finalHeight > 0) {
+                if ((finalWidth != currentWidth || finalHeight != currentHeight) && finalWidth > 0 && finalHeight > 0) {
                     try {
                         val scaled = Bitmap.createScaledBitmap(bitmap, finalWidth, finalHeight, true)
                         if (scaled != bitmap) bitmap.recycle()
@@ -386,7 +405,7 @@ class FileManager(private val context: Context) {
                     currentWidth, currentHeight, config
                 )
                 
-                if (finalWidth != currentWidth || finalHeight != currentHeight && finalWidth > 0 && finalHeight > 0) {
+                if ((finalWidth != currentWidth || finalHeight != currentHeight) && finalWidth > 0 && finalHeight > 0) {
                     try {
                         val scaled = Bitmap.createScaledBitmap(bitmap, finalWidth, finalHeight, true)
                         if (scaled != bitmap) bitmap.recycle()
@@ -860,17 +879,19 @@ class FileManager(private val context: Context) {
     ): Uri? = withContext(Dispatchers.IO) {
         try {
             val resolver = context.contentResolver
+            val normalizedMime = mime.substringBefore(';').trim().ifBlank { "application/octet-stream" }
             val collection = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                 android.provider.MediaStore.Images.Media.getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY)
             } else {
                 android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
             }
-            val ext = guessExtensionFromMime(mime)
+            val ext = guessExtensionFromMime(normalizedMime)
             val name = "${displayNameBase}_${System.currentTimeMillis()}.$ext"
             val values = android.content.ContentValues().apply {
                 put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, name)
-                put(android.provider.MediaStore.Images.Media.MIME_TYPE, mime)
+                put(android.provider.MediaStore.Images.Media.MIME_TYPE, normalizedMime)
                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/EveryTalk")
                     put(android.provider.MediaStore.Images.Media.IS_PENDING, 1)
                 }
             }

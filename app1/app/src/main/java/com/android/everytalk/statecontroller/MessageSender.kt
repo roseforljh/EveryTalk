@@ -59,6 +59,8 @@ private data class AttachmentProcessingResult(
     private val uriToBase64Encoder: (Uri) -> String?
 ) {
 
+    private val fileManager: FileManager by lazy { FileManager(application) }
+
     companion object {
         private const val MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024 // 50MB 最大文件大小
         private const val CHAT_ATTACHMENTS_SUBDIR = "chat_attachments"
@@ -86,105 +88,7 @@ private data class AttachmentProcessingResult(
         uri: Uri,
         isImageGeneration: Boolean = false
     ): Bitmap? {
-        return withContext(Dispatchers.IO) {
-            var bitmap: Bitmap? = null
-            try {
-                if (uri == Uri.EMPTY) return@withContext null
-
-                // 根据模式选择缩放配置
-                val config = if (isImageGeneration) {
-                    com.android.everytalk.util.image.ImageScaleConfig.IMAGE_GENERATION_MODE
-                } else {
-                    com.android.everytalk.util.image.ImageScaleConfig.CHAT_MODE
-                }
-
-                // 首先检查文件大小
-                var fileSize = 0L
-                try {
-                    context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
-                        if (cursor.moveToFirst()) {
-                            val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
-                            if (sizeIndex != -1) {
-                                fileSize = cursor.getLong(sizeIndex)
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    // 继续处理，但要小心内存使用
-                }
-
-                if (fileSize > MAX_FILE_SIZE_BYTES) {
-                    Log.w("MessageSender", "File size $fileSize exceeds limit $MAX_FILE_SIZE_BYTES")
-                    return@withContext null
-                }
-
-                val options = BitmapFactory.Options().apply {
-                    inJustDecodeBounds = true
-                }
-                context.contentResolver.openInputStream(uri)?.use {
-                    BitmapFactory.decodeStream(it, null, options)
-                }
-
-                val originalWidth = options.outWidth
-                val originalHeight = options.outHeight
-                
-                // 使用新的等比缩放算法计算目标尺寸
-                val (targetWidth, targetHeight) = ImageScaleCalculator.calculateProportionalScale(
-                    originalWidth, originalHeight, config
-                )
-
-                // 计算合适的采样率以避免内存问题
-                options.inSampleSize = ImageScaleCalculator.calculateInSampleSize(
-                    originalWidth, originalHeight, targetWidth, targetHeight
-                )
-
-                options.inJustDecodeBounds = false
-                options.inMutable = true
-                options.inPreferredConfig = Bitmap.Config.RGB_565 // 使用更少内存的配置
-
-                bitmap = context.contentResolver.openInputStream(uri)?.use {
-                    BitmapFactory.decodeStream(it, null, options)
-                }
-
-                // 如果需要进一步缩放到精确尺寸
-                if (bitmap != null) {
-                    val currentWidth = bitmap.width
-                    val currentHeight = bitmap.height
-                    
-                    // 重新计算精确的目标尺寸（基于采样后的实际尺寸）
-                    val (finalWidth, finalHeight) = ImageScaleCalculator.calculateProportionalScale(
-                        currentWidth, currentHeight, config
-                    )
-                    
-                    // 只有当目标尺寸与当前尺寸不同时才进行缩放
-                    if (finalWidth != currentWidth || finalHeight != currentHeight) {
-                        try {
-                            val scaledBitmap = Bitmap.createScaledBitmap(bitmap, finalWidth, finalHeight, true)
-                            if (scaledBitmap != bitmap) {
-                                bitmap.recycle()
-                            }
-                            bitmap = scaledBitmap
-                            Log.d("MessageSender", "Image scaled from ${currentWidth}x${currentHeight} to ${finalWidth}x${finalHeight} (mode: ${if(isImageGeneration) "generation" else "chat"})")
-                        } catch (e: OutOfMemoryError) {
-                            // 如果缩放失败，使用原图但记录警告
-                            Log.w("MessageSender", "Failed to scale bitmap due to memory constraints, using sampled size")
-                            System.gc()
-                        }
-                    }
-                }
-                
-                bitmap
-            } catch (e: OutOfMemoryError) {
-                bitmap?.recycle()
-                System.gc() // 建议垃圾回收
-                Log.e("MessageSender", "Out of memory while loading bitmap", e)
-                null
-            } catch (e: Exception) {
-                bitmap?.recycle()
-                Log.e("MessageSender", "Failed to load and compress bitmap", e)
-                null
-            }
-        }
+        return fileManager.loadAndCompressBitmapFromUri(uri = uri, isImageGeneration = isImageGeneration)
     }
 
     private fun calculateInSampleSize(options: BitmapFactory.Options, reqWidth: Int, reqHeight: Int): Int {
@@ -208,85 +112,12 @@ private data class AttachmentProcessingResult(
         attachmentIndex: Int,
         originalFileName: String?
     ): String? {
-        return withContext(Dispatchers.IO) {
-            try {
-                // 检查文件大小
-                var fileSize = 0L
-                try {
-                    context.contentResolver.query(sourceUri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
-                        if (cursor.moveToFirst()) {
-                            val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
-                            if (sizeIndex != -1) {
-                                fileSize = cursor.getLong(sizeIndex)
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    // 如果无法获取文件大小，继续处理但要小心
-                }
-
-                if (fileSize > MAX_FILE_SIZE_BYTES) {
-                    return@withContext null
-                }
-
-                val MimeTypeMap = android.webkit.MimeTypeMap.getSingleton()
-                val contentType = context.contentResolver.getType(sourceUri)
-                val extension = MimeTypeMap.getExtensionFromMimeType(contentType)
-                    ?: originalFileName?.substringAfterLast('.', "")
-                    ?: "bin"
-
-                val timeStamp: String =
-                    SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-                val safeOriginalName =
-                    originalFileName?.filter { it.isLetterOrDigit() || it in "._-" }?.take(30) ?: "file"
-                val uniqueFileName =
-                    "${safeOriginalName}_${messageIdHint}_${attachmentIndex}_${timeStamp}_${
-                        UUID.randomUUID().toString().take(4)
-                    }.$extension"
-
-                val attachmentDir = File(context.filesDir, CHAT_ATTACHMENTS_SUBDIR)
-                if (!attachmentDir.exists() && !attachmentDir.mkdirs()) {
-                    return@withContext null
-                }
-
-                val destinationFile = File(attachmentDir, uniqueFileName)
-                
-                // 使用缓冲区复制，避免一次性加载大文件到内存
-                context.contentResolver.openInputStream(sourceUri)?.use { inputStream ->
-                    FileOutputStream(destinationFile).use { outputStream ->
-                        val buffer = ByteArray(8192) // 8KB 缓冲区
-                        var bytesRead: Int
-                        var totalBytesRead = 0L
-                        
-                        while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                            outputStream.write(buffer, 0, bytesRead)
-                            totalBytesRead += bytesRead
-                            
-                            // 检查是否超过文件大小限制
-                            if (totalBytesRead > MAX_FILE_SIZE_BYTES) {
-                                destinationFile.delete()
-                                return@withContext null
-                            }
-                        }
-                    }
-                } ?: run {
-                    return@withContext null
-                }
-
-                if (!destinationFile.exists() || destinationFile.length() == 0L) {
-                    if (destinationFile.exists()) destinationFile.delete()
-                    return@withContext null
-                }
-
-                destinationFile.absolutePath
-            } catch (e: OutOfMemoryError) {
-                // 处理内存不足错误
-                System.gc() // 建议垃圾回收
-                null
-            } catch (e: Exception) {
-                null
-            }
-        }
+        return fileManager.copyUriToAppInternalStorage(
+            sourceUri = sourceUri,
+            messageIdHint = messageIdHint,
+            attachmentIndex = attachmentIndex,
+            originalFileName = originalFileName
+        )
     }
 
     private suspend fun saveBitmapToAppInternalStorage(
@@ -294,58 +125,16 @@ private data class AttachmentProcessingResult(
         bitmapToSave: Bitmap,
         messageIdHint: String,
         attachmentIndex: Int,
-        originalFileNameHint: String? = null
+        originalFileNameHint: String? = null,
+        isImageGeneration: Boolean = false
     ): String? {
-        return withContext(Dispatchers.IO) {
-            try {
-                if (bitmapToSave.isRecycled) {
-                    return@withContext null
-                }
-
-                val outputStream = ByteArrayOutputStream()
-                val fileExtension: String
-                val compressFormat = if (bitmapToSave.hasAlpha()) {
-                    fileExtension = "png"; Bitmap.CompressFormat.PNG
-                } else {
-                    fileExtension = "jpg"; Bitmap.CompressFormat.JPEG
-                }
-                // 使用新的 ImageScaleConfig 常量代替已废弃的 JPEG_COMPRESSION_QUALITY
-                val compressionQuality = com.android.everytalk.util.image.ImageScaleConfig.CHAT_MODE.compressionQuality
-                bitmapToSave.compress(compressFormat, compressionQuality, outputStream)
-                val bytes = outputStream.toByteArray()
-                if (!bitmapToSave.isRecycled) {
-                    bitmapToSave.recycle()
-                }
-
-                val timeStamp: String =
-                    SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-                val baseName = originalFileNameHint?.substringBeforeLast('.')
-                    ?.filter { it.isLetterOrDigit() || it in "._-" }?.take(20) ?: "IMG"
-                val uniqueFileName =
-                    "${baseName}_${messageIdHint}_${attachmentIndex}_${timeStamp}_${
-                        UUID.randomUUID().toString().take(4)
-                    }.$fileExtension"
-
-                val attachmentDir = File(context.filesDir, CHAT_ATTACHMENTS_SUBDIR)
-                if (!attachmentDir.exists() && !attachmentDir.mkdirs()) {
-                    return@withContext null
-                }
-
-                val destinationFile = File(attachmentDir, uniqueFileName)
-                FileOutputStream(destinationFile).use { it.write(bytes) }
-
-                if (!destinationFile.exists() || destinationFile.length() == 0L) {
-                    if (destinationFile.exists()) destinationFile.delete()
-                    return@withContext null
-                }
-                destinationFile.absolutePath
-            } catch (e: Exception) {
-                if (!bitmapToSave.isRecycled) {
-                    bitmapToSave.recycle()
-                }
-                null
-            }
-        }
+        return fileManager.saveBitmapToAppInternalStorage(
+            bitmapToSave = bitmapToSave,
+            messageIdHint = messageIdHint,
+            attachmentIndex = attachmentIndex,
+            originalFileNameHint = originalFileNameHint,
+            isImageGeneration = isImageGeneration
+        )
     }
 
     private suspend fun processAttachments(
@@ -388,7 +177,7 @@ private data class AttachmentProcessingResult(
                 is SelectedMediaItem.ImageFromUri -> {
                     val bitmap = loadAndCompressBitmapFromUri(application, originalMediaItem.uri, isImageGeneration)
                     if (bitmap != null) {
-                        saveBitmapToAppInternalStorage(application, bitmap, tempMessageIdForNaming, index, originalFileNameForHint)
+                        saveBitmapToAppInternalStorage(application, bitmap, tempMessageIdForNaming, index, originalFileNameForHint, isImageGeneration)
                     } else {
                         showSnackbar("无法加载或压缩图片: $originalFileNameForHint")
                         return@withContext AttachmentProcessingResult(success = false)
@@ -396,7 +185,19 @@ private data class AttachmentProcessingResult(
                 }
                 is SelectedMediaItem.ImageFromBitmap -> {
                     originalMediaItem.bitmap?.let { bitmap ->
-                        saveBitmapToAppInternalStorage(application, bitmap, tempMessageIdForNaming, index, originalFileNameForHint)
+                        val prefs = com.android.everytalk.config.ImageCompressionPreferences(application)
+                        val config = if (isImageGeneration) prefs.getImageGenerationModeConfig() else prefs.getChatModeConfig()
+                        val (targetW, targetH) = ImageScaleCalculator.calculateProportionalScale(bitmap.width, bitmap.height, config)
+                        val safeBitmap = try {
+                            if ((targetW > 0 && targetH > 0) && (targetW != bitmap.width || targetH != bitmap.height)) {
+                                Bitmap.createScaledBitmap(bitmap, targetW, targetH, true)
+                            } else {
+                                bitmap.copy(bitmap.config ?: Bitmap.Config.ARGB_8888, true)
+                            }
+                        } catch (_: OutOfMemoryError) {
+                            bitmap.copy(bitmap.config ?: Bitmap.Config.ARGB_8888, true)
+                        }
+                        saveBitmapToAppInternalStorage(application, safeBitmap, tempMessageIdForNaming, index, originalFileNameForHint, isImageGeneration)
                     }
                 }
                 is SelectedMediaItem.GenericFile -> {

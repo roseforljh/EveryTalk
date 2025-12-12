@@ -41,6 +41,7 @@ import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
 import java.io.InputStream
 import java.net.URL
+import com.android.everytalk.util.storage.FileManager
 
 /**
  * 全屏图片预览对话框（不依赖三方图片库；支持 http/https、content/file、data URI）
@@ -215,49 +216,25 @@ private fun decodeDataUrlToBitmap(dataUrl: String): Bitmap? {
 private suspend fun saveImageToGallery(context: Context, url: String) {
     withContext(Dispatchers.IO) {
         try {
-            val bitmap = when {
-                url.startsWith("data:", ignoreCase = true) -> {
-                    decodeDataUrlToBitmap(url)
-                }
-                url.startsWith("content://") || url.startsWith("file://") -> {
-                    context.contentResolver.openInputStream(Uri.parse(url)).use { input ->
-                        input?.let { BitmapFactory.decodeStream(it) }
-                    }
-                }
-                url.startsWith("http://") || url.startsWith("https://") -> {
-                    URL(url).openStream().use { input ->
-                        BitmapFactory.decodeStream(input)
-                    }
-                }
-                else -> null
-            }
-            
-            bitmap?.let {
-                // 保存到相册
-                val contentValues = ContentValues().apply {
-                    put(MediaStore.Images.Media.DISPLAY_NAME, "everytalk_${System.currentTimeMillis()}.png")
-                    put(MediaStore.Images.Media.MIME_TYPE, "image/png")
-                    put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/EveryTalk")
-                }
-                
-                val uri = context.contentResolver.insert(
-                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                    contentValues
-                )
-                
-                uri?.let { imageUri ->
-                    context.contentResolver.openOutputStream(imageUri)?.use { outputStream ->
-                        it.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
-                    }
-                    
-                    // 在主线程显示成功提示
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(context, "图片已保存到相册", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            } ?: run {
-                // 在主线程显示失败提示
+            val fileManager = FileManager(context)
+            val loaded = fileManager.loadBytesFromFlexibleSource(url)
+            if (loaded == null) {
                 withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "图片保存失败", Toast.LENGTH_SHORT).show()
+                }
+                return@withContext
+            }
+            val (bytes, mime) = loaded
+            val savedUri = fileManager.saveBytesToMediaStore(
+                bytes = bytes,
+                mime = mime,
+                displayNameBase = "everytalk"
+            )
+
+            withContext(Dispatchers.Main) {
+                if (savedUri != null) {
+                    Toast.makeText(context, "图片已保存到相册", Toast.LENGTH_SHORT).show()
+                } else {
                     Toast.makeText(context, "图片保存失败", Toast.LENGTH_SHORT).show()
                 }
             }
