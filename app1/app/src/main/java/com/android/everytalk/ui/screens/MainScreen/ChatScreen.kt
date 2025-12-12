@@ -176,8 +176,6 @@ fun ChatScreen(
 
 
     LaunchedEffect(scrollStateManager) {
-        // 强制同步模式状态为 TEXT，确保从图像模式左滑返回时状态正确
-        viewModel.simpleModeManager.setIntendedMode(SimpleModeManager.ModeType.TEXT)
         viewModel.scrollToBottomEvent.collect {
             scrollStateManager.jumpToBottom()
         }

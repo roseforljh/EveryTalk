@@ -74,7 +74,7 @@ import java.io.ByteArrayOutputStream
 private const val CONTEXT_MENU_ANIMATION_DURATION_MS = 150
 private val CONTEXT_MENU_CORNER_RADIUS = 16.dp
 private val CONTEXT_MENU_ITEM_ICON_SIZE = 20.dp
-// 基本对齐采用“角点贴手指”，再整体向下微移，避免“整体偏高”
+// 基本对齐采用"角点贴手指"，再整体向下微移，避免"整体偏高"
 private val CONTEXT_MENU_FINGER_VERTICAL_OFFSET = -90.dp
 private val CONTEXT_MENU_FIXED_WIDTH = 120.dp
 
@@ -94,7 +94,7 @@ internal fun UserOrErrorMessageContent(
 ) {
     val haptic = LocalHapticFeedback.current
     var globalPosition by remember { mutableStateOf(Offset.Zero) }
-    var previewUrl by remember { mutableStateOf<String?>(null) }
+    var previewUrl by remember(message.id) { mutableStateOf<String?>(null) }
 
     // 基于发送者动态计算最大宽度：用户71%，AI80%
     val configuration = LocalConfiguration.current
@@ -123,7 +123,7 @@ internal fun UserOrErrorMessageContent(
             modifier = Modifier
                 .wrapContentWidth()                 // 以内容宽度为准
                 .widthIn(max = appliedMax)          // 用户气泡最大71%，AI气泡最大80%
-                .onGloballyPositioned { coordinates ->
+                .onGloballyPositioned { coordinates -> 
                     // 存储组件在屏幕中的全局位置
                     globalPosition = coordinates.localToRoot(Offset.Zero)
                 }
@@ -143,8 +143,8 @@ internal fun UserOrErrorMessageContent(
                 }
         ) {
             // 展开/收起状态管理
-            var isExpanded by remember { mutableStateOf(false) }
-            var hasOverflow by remember { mutableStateOf(false) }
+            var isExpanded by remember(message.id) { mutableStateOf(false) }
+            var hasOverflow by remember(message.id) { mutableStateOf(false) }
             val maxCollapsedHeight = screenHeightDp * 0.4f // 默认最大高度为屏幕高度的 40%
             
             // 使用 Box 作为主容器，让按钮浮动在底部
@@ -268,7 +268,7 @@ fun AttachmentsContent(
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
-    var previewUrlInternal by remember { mutableStateOf<String?>(null) }
+    var previewUrlInternal by remember(message.id) { mutableStateOf<String?>(null) }
 
     // 附件区域也跟随相同的最大宽度限制
     val screenDp = LocalConfiguration.current.screenWidthDp.dp
@@ -291,7 +291,7 @@ fun AttachmentsContent(
                         } else {
                             attachment.uri
                         }
-                        // 额外父级宽度约束，防止重组或内部状态重置导致图片短暂“放大占满并左对齐”
+                        // 额外父级宽度约束，防止重组或内部状态重置导致图片短暂"放大占满并左对齐"
                         // 在 FlowRow 中，我们可能希望图片不要太大，以便多张并排
                         // 如果只有一张，可以大一点；多张时适当缩小
                         val isMultiple = attachments.size > 1
@@ -337,7 +337,7 @@ fun AttachmentsContent(
                     }
                     is SelectedMediaItem.ImageFromBitmap -> {
                         var imageGlobalPosition by remember { mutableStateOf(Offset.Zero) }
-                        // 额外父级宽度约束，防止重组或内部状态重置导致图片短暂“放大占满并左对齐”
+                        // 额外父级宽度约束，防止重组或内部状态重置导致图片短暂"放大占满并左对齐"
                         val isMultiple = attachments.size > 1
                         val itemMaxWidth = if (isMultiple) attachmentsAppliedMax * 0.48f else attachmentsAppliedMax * 0.8f
 
@@ -488,6 +488,8 @@ fun AttachmentsContent(
 
 
 
+
+
 @Composable
 private fun ThreeDotsLoadingAnimation(
     modifier: Modifier = Modifier,
@@ -566,7 +568,7 @@ fun MessageContextMenu(
         val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
         val estimatedMenuHeightPx = with(density) { (48.dp * 3 + 16.dp).toPx() }
  
-        // 将菜单左上角“精确对齐”到手指按压位置（向上微移 16dp）；如越界再进行边界夹紧
+        // 将菜单左上角"精确对齐"到手指按压位置（向上微移 16dp）；如越界再进行边界夹紧
         val rawX = pressOffset.x
         val rawY = pressOffset.y - with(density) { 71.dp.toPx() }
  
@@ -719,7 +721,7 @@ fun ImageContextMenu(
 
        val estimatedMenuHeightPx = with(density) { (48.dp * 2 + 16.dp).toPx() }
 
-       // 将菜单左上角“精确对齐”到手指按压位置（向上微移 16dp）；如越界再进行边界夹紧
+       // 将菜单左上角"精确对齐"到手指按压位置（向上微移 16dp）；如越界再进行边界夹紧
        val rawX = pressOffset.x
        val rawY = pressOffset.y- with(density) { 71.dp.toPx() }
  
