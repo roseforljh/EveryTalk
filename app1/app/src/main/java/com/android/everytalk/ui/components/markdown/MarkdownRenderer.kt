@@ -146,7 +146,7 @@ private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): S
             val isTableLine = line.contains("|")
             val hasUnbalancedBold = line.split("**").size % 2 == 0
             
-            val shouldSkipHardBreak = isTableLine
+            val shouldSkipHardBreak = isTableLine || (isStreaming && hasUnbalancedBold)
             
             // 调试日志
             if (trimmedLine.startsWith("#") || (isStreaming && (isTableLine || hasUnbalancedBold))) {
