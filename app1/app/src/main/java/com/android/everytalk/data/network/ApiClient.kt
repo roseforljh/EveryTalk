@@ -274,12 +274,19 @@ object ApiClient {
         }
         val uri = try { java.net.URI(withScheme) } catch (_: Exception) { java.net.URI("https://$trimmedAddress") }
         val existingPath = uri.rawPath ?: ""
+        val basePath = if (existingPath.contains("/models")) existingPath else existingPath
+            .replace(Regex("/v1/chat/completions/?$"), "/v1")
+            .replace(Regex("/chat/completions/?$"), "")
+            .replace(Regex("/v1/completions/?$"), "/v1")
+            .replace(Regex("/completions/?$"), "")
+        
         val finalPath = when {
-            existingPath.isEmpty() -> sanitizedDefault
-            existingPath.contains("/models") -> existingPath
-            existingPath.endsWith("/v1") -> "$existingPath/models"
-            existingPath.endsWith("/") -> existingPath + sanitizedDefault.removePrefix("/")
-            else -> existingPath + sanitizedDefault
+            basePath.isEmpty() -> sanitizedDefault
+            basePath.contains("/models") -> basePath
+            basePath.endsWith("/v1") -> "$basePath/models"
+            basePath.endsWith("/") -> basePath + sanitizedDefault.removePrefix("/")
+            sanitizedDefault.startsWith("/v1") && basePath.contains("/v1") -> basePath + sanitizedDefault.removePrefix("/v1")
+            else -> basePath + sanitizedDefault
         }.replace(Regex("/{2,}"), "/")
         return java.net.URI(uri.scheme, uri.userInfo, uri.host, uri.port, finalPath, uri.rawQuery, uri.rawFragment).toString()
     }
@@ -702,7 +709,7 @@ object ApiClient {
                         fun extractIdFromObj(obj: JsonObject): String? {
                             val candidates = listOf("id", "model", "name", "identifier")
                             for (k in candidates) {
-                                obj[k]?.jsonPrimitive?.contentOrNull?.let { s ->
+                                obj[k]?.jsonPrimitive?.contentOrNull?.let { s -> 
                                     val v = s.trim()
                                     if (v.isNotEmpty()) {
                                         // 若为 Google 风格 "models/xxx"，统一去掉前缀
@@ -897,7 +904,7 @@ object ApiClient {
                     val inputImages = extractInputImages(chatRequest)
                     if (inputImages.isNotEmpty()) {
                         // Convert to data URIs for Seedream
-                        val dataUris = inputImages.map { (base64, mimeType) ->
+                        val dataUris = inputImages.map { (base64, mimeType) -> 
                             "data:$mimeType;base64,$base64"
                         }
                         android.util.Log.i("ApiClient", "🔄 Seedream 图像编辑模式: 检测到 ${inputImages.size} 张输入图片")
