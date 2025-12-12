@@ -92,6 +92,18 @@ private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): S
         .replace("\u00A0", " ")
         .replace("\u3000", " ")
 
+    // 3.1 修复粗体在中文右括号后的换行/分片问题（收窄版）
+    // 仅处理这种边界： "...）**、**..." / "...）**，**..."
+    // 即：右括号后立刻闭合粗体，且紧跟“标点 + 下一段粗体开启”。
+    // 这类结构在流式分片时常切在 "）**" 上，导致第二段裸露 "**"。
+    // 处理方式：把前一段的闭合 ** 挪进右括号内：
+    // "）**、**" -> "**）、**"
+    val moveBoldInsideClosingParen = Regex("([）)】\\]》」』])\\*\\*(?=([，。！？、；：,.!?;:])\\*\\*)")
+    s = s.replace(moveBoldInsideClosingParen) { mr ->
+        val closing = mr.groupValues[1]
+        "**$closing"
+    }
+
     // ============================================================================================
     // 格式化增强 (Formatting Enhancements)
     // 只保留用户明确需要的功能，移除会导致问题的列表处理逻辑
