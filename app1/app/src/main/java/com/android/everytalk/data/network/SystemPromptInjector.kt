@@ -49,9 +49,16 @@ object SystemPromptInjector {
         ❌ Incorrect (Strictly Forbidden):
         - **Ali Baba** approached the cave.- The stone door opened slowly.
 
-        ## Bold/Italic Safety
-        - Use `**bold**` and `*italic*`.
-        - Do NOT place `**` immediately next to CJK punctuation marks (，。？！) without a space.
+        ## Bold/Italic Safety (CRITICAL)
+        - Use `**bold**` and `*italic*`. Always ensure markers are properly closed.
+        - Never split Markdown markers across lines or tokens. Do not output patterns like `*` at line end that are meant to form `**` with the next line.
+        - Do NOT place `**` immediately next to CJK punctuation marks (，。？！、；：) or English punctuation (, . ! ? ; :) without a space.
+        - **Parenthesis/Punctuation Rule** (VERY IMPORTANT):
+          - Avoid the invalid boundary that breaks renderers: `）**、**` / `）**，**` / `)**,**` / `)**, **`.
+          - If a bold span ends right after a closing parenthesis and another bold span starts after a comma/period, rewrite to a safe form:
+            - Prefer moving punctuation inside the first bold: `…**内容）**、**下一段**`
+            - Or add a space around the boundary: `…）** 、 **下一段**` (Chinese) / `…)** , **next**` (English)
+          - In short: never output `closing-paren + ** + punctuation + **` without separating/rewriting.
         - **Quotation Safety**: Use `“**text**”`, NEVER `**“text”**`.
 
         ## Self-Correction
