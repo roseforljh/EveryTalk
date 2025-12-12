@@ -100,7 +100,15 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
             viewModel.drawerState.close()
         }
     }
-
+    
+    // 🔧 关键修复：处理从图像模式返回文本模式的导航
+    // 当抽屉关闭时，返回手势应该正确切换到文本模式
+    BackHandler(enabled = !isDrawerOpen) {
+        // 切换到文本模式
+        viewModel.simpleModeManager.setIntendedMode(SimpleModeManager.ModeType.TEXT)
+        // 导航返回到文本聊天页面
+        navController.popBackStack()
+    }
 
     // 关于对话框 - 修复图像模式下的显示bug
     val showAboutDialog by viewModel.showAboutDialog.collectAsState()
