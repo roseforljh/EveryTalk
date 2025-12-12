@@ -26,7 +26,10 @@ import androidx.compose.ui.unit.dp
 import com.android.everytalk.ui.components.ContentParser
 import com.android.everytalk.ui.components.ContentPart
 import com.android.everytalk.ui.components.WebPreviewDialog
+import com.android.everytalk.ui.components.content.CodeBlockCard
 import com.android.everytalk.ui.components.markdown.MarkdownRenderer
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.android.everytalk.util.cache.ContentParseCache
@@ -66,7 +69,9 @@ fun TableAwareText(
     contentKey: String = "",  // 新增：用于缓存key（通常为消息ID）
     onLongPress: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null,
     onImageClick: ((String) -> Unit)? = null,
-    sender: Sender = Sender.AI
+    sender: Sender = Sender.AI,
+    onCodePreviewRequested: ((String, String) -> Unit)? = null, // 代码预览回调
+    onCodeCopied: (() -> Unit)? = null // 代码复制回调
 ) {
     // 预览状态管理
     var previewState by remember { mutableStateOf<Pair<String, String>?>(null) } // (code, language)
@@ -145,30 +150,20 @@ fun TableAwareText(
                     )
                 }
                 is ContentPart.Code -> {
-                    // 代码块部分：不再依赖单独的 CodeBlock 组件，
-                    // 直接用 MarkdownRenderer 渲染三引号代码块，同时使用等宽字体。
-                    val fencedCode = buildString {
-                        append("```")
-                        part.language?.let { append(it) }
-                        append('\n')
-                        append(part.content)
-                        append("\n```")
-                    }
-
-                    MarkdownRenderer(
-                        markdown = fencedCode,
-                        style = style.copy(fontFamily = FontFamily.Monospace),
-                        color = color,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp)
-                            .horizontalScroll(rememberScrollState()),
-                        isStreaming = isStreaming,
-                        onLongPress = onLongPress,
-                        onImageClick = onImageClick,
-                        sender = sender,
-                        contentKey = if (contentKey.isNotBlank()) "${contentKey}_code_${parsedParts.indexOf(part)}_${part.content.length}" else "",
-                        disableVerticalPadding = true
+                    // 🔧 修复：使用 CodeBlockCard 渲染代码块，提供复制按钮、预览按钮、语言类型和圆角
+                    // 这样无论流式还是非流式，代码块都有完整的 UI 功能
+                    val clipboard = LocalClipboardManager.current
+                    CodeBlockCard(
+                        language = part.language,
+                        code = part.content,
+                        modifier = Modifier.padding(vertical = 4.dp),
+                        onPreviewRequested = if (onCodePreviewRequested != null) {
+                            { onCodePreviewRequested(part.language ?: "", part.content) }
+                        } else null,
+                        onCopy = {
+                            clipboard.setText(AnnotatedString(part.content))
+                            onCodeCopied?.invoke()
+                        }
                     )
                 }
                 is ContentPart.Table -> {
