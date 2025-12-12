@@ -144,8 +144,9 @@ private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): S
             // 在流式传输时，表格行可能被分片传输，此时插入硬换行会破坏表格结构（如 | **容器编 \n 排** |）
             // 同样，未闭合的粗体如果在中间被插入换行，也会导致粗体失效。
             val isTableLine = line.contains("|")
-            // 简单检测：奇数个 ** 意味着该行内有未闭合的粗体标记
             val hasUnbalancedBold = line.split("**").size % 2 == 0
+            
+            val shouldSkipHardBreak = isTableLine
             
             // 调试日志
             if (trimmedLine.startsWith("#") || (isStreaming && (isTableLine || hasUnbalancedBold))) {
@@ -153,13 +154,12 @@ private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): S
             }
             
             when {
-                index == lastIndex -> line // 最后一行不添加换行
-                isEmptyLine -> "$line\n" // 空行保持不变
-                isHeadingLine -> "$line\n" // 标题行保持普通换行，不添加尾部空格
-                // 流式阶段保护：如果是表格行或包含未闭合粗体，禁止自动添加硬换行，防止破坏结构
-                isStreaming && (isTableLine || hasUnbalancedBold) -> "$line\n"
-                line.endsWith("  ") -> "$line\n" // 已经有硬换行的保持不变
-                else -> "$line  \n" // 普通行添加硬换行
+                index == lastIndex -> line
+                isEmptyLine -> "$line\n"
+                isHeadingLine -> "$line\n"
+                shouldSkipHardBreak -> "$line\n"
+                line.endsWith("  ") -> "$line\n"
+                else -> "$line  \n"
             }
         }.joinToString("")
     }
@@ -274,7 +274,7 @@ fun MarkdownRenderer(
                 
                 // 行间距 - 用户与 AI 区分设置
                 // 用户保持略紧凑，AI 适度加大上下行距离
-                // 根据反馈“稍微减文本之间的距离”，将 AI 行间距从 6f 调整为 5f
+                // 根据反馈"稍微减文本之间的距离"，将 AI 行间距从 6f 调整为 5f
                 val lineSpacingDp = if (sender == Sender.User) 2f else 5f
                 setLineSpacing(
                     TypedValue.applyDimension(
@@ -330,21 +330,21 @@ fun MarkdownRenderer(
                                 val layout = tvLocal.layout
                                 if (layout != null) {
                                     val line = layout.getLineForVertical(y)
-                                    
+                                
                                     // 几何命中测试：直接检查触摸点是否在 ImageSpan 的 bounds 内
                                     val lineStart = layout.getLineStart(line)
                                     val lineEnd = layout.getLineEnd(line)
-                                    
+                                
                                     // 1. 查找该行内的所有图片 Span (AsyncDrawableSpan)
                                     val imageSpans = text.getSpans(lineStart, lineEnd, AsyncDrawableSpan::class.java)
-                                    
+                                
                                     for (imageSpan in imageSpans) {
                                         val spanStart = text.getSpanStart(imageSpan)
                                         val xStart = layout.getPrimaryHorizontal(spanStart)
                                         val drawable = imageSpan.drawable
                                         val bounds = drawable.bounds
                                         val width = bounds.width()
-                                        
+                                
                                         val touchSlop = 20
                                         if (x >= (xStart - touchSlop) && x <= (xStart + width + touchSlop)) {
                                             val source = drawable.destination
@@ -362,7 +362,7 @@ fun MarkdownRenderer(
                                         val xStart = layout.getPrimaryHorizontal(spanStart)
                                         val drawable = imageSpan.drawable
                                         val width = drawable.bounds.width()
-                                        
+                                
                                         if (x >= xStart && x <= (xStart + width)) {
                                             val source = imageSpan.source
                                             if (!source.isNullOrEmpty()) {
@@ -514,4 +514,3 @@ fun MarkdownRenderer(
         }
     )
 }
-
