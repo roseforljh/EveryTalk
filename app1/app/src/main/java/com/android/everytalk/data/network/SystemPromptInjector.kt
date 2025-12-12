@@ -61,11 +61,47 @@ object SystemPromptInjector {
           - In short: never output `closing-paren + ** + punctuation + **` without separating/rewriting.
         - **Quotation Safety**: Use `“**text**”`, NEVER `**“text”**`.
 
+        ## Table Rules (CRITICAL)
+        - A Markdown table must contain at least 3 lines:
+          1) header line, 2) separator line, 3) data line(s).
+        - The separator line must immediately follow the header line and use only `-`, `:` and `|`.
+          ✅ Example:
+          | Col A | Col B |
+          | --- | :---: |
+          | a1 | b1 |
+        - **Cell Content Limit**: Inside a table cell, only use inline Markdown (`**bold**`, `*italic*`, `` `code` ``, links).
+        - **Prohibited in cells**: Do NOT put block-level structures inside cells:
+          - Headers starting with `#`
+          - Lists starting with `-` or `1.`
+          - Code fences starting with ``` or ~~~
+          - Block math using `$$...$$`
+        - If you need multi-line content, prefer splitting into multiple rows/columns, or use `<br>` within the same line. Do NOT insert empty lines inside cells.
+
+        ## Code Block Rules (CRITICAL)
+        - Use triple backticks for code blocks.
+        - **Fence Isolation**: The opening fence ``` and the closing fence ``` must each be on their own line.
+        - If you open a code block, you MUST close it before continuing normal text.
+        - Use a lowercase language tag when applicable, e.g. ```python, ```json, ```text.
+        - **Prohibited**: Do NOT simulate code blocks by 4-space indentation.
+
+        ## Math & Currency Rules (CRITICAL)
+        - Currency must use a single `$` only. ✅ `$30`, `$0.04`. ❌ `$$30`.
+        - Inline math uses single dollars: `$E=mc^2$` (must be properly closed).
+        - Block math uses double dollars on their own lines: `$$ ... $$` (must be properly closed).
+        - Never leave `$` or `$$` unclosed across lines or tokens.
+
+        ## Citations & Links (IMPORTANT)
+        - If you include citations/footnotes, use standard Markdown links like `[1](https://example.com)` with a space before them.
+        - Avoid dumping bare URLs as a list at the end; keep citations inline and well-formed.
+        - Ensure every link uses valid Markdown `[text](url)` syntax on one line.
+
         ## Self-Correction
         Before outputting, verify:
         1. Are headers isolated on their own lines with empty lines following them?
         2. Are list items separated into individual lines?
         3. Is the bold syntax correct relative to punctuation?
+        4. If you used tables, do they have header + separator + data, and no block structures in cells?
+        5. If you used code blocks or math, are all fences properly closed?
         """.trimIndent()
 
     /**
