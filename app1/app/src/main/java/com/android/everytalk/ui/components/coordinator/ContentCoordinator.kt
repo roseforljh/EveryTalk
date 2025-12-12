@@ -32,7 +32,9 @@ fun ContentCoordinator(
     onLongPress: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null,
     onImageClick: ((String) -> Unit)? = null, // 新增
     sender: Sender = Sender.AI,  // 新增：发送者信息，默认为AI
-    disableVerticalPadding: Boolean = false // 新增：允许禁用垂直padding
+    disableVerticalPadding: Boolean = false, // 新增：允许禁用垂直padding
+    onCodePreviewRequested: ((String, String) -> Unit)? = null, // 代码预览回调
+    onCodeCopied: (() -> Unit)? = null // 代码复制回调
 ) {
     // 根据发送者决定宽度策略
     val widthModifier = if (sender == Sender.User) {
@@ -96,7 +98,9 @@ fun ContentCoordinator(
             contentKey = contentKey,  // 传递缓存key
             onLongPress = onLongPress,
             onImageClick = onImageClick,
-            sender = sender
+            sender = sender,
+            onCodePreviewRequested = onCodePreviewRequested,
+            onCodeCopied = onCodeCopied
         )
         return
     }
