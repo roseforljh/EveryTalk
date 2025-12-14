@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.9.3](https://github.com/roseforljh/EveryTalk/compare/v1.9.2...v1.9.3) (2025-12-12)
+
+
+### Bug Fixes
+
+* good ([bb63390](https://github.com/roseforljh/EveryTalk/commit/bb633903136f0d7e22bc742bd0bece57a1791dd1))
+* 优化prompt ([dcd709e](https://github.com/roseforljh/EveryTalk/commit/dcd709e85679b59eb1470ca92607ef84238abd55))
+* 修复了“文件大小检查”误判/漏判的问题、修复了图片缩放判断的逻辑优先级 bug、让“发送附件”真正走统一的文件链路 ([3d3243e](https://github.com/roseforljh/EveryTalk/commit/3d3243e881ec94516dd39a3590e5f7936b7cf5af))
+* 修复模式切换bug ([5ed3ca3](https://github.com/roseforljh/EveryTalk/commit/5ed3ca36fdc80d053b1decad5462ba786ada3c8e))
+* 数学公式转换prompt修复 ([bd99077](https://github.com/roseforljh/EveryTalk/commit/bd9907798075a99c5980cc08ffbe7b2abad8465c))
+* 渲染结构始终一致 ([dd6dcde](https://github.com/roseforljh/EveryTalk/commit/dd6dcde6d8874305e314ef84278de9585f65f5d4))
+
 ## [1.9.2](https://github.com/roseforljh/EveryTalk/compare/v1.9.1...v1.9.2) (2025-12-11)
 
 
