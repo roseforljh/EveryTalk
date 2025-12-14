@@ -87,7 +87,7 @@ fun TableAwareText(
     // 缓存版本控制：当解析逻辑更新时，通过修改版本号使旧缓存失效
     val effectiveCacheKey = if (contentKey.isNotBlank()) "${contentKey}_v${ContentParseCache.PARSER_VERSION}" else ""
 
-    val parsedPartsState = remember(contentKey) {
+    val parsedPartsState = remember(contentKey, isStreaming, effectiveCacheKey) {
         mutableStateOf(
             if (!isStreaming && effectiveCacheKey.isNotBlank()) {
                 ContentParseCache.get(effectiveCacheKey) ?: listOf(ContentPart.Text(text))
@@ -97,14 +97,14 @@ fun TableAwareText(
         )
     }
 
-    LaunchedEffect(text, contentKey) {
+    LaunchedEffect(text, contentKey, isStreaming) {
         val newParts = withContext(Dispatchers.Default) {
             if (isStreaming) {
                 // 流式期间不读写全局缓存，直接解析
                 ContentParser.parseCompleteContent(text, isStreaming = true)
             } else {
                 // 非流式：尝试从全局缓存获取，否则完整解析并缓存
-                // 策略：如果文本包含表格特征字符 '|'，为了保险起见，可以考虑强制刷新（可选）
+                // 策略：如果文本包含表格特征字符 '|', 为了保险起见，可以考虑强制刷新（可选）
                 // 但有了版本号控制，通常不需要强制刷新。
                 ContentParseCache.get(effectiveCacheKey) ?: ContentParser.parseCompleteContent(text, isStreaming = false).also {
                     if (effectiveCacheKey.isNotBlank()) ContentParseCache.put(effectiveCacheKey, it)
