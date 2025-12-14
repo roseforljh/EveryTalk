@@ -557,7 +557,7 @@ class MainActivity : ComponentActivity() {
    }
    
    /**
-    * 🎯 低内存回调 - 清理缓存
+    *  低内存回调 - 清理缓存
     */
    override fun onTrimMemory(level: Int) {
        super.onTrimMemory(level)

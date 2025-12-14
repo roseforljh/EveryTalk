@@ -36,9 +36,15 @@ import io.noties.markwon.image.AsyncDrawableSpan
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.ui.components.markdown.MarkdownSpansCache
 
-
 private val MULTIPLE_SPACES_REGEX = Regex(" {2,}")
 private val ENUM_ITEM_REGEX = Regex("(?<!\n)\\s+([A-DＡ-Ｄ][\\.．、])\\s")
+
+private data class MarkdownRenderSignature(
+    val markdown: String,
+    val isStreaming: Boolean,
+    val isDark: Boolean,
+    val textSizeSp: Float
+)
 
 private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): String {
     var s = input
@@ -192,6 +198,7 @@ private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): S
     
     return s
 }
+
 @Composable
 fun MarkdownRenderer(
     markdown: String,
@@ -399,11 +406,17 @@ fun MarkdownRenderer(
             }
         },
         update = { tv ->
-            // ⚡️ 性能优化：如果内容未变更，直接跳过更新，防止流式结束时的闪烁/跳动
-            if (tv.tag == markdown) {
+            val signature = MarkdownRenderSignature(
+                markdown = markdown,
+                isStreaming = isStreaming,
+                isDark = isDark,
+                textSizeSp = textSizeSp
+            )
+
+            if (tv.tag == signature) {
                 return@AndroidView
             }
-            tv.tag = markdown
+            tv.tag = signature
 
             // 缓存优化：尝试从缓存获取 Spanned 对象
             val sp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
@@ -447,6 +460,9 @@ fun MarkdownRenderer(
                 
                 markwon.setParsedMarkdown(tv, spanned)
             }
+
+            tv.requestLayout()
+            tv.invalidate()
 
             // 处理图片点击事件（兼容 AsyncDrawableSpan 与 ImageSpan）
             if (onImageClick != null) {
