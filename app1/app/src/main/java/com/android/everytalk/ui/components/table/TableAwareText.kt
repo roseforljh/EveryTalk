@@ -157,8 +157,8 @@ fun TableAwareText(
                         onLongPress = onLongPress,
                         onImageClick = onImageClick,
                         sender = sender,
-                        // 修复缓存冲突：Key 必须包含内容的特征（如长度），因为 index 0 可能从完整文本变为片段
-                        contentKey = if (contentKey.isNotBlank()) "${contentKey}_part_${parsedParts.indexOf(part)}_${part.content.length}" else "",
+                        // 修复缓存冲突：Key 必须包含内容的特征（长度+哈希），防止内容变更但长度相同时命中旧缓存
+                        contentKey = if (contentKey.isNotBlank()) "${contentKey}_part_${parsedParts.indexOf(part)}_${part.content.length}_${part.content.hashCode()}" else "",
                         disableVerticalPadding = true // 禁用内部垂直 padding，由外层 Column 统一控制
                     )
                 }
