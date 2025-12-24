@@ -151,12 +151,12 @@ fun WebPreviewDialog(
 }
 
 /**
- * 提取原始 HTML/XML 字符串中 <body>...</body> 的内容。
- * - 若存在 body 标签，则返回 body 内部内容；
+ * 提取原始 HTML/XML 字符串中的 <style> 标签和 <body>...</body> 的内容。
+ * - 若存在 body 标签，则返回所有 <style> 标签 + body 内部内容；
  * - 若不存在 body 标签，则直接返回原始字符串。
  *
- * 这样可以避免用户提供的整页 HTML 自己的布局把图片固定在顶部，
- * 让真正的布局交给我们的 html.html 模板（flex 居中）。
+ * 这样可以保留用户定义的 CSS 样式，同时避免用户提供的整页 HTML
+ * 自己的布局把图片固定在顶部，让真正的布局交给我们的 html.html 模板（flex 居中）。
  */
 private fun extractHtmlBodyOrSelf(raw: String): String {
     val lower = raw.lowercase()
@@ -164,17 +164,53 @@ private fun extractHtmlBodyOrSelf(raw: String): String {
     // 优先匹配未转义的 <body>
     val bodyIndex = lower.indexOf("<body")
     if (bodyIndex == -1) {
-        // 再尝试匹配已经 HTML 转义后的 &lt;body> 形式
-        val escapedIndex = lower.indexOf("<body")
-        if (escapedIndex == -1) return raw
-
-        val startTagEndEscaped = lower.indexOf(">", escapedIndex).takeIf { it != -1 } ?: return raw
-        val endIndexEscaped = lower.indexOf("</body>", startTagEndEscaped).takeIf { it != -1 } ?: raw.length
-        return raw.substring(startTagEndEscaped + 4, endIndexEscaped)
+        // 没有 body 标签，直接返回原始字符串
+        return raw
     }
 
+    // 提取所有 <style>...</style> 标签内容
+    val styleBlocks = extractAllStyleBlocks(raw)
+    
+    // 提取 body 内容
     val startTagEnd = lower.indexOf(">", bodyIndex).takeIf { it != -1 } ?: return raw
     val endIndex = lower.indexOf("</body>", startTagEnd).takeIf { it != -1 } ?: raw.length
+    val bodyContent = raw.substring(startTagEnd + 1, endIndex)
 
-    return raw.substring(startTagEnd + 1, endIndex)
+    // 合并 style 标签和 body 内容
+    return if (styleBlocks.isNotEmpty()) {
+        styleBlocks + "\n" + bodyContent
+    } else {
+        bodyContent
+    }
+}
+
+/**
+ * 从 HTML 字符串中提取所有 <style>...</style> 标签（包括标签本身）
+ */
+private fun extractAllStyleBlocks(html: String): String {
+    val lower = html.lowercase()
+    val result = StringBuilder()
+    var searchStart = 0
+    
+    while (true) {
+        // 查找 <style 开始
+        val styleStart = lower.indexOf("<style", searchStart)
+        if (styleStart == -1) break
+        
+        // 查找 </style> 结束
+        val styleEnd = lower.indexOf("</style>", styleStart)
+        if (styleEnd == -1) break
+        
+        // 提取完整的 style 块（包括标签）
+        val styleBlock = html.substring(styleStart, styleEnd + 8) // 8 = "</style>".length
+        if (result.isNotEmpty()) {
+            result.append("\n")
+        }
+        result.append(styleBlock)
+        
+        // 继续搜索下一个 style 块
+        searchStart = styleEnd + 8
+    }
+    
+    return result.toString()
 }
