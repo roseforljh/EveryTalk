@@ -36,8 +36,8 @@ object MarkwonCache {
         imageClickListener: ((String) -> Unit)? = null
     ): Markwon {
         val roundedSize = textSize.toInt()
-        // v6: disabled heading preprocessing + custom heading factory
-        val cacheKey = "v6_dark=${isDark}_size=${roundedSize}"
+        // v7: dynamic code color based on theme
+        val cacheKey = "v7_dark=${isDark}_size=${roundedSize}"
         
         synchronized(lock) {
             cacheMap[cacheKey]?.let { return it }
@@ -96,10 +96,17 @@ object MarkwonCache {
 
                         // 自定义代码块样式
                         builder.setFactory(Code::class.java) { _, _ ->
+                            // 根据主题动态设置代码文字颜色
+                            val codeColor = if (isDark) {
+                                android.graphics.Color.parseColor("#E0E0E0") // 暗色模式：浅灰
+                            } else {
+                                android.graphics.Color.parseColor("#24292f") // 亮色模式：深灰 (GitHub 风格)
+                            }
+                            
                             arrayOf<Any>(
                                 TypefaceSpan("monospace"),
                                 RelativeSizeSpan(0.85f),
-                                ForegroundColorSpan(android.graphics.Color.parseColor("#9E9E9E"))
+                                ForegroundColorSpan(codeColor)
                             )
                         }
                     }

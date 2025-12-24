@@ -1,5 +1,15 @@
 # Changelog
 
+<<<<<<< HEAD
+=======
+## [1.9.4](https://github.com/roseforljh/EveryTalk/compare/v1.9.3...v1.9.4) (2025-12-14)
+
+
+### Bug Fixes
+
+* 对“表格渲染链路”补上流式结束必然触发最终解析的修复 ([79c3098](https://github.com/roseforljh/EveryTalk/commit/79c30985cfad0a6c4f7287cbdbc24780302168bb))
+
+>>>>>>> 1c44c1700a92704be50605decd8700529d405a82
 ## [1.9.3](https://github.com/roseforljh/EveryTalk/compare/v1.9.2...v1.9.3) (2025-12-12)
 
 

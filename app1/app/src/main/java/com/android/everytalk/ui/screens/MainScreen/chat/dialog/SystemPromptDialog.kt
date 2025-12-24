@@ -88,8 +88,8 @@ fun SystemPromptDialog(
                     this.scaleX = scaleAnim.value
                     this.scaleY = scaleAnim.value
                 },
-            // 背景修改为深灰色
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF333333))
+            // 使用 Material Theme 的 Surface 颜色，自适应亮/暗主题
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
         ) {
             Column(
                 modifier = Modifier
@@ -144,11 +144,13 @@ fun SystemPromptDialog(
                     },
                     shape = RoundedCornerShape(16.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Color.White,
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
                         unfocusedBorderColor = Color.Transparent,
-                        focusedContainerColor = Color.Black.copy(alpha = 0.2f),
-                        unfocusedContainerColor = Color.Black.copy(alpha = 0.2f),
-                        cursorColor = Color.White
+                        focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        cursorColor = MaterialTheme.colorScheme.primary,
+                        focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                        unfocusedTextColor = MaterialTheme.colorScheme.onSurface
                     ),
                     textStyle = MaterialTheme.typography.bodyLarge
                 )

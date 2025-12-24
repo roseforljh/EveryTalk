@@ -62,6 +62,40 @@ private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): S
     // 要获得干净的 Markdown 排版，应在生成端（Prompt / System Prompt）约束模型输出规范格式。
     // ============================================================================================
 
+    // 0. HTML 标签转义（防止 Markwon 将 HTML 代码解析为实际元素）
+    // 只转义代码块外的 HTML 标签，代码块内的内容由 ContentParser/CodeBlockCard 单独处理
+    if (s.contains("<") && !s.trimStart().startsWith("```")) {
+        val codeBlockPattern = Regex("```[\\s\\S]*?```")
+        val parts = mutableListOf<Pair<String, Boolean>>() // Pair(content, isCodeBlock)
+        
+        var lastEnd = 0
+        codeBlockPattern.findAll(s).forEach { match ->
+            // 添加代码块之前的普通文本
+            if (match.range.first > lastEnd) {
+                parts.add(Pair(s.substring(lastEnd, match.range.first), false))
+            }
+            // 添加代码块（保持原样）
+            parts.add(Pair(match.value, true))
+            lastEnd = match.range.last + 1
+        }
+        // 添加最后一个代码块之后的普通文本
+        if (lastEnd < s.length) {
+            parts.add(Pair(s.substring(lastEnd), false))
+        }
+        
+        // 只对非代码块部分进行 HTML 转义
+        s = parts.joinToString("") { (content, isCodeBlock) ->
+            if (isCodeBlock) {
+                content
+            } else {
+                content
+                    .replace("&", "&amp;")  // 先转义 & 避免二次转义
+                    .replace("<", "&lt;")
+                    .replace(">", "&gt;")
+            }
+        }
+    }
+
     // 1. 货币符号修复: $$30 -> \$30
     // Markwon 会将 $$ 解析为数学公式块，导致显示错误。需转义。
     if (s.contains("$$")) {
