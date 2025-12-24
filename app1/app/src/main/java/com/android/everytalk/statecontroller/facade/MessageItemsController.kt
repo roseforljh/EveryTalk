@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.flowOn
 import androidx.compose.runtime.snapshotFlow
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * 将 AppViewModel 中与“AI气泡状态 + ChatListItem 构建”相关的大段逻辑外置。
@@ -43,8 +44,15 @@ class MessageItemsController(
     private val chatListItemCache = mutableMapOf<String, CacheEntry>()
     private val imageGenerationChatListItemCache = mutableMapOf<String, CacheEntry>()
 
-    // 采用轻量状态机统一驱动“连接中/思考/流式/完成/错误”的展示
+    // 采用轻量状态机统一驱动"连接中/思考/流式/完成/错误"的展示
     private val bubbleStateMachines = mutableMapOf<String, com.android.everytalk.ui.state.AiBubbleStateMachine>()
+    
+    // 🔧 修复Loading不显示问题：记录每个消息开始流式传输的时间戳
+    // 用于确保Loading状态至少显示一段时间（防止后端响应过快时跳过Connecting状态）
+    private val streamingStartTimestamps = ConcurrentHashMap<String, Long>()
+    
+    // Loading状态最小显示时间（毫秒）- 确保用户能看到"正在连接"提示
+    private val MIN_CONNECTING_DISPLAY_TIME_MS = 300L
 
     private fun getBubbleStateMachine(messageId: String): com.android.everytalk.ui.state.AiBubbleStateMachine {
         return bubbleStateMachines.getOrPut(messageId) {
@@ -223,17 +231,41 @@ class MessageItemsController(
             if (isImageGeneration) stateHolder.imageReasoningCompleteMap else stateHolder.textReasoningCompleteMap
         val reasoningComplete = reasoningCompleteMap[message.id] ?: false
 
+        // 🔧 修复Loading不显示问题：记录流式开始时间
+        // 当开始流式传输时，记录时间戳；用于确保Loading状态至少显示MIN_CONNECTING_DISPLAY_TIME_MS
+        if (isCurrentStreaming && !streamingStartTimestamps.containsKey(message.id)) {
+            streamingStartTimestamps[message.id] = System.currentTimeMillis()
+            android.util.Log.d(
+                "MessageItemsController",
+                "🔧 Registered streaming start time for message: ${message.id.take(8)}"
+            )
+        }
+        
+        // 🔧 计算是否仍在最小显示时间内
+        val streamingStartTime = streamingStartTimestamps[message.id]
+        val isWithinMinDisplayTime = if (streamingStartTime != null && isCurrentStreaming) {
+            val elapsed = System.currentTimeMillis() - streamingStartTime
+            elapsed < MIN_CONNECTING_DISPLAY_TIME_MS
+        } else {
+            false
+        }
+
         if (Log.isLoggable("AppViewModelVerbose", Log.VERBOSE)) {
             Log.v(
                 "AppViewModelVerbose",
                 "computeBubbleState: id=${message.id.take(8)}, " +
                     "isStreaming=$isCurrentStreaming, hasReasoning=$hasReasoning, " +
                     "reasoningComplete=$reasoningComplete, contentStarted=${message.contentStarted}, " +
-                    "message.reasoning=${message.reasoning?.take(20)}"
+                    "message.reasoning=${message.reasoning?.take(20)}, isWithinMinDisplayTime=$isWithinMinDisplayTime"
             )
         }
 
         val state = when {
+            // 🔧 关键修复：如果仍在最小显示时间内且没有推理内容，强制显示Connecting状态
+            // 这确保了即使后端响应很快，用户也能看到"正在连接大模型..."提示
+            isCurrentStreaming && !hasReasoning && isWithinMinDisplayTime -> {
+                com.android.everytalk.ui.state.AiBubbleState.Connecting
+            }
             isCurrentStreaming && hasReasoning && !message.contentStarted -> {
                 com.android.everytalk.ui.state.AiBubbleState.Reasoning(
                     message.reasoning ?: "",
@@ -241,6 +273,8 @@ class MessageItemsController(
                 )
             }
             isCurrentStreaming && message.contentStarted -> {
+                // 清理时间戳，因为已经开始流式输出
+                streamingStartTimestamps.remove(message.id)
                 com.android.everytalk.ui.state.AiBubbleState.Streaming(
                     content = message.text,
                     hasReasoning = hasReasoning,
@@ -250,11 +284,14 @@ class MessageItemsController(
             isCurrentStreaming && !hasReasoning && !message.contentStarted -> {
                 com.android.everytalk.ui.state.AiBubbleState.Connecting
             }
-            (message.contentStarted || message.text.isNotBlank()) ->
+            (message.contentStarted || message.text.isNotBlank()) -> {
+                // 清理时间戳，因为消息已完成
+                streamingStartTimestamps.remove(message.id)
                 com.android.everytalk.ui.state.AiBubbleState.Complete(
                     content = message.text,
                     reasoning = message.reasoning
                 )
+            }
             else -> com.android.everytalk.ui.state.AiBubbleState.Idle
         }
 
@@ -262,7 +299,8 @@ class MessageItemsController(
             android.util.Log.d(
                 "MessageItemsController",
                 "BubbleState for ${message.id.take(8)}: ${state::class.simpleName}, " +
-                    "isStreaming=$isCurrentStreaming, contentStarted=${message.contentStarted}, textLen=${message.text.length}"
+                    "isStreaming=$isCurrentStreaming, contentStarted=${message.contentStarted}, " +
+                    "textLen=${message.text.length}, isWithinMinDisplayTime=$isWithinMinDisplayTime"
             )
         }
 
@@ -392,6 +430,16 @@ class MessageItemsController(
     fun clearAllCaches() {
         chatListItemCache.clear()
         imageGenerationChatListItemCache.clear()
-        android.util.Log.d("MessageItemsController", "Cleared all caches")
+        streamingStartTimestamps.clear()
+        android.util.Log.d("MessageItemsController", "Cleared all caches and streaming timestamps")
+    }
+    
+    /**
+     * 清理指定消息的流式时间戳
+     * 在消息完成或取消时调用
+     */
+    fun clearStreamingTimestamp(messageId: String) {
+        streamingStartTimestamps.remove(messageId)
+        android.util.Log.d("MessageItemsController", "Cleared streaming timestamp for message: ${messageId.take(8)}")
     }
 }

@@ -236,20 +236,30 @@ class ApiHandler(
         stateHolder.createStreamingBuffer(aiMessageId, isImageGeneration)
         logger.debug("Created StreamingBuffer for message: $aiMessageId")
 
+        // 🔧 修复Loading不显示问题：确保状态设置同步完成后再启动流收集
+        // 之前的问题：状态设置在协程中异步执行，流可能在状态设置完成前就开始发送事件
+        // 这会导致 MessageItemsController.computeBubbleState 在检查 isApiCalling 时返回错误状态
+        
+        // 1. 首先同步设置流式状态（确保 Loading 指示器可以被正确显示）
+        val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
+        
+        // 🔧 关键修复：先设置 streaming ID 和 isApiCalling 状态
+        // 这样当消息被添加到列表时，MessageItemsController 就能正确计算出 Connecting 状态
+        if (isImageGeneration) {
+            stateHolder._currentImageStreamingAiMessageId.value = aiMessageId
+            stateHolder._isImageApiCalling.value = true
+            stateHolder.imageReasoningCompleteMap[aiMessageId] = false
+        } else {
+            stateHolder._currentTextStreamingAiMessageId.value = aiMessageId
+            stateHolder._isTextApiCalling.value = true
+            stateHolder.textReasoningCompleteMap[aiMessageId] = false
+        }
+        
+        // 2. 然后添加消息到列表（此时状态已经正确设置）
         viewModelScope.launch(Dispatchers.Main.immediate) {
-            val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
-            var insertAtIndex = messageList.size
             messageList.add(newAiMessage)
             onNewAiMessageAdded()
-            if (isImageGeneration) {
-                stateHolder._currentImageStreamingAiMessageId.value = aiMessageId
-                stateHolder._isImageApiCalling.value = true
-                stateHolder.imageReasoningCompleteMap[aiMessageId] = false
-            } else {
-                stateHolder._currentTextStreamingAiMessageId.value = aiMessageId
-                stateHolder._isTextApiCalling.value = true
-                stateHolder.textReasoningCompleteMap[aiMessageId] = false
-            }
+            logger.debug("🔧 AI message added to list with streaming state already set: $aiMessageId")
         }
 
         eventChannel?.close()
