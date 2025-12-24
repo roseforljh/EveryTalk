@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.10.1](https://github.com/roseforljh/EveryTalk/compare/v1.10.0...v1.10.1) (2025-12-24)
+
+
+### Bug Fixes
+
+* 优化编辑功能 ([859e4b9](https://github.com/roseforljh/EveryTalk/commit/859e4b91f20584671f6e3f386affb35fec62251c))
+* 修复css样式不生效的bug ([b75f340](https://github.com/roseforljh/EveryTalk/commit/b75f340049881acf2e45db75e447ad5c49188f02))
+* 修复了流式结束瞬间因重新解析导致的 UI 重组跳动 ([c68e8d1](https://github.com/roseforljh/EveryTalk/commit/c68e8d12c9fa1ac4bf6f4cebb35ad7a87d9a3c51))
+* 显示bug修复 ([bd8baea](https://github.com/roseforljh/EveryTalk/commit/bd8baea82dbc8fa2b338154576efbe61e48a1cb9))
+* 滚动优化 ([8608a89](https://github.com/roseforljh/EveryTalk/commit/8608a8922c9eefa115244a33ef5abf02d49aa715))
+* 适配语言高亮 ([0b6538e](https://github.com/roseforljh/EveryTalk/commit/0b6538e099fa8d1cce8a71a15db76f6f12e18003))
+
 ## [1.10.0](https://github.com/roseforljh/EveryTalk/compare/v1.9.4...v1.10.0) (2025-12-24)
 
 
