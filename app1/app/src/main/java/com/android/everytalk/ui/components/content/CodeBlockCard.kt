@@ -102,14 +102,19 @@ fun CodeBlockCard(
     var cardHeightPx by remember { mutableIntStateOf(0) }
 
     Surface(
-        modifier = modifier
-            .fillMaxWidth()
-            .border(1.dp, outline, shape)
-            .onGloballyPositioned { coordinates ->
-                cardTopPx = coordinates.positionInWindow().y
-                cardHeightPx = coordinates.size.height
-            },
-        shape = shape,
+    modifier = modifier
+        .fillMaxWidth()
+        .border(1.dp, outline, shape)
+        .onGloballyPositioned { coordinates ->
+            val newTop = coordinates.positionInWindow().y
+            val newHeight = coordinates.size.height
+            // 仅当位置或高度发生显著变化时更新状态，减少不必要的重组
+            if (Math.abs(cardTopPx - newTop) > 1f || cardHeightPx != newHeight) {
+                cardTopPx = newTop
+                cardHeightPx = newHeight
+            }
+        },
+    shape = shape,
         color = Color.Transparent
     ) {
         // 使用 Column 布局：Header 在上，Content 在下，自然堆叠避免遮挡。
