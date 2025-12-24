@@ -65,8 +65,11 @@ import com.android.everytalk.ui.components.ImageGenCapabilities
 import com.android.everytalk.ui.components.ImageGenCapabilities.ModelFamily
 import com.android.everytalk.ui.components.ImageGenCapabilities.QualityTier
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.android.everytalk.config.PerformanceConfig
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -312,6 +315,31 @@ fun ImageGenerationInputArea(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    
+    // 🎯 性能优化：使用本地状态管理输入文本，避免每次按键都触发 ViewModel 更新
+    var localText by remember { mutableStateOf(text) }
+    var syncJob by remember { mutableStateOf<Job?>(null) }
+    var lastExternalText by remember { mutableStateOf(text) }
+    
+    // 当外部 text 变化时（如清空），同步到本地状态
+    LaunchedEffect(text) {
+        if (text != lastExternalText) {
+            lastExternalText = text
+            localText = text
+        }
+    }
+    
+    // 防抖同步到 ViewModel
+    LaunchedEffect(localText) {
+        syncJob?.cancel()
+        syncJob = coroutineScope.launch {
+            delay(PerformanceConfig.STATE_DEBOUNCE_DELAY_MS)
+            if (localText != text) {
+                onTextChange(localText)
+                lastExternalText = localText
+            }
+        }
+    }
 
     // 计算最终分辨率字符串（仅对 Kolors/Qwen 生效），其余家族返回 null（由后端/其它逻辑处理）
     fun resolveFinalImageSizeForFamily(ratio: ImageRatio, family: ModelFamily?): String? {
@@ -463,20 +491,29 @@ fun ImageGenerationInputArea(
 
     val onClearContent = remember {
         {
+            // 清空时同时清空本地状态
+            localText = ""
+            lastExternalText = ""
+            syncJob?.cancel()
             onTextChange("")
             onClearMediaItems()
             Unit
         }
     }
 
+    // 🎯 性能优化：发送时使用本地文本
     val onSendClick =
-        remember(isApiCalling, text, selectedMediaItems, selectedApiConfig, imeInsets, density) {
+        remember(isApiCalling, localText, selectedMediaItems, selectedApiConfig, imeInsets, density) {
             {
                 try {
                     if (isApiCalling) {
                         onStopApiCall()
-                    } else if ((text.isNotBlank() || selectedMediaItems.isNotEmpty()) && selectedApiConfig != null) {
-                        onSendMessageRequest(text, selectedMediaItems.toList())
+                    } else if ((localText.isNotBlank() || selectedMediaItems.isNotEmpty()) && selectedApiConfig != null) {
+                        onSendMessageRequest(localText, selectedMediaItems.toList())
+                        // 同时清空本地状态和 ViewModel 状态
+                        localText = ""
+                        lastExternalText = ""
+                        syncJob?.cancel()
                         onTextChange("")
                         onClearMediaItems()
                         
@@ -546,9 +583,13 @@ fun ImageGenerationInputArea(
                     }
                 }
 
+                // 🎯 性能优化：使用本地状态驱动 TextField
                 OutlinedTextField(
-                    value = text,
-                    onValueChange = onTextChange,
+                    value = localText,
+                    onValueChange = { newText ->
+                        // 立即更新本地状态，无延迟
+                        localText = newText
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(focusRequester)
@@ -653,7 +694,7 @@ fun ImageGenerationInputArea(
                     }
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (text.isNotEmpty() || selectedMediaItems.isNotEmpty()) {
+                        if (localText.isNotEmpty() || selectedMediaItems.isNotEmpty()) {
                             IconButton(onClick = onClearContent) {
                                 Icon(
                                     Icons.Filled.Clear,

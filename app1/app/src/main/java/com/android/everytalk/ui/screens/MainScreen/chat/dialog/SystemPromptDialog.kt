@@ -34,7 +34,11 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -44,6 +48,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.android.everytalk.config.PerformanceConfig
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * 系统提示编辑弹窗：
@@ -59,6 +67,32 @@ fun SystemPromptDialog(
     onConfirm: () -> Unit,
     onClear: () -> Unit
 ) {
+    // 🎯 性能优化：使用本地状态管理输入文本，避免每次按键都触发 ViewModel 更新
+    var localPrompt by remember { mutableStateOf(prompt) }
+    val coroutineScope = rememberCoroutineScope()
+    var syncJob by remember { mutableStateOf<Job?>(null) }
+    var lastExternalPrompt by remember { mutableStateOf(prompt) }
+    
+    // 当外部 prompt 变化时（如清空），同步到本地状态
+    LaunchedEffect(prompt) {
+        if (prompt != lastExternalPrompt) {
+            lastExternalPrompt = prompt
+            localPrompt = prompt
+        }
+    }
+    
+    // 防抖同步到 ViewModel
+    LaunchedEffect(localPrompt) {
+        syncJob?.cancel()
+        syncJob = coroutineScope.launch {
+            delay(PerformanceConfig.STATE_DEBOUNCE_DELAY_MS)
+            if (localPrompt != prompt) {
+                onPromptChange(localPrompt)
+                lastExternalPrompt = localPrompt
+            }
+        }
+    }
+    
     Dialog(
         onDismissRequest = onDismissRequest,
         properties = DialogProperties(
@@ -115,8 +149,14 @@ fun SystemPromptDialog(
                         )
                     }
                     
-                    if (prompt.isNotEmpty()) {
-                        IconButton(onClick = onClear) {
+                    if (localPrompt.isNotEmpty()) {
+                        IconButton(onClick = {
+                            // 清空时同时清空本地状态
+                            localPrompt = ""
+                            lastExternalPrompt = ""
+                            syncJob?.cancel()
+                            onClear()
+                        }) {
                             Icon(
                                 imageVector = Icons.Outlined.Delete,
                                 contentDescription = "清空",
@@ -128,10 +168,13 @@ fun SystemPromptDialog(
 
                 Spacer(Modifier.height(16.dp))
 
-                // 输入框
+                // 🎯 性能优化：使用本地状态驱动 TextField
                 OutlinedTextField(
-                    value = prompt,
-                    onValueChange = onPromptChange,
+                    value = localPrompt,
+                    onValueChange = { newPrompt ->
+                        // 立即更新本地状态，无延迟
+                        localPrompt = newPrompt
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f),
@@ -194,6 +237,11 @@ fun SystemPromptDialog(
                     Button(
                         onClick = {
                             if (!isEngaged) {
+                                // 确保在确认前同步本地文本到 ViewModel
+                                if (localPrompt != prompt) {
+                                    onPromptChange(localPrompt)
+                                }
+                                syncJob?.cancel()
                                 onConfirm()
                                 onToggleEngaged()
                                 onDismissRequest()

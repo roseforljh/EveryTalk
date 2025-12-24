@@ -44,10 +44,13 @@ import com.android.everytalk.models.MoreOptionsType
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.util.audio.AudioRecorderHelper
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.android.everytalk.config.PerformanceConfig
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -363,6 +366,36 @@ fun ChatInputArea(
     }
 
 
+    // 🎯 性能优化：使用本地状态管理输入文本，避免每次按键都触发 ViewModel 更新
+    // 这样可以大幅减少 ChatScreen 的重组次数，解决长文本输入卡顿问题
+    var localText by remember { mutableStateOf(text) }
+    
+    // 防抖同步 Job，用于取消上一次未完成的同步
+    var syncJob by remember { mutableStateOf<Job?>(null) }
+    
+    // 当外部 text 变化时（如清空、恢复草稿），同步到本地状态
+    // 使用 key 来区分外部变化和本地变化
+    var lastExternalText by remember { mutableStateOf(text) }
+    LaunchedEffect(text) {
+        if (text != lastExternalText) {
+            lastExternalText = text
+            localText = text
+        }
+    }
+    
+    // 防抖同步到 ViewModel（使用 PerformanceConfig 中定义的延迟）
+    LaunchedEffect(localText) {
+        // 取消上一次的同步任务
+        syncJob?.cancel()
+        syncJob = coroutineScope.launch {
+            delay(PerformanceConfig.STATE_DEBOUNCE_DELAY_MS)
+            if (localText != text) {
+                onTextChange(localText)
+                lastExternalText = localText
+            }
+        }
+    }
+
     LaunchedEffect(Unit) {
         snapshotFlow { imeInsets.getBottom(density) > 0 }
             .distinctUntilChanged()
@@ -401,20 +434,27 @@ fun ChatInputArea(
         }
     }
 
+    // 🎯 性能优化：发送时使用本地文本，确保发送最新内容
     val onSendClick =
-        remember(isApiCalling, text, selectedMediaItems, selectedApiConfig, imeInsets, density) {
+        remember(isApiCalling, localText, selectedMediaItems, selectedApiConfig, imeInsets, density) {
             {
                 try {
                     if (isApiCalling) {
                         onStopApiCall()
-                    } else if (text.isBlank() && selectedMediaItems.isEmpty()) {
+                    } else if (localText.isBlank() && selectedMediaItems.isEmpty()) {
                         onShowVoiceInput()
                     } else if (selectedApiConfig != null) {
                         val audioItem = selectedMediaItems.firstOrNull { it is SelectedMediaItem.Audio } as? SelectedMediaItem.Audio
                         val mimeType = audioItem?.mimeType
-                        onSendMessageRequest(text, false, selectedMediaItems.toList(), mimeType)
+                        // 使用本地文本发送消息
+                        onSendMessageRequest(localText, false, selectedMediaItems.toList(), mimeType)
+                        // 同时清空本地状态和 ViewModel 状态
+                        localText = ""
+                        lastExternalText = ""
                         onTextChange("")
                         onClearMediaItems()
+                        // 取消待处理的同步任务
+                        syncJob?.cancel()
                         
                         if (imeInsets.getBottom(density) > 0) {
                             keyboardController?.hide()
@@ -477,9 +517,13 @@ fun ChatInputArea(
                     onRemoveMediaItemAtIndex = onRemoveMediaItemAtIndex
                 )
 
+                // 🎯 性能优化：使用本地状态驱动 TextField，避免每次按键触发 ViewModel 更新
                 OutlinedTextField(
-                    value = text,
-                    onValueChange = onTextChange,
+                    value = localText,
+                    onValueChange = { newText ->
+                        // 立即更新本地状态，无延迟，保证输入流畅
+                        localText = newText
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(focusRequester)
@@ -515,6 +559,7 @@ fun ChatInputArea(
                     config.model.lowercase().contains("gemini")
                 } == true
                 
+                // 🎯 性能优化：使用本地文本来判断按钮状态
                 OptimizedControlButtonsRow(
                     isWebSearchEnabled = isWebSearchEnabled,
                     onToggleWebSearch = onToggleWebSearch,
@@ -525,9 +570,16 @@ fun ChatInputArea(
                     onToggleMoreOptionsPanel = onToggleMoreOptionsPanel,
                     showImageSelectionPanel = showImageSelectionPanel,
                     showMoreOptionsPanel = showMoreOptionsPanel,
-                    text = text,
+                    text = localText,
                     selectedMediaItems = selectedMediaItems,
-                    onClearContent = onClearContent,
+                    onClearContent = {
+                        // 清空时也需要清空本地状态
+                        localText = ""
+                        lastExternalText = ""
+                        onTextChange("")
+                        onClearMediaItems()
+                        syncJob?.cancel()
+                    },
                     onSendClick = onSendClick,
                     isApiCalling = isApiCalling
                 )

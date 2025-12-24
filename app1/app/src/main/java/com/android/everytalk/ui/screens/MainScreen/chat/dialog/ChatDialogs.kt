@@ -41,6 +41,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,6 +57,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.android.everytalk.config.PerformanceConfig
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -66,6 +70,33 @@ fun EditMessageDialog(
     onEditDialogTextChanged: (String) -> Unit,
     onConfirmMessageEdit: () -> Unit
 ) {
+    // 🎯 性能优化：使用本地状态管理输入文本，避免每次按键都触发 ViewModel 更新
+    // 这解决了"同一个用户气泡内的文本被编辑多次后无法输入"的问题
+    var localText by remember { mutableStateOf(editDialogInputText) }
+    val coroutineScope = rememberCoroutineScope()
+    var syncJob by remember { mutableStateOf<Job?>(null) }
+    var lastExternalText by remember { mutableStateOf(editDialogInputText) }
+    
+    // 当外部 editDialogInputText 变化时（如首次打开对话框），同步到本地状态
+    LaunchedEffect(editDialogInputText) {
+        if (editDialogInputText != lastExternalText) {
+            lastExternalText = editDialogInputText
+            localText = editDialogInputText
+        }
+    }
+    
+    // 防抖同步到 ViewModel
+    LaunchedEffect(localText) {
+        syncJob?.cancel()
+        syncJob = coroutineScope.launch {
+            delay(PerformanceConfig.STATE_DEBOUNCE_DELAY_MS)
+            if (localText != editDialogInputText) {
+                onEditDialogTextChanged(localText)
+                lastExternalText = localText
+            }
+        }
+    }
+    
     val alpha = remember { Animatable(0f) }
     val scale = remember { Animatable(0.8f) }
     val isDarkTheme = isSystemInDarkTheme()
@@ -101,9 +132,13 @@ fun EditMessageDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
+                    // 🎯 性能优化：使用本地状态驱动 TextField
                     OutlinedTextField(
-                        value = editDialogInputText,
-                        onValueChange = onEditDialogTextChanged,
+                        value = localText,
+                        onValueChange = { newText ->
+                            // 立即更新本地状态，无延迟
+                            localText = newText
+                        },
                         modifier = Modifier.fillMaxWidth(),
                         placeholder = { Text("请输入消息内容") },
                         colors = OutlinedTextFieldDefaults.colors(
@@ -130,7 +165,14 @@ fun EditMessageDialog(
         },
         confirmButton = {
             Button(
-                onClick = onConfirmMessageEdit,
+                onClick = {
+                    // 确认前确保同步本地文本到 ViewModel
+                    if (localText != editDialogInputText) {
+                        onEditDialogTextChanged(localText)
+                    }
+                    syncJob?.cancel()
+                    onConfirmMessageEdit()
+                },
                 modifier = Modifier
                     .height(48.dp)
                     .padding(horizontal = 4.dp),
