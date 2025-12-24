@@ -89,6 +89,9 @@ class MainActivity : ComponentActivity() {
             ProfileInstaller.writeProfile(this@MainActivity)
         }
         
+        // 处理分享过来的内容（首次启动）
+        handleIncomingShareIntent(intent)
+        
         WindowCompat.setDecorFitsSystemWindows(window, false)
         ApiClient.initialize(this)
         enableEdgeToEdge()
@@ -541,6 +544,70 @@ class MainActivity : ComponentActivity() {
        }
    }
     
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        // 处理分享过来的内容（应用已在运行时）
+        handleIncomingShareIntent(intent)
+    }
+    
+    /**
+     * 处理系统分享过来的文本内容
+     * 支持两种方式：
+     * 1. 直接分享文本（EXTRA_TEXT）
+     * 2. 分享文本文件（EXTRA_STREAM）- 读取文件内容
+     */
+    private fun handleIncomingShareIntent(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_SEND) return
+        
+        when {
+            // 处理直接分享的文本
+            intent.type == "text/plain" -> {
+                intent.getStringExtra(Intent.EXTRA_TEXT)?.let { sharedText ->
+                    if (sharedText.isNotBlank()) {
+                        lifecycleScope.launch {
+                            // 等待 ViewModel 初始化完成
+                            while (!::appViewModel.isInitialized) {
+                                kotlinx.coroutines.delay(50)
+                            }
+                            appViewModel.onTextChange(sharedText)
+                            appViewModel.showSnackbar("已接收分享内容")
+                        }
+                    }
+                }
+            }
+            // 处理分享的文本文件
+            intent.type?.startsWith("text/") == true -> {
+                val uri: Uri? = intent.getParcelableExtra(Intent.EXTRA_STREAM)
+                uri?.let { fileUri ->
+                    lifecycleScope.launch(Dispatchers.IO) {
+                        try {
+                            val content = contentResolver.openInputStream(fileUri)?.use { inputStream ->
+                                inputStream.bufferedReader().readText()
+                            }
+                            if (!content.isNullOrBlank()) {
+                                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                    while (!::appViewModel.isInitialized) {
+                                        kotlinx.coroutines.delay(50)
+                                    }
+                                    appViewModel.onTextChange(content)
+                                    appViewModel.showSnackbar("已接收分享文件内容")
+                                }
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.e("MainActivity", "读取分享文件失败", e)
+                            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                if (::appViewModel.isInitialized) {
+                                    appViewModel.showSnackbar("读取文件失败: ${e.message}")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+   
    override fun onPause() {
        super.onPause()
        // 在应用暂停时也保存数据作为额外保护
