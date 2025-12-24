@@ -29,6 +29,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.android.everytalk.ui.theme.chatColors
+import com.android.everytalk.ui.components.syntax.SyntaxHighlighter
+import com.android.everytalk.ui.components.syntax.SyntaxHighlightTheme
+import com.android.everytalk.ui.components.syntax.HighlightCache
 
 /**
  * 提供列表顶部位置的 CompositionLocal，用于代码块吸顶计算
@@ -43,6 +46,7 @@ val LocalStickyHeaderTop = compositionLocalOf { Float.NaN }
  * - 圆角边框
  * - 顶部操作栏（语言标签 + 复制/预览按钮）
  * - 代码内容区域（等宽字体）
+ * - 语法高亮（支持 HTML/CSS/JavaScript/Python/Kotlin/JSON）
  * - 吸顶效果（Header 在列表滚动时保持在顶部）
  */
 @Composable
@@ -66,11 +70,23 @@ fun CodeBlockCard(
         Color.Black
     }
     
-    // 根据主题设置代码文字颜色
-    val codeTextColor = if (isDarkTheme) {
-        Color(0xFFE0E0E0)  // 暗色主题：浅灰色文字
-    } else {
-        Color.Black        // 亮色主题：纯黑文字，最大化可读性
+    // 获取语法高亮主题
+    val syntaxTheme = remember(isDarkTheme) {
+        if (isDarkTheme) SyntaxHighlightTheme.Dark else SyntaxHighlightTheme.Light
+    }
+    
+    // 语法高亮处理（带缓存）
+    val highlightedCode = remember(code, language, isDarkTheme) {
+        val cacheKey = HighlightCache.generateKey(code, language, isDarkTheme)
+        
+        // 尝试从缓存获取
+        HighlightCache.get(cacheKey) ?: run {
+            // 缓存未命中，执行高亮
+            val result = SyntaxHighlighter.highlight(code, language, syntaxTheme)
+            // 存入缓存
+            HighlightCache.put(cacheKey, result)
+            result
+        }
     }
     
     // 规范化语言标签
@@ -197,14 +213,14 @@ fun CodeBlockCard(
                 // 使用 horizontalScroll 允许水平滚动
                 val scrollState = rememberScrollState()
                 
+                // 使用高亮后的 AnnotatedString
                 Text(
-                    text = code,
+                    text = highlightedCode,
                     style = MaterialTheme.typography.bodyMedium.copy(
                         fontFamily = FontFamily.Monospace,
                         fontSize = 13.sp,
                         lineHeight = 18.sp
                     ),
-                    color = codeTextColor,
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(scrollState)
