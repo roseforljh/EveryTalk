@@ -30,6 +30,7 @@
 - [🛠️ 技术架构](#️-技术架构)
 - [📁 项目结构](#-项目结构)
 - [🔌 通信协议详解](#-通信协议详解)
+- [📚 技术实现文档](#-技术实现文档)
 - [🤝 贡献代码](#-贡献代码)
 - [❓ 常见问题](#-常见问题)
 - [📄 开源协议](#-开源协议)
@@ -359,10 +360,22 @@ X-Signature: HMAC-SHA256(secret, method + path + timestamp + body)
 X-Timestamp: Unix timestamp
 ```
 
-**数据加密**: 
+**数据加密**:
 - 本地数据使用 AES-256 加密存储
 - 网络传输强制 HTTPS
 - 支持自定义 SSL 证书固定
+
+---
+
+## 📚 技术实现文档
+
+EveryTalk 不仅是一个应用，更是一个学习现代 Android AI 开发的实战案例。我们整理了核心功能的技术实现文档，供开发者参考：
+
+| 主题 | 说明 | 链接 |
+|------|------|------|
+| **Gemini 代码执行** | 深度解析 Gemini 原生 Code Execution 工具的实现原理，包括触发逻辑、请求构建、结果解析等。 | [👉 查看文档](docs/gemini-code-execution-architecture.md) |
+| **Gemini 联网搜索** | 详解 Gemini 原生 Google Search 工具的集成方案，涵盖智能触发、流式引用解析等。 | [👉 查看文档](docs/gemini-web-search-architecture.md) |
+| **滚动性能优化** | 分享我们在长列表滚动回滚（Scrolling Rollback）问题上的排查思路与优化方案，包含流式渲染稳定性与 Compose 性能优化。 | [👉 查看文档](docs/scrolling_rollback_optimization.md) |
 
 ---
 
