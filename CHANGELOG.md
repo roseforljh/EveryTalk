@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.10.2](https://github.com/roseforljh/EveryTalk/compare/v1.10.1...v1.10.2) (2025-12-25)
+
+
+### Bug Fixes
+
+* 代码块重组 ([0d4a730](https://github.com/roseforljh/EveryTalk/commit/0d4a730ce54cbbfc07d35deb233f2e6406abb8c2))
+* 代码长按 ([9c3addc](https://github.com/roseforljh/EveryTalk/commit/9c3addcbc5315503bb7555325608cea6c45ff9af))
+
 ## [1.10.1](https://github.com/roseforljh/EveryTalk/compare/v1.10.0...v1.10.1) (2025-12-24)
 
 
