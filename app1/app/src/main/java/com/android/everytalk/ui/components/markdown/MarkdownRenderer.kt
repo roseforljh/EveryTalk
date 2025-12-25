@@ -46,88 +46,98 @@ private data class MarkdownRenderSignature(
     val textSizeSp: Float
 )
 
+private data class MarkdownSegment(
+    val content: String,
+    val isCode: Boolean,
+    val isOpen: Boolean = false
+)
+
 private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): String {
-    var s = input
+    if (input.isBlank()) return input
 
-    // ============================================================================================
-    // 最小化预处理策略 (Minimal Preprocessing Strategy)
-    // ============================================================================================
-    //
-    // 之前的激进结构重写规则（如自动换行、自动缩进、列表拆分等）导致了很多副作用：
-    // - 错误触发代码块（4空格缩进）
-    // - 破坏粗体语法（** 被拆开）
-    // - 渲染结果不可预测
-    //
-    // 现在只保留绝对安全的、不改变文本结构的清理操作。
-    // 要获得干净的 Markdown 排版，应在生成端（Prompt / System Prompt）约束模型输出规范格式。
-    // ============================================================================================
+    // 1. Split into segments
+    val segments = mutableListOf<MarkdownSegment>()
+    val fenceRegex = Regex("```")
+    val matches = fenceRegex.findAll(input)
 
-    // 0. HTML 标签转义（防止 Markwon 将 HTML 代码解析为实际元素）
-    // 只转义代码块外的 HTML 标签，代码块内的内容由 ContentParser/CodeBlockCard 单独处理
-    if (s.contains("<") && !s.trimStart().startsWith("```")) {
-        val codeBlockPattern = Regex("```[\\s\\S]*?```")
-        val parts = mutableListOf<Pair<String, Boolean>>() // Pair(content, isCodeBlock)
-        
-        var lastEnd = 0
-        codeBlockPattern.findAll(s).forEach { match ->
-            // 添加代码块之前的普通文本
-            if (match.range.first > lastEnd) {
-                parts.add(Pair(s.substring(lastEnd, match.range.first), false))
+    var lastIndex = 0
+    var inCodeBlock = false
+    var codeBlockStart = 0
+
+    for (match in matches) {
+        if (!inCodeBlock) {
+            // Found start of code block
+            if (match.range.first > lastIndex) {
+                segments.add(MarkdownSegment(input.substring(lastIndex, match.range.first), isCode = false))
             }
-            // 添加代码块（保持原样）
-            parts.add(Pair(match.value, true))
-            lastEnd = match.range.last + 1
-        }
-        // 添加最后一个代码块之后的普通文本
-        if (lastEnd < s.length) {
-            parts.add(Pair(s.substring(lastEnd), false))
-        }
-        
-        // 只对非代码块部分进行 HTML 转义
-        s = parts.joinToString("") { (content, isCodeBlock) ->
-            if (isCodeBlock) {
-                content
-            } else {
-                content
-                    .replace("&", "&amp;")  // 先转义 & 避免二次转义
-                    .replace("<", "&lt;")
-                    .replace(">", "&gt;")
-            }
+            inCodeBlock = true
+            codeBlockStart = match.range.first
+        } else {
+            // Found end of code block
+            val end = match.range.last + 1
+            segments.add(MarkdownSegment(input.substring(codeBlockStart, end), isCode = true))
+            inCodeBlock = false
+            lastIndex = end
         }
     }
 
-    // 1. 货币符号修复: $$30 -> \$30
-    // Markwon 会将 $$ 解析为数学公式块，导致显示错误。需转义。
+    // Handle remaining content
+    if (inCodeBlock) {
+        // We are inside an open code block
+        segments.add(MarkdownSegment(input.substring(codeBlockStart), isCode = true, isOpen = true))
+    } else if (lastIndex < input.length) {
+        // Remaining text
+        segments.add(MarkdownSegment(input.substring(lastIndex), isCode = false))
+    }
+
+    // 2. Process and Join
+    val s = segments.joinToString("") { seg ->
+        if (seg.isCode) {
+            if (seg.isOpen && isStreaming) {
+                // Auto-close open code blocks during streaming to prevent flickering
+                // Ensure there is a newline before closing fence if content doesn't end with one
+                val content = seg.content
+                if (content.endsWith("\n")) "$content```" else "$content\n```"
+            } else {
+                seg.content
+            }
+        } else {
+            processTextSegment(seg.content, isStreaming)
+        }
+    }
+
+    // 移除文本开头的多余换行符
+    return s.trimStart('\n')
+}
+
+private fun processTextSegment(input: String, isStreaming: Boolean): String {
+    var s = input
+
+    // 0. HTML Escape
+    s = s.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+
+    // 1. Currency
     if (s.contains("$$")) {
         val currencyPattern = Regex("\\$\\$(?=\\d)")
         s = s.replace(currencyPattern) { "\\$" }
     }
 
-    // 2. Base64 图片链接清理
-    // 修复 Base64 字符串中可能包含的换行符，防止 Markdown 图片解析失败。
-    // 增强正则：支持尖括号包裹的 URL (<data:image/...>) 和无尖括号的 URL
+    // 2. Base64
     if (s.contains("data:image/")) {
-        // 匹配 ![alt](data:image/...) 或 ![alt](<data:image/...>)
-        // group 1: ![alt](
-        // group 2: < (可选)
-        // group 3: data:image/.... (内容)
-        // group 4: > (可选)
-        // group 5: )
         val base64ImagePattern = Regex("(\\!\\[[^\\]]*\\]\\()\\s*(<?)(data:image\\/[^)>]+)(>?)\\s*(\\))", setOf(RegexOption.DOT_MATCHES_ALL))
         s = s.replace(base64ImagePattern) { mr ->
             val prefix = mr.groupValues[1]
             val openAngle = mr.groupValues[2]
-            // 清理 data 中的空白
             val data = mr.groupValues[3].filter { !it.isWhitespace() }
             val closeAngle = mr.groupValues[4]
             val suffix = mr.groupValues[5]
-            
-            // 重新组合，保持原有的尖括号结构（如果存在）
             prefix + openAngle + data + closeAngle + suffix
         }
     }
 
-    // 3. 特殊空格归一化
+    // 3. Special Spaces
     s = s.replace("&nbsp;", " ")
         .replace("\u00A0", " ")
         .replace("\u3000", " ")
@@ -135,80 +145,40 @@ private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): S
     val fullWidthParenBoldFix = Regex("）\\*\\*")
     s = s.replace(fullWidthParenBoldFix, "**）")
 
-    // ============================================================================================
-    // 格式化增强 (Formatting Enhancements)
-    // 只保留用户明确需要的功能，移除会导致问题的列表处理逻辑
-    // ============================================================================================
-
-    // 4.1 修复紧凑标题 (Compact Headers Fix) - 已禁用
-    // 之前的逻辑会在标题前添加 \n\n，导致顶部空间过大
-    // 现在只保留补全标题后空格的逻辑
-    // s = s.replace(Regex("(?<!^)(?<!\\n)(#{2,6})"), "\n\n$1")  // 已禁用：导致顶部空间过大
-    
-    // 2. 补全标题后的空格（保留：不会导致额外空间）
+    // 4. Formatting (Headers)
     s = s.replace(Regex("(?<=^|\\n)(#{1,6})(?=[^#\\s])"), "$1 ")
-    
-    // 3. 针对"标题+正文"粘连的智能处理 - 已禁用
-    // 这些逻辑会在标题后添加 \n\n，可能导致额外空间
-    // s = s.replace(Regex("^(#{1,6}\\s+)([^\\n]{1,20}[：:。？！\\s])([^\\n]+)$", RegexOption.MULTILINE)) { ... }  // 已禁用
-
-    // 策略B：降级兜底 - 保留（不会添加额外空间，只是转义）
     s = s.replace(Regex("^(#{1,6})(?=\\s.{50,})", RegexOption.MULTILINE)) { mr ->
         "\\" + mr.groupValues[1]
     }
 
-    // 4.2 紧凑列表 - 已禁用
-    // 这个逻辑会在标题后添加换行，可能导致额外空间
-    // s = s.replace(Regex("^(#{1,6}[^\\n]*?)(?:\\s*)-\\s", RegexOption.MULTILINE)) { ... }  // 已禁用
+    // 5. Hard Break Enforcement
+    val lines = s.lines()
+    val lastIndex = lines.size - 1
+    s = lines.mapIndexed { index, line ->
+        val trimmedLine = line.trimStart()
+        val isHeadingLine = trimmedLine.startsWith("# ") ||
+                trimmedLine.startsWith("## ") ||
+                trimmedLine.startsWith("### ") ||
+                trimmedLine.startsWith("#### ") ||
+                trimmedLine.startsWith("##### ") ||
+                trimmedLine.startsWith("###### ")
+        
+        val isEmptyLine = line.isBlank()
+        val isTableLine = line.contains("|")
+        val hasUnbalancedBold = line.split("**").size % 2 == 0
+        val shouldSkipHardBreak = isTableLine || (isStreaming && hasUnbalancedBold)
 
-    // 5. 强制换行处理 (Hard Break Enforcement) - 用户明确要求保留
-    // Markwon/CommonMark 默认将单个换行符视为空格 (Soft Break)。
-    // 将单换行转换为 Markdown 硬换行 (两个空格 + \n)。
-    // 注意：不处理标题行末尾，否则会破坏标题解析（标题行末尾不能有空格）
-    val isIsolatedCodeBlock = s.trimStart().startsWith("```")
-    if (!isIsolatedCodeBlock) {
-        // 按行处理，排除标题行（以 # 开头的行）
-        val lines = s.lines()
-        val lastIndex = lines.size - 1
-        s = lines.mapIndexed { index, line ->
-            // 标题行检测：以 # 开头（可以有前导空格），后跟空格
-            // 使用 startsWith 检测更可靠
-            val trimmedLine = line.trimStart()
-            val isHeadingLine = trimmedLine.startsWith("# ") ||
-                               trimmedLine.startsWith("## ") ||
-                               trimmedLine.startsWith("### ") ||
-                               trimmedLine.startsWith("#### ") ||
-                               trimmedLine.startsWith("##### ") ||
-                               trimmedLine.startsWith("###### ")
-            // 空行检测
-            val isEmptyLine = line.isBlank()
-            
-            // 表格行与未闭合粗体检测 (Table & Unbalanced Bold Protection)
-            // 在流式传输时，表格行可能被分片传输，此时插入硬换行会破坏表格结构（如 | **容器编 \n 排** |）
-            // 同样，未闭合的粗体如果在中间被插入换行，也会导致粗体失效。
-            val isTableLine = line.contains("|")
-            val hasUnbalancedBold = line.split("**").size % 2 == 0
-            
-            val shouldSkipHardBreak = isTableLine || (isStreaming && hasUnbalancedBold)
-            
-            // 调试日志
-            if (trimmedLine.startsWith("#") || (isStreaming && (isTableLine || hasUnbalancedBold))) {
-                android.util.Log.d("MarkdownPreprocess", "Line ${index}: isHeading=$isHeadingLine, isTable=$isTableLine, unbalancedBold=$hasUnbalancedBold, streaming=$isStreaming, content='${line.take(50)}'")
-            }
-            
-            when {
-                index == lastIndex -> line
-                isEmptyLine -> "$line\n"
-                isHeadingLine -> "$line\n"
-                shouldSkipHardBreak -> "$line\n"
-                line.endsWith("  ") -> "$line\n"
-                else -> "$line  \n"
-            }
-        }.joinToString("")
-    }
+        when {
+            index == lastIndex -> line
+            isEmptyLine -> "$line\n"
+            isHeadingLine -> "$line\n"
+            shouldSkipHardBreak -> "$line\n"
+            line.endsWith("  ") -> "$line\n"
+            else -> "$line  \n"
+        }
+    }.joinToString("")
 
-    // 6. 内联数学公式转换 - 用户明确要求保留
-    // Convert inline math ($...$) to block math ($$...$$)
+    // 6. Inline Math
     val inlineMathPattern = Regex("(?<!\\\\)(?<!\\$)\\$([^$\\n]+?)(?<!\\\\)(?<!\\$)\\$")
     if (s.contains("$")) {
         s = s.replace(inlineMathPattern) { matchResult ->
@@ -216,20 +186,6 @@ private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): S
         }
     }
 
-    // ============================================================================================
-    // 已移除的功能（会导致代码块和粗体破坏问题）：
-    // - 紧凑列表修复 (Compact Lists Fix) - 已移除，会触发代码块
-    // - 列表项缩进处理 - 已移除，会触发代码块
-    // - 列表符号后自动加空格 - 已移除，会破坏 ** 粗体语法
-    // ============================================================================================
-
-    // 7. 移除文本开头的多余换行符 (Remove leading newlines)
-    // 防止因标题预处理或其他原因导致顶部出现不必要的空白
-    s = s.trimStart('\n')
-
-    // 调试：打印预处理后的前200个字符，检查标题格式
-    android.util.Log.d("MarkdownPreprocess", "Processed markdown (first 500 chars): ${s.take(500).replace("\n", "\\n")}")
-    
     return s
 }
 

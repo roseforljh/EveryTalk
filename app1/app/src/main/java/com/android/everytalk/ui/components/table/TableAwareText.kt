@@ -80,54 +80,52 @@ fun TableAwareText(
     // 无论是否流式，都尝试进行轻量级分段解析（仅分离代码块，表格仍由MarkdownRenderer处理或后续优化）
     
     // 1. 解析状态管理
-    // 优化：使用 remember + LaunchedEffect 替代 produceState
-    // 目的：当 isStreaming 变化时（true -> false），保持当前的 parsedParts 不变，
-    // 直到新的解析完成。避免 produceState 重置导致的回退到 initialValue (纯文本) 造成的闪烁/跳动。
+    // 优化：分离流式与非流式状态管理策略
+    // 目的：流式输出时保留上一帧的解析结果，避免每次 text 变化时重置为纯文本导致的闪烁
     
-    // 缓存版本控制：当解析逻辑更新时，通过修改版本号使旧缓存失效
-    // 增加 text.hashCode() 以防止编辑后命中旧缓存
+    // 缓存版本控制
     val effectiveCacheKey = if (contentKey.isNotBlank()) "${contentKey}_${text.hashCode()}_v${ContentParseCache.PARSER_VERSION}" else ""
 
-    val parsedPartsState = remember(contentKey, isStreaming, effectiveCacheKey, text) {
-        mutableStateOf(
-            if (!isStreaming) {
-                // 非流式：优先从缓存获取，若无则在主线程同步解析
-                // 解决 "position fallback" 问题：避免先显示纯文本(MarkdownRenderer)再切换到CodeBlockCard导致的布局跳动
-                if (effectiveCacheKey.isNotBlank()) {
-                    ContentParseCache.get(effectiveCacheKey) ?: ContentParser.parseCompleteContent(text, isStreaming = false).also {
-                        ContentParseCache.put(effectiveCacheKey, it)
-                    }
-                } else {
-                    ContentParser.parseCompleteContent(text, isStreaming = false)
-                }
-            } else {
-                // 流式：初始状态可能为空，后续由 LaunchedEffect 更新
-                listOf(ContentPart.Text(text))
-            }
-        )
+    // 使用 remember(contentKey) 保持状态实例，避免 text 变化时状态被重置
+    val parsedPartsState = remember(contentKey) {
+        mutableStateOf<List<ContentPart>?>(null)
     }
 
-    // 仅在流式模式下使用异步更新
+    if (!isStreaming) {
+        // 非流式：同步解析/读取缓存，确保首帧即显示正确内容
+        // 使用 remember(text) 确保文本变化时更新（如编辑消息）
+        val syncParts = remember(text, effectiveCacheKey) {
+            if (effectiveCacheKey.isNotBlank()) {
+                ContentParseCache.get(effectiveCacheKey) ?: ContentParser.parseCompleteContent(text, isStreaming = false).also {
+                    ContentParseCache.put(effectiveCacheKey, it)
+                }
+            } else {
+                ContentParser.parseCompleteContent(text, isStreaming = false)
+            }
+        }
+        parsedPartsState.value = syncParts
+    }
+
+    // 流式：异步解析，避免阻塞 UI 线程
     LaunchedEffect(text, contentKey, isStreaming) {
         if (isStreaming) {
+            // 异步解析新内容
             val start = System.nanoTime()
             val newParts = withContext(Dispatchers.Default) {
                 ContentParser.parseCompleteContent(text, isStreaming = true)
             }
+            // 更新状态
+            parsedPartsState.value = newParts
+            
             val cost = (System.nanoTime() - start) / 1_000_000
             if (com.android.everytalk.config.PerformanceConfig.ENABLE_PERFORMANCE_LOGGING) {
-                android.util.Log.d("TableAwareText", "Async parsing completed in ${cost}ms for key=$effectiveCacheKey")
+                android.util.Log.d("TableAwareText", "Async parsing completed in ${cost}ms")
             }
-            parsedPartsState.value = newParts
-        } else {
-             // Debug log to verify synchronous parsing path
-             if (com.android.everytalk.config.PerformanceConfig.ENABLE_PERFORMANCE_LOGGING) {
-                 android.util.Log.d("TableAwareText", "Synchronous parsing used for key=$effectiveCacheKey (Stable State)")
-             }
         }
     }
     
-    val parsedParts = parsedPartsState.value
+    // 如果状态为空（流式第一帧），暂显示纯文本，避免空白
+    val parsedParts = parsedPartsState.value ?: listOf(ContentPart.Text(text))
 
     // 统一渲染逻辑
     // ContentParser 已经确保解析准确性，UI 层直接渲染即可
@@ -144,10 +142,13 @@ fun TableAwareText(
             .fillMaxWidth()
             .padding(vertical = verticalPaddingDp) // 在容器层统一添加垂直 padding
     ) {
-        parsedParts.forEach { part ->
-            when (part) {
-                is ContentPart.Text -> {
-                    // 纯文本部分：用MarkdownRenderer渲染
+        parsedParts.forEachIndexed { index, part ->
+            // 使用 key 确保组件状态稳定，避免因列表重建导致的闪烁或滚动位置丢失
+            // 在流式输出中，前面的 part 通常是稳定的，key 能有效避免它们被重组
+            androidx.compose.runtime.key(index) {
+                when (part) {
+                    is ContentPart.Text -> {
+                        // 纯文本部分：用MarkdownRenderer渲染
                     MarkdownRenderer(
                         markdown = part.content,
                         style = style,
@@ -162,42 +163,41 @@ fun TableAwareText(
                         disableVerticalPadding = true // 禁用内部垂直 padding，由外层 Column 统一控制
                     )
                 }
-                is ContentPart.Code -> {
-                    // 🔧 修复：使用 CodeBlockCard 渲染代码块，提供复制按钮、预览按钮、语言类型和圆角
-                    // 这样无论流式还是非流式，代码块都有完整的 UI 功能
-                    val clipboard = LocalClipboardManager.current
-                    CodeBlockCard(
-                        language = part.language,
-                        code = part.content,
-                        modifier = Modifier.padding(vertical = 4.dp),
-                        onPreviewRequested = if (onCodePreviewRequested != null) {
-                            { onCodePreviewRequested(part.language ?: "", part.content) }
-                        } else null,
-                        onCopy = {
-                            clipboard.setText(AnnotatedString(part.content))
-                            onCodeCopied?.invoke()
-                        },
-                        onLongPress = onLongPress
-                    )
-                }
-                is ContentPart.Table -> {
-                    // 表格部分：使用 TableRenderer 渲染
-                    TableRenderer(
-                        lines = part.lines,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 8.dp),
-                        isStreaming = isStreaming,
-                        contentKey = if (contentKey.isNotBlank()) "${contentKey}_table_${parsedParts.indexOf(part)}_${part.lines.size}" else "",
-                        onLongPress = onLongPress,
-                        // 使用与文本一致的样式
-                        headerStyle = style.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Bold),
-                        cellStyle = style
-                    )
-                }
-                is ContentPart.Math -> {
-                    // 数学公式块部分：支持横向滚动
-                    Row(
+                    is ContentPart.Code -> {
+                        // 🔧 修复：使用 CodeBlockCard 渲染代码块，提供复制按钮、预览按钮、语言类型和圆角
+                        val clipboard = LocalClipboardManager.current
+                        CodeBlockCard(
+                            language = part.language,
+                            code = part.content,
+                            modifier = Modifier.padding(vertical = 4.dp),
+                            onPreviewRequested = if (onCodePreviewRequested != null) {
+                                { onCodePreviewRequested(part.language ?: "", part.content) }
+                            } else null,
+                            onCopy = {
+                                clipboard.setText(AnnotatedString(part.content))
+                                onCodeCopied?.invoke()
+                            },
+                            onLongPress = onLongPress
+                        )
+                    }
+                    is ContentPart.Table -> {
+                        // 表格部分：使用 TableRenderer 渲染
+                        TableRenderer(
+                            lines = part.lines,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp),
+                            isStreaming = isStreaming,
+                            contentKey = if (contentKey.isNotBlank()) "${contentKey}_table_${index}_${part.lines.size}" else "",
+                            onLongPress = onLongPress,
+                            // 使用与文本一致的样式
+                            headerStyle = style.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Bold),
+                            cellStyle = style
+                        )
+                    }
+                    is ContentPart.Math -> {
+                        // 数学公式块部分：支持横向滚动
+                        Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 8.dp)
@@ -245,13 +245,14 @@ fun TableAwareText(
                             modifier = Modifier
                                 .wrapContentWidth()
                                 .padding(horizontal = 8.dp)
-                        )
-                        Spacer(modifier = Modifier.width(16.dp))
+                                )
+                                Spacer(modifier = Modifier.width(16.dp))
+                            }
+                        }
                     }
                 }
             }
         }
-    }
 
     // 显示预览对话框
     previewState?.let { (code, language) ->

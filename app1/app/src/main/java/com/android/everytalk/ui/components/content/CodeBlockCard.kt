@@ -79,6 +79,14 @@ fun CodeBlockCard(
     }
     
     // 语法高亮处理（带缓存）
+    // 优化：使用 derivedStateOf 或其他方式避免在输入过程中频繁高亮
+    // 但 Text 组件对于 AnnotatedString 的变更可能会导致重组
+    // CodeBlockCard 在流式传输中会频繁接收到新的 code
+    // 每次 code 变化都会触发高亮，可能导致闪烁
+    // 不过，SyntaxHighlighter 本身应该是纯函数，且这里有 HighlightCache
+    // 关键在于：流式输出时，每次都是全新的 code，缓存很难命中
+    // 除非我们能增量高亮（目前不支持）
+    // 暂时保持原样，依赖 TableAwareText 的稳定性
     val highlightedCode = remember(code, language, isDarkTheme) {
         val cacheKey = HighlightCache.generateKey(code, language, isDarkTheme)
         

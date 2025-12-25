@@ -80,7 +80,8 @@ fun ContentCoordinator(
     // 性能保护：
     //   - TableAwareText 延迟250ms解析大型内容（>8000字符）
     //   - 使用后台线程（Dispatchers.Default）避免阻塞UI
-    if (hasCodeBlock || hasTable || hasMathBlock) {
+    // 优化：AI 消息始终走 TableAwareText，避免流式输出时因检测到代码块而切换渲染器导致闪烁
+    if (sender == Sender.AI || hasCodeBlock || hasTable || hasMathBlock) {
         // 只根据流式状态判断是否使用轻量模式
         // 如果包含表格，即使是流式也建议走 TableAwareText 以便正确渲染表格（虽然 TableAwareText 内部对流式有优化）
         // 但为了性能，流式期间如果只有表格没有代码块，也可以考虑暂缓？
