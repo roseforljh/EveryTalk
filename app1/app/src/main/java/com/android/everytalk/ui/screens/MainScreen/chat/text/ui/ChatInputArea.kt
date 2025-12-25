@@ -20,6 +20,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -368,7 +370,10 @@ fun ChatInputArea(
 
     // 🎯 性能优化：使用本地状态管理输入文本，避免每次按键都触发 ViewModel 更新
     // 这样可以大幅减少 ChatScreen 的重组次数，解决长文本输入卡顿问题
-    var localText by remember { mutableStateOf(text) }
+    // 🔧 修复：使用 TextFieldValue 替代 String，以更好地兼容华为小艺输入法等 IME 的剪贴板粘贴行为
+    var localTextFieldValue by remember {
+        mutableStateOf(TextFieldValue(text, TextRange(text.length)))
+    }
     
     // 防抖同步 Job，用于取消上一次未完成的同步
     var syncJob by remember { mutableStateOf<Job?>(null) }
@@ -379,11 +384,13 @@ fun ChatInputArea(
     LaunchedEffect(text) {
         if (text != lastExternalText) {
             lastExternalText = text
-            localText = text
+            // 更新 TextFieldValue，保持光标在末尾
+            localTextFieldValue = TextFieldValue(text, TextRange(text.length))
         }
     }
     
     // 防抖同步到 ViewModel（使用 PerformanceConfig 中定义的延迟）
+    val localText = localTextFieldValue.text
     LaunchedEffect(localText) {
         // 取消上一次的同步任务
         syncJob?.cancel()
@@ -449,7 +456,7 @@ fun ChatInputArea(
                         // 使用本地文本发送消息
                         onSendMessageRequest(localText, false, selectedMediaItems.toList(), mimeType)
                         // 同时清空本地状态和 ViewModel 状态
-                        localText = ""
+                        localTextFieldValue = TextFieldValue("", TextRange(0))
                         lastExternalText = ""
                         onTextChange("")
                         onClearMediaItems()
@@ -518,11 +525,12 @@ fun ChatInputArea(
                 )
 
                 // 🎯 性能优化：使用本地状态驱动 TextField，避免每次按键触发 ViewModel 更新
+                // 🔧 修复：使用 TextFieldValue 以更好地兼容各种 IME（包括华为小艺输入法）的剪贴板粘贴
                 OutlinedTextField(
-                    value = localText,
-                    onValueChange = { newText ->
+                    value = localTextFieldValue,
+                    onValueChange = { newValue ->
                         // 立即更新本地状态，无延迟，保证输入流畅
-                        localText = newText
+                        localTextFieldValue = newValue
                     },
                     modifier = Modifier
                         .fillMaxWidth()
@@ -574,7 +582,7 @@ fun ChatInputArea(
                     selectedMediaItems = selectedMediaItems,
                     onClearContent = {
                         // 清空时也需要清空本地状态
-                        localText = ""
+                        localTextFieldValue = TextFieldValue("", TextRange(0))
                         lastExternalText = ""
                         onTextChange("")
                         onClearMediaItems()

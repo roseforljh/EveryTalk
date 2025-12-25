@@ -3,6 +3,7 @@ package com.android.everytalk.ui.components
 import com.android.everytalk.data.DataClass.ContentPart as DataContentPart
 import com.android.everytalk.ui.components.ContentPart
 import android.util.Log
+import com.android.everytalk.ui.components.table.TableUtils
 
 /**
  * 负责将 Markdown 文本解析为结构化的 ContentPart 列表。
@@ -90,7 +91,31 @@ object ContentParser {
             }
             
             // 2. 检测数学公式块 $$ (暂略，可复用 MarkdownRenderer)
-            // 3. 检测表格 (暂略，可复用 MarkdownRenderer 或增加 TablePart)
+            
+            // 3. 检测表格
+            if (TableUtils.isTableLine(trimmedLine)) {
+                // 如果有之前的文本，先添加
+                if (i > lastTextStart) {
+                    val textContent = lines.subList(lastTextStart, i).joinToString("\n")
+                    if (textContent.isNotEmpty()) {
+                        parts.add(ContentPart.Text(textContent))
+                    }
+                }
+
+                // 尝试提取完整表格
+                val (tableLines, nextIndex) = TableUtils.extractTableLines(lines, i)
+                
+                if (tableLines.isNotEmpty()) {
+                    // 成功提取表格
+                    parts.add(ContentPart.Table(tableLines))
+                    i = nextIndex
+                    lastTextStart = i
+                    continue
+                } else {
+                    // 不是有效的表格（例如只有一行或者格式错误），当作普通文本处理
+                    // 继续循环
+                }
+            }
 
             i++
         }

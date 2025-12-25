@@ -16,6 +16,7 @@ import io.noties.markwon.core.MarkwonTheme
 import io.noties.markwon.ext.latex.JLatexMathPlugin
 import io.noties.markwon.image.ImagesPlugin
 import io.noties.markwon.inlineparser.MarkwonInlineParserPlugin
+import io.noties.markwon.ext.tables.TablePlugin
 import org.commonmark.node.Code
 
 /**
@@ -36,8 +37,8 @@ object MarkwonCache {
         imageClickListener: ((String) -> Unit)? = null
     ): Markwon {
         val roundedSize = textSize.toInt()
-        // v7: dynamic code color based on theme
-        val cacheKey = "v7_dark=${isDark}_size=${roundedSize}"
+        // v8: added TablePlugin for markdown table rendering
+        val cacheKey = "v8_dark=${isDark}_size=${roundedSize}"
         
         synchronized(lock) {
             cacheMap[cacheKey]?.let { return it }
@@ -51,6 +52,7 @@ object MarkwonCache {
                      plugin.addSchemeHandler(io.noties.markwon.image.data.DataUriSchemeHandler.create())
                 })
                 .usePlugin(MarkwonInlineParserPlugin.create())
+                .usePlugin(TablePlugin.create(context))
                 .usePlugin(JLatexMathPlugin.create(mathTextSize) { builder ->
                     // Enable inlines to support standard inline math if needed,
                     // though we mostly rely on $$ block fallback from MarkdownRenderer
