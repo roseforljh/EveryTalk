@@ -176,7 +176,8 @@ fun TableAwareText(
                         onCopy = {
                             clipboard.setText(AnnotatedString(part.content))
                             onCodeCopied?.invoke()
-                        }
+                        },
+                        onLongPress = onLongPress
                     )
                 }
                 is ContentPart.Table -> {

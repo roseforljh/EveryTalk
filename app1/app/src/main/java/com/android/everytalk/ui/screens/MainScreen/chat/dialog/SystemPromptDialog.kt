@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -223,13 +224,22 @@ fun SystemPromptDialog(
                         )
                     }
 
+                    val isDarkTheme = isSystemInDarkTheme()
                     val buttonColor = animateColorAsState(
-                        targetValue = if (isEngaged) MaterialTheme.colorScheme.surfaceVariant else Color.White,
+                        targetValue = if (isEngaged) {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        } else {
+                            if (isDarkTheme) Color.White else Color.Black
+                        },
                         label = "ButtonContainerColor"
                     )
                     
                     val contentColor = animateColorAsState(
-                        targetValue = if (isEngaged) MaterialTheme.colorScheme.onSurfaceVariant else Color.Black,
+                        targetValue = if (isEngaged) {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        } else {
+                            if (isDarkTheme) Color.Black else Color.White
+                        },
                         label = "ButtonContentColor"
                     )
 

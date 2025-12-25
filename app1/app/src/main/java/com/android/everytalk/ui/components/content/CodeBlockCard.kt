@@ -28,6 +28,8 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
 import com.android.everytalk.ui.theme.chatColors
 import com.android.everytalk.ui.components.syntax.SyntaxHighlighter
 import com.android.everytalk.ui.components.syntax.SyntaxHighlightTheme
@@ -55,7 +57,8 @@ fun CodeBlockCard(
     code: String,
     modifier: Modifier = Modifier,
     onCopy: (() -> Unit)? = null,
-    onPreviewRequested: (() -> Unit)? = null
+    onPreviewRequested: (() -> Unit)? = null,
+    onLongPress: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null
 ) {
     val shape = RoundedCornerShape(8.dp)
     val clipboard = LocalClipboardManager.current
@@ -105,6 +108,16 @@ fun CodeBlockCard(
     modifier = modifier
         .fillMaxWidth()
         .border(1.dp, outline, shape)
+        .pointerInput(onLongPress) {
+            if (onLongPress != null) {
+                detectTapGestures(
+                    onLongPress = { offset ->
+                        onLongPress(offset)
+                    },
+                    onTap = { /* Allow click pass-through */ }
+                )
+            }
+        }
         .onGloballyPositioned { coordinates ->
             val newTop = coordinates.positionInWindow().y
             val newHeight = coordinates.size.height
