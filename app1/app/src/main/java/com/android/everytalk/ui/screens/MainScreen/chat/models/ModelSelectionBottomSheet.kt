@@ -455,6 +455,11 @@ fun PlatformSelectionDialog(
         }
     }
 
+    val isDarkTheme = isSystemInDarkTheme()
+    val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
+    val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
+    val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
+
     Dialog(
         onDismissRequest = onDismissRequest,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -468,7 +473,7 @@ fun PlatformSelectionDialog(
                     this.scaleY = scale.value
                 },
             shape = RoundedCornerShape(28.dp),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF333333))
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
         ) {
             Column(
                 modifier = Modifier.padding(24.dp),
@@ -477,7 +482,7 @@ fun PlatformSelectionDialog(
                 Text(
                     text = "切换平台",
                     style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.align(Alignment.Start)
                 )
                 
@@ -488,7 +493,7 @@ fun PlatformSelectionDialog(
                 ) {
                     items(sortedPlatforms) { platform ->
                         ListItem(
-                            headlineContent = { Text(platform, color = Color.White) },
+                            headlineContent = { Text(platform, color = MaterialTheme.colorScheme.onSurface) },
                             modifier = Modifier.clickable { tempSelectedPlatform = platform },
                             colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                             trailingContent = {
@@ -496,13 +501,13 @@ fun PlatformSelectionDialog(
                                     Icon(
                                         imageVector = Icons.Filled.CheckCircle,
                                         contentDescription = "Selected",
-                                        tint = Color.White
+                                        tint = MaterialTheme.colorScheme.primary
                                     )
                                 } else {
                                     Icon(
                                         imageVector = Icons.Filled.RadioButtonUnchecked,
                                         contentDescription = "Unselected",
-                                        tint = Color.Gray
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                             }
@@ -524,9 +529,10 @@ fun PlatformSelectionDialog(
                             .height(48.dp),
                         shape = RoundedCornerShape(24.dp),
                         colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = Color(0xFFFF5252)
+                            containerColor = MaterialTheme.colorScheme.surface,
+                            contentColor = cancelButtonColor
                         ),
-                        border = BorderStroke(1.dp, Color(0xFFFF5252))
+                        border = BorderStroke(1.dp, cancelButtonColor)
                     ) {
                         Text(
                             text = "取消",
@@ -543,10 +549,10 @@ fun PlatformSelectionDialog(
                             .height(48.dp),
                         shape = RoundedCornerShape(24.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = Color.White,
-                            contentColor = Color.Black,
-                            disabledContainerColor = Color.Gray,
-                            disabledContentColor = Color.LightGray
+                            containerColor = confirmButtonColor,
+                            contentColor = confirmButtonTextColor,
+                            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                         )
                     ) {
                         Text(
