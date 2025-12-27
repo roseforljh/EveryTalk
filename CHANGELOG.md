@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.10.3](https://github.com/roseforljh/EveryTalk/compare/v1.10.2...v1.10.3) (2025-12-27)
+
+
+### Bug Fixes
+
+* 更新默认模型 ([26eec51](https://github.com/roseforljh/EveryTalk/commit/26eec51a04a3809a7a98758ecf6af8fcc1a30283))
+* 表格转换 ([e338705](https://github.com/roseforljh/EveryTalk/commit/e3387054c76cba0b2c236c36c419afdea67cc1d4))
+
 ## [1.10.2](https://github.com/roseforljh/EveryTalk/compare/v1.10.1...v1.10.2) (2025-12-25)
 
 
