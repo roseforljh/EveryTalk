@@ -2,9 +2,13 @@
 agp = "8.7.3"
 # Kotlin & KSP
 kotlin = "2.1.0"
+# Markdown AST Parser
+intellijMarkdown = "0.7.3"
 kspVersion = "2.1.0-1.0.29"
 room = "2.8.4"
 hilt = "2.52"
+koin = "3.5.6"
+koinCompose = "3.5.6"
 coreKtx = "1.15.0"
 junit = "4.13.2"
 junitVersion = "1.2.1"
@@ -46,6 +50,15 @@ room-compiler = { group = "androidx.room", name = "room-compiler", version.ref =
 hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref = "hilt" }
 hilt-compiler = { group = "com.google.dagger", name = "hilt-compiler", version.ref = "hilt" }
 hilt-navigation-compose = { group = "androidx.hilt", name = "hilt-navigation-compose", version = "1.2.0" }
+
+# Koin Dependency Injection (Kotlin 2.1 compatible)
+koin-android = { group = "io.insert-koin", name = "koin-android", version.ref = "koin" }
+koin-androidx-compose = { group = "io.insert-koin", name = "koin-androidx-compose", version.ref = "koinCompose" }
+koin-core = { group = "io.insert-koin", name = "koin-core", version.ref = "koin" }
+koin-test = { group = "io.insert-koin", name = "koin-test", version.ref = "koin" }
+
+# Markdown AST Parser
+intellij-markdown = { group = "org.jetbrains", name = "markdown", version.ref = "intellijMarkdown" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

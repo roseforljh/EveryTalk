@@ -231,6 +231,12 @@ android {
     }
     buildToolsVersion = "36.0.0"
     ndkVersion = "25.2.9519653"
+    
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
 
 
     applicationVariants.all {
@@ -293,6 +299,10 @@ android {
 
         // ===== Testing =====
         testImplementation(libs.junit)
+        testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
+        testImplementation("io.mockk:mockk:1.13.8")
+        testImplementation("app.cash.turbine:turbine:1.0.0")
+        testImplementation("org.robolectric:robolectric:4.11.1")
         androidTestImplementation(libs.androidx.junit)
         androidTestImplementation(libs.androidx.espresso.core)
         androidTestImplementation(libs.androidx.ui.test.junit4)
@@ -319,6 +329,9 @@ android {
         // ===== 网络 - OkHttp =====
         implementation("com.squareup.okhttp3:okhttp:5.3.0")
 
+        // ===== Markdown AST Parser =====
+        implementation(libs.intellij.markdown)
+
         // ===== Markdown 渲染 - Markwon =====
         // 核心 + 表格
         implementation("io.noties.markwon:core:4.6.2")
@@ -337,11 +350,21 @@ android {
         // ===== Room Database =====
         implementation(libs.room.runtime)
         implementation(libs.room.ktx)
+        implementation("androidx.room:room-paging:2.8.4")
         ksp(libs.room.compiler)
+        
+        // ===== Paging 3 =====
+        implementation("androidx.paging:paging-runtime:3.3.6")
+        implementation("androidx.paging:paging-compose:3.3.6")
         
         // ===== Hilt Dependency Injection =====
         // 暂不启用 - Kotlin 2.1.0 兼容性问题
         // implementation(libs.hilt.android)
         // ksp(libs.hilt.compiler)
         // implementation(libs.hilt.navigation.compose)
+        
+        // ===== Koin Dependency Injection =====
+        implementation("io.insert-koin:koin-android:3.5.6")
+        implementation("io.insert-koin:koin-androidx-compose:3.5.6")
+        testImplementation("io.insert-koin:koin-test:3.5.6")
     }

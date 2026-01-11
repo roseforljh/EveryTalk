@@ -1,5 +1,6 @@
 package com.android.everytalk.data.database.daos
 
+import androidx.paging.PagingSource
 import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
@@ -26,14 +27,8 @@ interface ChatDao {
         insertMessages(messages)
     }
     
-    // For single session (e.g., last open chat)
     @Transaction
     suspend fun saveLastOpenSession(session: ChatSessionEntity, messages: List<MessageEntity>) {
-        // We only keep one "last open chat" per mode (text/image) in SharedPreferences.
-        // In Room, we might just use a special ID for "last_open_text" and "last_open_image".
-        // Or we use the regular table but with a special flag.
-        // However, the caller will likely pass a session with a specific ID.
-        // If we want to mimic "saveLastOpenChat", we just save it.
         saveSessionWithMessages(session, messages)
     }
 
@@ -42,6 +37,12 @@ interface ChatDao {
 
     @Query("SELECT * FROM messages WHERE sessionId = :sessionId ORDER BY timestamp ASC")
     suspend fun getMessagesForSession(sessionId: String): List<MessageEntity>
+    
+    @Query("SELECT * FROM messages WHERE sessionId = :sessionId ORDER BY timestamp ASC")
+    fun getMessagesForSessionPaged(sessionId: String): PagingSource<Int, MessageEntity>
+    
+    @Query("SELECT COUNT(*) FROM messages WHERE sessionId = :sessionId")
+    suspend fun getMessageCountForSession(sessionId: String): Int
     
     @Query("DELETE FROM chat_sessions WHERE isImageGeneration = :isImageGen")
     suspend fun clearAllSessions(isImageGen: Boolean)

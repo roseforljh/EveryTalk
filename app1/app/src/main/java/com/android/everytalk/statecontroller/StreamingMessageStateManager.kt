@@ -23,13 +23,12 @@ import kotlin.math.min
  * allowing them to observe only the streaming content changes without
  * triggering recomposition of the entire message list.
  *
- * Key Features:
+ * Key Features (参考 Cherry Studio、Lobe Chat、RikkaHub):
  * - Maintains separate StateFlow for each streaming message
- * - Provides efficient content updates during streaming
- * - Automatically cleans up state when streaming completes
- * - Supports both text and image generation modes
- *
- * Requirements: 1.4, 3.4
+ * - Adaptive flush intervals based on content length (类似 Cherry Studio 的动态 chunk 策略)
+ * - Debounce mechanism to batch high-frequency updates (16ms = ~60fps)
+ * - Automatic cleanup when streaming completes
+ * - Code block detection to avoid partial flushes
  *
  * @see ViewModelStateHolder
  * @see StreamingBuffer

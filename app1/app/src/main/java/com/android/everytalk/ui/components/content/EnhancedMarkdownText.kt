@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.components
 import com.android.everytalk.ui.components.coordinator.ContentCoordinator
+import com.android.everytalk.ui.components.streaming.rememberTypewriterState
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -102,19 +103,31 @@ fun EnhancedMarkdownText(
     Box(
         modifier = modifier.then(widthModifier)
     ) {
-        // 🔧 流式跳动修复 v4：完全移除分段渲染，始终使用 ContentCoordinator 统一渲染
-        // TableAwareText 内部已集成 CodeBlockCard，提供复制按钮、预览按钮、语言类型和圆角
-        // 这样无论流式还是非流式，渲染结构始终一致，彻底消除切换跳动
         val isActuallyStreaming = isStreaming || 
             (viewModel?.streamingMessageStateManager?.isStreaming(message.id) == true)
         
+        val typewriterState = rememberTypewriterState(
+            targetText = content,
+            isStreaming = isActuallyStreaming,
+            charsPerFrame = 3,
+            frameDelayMs = 16L,
+            maxCharsPerFrame = 50,
+            catchUpDivisor = 5
+        )
+        
+        val displayText = if (isActuallyStreaming) {
+            typewriterState.displayedText
+        } else {
+            content
+        }
+        
         ContentCoordinator(
-            text = content,
+            text = displayText,
             style = style,
             color = textColor,
             isStreaming = isActuallyStreaming,
             modifier = widthModifier,
-            contentKey = message.id, // 使用稳定的 messageId 作为缓存 key
+            contentKey = message.id,
             onLongPress = onLongPress,
             onImageClick = onImageClick,
             sender = message.sender,

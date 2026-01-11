@@ -44,12 +44,15 @@ data class PendingConfigParams(
     // Provides StateFlow-based observation of streaming content
     // Requirements: 1.4, 3.4
     val streamingMessageStateManager = StreamingMessageStateManager()
-    
+
     // 🎯 StreamingBuffer mapping (one buffer per message ID)
     private val streamingBuffers = mutableMapOf<String, StreamingBuffer>()
 
     // 新增：记录每条流式消息已提交到 UI 的长度，用于只追加增量，避免重复全量赋值造成卡顿
     private val streamingLastLengths = mutableMapOf<String, Int>()
+
+    // 🎯 记录已完成同步的消息ID，避免重复同步导致UI抖动
+    private val syncedMessageIds = mutableSetOf<String>()
     
     // CoroutineScope for StreamingBuffer operations (will be initialized from AppViewModel)
     private var bufferCoroutineScope: CoroutineScope? = null
@@ -280,9 +283,12 @@ val _isStreamingPaused = MutableStateFlow(false)
             buffer.clear()
         }
         streamingBuffers.clear()
-        
+
         // 🎯 清理流式消息状态管理器（Requirements: 1.4, 3.4）
         streamingMessageStateManager.clearAll()
+
+        // 🎯 清理同步标记
+        syncedMessageIds.clear()
         
         android.util.Log.d("ViewModelStateHolder", "Cleared all StreamingBuffers and streaming states for text chat")
         
@@ -325,9 +331,12 @@ val _isStreamingPaused = MutableStateFlow(false)
             buffer.clear()
         }
         streamingBuffers.clear()
-        
+
         // 🎯 清理流式消息状态管理器（Requirements: 1.4, 3.4）
         streamingMessageStateManager.clearAll()
+
+        // 🎯 清理同步标记
+        syncedMessageIds.clear()
         
         android.util.Log.d("ViewModelStateHolder", "Cleared all StreamingBuffers and streaming states for image chat")
         
@@ -582,6 +591,9 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
         // 清理增量计数器
         streamingLastLengths.remove(messageId)
 
+        // 🎯 清理同步标记，允许下次同步
+        syncedMessageIds.remove(messageId)
+
         // 🎯 Clear streaming state in StreamingMessageStateManager
         streamingMessageStateManager.clearStreamingState(messageId)
 
@@ -811,8 +823,15 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
     /**
      * 同步流式消息到 messages 列表
      * 🎯 在流式结束时调用，将缓冲区的文本同步到持久化存储
+     * 该方法是幂等的，重复调用不会产生副作用
      */
     fun syncStreamingMessageToList(messageId: String, isImageGeneration: Boolean = false) {
+        // 🎯 幂等检查：如果已经同步过，直接返回
+        if (syncedMessageIds.contains(messageId)) {
+            android.util.Log.d("ViewModelStateHolder", "syncStreamingMessageToList: already synced $messageId, skipping")
+            return
+        }
+
         val finalText = streamingMessageStateManager.finishStreaming(messageId)
 
         android.util.Log.d("ViewModelStateHolder", "🎯 Syncing streaming message $messageId: finalText.length=${finalText.length}")
@@ -842,6 +861,9 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
             } else {
                 isTextConversationDirty.value = true
             }
+
+            // 🎯 标记为已同步，防止重复同步
+            syncedMessageIds.add(messageId)
 
             // 同步完成后，清理长度记录，避免后续错误增量
             streamingLastLengths.remove(messageId)

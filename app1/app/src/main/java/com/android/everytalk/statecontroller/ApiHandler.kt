@@ -469,11 +469,14 @@ class ApiHandler(
                     onRequestFailed(e)
                 } else {
                     logger.debug("Stream cancelled: ${e.message}")
-                    
+
+                    // 🎯 判断是正常结束还是用户取消
+                    val isNormalFinish = e.message?.contains("Stream finished with event:") == true
+
                     // 🎯 Save partial content to history on cancellation (Requirements: 7.5)
                     stateHolder.flushStreamingBuffer(aiMessageId)
                     logger.debug("Flushed StreamingBuffer on cancellation for message: $aiMessageId")
-                    
+
                     // Get partial content from message processor
                     val partialText = currentMessageProcessor.getCurrentText().trim()
                     if (partialText.isNotBlank()) {
@@ -487,10 +490,13 @@ class ApiHandler(
                             }
                         }
                     }
-                    
-                    // 🎯 清理 StreamingBuffer（Requirements: 7.5）
-                    stateHolder.clearStreamingBuffer(aiMessageId)
-                    logger.debug("Cleared StreamingBuffer on cancellation exception for message: $aiMessageId")
+
+                    // 🎯 只有在用户主动取消时才立即清理 StreamingBuffer
+                    // 正常结束时，延迟到 finally 块中 sync 完成后再清理
+                    if (!isNormalFinish) {
+                        stateHolder.clearStreamingBuffer(aiMessageId)
+                        logger.debug("Cleared StreamingBuffer on user cancellation for message: $aiMessageId")
+                    }
                 }
             } finally {
                 // 🎯 最终安全网：如果在 onCompletion 中因异常未执行同步，这里再尝试一次
@@ -501,6 +507,14 @@ class ApiHandler(
                     stateHolder.syncStreamingMessageToList(aiMessageId, isImageGeneration)
                 } catch (e: Exception) {
                     logger.warn("Final sync in finally block failed: ${e.message}")
+                }
+
+                // 🎯 最后统一清理 StreamingBuffer，确保 sync 完成后再清理
+                try {
+                    stateHolder.clearStreamingBuffer(aiMessageId)
+                    logger.debug("Cleared StreamingBuffer in finally block for message: $aiMessageId")
+                } catch (e: Exception) {
+                    logger.warn("Clear StreamingBuffer in finally block failed: ${e.message}")
                 }
 
                 val currentJob = if (isImageGeneration) stateHolder.imageApiJob else stateHolder.textApiJob

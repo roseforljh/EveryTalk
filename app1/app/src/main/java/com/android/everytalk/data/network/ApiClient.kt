@@ -485,7 +485,7 @@ object ApiClient {
 
     /**
      * 强制直连模式 - 直接调用 API 提供商，不经过后端代理
-     * 根据渠道类型自动选择 GeminiDirectClient 或 OpenAIDirectClient
+     * 使用 ProviderRegistry 自动选择合适的 Provider
      */
     @OptIn(ExperimentalCoroutinesApi::class)
     fun streamChatResponse(
@@ -493,7 +493,7 @@ object ApiClient {
         attachments: List<SelectedMediaItem>,
         applicationContext: Context
     ): Flow<AppStreamEvent> = channelFlow {
-        android.util.Log.i("ApiClient", "🔄 强制直连模式启动")
+        android.util.Log.i("ApiClient", "Direct mode started")
 
         // 1. 针对"默认"提供商进行配置注入（若字段为空）
         // 这样能确保即使是旧数据或未完整初始化的配置，也能使用 BuildConfig 中的默认值
@@ -511,43 +511,26 @@ object ApiClient {
             request
         }
 
-        // 2. 判断渠道类型
-        // 修正逻辑：只有明确指定为 Gemini 渠道，或者模型名含 gemini 且非 OpenAI 兼容渠道时，才走 Gemini 原生协议
-        // 这样可以支持通过 OpenAI 兼容接口（如 OneAPI/NewAPI）提供的 Gemini 模型
-        val isGeminiRequest = (effectiveRequest.provider == "gemini" ||
-                effectiveRequest.channel.lowercase().contains("gemini")) &&
-                !effectiveRequest.channel.lowercase().contains("openai") ||
-                (effectiveRequest.model.contains("gemini", ignoreCase = true) &&
-                        !effectiveRequest.channel.lowercase().contains("openai") &&
-                        effectiveRequest.provider != "默认" && effectiveRequest.provider != "default")
-
         // 构建多模态请求（注入图片附件）
         val requestForDirect = try {
             buildDirectMultimodalRequest(effectiveRequest, attachments, applicationContext)
         } catch (e: Exception) {
-            android.util.Log.w("ApiClient", "构建直连多模态请求失败，使用原始请求: ${e.message}")
+            android.util.Log.w("ApiClient", "Failed to build multimodal request, using original: ${e.message}")
             effectiveRequest
         }
         
         try {
-            when {
-                isGeminiRequest -> {
-                    android.util.Log.i("ApiClient", "🔄 使用 Gemini 直连模式 (model=${effectiveRequest.model})")
-                    GeminiDirectClient.streamChatDirect(client, requestForDirect)
-                        .collect { event -> send(event) }
-                    android.util.Log.i("ApiClient", "✅ Gemini 直连完成")
-                }
-                else -> {
-                    // OpenAI 兼容模式（包括 OpenAI、Azure、其他兼容 API）
-                    android.util.Log.i("ApiClient", "🔄 使用 OpenAI 兼容直连模式 (model=${effectiveRequest.model})")
-                    OpenAIDirectClient.streamChatDirect(client, requestForDirect)
-                        .collect { event -> send(event) }
-                    android.util.Log.i("ApiClient", "✅ OpenAI 兼容直连完成")
-                }
-            }
+            val providerRegistry = org.koin.java.KoinJavaComponent.getKoin().get<com.android.everytalk.provider.ProviderRegistry>()
+            val provider = providerRegistry.getProvider(requestForDirect)
+            android.util.Log.i("ApiClient", "Using provider: ${provider.providerName} (model=${effectiveRequest.model})")
+            
+            providerRegistry.streamChat(requestForDirect, attachments, applicationContext)
+                .collect { event -> send(event) }
+            
+            android.util.Log.i("ApiClient", "Provider ${provider.providerName} completed")
         } catch (e: Exception) {
-            android.util.Log.e("ApiClient", "❌ 直连失败", e)
-            send(AppStreamEvent.Error("直连失败: ${e.message}", null))
+            android.util.Log.e("ApiClient", "Direct connection failed", e)
+            send(AppStreamEvent.Error("Direct connection failed: ${e.message}", null))
             send(AppStreamEvent.Finish("direct_connection_failed"))
         }
     }.buffer(Channel.BUFFERED).flowOn(Dispatchers.IO)

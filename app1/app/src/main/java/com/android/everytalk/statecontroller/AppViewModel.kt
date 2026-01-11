@@ -83,28 +83,25 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         ignoreUnknownKeys = true
     }
 
-    // 高级缓存管理器
-    private val cacheManager by lazy { CacheManager.getInstance(application.applicationContext) }
-    // 原图文件管理器（用于原样字节落地与下载）
-    private val fileManager by lazy { FileManager(application.applicationContext) }
+    private val cacheManager: CacheManager by lazy { 
+        org.koin.java.KoinJavaComponent.getKoin().get() 
+    }
+    private val fileManager: FileManager by lazy { 
+        org.koin.java.KoinJavaComponent.getKoin().get() 
+    }
     
-    // 缓存控制器 - 管理预览缓存和缓存预热
     private val cacheController by lazy { CacheController(cacheManager, viewModelScope) }
     
-    // 增量备份管理器 - 跟踪脏会话，只保存变更数据
     val incrementalBackupManager by lazy { IncrementalBackupManager() }
     
     private val messagesMutex = Mutex()
     private val historyMutex = Mutex()
-    // 使用 CacheController 的缓存
     private val textConversationPreviewCache get() = cacheController.getTextPreviewCache()
     private val imageConversationPreviewCache get() = cacheController.getImagePreviewCache()
     internal val stateHolder = ViewModelStateHolder()
     
-    // 手势冲突管理器（用于协调代码块滚动和抽屉手势）
     val gestureManager = com.android.everytalk.ui.components.GestureConflictManager()
     
-    // 流式消息状态管理器（用于实时流式内容观察）
     val streamingMessageStateManager get() = stateHolder.streamingMessageStateManager
     
     private val imageLoader = ImageLoader.Builder(application.applicationContext)
@@ -129,15 +126,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     scope = viewModelScope
             )
     
-    // 公开的模式管理器 - 供设置界面等外部组件使用
     val simpleModeManager = SimpleModeManager(stateHolder, historyManager, viewModelScope)
 
-    // 只读 UI 状态门面（逐步替换直接暴露的 StateFlow/Snapshot 访问）
     private val uiStateFacade by lazy { UiStateFacade(stateHolder, simpleModeManager) }
     val ui: UiStateFacade
         get() = uiStateFacade
 
-    // 向UI层公开“意图模式”StateFlow，避免基于内容态推断造成的短暂不一致
     val uiModeFlow: StateFlow<SimpleModeManager.ModeType>
         get() = simpleModeManager.uiModeFlow
 
