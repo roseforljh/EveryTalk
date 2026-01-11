@@ -28,7 +28,6 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.*
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.res.stringResource
@@ -49,9 +48,7 @@ import com.android.everytalk.ui.theme.chatColors
 import com.android.everytalk.ui.components.EnhancedMarkdownText
 import com.android.everytalk.ui.components.StableMarkdownText
 import com.android.everytalk.ui.components.markdown.MarkdownRenderer
-import com.android.everytalk.ui.components.content.LocalStickyHeaderTop
 import com.android.everytalk.ui.components.WebPreviewDialog
-import androidx.compose.ui.layout.positionInWindow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 
@@ -120,39 +117,21 @@ fun ChatMessagesList(
             scrollStateManager.restoreAnchorIfNeeded(listState)
         }
     }
-
-    // 用于追踪列表顶部的 Y 坐标（屏幕坐标），供代码块吸顶使用
-    var listTopPx by remember { mutableFloatStateOf(0f) }
-
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val availableHeight = maxHeight
         
-        CompositionLocalProvider(LocalStickyHeaderTop provides listTopPx) {
             LazyColumn(
                 state = listState,
                 reverseLayout = false,
                 modifier = Modifier
                     .fillMaxSize()
-                    .nestedScroll(scrollStateManager.nestedScrollConnection)
-                    .onGloballyPositioned { coordinates ->
-                        // 获取列表顶部的屏幕坐标
-                        // 这里使用 padding 之前的坐标，因为 contentPadding 会把内容往下推，
-                        // 但吸顶通常应该吸附在可视区域的顶部（即 contentPadding.top 之下，或者是列表的顶部边界？）
-                        // 如果吸附在 contentPadding.top 之下，则 listTopPx 应加上 topPadding。
-                        // ChatMessagesList 设定了 topPadding = 8.dp。
-                        // 这里的 onGloballyPositioned 是 LazyColumn 自身的，即包含 padding 的整体区域。
-                        // 所以 listTopPx 就是 LazyColumn 顶部在屏幕的 Y。
-                        listTopPx = coordinates.positionInWindow().y
-                    },
+                    .nestedScroll(scrollStateManager.nestedScrollConnection),
                 contentPadding = PaddingValues(
-            start = 16.dp,
-            end = 16.dp,
-            top = 8.dp,
+                    start = 16.dp,
+                    end = 16.dp,
+                    top = 8.dp,
                     bottom = 10.dp  // 增加底部padding以确保内容完全显示在输入框上方
                 ),
-                // 提升滚动稳定性：在可视区域外保留一定数量的项，降低回收/重组频率
-                // 需要 @OptIn(ExperimentalFoundationApi::class)
-                
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 itemsIndexed(
@@ -527,7 +506,6 @@ fun ChatMessagesList(
                         Spacer(modifier = Modifier.height(1.dp))
                     }
                 }
-        }
 
         contextMenuMessage?.let { message ->
             MessageContextMenu(

@@ -35,6 +35,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -58,6 +60,7 @@ import com.android.everytalk.ui.components.WebSourcesDialog
 import com.android.everytalk.ui.components.ImagePreviewDialog
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.ChatInputArea
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.ChatMessagesList
+import com.android.everytalk.ui.components.content.LocalStickyHeaderTop
 import com.android.everytalk.ui.screens.MainScreen.chat.dialog.EditMessageDialog
 import com.android.everytalk.ui.screens.MainScreen.chat.dialog.SystemPromptDialog
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.EmptyChatView
@@ -370,25 +373,41 @@ fun ChatScreen(
                     else -> {
                         val chatListItems by viewModel.chatListItems.collectAsState()
 
-                        ChatMessagesList(
-                            chatItems = chatListItems,
-                            viewModel = viewModel,
-                            listState = listState,
-                            scrollStateManager = scrollStateManager,
-                            bubbleMaxWidth = bubbleMaxWidth,
-                            onShowAiMessageOptions = { msg ->
-                                selectedMessageForOptions = msg
-                                showAiMessageOptionsBottomSheet = true
-                            },
-                            onImageLoaded = {
-                                if (scrollStateManager.isAtBottom.value) {
-                                    scrollStateManager.jumpToBottom()
+                        var stickyHeaderTopPx by remember { mutableFloatStateOf(0f) }
+                        val contentPaddingTopPx = with(density) { 8.dp.toPx() }
+
+                        CompositionLocalProvider(LocalStickyHeaderTop provides stickyHeaderTopPx) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .onGloballyPositioned { coordinates ->
+                                        val y = coordinates.positionInWindow().y
+                                        if (y.isFinite() && y > 0f) {
+                                            stickyHeaderTopPx = y + contentPaddingTopPx
+                                        }
+                                    }
+                            ) {
+                                ChatMessagesList(
+                                chatItems = chatListItems,
+                                viewModel = viewModel,
+                                listState = listState,
+                                scrollStateManager = scrollStateManager,
+                                bubbleMaxWidth = bubbleMaxWidth,
+                                onShowAiMessageOptions = { msg ->
+                                    selectedMessageForOptions = msg
+                                    showAiMessageOptionsBottomSheet = true
+                                },
+                                onImageLoaded = {
+                                    if (scrollStateManager.isAtBottom.value) {
+                                        scrollStateManager.jumpToBottom()
+                                    }
+                                },
+                                onImageClick = { imageUrl ->
+                                    viewModel.showImageViewer(imageUrl)
                                 }
-                            },
-                            onImageClick = { imageUrl ->
-                                viewModel.showImageViewer(imageUrl)
+                            )
                             }
-                        )
+                        }
                     }
                 }
 
