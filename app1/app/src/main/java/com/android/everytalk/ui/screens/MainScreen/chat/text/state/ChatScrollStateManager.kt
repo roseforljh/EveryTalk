@@ -2,7 +2,13 @@ package com.android.everytalk.ui.screens.MainScreen.chat.text.state
 
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.animation.core.AnimationState
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.Easing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateTo
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.lazy.LazyListItemInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.*
 import androidx.compose.ui.geometry.Offset
@@ -13,8 +19,16 @@ import com.android.everytalk.util.AppLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.roundToInt
+import kotlin.math.sign
+import androidx.compose.runtime.withFrameNanos
 
 @Composable
 fun rememberChatScrollStateManager(
@@ -228,100 +242,40 @@ class ChatScrollStateManager(
         }
     }
 
+    /**
+     * 将指定 index 的 item 滚动到屏幕顶部（紧贴内容区顶部，即 contentPadding.top 之后）
+     * 
+     * 修复两个问题：
+     * 1. 对齐精确：使用 beforeContentPadding 而非写死 0，确保 item 正好在 AppBar 下方
+     * 2. 全程动画：无论距离远近都使用同一个 CubicBezierEasing，保证加速/减速手感一致
+     */
     fun scrollItemToTop(index: Int, scrollDurationMs: Int = 300) {
         logger.debug("Scrolling item $index to top.")
         if (autoScrollJob?.isActive == true) {
             autoScrollJob?.cancel()
         }
         
-        // Lock auto-scroll to prevent image loading etc from jumping to bottom
         preventAutoScroll = true
         
         autoScrollJob = coroutineScope.launch {
-            // Wait for layout to update and contain the index
-            var attempts = 0
-            while (attempts < 20) { // Retry for up to 1 second
-                val totalItems = listState.layoutInfo.totalItemsCount
-                if (totalItems > index) {
-                    break
-                }
-                delay(50)
-                attempts++
-            }
-
-            val totalItems = listState.layoutInfo.totalItemsCount
-            if (totalItems > 0 && index in 0 until totalItems) {
-                // Manually update anchor to prevent "jumping up" when restoreAnchorIfNeeded triggers
-                // This ensures that if the list recomposes (e.g. streaming finishes), we stay at this new position
-                userAnchored = true
-                anchorIndex = index
-                anchorScrollOffset = 0
-                
-                isProgrammaticScroll = true
-                try {
-                    // Check if item is currently visible
-                    val layoutInfo = listState.layoutInfo
-                    var visibleItem = layoutInfo.visibleItemsInfo.find { it.index == index }
-                    
-                    if (visibleItem != null) {
-                        // Item is visible, we can use animateScrollBy for custom control
-                        val currentOffset = visibleItem.offset
-                        if (currentOffset != 0) {
-                            // We want offset to be 0 (top of screen), so we scroll by currentOffset
-                            // Use custom duration and CubicBezierEasing for a "heavy/slow" natural feel
-                            listState.animateScrollBy(
-                                value = currentOffset.toFloat(),
-                                animationSpec = tween(
-                                    durationMillis = scrollDurationMs,
-                                    easing = androidx.compose.animation.core.CubicBezierEasing(0.25f, 0.1f, 0.25f, 1.0f)
-                                )
-                            )
-                        }
-                    } else {
-                        // Item is NOT visible - we need a two-phase approach:
-                        // Phase 1: Snap to a position where the target item is just barely visible at the BOTTOM of the viewport
-                        //          This minimizes the "teleport" distance and makes the subsequent animation more noticeable
-                        // Phase 2: Animate smoothly from there to bring the item to the top
-                        
-                        // Calculate snap target: we want the item to be at the bottom of the visible area after snap
-                        // So we scroll to (index - visibleItemsCount + 1) to put it near the bottom
-                        val visibleCount = layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)
-                        // Scroll so that `index` will be near the end of visible items, not at the top
-                        val snapTarget = (index - visibleCount + 2).coerceAtLeast(0)
-                        
-                        // Phase 1: Instant snap
-                        listState.scrollToItem(snapTarget, 0)
-                        
-                        // Wait for layout to settle
-                        delay(32)
-                        
-                        // Phase 2: Now the target item should be visible (near the bottom). Animate it to the top.
-                        val updatedLayoutInfo = listState.layoutInfo
-                        visibleItem = updatedLayoutInfo.visibleItemsInfo.find { it.index == index }
-                        
-                        if (visibleItem != null) {
-                            val currentOffset = visibleItem.offset
-                            if (currentOffset != 0) {
-                                // Animate the item from its current position (near bottom) to the top (offset=0)
-                                // This gives a nice "slide up" effect
-                                listState.animateScrollBy(
-                                    value = currentOffset.toFloat(),
-                                    animationSpec = tween(
-                                        durationMillis = scrollDurationMs,
-                                        easing = androidx.compose.animation.core.CubicBezierEasing(0.25f, 0.1f, 0.25f, 1.0f)
-                                    )
-                                )
-                            }
-                        } else {
-                            // Fallback: item still not visible (shouldn't happen), just snap to it
-                            listState.scrollToItem(index, 0)
-                        }
-                    }
-                } finally {
-                    isProgrammaticScroll = false
-                }
-            } else {
-                logger.warn("Failed to scroll item $index to top: Index out of bounds (total=$totalItems)")
+            snapshotFlow { listState.layoutInfo.totalItemsCount }
+                .first { total -> total > index }
+            
+            val desiredItemOffsetPx = listState.layoutInfo.beforeContentPadding
+            
+            userAnchored = true
+            anchorIndex = index
+            anchorScrollOffset = desiredItemOffsetPx
+            
+            isProgrammaticScroll = true
+            try {
+                listState.animateScrollToItemWithEasing(
+                    index = index,
+                    desiredItemOffsetPx = desiredItemOffsetPx,
+                    baseDurationMs = scrollDurationMs
+                )
+            } finally {
+                isProgrammaticScroll = false
             }
         }
     }
@@ -351,4 +305,119 @@ class ChatScrollStateManager(
         isStreaming = false
         jumpToBottom()
     }
+}
+
+private val DefaultScrollEasing = CubicBezierEasing(0.25f, 0.1f, 0.25f, 1.0f)
+
+private suspend fun LazyListState.animateScrollToItemWithEasing(
+    index: Int,
+    desiredItemOffsetPx: Int,
+    baseDurationMs: Int = 300,
+    maxDurationMs: Int = 1600,
+    easing: Easing = DefaultScrollEasing,
+    maxPasses: Int = 3
+) {
+    val totalCount = layoutInfo.totalItemsCount
+    if (index !in 0 until totalCount) return
+
+    val scrollOffsetForToItem = (layoutInfo.beforeContentPadding - desiredItemOffsetPx).coerceAtLeast(0)
+
+    repeat(maxPasses) {
+        findVisibleItem(index)?.let { item ->
+            val deltaPx = item.offset - desiredItemOffsetPx
+            if (deltaPx != 0) {
+                animateScrollBy(
+                    value = deltaPx.toFloat(),
+                    animationSpec = tween(durationMillis = baseDurationMs, easing = easing)
+                )
+            }
+            return
+        }
+
+        val initialEstimate = estimateDistanceToItemPx(index, desiredItemOffsetPx)
+        if (initialEstimate == 0f) return
+
+        val viewportPx = (layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset).coerceAtLeast(1)
+        val durationMs = computeScrollDurationMs(
+            distancePx = initialEstimate,
+            viewportPx = viewportPx,
+            baseDurationMs = baseDurationMs,
+            maxDurationMs = maxDurationMs
+        )
+
+        scroll {
+            val anim = AnimationState(initialValue = 0f)
+            var scrolledSoFar = 0f
+            var directionSign = initialEstimate.sign.takeIf { it != 0f } ?: 1f
+
+            anim.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(durationMillis = durationMs, easing = LinearEasing)
+            ) {
+                val t = value.coerceIn(0f, 1f)
+                val easedT = easing.transform(t)
+
+                val remainingPx = this@animateScrollToItemWithEasing.remainingDistanceToItemPx(index, desiredItemOffsetPx)
+                val totalPx = scrolledSoFar + remainingPx
+
+                if (totalPx != 0f) directionSign = totalPx.sign
+
+                val desiredScrolledByNow = totalPx * easedT
+                var delta = desiredScrolledByNow - scrolledSoFar
+
+                delta = if (directionSign > 0f) max(0f, delta) else min(0f, delta)
+
+                if (delta > 0f && !this@animateScrollToItemWithEasing.canScrollForward) return@animateTo
+                if (delta < 0f && !this@animateScrollToItemWithEasing.canScrollBackward) return@animateTo
+
+                val consumed = scrollBy(delta)
+                scrolledSoFar += consumed
+
+                if (consumed == 0f) return@animateTo
+            }
+        }
+    }
+
+    scrollToItem(index, scrollOffsetForToItem)
+    findVisibleItem(index)?.let { item ->
+        val finalDeltaPx = item.offset - desiredItemOffsetPx
+        if (finalDeltaPx != 0) {
+            animateScrollBy(
+                value = finalDeltaPx.toFloat(),
+                animationSpec = tween(durationMillis = baseDurationMs, easing = easing)
+            )
+        }
+    }
+}
+
+private fun LazyListState.findVisibleItem(index: Int): LazyListItemInfo? =
+    layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
+
+private fun LazyListState.remainingDistanceToItemPx(index: Int, desiredItemOffsetPx: Int): Float {
+    findVisibleItem(index)?.let { item ->
+        return (item.offset - desiredItemOffsetPx).toFloat()
+    }
+    return estimateDistanceToItemPx(index, desiredItemOffsetPx)
+}
+
+private fun LazyListState.estimateDistanceToItemPx(index: Int, desiredItemOffsetPx: Int): Float {
+    val visible = layoutInfo.visibleItemsInfo
+    if (visible.isEmpty()) return 0f
+
+    val avgSizePx = visible.sumOf { it.size }.toFloat() / visible.size.coerceAtLeast(1)
+    val deltaIndex = index - firstVisibleItemIndex
+
+    val estimatedTargetStartOffsetPx = deltaIndex * avgSizePx - firstVisibleItemScrollOffset
+    return estimatedTargetStartOffsetPx - desiredItemOffsetPx
+}
+
+private fun computeScrollDurationMs(
+    distancePx: Float,
+    viewportPx: Int,
+    baseDurationMs: Int,
+    maxDurationMs: Int
+): Int {
+    val vp = viewportPx.toFloat().coerceAtLeast(1f)
+    val pages = (abs(distancePx) / vp).coerceIn(1f, 6f)
+    return (baseDurationMs * pages).roundToInt().coerceAtMost(maxDurationMs)
 }
