@@ -56,6 +56,7 @@ fun CodeBlockCard(
     language: String?,
     code: String,
     modifier: Modifier = Modifier,
+    isStreaming: Boolean = false,
     onCopy: (() -> Unit)? = null,
     onPreviewRequested: (() -> Unit)? = null,
     onLongPress: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null
@@ -79,24 +80,23 @@ fun CodeBlockCard(
     }
     
     // 语法高亮处理（带缓存）
-    // 优化：使用 derivedStateOf 或其他方式避免在输入过程中频繁高亮
-    // 但 Text 组件对于 AnnotatedString 的变更可能会导致重组
-    // CodeBlockCard 在流式传输中会频繁接收到新的 code
-    // 每次 code 变化都会触发高亮，可能导致闪烁
-    // 不过，SyntaxHighlighter 本身应该是纯函数，且这里有 HighlightCache
-    // 关键在于：流式输出时，每次都是全新的 code，缓存很难命中
-    // 除非我们能增量高亮（目前不支持）
-    // 暂时保持原样，依赖 TableAwareText 的稳定性
-    val highlightedCode = remember(code, language, isDarkTheme) {
-        val cacheKey = HighlightCache.generateKey(code, language, isDarkTheme)
-        
-        // 尝试从缓存获取
-        HighlightCache.get(cacheKey) ?: run {
-            // 缓存未命中，执行高亮
-            val result = SyntaxHighlighter.highlight(code, language, syntaxTheme)
-            // 存入缓存
-            HighlightCache.put(cacheKey, result)
-            result
+    // 流式模式：降低高亮频率，只在代码较短或变化较大时高亮
+    val highlightedCode = remember(code, language, isDarkTheme, isStreaming) {
+        // 流式模式下，代码较长时跳过高亮，直接返回纯文本
+        // 这样可以避免频繁高亮导致的闪烁
+        if (isStreaming && code.length > 500) {
+            AnnotatedString(code)
+        } else {
+            val cacheKey = HighlightCache.generateKey(code, language, isDarkTheme)
+
+            // 尝试从缓存获取
+            HighlightCache.get(cacheKey) ?: run {
+                // 缓存未命中，执行高亮
+                val result = SyntaxHighlighter.highlight(code, language, syntaxTheme)
+                // 存入缓存
+                HighlightCache.put(cacheKey, result)
+                result
+            }
         }
     }
     
@@ -229,17 +229,13 @@ fun CodeBlockCard(
                 }
             }
 
-            // 代码内容区域
-            Column(
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(bg)
-                    // 移除内边距 (padding(12.dp))，使代码贴边显示
             ) {
-                // 使用 horizontalScroll 允许水平滚动
                 val scrollState = rememberScrollState()
                 
-                // 使用高亮后的 AnnotatedString
                 Text(
                     text = highlightedCode,
                     style = MaterialTheme.typography.bodyMedium.copy(
@@ -247,11 +243,10 @@ fun CodeBlockCard(
                         fontSize = 13.sp,
                         lineHeight = 18.sp
                     ),
+                    softWrap = false,
                     modifier = Modifier
-                        .fillMaxWidth()
                         .horizontalScroll(scrollState)
-                        // 添加微小的水平内边距，防止文字紧贴边缘
-                        .padding(horizontal = 4.dp, vertical = 8.dp)
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
                 )
             }
         }

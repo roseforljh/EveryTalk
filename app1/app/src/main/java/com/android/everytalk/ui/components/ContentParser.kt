@@ -1,24 +1,22 @@
 package com.android.everytalk.ui.components
 
-import com.android.everytalk.data.DataClass.ContentPart as DataContentPart
-import com.android.everytalk.ui.components.ContentPart
-import android.util.Log
-import com.android.everytalk.ui.components.table.TableUtils
+import org.intellij.markdown.IElementType
+import org.intellij.markdown.MarkdownElementTypes
+import org.intellij.markdown.MarkdownTokenTypes
+import org.intellij.markdown.ast.ASTNode
+import org.intellij.markdown.ast.getTextInNode
+import org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor
+import org.intellij.markdown.flavours.gfm.GFMElementTypes
+import org.intellij.markdown.parser.MarkdownParser
 
 /**
- * 负责将 Markdown 文本解析为结构化的 ContentPart 列表。
- * 核心逻辑：将纯文本、代码块、表格等不同内容拆分开，以便 UI 层使用最合适的组件进行渲染。
+ * 使用 intellij-markdown AST 解析 Markdown 文本。
+ * 将纯文本、代码块、表格等不同内容拆分开，以便 UI 层使用最合适的组件进行渲染。
  */
 object ContentParser {
-    private const val TAG = "ContentParser"
+    private val flavour = GFMFlavourDescriptor()
+    private val parser = MarkdownParser(flavour)
 
-    /**
-     * 将原始 Markdown 文本解析为 ContentPart 列表。
-     *
-     * @param text 原始 Markdown 文本
-     * @param isStreaming 是否处于流式传输模式（用于优化解析策略）
-     * @return 解析后的 ContentPart 列表
-     */
     /**
      * 将原始 Markdown 文本解析为 ContentPart 列表。
      *
@@ -27,117 +25,260 @@ object ContentParser {
      * @return 解析后的 ContentPart 列表
      */
     fun parseCompleteContent(text: String, isStreaming: Boolean = false): List<ContentPart> {
+        if (text.isEmpty()) return emptyList()
+
+        // 流式模式下，自动闭合未完成的代码块
+        val processedText = if (isStreaming) {
+            autoCloseCodeBlocks(text)
+        } else {
+            text
+        }
+
+        val astTree = parser.buildMarkdownTreeFromString(processedText)
+        return extractParts(astTree, processedText)
+    }
+
+    /**
+     * 自动闭合未完成的代码块（流式输出时使用）
+     */
+    private fun autoCloseCodeBlocks(text: String): String {
+        val codeBlockPattern = Regex("```")
+        val matches = codeBlockPattern.findAll(text).toList()
+
+        // 如果 ``` 出现奇数次，说明有未闭合的代码块
+        return if (matches.size % 2 == 1) {
+            "$text\n```"
+        } else {
+            text
+        }
+    }
+
+    /**
+     * 从 AST 树中提取 ContentPart 列表
+     */
+    private fun extractParts(root: ASTNode, text: String): List<ContentPart> {
         val parts = mutableListOf<ContentPart>()
-        if (text.isEmpty()) {
-            return parts
+        val textBuffer = StringBuilder()
+
+        fun flushTextBuffer() {
+            if (textBuffer.isNotEmpty()) {
+                parts.add(ContentPart.Text(textBuffer.toString()))
+                textBuffer.clear()
+            }
         }
 
-        val lines = text.lines()
-        var i = 0
-        var lastTextStart = 0
-
-        while (i < lines.size) {
-            val line = lines[i]
-            val trimmedLine = line.trimStart() // 仅移除开头的空白，保留缩进结构可能更安全，但 markdown 块级元素对缩进敏感
-
-            // 1. 检测代码块起始 ```
-            if (trimmedLine.startsWith("```")) {
-                // 如果有之前的文本，先添加
-                if (i > lastTextStart) {
-                    // 注意：这里需要保留换行符，否则多行文本会变成一行
-                    // 并且，如果文本末尾有空行，也应该保留，以保持布局一致
-                    val textContent = lines.subList(lastTextStart, i).joinToString("\n")
-                    if (textContent.isNotEmpty()) {
-                        parts.add(ContentPart.Text(textContent))
-                    }
+        fun processNode(node: ASTNode) {
+            when (node.type) {
+                // 代码块
+                MarkdownElementTypes.CODE_FENCE -> {
+                    flushTextBuffer()
+                    val (language, code) = parseCodeFence(node, text)
+                    parts.add(ContentPart.Code(language, code))
                 }
-
-                // 提取语言
-                var language: String? = trimmedLine.removePrefix("```").trim()
-                if (language.isNullOrEmpty()) language = null
-
-                // 寻找代码块结束
-                val codeStart = i + 1
-                var codeEnd = -1
-                
-                // 向下寻找闭合的 ```
-                for (j in codeStart until lines.size) {
-                    if (lines[j].trimStart().startsWith("```")) {
-                        codeEnd = j
-                        break
-                    }
+                // 缩进代码块
+                MarkdownElementTypes.CODE_BLOCK -> {
+                    flushTextBuffer()
+                    val code = node.getTextInNode(text).toString()
+                        .lines()
+                        .joinToString("\n") { it.removePrefix("    ").removePrefix("\t") }
+                    parts.add(ContentPart.Code(null, code))
                 }
-
-                if (codeEnd != -1) {
-                    // 找到完整闭合的代码块
-                    val codeContent = lines.subList(codeStart, codeEnd).joinToString("\n")
-                    parts.add(ContentPart.Code(language, codeContent))
-                    i = codeEnd + 1
-                    lastTextStart = i
-                    continue
-                } else {
-                    // 未找到闭合
-                    // 策略：无论是流式还是非流式，只要是以 ``` 开头，都优先解析为代码块
-                    // 这样可以避免流式过程中代码块先显示为文本，等闭合符出现后突然变成代码块的跳变
-                    // 同时也能容忍生成不完整的情况
-                    val codeContent = lines.subList(codeStart, lines.size).joinToString("\n")
-                    parts.add(ContentPart.Code(language, codeContent))
-                    
-                    // 标记已处理到末尾
-                    i = lines.size
-                    lastTextStart = i
-                    break
-                }
-            }
-            
-            // 2. 检测数学公式块 $$ (暂略，可复用 MarkdownRenderer)
-            
-            // 3. 检测表格
-            if (TableUtils.isTableLine(trimmedLine)) {
-                // 如果有之前的文本，先添加
-                if (i > lastTextStart) {
-                    val textContent = lines.subList(lastTextStart, i).joinToString("\n")
-                    if (textContent.isNotEmpty()) {
-                        parts.add(ContentPart.Text(textContent))
-                    }
-                }
-
-                // 尝试提取完整表格
-                val (tableLines, nextIndex) = TableUtils.extractTableLines(lines, i)
-                
-                if (tableLines.isNotEmpty()) {
-                    // 成功提取表格
+                // GFM 表格
+                GFMElementTypes.TABLE -> {
+                    flushTextBuffer()
+                    val tableText = node.getTextInNode(text).toString()
+                    val tableLines = tableText.lines().filter { it.isNotBlank() }
                     parts.add(ContentPart.Table(tableLines))
-                    i = nextIndex
-                    lastTextStart = i
-                    continue
-                } else {
-                    // 不是有效的表格（例如只有一行或者格式错误），当作普通文本处理
-                    // 继续循环
+                }
+                // 其他节点：递归处理子节点或作为文本
+                else -> {
+                    if (node.children.isEmpty()) {
+                        // 叶子节点，添加到文本缓冲区
+                        if (isTextNode(node.type)) {
+                            textBuffer.append(node.getTextInNode(text))
+                        }
+                    } else {
+                        // 非叶子节点，检查是否需要特殊处理
+                        if (shouldProcessAsBlock(node.type)) {
+                            // 块级元素，整体提取文本
+                            val blockText = node.getTextInNode(text).toString()
+                            textBuffer.append(blockText)
+                        } else {
+                            // 递归处理子节点
+                            node.children.forEach { processNode(it) }
+                        }
+                    }
                 }
             }
-
-            i++
         }
 
-        // 添加剩余的文本
-        if (lastTextStart < lines.size) {
-            val textContent = lines.subList(lastTextStart, lines.size).joinToString("\n")
-            if (textContent.isNotEmpty()) {
-                parts.add(ContentPart.Text(textContent))
+        // 处理顶层子节点
+        root.children.forEach { child ->
+            processNode(child)
+        }
+
+        flushTextBuffer()
+
+        // 合并相邻的文本块
+        return mergeAdjacentTextParts(parts)
+    }
+
+    private fun parseCodeFence(node: ASTNode, text: String): Pair<String?, String> {
+        var language: String? = null
+        val codeBuilder = StringBuilder()
+        var insideFence = false
+        var skippedFirstEolAfterStart = false
+
+        for (child in node.children) {
+            when (child.type) {
+                MarkdownTokenTypes.FENCE_LANG -> {
+                    language = child.getTextInNode(text).toString().trim().ifBlank { null }
+                }
+                MarkdownTokenTypes.CODE_FENCE_START -> {
+                    insideFence = true
+                    skippedFirstEolAfterStart = false
+                }
+                MarkdownTokenTypes.CODE_FENCE_END -> {
+                    insideFence = false
+                }
+                MarkdownTokenTypes.EOL -> {
+                    if (insideFence) {
+                        if (!skippedFirstEolAfterStart) {
+                            skippedFirstEolAfterStart = true
+                        } else if (codeBuilder.isNotEmpty() && codeBuilder.last() != '\n') {
+                            codeBuilder.append('\n')
+                        }
+                    }
+                }
+                MarkdownTokenTypes.CODE_FENCE_CONTENT -> {
+                    if (insideFence) {
+                        codeBuilder.append(child.getTextInNode(text).toString())
+                        skippedFirstEolAfterStart = true
+                    }
+                }
             }
         }
 
-        return parts
+        val code = codeBuilder.toString()
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
+            .trimEnd()
+
+        return Pair(language, code)
+    }
+
+    /**
+     * 判断节点类型是否应作为文本处理
+     */
+    private fun isTextNode(type: IElementType): Boolean {
+        return type == MarkdownTokenTypes.TEXT ||
+                type == MarkdownTokenTypes.WHITE_SPACE ||
+                type == MarkdownTokenTypes.EOL ||
+                type == MarkdownTokenTypes.SINGLE_QUOTE ||
+                type == MarkdownTokenTypes.DOUBLE_QUOTE ||
+                type == MarkdownTokenTypes.LPAREN ||
+                type == MarkdownTokenTypes.RPAREN ||
+                type == MarkdownTokenTypes.LBRACKET ||
+                type == MarkdownTokenTypes.RBRACKET ||
+                type == MarkdownTokenTypes.LT ||
+                type == MarkdownTokenTypes.GT ||
+                type == MarkdownTokenTypes.COLON ||
+                type == MarkdownTokenTypes.EXCLAMATION_MARK
+    }
+
+    /**
+     * 判断节点是否应作为整体块处理（不递归）
+     */
+    private fun shouldProcessAsBlock(type: IElementType): Boolean {
+        return type == MarkdownElementTypes.PARAGRAPH ||
+                type == MarkdownElementTypes.SETEXT_1 ||
+                type == MarkdownElementTypes.SETEXT_2 ||
+                type == MarkdownElementTypes.ATX_1 ||
+                type == MarkdownElementTypes.ATX_2 ||
+                type == MarkdownElementTypes.ATX_3 ||
+                type == MarkdownElementTypes.ATX_4 ||
+                type == MarkdownElementTypes.ATX_5 ||
+                type == MarkdownElementTypes.ATX_6 ||
+                type == MarkdownElementTypes.BLOCK_QUOTE ||
+                type == MarkdownElementTypes.ORDERED_LIST ||
+                type == MarkdownElementTypes.UNORDERED_LIST
+    }
+
+    /**
+     * 合并相邻的文本块
+     */
+    private fun mergeAdjacentTextParts(parts: List<ContentPart>): List<ContentPart> {
+        if (parts.isEmpty()) return parts
+
+        val merged = mutableListOf<ContentPart>()
+        var currentTextBuilder: StringBuilder? = null
+
+        for (part in parts) {
+            when (part) {
+                is ContentPart.Text -> {
+                    if (currentTextBuilder == null) {
+                        currentTextBuilder = StringBuilder(part.content)
+                    } else {
+                        currentTextBuilder.append(part.content)
+                    }
+                }
+                else -> {
+                    currentTextBuilder?.let {
+                        val text = it.toString()
+                        if (text.isNotEmpty()) {
+                            merged.add(ContentPart.Text(text))
+                        }
+                    }
+                    currentTextBuilder = null
+                    merged.add(part)
+                }
+            }
+        }
+
+        currentTextBuilder?.let {
+            val text = it.toString()
+            if (text.isNotEmpty()) {
+                merged.add(ContentPart.Text(text))
+            }
+        }
+
+        return merged
     }
 }
 
 /**
  * UI 层使用的密封类，与 Data 层区分
+ *
+ * 标记为 @Immutable 帮助 Compose 编译器优化重组：
+ * - 当 ContentPart 实例未变化时，跳过使用它的 Composable 重组
+ * - 参考 RikkaHub 的 referentialEqualityPolicy 策略
  */
+@androidx.compose.runtime.Immutable
 sealed class ContentPart {
     data class Text(val content: String) : ContentPart()
     data class Code(val language: String?, val content: String) : ContentPart()
     data class Table(val lines: List<String>) : ContentPart()
     data class Math(val content: String) : ContentPart()
+
+    /**
+     * 获取内容的哈希值，用于 Compose key 优化
+     * 相同内容的块会生成相同的哈希，避免不必要的重组
+     */
+    fun contentHash(): Int = when (this) {
+        is Text -> content.hashCode()
+        is Code -> (language.hashCode() * 31) + content.hashCode()
+        is Table -> lines.hashCode()
+        is Math -> content.hashCode()
+    }
+
+    /**
+     * 获取内容的预览字符串，用于流式输出时的 key 生成
+     * 返回内容的前缀，用于减少小增量变化导致的 key 频繁变化
+     */
+    fun contentPreview(): String = when (this) {
+        is Text -> content
+        is Code -> content
+        is Table -> lines.joinToString("\n")
+        is Math -> content
+    }
 }
