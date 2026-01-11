@@ -17,94 +17,62 @@ object ContentParser {
     private val flavour = GFMFlavourDescriptor()
     private val parser = MarkdownParser(flavour)
 
-    /**
-     * 将原始 Markdown 文本解析为 ContentPart 列表。
-     *
-     * @param text 原始 Markdown 文本
-     * @param isStreaming 是否处于流式传输模式（用于优化解析策略）
-     * @return 解析后的 ContentPart 列表
-     */
     fun parseCompleteContent(text: String, isStreaming: Boolean = false): List<ContentPart> {
         if (text.isEmpty()) return emptyList()
-
-        // 流式模式下，自动闭合未完成的代码块
-        val processedText = if (isStreaming) {
-            autoCloseCodeBlocks(text)
-        } else {
-            text
-        }
-
-        val astTree = parser.buildMarkdownTreeFromString(processedText)
-        return extractParts(astTree, processedText)
+        val astTree = parser.buildMarkdownTreeFromString(text)
+        return extractParts(astTree, text)
     }
 
-    /**
-     * 自动闭合未完成的代码块（流式输出时使用）
-     */
-    private fun autoCloseCodeBlocks(text: String): String {
-        val codeBlockPattern = Regex("```")
-        val matches = codeBlockPattern.findAll(text).toList()
-
-        // 如果 ``` 出现奇数次，说明有未闭合的代码块
-        return if (matches.size % 2 == 1) {
-            "$text\n```"
-        } else {
-            text
-        }
-    }
-
-    /**
-     * 从 AST 树中提取 ContentPart 列表
-     */
     private fun extractParts(root: ASTNode, text: String): List<ContentPart> {
         val parts = mutableListOf<ContentPart>()
         val textBuffer = StringBuilder()
 
+        var textBufferStartOffset = -1
+        
         fun flushTextBuffer() {
             if (textBuffer.isNotEmpty()) {
-                parts.add(ContentPart.Text(textBuffer.toString()))
+                parts.add(ContentPart.Text(textBuffer.toString(), if (textBufferStartOffset >= 0) textBufferStartOffset else 0))
                 textBuffer.clear()
+                textBufferStartOffset = -1
             }
         }
 
         fun processNode(node: ASTNode) {
             when (node.type) {
-                // 代码块
                 MarkdownElementTypes.CODE_FENCE -> {
                     flushTextBuffer()
                     val (language, code) = parseCodeFence(node, text)
-                    parts.add(ContentPart.Code(language, code))
+                    parts.add(ContentPart.Code(language, code, node.startOffset))
                 }
-                // 缩进代码块
                 MarkdownElementTypes.CODE_BLOCK -> {
                     flushTextBuffer()
                     val code = node.getTextInNode(text).toString()
                         .lines()
                         .joinToString("\n") { it.removePrefix("    ").removePrefix("\t") }
-                    parts.add(ContentPart.Code(null, code))
+                    parts.add(ContentPart.Code(null, code, node.startOffset))
                 }
-                // GFM 表格
                 GFMElementTypes.TABLE -> {
                     flushTextBuffer()
                     val tableText = node.getTextInNode(text).toString()
                     val tableLines = tableText.lines().filter { it.isNotBlank() }
-                    parts.add(ContentPart.Table(tableLines))
+                    parts.add(ContentPart.Table(tableLines, node.startOffset))
                 }
-                // 其他节点：递归处理子节点或作为文本
                 else -> {
                     if (node.children.isEmpty()) {
-                        // 叶子节点，添加到文本缓冲区
                         if (isTextNode(node.type)) {
+                            if (textBuffer.isEmpty()) {
+                                textBufferStartOffset = node.startOffset
+                            }
                             textBuffer.append(node.getTextInNode(text))
                         }
                     } else {
-                        // 非叶子节点，检查是否需要特殊处理
                         if (shouldProcessAsBlock(node.type)) {
-                            // 块级元素，整体提取文本
+                            if (textBuffer.isEmpty()) {
+                                textBufferStartOffset = node.startOffset
+                            }
                             val blockText = node.getTextInNode(text).toString()
                             textBuffer.append(blockText)
                         } else {
-                            // 递归处理子节点
                             node.children.forEach { processNode(it) }
                         }
                     }
@@ -112,14 +80,12 @@ object ContentParser {
             }
         }
 
-        // 处理顶层子节点
         root.children.forEach { child ->
             processNode(child)
         }
 
         flushTextBuffer()
 
-        // 合并相邻的文本块
         return mergeAdjacentTextParts(parts)
     }
 
@@ -212,12 +178,14 @@ object ContentParser {
 
         val merged = mutableListOf<ContentPart>()
         var currentTextBuilder: StringBuilder? = null
+        var currentTextStartOffset = 0
 
         for (part in parts) {
             when (part) {
                 is ContentPart.Text -> {
                     if (currentTextBuilder == null) {
                         currentTextBuilder = StringBuilder(part.content)
+                        currentTextStartOffset = part.startOffset
                     } else {
                         currentTextBuilder.append(part.content)
                     }
@@ -226,7 +194,7 @@ object ContentParser {
                     currentTextBuilder?.let {
                         val text = it.toString()
                         if (text.isNotEmpty()) {
-                            merged.add(ContentPart.Text(text))
+                            merged.add(ContentPart.Text(text, currentTextStartOffset))
                         }
                     }
                     currentTextBuilder = null
@@ -238,7 +206,7 @@ object ContentParser {
         currentTextBuilder?.let {
             val text = it.toString()
             if (text.isNotEmpty()) {
-                merged.add(ContentPart.Text(text))
+                merged.add(ContentPart.Text(text, currentTextStartOffset))
             }
         }
 
@@ -255,10 +223,16 @@ object ContentParser {
  */
 @androidx.compose.runtime.Immutable
 sealed class ContentPart {
-    data class Text(val content: String) : ContentPart()
-    data class Code(val language: String?, val content: String) : ContentPart()
-    data class Table(val lines: List<String>) : ContentPart()
-    data class Math(val content: String) : ContentPart()
+    /**
+     * 内容在原始文本中的起始位置，用于生成稳定的 Compose key
+     * 流式模式下，同一位置的内容块 key 不变，避免 index 漂移导致重组
+     */
+    abstract val startOffset: Int
+    
+    data class Text(val content: String, override val startOffset: Int = 0) : ContentPart()
+    data class Code(val language: String?, val content: String, override val startOffset: Int = 0) : ContentPart()
+    data class Table(val lines: List<String>, override val startOffset: Int = 0) : ContentPart()
+    data class Math(val content: String, override val startOffset: Int = 0) : ContentPart()
 
     /**
      * 获取内容的哈希值，用于 Compose key 优化

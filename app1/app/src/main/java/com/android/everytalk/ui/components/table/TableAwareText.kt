@@ -2,6 +2,7 @@ package com.android.everytalk.ui.components.table
 
 import android.view.ViewGroup
 import android.widget.ImageView
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -74,7 +75,6 @@ fun TableAwareText(
     // 预览状态管理
     var previewState by remember { mutableStateOf<Pair<String, String>?>(null) } // (code, language)
 
-    // 使用 referentialEqualityPolicy 避免不必要的重组
     var parsedParts by remember {
         mutableStateOf(
             value = emptyList<ContentPart>(),
@@ -82,7 +82,6 @@ fun TableAwareText(
         )
     }
 
-    // 在后台线程解析内容
     val updatedText by rememberUpdatedState(text)
     val updatedIsStreaming by rememberUpdatedState(isStreaming)
     val effectiveCacheKey = if (contentKey.isNotBlank() && !isStreaming) {
@@ -90,20 +89,17 @@ fun TableAwareText(
     } else ""
 
     LaunchedEffect(Unit) {
-        snapshotFlow { updatedText to updatedIsStreaming }
+        snapshotFlow { Triple(updatedText, updatedIsStreaming, effectiveCacheKey) }
             .distinctUntilChanged()
-            .mapLatest { (currentText, streaming) ->
-                // 非流式模式：尝试从缓存读取
-                if (!streaming && effectiveCacheKey.isNotBlank()) {
-                    ContentParseCache.get(effectiveCacheKey)?.let { return@mapLatest it }
+            .mapLatest { (currentText, streaming, cacheKey) ->
+                if (!streaming && cacheKey.isNotBlank()) {
+                    ContentParseCache.get(cacheKey)?.let { return@mapLatest it }
                 }
 
-                // 解析内容（流式模式会自动闭合未完成的代码块）
                 val parts = ContentParser.parseCompleteContent(currentText, isStreaming = streaming)
 
-                // 非流式模式：缓存结果
-                if (!streaming && effectiveCacheKey.isNotBlank()) {
-                    ContentParseCache.put(effectiveCacheKey, parts)
+                if (!streaming && cacheKey.isNotBlank()) {
+                    ContentParseCache.put(cacheKey, parts)
                 }
 
                 parts
@@ -118,7 +114,6 @@ fun TableAwareText(
             }
     }
 
-    // 初始化时同步解析（避免首次渲染空白）
     if (parsedParts.isEmpty() && text.isNotEmpty()) {
         val initialParts = remember(text, contentKey, isStreaming) {
             if (!isStreaming && effectiveCacheKey.isNotBlank()) {
@@ -132,16 +127,14 @@ fun TableAwareText(
         parsedParts = initialParts
     }
 
-    // 渲染逻辑
     val verticalPaddingDp = 0.dp
 
     Column(
         modifier = modifier
             .fillMaxWidth()
             .padding(vertical = verticalPaddingDp)
+            .animateContentSize()
     ) {
-        // 统一使用 类型+索引 作为 key
-        // 这样流式结束时 key 不会变化，避免组件重建导致闪烁
         parsedParts.forEachIndexed { index, part ->
             val stableKey = "${part.javaClass.simpleName}_$index"
 

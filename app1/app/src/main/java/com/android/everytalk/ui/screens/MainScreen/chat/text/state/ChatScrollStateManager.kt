@@ -50,6 +50,12 @@ class ChatScrollStateManager(
     
     private var hideButtonJob: Job? = null
     private var isStreaming by mutableStateOf(false)
+    
+    // Bug 2 Fix: Hysteresis for bottom detection
+    private var consecutiveBottomFrames = 0
+    private var lastStreamingTransitionTime = 0L
+    private val BOTTOM_DETECTION_THRESHOLD = 2
+    private val STREAMING_TRANSITION_FREEZE_MS = 150L
 
     private val _isAtBottom = mutableStateOf(true)
     val isAtBottom: State<Boolean> = _isAtBottom
@@ -106,10 +112,20 @@ class ChatScrollStateManager(
                     firstVisibleIndex = listState.firstVisibleItemIndex,
                     firstVisibleOffset = listState.firstVisibleItemScrollOffset
                 )
-            }.collect { snapshot ->
-                _isAtBottom.value = snapshot.isStrictlyAtBottom
+        }.collect { snapshot ->
+                val now = System.currentTimeMillis()
+                val inFreezeWindow = now - lastStreamingTransitionTime < STREAMING_TRANSITION_FREEZE_MS
+                
+                if (snapshot.isStrictlyAtBottom && !inFreezeWindow) {
+                    consecutiveBottomFrames++
+                } else {
+                    consecutiveBottomFrames = 0
+                }
+                
+                val confirmedAtBottom = consecutiveBottomFrames >= BOTTOM_DETECTION_THRESHOLD && !inFreezeWindow
+                _isAtBottom.value = confirmedAtBottom
 
-                if (snapshot.isStrictlyAtBottom) {
+                if (confirmedAtBottom) {
                     _showScrollToBottomButton.value = false
                     cancelHideButtonJob()
                     onReachedBottom()
@@ -146,6 +162,14 @@ class ChatScrollStateManager(
             userAnchored = false
             // logger.debug("Reached bottom, clearing anchor")
         }
+    }
+    
+    fun updateStreamingState(streaming: Boolean) {
+        if (isStreaming && !streaming) {
+            lastStreamingTransitionTime = System.currentTimeMillis()
+            consecutiveBottomFrames = 0
+        }
+        isStreaming = streaming
     }
 
     suspend fun restoreAnchorIfNeeded(listState: LazyListState) {

@@ -98,6 +98,7 @@ fun ChatScreen(
     val isCodeExecutionEnabled by viewModel.isCodeExecutionEnabled.collectAsState()
     val selectedMediaItems = viewModel.selectedMediaItems
     val isLoadingHistory by viewModel.isLoadingHistory.collectAsState()
+    val mcpServerStates by viewModel.mcpServerStates.collectAsState()
     val isLoadingHistoryData by viewModel.isLoadingHistoryData.collectAsState()
     val conversationId by viewModel.currentConversationId.collectAsState()
     val latestReleaseInfo by viewModel.latestReleaseInfo.collectAsState()
@@ -162,6 +163,11 @@ fun ChatScreen(
 
     val scrollStateManager = rememberChatScrollStateManager(listState, coroutineScope)
     val isAtBottom by scrollStateManager.isAtBottom
+    
+    LaunchedEffect(scrollStateManager, currentStreamingAiMessageId) {
+        val isCurrentlyStreaming = currentStreamingAiMessageId != null
+        scrollStateManager.updateStreamingState(isCurrentlyStreaming)
+    }
 
 
 
@@ -485,7 +491,12 @@ fun ChatScreen(
                     )
                 },
                 viewModel = viewModel,
-                onShowVoiceInput = { navController.navigate(Screen.VOICE_INPUT_SCREEN) }
+                onShowVoiceInput = { navController.navigate(Screen.VOICE_INPUT_SCREEN) },
+                // MCP 相关参数
+                mcpServerStates = mcpServerStates,
+                onAddMcpServer = { viewModel.addMcpServer(it) },
+                onRemoveMcpServer = { viewModel.removeMcpServer(it) },
+                onToggleMcpServer = { id, enabled -> viewModel.toggleMcpServer(id, enabled) }
             )
         }
 
