@@ -63,6 +63,7 @@ internal fun DrawerConversationListItem(
     groups: List<String>,
     onMoveToGroup: (Int, String?) -> Unit,
     onMoveToGroupClick: (Int) -> Unit,
+    onShareClick: (Int) -> Unit = {}, // 新增：分享回调
     isImageGenerationMode: Boolean = false
 ) {
     val originalIndex = itemData.originalIndex
@@ -238,7 +239,8 @@ internal fun DrawerConversationListItem(
                     },
                     groups = groups,
                     onMoveToGroup = { group -> onMoveToGroup(originalIndex, group) },
-                    onMoveToGroupClick = { onMoveToGroupClick(originalIndex) }
+                    onMoveToGroupClick = { onMoveToGroupClick(originalIndex) },
+                    onShareClick = { onShareClick(originalIndex) }
                 )
             }
         }

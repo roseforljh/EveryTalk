@@ -12,6 +12,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -43,7 +44,8 @@ internal fun ConversationItemMenu(
     isRenameEnabled: Boolean = true, // 默认重命名可用
     groups: List<String>,
     onMoveToGroup: (String?) -> Unit,
-    onMoveToGroupClick: () -> Unit
+    onMoveToGroupClick: () -> Unit,
+    onShareClick: () -> Unit = {} // 新增：分享回调
 ) {
     if (expanded) {
         Popup(
@@ -103,6 +105,14 @@ internal fun ConversationItemMenu(
                             icon = Icons.Filled.Folder,
                             onClick = {
                                 onMoveToGroupClick()
+                                onDismissRequest()
+                            }
+                        )
+                        MenuItem(
+                            text = "分享",
+                            icon = Icons.Filled.Share,
+                            onClick = {
+                                onShareClick()
                                 onDismissRequest()
                             }
                         )

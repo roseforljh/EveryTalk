@@ -355,7 +355,10 @@ class MainActivity : ComponentActivity() {
                                     onDeleteGroup = { groupName -> appViewModel.deleteGroup(groupName) },
                                     onMoveConversationToGroup = { index, groupName, isImageGen -> appViewModel.moveConversationToGroup(index, groupName, isImageGen) },
                                     expandedGroups = appViewModel.stateHolder.expandedGroups.collectAsState().value,
-                                    onToggleGroup = { groupKey -> appViewModel.toggleGroupExpanded(groupKey) }
+                                    onToggleGroup = { groupKey -> appViewModel.toggleGroupExpanded(groupKey) },
+                                    onShareConversation = { index ->
+                                        appViewModel.shareConversation(index, isImageGenerationMode)
+                                    }
                                 )
                             }
                         ) {

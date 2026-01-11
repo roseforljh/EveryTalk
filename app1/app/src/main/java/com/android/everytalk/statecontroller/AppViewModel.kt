@@ -1825,4 +1825,41 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun isGroupExpanded(groupKey: String): Boolean {
         return stateHolder.expandedGroups.value.contains(groupKey)
     }
+
+    // ========= 会话分享功能 =========
+
+    /**
+     * 分享指定索引的会话
+     * @param index 会话在历史列表中的索引
+     * @param isImageGeneration 是否为图像生成模式
+     */
+    fun shareConversation(index: Int, isImageGeneration: Boolean) {
+        val conversations = if (isImageGeneration) {
+            stateHolder._imageGenerationHistoricalConversations.value
+        } else {
+            stateHolder._historicalConversations.value
+        }
+
+        val conversation = conversations.getOrNull(index)
+        if (conversation == null) {
+            Log.w("AppViewModel", "无法分享会话: 索引 $index 无效")
+            showSnackbar("无法分享会话")
+            return
+        }
+
+        viewModelScope.launch {
+            try {
+                val title = historyController.getConversationPreviewText(index, isImageGeneration)
+                com.android.everytalk.util.share.ConversationExporter.shareConversation(
+                    context = getApplication(),
+                    messages = conversation,
+                    title = title
+                )
+                Log.d("AppViewModel", "会话分享已启动: index=$index, isImageGen=$isImageGeneration")
+            } catch (e: Exception) {
+                Log.e("AppViewModel", "分享会话失败", e)
+                showSnackbar("分享失败: ${e.message}")
+            }
+        }
+    }
 }

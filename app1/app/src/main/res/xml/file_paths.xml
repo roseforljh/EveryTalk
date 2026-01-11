@@ -15,6 +15,9 @@
     <cache-path name="preview_cache" path="preview_cache/" />
     <cache-path name="share_images" path="share_images/" />
 
+    <!-- Path for shared conversation markdown files -->
+    <cache-path name="shared_conversations" path="shared_conversations/" />
+
     <!-- 如果你还在用外部存储，例如 getExternalFilesDir(null) -->
     <!-- <external-files-path name="my_external_images" path="." /> -->
 </paths>

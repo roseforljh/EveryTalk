@@ -101,6 +101,7 @@ fun AppDrawerContent(
     onMoveConversationToGroup: (Int, String?, Boolean) -> Unit,
     expandedGroups: Set<String>,
     onToggleGroup: (String) -> Unit,
+    onShareConversation: (Int) -> Unit = {}, // 新增：分享会话回调
     modifier: Modifier = Modifier
 ) {
     val selectedSet = remember { mutableStateListOf<Int>() }
@@ -264,6 +265,9 @@ fun AppDrawerContent(
                 },
                 onMoveToGroupClick = { index ->
                     showMoveToGroupDialog = index
+                },
+                onShareClick = { index ->
+                    onShareConversation(index)
                 },
                 isImageGenerationMode = isImageGenerationMode
             )
