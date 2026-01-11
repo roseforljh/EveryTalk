@@ -72,6 +72,7 @@ import com.android.everytalk.statecontroller.controller.media.ClipboardControlle
 import com.android.everytalk.statecontroller.controller.config.ConfigFacade
 import com.android.everytalk.statecontroller.controller.config.ProviderController
 import com.android.everytalk.statecontroller.controller.cache.CacheController
+import com.android.everytalk.statecontroller.viewmodel.McpManager
 import com.android.everytalk.util.storage.IncrementalBackupManager
 
 // Constructor changed: removed dataSource
@@ -127,6 +128,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             )
     
     val simpleModeManager = SimpleModeManager(stateHolder, historyManager, viewModelScope)
+
+    // MCP Manager
+    val mcpManager = McpManager(application.applicationContext)
+    val mcpServerStates = mcpManager.serverStates
 
     private val uiStateFacade by lazy { UiStateFacade(stateHolder, simpleModeManager) }
     val ui: UiStateFacade
@@ -1584,6 +1589,41 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         messageContentController.cleanup()
         // 统一的生命周期清理
         lifecycleCoordinator.onCleared()
+        // 关闭 MCP 管理器
+        mcpManager.close()
+    }
+
+    // ===== MCP 服务器管理方法 =====
+    fun addMcpServer(config: com.android.everytalk.data.mcp.McpServerConfig) {
+        viewModelScope.launch {
+            try {
+                mcpManager.addServer(config)
+                showSnackbar("已添加服务器: ${config.name}")
+            } catch (e: Exception) {
+                showSnackbar("添加服务器失败: ${e.message}")
+            }
+        }
+    }
+
+    fun removeMcpServer(serverId: String) {
+        viewModelScope.launch {
+            try {
+                mcpManager.removeServer(serverId)
+                showSnackbar("已移除服务器")
+            } catch (e: Exception) {
+                showSnackbar("移除服务器失败: ${e.message}")
+            }
+        }
+    }
+
+    fun toggleMcpServer(serverId: String, enabled: Boolean) {
+        viewModelScope.launch {
+            try {
+                mcpManager.toggleServer(serverId, enabled)
+            } catch (e: Exception) {
+                showSnackbar("操作失败: ${e.message}")
+            }
+        }
     }
     
     /**

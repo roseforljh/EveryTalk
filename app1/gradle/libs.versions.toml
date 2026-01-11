@@ -6,6 +6,8 @@ kotlin = "2.1.0"
 intellijMarkdown = "0.7.3"
 kspVersion = "2.1.0-1.0.29"
 room = "2.8.4"
+mcp = "0.8.1"
+ktor = "3.3.2"
 hilt = "2.52"
 koin = "3.5.6"
 koinCompose = "3.5.6"
@@ -59,6 +61,15 @@ koin-test = { group = "io.insert-koin", name = "koin-test", version.ref = "koin"
 
 # Markdown AST Parser
 intellij-markdown = { group = "org.jetbrains", name = "markdown", version.ref = "intellijMarkdown" }
+
+# MCP (Model Context Protocol) SDK
+mcp-kotlin-sdk = { module = "io.modelcontextprotocol:kotlin-sdk", version.ref = "mcp" }
+
+# Ktor Client (for MCP SSE transport)
+ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
+ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" }
+ktor-client-content-negotiation = { module = "io.ktor:ktor-client-content-negotiation", version.ref = "ktor" }
+ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

@@ -297,6 +297,9 @@ android {
         // SLF4J - Ktor logging 的间接依赖,必须保留
         implementation("org.slf4j:slf4j-nop:2.0.17")
 
+        // ===== MCP (Model Context Protocol) SDK =====
+        implementation(libs.mcp.kotlin.sdk)
+
         // ===== Testing =====
         testImplementation(libs.junit)
         testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")

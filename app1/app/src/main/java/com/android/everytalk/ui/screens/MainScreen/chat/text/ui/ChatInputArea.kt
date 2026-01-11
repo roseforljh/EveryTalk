@@ -53,6 +53,9 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.android.everytalk.config.PerformanceConfig
+import com.android.everytalk.data.mcp.McpServerState
+import com.android.everytalk.data.mcp.McpServerConfig
+import com.android.everytalk.ui.screens.mcp.McpServerListDialog
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -221,7 +224,12 @@ fun ChatInputArea(
     onFocusChange: (isFocused: Boolean) -> Unit,
     onSendMessage: (messageText: String, isFromRegeneration: Boolean, attachments: List<SelectedMediaItem>, audioBase64: String?, mimeType: String?) -> Unit,
     viewModel: com.android.everytalk.statecontroller.AppViewModel,
-    onShowVoiceInput: () -> Unit
+    onShowVoiceInput: () -> Unit,
+    // MCP 相关参数
+    mcpServerStates: Map<String, McpServerState> = emptyMap(),
+    onAddMcpServer: (McpServerConfig) -> Unit = {},
+    onRemoveMcpServer: (String) -> Unit = {},
+    onToggleMcpServer: (String, Boolean) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -235,6 +243,7 @@ fun ChatInputArea(
     var lastImagePanelDismissAt by remember { mutableStateOf(0L) }
     var lastMorePanelDismissAt by remember { mutableStateOf(0L) }
     var showConversationParamsDialog by remember { mutableStateOf(false) }
+    var showMcpServerListDialog by remember { mutableStateOf(false) }
     var tempCameraImageUri by remember { mutableStateOf<Uri?>(null) }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
@@ -715,6 +724,9 @@ fun ChatInputArea(
                             MoreOptionsType.CONVERSATION_PARAMS -> {
                                 showConversationParamsDialog = true
                             }
+                            MoreOptionsType.MCP -> {
+                                showMcpServerListDialog = true
+                            }
                             else -> {
                                 val mimeTypesArray = Array(selectedOption.mimeTypes.size) { index ->
                                     selectedOption.mimeTypes[index]
@@ -743,6 +755,17 @@ fun ChatInputArea(
             initialTemperature = currentParams?.temperature,
             initialTopP = currentParams?.topP,
             initialMaxTokens = currentParams?.maxOutputTokens
+        )
+    }
+
+    // MCP Server List Dialog
+    if (showMcpServerListDialog) {
+        McpServerListDialog(
+            serverStates = mcpServerStates,
+            onAddServer = onAddMcpServer,
+            onRemoveServer = onRemoveMcpServer,
+            onToggleServer = onToggleMcpServer,
+            onDismiss = { showMcpServerListDialog = false }
         )
     }
 

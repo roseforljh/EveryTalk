@@ -1049,8 +1049,11 @@ private suspend fun buildDirectMultimodalRequest(
                     }
                 } else {
                     // 尝试提取文档文本
-                    // Qwen 模型支持原生文档上传，跳过文本提取，直接传递 URI
+                    // Qwen 和 Gemini 模型支持原生文档上传，跳过文本提取，直接传递文件
                     val isQwen = request.model.contains("qwen", ignoreCase = true)
+                    val isGemini = request.model.contains("gemini", ignoreCase = true)
+                    val isPdf = mime == "application/pdf"
+
                     if (isQwen) {
                         val fileName = item.displayName ?: "Document"
                         // 读取文件字节并转为 Base64，以便 OpenAIDirectClient 上传
@@ -1064,6 +1067,21 @@ private suspend fun buildDirectMultimodalRequest(
                                 com.android.everytalk.data.DataClass.ApiContentPart.InlineData(
                                     base64Data = b64,
                                     mimeType = "file_upload_marker|$mime|$fileName" // 使用特殊 mimeType 标记，携带文件名
+                                )
+                            )
+                        }
+                    } else if (isGemini && isPdf) {
+                        // Gemini 原生支持 PDF，直接通过 inlineData 传递
+                        val bytes = runCatching {
+                            context.contentResolver.openInputStream(item.uri)?.use { it.readBytes() }
+                        }.getOrNull()
+
+                        if (bytes != null) {
+                            val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                            inlineParts.add(
+                                com.android.everytalk.data.DataClass.ApiContentPart.InlineData(
+                                    base64Data = b64,
+                                    mimeType = mime
                                 )
                             )
                         }

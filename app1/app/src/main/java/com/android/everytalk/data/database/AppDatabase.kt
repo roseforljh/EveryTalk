@@ -9,6 +9,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.android.everytalk.data.database.daos.ApiConfigDao
 import com.android.everytalk.data.database.daos.ChatDao
+import com.android.everytalk.data.database.daos.McpConfigDao
 import com.android.everytalk.data.database.daos.SettingsDao
 import com.android.everytalk.data.database.daos.VoiceConfigDao
 import com.android.everytalk.data.database.entities.ApiConfigEntity
@@ -16,6 +17,7 @@ import com.android.everytalk.data.database.entities.ChatSessionEntity
 import com.android.everytalk.data.database.entities.ConversationGroupEntity
 import com.android.everytalk.data.database.entities.ConversationParamsEntity
 import com.android.everytalk.data.database.entities.ExpandedGroupEntity
+import com.android.everytalk.data.database.entities.McpServerConfigEntity
 import com.android.everytalk.data.database.entities.MessageEntity
 import com.android.everytalk.data.database.entities.PinnedItemEntity
 import com.android.everytalk.data.database.entities.SystemSettingEntity
@@ -31,9 +33,10 @@ import com.android.everytalk.data.database.entities.VoiceBackendConfigEntity
         PinnedItemEntity::class,
         ConversationGroupEntity::class,
         ExpandedGroupEntity::class,
-        ConversationParamsEntity::class
+        ConversationParamsEntity::class,
+        McpServerConfigEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -42,6 +45,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun voiceConfigDao(): VoiceConfigDao
     abstract fun chatDao(): ChatDao
     abstract fun settingsDao(): SettingsDao
+    abstract fun mcpConfigDao(): McpConfigDao
 
     companion object {
         @Volatile
@@ -54,7 +58,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "eztalk_room_database"
                 )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .build()
                 INSTANCE = instance
                 instance
@@ -73,6 +77,22 @@ abstract class AppDatabase : RoomDatabase() {
                 // Add useRealtimeStreaming column to voice_backend_configs table
                 // SQLite doesn't support BOOLEAN type directly, uses INTEGER (0/1)
                 database.execSQL("ALTER TABLE voice_backend_configs ADD COLUMN useRealtimeStreaming INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                // Create MCP server configs table
+                database.execSQL("""
+                    CREATE TABLE IF NOT EXISTS mcp_server_configs (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        url TEXT NOT NULL,
+                        transportType TEXT NOT NULL DEFAULT 'SSE',
+                        enabled INTEGER NOT NULL DEFAULT 1,
+                        headers TEXT NOT NULL DEFAULT '{}'
+                    )
+                """.trimIndent())
             }
         }
     }

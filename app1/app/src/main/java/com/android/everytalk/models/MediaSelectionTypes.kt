@@ -19,8 +19,9 @@ enum class ImageSourceOption(val label: String, val icon: ImageVector) {
     CAMERA("相机", Icons.Outlined.PhotoCamera)
 }
 
-object DocumentMimeTypes {
+object AttachmentMimeTypes {
     val TYPES = arrayOf(
+        // 文档类型
         "application/pdf",
         "application/msword",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -32,14 +33,17 @@ object DocumentMimeTypes {
         "text/csv",
         "text/html",
         "application/rtf",
-        "application/epub+zip"
+        "application/epub+zip",
+        // 视频类型
+        "video/*",
+        // 音频类型
+        "audio/*"
     )
 }
 
 enum class MoreOptionsType(val label: String, val icon: ImageVector, val mimeTypes: Array<String>) {
-    FILE("文档", Icons.Outlined.AttachFile, DocumentMimeTypes.TYPES),
-    VIDEO("视频", Icons.Outlined.Videocam, arrayOf("video/*")),
-    AUDIO("音频", Icons.Outlined.Audiotrack, arrayOf("audio/*")),
+    ATTACHMENT("附件", Icons.Outlined.AttachFile, AttachmentMimeTypes.TYPES),
+    MCP("MCP", Icons.Outlined.Extension, arrayOf()),
     CONVERSATION_PARAMS("会话参数", Icons.Outlined.Settings, arrayOf())
 }
 
