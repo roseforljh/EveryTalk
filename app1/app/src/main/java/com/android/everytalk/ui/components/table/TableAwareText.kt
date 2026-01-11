@@ -1,7 +1,8 @@
 package com.android.everytalk.ui.components.table
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
+import android.view.ViewGroup
+import android.widget.ImageView
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -10,53 +11,50 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.referentialEqualityPolicy
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.ui.components.ContentParser
 import com.android.everytalk.ui.components.ContentPart
 import com.android.everytalk.ui.components.WebPreviewDialog
 import com.android.everytalk.ui.components.content.CodeBlockCard
 import com.android.everytalk.ui.components.markdown.MarkdownRenderer
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import com.android.everytalk.util.cache.ContentParseCache
-import com.android.everytalk.ui.components.table.TableUtils
-import android.widget.ImageView
-import android.view.ViewGroup
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.graphics.toArgb
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.mapLatest
 import ru.noties.jlatexmath.JLatexMathDrawable
-import com.android.everytalk.data.DataClass.Sender
-import android.util.TypedValue
-import androidx.compose.ui.platform.LocalContext
 
 /**
- * 表格感知文本渲染器（优化版 + 跳动修复）
+ * 表格感知文本渲染器（优化版 + 实时渲染）
  *
  * 核心策略：
- * - 统一渲染流水线：
- *   - 全程（流式 + 结束）都使用分段解析和渲染
- *   - ContentParser 负责准确解析文本、代码块和表格
- *   - UI 层只负责渲染，不做内容过滤
- *   - 彻底消除流式结束时的组件替换，从而根除跳动
+ * - 流式模式：实时分块渲染，表格/代码块即时显示
+ * - 非流式模式：分块渲染，每种 ContentPart 类型使用最优组件
+ * - 后台解析：使用 flowOn(Dispatchers.Default) 在后台线程解析 AST
+ * - referentialEqualityPolicy：避免不必要的状态更新导致重组
+ * - 稳定 Key：使用索引作为 key，避免内容变化导致组件重建
  *
  * 缓存机制：通过 contentKey 持久化解析结果，避免 LazyColumn 回收导致重复解析
- *
- * 修复历史：
- * - 2024-11: 移除 filteredParts 补丁逻辑，由 ContentParser 保证解析准确性
  */
 @Composable
 fun TableAwareText(
@@ -76,100 +74,102 @@ fun TableAwareText(
     // 预览状态管理
     var previewState by remember { mutableStateOf<Pair<String, String>?>(null) } // (code, language)
 
-    // 方案二：实时分段解析与统一渲染
-    // 无论是否流式，都尝试进行轻量级分段解析（仅分离代码块，表格仍由MarkdownRenderer处理或后续优化）
-    
-    // 1. 解析状态管理
-    // 优化：分离流式与非流式状态管理策略
-    // 目的：流式输出时保留上一帧的解析结果，避免每次 text 变化时重置为纯文本导致的闪烁
-    
-    // 缓存版本控制
-    val effectiveCacheKey = if (contentKey.isNotBlank()) "${contentKey}_${text.hashCode()}_v${ContentParseCache.PARSER_VERSION}" else ""
-
-    // 使用 remember(contentKey) 保持状态实例，避免 text 变化时状态被重置
-    val parsedPartsState = remember(contentKey) {
-        mutableStateOf<List<ContentPart>?>(null)
+    // 使用 referentialEqualityPolicy 避免不必要的重组
+    var parsedParts by remember {
+        mutableStateOf(
+            value = emptyList<ContentPart>(),
+            policy = referentialEqualityPolicy()
+        )
     }
 
-    if (!isStreaming) {
-        // 非流式：同步解析/读取缓存，确保首帧即显示正确内容
-        // 使用 remember(text) 确保文本变化时更新（如编辑消息）
-        val syncParts = remember(text, effectiveCacheKey) {
-            if (effectiveCacheKey.isNotBlank()) {
-                ContentParseCache.get(effectiveCacheKey) ?: ContentParser.parseCompleteContent(text, isStreaming = false).also {
-                    ContentParseCache.put(effectiveCacheKey, it)
+    // 在后台线程解析内容
+    val updatedText by rememberUpdatedState(text)
+    val updatedIsStreaming by rememberUpdatedState(isStreaming)
+    val effectiveCacheKey = if (contentKey.isNotBlank() && !isStreaming) {
+        "${contentKey}_${text.hashCode()}_v${ContentParseCache.PARSER_VERSION}"
+    } else ""
+
+    LaunchedEffect(Unit) {
+        snapshotFlow { updatedText to updatedIsStreaming }
+            .distinctUntilChanged()
+            .mapLatest { (currentText, streaming) ->
+                // 非流式模式：尝试从缓存读取
+                if (!streaming && effectiveCacheKey.isNotBlank()) {
+                    ContentParseCache.get(effectiveCacheKey)?.let { return@mapLatest it }
                 }
-            } else {
-                ContentParser.parseCompleteContent(text, isStreaming = false)
+
+                // 解析内容（流式模式会自动闭合未完成的代码块）
+                val parts = ContentParser.parseCompleteContent(currentText, isStreaming = streaming)
+
+                // 非流式模式：缓存结果
+                if (!streaming && effectiveCacheKey.isNotBlank()) {
+                    ContentParseCache.put(effectiveCacheKey, parts)
+                }
+
+                parts
             }
-        }
-        parsedPartsState.value = syncParts
+            .catch { e ->
+                e.printStackTrace()
+                emit(listOf(ContentPart.Text(updatedText)))
+            }
+            .flowOn(Dispatchers.Default)
+            .collect { parts ->
+                parsedParts = parts
+            }
     }
 
-    // 流式：异步解析，避免阻塞 UI 线程
-    LaunchedEffect(text, contentKey, isStreaming) {
-        if (isStreaming) {
-            // 异步解析新内容
-            val start = System.nanoTime()
-            val newParts = withContext(Dispatchers.Default) {
-                ContentParser.parseCompleteContent(text, isStreaming = true)
-            }
-            // 更新状态
-            parsedPartsState.value = newParts
-            
-            val cost = (System.nanoTime() - start) / 1_000_000
-            if (com.android.everytalk.config.PerformanceConfig.ENABLE_PERFORMANCE_LOGGING) {
-                android.util.Log.d("TableAwareText", "Async parsing completed in ${cost}ms")
+    // 初始化时同步解析（避免首次渲染空白）
+    if (parsedParts.isEmpty() && text.isNotEmpty()) {
+        val initialParts = remember(text, contentKey, isStreaming) {
+            if (!isStreaming && effectiveCacheKey.isNotBlank()) {
+                ContentParseCache.get(effectiveCacheKey)
+            } else null
+        } ?: ContentParser.parseCompleteContent(text, isStreaming = isStreaming).also { parts ->
+            if (!isStreaming && effectiveCacheKey.isNotBlank()) {
+                ContentParseCache.put(effectiveCacheKey, parts)
             }
         }
+        parsedParts = initialParts
     }
-    
-    // 如果状态为空（流式第一帧），暂显示纯文本，避免空白
-    val parsedParts = parsedPartsState.value ?: listOf(ContentPart.Text(text))
 
-    // 统一渲染逻辑
-    // ContentParser 已经确保解析准确性，UI 层直接渲染即可
-    // 优化：将垂直 padding 移至外层 Column，内部组件禁用垂直 padding，从而消除组件间的双重间距
-    
-    val context = LocalContext.current
-    // 用户气泡外部已有 padding，内部不再添加垂直 padding，避免顶部空白过大
-    // AI 气泡也移除垂直 padding，将空间控制交给具体的渲染组件（如 MarkdownRenderer 的 pre-processing）
-    // 防止出现“顶部空白过大”的问题
+    // 渲染逻辑
     val verticalPaddingDp = 0.dp
-    
+
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = verticalPaddingDp) // 在容器层统一添加垂直 padding
+            .padding(vertical = verticalPaddingDp)
     ) {
+        // 统一使用 类型+索引 作为 key
+        // 这样流式结束时 key 不会变化，避免组件重建导致闪烁
         parsedParts.forEachIndexed { index, part ->
-            // 使用 key 确保组件状态稳定，避免因列表重建导致的闪烁或滚动位置丢失
-            // 在流式输出中，前面的 part 通常是稳定的，key 能有效避免它们被重组
-            androidx.compose.runtime.key(index) {
+            val stableKey = "${part.javaClass.simpleName}_$index"
+
+            androidx.compose.runtime.key(stableKey) {
                 when (part) {
                     is ContentPart.Text -> {
-                        // 纯文本部分：用MarkdownRenderer渲染
-                    MarkdownRenderer(
-                        markdown = part.content,
-                        style = style,
-                        color = color,
-                        modifier = Modifier.fillMaxWidth(),
-                        isStreaming = isStreaming, // 传递流式状态给MarkdownRenderer（用于内部优化）
-                        onLongPress = onLongPress,
-                        onImageClick = onImageClick,
-                        sender = sender,
-                        // 修复缓存冲突：Key 必须包含内容的特征（长度+哈希），防止内容变更但长度相同时命中旧缓存
-                        contentKey = if (contentKey.isNotBlank()) "${contentKey}_part_${parsedParts.indexOf(part)}_${part.content.length}_${part.content.hashCode()}" else "",
-                        disableVerticalPadding = true // 禁用内部垂直 padding，由外层 Column 统一控制
-                    )
-                }
+                        MarkdownRenderer(
+                            markdown = part.content,
+                            style = style,
+                            color = color,
+                            modifier = Modifier.fillMaxWidth(),
+                            isStreaming = isStreaming,
+                            onLongPress = onLongPress,
+                            onImageClick = onImageClick,
+                            sender = sender,
+                            contentKey = if (contentKey.isNotBlank() && !isStreaming) {
+                                "${contentKey}_part_${index}_${part.content.hashCode()}"
+                            } else "",
+                            disableVerticalPadding = true
+                        )
+                    }
                     is ContentPart.Code -> {
-                        // 🔧 修复：使用 CodeBlockCard 渲染代码块，提供复制按钮、预览按钮、语言类型和圆角
                         val clipboard = LocalClipboardManager.current
                         CodeBlockCard(
                             language = part.language,
                             code = part.content,
                             modifier = Modifier.padding(vertical = 4.dp),
+                            isStreaming = isStreaming,
                             onPreviewRequested = if (onCodePreviewRequested != null) {
                                 { onCodePreviewRequested(part.language ?: "", part.content) }
                             } else null,
@@ -181,17 +181,17 @@ fun TableAwareText(
                         )
                     }
                     is ContentPart.Table -> {
-                        // 表格部分：使用 TableRenderer 渲染
                         TableRenderer(
                             lines = part.lines,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(vertical = 8.dp),
                             isStreaming = isStreaming,
-                            contentKey = if (contentKey.isNotBlank()) "${contentKey}_table_${index}_${part.lines.size}" else "",
+                            contentKey = if (contentKey.isNotBlank() && !isStreaming) {
+                                "${contentKey}_table_${index}_${part.lines.size}"
+                            } else "",
                             onLongPress = onLongPress,
-                            // 使用与文本一致的样式
-                            headerStyle = style.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Bold),
+                            headerStyle = style.copy(fontWeight = FontWeight.Bold),
                             cellStyle = style
                         )
                     }

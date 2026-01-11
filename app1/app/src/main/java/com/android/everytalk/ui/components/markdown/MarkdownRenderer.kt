@@ -41,90 +41,32 @@ private val ENUM_ITEM_REGEX = Regex("(?<!\n)\\s+([A-DＡ-Ｄ][\\.．、])\\s")
 
 private data class MarkdownRenderSignature(
     val markdown: String,
-    val isStreaming: Boolean,
     val isDark: Boolean,
     val textSizeSp: Float
 )
 
-private data class MarkdownSegment(
-    val content: String,
-    val isCode: Boolean,
-    val isOpen: Boolean = false
-)
-
+/**
+ * 预处理 Markdown 文本（简化版）
+ *
+ * 由于代码块和表格已由 ContentParser 提取，此函数只需处理纯文本内容。
+ */
 private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): String {
     if (input.isBlank()) return input
 
-    // 1. Split into segments
-    val segments = mutableListOf<MarkdownSegment>()
-    val fenceRegex = Regex("```")
-    val matches = fenceRegex.findAll(input)
-
-    var lastIndex = 0
-    var inCodeBlock = false
-    var codeBlockStart = 0
-
-    for (match in matches) {
-        if (!inCodeBlock) {
-            // Found start of code block
-            if (match.range.first > lastIndex) {
-                segments.add(MarkdownSegment(input.substring(lastIndex, match.range.first), isCode = false))
-            }
-            inCodeBlock = true
-            codeBlockStart = match.range.first
-        } else {
-            // Found end of code block
-            val end = match.range.last + 1
-            segments.add(MarkdownSegment(input.substring(codeBlockStart, end), isCode = true))
-            inCodeBlock = false
-            lastIndex = end
-        }
-    }
-
-    // Handle remaining content
-    if (inCodeBlock) {
-        // We are inside an open code block
-        segments.add(MarkdownSegment(input.substring(codeBlockStart), isCode = true, isOpen = true))
-    } else if (lastIndex < input.length) {
-        // Remaining text
-        segments.add(MarkdownSegment(input.substring(lastIndex), isCode = false))
-    }
-
-    // 2. Process and Join
-    val s = segments.joinToString("") { seg ->
-        if (seg.isCode) {
-            if (seg.isOpen && isStreaming) {
-                // Auto-close open code blocks during streaming to prevent flickering
-                // Ensure there is a newline before closing fence if content doesn't end with one
-                val content = seg.content
-                if (content.endsWith("\n")) "$content```" else "$content\n```"
-            } else {
-                seg.content
-            }
-        } else {
-            processTextSegment(seg.content, isStreaming)
-        }
-    }
-
-    // 移除文本开头的多余换行符
-    return s.trimStart('\n')
-}
-
-private fun processTextSegment(input: String, isStreaming: Boolean): String {
     var s = input
 
-    // 0. HTML Escape
+    // 1. HTML Escape
     s = s.replace("&", "&amp;")
         .replace("<", "&lt;")
         .replace(">", "&gt;")
 
-    // 1. Currency
+    // 2. Currency: 避免 $$ 被误识别为数学公式
     if (s.contains("$$")) {
         val currencyPattern = Regex("\\$\\$(?=\\d)")
         s = s.replace(currencyPattern) { "\\$" }
     }
 
-    // 2. Base64
+    // 3. Base64 Image: 移除 Base64 中的空白
     if (s.contains("data:image/")) {
         val base64ImagePattern = Regex("(\\!\\[[^\\]]*\\]\\()\\s*(<?)(data:image\\/[^)>]+)(>?)\\s*(\\))", setOf(RegexOption.DOT_MATCHES_ALL))
         s = s.replace(base64ImagePattern) { mr ->
@@ -137,21 +79,22 @@ private fun processTextSegment(input: String, isStreaming: Boolean): String {
         }
     }
 
-    // 3. Special Spaces
+    // 4. Special Spaces
     s = s.replace("&nbsp;", " ")
         .replace("\u00A0", " ")
         .replace("\u3000", " ")
 
+    // 5. Full-width Paren Bold Fix
     val fullWidthParenBoldFix = Regex("）\\*\\*")
     s = s.replace(fullWidthParenBoldFix, "**）")
 
-    // 4. Formatting (Headers)
+    // 6. Headers: 确保 # 后有空格
     s = s.replace(Regex("(?<=^|\\n)(#{1,6})(?=[^#\\s])"), "$1 ")
     s = s.replace(Regex("^(#{1,6})(?=\\s.{50,})", RegexOption.MULTILINE)) { mr ->
         "\\" + mr.groupValues[1]
     }
 
-    // 5. Hard Break Enforcement
+    // 7. Hard Break Enforcement
     val lines = s.lines()
     val lastIndex = lines.size - 1
     s = lines.mapIndexed { index, line ->
@@ -162,7 +105,7 @@ private fun processTextSegment(input: String, isStreaming: Boolean): String {
                 trimmedLine.startsWith("#### ") ||
                 trimmedLine.startsWith("##### ") ||
                 trimmedLine.startsWith("###### ")
-        
+
         val isEmptyLine = line.isBlank()
         val isTableLine = line.contains("|")
         val hasUnbalancedBold = line.split("**").size % 2 == 0
@@ -178,7 +121,7 @@ private fun processTextSegment(input: String, isStreaming: Boolean): String {
         }
     }.joinToString("")
 
-    // 6. Inline Math
+    // 8. Inline Math: 将单个 $ 转换为 $$
     val inlineMathPattern = Regex("(?<!\\\\)(?<!\\$)\\$([^$\\n]+?)(?<!\\\\)(?<!\\$)\\$")
     if (s.contains("$")) {
         s = s.replace(inlineMathPattern) { matchResult ->
@@ -186,7 +129,7 @@ private fun processTextSegment(input: String, isStreaming: Boolean): String {
         }
     }
 
-    return s
+    return s.trimStart('\n')
 }
 
 @Composable
@@ -398,7 +341,6 @@ fun MarkdownRenderer(
         update = { tv ->
             val signature = MarkdownRenderSignature(
                 markdown = markdown,
-                isStreaming = isStreaming,
                 isDark = isDark,
                 textSizeSp = textSizeSp
             )

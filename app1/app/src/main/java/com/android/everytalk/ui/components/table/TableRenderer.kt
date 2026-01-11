@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -14,23 +15,27 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.android.everytalk.ui.components.markdown.MarkdownRenderer
 
 /**
- * 表格渲染器
+ * 表格渲染器（优化版，参考 RikkaHub DataTable）
  *
- * 支持：
- * - 自动列宽计算
- * - 水平滚动
- * - Markdown单元格内容
- * - 流式渲染
+ * 核心优化策略：
+ * - 使用稳定的 key() 避免不必要的重组
+ * - 使用纯 Compose Text 渲染单元格，避免 AndroidView 开销
+ * - 使用 remember 缓存解析结果
+ * - 支持水平滚动
  */
 @Composable
 fun TableRenderer(
@@ -48,47 +53,44 @@ fun TableRenderer(
 ) {
     if (lines.size < 2) return
 
-    // 解析表头
-    val headers = TableUtils.parseTableRow(lines[0])
+    // 使用 remember 缓存解析结果，避免重复解析
+    val (headers, dataRows, columnWidths) = remember(lines) {
+        val parsedHeaders = TableUtils.parseTableRow(lines[0])
+        val parsedDataRows = lines.drop(2).map { TableUtils.parseTableRow(it) }
+        val parsedColumnWidths = TableUtils.calculateColumnWidths(parsedHeaders, parsedDataRows)
+        Triple(parsedHeaders, parsedDataRows, parsedColumnWidths)
+    }
 
-    // 跳过分隔行，解析数据行
-    val dataRows = lines.drop(2).map { TableUtils.parseTableRow(it) }
-
-    // 计算列宽
-    val columnWidths = TableUtils.calculateColumnWidths(headers, dataRows)
-
-    // 根据表格规模决定渲染策略：单元格总量大时禁用单元格内Markdown/Math以避免递归渲染
+    // 根据表格规模决定渲染策略：单元格总量大时禁用单元格内Markdown以避免递归渲染
+    // 参考 RikkaHub：使用纯 Compose Text 而非 AndroidView，大幅减少重组开销
     val totalCells = headers.size * dataRows.size
-    // 🎯 优化：流式期间也允许渲染 Markdown，保持与流式结束后的样式一致，防止跳动。
-    // 仅在单元格非常多时降级为纯文本。
-    val usePlainTextCells = totalCells > 60 || !renderMarkdownInCells
+    val usePlainTextCells = totalCells > 40 || !renderMarkdownInCells
 
     val cornerRadius = 12.dp
     val tableShape = RoundedCornerShape(cornerRadius)
-    
+
     // 使用 ScrollState 来支持水平滚动
     val scrollState = rememberScrollState()
-    
+
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(tableShape) // 应用圆角裁剪
+            .clip(tableShape)
             .pointerInput(onLongPress) {
                 if (onLongPress != null) {
                     detectTapGestures(
                         onLongPress = { offset ->
                             onLongPress(offset)
                         },
-                        // 允许点击穿透，不消费点击事件，以免影响内部可能的点击交互（虽然目前主要是长按）
                         onTap = { /* no-op */ }
                     )
                 }
             }
-            .horizontalScroll(scrollState) // 由外层统一提供水平滚动，保证表头与数据行滚动同步
+            .horizontalScroll(scrollState)
             .background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, MaterialTheme.colorScheme.outline, tableShape) // 边框也使用圆角
+            .border(1.dp, MaterialTheme.colorScheme.outline, tableShape)
     ) {
-        // 渲染表头（使用轻量Text，避免复杂渲染）
+        // 渲染表头
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -96,71 +98,96 @@ fun TableRenderer(
                 .padding(vertical = 8.dp)
         ) {
             headers.forEachIndexed { index, header ->
-                val cellModifier = Modifier
-                    .width(columnWidths[index])
-                    .padding(horizontal = 12.dp)
-
-                if (renderMarkdownInCells) {
-                    // 头部单元格也走轻量 Markdown 渲染，保证 **加粗**、*斜体*、行内代码等能被正确解析
-                    MarkdownRenderer(
-                        markdown = header.trim(),
+                // 使用稳定的 key 避免重组
+                key("header_$index") {
+                    TableCell(
+                        content = header.trim(),
+                        width = columnWidths.getOrElse(index) { 100.dp },
                         style = headerStyle,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        isStreaming = false,
-                        modifier = cellModifier,
+                        usePlainText = true, // 表头始终使用纯文本，避免复杂渲染
                         contentKey = if (contentKey.isNotBlank()) "${contentKey}_th_$index" else ""
-                    )
-                } else {
-                    Text(
-                        text = header.trim(),
-                        modifier = cellModifier,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onSurface
                     )
                 }
             }
         }
 
-        // 渲染数据行：避免在嵌套滚动环境中使用 LazyColumn，防止“无限高度约束”崩溃
-        // 依赖外部父级（消息列表）的垂直滚动，这里用普通 Column + forEach 渲染行
-        dataRows.forEach { row ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(
-                        width = 0.5.dp,
-                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
-                    )
-                    .padding(vertical = 8.dp)
-            ) {
-                row.forEachIndexed { index, cell ->
-                    if (index < columnWidths.size) {
-                        val cellModifier = Modifier
-                            .width(columnWidths[index])
-                            .padding(horizontal = 12.dp)
-
-                        // 在单元格内启用轻量 Markdown 渲染（不引入额外滚动容器）
-                        if (renderMarkdownInCells) {
-                            MarkdownRenderer(
-                                markdown = cell.trim(),
-                                style = cellStyle,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                isStreaming = false,
-                                modifier = cellModifier,
-                                contentKey = if (contentKey.isNotBlank()) "${contentKey}_tr_${dataRows.indexOf(row)}_td_$index" else ""
-                            )
-                        } else {
-                            Text(
-                                text = cell.trim(),
-                                modifier = cellModifier,
-                                fontSize = 13.sp,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
+        // 渲染数据行
+        dataRows.forEachIndexed { rowIndex, row ->
+            // 使用稳定的 key 避免重组
+            key("row_$rowIndex") {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(
+                            width = 0.5.dp,
+                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                        )
+                        .padding(vertical = 8.dp)
+                ) {
+                    row.forEachIndexed { colIndex, cell ->
+                        if (colIndex < columnWidths.size) {
+                            // 使用稳定的 key 避免重组
+                            key("cell_${rowIndex}_$colIndex") {
+                                TableCell(
+                                    content = cell.trim(),
+                                    width = columnWidths[colIndex],
+                                    style = cellStyle,
+                                    usePlainText = usePlainTextCells,
+                                    contentKey = if (contentKey.isNotBlank()) "${contentKey}_tr_${rowIndex}_td_$colIndex" else ""
+                                )
+                            }
                         }
                     }
                 }
             }
         }
+    }
+}
+
+/**
+ * 表格单元格组件
+ *
+ * 参考 Open WebUI 的 MarkdownInlineTokens：
+ * - 使用轻量级 InlineMarkdownParser 渲染内联 Markdown
+ * - 纯 Compose AnnotatedString，无 AndroidView 开销
+ * - 支持加粗、斜体、代码、删除线等格式
+ */
+@Composable
+private fun TableCell(
+    content: String,
+    width: androidx.compose.ui.unit.Dp,
+    style: TextStyle,
+    usePlainText: Boolean,
+    contentKey: String
+) {
+    val textColor = MaterialTheme.colorScheme.onSurface
+    val codeBackground = MaterialTheme.colorScheme.surfaceVariant
+
+    // 使用 remember 缓存解析结果
+    val annotatedText = remember(content, usePlainText) {
+        if (usePlainText || !InlineMarkdownParser.containsInlineMarkdown(content)) {
+            androidx.compose.ui.text.AnnotatedString(content)
+        } else {
+            InlineMarkdownParser.parse(
+                text = content,
+                baseColor = Color.Unspecified,
+                codeBackground = codeBackground
+            )
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .width(width)
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Text(
+            text = annotatedText,
+            style = style,
+            color = textColor,
+            maxLines = 10,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
