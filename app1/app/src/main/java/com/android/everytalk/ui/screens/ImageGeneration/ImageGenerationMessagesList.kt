@@ -7,7 +7,10 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -84,6 +87,7 @@ import com.android.everytalk.ui.screens.MainScreen.chat.text.state.ChatScrollSta
 import com.android.everytalk.ui.screens.BubbleMain.Main.AttachmentsContent
 import com.android.everytalk.ui.screens.BubbleMain.Main.MessageContextMenu
 import com.android.everytalk.ui.screens.BubbleMain.Main.ImageContextMenu
+import com.android.everytalk.ui.screens.BubbleMain.Main.UserOrErrorMessageContent
 import com.android.everytalk.ui.theme.ChatDimensions
 import com.android.everytalk.ui.theme.chatColors
 import com.android.everytalk.ui.components.EnhancedMarkdownText
@@ -175,9 +179,48 @@ fun ImageGenerationMessagesList(
     var isImagePreviewVisible by remember { mutableStateOf(false) }
     var imagePreviewModel by remember { mutableStateOf<Any?>(null) }
 
+    // 收集当前会话中所有 AI 生成的图片 URL（用于左右滑动切换）
+    val allImageUrls = remember(chatItems) {
+        chatItems.flatMap { item ->
+            when (item) {
+                is ChatListItem.AiMessage -> {
+                    viewModel.getMessageById(item.messageId)?.imageUrls ?: emptyList()
+                }
+                else -> emptyList()
+            }
+        }
+    }
+    // 当前预览图片在 allImageUrls 中的索引
+    var currentImageIndex by remember { mutableStateOf(0) }
+
+    val isApiCalling by viewModel.isImageApiCalling.collectAsState()
+    val currentStreamingId by viewModel.currentImageStreamingAiMessageId.collectAsState()
+
+    // 滚动锚点逻辑：当用户手动离开底部时，记录当前位置；当列表数据变化时，尝试恢复该位置
+    val isAtBottom by scrollStateManager.isAtBottom
+    LaunchedEffect(listState.isScrollInProgress, isAtBottom) {
+        if (listState.isScrollInProgress && !isAtBottom) {
+            scrollStateManager.onUserScrollSnapshot(listState)
+        }
+    }
+
+    // 构造内容签名：仅结合列表长度和最后一条AI消息的ID
+    val lastAiItem = chatItems.lastOrNull {
+        it is ChatListItem.AiMessage ||
+        it is ChatListItem.AiMessageStreaming
+    }
+    val contentSignature = remember(chatItems.size, lastAiItem) {
+        "${chatItems.size}_${lastAiItem?.stableId}"
+    }
+
+    LaunchedEffect(contentSignature, isAtBottom) {
+        if (!isAtBottom) {
+            scrollStateManager.restoreAnchorIfNeeded(listState)
+        }
+    }
+
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val availableHeight = maxHeight
-        val isApiCalling by viewModel.isImageApiCalling.collectAsState()
 
         if (chatItems.isEmpty()) {
             if (isApiCalling) {
@@ -228,92 +271,74 @@ fun ImageGenerationMessagesList(
                         is ChatListItem.UserMessage -> {
                             val message = viewModel.getMessageById(item.messageId)
                             if (message != null) {
-                                Column(
+                                // 使用 Row + Arrangement.End 强制右贴齐，避免重组导致漂移
+                                Row(
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalAlignment = Alignment.End
+                                    horizontalArrangement = Arrangement.End,
+                                    verticalAlignment = Alignment.Top
                                 ) {
-                                    if (!item.attachments.isNullOrEmpty()) {
-                                        AttachmentsContent(
-                                            attachments = item.attachments,
-                                            onAttachmentClick = { att ->
-                                                when (att) {
-                                                    is com.android.everytalk.models.SelectedMediaItem.ImageFromUri -> {
-                                                        // 🔥 修复：如果是 data URI，使用字符串而不是 Uri 对象
-                                                        imagePreviewModel = if (att.uri.scheme == "data") {
-                                                            att.uri.toString()
-                                                        } else {
-                                                            att.uri
+                                    Column(
+                                        modifier = Modifier.wrapContentWidth(),
+                                        horizontalAlignment = Alignment.End
+                                    ) {
+                                        if (!item.attachments.isNullOrEmpty()) {
+                                            AttachmentsContent(
+                                                attachments = item.attachments,
+                                                onAttachmentClick = { att ->
+                                                    when (att) {
+                                                        is com.android.everytalk.models.SelectedMediaItem.ImageFromUri -> {
+                                                            imagePreviewModel = if (att.uri.scheme == "data") {
+                                                                att.uri.toString()
+                                                            } else {
+                                                                att.uri
+                                                            }
+                                                            isImagePreviewVisible = true
                                                         }
-                                                        isImagePreviewVisible = true
-                                                    }
-                                                    is com.android.everytalk.models.SelectedMediaItem.ImageFromBitmap -> {
-                                                        imagePreviewModel = att.bitmap
-                                                        isImagePreviewVisible = true
-                                                    }
-                                                    else -> { /* 其他类型暂不预览 */ }
-                                                }
-                                            },
-                                            maxWidth = bubbleMaxWidth * ChatDimensions.BUBBLE_WIDTH_RATIO,
-                                            message = message,
-                                            onEditRequest = { viewModel.requestEditMessage(it) },
-                                            onRegenerateRequest = {
-                                                viewModel.regenerateAiResponse(it, isImageGeneration = true)
-                                                scrollStateManager.jumpToBottom()
-                                            },
-                                           onLongPress = { msg, offset ->
-                                                contextMenuMessage = msg
-                                                contextMenuPressOffset = offset
-                                                isContextMenuVisible = true
-                                            },
-                                            onImageLoaded = onImageLoaded,
-                                            bubbleColor = MaterialTheme.chatColors.userBubble,
-                                            scrollStateManager = scrollStateManager
-                                        )
-                                    }
-                                    if (item.text.isNotBlank()) {
-                                        // 用户气泡：右对齐 + 自适应宽度（右上角直角，其他圆角）
-                                        var bubbleGlobalPosition by remember { mutableStateOf(Offset.Zero) }
-                                        Surface(
-                                            modifier = Modifier
-                                                .wrapContentWidth()
-                                                .widthIn(max = bubbleMaxWidth * ChatDimensions.USER_BUBBLE_WIDTH_RATIO)
-                                                .onGloballyPositioned {
-                                                    bubbleGlobalPosition = it.localToRoot(Offset.Zero)
-                                                }
-                                                .pointerInput(message.id) {
-                                                    detectTapGestures(
-                                                        onLongPress = { localOffset ->
-                                                            // 图像模式下用户气泡补充震动 + 全局坐标
-                                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                            contextMenuMessage = message
-                                                            contextMenuPressOffset = bubbleGlobalPosition + localOffset
-                                                            isContextMenuVisible = true
+                                                        is com.android.everytalk.models.SelectedMediaItem.ImageFromBitmap -> {
+                                                            imagePreviewModel = att.bitmap
+                                                            isImagePreviewVisible = true
                                                         }
-                                                    )
+                                                        else -> { /* 其他类型暂不预览 */ }
+                                                    }
                                                 },
-                                            shape = RoundedCornerShape(
-                                                topStart = ChatDimensions.CORNER_RADIUS_LARGE,
-                                                topEnd = 0.dp,
-                                                bottomStart = ChatDimensions.CORNER_RADIUS_LARGE,
-                                                bottomEnd = ChatDimensions.CORNER_RADIUS_LARGE
-                                            ),
-                                            color = MaterialTheme.chatColors.userBubble,
-                                            contentColor = MaterialTheme.colorScheme.onSurface,
-                                            shadowElevation = 0.dp
-                                        ) {
-                                            Box(
-                                                modifier = Modifier.padding(
-                                                    horizontal = ChatDimensions.BUBBLE_INNER_PADDING_HORIZONTAL,
-                                                    vertical = ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL
-                                                )
-                                            ) {
-                                                Text(
-                                                    text = item.text,
-                                                    style = MaterialTheme.typography.bodyLarge,
-                                                    color = MaterialTheme.colorScheme.onSurface,
-                                                    textAlign = androidx.compose.ui.text.style.TextAlign.Start
-                                                )
-                                            }
+                                                maxWidth = bubbleMaxWidth * ChatDimensions.USER_BUBBLE_WIDTH_RATIO,
+                                                message = message,
+                                                onEditRequest = { viewModel.requestEditMessage(it) },
+                                                onRegenerateRequest = {
+                                                    scrollStateManager.lockAutoScroll()
+                                                    viewModel.regenerateAiResponse(it, isImageGeneration = true, scrollToNewMessage = true)
+                                                },
+                                                onLongPress = { msg, offset ->
+                                                    contextMenuMessage = msg
+                                                    contextMenuPressOffset = offset
+                                                    isContextMenuVisible = true
+                                                },
+                                                onImageLoaded = onImageLoaded,
+                                                bubbleColor = MaterialTheme.chatColors.userBubble,
+                                                scrollStateManager = scrollStateManager,
+                                                onImageClick = { url ->
+                                                    imagePreviewModel = url
+                                                    isImagePreviewVisible = true
+                                                }
+                                            )
+                                        }
+                                        if (item.text.isNotBlank()) {
+                                            // 复用文本气泡渲染，与文本模式一致
+                                            UserOrErrorMessageContent(
+                                                message = message,
+                                                displayedText = item.text,
+                                                showLoadingDots = false,
+                                                bubbleColor = MaterialTheme.chatColors.userBubble,
+                                                contentColor = MaterialTheme.colorScheme.onSurface,
+                                                isError = false,
+                                                maxWidth = bubbleMaxWidth * ChatDimensions.USER_BUBBLE_WIDTH_RATIO,
+                                                onLongPress = { msg, offset ->
+                                                    contextMenuMessage = msg
+                                                    contextMenuPressOffset = offset
+                                                    isContextMenuVisible = true
+                                                },
+                                                scrollStateManager = scrollStateManager
+                                            )
                                         }
                                     }
                                 }
@@ -322,11 +347,11 @@ fun ImageGenerationMessagesList(
 
                         is ChatListItem.AiMessage -> {
                             val message = viewModel.getMessageById(item.messageId)
-                            android.util.Log.d("ImageGenMessagesList", "🖼️ [UI] Rendering AI message: id=${message?.id?.take(8)}, hasImageUrls=${message?.imageUrls?.isNotEmpty()}, imageUrlsCount=${message?.imageUrls?.size}")
+                            android.util.Log.d("ImageGenMessagesList", "[UI] Rendering AI message: id=${message?.id?.take(8)}, hasImageUrls=${message?.imageUrls?.isNotEmpty()}, imageUrlsCount=${message?.imageUrls?.size}")
                             if (message != null) {
                                 val isLastItem = index == chatItems.lastIndex
-                                val shouldApplyMinHeight = isLastItem && chatItems.size > 2
-                                
+                                val shouldApplyMinHeight = isLastItem && chatItems.size >= 2
+
                                 AiMessageItem(
                                     message = message,
                                     text = item.text,
@@ -343,9 +368,13 @@ fun ImageGenerationMessagesList(
                                     },
                                     onOpenPreview = { model ->
                                         imagePreviewModel = model
+                                        // 查找当前图片在 allImageUrls 中的索引
+                                        val modelStr = model.toString()
+                                        val index = allImageUrls.indexOfFirst { it == modelStr }
+                                        currentImageIndex = if (index >= 0) index else 0
                                         isImagePreviewVisible = true
                                     },
-                                    isStreaming = viewModel.currentImageStreamingAiMessageId.collectAsState().value == message.id,
+                                    isStreaming = currentStreamingId == message.id,
                                     onImageLoaded = onImageLoaded,
                                     scrollStateManager = scrollStateManager,
                                     viewModel = viewModel,
@@ -359,7 +388,7 @@ fun ImageGenerationMessagesList(
                         }
                         is ChatListItem.LoadingIndicator -> {
                             val isLastItem = index == chatItems.lastIndex
-                            val shouldApplyMinHeight = isLastItem && chatItems.size > 2
+                            val shouldApplyMinHeight = isLastItem && chatItems.size >= 2
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -481,8 +510,8 @@ fun ImageGenerationMessagesList(
             )
         }
 
-        // 全屏黑底图片预览（图1风格）+ 手势缩放 + 保存/分享
-        if (isImagePreviewVisible && imagePreviewModel != null) {
+        // 全屏黑底图片预览（图1风格）+ 手势缩放 + 保存/分享 + 左右滑动切换
+        if (isImagePreviewVisible && allImageUrls.isNotEmpty()) {
             val context = LocalContext.current
             val scope = rememberCoroutineScope()
             // 当前选中的图像生成配置（用于附加鉴权/来源头）
@@ -490,10 +519,31 @@ fun ImageGenerationMessagesList(
             val authToken = remember(selectedImageConfig) { selectedImageConfig?.key?.takeIf { it.isNotBlank() } }
             val refererHeader = remember(selectedImageConfig) { selectedImageConfig?.address?.takeIf { it.isNotBlank() } }
 
-            // 手势缩放/平移状态
+            // HorizontalPager 状态
+            val pagerState = rememberPagerState(
+                initialPage = currentImageIndex.coerceIn(0, allImageUrls.lastIndex.coerceAtLeast(0)),
+                pageCount = { allImageUrls.size }
+            )
+
+            // 当 pager 页面变化时，同步更新 imagePreviewModel
+            LaunchedEffect(pagerState.currentPage) {
+                if (pagerState.currentPage in allImageUrls.indices) {
+                    imagePreviewModel = allImageUrls[pagerState.currentPage]
+                    currentImageIndex = pagerState.currentPage
+                }
+            }
+
+            // 手势缩放/平移状态（每页独立）
             var scale by remember { mutableStateOf(1f) }
             var offsetX by remember { mutableStateOf(0f) }
             var offsetY by remember { mutableStateOf(0f) }
+
+            // 页面切换时重置缩放
+            LaunchedEffect(pagerState.currentPage) {
+                scale = 1f
+                offsetX = 0f
+                offsetY = 0f
+            }
 
             // 简易画笔编辑器状态
             var isBrushing by remember { mutableStateOf(false) }
@@ -1042,42 +1092,51 @@ fun ImageGenerationMessagesList(
                             Spacer(modifier = Modifier.width(48.dp))
                         }
 
-                        // 居中展示图片，手势缩放与双击缩放
-                        Box(
+                        // 左右滑动切换图片 + 双击缩放
+                        HorizontalPager(
+                            state = pagerState,
                             modifier = Modifier
                                 .fillMaxSize()
-                                .padding(vertical = 36.dp) // 给顶部/底部留出空间
-                                .pointerInput(imagePreviewModel) {
-                                    detectTransformGestures { _, _, zoom, _ ->
-                                        // 允许缩放，但不允许平移
-                                        scale = (scale * zoom).coerceIn(1f, 6f)
-                                        offsetX = 0f
-                                        offsetY = 0f
-                                    }
-                                }
-                                .pointerInput(imagePreviewModel) {
-                                    detectTapGestures(
-                                        onDoubleTap = {
-                                            scale = if (scale > 1.5f) 1f else 2f
-                                            if (scale == 1f) { offsetX = 0f; offsetY = 0f }
-                                        }
-                                    )
-                                },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            AsyncImage(
-                                model = imagePreviewModel,
-                                contentDescription = "预览图片",
+                                .padding(vertical = 56.dp),
+                            userScrollEnabled = scale == 1f, // 仅在未缩放时允许滑动
+                            beyondViewportPageCount = 1
+                        ) { page ->
+                            val currentUrl = allImageUrls.getOrNull(page)
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                AsyncImage(
+                                    model = currentUrl,
+                                    contentDescription = "预览图片 ${page + 1}/${allImageUrls.size}",
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .combinedClickable(
+                                            indication = null,
+                                            interactionSource = remember { MutableInteractionSource() },
+                                            onClick = { },
+                                            onDoubleClick = {
+                                                scale = if (scale > 1f) 1f else 2f
+                                            }
+                                        )
+                                        .graphicsLayer {
+                                            scaleX = scale
+                                            scaleY = scale
+                                        },
+                                    contentScale = ContentScale.FillWidth
+                                )
+                            }
+                        }
+
+                        // 页码指示器（仅当有多张图片时显示）
+                        if (allImageUrls.size > 1) {
+                            Text(
+                                text = "${pagerState.currentPage + 1} / ${allImageUrls.size}",
+                                color = Color.White.copy(alpha = 0.8f),
+                                style = MaterialTheme.typography.bodyMedium,
                                 modifier = Modifier
-                                    .fillMaxWidth()
-                                    .graphicsLayer {
-                                        // 仅缩放，始终居中，不允许平移
-                                        scaleX = scale
-                                        scaleY = scale
-                                        translationX = 0f
-                                        translationY = 0f
-                                    },
-                                contentScale = ContentScale.FillWidth
+                                    .align(Alignment.TopCenter)
+                                    .padding(top = 52.dp)
                             )
                         }
 

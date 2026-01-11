@@ -131,6 +131,38 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
         }
     }
 
+    // 监听滚动到指定消息的事件（重新回答时置顶）
+    LaunchedEffect(scrollStateManager) {
+        viewModel.scrollToItemEvent.collect { messageId ->
+            // 收到滚动请求时，列表可能尚未更新（StateFlow更新有延迟），因此需要重试等待
+            var attempts = 0
+            var targetIndex = -1
+            while (attempts < 20) {
+                val currentItems = viewModel.imageGenerationChatListItems.value
+                targetIndex = currentItems.indexOfFirst {
+                    when (it) {
+                        is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage -> it.messageId == messageId
+                        is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage -> it.messageId == messageId
+                        else -> false
+                    }
+                }
+
+                if (targetIndex != -1) {
+                    break
+                }
+                kotlinx.coroutines.delay(50)
+                attempts++
+            }
+
+            if (targetIndex != -1) {
+                scrollStateManager.scrollItemToTop(targetIndex)
+            } else {
+                // 如果找不到目标消息（例如列表更新失败），回退到滚动到底部
+                scrollStateManager.smoothScrollToBottom(isUserAction = true)
+            }
+        }
+    }
+
     if (showAboutDialog) {
         AboutDialog(
             viewModel = viewModel,
