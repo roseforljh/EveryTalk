@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.10.3](https://github.com/roseforljh/EveryTalk/compare/v1.10.2...v1.10.3) (2026-01-11)
+
+
+### Bug Fixes
+
+* **code-block:** restore EOL tokens in fenced code parsing to preserve line breaks ([7f88431](https://github.com/roseforljh/EveryTalk/commit/7f884310bad9876e4c70107923d0e48e15197641))
+* **core:** 流式渲染架构优化与Provider抽象重构 ([e0949d8](https://github.com/roseforljh/EveryTalk/commit/e0949d8c5011f8982efa741ffce7c69bcade6e92))
+* **mcp:** 添加MCP协议支持并修复Gemini PDF上传问题 ([d09bb97](https://github.com/roseforljh/EveryTalk/commit/d09bb97f60e5fde658bccd6d1328b4be34aa615f))
+* **regenerate:** 重新回答置顶改为事件驱动，消除竞态条件 ([2b10838](https://github.com/roseforljh/EveryTalk/commit/2b1083847742508ceec5310300b8b23de0a7ec68))
+* **scroll:** 统一滚动动画曲线，解决从中间位置发送消息时无加速度的问题 ([e044b1f](https://github.com/roseforljh/EveryTalk/commit/e044b1f99dbab724b0f399d12a31774d82de430b))
+* **share:** 新增历史会话分享功能，支持导出为Markdown格式 ([7931104](https://github.com/roseforljh/EveryTalk/commit/79311042f818ba701a0839765cef73964e3db152))
+* **sticky-header:** 修复代码块吸顶失效问题 ([f191d3b](https://github.com/roseforljh/EveryTalk/commit/f191d3b039a2512de49c8281e7b9e2e543c739d1))
+* **streaming:** 修复流式渲染代码块/表格闪烁问题 ([44a9336](https://github.com/roseforljh/EveryTalk/commit/44a9336aea3771f66154c9830e11533b73c70228))
+* **streaming:** 修复流式渲染闪烁和表格Markdown格式丢失问题 ([b9be5cd](https://github.com/roseforljh/EveryTalk/commit/b9be5cd19336c00f00b3625520a6f659c54db096))
+* 更新默认模型 ([26eec51](https://github.com/roseforljh/EveryTalk/commit/26eec51a04a3809a7a98758ecf6af8fcc1a30283))
+* 表格转换 ([e338705](https://github.com/roseforljh/EveryTalk/commit/e3387054c76cba0b2c236c36c419afdea67cc1d4))
+
 ## [1.10.2](https://github.com/roseforljh/EveryTalk/compare/v1.10.1...v1.10.2) (2025-12-25)
 
 
