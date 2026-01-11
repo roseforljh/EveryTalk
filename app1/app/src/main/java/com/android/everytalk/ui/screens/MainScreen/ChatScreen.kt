@@ -541,43 +541,9 @@ fun ChatScreen(
                         AiMessageOption.SELECT_TEXT -> viewModel.showSelectableTextDialog(latestMessage.text)
                         AiMessageOption.COPY_FULL_TEXT -> viewModel.copyToClipboard(latestMessage.text)
                         AiMessageOption.REGENERATE -> {
-                            // 确保键盘隐藏，避免重新回答时弹出输入法
                             keyboardController?.hide()
-                            
-                            // 立即锁定自动滚动，防止 onNewAiMessageAdded 触发的 jumpToBottom 覆盖后续的 scrollItemToTop
                             scrollStateManager.lockAutoScroll()
-                            
-                            val originalMessageId = latestMessage.id
-                            viewModel.regenerateAiResponse(latestMessage)
-                            
-                            // 使用与发送消息相同的动画逻辑：等待列表更新后，将新用户消息滚动到顶部
-                            coroutineScope.launch {
-                                // 等待列表更新（检查原 AI 消息是否被移除）
-                                var attempts = 0
-                                var targetIndex = -1
-                                while (attempts < 30) {
-                                    val items = viewModel.chatListItems.value
-                                    // 检查 AI 消息是否被移除
-                                    val hasOriginalMessage = items.any { 
-                                        (it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage && it.messageId == originalMessageId) ||
-                                        (it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageStreaming && it.messageId == originalMessageId)
-                                    }
-                                    if (!hasOriginalMessage || attempts > 10) {
-                                        // 找到最后一个用户消息（即新生成的用户消息）
-                                        targetIndex = items.indexOfLast { it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage }
-                                        if (targetIndex != -1) break
-                                    }
-                                    delay(50)
-                                    attempts++
-                                }
-                                
-                                // 将重新生成的用户消息滚动到顶部，动画效果与正常发送消息一致
-                                if (targetIndex != -1) {
-                                    scrollStateManager.scrollItemToTop(targetIndex, scrollDurationMs = 350)
-                                } else {
-                                    scrollStateManager.smoothScrollToBottom(isUserAction = true)
-                                }
-                            }
+                            viewModel.regenerateAiResponse(latestMessage, scrollToNewMessage = true)
                         }
                         AiMessageOption.EXPORT_TEXT -> viewModel.exportMessageText(latestMessage.text)
                     }

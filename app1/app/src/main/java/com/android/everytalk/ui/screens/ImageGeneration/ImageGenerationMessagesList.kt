@@ -453,48 +453,8 @@ fun ImageGenerationMessagesList(
                 },
                 onRegenerate = {
                     scrollStateManager.lockAutoScroll()
-                    
-                    val originalMessageId = it.id
-                    val isAiMessage = it.sender == com.android.everytalk.data.DataClass.Sender.AI
-                    viewModel.regenerateAiResponse(it, isImageGeneration = true)
+                    viewModel.regenerateAiResponse(it, isImageGeneration = true, scrollToNewMessage = true)
                     isContextMenuVisible = false
-                    
-                    // 使用与发送消息相同的动画逻辑：等待列表更新后，将新用户消息滚动到顶部
-                    coroutineScope.launch {
-                        // 等待列表更新（检查原消息是否被移除）
-                        var attempts = 0
-                        var targetIndex = -1
-                        while (attempts < 30) {
-                            val items = viewModel.imageGenerationChatListItems.value
-                            // 检查列表是否已更新（原消息被移除，新消息被添加）
-                            val hasOriginalMessage = if (isAiMessage) {
-                                // 长按 AI 气泡时，检查该 AI 消息是否被移除
-                                items.any { item: ChatListItem ->
-                                    (item is ChatListItem.AiMessage && item.messageId == originalMessageId) ||
-                                    (item is ChatListItem.AiMessageStreaming && item.messageId == originalMessageId)
-                                }
-                            } else {
-                                // 长按用户气泡时，检查该用户消息是否被移除
-                                items.any { item: ChatListItem ->
-                                    item is ChatListItem.UserMessage && item.messageId == originalMessageId
-                                }
-                            }
-                            if (hasOriginalMessage.not() || attempts > 10) {
-                                // 找到最后一个用户消息（即新生成的用户消息）
-                                targetIndex = items.indexOfLast { item: ChatListItem -> item is ChatListItem.UserMessage }
-                                if (targetIndex != -1) break
-                            }
-                            kotlinx.coroutines.delay(50)
-                            attempts++
-                        }
-                        
-                        // 将重新生成的用户消息滚动到顶部，动画效果与正常发送消息一致
-                        if (targetIndex != -1) {
-                            scrollStateManager.scrollItemToTop(targetIndex, scrollDurationMs = 350)
-                        } else {
-                            scrollStateManager.smoothScrollToBottom(isUserAction = true)
-                        }
-                    }
                 }
             )
         }

@@ -859,8 +859,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         editMessageController.cancelEditing()
     }
 
-    fun regenerateAiResponse(message: Message, isImageGeneration: Boolean = false) {
-        regenerateController.regenerateFrom(message, isImageGeneration)
+    fun regenerateAiResponse(message: Message, isImageGeneration: Boolean = false, scrollToNewMessage: Boolean = false) {
+        regenerateController.regenerateFrom(message, isImageGeneration, scrollToNewMessage)
     }
 
    fun showSystemPromptDialog() {

@@ -43,7 +43,7 @@ class RegenerateController(
     ) -> Unit
 ) {
 
-    fun regenerateFrom(message: Message, isImageGeneration: Boolean = false) {
+    fun regenerateFrom(message: Message, isImageGeneration: Boolean = false, scrollToNewMessage: Boolean = false) {
         val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
 
         // 基准用户消息：若传入为 AI，则寻找其上一个用户消息；否则用自身
@@ -187,13 +187,12 @@ class RegenerateController(
                             }
                             listRef.removeAt(finalUserIndex)
                         }
+                        
+                        if (scrollToNewMessage) {
+                            stateHolder._scrollToItemEvent.tryEmit(newUserMessageId)
+                        }
                     }
                 }
-
-                // 移除强制滚动到新用户消息的逻辑，保持页面原地不动
-                // if (shouldAutoScroll()) {
-                //     stateHolder._scrollToItemEvent.tryEmit(newUserMessageId)
-                // }
             }
         }
     }
