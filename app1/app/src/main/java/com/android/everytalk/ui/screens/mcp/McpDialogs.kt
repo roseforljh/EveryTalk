@@ -1,9 +1,16 @@
 package com.android.everytalk.ui.screens.mcp
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -13,16 +20,16 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.android.everytalk.data.mcp.*
 import com.android.everytalk.ui.screens.settings.DialogShape
 import com.android.everytalk.ui.screens.settings.DialogTextFieldColors
-import java.util.UUID
 
-/**
- * MCP 服务器列表对话框
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun McpServerListDialog(
@@ -33,24 +40,78 @@ fun McpServerListDialog(
     onDismiss: () -> Unit
 ) {
     var showAddDialog by remember { mutableStateOf(false) }
+    var serverToDeleteId by remember { mutableStateOf<String?>(null) }
+
+    if (serverToDeleteId != null) {
+        val server = serverStates[serverToDeleteId]
+        if (server != null) {
+            AlertDialog(
+                onDismissRequest = { serverToDeleteId = null },
+                title = { Text("移除服务器") },
+                text = { Text("确定要移除 '${server.config.name}' 吗？此操作无法撤销。") },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            onRemoveServer(serverToDeleteId!!)
+                            serverToDeleteId = null
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Text("移除")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { serverToDeleteId = null }) {
+                        Text("取消")
+                    }
+                },
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                shape = RoundedCornerShape(28.dp)
+            )
+        } else {
+            serverToDeleteId = null
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        shape = DialogShape,
-        containerColor = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(28.dp),
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier.border(
+            width = 0.5.dp,
+            color = Color.White.copy(alpha = 0.15f),
+            shape = RoundedCornerShape(28.dp)
+        ),
         title = {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "MCP 服务器",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
-                )
-                IconButton(onClick = { showAddDialog = true }) {
-                    Icon(Icons.Outlined.Add, contentDescription = "添加服务器")
+                Column {
+                    Text(
+                        text = "MCP 服务器",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "管理您的 MCP 连接",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                FilledTonalIconButton(
+                    onClick = { showAddDialog = true },
+                    colors = IconButtonDefaults.filledTonalIconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                ) {
+                    Icon(Icons.Filled.Add, contentDescription = "添加服务器")
                 }
             }
         },
@@ -59,43 +120,55 @@ fun McpServerListDialog(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(200.dp),
+                        .height(240.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        Icon(
-                            Icons.Outlined.Extension,
-                            contentDescription = null,
-                            modifier = Modifier.size(48.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            "暂无 MCP 服务器",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            "点击右上角添加服务器",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                        )
+                        Surface(
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                            modifier = Modifier.size(80.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    Icons.Outlined.Dns,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(40.dp),
+                                    tint = MaterialTheme.colorScheme.secondary
+                                )
+                            }
+                        }
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                "暂无连接",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                "添加 MCP 服务器以扩展能力",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             } else {
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 400.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                        .heightIn(max = 600.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                    contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp)
                 ) {
                     items(serverStates.values.toList(), key = { it.config.id }) { state ->
                         McpServerItem(
                             serverState = state,
                             onToggle = { onToggleServer(state.config.id, it) },
-                            onRemove = { onRemoveServer(state.config.id) }
+                            onDeleteClick = { serverToDeleteId = state.config.id }
                         )
                     }
                 }
@@ -103,7 +176,7 @@ fun McpServerListDialog(
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text("关闭")
+                Text("完成")
             }
         }
     )
@@ -119,97 +192,180 @@ fun McpServerListDialog(
     }
 }
 
-/**
- * MCP 服务器列表项
- */
+@Composable
+private fun getServerIcon(name: String): androidx.compose.ui.graphics.vector.ImageVector {
+    val lowerName = name.lowercase()
+    return when {
+        lowerName.contains("exa") -> Icons.Filled.Search
+        lowerName.contains("firecrawl") || lowerName.contains("crawl") -> Icons.Filled.Language
+        lowerName.contains("wiki") -> Icons.Filled.MenuBook
+        lowerName.contains("news") -> Icons.Filled.Newspaper
+        lowerName.contains("tavily") -> Icons.Filled.TravelExplore
+        lowerName.contains("search") -> Icons.Filled.Search
+        lowerName.contains("web") -> Icons.Filled.Public
+        lowerName.contains("code") || lowerName.contains("github") -> Icons.Filled.Code
+        lowerName.contains("data") || lowerName.contains("database") -> Icons.Filled.Storage
+        lowerName.contains("ai") || lowerName.contains("chat") -> Icons.Filled.AutoAwesome
+        lowerName.contains("file") || lowerName.contains("doc") -> Icons.Filled.Description
+        lowerName.contains("mail") || lowerName.contains("email") -> Icons.Filled.Email
+        lowerName.contains("calendar") || lowerName.contains("schedule") -> Icons.Filled.CalendarMonth
+        lowerName.contains("weather") -> Icons.Filled.Cloud
+        lowerName.contains("map") || lowerName.contains("location") -> Icons.Filled.Place
+        else -> Icons.Filled.Extension
+    }
+}
+
+@Composable
+private fun getServerIconColor(name: String): Color {
+    val lowerName = name.lowercase()
+    return when {
+        lowerName.contains("exa") -> Color(0xFF6366F1)
+        lowerName.contains("firecrawl") -> Color(0xFFEF4444)
+        lowerName.contains("wiki") -> Color(0xFF3B82F6)
+        lowerName.contains("news") -> Color(0xFF8B5CF6)
+        lowerName.contains("tavily") -> Color(0xFF10B981)
+        else -> MaterialTheme.colorScheme.primary
+    }
+}
+
 @Composable
 private fun McpServerItem(
     serverState: McpServerState,
     onToggle: (Boolean) -> Unit,
-    onRemove: () -> Unit
+    onDeleteClick: () -> Unit
 ) {
     val config = serverState.config
-    val connectionState = serverState.connectionState
+    val status = serverState.status
+    
+    val iconColor = getServerIconColor(config.name)
+    val icon = getServerIcon(config.name)
+
+    val containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
+    val contentColor = MaterialTheme.colorScheme.onSurface
 
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant
+            containerColor = containerColor
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        border = BorderStroke(
+            width = 1.dp,
+            color = if (config.enabled && status is McpStatus.Connected)
+                iconColor.copy(alpha = 0.2f)
+            else
+                MaterialTheme.colorScheme.outline.copy(alpha = 0.1f)
         )
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+        Column(
+            modifier = Modifier.padding(16.dp)
         ) {
             Row(
-                modifier = Modifier.weight(1f),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // 状态指示器
-                Icon(
-                    imageVector = when (connectionState) {
-                        McpConnectionState.CONNECTED -> Icons.Filled.CheckCircle
-                        McpConnectionState.CONNECTING -> Icons.Filled.Sync
-                        McpConnectionState.ERROR -> Icons.Filled.Error
-                        McpConnectionState.DISCONNECTED -> Icons.Outlined.Circle
-                    },
-                    contentDescription = null,
-                    tint = when (connectionState) {
-                        McpConnectionState.CONNECTED -> MaterialTheme.colorScheme.primary
-                        McpConnectionState.CONNECTING -> MaterialTheme.colorScheme.tertiary
-                        McpConnectionState.ERROR -> MaterialTheme.colorScheme.error
-                        McpConnectionState.DISCONNECTED -> MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    modifier = Modifier.size(24.dp)
-                )
+                Surface(
+                    modifier = Modifier.size(48.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    color = if (config.enabled) iconColor.copy(alpha = 0.1f) else MaterialTheme.colorScheme.surfaceContainer,
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = null,
+                            modifier = Modifier.size(24.dp),
+                            tint = if (config.enabled) iconColor else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(16.dp))
 
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = config.name,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Medium
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if (config.enabled) contentColor else contentColor.copy(alpha = 0.5f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
-                    Text(
-                        text = config.url,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    if (serverState.tools.isNotEmpty()) {
-                        Text(
-                            text = "${serverState.tools.size} 个工具",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
+                    
+                    Spacer(modifier = Modifier.height(4.dp))
+                    
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    when (status) {
+                                        is McpStatus.Connected -> iconColor
+                                        is McpStatus.Connecting -> MaterialTheme.colorScheme.tertiary
+                                        is McpStatus.Error -> MaterialTheme.colorScheme.error
+                                        is McpStatus.Idle -> MaterialTheme.colorScheme.outline
+                                    }
+                                )
                         )
-                    }
-                    serverState.errorMessage?.let { error ->
+                        Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = error,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.error
+                            text = when (status) {
+                                is McpStatus.Connected -> "${serverState.tools.size} 个可用工具"
+                                is McpStatus.Connecting -> "正在连接..."
+                                is McpStatus.Error -> "连接失败"
+                                is McpStatus.Idle -> "已暂停"
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
-            }
 
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+                Spacer(modifier = Modifier.width(8.dp))
+
                 Switch(
                     checked = config.enabled,
-                    onCheckedChange = onToggle
-                )
-                IconButton(onClick = onRemove) {
-                    Icon(
-                        Icons.Filled.Delete,
-                        contentDescription = "删除",
-                        tint = MaterialTheme.colorScheme.error
+                    onCheckedChange = onToggle,
+                    modifier = Modifier.scale(0.85f),
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = iconColor,
+                        checkedBorderColor = Color.Transparent,
+                        uncheckedThumbColor = Color.White,
+                        uncheckedTrackColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        uncheckedBorderColor = Color.White.copy(alpha = 0.4f)
                     )
+                )
+            }
+            
+            if (!config.enabled || status is McpStatus.Error) {
+                HorizontalDivider(
+                    modifier = Modifier.padding(top = 16.dp, bottom = 8.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (status is McpStatus.Error) "检查配置或网络" else "点击开关以启用",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (status is McpStatus.Error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
+                    
+                    IconButton(
+                        onClick = onDeleteClick,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            Icons.Outlined.Delete,
+                            contentDescription = "删除",
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
         }
@@ -217,31 +373,95 @@ private fun McpServerItem(
 }
 
 /**
- * 添加 MCP 服务器对话框
+ * MCP 服务器预设
  */
+enum class McpServerPreset(
+    val displayName: String,
+    val description: String,
+    val urlTemplate: String,
+    val transportType: McpTransportType,
+    val requiresApiKey: Boolean = true,
+    val apiKeyPlaceholder: String = "API Key",
+    val useHeaderAuth: Boolean = false,
+    val headerName: String = ""
+) {
+    CUSTOM(
+        displayName = "自定义",
+        description = "手动配置",
+        urlTemplate = "",
+        transportType = McpTransportType.SSE,
+        requiresApiKey = false
+    ),
+    EXA_SEARCH(
+        displayName = "Exa",
+        description = "AI 搜索引擎",
+        urlTemplate = "https://mcp.exa.ai/mcp?exaApiKey={API_KEY}&tools=web_search_exa,get_code_context_exa",
+        transportType = McpTransportType.HTTP,
+        requiresApiKey = true,
+        apiKeyPlaceholder = "Exa API Key"
+    ),
+    FIRECRAWL(
+        displayName = "Firecrawl",
+        description = "网页抓取/解析",
+        urlTemplate = "https://mcp.firecrawl.dev/{API_KEY}/v2/mcp",
+        transportType = McpTransportType.HTTP,
+        requiresApiKey = true,
+        apiKeyPlaceholder = "Firecrawl API Key"
+    );
+
+    fun buildUrl(apiKey: String): String {
+        return urlTemplate.replace("{API_KEY}", apiKey)
+    }
+    
+    fun buildHeaders(apiKey: String): Map<String, String> {
+        return if (useHeaderAuth && headerName.isNotBlank()) {
+            mapOf(headerName to apiKey)
+        } else {
+            emptyMap()
+        }
+    }
+}
+
 @Composable
 fun AddMcpServerDialog(
     onConfirm: (McpServerConfig) -> Unit,
     onDismiss: () -> Unit
 ) {
+    var selectedPreset by remember { mutableStateOf(McpServerPreset.CUSTOM) }
     var name by remember { mutableStateOf("") }
     var url by remember { mutableStateOf("") }
+    var apiKey by remember { mutableStateOf("") }
     var transportType by remember { mutableStateOf(McpTransportType.SSE) }
 
-    val isValid = name.isNotBlank() && url.isNotBlank() &&
-        (url.startsWith("http://") || url.startsWith("https://"))
+    LaunchedEffect(selectedPreset) {
+        if (selectedPreset != McpServerPreset.CUSTOM) {
+            name = selectedPreset.displayName
+            transportType = selectedPreset.transportType
+        }
+    }
 
-    // 输入框圆角样式
+    val isValid = if (selectedPreset == McpServerPreset.CUSTOM) {
+        name.isNotBlank() && url.isNotBlank() &&
+            (url.startsWith("http://") || url.startsWith("https://"))
+    } else {
+        name.isNotBlank() && apiKey.isNotBlank()
+    }
+
     val textFieldShape = RoundedCornerShape(16.dp)
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        shape = DialogShape,
-        containerColor = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(28.dp),
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier.border(
+            width = 0.5.dp,
+            color = Color.White.copy(alpha = 0.15f),
+            shape = RoundedCornerShape(28.dp)
+        ),
         title = {
             Text(
-                text = "添加 MCP 服务器",
-                style = MaterialTheme.typography.titleLarge,
+                text = "新建连接",
+                style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold
             )
         },
@@ -250,87 +470,158 @@ fun AddMcpServerDialog(
                 modifier = Modifier
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                verticalArrangement = Arrangement.spacedBy(20.dp)
             ) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("服务器名称") },
-                    placeholder = { Text("例如: 文件搜索") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = textFieldShape,
-                    colors = DialogTextFieldColors
-                )
-
-                OutlinedTextField(
-                    value = url,
-                    onValueChange = { url = it },
-                    label = { Text("服务器地址") },
-                    placeholder = { Text("https://example.com/mcp") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = textFieldShape,
-                    colors = DialogTextFieldColors,
-                    isError = url.isNotBlank() &&
-                        !url.startsWith("http://") &&
-                        !url.startsWith("https://"),
-                    supportingText = if (url.isNotBlank() &&
-                        !url.startsWith("http://") &&
-                        !url.startsWith("https://")) {
-                        { Text("URL 必须以 http:// 或 https:// 开头") }
-                    } else null
-                )
-
-                // 传输类型选择
-                Column {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = "传输类型",
+                        text = "选择类型",
                         style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(bottom = 12.dp)
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        McpTransportType.values().forEach { type ->
-                            val isSelected = transportType == type
+                        items(McpServerPreset.entries.toList()) { preset ->
+                            val isSelected = selectedPreset == preset
+                            val presetColor = when (preset) {
+                                McpServerPreset.CUSTOM -> Color(0xFF8B5CF6)
+                                McpServerPreset.EXA_SEARCH -> Color(0xFF6366F1)
+                                McpServerPreset.FIRECRAWL -> Color(0xFFEF4444)
+                            }
+                            val borderColor by animateColorAsState(
+                                if (isSelected) presetColor else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                                label = "borderColor"
+                            )
+                            val containerColor by animateColorAsState(
+                                if (isSelected) presetColor.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.5f),
+                                label = "containerColor"
+                            )
+                            
                             Surface(
-                                onClick = { transportType = type },
+                                onClick = { selectedPreset = preset },
+                                shape = RoundedCornerShape(16.dp),
+                                color = containerColor,
+                                border = BorderStroke(1.5.dp, borderColor),
                                 modifier = Modifier
-                                    .weight(1f)
-                                    .height(48.dp),
-                                shape = RoundedCornerShape(12.dp),
-                                color = if (isSelected)
-                                    MaterialTheme.colorScheme.primaryContainer
-                                else
-                                    MaterialTheme.colorScheme.surfaceVariant,
-                                border = if (isSelected)
-                                    androidx.compose.foundation.BorderStroke(
-                                        2.dp,
-                                        MaterialTheme.colorScheme.primary
-                                    )
-                                else null
+                                    .width(100.dp)
+                                    .height(80.dp)
                             ) {
-                                Row(
-                                    modifier = Modifier.fillMaxSize(),
-                                    horizontalArrangement = Arrangement.Center,
-                                    verticalAlignment = Alignment.CenterVertically
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.Center,
+                                    horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
+                                    Icon(
+                                        imageVector = getServerIcon(preset.name),
+                                        contentDescription = null,
+                                        tint = if (isSelected) presetColor else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
                                     Text(
-                                        text = type.name,
-                                        style = MaterialTheme.typography.labelLarge,
+                                        text = preset.displayName,
+                                        style = MaterialTheme.typography.labelMedium,
                                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                        color = if (isSelected)
-                                            MaterialTheme.colorScheme.primary
-                                        else
-                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        color = if (isSelected) presetColor else MaterialTheme.colorScheme.onSurface
                                     )
                                 }
                             }
                         }
+                    }
+                }
+
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        label = { Text("名称") },
+                        placeholder = { Text("给服务器起个名字") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = textFieldShape,
+                        colors = DialogTextFieldColors,
+                        leadingIcon = {
+                             Icon(Icons.Outlined.Label, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    )
+
+                    if (selectedPreset == McpServerPreset.CUSTOM) {
+                        OutlinedTextField(
+                            value = url,
+                            onValueChange = { url = it },
+                            label = { Text("服务器 URL") },
+                            placeholder = { Text("https://...") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = textFieldShape,
+                            colors = DialogTextFieldColors,
+                            isError = url.isNotBlank() &&
+                                !url.startsWith("http://") &&
+                                !url.startsWith("https://"),
+                            leadingIcon = {
+                                Icon(Icons.Outlined.Link, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            },
+                            supportingText = if (url.isNotBlank() &&
+                                !url.startsWith("http://") &&
+                                !url.startsWith("https://")) {
+                                { Text("必须以 http:// 或 https:// 开头") }
+                            } else null
+                        )
+
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                text = "传输协议",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+                                horizontalArrangement = Arrangement.spacedBy(0.dp)
+                            ) {
+                                McpTransportType.entries.forEachIndexed { index, type ->
+                                    val isSelected = transportType == type
+                                    val buttonColor = if (index == 0) Color(0xFF10B981) else Color(0xFF3B82F6)
+                                    val textColor = if (isSelected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+                                    
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .fillMaxHeight()
+                                            .padding(4.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(if (isSelected) buttonColor else Color.Transparent)
+                                            .clickable { transportType = type },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = type.name,
+                                            style = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.Bold,
+                                            color = textColor
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        OutlinedTextField(
+                            value = apiKey,
+                            onValueChange = { apiKey = it },
+                            label = { Text(selectedPreset.apiKeyPlaceholder) },
+                            placeholder = { Text("粘贴 API Key") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = textFieldShape,
+                            colors = DialogTextFieldColors,
+                            leadingIcon = {
+                                Icon(Icons.Outlined.Key, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        )
                     }
                 }
             }
@@ -338,11 +629,21 @@ fun AddMcpServerDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    val config = McpServerConfig(
-                        id = UUID.randomUUID().toString(),
+                    val finalUrl = if (selectedPreset == McpServerPreset.CUSTOM) {
+                        url.trim()
+                    } else {
+                        selectedPreset.buildUrl(apiKey.trim())
+                    }
+                    val headers = if (selectedPreset != McpServerPreset.CUSTOM) {
+                        selectedPreset.buildHeaders(apiKey.trim())
+                    } else {
+                        emptyMap()
+                    }
+                    val config = McpServerConfig.createDefault(
                         name = name.trim(),
-                        url = url.trim(),
-                        transportType = transportType
+                        url = finalUrl,
+                        transportType = if (selectedPreset == McpServerPreset.CUSTOM) transportType else selectedPreset.transportType,
+                        headers = headers
                     )
                     onConfirm(config)
                 },
@@ -372,7 +673,7 @@ fun McpToolSelectionDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         shape = DialogShape,
-        containerColor = MaterialTheme.colorScheme.surface,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         title = {
             Text(
                 text = "选择 MCP 工具",
