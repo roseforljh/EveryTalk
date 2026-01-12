@@ -73,6 +73,8 @@ import com.android.everytalk.statecontroller.controller.config.ConfigFacade
 import com.android.everytalk.statecontroller.controller.config.ProviderController
 import com.android.everytalk.statecontroller.controller.cache.CacheController
 import com.android.everytalk.statecontroller.viewmodel.McpManager
+import com.android.everytalk.data.network.GeminiDirectClient
+import com.android.everytalk.data.network.OpenAIDirectClient
 import com.android.everytalk.util.storage.IncrementalBackupManager
 
 // Constructor changed: removed dataSource
@@ -146,7 +148,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 viewModelScope,
                 historyManager,
                 onAiMessageFullTextChanged = ::onAiMessageFullTextChanged,
-                ::triggerScrollToBottom
+                ::triggerScrollToBottom,
+                executeMcpTool = { toolName, arguments -> mcpManager.callTool(toolName, arguments) },
+                isMcpTool = { toolName -> mcpManager.isMcpTool(toolName) }
         )
     }
     private val configManager: ConfigManager by lazy {
@@ -163,7 +167,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 historyManager = historyManager,
                 showSnackbar = ::showSnackbar,
                 triggerScrollToBottom = { triggerScrollToBottom() },
-                uriToBase64Encoder = { uri -> encodeUriAsBase64(uri) }
+                uriToBase64Encoder = { uri -> encodeUriAsBase64(uri) },
+                getMcpToolsForRequest = { mcpManager.getToolsForChatRequest() }
         )
     }
 
@@ -480,6 +485,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
    )
 
   init {
+        GeminiDirectClient.setMcpToolExecutor { toolName, arguments ->
+            mcpManager.callTool(toolName, arguments)
+        }
+        OpenAIDirectClient.setMcpToolExecutor { toolName, arguments ->
+            mcpManager.callTool(toolName, arguments)
+        }
+        
         // 初始化 StateHolder 的持久化回调
         viewModelScope.launch(Dispatchers.IO) {
             // 加载初始会话参数

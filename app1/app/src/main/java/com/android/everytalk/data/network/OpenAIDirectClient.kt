@@ -19,9 +19,18 @@ import kotlinx.serialization.json.*
 import io.ktor.client.request.forms.*
 import io.ktor.http.content.*
 import android.util.Base64
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
 object OpenAIDirectClient {
     private const val TAG = "OpenAIDirectClient"
+    private const val MAX_TOOL_LOOPS = 5
+
+    private var mcpToolExecutor: (suspend (String, JsonObject) -> JsonElement)? = null
+
+    fun setMcpToolExecutor(executor: (suspend (String, JsonObject) -> JsonElement)?) {
+        mcpToolExecutor = executor
+    }
 
     private data class SearchHit(val title: String, val href: String, val snippet: String)
     
@@ -97,33 +106,139 @@ object OpenAIDirectClient {
                 baseUrl.endsWith("/v1") -> "$baseUrl/chat/completions"
                 else -> "$baseUrl/v1/chat/completions"
             }
-            
+
             Log.d(TAG, "直连 URL: $url")
 
-            val payload = buildOpenAIPayload(effectiveRequest)
+            // 会话历史用于工具调用的多轮对话
+            val conversationHistory = mutableListOf<JsonObject>()
+            var currentRequest = effectiveRequest
+            var loopCount = 0
 
-            client.preparePost(url) {
-                contentType(ContentType.Application.Json)
-                setBody(payload)
-                header(HttpHeaders.Authorization, "Bearer ${effectiveRequest.apiKey}")
-                configureSSERequest()
-            }.execute { response ->
-                if (!response.status.isSuccess()) {
-                    val errorBody = try { response.bodyAsText() } catch (_: Exception) { null }
-                    val result = NetworkUtils.handleApiError(response.status, errorBody, "OpenAI")
-                    send(result.error)
-                    send(result.finish)
-                    return@execute
+            while (loopCount < MAX_TOOL_LOOPS) {
+                loopCount++
+                Log.i(TAG, "🔄 开始循环 #$loopCount, 历史记录数: ${conversationHistory.size}")
+
+                val payload = if (conversationHistory.isEmpty()) {
+                    buildOpenAIPayload(currentRequest)
+                } else {
+                    buildOpenAIPayloadWithHistory(currentRequest, conversationHistory)
                 }
 
-                Log.i(TAG, "✅ 直连成功，开始接收流")
+                var pendingToolCalls = mutableListOf<OpenAiToolCallInfo>()
+                var hasContent = false
+                var parseResult: OpenAIParseResult? = null
 
-                parseOpenAISSEStream(response.bodyAsChannel())
-                    .collect { event ->
-                        send(event)
-                        kotlinx.coroutines.yield()
+                client.preparePost(url) {
+                    contentType(ContentType.Application.Json)
+                    setBody(payload)
+                    header(HttpHeaders.Authorization, "Bearer ${currentRequest.apiKey}")
+                    configureSSERequest()
+                }.execute { response ->
+                    if (!response.status.isSuccess()) {
+                        val errorBody = try { response.bodyAsText() } catch (_: Exception) { null }
+                        val result = NetworkUtils.handleApiError(response.status, errorBody, "OpenAI")
+                        send(result.error)
+                        send(result.finish)
+                        return@execute
                     }
+
+                    Log.i(TAG, "✅ 直连成功 (loop $loopCount)，开始接收流")
+
+                    parseResult = parseOpenAISSEStreamWithTools(
+                        channel = response.bodyAsChannel(),
+                        onToolCall = { toolInfo ->
+                            Log.d(TAG, "回调捕获工具: ${toolInfo.name}")
+                            pendingToolCalls.add(toolInfo)
+                        },
+                        emitEvent = { event ->
+                            when (event) {
+                                is AppStreamEvent.Content -> {
+                                    hasContent = true
+                                    Log.d(TAG, "收到内容: ${event.text.take(50)}...")
+                                }
+                                is AppStreamEvent.ToolCall -> {
+                                    Log.d(TAG, "流中收到 ToolCall: ${event.name}")
+                                }
+                                is AppStreamEvent.Error -> {
+                                    Log.e(TAG, "收到错误事件: ${event.message}")
+                                }
+                                else -> {}
+                            }
+                            send(event)
+                            kotlinx.coroutines.yield()
+                        }
+                    )
+                }
+
+                Log.i(TAG, "循环 #$loopCount 结束, pendingToolCalls=${pendingToolCalls.size}, hasContent=$hasContent")
+
+                if (pendingToolCalls.isEmpty()) {
+                    Log.i(TAG, "🏁 没有待处理的工具调用，结束循环")
+                    break
+                }
+
+                if (mcpToolExecutor == null) {
+                    Log.w(TAG, "⚠️ 有工具调用但没有设置执行器，跳过")
+                    break
+                }
+
+                Log.i(TAG, "🔧 处理 ${pendingToolCalls.size} 个工具调用")
+
+                // 构建 assistant 消息（包含 tool_calls）
+                conversationHistory.add(buildJsonObject {
+                    put("role", "assistant")
+                    put("content", parseResult?.fullText ?: "")
+                    putJsonArray("tool_calls") {
+                        pendingToolCalls.forEach { toolInfo ->
+                            addJsonObject {
+                                put("id", toolInfo.id)
+                                put("type", "function")
+                                putJsonObject("function") {
+                                    put("name", toolInfo.name)
+                                    put("arguments", toolInfo.arguments)
+                                }
+                            }
+                        }
+                    }
+                })
+
+                // 执行每个工具并构建 tool 消息
+                for (toolInfo in pendingToolCalls) {
+                    try {
+                        val argsJson = try {
+                            Json.parseToJsonElement(toolInfo.arguments).jsonObject
+                        } catch (e: Exception) {
+                            Log.w(TAG, "解析工具参数失败: ${toolInfo.arguments}", e)
+                            JsonObject(emptyMap())
+                        }
+
+                        val result = withContext(NonCancellable) {
+                            Log.d(TAG, "🔧 开始执行工具: ${toolInfo.name}")
+                            mcpToolExecutor!!.invoke(toolInfo.name, argsJson)
+                        }
+                        Log.i(TAG, "🔧 工具 ${toolInfo.name} 执行成功: ${result.toString().take(100)}")
+
+                        conversationHistory.add(buildJsonObject {
+                            put("role", "tool")
+                            put("tool_call_id", toolInfo.id)
+                            put("content", result.toString())
+                        })
+                    } catch (e: Exception) {
+                        Log.e(TAG, "🔧 工具 ${toolInfo.name} 执行失败", e)
+                        conversationHistory.add(buildJsonObject {
+                            put("role", "tool")
+                            put("tool_call_id", toolInfo.id)
+                            put("content", "Error: ${e.message ?: "Unknown error"}")
+                        })
+                    }
+                }
+
+                pendingToolCalls.clear()
             }
+
+            Log.i(TAG, "🏁 工具循环完成，发送 Finish 事件")
+            send(AppStreamEvent.Finish("stop"))
+
         } catch (e: kotlinx.coroutines.CancellationException) {
             Log.d(TAG, "流被取消: ${e.message}")
             throw e
@@ -135,6 +250,17 @@ object OpenAIDirectClient {
 
         return@channelFlow
     }
+
+    private data class OpenAiToolCallInfo(
+        val id: String,
+        val name: String,
+        val arguments: String
+    )
+
+    private data class OpenAIParseResult(
+        val hasToolCalls: Boolean,
+        val fullText: String
+    )
     
     /**
      * 构建 OpenAI API 请求体
@@ -396,7 +522,41 @@ object OpenAIDirectClient {
                     }
                 }
             }
+
+            // MCP 工具注入 (OpenAI function calling 格式)
+            request.tools?.let { tools ->
+                if (tools.isNotEmpty()) {
+                    Log.d(TAG, "注入 ${tools.size} 个 MCP 工具到请求")
+                    putJsonArray("tools") {
+                        tools.forEach { toolDef ->
+                            add(mapToJsonElement(toolDef))
+                        }
+                    }
+                    put("tool_choice", "auto")
+                }
+            }
         }.toString()
+    }
+
+    private fun mapToJsonElement(map: Map<String, Any>): JsonElement {
+        return buildJsonObject {
+            map.forEach { (key, value) ->
+                put(key, anyToJsonElement(value))
+            }
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun anyToJsonElement(value: Any?): JsonElement {
+        return when (value) {
+            null -> JsonNull
+            is String -> JsonPrimitive(value)
+            is Number -> JsonPrimitive(value)
+            is Boolean -> JsonPrimitive(value)
+            is Map<*, *> -> mapToJsonElement(value as Map<String, Any>)
+            is List<*> -> JsonArray(value.map { anyToJsonElement(it) })
+            else -> JsonPrimitive(value.toString())
+        }
     }
 
     // -------------------- Helper: Extract last user text -------------------- 
@@ -688,8 +848,289 @@ object OpenAIDirectClient {
             send(AppStreamEvent.Error("流解析失败: ${e.message}", null))
         }
 
-        awaitClose { 
+        awaitClose {
             Log.d(TAG, "SSE stream channel closed")
         }
+    }
+
+    /**
+     * 构建带有工具调用历史的 OpenAI API 请求体
+     */
+    private fun buildOpenAIPayloadWithHistory(
+        request: ChatRequest,
+        conversationHistory: List<JsonObject>
+    ): String {
+        val messagesWithSystemPrompt = SystemPromptInjector.smartInjectSystemPrompt(request.messages)
+        Log.i(TAG, "📝 已注入系统提示词，消息数量: ${messagesWithSystemPrompt.size}, 历史数量: ${conversationHistory.size}")
+
+        fun audioFormatFromMime(mime: String): String {
+            return when (mime.lowercase()) {
+                "audio/wav", "audio/x-wav" -> "wav"
+                "audio/mpeg", "audio/mp3" -> "mp3"
+                "audio/aac" -> "aac"
+                "audio/ogg" -> "ogg"
+                "audio/opus" -> "opus"
+                "audio/flac" -> "flac"
+                "audio/3gpp" -> "3gp"
+                "audio/amr" -> "amr"
+                "audio/aiff" -> "aiff"
+                "audio/x-m4a" -> "m4a"
+                "audio/midi" -> "midi"
+                "audio/webm" -> "webm"
+                else -> mime.substringAfter("/", mime)
+            }
+        }
+
+        fun isAudioMime(mime: String?) = mime?.lowercase()?.startsWith("audio/") == true
+        fun isVideoMime(mime: String?) = mime?.lowercase()?.startsWith("video/") == true
+
+        return buildJsonObject {
+            put("model", request.model)
+            put("stream", true)
+
+            putJsonArray("messages") {
+                // 原始消息
+                messagesWithSystemPrompt.forEach { message ->
+                    when (message) {
+                        is SimpleTextApiMessage -> {
+                            addJsonObject {
+                                put("role", message.role)
+                                put("content", message.content)
+                            }
+                        }
+                        is PartsApiMessage -> {
+                            val parts = message.parts.filterNot {
+                                it is ApiContentPart.FileUri && it.mimeType == "qwen-file-id"
+                            }
+                            val allText = parts.all { it is ApiContentPart.Text }
+                            if (allText) {
+                                val textContent = parts.joinToString("\n") { (it as ApiContentPart.Text).text }
+                                addJsonObject {
+                                    put("role", message.role)
+                                    put("content", textContent)
+                                }
+                            } else {
+                                addJsonObject {
+                                    put("role", message.role)
+                                    putJsonArray("content") {
+                                        parts.forEach { part ->
+                                            when (part) {
+                                                is ApiContentPart.Text -> {
+                                                    addJsonObject {
+                                                        put("type", "text")
+                                                        put("text", part.text)
+                                                    }
+                                                }
+                                                is ApiContentPart.InlineData -> {
+                                                    val mime = part.mimeType
+                                                    if (isAudioMime(mime)) {
+                                                        addJsonObject {
+                                                            put("type", "input_audio")
+                                                            putJsonObject("input_audio") {
+                                                                put("data", part.base64Data)
+                                                                put("format", audioFormatFromMime(mime))
+                                                            }
+                                                        }
+                                                    } else {
+                                                        val dataUri = "data:${mime};base64,${part.base64Data}"
+                                                        addJsonObject {
+                                                            put("type", "image_url")
+                                                            putJsonObject("image_url") {
+                                                                put("url", dataUri)
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                is ApiContentPart.FileUri -> {
+                                                    addJsonObject {
+                                                        put("type", "text")
+                                                        put("text", "[Attachment: ${part.uri}]")
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        else -> {
+                            addJsonObject {
+                                put("role", message.role)
+                                put("content", "")
+                            }
+                        }
+                    }
+                }
+
+                // 添加工具调用历史
+                conversationHistory.forEach { historyMsg ->
+                    add(historyMsg)
+                }
+            }
+
+            // 添加参数
+            request.generationConfig?.let { config ->
+                config.temperature?.let { put("temperature", it) }
+                config.topP?.let { put("top_p", it) }
+                config.maxOutputTokens?.let { put("max_tokens", it) }
+            }
+
+            // MCP 工具注入
+            request.tools?.let { tools ->
+                if (tools.isNotEmpty()) {
+                    putJsonArray("tools") {
+                        tools.forEach { toolDef ->
+                            add(mapToJsonElement(toolDef))
+                        }
+                    }
+                    put("tool_choice", "auto")
+                }
+            }
+        }.toString()
+    }
+
+    /**
+     * 解析 OpenAI SSE 流并支持工具调用
+     */
+    private suspend fun parseOpenAISSEStreamWithTools(
+        channel: ByteReadChannel,
+        onToolCall: (OpenAiToolCallInfo) -> Unit,
+        emitEvent: suspend (AppStreamEvent) -> Unit
+    ): OpenAIParseResult {
+        val lineBuffer = StringBuilder()
+        var fullText = ""
+
+        var reasoningStarted = false
+        var reasoningFinished = false
+        var contentStarted = false
+        var hasToolCalls = false
+
+        // 用于聚合流式的 tool_calls（OpenAI 会分多个 chunk 发送）
+        val toolCallsMap = mutableMapOf<Int, Triple<String, String, StringBuilder>>() // index -> (id, name, arguments)
+
+        try {
+            while (!channel.isClosedForRead) {
+                val line = channel.readUTF8Line() ?: break
+
+                when {
+                    line.isEmpty() -> {
+                        val chunk = lineBuffer.toString().trim()
+                        if (chunk.isNotEmpty()) {
+                            if (chunk == "[DONE]") {
+                                if (reasoningStarted && !reasoningFinished) {
+                                    emitEvent(AppStreamEvent.ReasoningFinish(null))
+                                    reasoningFinished = true
+                                }
+                                break
+                            }
+                            try {
+                                val jsonChunk = Json.parseToJsonElement(chunk).jsonObject
+                                val choice = jsonChunk["choices"]?.jsonArray?.firstOrNull()?.jsonObject
+
+                                if (choice != null) {
+                                    val delta = choice["delta"]?.jsonObject
+
+                                    // 处理推理内容
+                                    val reasoningText =
+                                        delta?.get("reasoning_content")?.jsonPrimitive?.contentOrNull
+                                            ?: delta?.get("reasoning")?.jsonPrimitive?.contentOrNull
+                                            ?: delta?.get("thinking")?.jsonPrimitive?.contentOrNull
+                                            ?: delta?.get("thoughts")?.jsonPrimitive?.contentOrNull
+
+                                    if (!reasoningText.isNullOrEmpty()) {
+                                        if (!reasoningStarted) reasoningStarted = true
+                                        emitEvent(AppStreamEvent.Reasoning(reasoningText))
+                                    }
+
+                                    // 处理正文内容
+                                    val contentText = delta?.get("content")?.jsonPrimitive?.contentOrNull
+                                    if (!contentText.isNullOrEmpty()) {
+                                        if (reasoningStarted && !reasoningFinished) {
+                                            emitEvent(AppStreamEvent.ReasoningFinish(null))
+                                            reasoningFinished = true
+                                        }
+                                        if (!contentStarted) contentStarted = true
+                                        fullText += contentText
+                                        emitEvent(AppStreamEvent.Content(contentText, null, null))
+                                    }
+
+                                    // 处理工具调用 (OpenAI 格式: delta.tool_calls)
+                                    delta?.get("tool_calls")?.jsonArray?.forEach { tcElement ->
+                                        val tcObj = tcElement.jsonObject
+                                        val index = tcObj["index"]?.jsonPrimitive?.intOrNull ?: 0
+                                        val id = tcObj["id"]?.jsonPrimitive?.contentOrNull
+                                        val function = tcObj["function"]?.jsonObject
+                                        val name = function?.get("name")?.jsonPrimitive?.contentOrNull
+                                        val argumentsDelta = function?.get("arguments")?.jsonPrimitive?.contentOrNull ?: ""
+
+                                        val existing = toolCallsMap[index]
+                                        if (existing != null) {
+                                            existing.third.append(argumentsDelta)
+                                        } else {
+                                            toolCallsMap[index] = Triple(
+                                                id ?: "call_${System.currentTimeMillis()}_$index",
+                                                name ?: "",
+                                                StringBuilder(argumentsDelta)
+                                            )
+                                        }
+                                        hasToolCalls = true
+                                    }
+
+                                    // 检查 finish_reason
+                                    val finishReason = choice["finish_reason"]?.jsonPrimitive?.contentOrNull
+                                    if (finishReason == "tool_calls") {
+                                        Log.d(TAG, "Finish reason: tool_calls, 准备处理工具调用")
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                Log.w(TAG, "解析 SSE chunk 失败: ${e.message}")
+                            }
+                        }
+                        lineBuffer.clear()
+                    }
+                    line.startsWith("data:") -> {
+                        val dataContent = line.substring(5).trim()
+                        if (lineBuffer.isNotEmpty()) lineBuffer.append('\n')
+                        lineBuffer.append(dataContent)
+                    }
+                    line.startsWith(":") -> {
+                        // SSE 注释/心跳，忽略
+                    }
+                }
+            }
+
+            // 处理完成后，发送聚合的工具调用
+            if (toolCallsMap.isNotEmpty()) {
+                toolCallsMap.values.forEach { (id, name, argsBuilder) ->
+                    if (name.isNotBlank()) {
+                        val toolInfo = OpenAiToolCallInfo(id, name, argsBuilder.toString())
+                        onToolCall(toolInfo)
+                        emitEvent(AppStreamEvent.ToolCall(
+                            id = id,
+                            name = name,
+                            argumentsObj = try {
+                                Json.parseToJsonElement(argsBuilder.toString()).jsonObject
+                            } catch (e: Exception) {
+                                JsonObject(emptyMap())
+                            }
+                        ))
+                    }
+                }
+            }
+
+            // 发送结束事件
+            if (fullText.isNotEmpty() && !hasToolCalls) {
+                emitEvent(AppStreamEvent.ContentFinal(fullText, null, null))
+            }
+            if (reasoningStarted && !reasoningFinished) {
+                emitEvent(AppStreamEvent.ReasoningFinish(null))
+            }
+            // 注意：不在这里发送 Finish，由调用方决定（可能还有工具循环）
+
+        } catch (e: Exception) {
+            emitEvent(AppStreamEvent.Error("流解析失败: ${e.message}", null))
+        }
+
+        return OpenAIParseResult(hasToolCalls = hasToolCalls, fullText = fullText)
     }
 }
