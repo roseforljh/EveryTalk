@@ -1,107 +1,149 @@
 package com.android.everytalk.data.mcp
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 
-/**
- * MCP 服务器传输类型
- */
 enum class McpTransportType {
-    SSE,        // Server-Sent Events (HTTP)
-    WEBSOCKET   // WebSocket
+    SSE,
+    HTTP
 }
 
-/**
- * MCP 服务器配置
- */
 @Serializable
-data class McpServerConfig(
-    val id: String,
-    val name: String,
-    val url: String,
-    val transportType: McpTransportType = McpTransportType.SSE,
-    val enabled: Boolean = true,
-    val headers: Map<String, String> = emptyMap()
+data class McpCommonOptions(
+    val enable: Boolean = true,
+    val name: String = "",
+    val headers: List<Pair<String, String>> = emptyList(),
+    val tools: List<McpTool> = emptyList()
 )
 
-/**
- * MCP 工具定义
- */
+@Serializable
+sealed class McpServerConfig {
+    abstract val id: String
+    abstract val commonOptions: McpCommonOptions
+    abstract val url: String
+
+    abstract fun clone(
+        id: String = this.id,
+        commonOptions: McpCommonOptions = this.commonOptions
+    ): McpServerConfig
+
+    val name: String get() = commonOptions.name
+    val enabled: Boolean get() = commonOptions.enable
+    val headers: Map<String, String> get() = commonOptions.headers.toMap()
+
+    @Serializable
+    @SerialName("sse")
+    data class SseTransportServer(
+        override val id: String = java.util.UUID.randomUUID().toString(),
+        override val commonOptions: McpCommonOptions = McpCommonOptions(),
+        override val url: String = "",
+    ) : McpServerConfig() {
+        override fun clone(id: String, commonOptions: McpCommonOptions): McpServerConfig {
+            return copy(id = id, commonOptions = commonOptions)
+        }
+    }
+
+    @Serializable
+    @SerialName("streamable_http")
+    data class StreamableHTTPServer(
+        override val id: String = java.util.UUID.randomUUID().toString(),
+        override val commonOptions: McpCommonOptions = McpCommonOptions(),
+        override val url: String = "",
+    ) : McpServerConfig() {
+        override fun clone(id: String, commonOptions: McpCommonOptions): McpServerConfig {
+            return copy(id = id, commonOptions = commonOptions)
+        }
+    }
+
+    companion object {
+        fun createDefault(
+            name: String,
+            url: String,
+            transportType: McpTransportType = McpTransportType.SSE,
+            headers: Map<String, String> = emptyMap()
+        ): McpServerConfig {
+            val commonOptions = McpCommonOptions(
+                enable = true,
+                name = name,
+                headers = headers.toList()
+            )
+            return when (transportType) {
+                McpTransportType.SSE -> SseTransportServer(
+                    commonOptions = commonOptions,
+                    url = url
+                )
+                McpTransportType.HTTP -> StreamableHTTPServer(
+                    commonOptions = commonOptions,
+                    url = url
+                )
+            }
+        }
+    }
+}
+
 @Serializable
 data class McpTool(
     val name: String,
-    val description: String?,
-    val inputSchema: McpToolInputSchema?
-)
-
-/**
- * MCP 工具输入模式
- */
-@Serializable
-data class McpToolInputSchema(
-    val type: String = "object",
-    val properties: Map<String, McpPropertySchema> = emptyMap(),
-    val required: List<String> = emptyList()
-)
-
-/**
- * MCP 属性模式
- */
-@Serializable
-data class McpPropertySchema(
-    val type: String,
     val description: String? = null,
-    val enum: List<String>? = null
+    val enable: Boolean = true,
+    val inputSchema: McpInputSchema? = null
 )
 
-/**
- * MCP 工具调用请求
- */
+@Serializable
+sealed class McpInputSchema {
+    @Serializable
+    @SerialName("object")
+    data class Obj(
+        val properties: JsonObject = JsonObject(emptyMap()),
+        val required: List<String>? = null
+    ) : McpInputSchema()
+
+    fun toJsonObject(): JsonObject {
+        return when (this) {
+            is Obj -> properties
+        }
+    }
+}
+
 @Serializable
 data class McpToolCall(
     val name: String,
-    val arguments: Map<String, kotlinx.serialization.json.JsonElement> = emptyMap()
+    val arguments: Map<String, JsonElement> = emptyMap()
 )
 
-/**
- * MCP 工具调用结果
- */
 @Serializable
 data class McpToolResult(
     val content: List<McpContent>,
     val isError: Boolean = false
 )
 
-/**
- * MCP 内容类型
- */
 @Serializable
 sealed class McpContent {
     @Serializable
+    @SerialName("text")
     data class Text(val text: String) : McpContent()
 
     @Serializable
+    @SerialName("image")
     data class Image(val data: String, val mimeType: String) : McpContent()
 
     @Serializable
+    @SerialName("resource")
     data class Resource(val uri: String, val mimeType: String?, val text: String?) : McpContent()
 }
 
-/**
- * MCP 连接状态
- */
-enum class McpConnectionState {
-    DISCONNECTED,
-    CONNECTING,
-    CONNECTED,
-    ERROR
+sealed class McpStatus {
+    object Idle : McpStatus()
+    object Connecting : McpStatus()
+    object Connected : McpStatus()
+    class Error(val message: String) : McpStatus()
 }
 
-/**
- * MCP 服务器状态
- */
 data class McpServerState(
     val config: McpServerConfig,
-    val connectionState: McpConnectionState = McpConnectionState.DISCONNECTED,
+    val status: McpStatus = McpStatus.Idle,
     val tools: List<McpTool> = emptyList(),
     val errorMessage: String? = null
 )

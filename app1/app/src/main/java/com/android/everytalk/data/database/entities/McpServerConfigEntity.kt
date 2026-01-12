@@ -2,15 +2,12 @@ package com.android.everytalk.data.database.entities
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
+import com.android.everytalk.data.mcp.McpCommonOptions
 import com.android.everytalk.data.mcp.McpServerConfig
 import com.android.everytalk.data.mcp.McpTransportType
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.decodeFromString
 
-/**
- * MCP 服务器配置数据库实体
- */
 @Entity(tableName = "mcp_server_configs")
 data class McpServerConfigEntity(
     @PrimaryKey
@@ -19,32 +16,55 @@ data class McpServerConfigEntity(
     val url: String,
     val transportType: String = "SSE",
     val enabled: Boolean = true,
-    val headers: String = "{}" // JSON 格式存储
+    val headers: String = "[]"
 ) {
     fun toModel(): McpServerConfig {
-        val headerMap = try {
-            Json.decodeFromString<Map<String, String>>(headers)
+        val headerList: List<Pair<String, String>> = try {
+            Json.decodeFromString<List<List<String>>>(headers).map { it[0] to it[1] }
         } catch (e: Exception) {
-            emptyMap()
+            try {
+                val headerMap = Json.decodeFromString<Map<String, String>>(headers)
+                headerMap.toList()
+            } catch (e2: Exception) {
+                emptyList()
+            }
         }
-        return McpServerConfig(
-            id = id,
+
+        val commonOptions = McpCommonOptions(
+            enable = enabled,
             name = name,
-            url = url,
-            transportType = McpTransportType.valueOf(transportType),
-            enabled = enabled,
-            headers = headerMap
+            headers = headerList
         )
+
+        return when (McpTransportType.valueOf(transportType)) {
+            McpTransportType.SSE -> McpServerConfig.SseTransportServer(
+                id = id,
+                commonOptions = commonOptions,
+                url = url
+            )
+            McpTransportType.HTTP -> McpServerConfig.StreamableHTTPServer(
+                id = id,
+                commonOptions = commonOptions,
+                url = url
+            )
+        }
     }
 
     companion object {
         fun fromModel(config: McpServerConfig): McpServerConfigEntity {
-            val headersJson = Json.encodeToString(config.headers)
+            val headersList = config.commonOptions.headers.map { listOf(it.first, it.second) }
+            val headersJson = Json.encodeToString(headersList)
+
+            val transportType = when (config) {
+                is McpServerConfig.SseTransportServer -> McpTransportType.SSE
+                is McpServerConfig.StreamableHTTPServer -> McpTransportType.HTTP
+            }
+
             return McpServerConfigEntity(
                 id = config.id,
                 name = config.name,
                 url = config.url,
-                transportType = config.transportType.name,
+                transportType = transportType.name,
                 enabled = config.enabled,
                 headers = headersJson
             )

@@ -1,16 +1,17 @@
 package com.android.everytalk.statecontroller.viewmodel
 
 import android.content.Context
+import android.util.Log
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.database.entities.McpServerConfigEntity
 import com.android.everytalk.data.mcp.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 
-/**
- * MCP 管理器
- * 负责管理 MCP 服务器配置和工具调用
- */
+private const val TAG = "McpManager"
+
 class McpManager(context: Context) {
     private val database = AppDatabase.getDatabase(context)
     private val mcpDao = database.mcpConfigDao()
@@ -18,6 +19,7 @@ class McpManager(context: Context) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     val serverStates: StateFlow<Map<String, McpServerState>> = clientManager.serverStates
+    val syncingStatus: StateFlow<Map<String, McpStatus>> = clientManager.syncingStatus
 
     private val _selectedTools = MutableStateFlow<Set<String>>(emptySet())
     val selectedTools: StateFlow<Set<String>> = _selectedTools.asStateFlow()
@@ -25,32 +27,40 @@ class McpManager(context: Context) {
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
+    private val _mcpToolNames = MutableStateFlow<Set<String>>(emptySet())
+
     init {
-        // 加载已保存的服务器配置并连接
         scope.launch {
             mcpDao.getEnabledConfigs().collect { entities ->
                 entities.forEach { entity ->
                     val config = entity.toModel()
                     if (!serverStates.value.containsKey(config.id)) {
-                        launch { clientManager.addServer(config) }
+                        launch {
+                            runCatching { clientManager.addServer(config) }
+                                .onFailure { Log.e(TAG, "Failed to add server ${config.name}", it) }
+                        }
                     }
                 }
             }
         }
+        scope.launch {
+            serverStates.collect { states ->
+                val toolNames = states.values
+                    .filter { it.status is McpStatus.Connected && it.config.enabled }
+                    .flatMap { it.tools.map { tool -> tool.name } }
+                    .toSet()
+                _mcpToolNames.value = toolNames
+                Log.d(TAG, "Updated MCP tool names: $toolNames")
+            }
+        }
     }
 
-    /**
-     * 获取所有已配置的服务器
-     */
     fun getAllConfigs(): Flow<List<McpServerConfig>> {
         return mcpDao.getAllConfigs().map { entities ->
             entities.map { it.toModel() }
         }
     }
 
-    /**
-     * 添加服务器
-     */
     suspend fun addServer(config: McpServerConfig) {
         _isLoading.value = true
         try {
@@ -61,21 +71,14 @@ class McpManager(context: Context) {
         }
     }
 
-    /**
-     * 移除服务器
-     */
     suspend fun removeServer(serverId: String) {
         mcpDao.deleteConfigById(serverId)
         clientManager.removeServer(serverId)
-        // 移除该服务器相关的已选工具
         _selectedTools.update { tools ->
             tools.filterNot { it.startsWith("$serverId:") }.toSet()
         }
     }
 
-    /**
-     * 切换服务器启用状态
-     */
     suspend fun toggleServer(serverId: String, enabled: Boolean) {
         mcpDao.setEnabled(serverId, enabled)
         if (enabled) {
@@ -84,24 +87,72 @@ class McpManager(context: Context) {
                 clientManager.addServer(it.toModel())
             }
         } else {
-            clientManager.removeServer(serverId)
-            // 移除该服务器相关的已选工具
+            clientManager.disconnectServer(serverId)
             _selectedTools.update { tools ->
                 tools.filterNot { it.startsWith("$serverId:") }.toSet()
             }
         }
     }
 
-    /**
-     * 获取所有可用工具
-     */
-    fun getAllAvailableTools(): List<Pair<McpServerConfig, McpTool>> {
-        return clientManager.getAllTools()
+    fun getAllAvailableTools(): List<McpTool> {
+        return clientManager.getAllAvailableTools()
     }
 
-    /**
-     * 切换工具选择状态
-     */
+    fun getToolsForChatRequest(): List<Map<String, Any>> {
+        val states = serverStates.value
+        Log.d(TAG, "getToolsForChatRequest: serverStates count=${states.size}")
+        states.forEach { (id, state) ->
+            Log.d(TAG, "  Server[$id]: status=${state.status::class.simpleName}, enabled=${state.config.enabled}, tools=${state.tools.size}")
+        }
+        val tools = getAllAvailableTools()
+        Log.d(TAG, "getToolsForChatRequest: ${tools.size} tools available after filter")
+        tools.forEach { tool ->
+            Log.d(TAG, "  Tool: ${tool.name}, enable=${tool.enable}")
+        }
+        return tools.map { tool ->
+            buildToolDefinition(tool)
+        }
+    }
+
+    private fun buildToolDefinition(tool: McpTool): Map<String, Any> {
+        val functionDef = mutableMapOf<String, Any>(
+            "name" to tool.name,
+            "description" to (tool.description ?: "MCP tool: ${tool.name}")
+        )
+
+        tool.inputSchema?.let { schema ->
+            when (schema) {
+                is McpInputSchema.Obj -> {
+                    val parameters = mutableMapOf<String, Any>(
+                        "type" to "object",
+                        "properties" to schema.properties.toMap()
+                    )
+                    schema.required?.let { parameters["required"] = it }
+                    functionDef["parameters"] = parameters
+                }
+            }
+        } ?: run {
+            functionDef["parameters"] = mapOf(
+                "type" to "object",
+                "properties" to emptyMap<String, Any>()
+            )
+        }
+
+        return mapOf(
+            "type" to "function",
+            "function" to functionDef
+        )
+    }
+
+    fun isMcpTool(toolName: String): Boolean {
+        return _mcpToolNames.value.contains(toolName)
+    }
+
+    suspend fun callTool(toolName: String, arguments: JsonObject): JsonElement {
+        Log.i(TAG, "Calling MCP tool: $toolName with args: $arguments")
+        return clientManager.callTool(toolName, arguments)
+    }
+
     fun toggleToolSelection(toolId: String) {
         _selectedTools.update { current ->
             if (current.contains(toolId)) {
@@ -112,48 +163,10 @@ class McpManager(context: Context) {
         }
     }
 
-    /**
-     * 清除工具选择
-     */
     fun clearToolSelection() {
         _selectedTools.value = emptySet()
     }
 
-    /**
-     * 调用选中的工具
-     */
-    suspend fun callSelectedTools(
-        arguments: Map<String, kotlinx.serialization.json.JsonElement>
-    ): List<Pair<String, Result<McpToolResult>>> {
-        val results = mutableListOf<Pair<String, Result<McpToolResult>>>()
-
-        selectedTools.value.forEach { toolId ->
-            val parts = toolId.split(":", limit = 2)
-            if (parts.size == 2) {
-                val serverId = parts[0]
-                val toolName = parts[1]
-                val result = clientManager.callTool(serverId, toolName, arguments)
-                results.add(toolId to result)
-            }
-        }
-
-        return results
-    }
-
-    /**
-     * 调用指定工具
-     */
-    suspend fun callTool(
-        serverId: String,
-        toolName: String,
-        arguments: Map<String, kotlinx.serialization.json.JsonElement>
-    ): Result<McpToolResult> {
-        return clientManager.callTool(serverId, toolName, arguments)
-    }
-
-    /**
-     * 关闭管理器
-     */
     fun close() {
         scope.cancel()
         clientManager.close()

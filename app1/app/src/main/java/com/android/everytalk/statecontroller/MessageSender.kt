@@ -56,7 +56,8 @@ private data class AttachmentProcessingResult(
     private val historyManager: HistoryManager,
     private val showSnackbar: (String) -> Unit,
     private val triggerScrollToBottom: () -> Unit,
-    private val uriToBase64Encoder: (Uri) -> String?
+    private val uriToBase64Encoder: (Uri) -> String?,
+    private val getMcpToolsForRequest: () -> List<Map<String, Any>> = { emptyList() }
 ) {
 
     private val fileManager: FileManager by lazy { FileManager(application) }
@@ -220,7 +221,8 @@ private data class AttachmentProcessingResult(
 
             val processedItemForUi: SelectedMediaItem = when (originalMediaItem) {
                 is SelectedMediaItem.ImageFromUri -> {
-                    imageUriStringsForUi.add(persistentFileProviderUri.toString())
+                    // 使用本地文件路径而非 FileProvider URI，确保应用重启后图片仍可访问
+                    imageUriStringsForUi.add(persistentFilePath!!)
                     SelectedMediaItem.ImageFromUri(
                         uri = persistentFileProviderUri!!,
                         id = originalMediaItem.id,
@@ -228,7 +230,8 @@ private data class AttachmentProcessingResult(
                     )
                 }
                 is SelectedMediaItem.ImageFromBitmap -> {
-                    imageUriStringsForUi.add(persistentFileProviderUri.toString())
+                    // 使用本地文件路径而非 FileProvider URI，确保应用重启后图片仍可访问
+                    imageUriStringsForUi.add(persistentFilePath!!)
                     originalMediaItem.bitmap?.let { bitmap ->
                         SelectedMediaItem.ImageFromBitmap.fromBitmap(
                             bitmap = bitmap,
@@ -637,6 +640,13 @@ private data class AttachmentProcessingResult(
                         if (isGeminiChannel && stateHolder._isCodeExecutionEnabled.value) {
                             Log.d("MessageSender", "启用代码执行工具 (code_execution)")
                             toolsList.add(mapOf("code_execution" to emptyMap<String, Any>()))
+                        }
+                        
+                        // 4. MCP 工具 (来自 MCP 服务器)
+                        val mcpTools = getMcpToolsForRequest()
+                        if (mcpTools.isNotEmpty()) {
+                            Log.d("MessageSender", "注入 ${mcpTools.size} 个 MCP 工具")
+                            toolsList.addAll(mcpTools)
                         }
                         
                         toolsList.ifEmpty { null }

@@ -44,7 +44,9 @@ class ApiHandler(
     private val viewModelScope: CoroutineScope,
     private val historyManager: HistoryManager,
     private val onAiMessageFullTextChanged: (messageId: String, currentFullText: String) -> Unit,
-    private val triggerScrollToBottom: () -> Unit
+    private val triggerScrollToBottom: () -> Unit,
+    private val executeMcpTool: (suspend (toolName: String, arguments: kotlinx.serialization.json.JsonObject) -> kotlinx.serialization.json.JsonElement)? = null,
+    private val isMcpTool: (toolName: String) -> Boolean = { false }
 ) {
     // Note: Do not hold a FileManager with appContext here; pass Context when needed
     private val logger = AppLogger.forComponent("ApiHandler")
@@ -812,14 +814,12 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     updateMessageWithError(aiMessageId, IOException(appEvent.message), isImageGeneration)
                 }
                 is AppStreamEvent.ToolCall -> {
-                    // 收到工具调用请求
                     logger.debug("Received ToolCall event: ${appEvent.name}")
-                    // 暂时仅记录日志，后续版本可在此处分发给 ToolExecutionManager
-                    // 由于当前需求未要求在客户端真实执行（而是依赖后端或模拟），
-                    // 我们可以在这里更新消息状态显示 "正在调用工具: ${appEvent.name}"
+                    val toolName = appEvent.name
+                    
                     stateHolder.updateMessageStatus(
                         aiMessageId,
-                        "正在调用工具: ${appEvent.name}",
+                        "正在调用工具: $toolName",
                         isImageGeneration
                     )
                 }

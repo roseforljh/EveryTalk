@@ -8,6 +8,8 @@ import com.android.everytalk.data.network.NetworkUtils.configureSSERequest
 import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import io.ktor.http.*
 import io.ktor.utils.io.*
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -16,6 +18,13 @@ import kotlinx.serialization.json.*
 
 object GeminiDirectClient {
     private const val TAG = "GeminiDirectClient"
+    private const val MAX_TOOL_LOOPS = 5
+    
+    private var mcpToolExecutor: (suspend (String, JsonObject) -> JsonElement)? = null
+    
+    fun setMcpToolExecutor(executor: (suspend (String, JsonObject) -> JsonElement)?) {
+        mcpToolExecutor = executor
+    }
     
     @OptIn(ExperimentalCoroutinesApi::class)
     suspend fun streamChatDirect(
@@ -33,29 +42,131 @@ object GeminiDirectClient {
             
             Log.d(TAG, "直连 URL: ${url.substringBefore("?key=")}")
             
-            val payload = buildGeminiPayload(request)
+            val conversationHistory = mutableListOf<JsonObject>()
+            var currentRequest = request
+            var loopCount = 0
             
-            client.preparePost(url) {
-                contentType(ContentType.Application.Json)
-                setBody(payload)
-                configureSSERequest()
-            }.execute { response ->
-                if (!response.status.isSuccess()) {
-                    val errorBody = try { response.bodyAsText() } catch (_: Exception) { null }
-                    val result = NetworkUtils.handleApiError(response.status, errorBody, "Gemini")
-                    send(result.error)
-                    send(result.finish)
-                    return@execute
-                }
-
-                Log.i(TAG, "✅ Gemini 直连成功，开始接收流")
-
-                parseGeminiSSEStream(response.bodyAsChannel())
-                    .collect { event ->
-                        send(event)
-                        kotlinx.coroutines.yield()
+            while (loopCount < MAX_TOOL_LOOPS) {
+                loopCount++
+                Log.i(TAG, "🔄 开始循环 #$loopCount, 历史记录数: ${conversationHistory.size}")
+                val payload = buildGeminiPayloadWithHistory(currentRequest, conversationHistory)
+                Log.d(TAG, "请求 payload 长度: ${payload.length}")
+                
+                var pendingToolCalls = mutableListOf<Pair<String, JsonObject>>()
+                var hasContent = false
+                
+                var parseResult: ParseResult? = null
+                
+                client.preparePost(url) {
+                    contentType(ContentType.Application.Json)
+                    setBody(payload)
+                    configureSSERequest()
+                }.execute { response ->
+                    if (!response.status.isSuccess()) {
+                        val errorBody = try { response.bodyAsText() } catch (_: Exception) { null }
+                        val result = NetworkUtils.handleApiError(response.status, errorBody, "Gemini")
+                        send(result.error)
+                        send(result.finish)
+                        return@execute
                     }
+
+                    Log.i(TAG, "✅ Gemini 直连成功 (loop $loopCount)，开始接收流")
+
+                    parseResult = parseGeminiSSEStreamWithToolCapture(
+                        channel = response.bodyAsChannel(),
+                        onToolCall = { toolName, args ->
+                            Log.d(TAG, "回调捕获工具: $toolName")
+                            pendingToolCalls.add(toolName to args)
+                        },
+                        emitEvent = { event ->
+                            when (event) {
+                                is AppStreamEvent.Content -> {
+                                    hasContent = true
+                                    Log.d(TAG, "收到内容: ${event.text.take(50)}...")
+                                }
+                                is AppStreamEvent.ToolCall -> {
+                                    Log.d(TAG, "流中收到 ToolCall: ${event.name}")
+                                }
+                                is AppStreamEvent.Error -> {
+                                    Log.e(TAG, "收到错误事件: ${event.message}")
+                                }
+                                else -> {}
+                            }
+                            send(event)
+                            kotlinx.coroutines.yield()
+                        }
+                    )
+                }
+                
+                Log.i(TAG, "循环 #$loopCount 结束, pendingToolCalls=${pendingToolCalls.size}, hasContent=$hasContent, hasToolCalls=${parseResult?.hasToolCalls}")
+                
+                if (pendingToolCalls.isEmpty()) {
+                    Log.i(TAG, "🏁 没有待处理的工具调用，结束循环")
+                    break
+                }
+                
+                if (mcpToolExecutor == null) {
+                    Log.w(TAG, "⚠️ 有工具调用但没有设置执行器，跳过")
+                    break
+                }
+                
+                Log.i(TAG, "🔧 处理 ${pendingToolCalls.size} 个工具调用")
+                
+                val toolResponses = mutableListOf<JsonObject>()
+                for ((toolName, args) in pendingToolCalls) {
+                    try {
+                        val result = withContext(NonCancellable) {
+                            Log.d(TAG, "🔧 开始执行工具: $toolName")
+                            mcpToolExecutor!!.invoke(toolName, args)
+                        }
+                        Log.i(TAG, "🔧 工具 $toolName 执行成功: ${result.toString().take(100)}")
+                        toolResponses.add(buildJsonObject {
+                            put("functionResponse", buildJsonObject {
+                                put("name", toolName)
+                                put("response", buildJsonObject {
+                                    put("result", result)
+                                })
+                            })
+                        })
+                    } catch (e: Exception) {
+                        Log.e(TAG, "🔧 工具 $toolName 执行失败", e)
+                        toolResponses.add(buildJsonObject {
+                            put("functionResponse", buildJsonObject {
+                                put("name", toolName)
+                                put("response", buildJsonObject {
+                                    put("error", e.message ?: "Unknown error")
+                                })
+                            })
+                        })
+                    }
+                }
+                
+                conversationHistory.add(buildJsonObject {
+                    put("role", "model")
+                    putJsonArray("parts") {
+                        pendingToolCalls.forEach { (name, args) ->
+                            addJsonObject {
+                                put("functionCall", buildJsonObject {
+                                    put("name", name)
+                                    put("args", args)
+                                })
+                            }
+                        }
+                    }
+                })
+                
+                conversationHistory.add(buildJsonObject {
+                    put("role", "user")
+                    putJsonArray("parts") {
+                        toolResponses.forEach { add(it) }
+                    }
+                })
+                
+                pendingToolCalls.clear()
             }
+            
+            Log.i(TAG, "🏁 工具循环完成，发送 Finish 事件")
+            send(AppStreamEvent.Finish("stop"))
             
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -218,8 +329,9 @@ object GeminiDirectClient {
                 }
             }
             
-            // 添加工具（Web 搜索、代码执行等）
-            if (enableWebSearch || enableCodeExecution) {
+            // 添加工具（Web 搜索、代码执行、MCP 工具等）
+            val hasMcpTools = !request.tools.isNullOrEmpty()
+            if (enableWebSearch || enableCodeExecution || hasMcpTools) {
                 putJsonArray("tools") {
                     // Google Search 工具 - 使用 Gemini 原生 google_search (REST API 标准)
                     if (enableWebSearch) {
@@ -231,6 +343,30 @@ object GeminiDirectClient {
                         // 🔥 修复：Gemini REST API 使用 snake_case (code_execution)
                         addJsonObject { putJsonObject("code_execution") {} }
                         Log.i(TAG, "💻 启用代码执行工具")
+                    }
+                    // MCP 工具 - 转换为 Gemini functionDeclarations 格式
+                    if (hasMcpTools) {
+                        addJsonObject {
+                            putJsonArray("functionDeclarations") {
+                                request.tools!!.forEach { tool ->
+                                    val toolMap = tool as? Map<*, *> ?: return@forEach
+                                    val functionMap = toolMap["function"] as? Map<*, *> ?: return@forEach
+                                    val name = functionMap["name"] as? String ?: return@forEach
+                                    val description = functionMap["description"] as? String ?: ""
+                                    val parameters = functionMap["parameters"]
+                                    
+                                    addJsonObject {
+                                        put("name", name)
+                                        put("description", description)
+                                        if (parameters != null) {
+                                            put("parameters", convertToolParametersForGemini(parameters))
+                                        }
+                                    }
+                                    Log.d(TAG, "🔧 添加 MCP 工具: $name")
+                                }
+                            }
+                        }
+                        Log.i(TAG, "🔧 注入 ${request.tools!!.size} 个 MCP 工具到 functionDeclarations")
                     }
                 }
             }
@@ -271,6 +407,262 @@ object GeminiDirectClient {
             }
             else -> null
         }
+    }
+    
+    private fun convertToJsonElement(value: Any?): JsonElement = when (value) {
+        null -> JsonNull
+        is JsonElement -> value
+        is String -> JsonPrimitive(value)
+        is Number -> JsonPrimitive(value)
+        is Boolean -> JsonPrimitive(value)
+        is Map<*, *> -> buildJsonObject {
+            value.forEach { (k, v) ->
+                if (k is String) put(k, convertToJsonElement(v))
+            }
+        }
+        is List<*> -> buildJsonArray {
+            value.forEach { add(convertToJsonElement(it)) }
+        }
+        else -> JsonPrimitive(value.toString())
+    }
+    
+    // Gemini 完全不支持、需要直接移除的字段
+    private val REMOVE_SCHEMA_KEYS = setOf(
+        "propertyNames", "dependentSchemas", "dependentRequired", 
+        "unevaluatedProperties", "unevaluatedItems", 
+        "contentMediaType", "contentEncoding",
+        "\$schema", "\$id", "\$anchor", "\$dynamicRef",
+        "\$dynamicAnchor", "\$vocabulary", "\$comment",
+        "not", "if", "then", "else"
+    )
+    
+    // 需要特殊转换的字段
+    private val CONVERT_SCHEMA_KEYS = setOf(
+        "const", "anyOf", "any_of", "oneOf", "one_of", 
+        "allOf", "all_of", "\$ref", "\$defs"
+    )
+    
+    /**
+     * 转换 JSON Schema 为 Gemini 兼容格式
+     * - const -> enum
+     * - anyOf/oneOf -> 取第一个有效类型
+     * - allOf -> 合并所有 schema
+     * - $ref/$defs -> 尝试内联解析
+     */
+    private fun sanitizeSchemaForGemini(element: JsonElement, defs: JsonObject? = null): JsonElement = when (element) {
+        is JsonObject -> transformSchemaObject(element, defs ?: element["\$defs"]?.jsonObjectOrNull)
+        is JsonArray -> buildJsonArray { element.forEach { add(sanitizeSchemaForGemini(it, defs)) } }
+        else -> element
+    }
+    
+    private fun transformSchemaObject(obj: JsonObject, defs: JsonObject?): JsonObject {
+        val addedKeys = mutableSetOf<String>()
+        
+        return buildJsonObject {
+            // 先处理 $ref 引用
+            obj["\$ref"]?.jsonPrimitive?.contentOrNull?.let { ref ->
+                val resolved = resolveRef(ref, defs)
+                if (resolved != null) {
+                    val sanitized = sanitizeSchemaForGemini(resolved, defs).jsonObject
+                    sanitized.forEach { (k, v) -> put(k, v); addedKeys.add(k) }
+                    return@buildJsonObject
+                }
+            }
+            
+            // 处理 const -> enum
+            obj["const"]?.let { constVal ->
+                put("enum", buildJsonArray { add(constVal) })
+                addedKeys.add("enum")
+                Log.d(TAG, "转换 const -> enum: $constVal")
+            }
+            
+            // 处理 anyOf/oneOf -> 取第一个有效 schema
+            val anyOfKey = listOf("anyOf", "any_of", "oneOf", "one_of").firstOrNull { obj.containsKey(it) }
+            if (anyOfKey != null) {
+                obj[anyOfKey]?.jsonArrayOrNull?.firstOrNull()?.jsonObjectOrNull?.let { first ->
+                    val sanitized = sanitizeSchemaForGemini(first, defs).jsonObject
+                    sanitized.forEach { (k, v) -> 
+                        if (k !in addedKeys) { put(k, v); addedKeys.add(k) }
+                    }
+                    Log.d(TAG, "转换 $anyOfKey -> 使用第一个 schema")
+                }
+            }
+            
+            // 处理 allOf -> 合并所有 schema
+            val allOfKey = listOf("allOf", "all_of").firstOrNull { obj.containsKey(it) }
+            if (allOfKey != null) {
+                obj[allOfKey]?.jsonArrayOrNull?.forEach { item ->
+                    item.jsonObjectOrNull?.let { subSchema ->
+                        val sanitized = sanitizeSchemaForGemini(subSchema, defs).jsonObject
+                        sanitized.forEach { (k, v) -> 
+                            if (k !in addedKeys) { put(k, v); addedKeys.add(k) }
+                        }
+                    }
+                }
+                Log.d(TAG, "转换 $allOfKey -> 合并 schema")
+            }
+            
+            // 复制其他字段，递归处理嵌套
+            obj.forEach { (key, value) ->
+                if (key in REMOVE_SCHEMA_KEYS || key in CONVERT_SCHEMA_KEYS || key in addedKeys) return@forEach
+                put(key, sanitizeSchemaForGemini(value, defs))
+            }
+        }
+    }
+    
+    private fun resolveRef(ref: String, defs: JsonObject?): JsonElement? {
+        if (defs == null) return null
+        // 格式: "#/$defs/SomeName" 或 "#/definitions/SomeName"
+        val parts = ref.removePrefix("#/").split("/")
+        if (parts.size >= 2 && (parts[0] == "\$defs" || parts[0] == "definitions")) {
+            return defs[parts[1]]
+        }
+        return null
+    }
+    
+    private val JsonElement.jsonObjectOrNull: JsonObject?
+        get() = this as? JsonObject
+    
+    private val JsonElement.jsonArrayOrNull: JsonArray?
+        get() = this as? JsonArray
+    
+    private fun convertToolParametersForGemini(value: Any?): JsonElement {
+        val rawElement = convertToJsonElement(value)
+        return sanitizeSchemaForGemini(rawElement)
+    }
+    
+    private fun buildGeminiPayloadWithHistory(
+        request: ChatRequest, 
+        toolHistory: List<JsonObject>
+    ): String {
+        val basePayload = Json.parseToJsonElement(buildGeminiPayload(request)).jsonObject.toMutableMap()
+        
+        if (toolHistory.isNotEmpty()) {
+            val existingContents = basePayload["contents"]?.jsonArray?.toMutableList() ?: mutableListOf()
+            toolHistory.forEach { historyItem ->
+                existingContents.add(historyItem)
+            }
+            basePayload["contents"] = JsonArray(existingContents)
+            Log.d(TAG, "添加 ${toolHistory.size} 条工具历史到 contents")
+        }
+        
+        return JsonObject(basePayload).toString()
+    }
+    
+    /**
+     * 解析结果，用于在工具循环中传递信息
+     */
+    private data class ParseResult(
+        val hasToolCalls: Boolean,
+        val fullText: String
+    )
+    
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private suspend fun parseGeminiSSEStreamWithToolCapture(
+        channel: ByteReadChannel,
+        onToolCall: (String, JsonObject) -> Unit,
+        emitEvent: suspend (AppStreamEvent) -> Unit
+    ): ParseResult {
+        val lineBuffer = StringBuilder()
+        var fullText = ""
+        var fullReasoning = ""
+        var lineCount = 0
+        var eventCount = 0
+        var reasoningStarted = false
+        var reasoningFinished = false
+        var contentStarted = false
+        var hasToolCalls = false
+        
+        try {
+            Log.d(TAG, "开始解析 SSE 流（支持工具捕获）...")
+            
+            while (!channel.isClosedForRead) {
+                val line = channel.readUTF8Line() ?: break
+                lineCount++
+                
+                when {
+                    line.isEmpty() -> {
+                        val chunk = lineBuffer.toString().trim()
+                        if (chunk.isNotEmpty()) {
+                            if (chunk.equals("[DONE]", ignoreCase = true)) break
+                            
+                            try {
+                                val jsonChunk = Json.parseToJsonElement(chunk).jsonObject
+                                jsonChunk["candidates"]?.jsonArray?.firstOrNull()?.let { candidate ->
+                                    val candidateObj = candidate.jsonObject
+                                    candidateObj["content"]?.jsonObject?.get("parts")?.jsonArray?.forEach { part ->
+                                        val partObj = part.jsonObject
+                                        
+                                        val isThought = partObj["thought"]?.jsonPrimitive?.booleanOrNull == true
+                                        val textContent = partObj["text"]?.jsonPrimitive?.contentOrNull
+                                        
+                                        if (isThought && !textContent.isNullOrEmpty()) {
+                                            if (!reasoningStarted) reasoningStarted = true
+                                            fullReasoning += textContent
+                                            emitEvent(AppStreamEvent.Reasoning(textContent))
+                                        } else if (!textContent.isNullOrEmpty()) {
+                                            if (reasoningStarted && !reasoningFinished) {
+                                                emitEvent(AppStreamEvent.ReasoningFinish(null))
+                                                reasoningFinished = true
+                                            }
+                                            if (!contentStarted) contentStarted = true
+                                            eventCount++
+                                            fullText += textContent
+                                            emitEvent(AppStreamEvent.Content(textContent, null, null))
+                                        }
+                                        
+                                        partObj["functionCall"]?.jsonObject?.let { fcObj ->
+                                            val name = fcObj["name"]?.jsonPrimitive?.contentOrNull ?: return@let
+                                            val args = fcObj["args"]?.jsonObject ?: JsonObject(emptyMap())
+                                            hasToolCalls = true
+                                            onToolCall(name, args)
+                                            emitEvent(AppStreamEvent.ToolCall(
+                                                id = "fc_${System.currentTimeMillis()}",
+                                                name = name,
+                                                argumentsObj = args
+                                            ))
+                                            Log.i(TAG, "🔧 捕获 functionCall: $name")
+                                        }
+                                    }
+                                    
+                                    candidateObj["finishReason"]?.jsonPrimitive?.contentOrNull?.let { reason ->
+                                        Log.d(TAG, "Finish reason: $reason")
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "解析数据块失败", e)
+                            }
+                        }
+                        lineBuffer.clear()
+                    }
+                    line.startsWith("data:") -> {
+                        val data = line.removePrefix("data:").trim()
+                        if (data.isNotEmpty() && !data.equals("[DONE]", ignoreCase = true)) {
+                            lineBuffer.append(data)
+                        } else if (data.equals("[DONE]", ignoreCase = true)) {
+                            break
+                        }
+                    }
+                }
+            }
+            
+            // 只有当没有工具调用时才发送 ContentFinal
+            // 有工具调用时，等待整个循环完成后再发送最终内容
+            if (fullText.isNotEmpty() && !hasToolCalls) {
+                emitEvent(AppStreamEvent.ContentFinal(fullText))
+            }
+            
+            // 关键修复：不在这里发送 Finish 事件
+            // Finish 事件由 streamChatDirect 在整个工具循环完成后统一发送
+            // 这样就不会触发 ApiHandler 的 CancellationException
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "SSE 流解析错误", e)
+            emitEvent(AppStreamEvent.Error(e.message ?: "Unknown error"))
+            // 错误时也不发送 Finish，让上层处理
+        }
+        
+        return ParseResult(hasToolCalls = hasToolCalls, fullText = fullText)
     }
     
     /**
@@ -387,6 +779,17 @@ object GeminiDirectClient {
                                                 send(AppStreamEvent.CodeExecutionResult(null, "success", imageUrl))
                                                 Log.i(TAG, "📊 收到代码执行生成的图片: $mimeType")
                                             }
+                                        }
+                                        
+                                        partObj["functionCall"]?.jsonObject?.let { fcObj ->
+                                            val name = fcObj["name"]?.jsonPrimitive?.contentOrNull ?: return@let
+                                            val args = fcObj["args"]?.jsonObject ?: JsonObject(emptyMap())
+                                            send(AppStreamEvent.ToolCall(
+                                                id = "fc_${System.currentTimeMillis()}",
+                                                name = name,
+                                                argumentsObj = args
+                                            ))
+                                            Log.i(TAG, "🔧 收到 functionCall: $name, args=$args")
                                         }
                                     }
                                     

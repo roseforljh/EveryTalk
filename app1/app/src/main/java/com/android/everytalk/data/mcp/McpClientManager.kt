@@ -1,256 +1,322 @@
 package com.android.everytalk.data.mcp
 
-import io.ktor.client.*
-import io.ktor.client.engine.okhttp.*
-import io.ktor.client.plugins.contentnegotiation.*
-import io.ktor.client.plugins.sse.*
-import io.ktor.client.request.*
-import io.ktor.client.statement.*
-import io.ktor.http.*
-import io.ktor.serialization.kotlinx.json.*
-import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.*
-import kotlinx.serialization.json.*
-import java.util.UUID
+import android.util.Log
+import com.android.everytalk.data.mcp.transport.SseClientTransport
+import com.android.everytalk.data.mcp.transport.StreamableHttpClientTransport
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.plugins.sse.SSE
+import io.ktor.serialization.kotlinx.json.json
+import io.ktor.util.StringValues
+import io.modelcontextprotocol.kotlin.sdk.client.Client
+import io.modelcontextprotocol.kotlin.sdk.shared.AbstractTransport
+import io.modelcontextprotocol.kotlin.sdk.shared.RequestOptions
+import io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest
+import io.modelcontextprotocol.kotlin.sdk.types.CallToolRequestParams
+import io.modelcontextprotocol.kotlin.sdk.types.Implementation
+import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.ClassDiscriminatorMode
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.encodeToJsonElement
+import okhttp3.OkHttpClient
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
+import kotlin.time.Duration.Companion.seconds
 
-/**
- * MCP 客户端管理器
- * 负责管理多个 MCP 服务器连接和工具调用
- */
-class McpClientManager {
-    private val json = Json {
-        ignoreUnknownKeys = true
-        isLenient = true
-        encodeDefaults = true
-    }
+private const val TAG = "McpClientManager"
+
+class McpClientManager(
+    private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+) {
+    private val okHttpClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.MINUTES)
+        .writeTimeout(120, TimeUnit.SECONDS)
+        .followSslRedirects(true)
+        .followRedirects(true)
+        .build()
 
     private val httpClient = HttpClient(OkHttp) {
+        engine {
+            preconfigured = okHttpClient
+        }
         install(ContentNegotiation) {
-            json(this@McpClientManager.json)
+            json(Json {
+                prettyPrint = true
+                isLenient = true
+            })
         }
         install(SSE)
     }
 
+    private val clients = ConcurrentHashMap<String, Client>()
+    private val configs = ConcurrentHashMap<String, McpServerConfig>()
+
     private val _serverStates = MutableStateFlow<Map<String, McpServerState>>(emptyMap())
     val serverStates: StateFlow<Map<String, McpServerState>> = _serverStates.asStateFlow()
 
-    private val connections = ConcurrentHashMap<String, Job>()
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val _syncingStatus = MutableStateFlow<Map<String, McpStatus>>(emptyMap())
+    val syncingStatus: StateFlow<Map<String, McpStatus>> = _syncingStatus.asStateFlow()
 
-    /**
-     * 添加并连接 MCP 服务器
-     */
-    suspend fun addServer(config: McpServerConfig) {
-        updateServerState(config.id) {
-            McpServerState(config = config, connectionState = McpConnectionState.CONNECTING)
-        }
-
-        try {
-            val tools = fetchTools(config)
-            updateServerState(config.id) {
-                McpServerState(
-                    config = config,
-                    connectionState = McpConnectionState.CONNECTED,
-                    tools = tools
-                )
-            }
-        } catch (e: Exception) {
-            updateServerState(config.id) {
-                McpServerState(
-                    config = config,
-                    connectionState = McpConnectionState.ERROR,
-                    errorMessage = e.message ?: "连接失败"
-                )
-            }
-        }
+    fun getClient(config: McpServerConfig): Client? {
+        return clients[config.id]
     }
 
-    /**
-     * 移除服务器连接
-     */
-    fun removeServer(serverId: String) {
-        connections[serverId]?.cancel()
-        connections.remove(serverId)
-        _serverStates.update { it - serverId }
-    }
-
-    /**
-     * 获取所有可用工具
-     */
-    fun getAllTools(): List<Pair<McpServerConfig, McpTool>> {
+    fun getAllAvailableTools(): List<McpTool> {
         return _serverStates.value.values
-            .filter { it.connectionState == McpConnectionState.CONNECTED && it.config.enabled }
-            .flatMap { state -> state.tools.map { tool -> state.config to tool } }
+            .filter { it.status is McpStatus.Connected && it.config.enabled }
+            .flatMap { state -> state.tools.filter { it.enable } }
     }
 
-    /**
-     * 调用 MCP 工具
-     */
-    suspend fun callTool(
-        serverId: String,
-        toolName: String,
-        arguments: Map<String, JsonElement>
-    ): Result<McpToolResult> {
-        val serverState = _serverStates.value[serverId]
-            ?: return Result.failure(Exception("服务器不存在: $serverId"))
-
-        if (serverState.connectionState != McpConnectionState.CONNECTED) {
-            return Result.failure(Exception("服务器未连接: ${serverState.config.name}"))
+    fun getToolWithServer(toolName: String): Pair<McpServerConfig, McpTool>? {
+        for ((_, state) in _serverStates.value) {
+            if (state.status !is McpStatus.Connected || !state.config.enabled) continue
+            val tool = state.tools.find { it.name == toolName && it.enable }
+            if (tool != null) {
+                return state.config to tool
+            }
         }
+        return null
+    }
+
+    suspend fun callTool(toolName: String, args: JsonObject): JsonElement {
+        val (config, _) = getToolWithServer(toolName)
+            ?: return JsonPrimitive("Failed to execute tool: no such tool '$toolName'")
+
+        val client = clients[config.id]
+            ?: return JsonPrimitive("Failed to execute tool: no client for server '${config.name}'")
+
+        Log.i(TAG, "callTool: $toolName / $args")
+        Log.d(TAG, "callTool: transport=${client.transport?.javaClass?.simpleName}, connected=${client.transport != null}")
 
         return try {
-            val result = executeToolCall(serverState.config, toolName, arguments)
-            Result.success(result)
+            if (client.transport == null) {
+                Log.d(TAG, "callTool: reconnecting...")
+                client.connect(getTransport(config))
+            }
+
+            Log.d(TAG, "callTool: sending request...")
+            val result = client.callTool(
+                request = CallToolRequest(
+                    params = CallToolRequestParams(
+                        name = toolName,
+                        arguments = args,
+                    ),
+                ),
+                options = RequestOptions(timeout = 60.seconds),
+            )
+            Log.d(TAG, "callTool: got result with ${result.content.size} content items")
+            McpJson.encodeToJsonElement(result.content)
         } catch (e: Exception) {
-            Result.failure(e)
+            Log.e(TAG, "callTool error: ${e.javaClass.simpleName}: ${e.message}", e)
+            JsonPrimitive("Error executing tool '$toolName': ${e.message}")
         }
     }
 
-    /**
-     * 从服务器获取工具列表
-     */
-    private suspend fun fetchTools(config: McpServerConfig): List<McpTool> {
-        val requestId = UUID.randomUUID().toString()
-        val request = buildJsonObject {
-            put("jsonrpc", "2.0")
-            put("id", requestId)
-            put("method", "tools/list")
+    private fun getTransport(config: McpServerConfig): AbstractTransport = when (config) {
+        is McpServerConfig.SseTransportServer -> {
+            SseClientTransport(
+                urlString = config.url,
+                client = httpClient,
+                requestBuilder = {
+                    headers.appendAll(StringValues.build {
+                        config.commonOptions.headers.forEach {
+                            append(it.first, it.second)
+                        }
+                    })
+                },
+            )
         }
 
-        val response = httpClient.post(config.url) {
-            contentType(ContentType.Application.Json)
-            config.headers.forEach { (key, value) ->
-                header(key, value)
-            }
-            setBody(request.toString())
-        }
-
-        val responseBody = response.bodyAsText()
-        val jsonResponse = json.parseToJsonElement(responseBody).jsonObject
-
-        val result = jsonResponse["result"]?.jsonObject
-            ?: throw Exception("无效的响应格式")
-
-        val toolsArray = result["tools"]?.jsonArray
-            ?: return emptyList()
-
-        return toolsArray.map { toolElement ->
-            val toolObj = toolElement.jsonObject
-            McpTool(
-                name = toolObj["name"]?.jsonPrimitive?.content ?: "",
-                description = toolObj["description"]?.jsonPrimitive?.contentOrNull,
-                inputSchema = toolObj["inputSchema"]?.let { parseInputSchema(it) }
+        is McpServerConfig.StreamableHTTPServer -> {
+            StreamableHttpClientTransport(
+                url = config.url,
+                client = httpClient,
+                requestBuilder = {
+                    headers.appendAll(StringValues.build {
+                        config.commonOptions.headers.forEach {
+                            append(it.first, it.second)
+                        }
+                    })
+                }
             )
         }
     }
 
-    /**
-     * 执行工具调用
-     */
-    private suspend fun executeToolCall(
-        config: McpServerConfig,
-        toolName: String,
-        arguments: Map<String, JsonElement>
-    ): McpToolResult {
-        val requestId = UUID.randomUUID().toString()
-        val request = buildJsonObject {
-            put("jsonrpc", "2.0")
-            put("id", requestId)
-            put("method", "tools/call")
-            put("params", buildJsonObject {
-                put("name", toolName)
-                put("arguments", JsonObject(arguments))
-            })
-        }
+    suspend fun addServer(config: McpServerConfig) = withContext(Dispatchers.IO) {
+        removeServer(config.id)
 
-        val response = httpClient.post(config.url) {
-            contentType(ContentType.Application.Json)
-            config.headers.forEach { (key, value) ->
-                header(key, value)
-            }
-            setBody(request.toString())
-        }
-
-        val responseBody = response.bodyAsText()
-        val jsonResponse = json.parseToJsonElement(responseBody).jsonObject
-
-        // 检查错误
-        jsonResponse["error"]?.let { error ->
-            val errorObj = error.jsonObject
-            val message = errorObj["message"]?.jsonPrimitive?.contentOrNull ?: "未知错误"
-            return McpToolResult(
-                content = listOf(McpContent.Text(message)),
-                isError = true
+        val transport = getTransport(config)
+        val client = Client(
+            clientInfo = Implementation(
+                name = config.name,
+                version = "1.0",
             )
-        }
-
-        val result = jsonResponse["result"]?.jsonObject
-            ?: throw Exception("无效的响应格式")
-
-        val contentArray = result["content"]?.jsonArray ?: return McpToolResult(emptyList())
-        val isError = result["isError"]?.jsonPrimitive?.booleanOrNull ?: false
-
-        val contents = contentArray.mapNotNull { contentElement ->
-            val contentObj = contentElement.jsonObject
-            when (contentObj["type"]?.jsonPrimitive?.content) {
-                "text" -> McpContent.Text(
-                    text = contentObj["text"]?.jsonPrimitive?.content ?: ""
-                )
-                "image" -> McpContent.Image(
-                    data = contentObj["data"]?.jsonPrimitive?.content ?: "",
-                    mimeType = contentObj["mimeType"]?.jsonPrimitive?.content ?: "image/png"
-                )
-                "resource" -> McpContent.Resource(
-                    uri = contentObj["uri"]?.jsonPrimitive?.content ?: "",
-                    mimeType = contentObj["mimeType"]?.jsonPrimitive?.contentOrNull,
-                    text = contentObj["text"]?.jsonPrimitive?.contentOrNull
-                )
-                else -> null
-            }
-        }
-
-        return McpToolResult(content = contents, isError = isError)
-    }
-
-    /**
-     * 解析工具输入模式
-     */
-    private fun parseInputSchema(element: JsonElement): McpToolInputSchema {
-        val obj = element.jsonObject
-        val properties = obj["properties"]?.jsonObject?.mapValues { (_, propElement) ->
-            val propObj = propElement.jsonObject
-            McpPropertySchema(
-                type = propObj["type"]?.jsonPrimitive?.content ?: "string",
-                description = propObj["description"]?.jsonPrimitive?.contentOrNull,
-                enum = propObj["enum"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }
-            )
-        } ?: emptyMap()
-
-        val required = obj["required"]?.jsonArray?.mapNotNull {
-            it.jsonPrimitive.contentOrNull
-        } ?: emptyList()
-
-        return McpToolInputSchema(
-            type = obj["type"]?.jsonPrimitive?.content ?: "object",
-            properties = properties,
-            required = required
         )
+
+        clients[config.id] = client
+        configs[config.id] = config
+
+        runCatching {
+            setStatus(config.id, McpStatus.Connecting)
+            updateServerState(config.id) {
+                McpServerState(config = config, status = McpStatus.Connecting)
+            }
+
+            client.connect(transport)
+            syncTools(config)
+
+            setStatus(config.id, McpStatus.Connected)
+            Log.i(TAG, "addServer: connected ${config.name}")
+        }.onFailure { e ->
+            e.printStackTrace()
+            setStatus(config.id, McpStatus.Error(e.message ?: e.javaClass.name))
+            updateServerState(config.id) {
+                McpServerState(
+                    config = config,
+                    status = McpStatus.Error(e.message ?: "Connection failed"),
+                    errorMessage = e.message
+                )
+            }
+        }
+    }
+
+    private suspend fun syncTools(config: McpServerConfig) {
+        val client = clients[config.id] ?: return
+
+        setStatus(config.id, McpStatus.Connecting)
+
+        if (client.transport == null) {
+            client.connect(getTransport(config))
+        }
+
+        val serverTools = client.listTools()?.tools ?: emptyList()
+        Log.i(TAG, "syncTools: ${serverTools.size} tools from ${config.name}")
+
+        val tools = serverTools.map { serverTool ->
+            McpTool(
+                name = serverTool.name,
+                description = serverTool.description,
+                enable = true,
+                inputSchema = serverTool.inputSchema.toMcpInputSchema()
+            )
+        }
+
+        val updatedConfig = config.clone(
+            commonOptions = config.commonOptions.copy(tools = tools)
+        )
+        configs[config.id] = updatedConfig
+
+        updateServerState(config.id) {
+            McpServerState(
+                config = updatedConfig,
+                status = McpStatus.Connected,
+                tools = tools
+            )
+        }
+
+        setStatus(config.id, McpStatus.Connected)
+    }
+
+    suspend fun syncAll() = withContext(Dispatchers.IO) {
+        configs.values.toList().forEach { config ->
+            runCatching {
+                syncTools(config)
+            }.onFailure {
+                it.printStackTrace()
+            }
+        }
+    }
+
+    suspend fun removeServer(serverId: String) = withContext(Dispatchers.IO) {
+        val client = clients.remove(serverId)
+        configs.remove(serverId)
+
+        client?.let {
+            runCatching { it.close() }.onFailure { e -> e.printStackTrace() }
+        }
+
+        _serverStates.value = _serverStates.value - serverId
+        _syncingStatus.value = _syncingStatus.value - serverId
+
+        Log.i(TAG, "removeServer: $serverId")
+    }
+
+    suspend fun disconnectServer(serverId: String) = withContext(Dispatchers.IO) {
+        val client = clients.remove(serverId)
+        val config = configs[serverId]
+
+        client?.let {
+            runCatching { it.close() }.onFailure { e -> e.printStackTrace() }
+        }
+
+        if (config != null) {
+            val disabledConfig = config.clone(
+                commonOptions = config.commonOptions.copy(enable = false)
+            )
+            configs[serverId] = disabledConfig
+            updateServerState(serverId) {
+                McpServerState(
+                    config = disabledConfig,
+                    status = McpStatus.Idle,
+                    tools = _serverStates.value[serverId]?.tools ?: emptyList()
+                )
+            }
+            setStatus(serverId, McpStatus.Idle)
+        }
+
+        Log.i(TAG, "disconnectServer: $serverId")
+    }
+
+    private suspend fun setStatus(serverId: String, status: McpStatus) {
+        _syncingStatus.value = _syncingStatus.value + (serverId to status)
     }
 
     private fun updateServerState(serverId: String, update: () -> McpServerState) {
-        _serverStates.update { current ->
-            current + (serverId to update())
-        }
+        _serverStates.value = _serverStates.value + (serverId to update())
     }
 
-    /**
-     * 关闭管理器，释放资源
-     */
-    fun close() {
-        scope.cancel()
-        connections.values.forEach { it.cancel() }
-        connections.clear()
-        httpClient.close()
+    fun getStatus(serverId: String): McpStatus {
+        return _syncingStatus.value[serverId] ?: McpStatus.Idle
     }
+
+    fun close() {
+        scope.launch {
+            clients.values.forEach { client ->
+                runCatching { client.close() }.onFailure { it.printStackTrace() }
+            }
+            clients.clear()
+            configs.clear()
+            httpClient.close()
+        }
+    }
+}
+
+internal val McpJson: Json by lazy {
+    Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+        isLenient = true
+        classDiscriminatorMode = ClassDiscriminatorMode.NONE
+        explicitNulls = false
+    }
+}
+
+private fun ToolSchema.toMcpInputSchema(): McpInputSchema {
+    return McpInputSchema.Obj(
+        properties = this.properties ?: JsonObject(emptyMap()),
+        required = this.required
+    )
 }
