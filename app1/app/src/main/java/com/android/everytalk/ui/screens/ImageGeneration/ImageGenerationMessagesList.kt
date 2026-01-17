@@ -94,6 +94,11 @@ import com.android.everytalk.ui.components.EnhancedMarkdownText
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import coil3.size.Size
+import kotlin.math.min
+
+private const val MAX_PREVIEW_BITMAP_DIMENSION = 2048
+private const val MAX_BASE64_LENGTH_FOR_PREVIEW = 40 * 1024 * 1024
 
 @Composable
 fun ImageGenerationLoadingView() {
@@ -370,7 +375,18 @@ fun ImageGenerationMessagesList(
                                         imagePreviewModel = model
                                         // 查找当前图片在 allImageUrls 中的索引
                                         val modelStr = model.toString()
-                                        val index = allImageUrls.indexOfFirst { it == modelStr }
+                                        var index = allImageUrls.indexOfFirst { it == modelStr }
+
+                                        // 尝试模糊匹配：解决本地路径与 file:// URI 不一致的问题
+                                        if (index < 0) {
+                                            index = allImageUrls.indexOfFirst {
+                                                // 如果 allImageUrls 中是 /path，modelStr 是 file:///path
+                                                (it.startsWith("/") && modelStr.startsWith("file://") && modelStr.endsWith(it)) ||
+                                                // 反之亦然
+                                                (modelStr.startsWith("/") && it.startsWith("file://") && it.endsWith(modelStr))
+                                            }
+                                        }
+
                                         currentImageIndex = if (index >= 0) index else 0
                                         isImagePreviewVisible = true
                                     },
@@ -559,32 +575,32 @@ fun ImageGenerationMessagesList(
                 model: Any,
                 context: Context
             ): Bitmap? {
-                // Coil 建议在主线程初始化 Request，但 execute 可在挂起函数中调用
-                // 为确保安全，我们切换到 Main 调度器构建 Request，再执行
                 return withContext(Dispatchers.Main) {
                     try {
                         val imageLoader = context.imageLoader
                         val request = ImageRequest.Builder(context)
                             .data(model)
-                            .allowHardware(false) // 禁用硬件位图以便后续写入
-                            // 必须指定 size，否则某些情况下 Coil 无法确定尺寸会导致加载失败
-                            .size(coil3.size.Size.ORIGINAL)
+                            .allowHardware(false)
+                            .size(Size(MAX_PREVIEW_BITMAP_DIMENSION, MAX_PREVIEW_BITMAP_DIMENSION))
                             .build()
                         
                         // execute 是挂起函数，会处理线程切换
                         val result = imageLoader.execute(request)
                         
                         if (result is SuccessResult) {
-                            // 修复：coil3.Image 需要转为 Drawable 才能获取宽高和转换为 Bitmap
-                            // Coil 3.x 的 result.image 是 coil3.Image 类型，需要用 asDrawable(Resources) 转为 Android Drawable
                             val image = result.image
                             val drawable = image?.asDrawable(context.resources)
                             
                             if (drawable != null) {
                                 val w = drawable.intrinsicWidth.coerceAtLeast(1)
                                 val h = drawable.intrinsicHeight.coerceAtLeast(1)
-                                // 使用 AndroidX 的 toBitmap，避免手动离屏绘制易错
-                                val bmp = drawable.toBitmap(w, h, Bitmap.Config.ARGB_8888)
+                                val scale = min(
+                                    MAX_PREVIEW_BITMAP_DIMENSION.toFloat() / w.toFloat(),
+                                    MAX_PREVIEW_BITMAP_DIMENSION.toFloat() / h.toFloat()
+                                ).coerceAtMost(1f)
+                                val targetW = (w * scale).toInt().coerceAtLeast(1)
+                                val targetH = (h * scale).toInt().coerceAtLeast(1)
+                                val bmp = drawable.toBitmap(targetW, targetH, Bitmap.Config.ARGB_8888)
                                 android.util.Log.d("ImagePreview", "Bitmap obtained via Coil cache/network.")
                                 return@withContext bmp
                             }
@@ -665,12 +681,11 @@ fun ImageGenerationMessagesList(
                         }
                         is String -> {
                             val s = model
-                            // 修复：支持所有 data: 开头的 URI（包括 application/octet-stream）
                             if (s.startsWith("data:", ignoreCase = true)) {
                                 val isBase64 = s.contains(";base64,", ignoreCase = true)
                                 if (isBase64) {
                                     val base64 = s.substringAfter(";base64,", "")
-                                    if (base64.isNotBlank()) {
+                                    if (base64.isNotBlank() && base64.length <= MAX_BASE64_LENGTH_FOR_PREVIEW) {
                                         val bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT)
                                         return@withContext BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                                     }
