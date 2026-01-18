@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.2](https://github.com/roseforljh/EveryTalk/compare/v1.11.1...v1.11.2) (2026-01-18)
+
+
+### Bug Fixes
+
+* revert to PAT to allow triggering build workflow ([283cd40](https://github.com/roseforljh/EveryTalk/commit/283cd402af98a06e38b9aa06af1a7da93d085d4a))
+
 ## [1.11.1](https://github.com/roseforljh/EveryTalk/compare/v1.11.0...v1.11.1) (2026-01-18)
 
 
