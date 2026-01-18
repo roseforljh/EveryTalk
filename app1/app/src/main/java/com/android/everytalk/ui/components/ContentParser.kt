@@ -86,7 +86,8 @@ object ContentParser {
 
         flushTextBuffer()
 
-        return mergeAdjacentTextParts(parts)
+        val merged = mergeAdjacentTextParts(parts)
+        return splitMathBlocks(merged)
     }
 
     private fun parseCodeFence(node: ASTNode, text: String): Pair<String?, String> {
@@ -211,6 +212,82 @@ object ContentParser {
         }
 
         return merged
+    }
+
+    private fun splitMathBlocks(parts: List<ContentPart>): List<ContentPart> {
+        if (parts.isEmpty()) return parts
+
+        val result = mutableListOf<ContentPart>()
+
+        parts.forEach { part ->
+            if (part is ContentPart.Text && part.content.contains("$$")) {
+                val text = part.content
+                val regex = Regex("\\$\\$[\\s\\S]*?\\$\\$")
+
+                val blockMatches = regex.findAll(text).filter { match ->
+                    val start = match.range.first
+                    val endInclusive = match.range.last
+                    val endExclusive = endInclusive + 1
+
+                    val beforeChar = if (start == 0) '\n' else text[start - 1]
+                    val afterChar = if (endExclusive >= text.length) '\n' else text[endExclusive]
+
+                    (beforeChar == '\n' || beforeChar == '\r') &&
+                            (afterChar == '\n' || afterChar == '\r')
+                }.toList()
+
+                if (blockMatches.isEmpty()) {
+                    result.add(part)
+                    return@forEach
+                }
+
+                var currentIndex = 0
+
+                blockMatches.forEach { match ->
+                    val start = match.range.first
+                    val endInclusive = match.range.last
+                    val endExclusive = endInclusive + 1
+
+                    if (start > currentIndex) {
+                        val prefix = text.substring(currentIndex, start)
+                        if (prefix.isNotEmpty()) {
+                            result.add(
+                                ContentPart.Text(
+                                    prefix,
+                                    part.startOffset + currentIndex
+                                )
+                            )
+                        }
+                    }
+
+                    val mathContent = text.substring(start, endExclusive)
+                    result.add(
+                        ContentPart.Math(
+                            mathContent,
+                            part.startOffset + start
+                        )
+                    )
+
+                    currentIndex = endExclusive
+                }
+
+                if (currentIndex < text.length) {
+                    val suffix = text.substring(currentIndex)
+                    if (suffix.isNotEmpty()) {
+                        result.add(
+                            ContentPart.Text(
+                                suffix,
+                                part.startOffset + currentIndex
+                            )
+                        )
+                    }
+                }
+            } else {
+                result.add(part)
+            }
+        }
+
+        return result
     }
 }
 
