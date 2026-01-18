@@ -4,16 +4,21 @@ import android.view.ViewGroup
 import android.widget.ImageView
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AlignVerticalCenter
@@ -66,6 +71,7 @@ import com.android.everytalk.ui.components.WebPreviewDialog
 import com.android.everytalk.ui.components.content.CodeBlockCard
 import com.android.everytalk.ui.components.markdown.MarkdownRenderer
 import com.android.everytalk.ui.components.icons.MdiIcon
+import com.android.everytalk.ui.components.icons.MdiIconAdaptive
 import com.android.everytalk.ui.components.icons.isMdiIconAvailable
 import com.android.everytalk.util.cache.ContentParseCache
 import kotlinx.coroutines.Dispatchers
@@ -446,121 +452,122 @@ private fun InfographicBlock(
 
     val headlineColor = if (color != Color.Unspecified) color else MaterialTheme.colorScheme.onSurface
     val secondaryColor = MaterialTheme.colorScheme.onSurfaceVariant
-    val surface = MaterialTheme.colorScheme.surface
-    val chipBg = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f)
-    val chipText = MaterialTheme.colorScheme.onSurfaceVariant
-    val palette = listOf(
-        MaterialTheme.colorScheme.primaryContainer,
-        MaterialTheme.colorScheme.secondaryContainer,
-        MaterialTheme.colorScheme.tertiaryContainer,
-        MaterialTheme.colorScheme.errorContainer
+    val isDark = androidx.compose.foundation.isSystemInDarkTheme()
+
+    // 多彩图标颜色
+    val iconColors = listOf(
+        Color(0xFF4285F4), // Google Blue
+        Color(0xFF34A853), // Google Green
+        Color(0xFFEA4335), // Google Red
+        Color(0xFFFBBC05), // Google Yellow
+        Color(0xFF9C27B0), // Purple
+        Color(0xFF00BCD4), // Cyan
+        Color(0xFFFF5722), // Deep Orange
+        Color(0xFF3F51B5)  // Indigo
     )
-    val scrollState = rememberScrollState()
 
-    Card(
-        modifier = modifier,
-        colors = CardDefaults.cardColors(
-            containerColor = surface
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        shape = RoundedCornerShape(20.dp)
+    // 时间轴连接线颜色
+    val lineColor = if (isDark) {
+        Color.White.copy(alpha = 0.2f)
+    } else {
+        Color.Black.copy(alpha = 0.15f)
+    }
+
+    Column(
+        modifier = modifier.fillMaxWidth()
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 14.dp)
-        ) {
+        // 标题（如果有）
+        if (title.isNotBlank()) {
+            Text(
+                text = title,
+                style = style.copy(
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = style.fontSize * 1.1f
+                ),
+                color = headlineColor,
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
+        }
+
+        // 时间轴布局
+        items.forEachIndexed { index, item ->
+            val currentIconColor = iconColors[index % iconColors.size]
+            val isLast = index == items.lastIndex
+
             Row(
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp)
             ) {
-                Text(
-                    text = "infographic",
-                    style = style.copy(fontSize = style.fontSize * 0.85f, fontWeight = FontWeight.Medium),
-                    color = chipText,
-                    modifier = Modifier
-                        .background(chipBg, RoundedCornerShape(999.dp))
-                        .padding(horizontal = 10.dp, vertical = 3.dp)
-                )
-            }
-
-            if (title.isNotBlank()) {
-                Spacer(modifier = Modifier.height(10.dp))
-                Text(
-                    text = title,
-                    style = style.copy(fontWeight = FontWeight.SemiBold),
-                    color = headlineColor,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                )
-            }
-
-            if (items.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(16.dp))
-                var colorIndex = 0
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(scrollState),
-                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp)
+                // 左侧：图标 + 连接线
+                Column(
+                    horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally
                 ) {
-                    items.forEach { item ->
-                        val bgColor = palette[colorIndex % palette.size]
-                        colorIndex++
-                        Card(
-                            modifier = Modifier.width(220.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = bgColor
-                            ),
-                            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-                            shape = RoundedCornerShape(16.dp)
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-                            ) {
-                                if (!item.icon.isNullOrBlank()) {
-                                    val iconText = item.icon
-                                    if (isMdiIconAvailable(iconText)) {
-                                        val iconName = iconText.trim().lowercase().removePrefix("mdi:")
-                                        MdiIcon(
-                                            name = iconName,
-                                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                            modifier = Modifier.padding(bottom = 4.dp)
-                                        )
-                                    } else {
-                                        val mdiVector = resolveMdiImageVector(iconText)
-                                        val iconVector = mdiVector ?: resolveInfographicIcon(iconText)
-                                        if (iconVector != null) {
-                                            Icon(
-                                                imageVector = iconVector,
-                                                contentDescription = iconText,
-                                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                                modifier = Modifier.padding(bottom = 4.dp)
-                                            )
-                                        } else {
-                                            Text(
-                                                text = iconText,
-                                                style = style.copy(fontWeight = FontWeight.Medium),
-                                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                                modifier = Modifier.padding(bottom = 4.dp)
-                                            )
-                                        }
-                                    }
-                                }
-                                Text(
-                                    text = item.label,
-                                    style = style.copy(fontWeight = FontWeight.SemiBold),
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    modifier = Modifier.padding(bottom = if (item.desc.isNotBlank()) 2.dp else 0.dp)
+                    // 图标圆圈
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(currentIconColor.copy(alpha = 0.15f), CircleShape)
+                            .border(1.5.dp, currentIconColor.copy(alpha = 0.4f), CircleShape),
+                        contentAlignment = androidx.compose.ui.Alignment.Center
+                    ) {
+                        if (!item.icon.isNullOrBlank()) {
+                            val iconText = item.icon
+                            if (isMdiIconAvailable(iconText)) {
+                                val iconName = iconText.trim().lowercase().removePrefix("mdi:")
+                                MdiIconAdaptive(
+                                    name = iconName,
+                                    tint = currentIconColor,
+                                    padding = 0.25f
                                 )
-                                if (item.desc.isNotBlank()) {
-                                    Text(
-                                        text = item.desc,
-                                        style = style.copy(fontWeight = FontWeight.Normal),
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                            } else {
+                                val mdiVector = resolveMdiImageVector(iconText)
+                                val iconVector = mdiVector ?: resolveInfographicIcon(iconText)
+                                if (iconVector != null) {
+                                    Icon(
+                                        imageVector = iconVector,
+                                        contentDescription = iconText,
+                                        tint = currentIconColor,
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(6.dp)
                                     )
                                 }
                             }
                         }
+                    }
+
+                    // 连接线（非最后一项才显示）
+                    if (!isLast) {
+                        Box(
+                            modifier = Modifier
+                                .width(2.dp)
+                                .height(40.dp)
+                                .background(lineColor)
+                        )
+                    }
+                }
+
+                // 右侧：文字内容
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(top = 4.dp, bottom = if (isLast) 0.dp else 16.dp),
+                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(
+                        text = item.label,
+                        style = style.copy(fontWeight = FontWeight.Medium),
+                        color = headlineColor
+                    )
+                    if (item.desc.isNotBlank()) {
+                        Text(
+                            text = item.desc,
+                            style = style.copy(
+                                fontWeight = FontWeight.Normal,
+                                fontSize = style.fontSize * 0.9f
+                            ),
+                            color = secondaryColor
+                        )
                     }
                 }
             }
