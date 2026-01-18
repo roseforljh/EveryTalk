@@ -268,9 +268,6 @@ android {
         implementation("androidx.compose.material:material-icons-core")
         implementation("androidx.compose.material:material-icons-extended")
 
-        // ===== Material Design Icons (完整 MDI 向量图标) =====
-        implementation("com.pavelsikun:materialdesignicons:1.0")
-
         debugImplementation("androidx.compose.ui:ui-tooling")
 
         // ===== Lifecycle & ViewModel =====
