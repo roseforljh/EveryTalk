@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.11.1](https://github.com/roseforljh/EveryTalk/compare/v1.11.0...v1.11.1) (2026-01-18)
+
+
+### Bug Fixes
+
+* keep long LaTeX blocks readable with horizontal scroll ([a539a69](https://github.com/roseforljh/EveryTalk/commit/a539a69e60b31eda90ad93a700b6f8f5c2d522ef))
+* math formula rendering and click preview ([0b61a4f](https://github.com/roseforljh/EveryTalk/commit/0b61a4f6cb97dded004c861e58264dd932e4282a))
+* use github token for release-please workflow ([0b70845](https://github.com/roseforljh/EveryTalk/commit/0b70845dffbe5032db29eb9e0dcc98d4d75510cd))
+
 ## [1.11.0](https://github.com/roseforljh/EveryTalk/compare/v1.10.2...v1.11.0) (2026-01-12)
 
 
