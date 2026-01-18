@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.12.0](https://github.com/roseforljh/EveryTalk/compare/v1.11.3...v1.12.0) (2026-01-18)
+
+
+### Features
+
+* **infographic:** 重构时间轴布局 + 优化 MDI 图标居中 ([842bf08](https://github.com/roseforljh/EveryTalk/commit/842bf089afba43da9da45f125af02d7529928e75))
+
+
+### Bug Fixes
+
+* **infographic:** 支持完整 MDI 图标库 + 修复 HTML 内容丢失 ([2319081](https://github.com/roseforljh/EveryTalk/commit/23190816719bce42d997ae4a83a9efc0880c5e38))
+* **markdown:** 修复标题中内联数学公式不渲染的问题 ([fb7c9b3](https://github.com/roseforljh/EveryTalk/commit/fb7c9b36e6e3df3cd449514044264eefec5a8db2))
+* **ui:** 修复 Markdown 渲染问题 + 优化表格和代码块样式 ([ef31e15](https://github.com/roseforljh/EveryTalk/commit/ef31e157d03007fcadae7b45620b879e44adb55b))
+
 ## [1.11.3](https://github.com/roseforljh/EveryTalk/compare/v1.11.2...v1.11.3) (2026-01-18)
 
 
