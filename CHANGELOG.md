@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.3](https://github.com/roseforljh/EveryTalk/compare/v1.11.2...v1.11.3) (2026-01-18)
+
+
+### Bug Fixes
+
+* 删除垃圾 ([96076d0](https://github.com/roseforljh/EveryTalk/commit/96076d09ed38c3c66a28fdee2594067b06add00e))
+
 ## [1.11.2](https://github.com/roseforljh/EveryTalk/compare/v1.11.1...v1.11.2) (2026-01-18)
 
 
