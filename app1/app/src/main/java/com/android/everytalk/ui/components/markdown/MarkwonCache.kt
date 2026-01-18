@@ -37,8 +37,8 @@ object MarkwonCache {
         imageClickListener: ((String) -> Unit)? = null
     ): Markwon {
         val roundedSize = textSize.toInt()
-        // v8: added TablePlugin for markdown table rendering
-        val cacheKey = "v8_dark=${isDark}_size=${roundedSize}"
+        // v9: reordered plugins - JLatexMathPlugin before MarkwonInlineParserPlugin for proper inline math
+        val cacheKey = "v9_dark=${isDark}_size=${roundedSize}"
         
         synchronized(lock) {
             cacheMap[cacheKey]?.let { return it }
@@ -51,13 +51,14 @@ object MarkwonCache {
                 .usePlugin(ImagesPlugin.create { plugin ->
                      plugin.addSchemeHandler(io.noties.markwon.image.data.DataUriSchemeHandler.create())
                 })
-                .usePlugin(MarkwonInlineParserPlugin.create())
                 .usePlugin(TablePlugin.create(context))
+                // JLatexMathPlugin 必须在 MarkwonInlineParserPlugin 之前，
+                // 这样它才能正确配置 InlineParserPlugin 来处理 $$...$$ 语法
                 .usePlugin(JLatexMathPlugin.create(mathTextSize) { builder ->
-                    // Enable inlines to support standard inline math if needed,
-                    // though we mostly rely on $$ block fallback from MarkdownRenderer
+                    // 启用内联数学公式支持
                     builder.inlinesEnabled(true)
                 })
+                .usePlugin(MarkwonInlineParserPlugin.create())
                 .usePlugin(object : AbstractMarkwonPlugin() {
                     override fun configureTheme(builder: MarkwonTheme.Builder) {
                         builder.codeBlockMargin(0)
