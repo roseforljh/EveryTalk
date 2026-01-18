@@ -124,7 +124,6 @@ jobs:
 
       - name: Build Release APK
         working-directory: ${{ env.APP_DIR }}
-        continue-on-error: true
         env:
           # 签名配置
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
