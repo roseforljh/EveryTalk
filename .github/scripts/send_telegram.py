@@ -11,16 +11,21 @@ def send_telegram_notification():
     branch = os.environ.get('BRANCH')
     run_id = os.environ.get('RUN_ID')
     commit_msg = os.environ.get('COMMIT_MSG')
-    apk_dir = os.environ.get('APK_DIR') # APK 文件所在的目录
+    apk_dir = os.environ.get('APK_DIR')
 
     if not all([token, chat_id, repo, apk_dir]):
         print("Error: Missing required environment variables.")
         sys.exit(1)
 
-    # 查找 APK 文件
-    apk_files = glob.glob(os.path.join(apk_dir, '*.apk'))
+    workspace = os.environ.get('GITHUB_WORKSPACE', '')
+    if os.path.isabs(apk_dir):
+        search_dir = apk_dir
+    else:
+        search_dir = os.path.join(workspace, apk_dir) if workspace else apk_dir
+
+    apk_files = glob.glob(os.path.join(search_dir, '*.apk'))
     if not apk_files:
-        print(f"Error: No APK files found in {apk_dir}")
+        print(f"Error: No APK files found in {search_dir}")
         sys.exit(1)
     
     # 假设只发送找到的第一个 APK，或者可以循环发送
