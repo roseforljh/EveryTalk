@@ -18,15 +18,28 @@
     </div>
     <script>
         var ctx = document.getElementById('myChart').getContext('2d');
-        var config = <!-- CONTENT_PLACEHOLDER -->;
+        var rawCode = `<!-- CONTENT_PLACEHOLDER -->`;
+        var config;
         
+        try {
+            config = eval('(' + rawCode + ')');
+        } catch (e) {
+            try {
+                eval(rawCode);
+            } catch (e2) {
+                console.error("Failed to parse chartjs config", e, e2);
+            }
+        }
+
         // Auto-detect theme colors if not specified
         if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
             Chart.defaults.color = '#ffffff';
             Chart.defaults.borderColor = '#444444';
         }
         
-        new Chart(ctx, config);
+        if (config && typeof config === 'object') {
+            new Chart(ctx, config);
+        }
     </script>
 </body>
 </html>

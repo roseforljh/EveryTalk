@@ -16,8 +16,27 @@
     <div id="container"></div>
     <script>
         var chart = echarts.init(document.getElementById('container'), window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : null);
-        var option = <!-- CONTENT_PLACEHOLDER -->;
-        chart.setOption(option);
+        var rawCode = `<!-- CONTENT_PLACEHOLDER -->`;
+        var option;
+        try {
+            // 尝试解析为对象字面量
+            option = eval('(' + rawCode + ')');
+        } catch (e) {
+            try {
+                // 如果失败，尝试作为完整代码执行（可能包含 option = ...）
+                eval(rawCode);
+            } catch (e2) {
+                console.error("Failed to parse echarts option", e, e2);
+            }
+        }
+        
+        if (option && typeof option === 'object') {
+            chart.setOption(option);
+        } else if (typeof option === 'undefined') {
+            // 如果 option 未定义，可能是代码中定义了但没有赋值给 option 变量，或者代码有误
+            // 这种情况下 eval(rawCode) 已经执行，如果它调用了 chart.setOption 也可以
+        }
+        
         window.onresize = function() {
             chart.resize();
         };

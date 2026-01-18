@@ -45,12 +45,13 @@ fun WebPreviewDialog(
     val (templateFileName, processedCode) = remember(code, language) {
         val normalizedLang = language.trim().lowercase()
         when (normalizedLang) {
-            "mermaid" -> "templates/mermaid.html" to code
-            "echarts" -> "templates/echarts.html" to code
-            "chartjs" -> "templates/chartjs.html" to code
+            "mermaid" -> "templates/mermaid.html" to escapeHtml(code)
+            "echarts" -> "templates/echarts.html" to code.replace("`", "\\`")
+            "chartjs" -> "templates/chartjs.html" to code.replace("`", "\\`")
             // flowchart 模板里使用 JS 模板字符串，需要转义反引号
             "flowchart", "flow" -> "templates/flowchart.html" to code.replace("`", "\\`")
             "vega", "vega-lite" -> "templates/vega.html" to code
+            "infographic" -> "templates/html.html" to renderInfographic(code)
             // html / svg / xml：剥掉外层 html/body，只保留 body 内容，交给居中模板
             "html", "svg", "xml" -> "templates/html.html" to extractHtmlBodyOrSelf(code)
             else -> "templates/html.html" to code // 其它语言也走通用 html 模板
@@ -148,6 +149,104 @@ fun WebPreviewDialog(
             }
         }
     }
+}
+
+/**
+ * HTML 转义，防止 mermaid 代码中的 < > 等字符破坏 HTML 结构
+ */
+private fun escapeHtml(text: String): String {
+    return text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+        .replace("'", "&#039;")
+}
+
+private fun renderInfographic(raw: String): String {
+    val lines = raw.lines().map { it.trim() }.filter { it.isNotEmpty() }
+    if (lines.isEmpty()) {
+        return ""
+    }
+
+    var index = 0
+    while (index < lines.size && lines[index].startsWith("infographic", ignoreCase = true)) {
+        index++
+    }
+    if (index < lines.size && lines[index].equals("data", ignoreCase = true)) {
+        index++
+    }
+
+    var title = ""
+    val items = mutableListOf<Triple<String, String, String?>>()
+
+    while (index < lines.size) {
+        val line = lines[index]
+        if (line.startsWith("title ", ignoreCase = true)) {
+            title = line.removePrefix("title").trim()
+            index++
+            continue
+        }
+        if (line.startsWith("items", ignoreCase = true)) {
+            index++
+            while (index < lines.size) {
+                val current = lines[index]
+                if (!current.startsWith("- label ", ignoreCase = true)) {
+                    index++
+                    continue
+                }
+                val label = current.removePrefix("- label").trim()
+                var desc = ""
+                var icon: String? = null
+
+                var next = index + 1
+                if (next < lines.size && lines[next].startsWith("desc ", ignoreCase = true)) {
+                    desc = lines[next].removePrefix("desc").trim()
+                    next++
+                }
+                if (next < lines.size && lines[next].startsWith("icon ", ignoreCase = true)) {
+                    icon = lines[next].removePrefix("icon").trim()
+                    next++
+                }
+
+                items.add(Triple(label, desc, icon))
+                index = next
+            }
+            continue
+        }
+        index++
+    }
+
+    if (title.isBlank() && items.isEmpty()) {
+        return "<pre style=\"white-space:pre-wrap;font-family:monospace;font-size:14px;\">${escapeHtml(raw)}</pre>"
+    }
+
+    val builder = StringBuilder()
+    builder.append("<div style=\"width:100%;display:flex;flex-direction:column;gap:16px;\">")
+    if (title.isNotBlank()) {
+        builder.append("<div style=\"font-size:20px;font-weight:600;margin-bottom:4px;\">")
+        builder.append(escapeHtml(title))
+        builder.append("</div>")
+    }
+    builder.append("<div style=\"display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;\">")
+    for ((label, desc, icon) in items) {
+        builder.append("<div style=\"border-radius:12px;padding:12px 14px;border:1px solid rgba(0,0,0,0.08);background:rgba(0,0,0,0.02);\">")
+        if (!icon.isNullOrBlank()) {
+            builder.append("<div style=\"font-size:11px;color:rgba(0,0,0,0.5);margin-bottom:4px;\">")
+            builder.append(escapeHtml(icon))
+            builder.append("</div>")
+        }
+        builder.append("<div style=\"font-size:14px;font-weight:600;margin-bottom:4px;\">")
+        builder.append(escapeHtml(label))
+        builder.append("</div>")
+        if (desc.isNotBlank()) {
+            builder.append("<div style=\"font-size:13px;color:rgba(0,0,0,0.75);\">")
+            builder.append(escapeHtml(desc))
+            builder.append("</div>")
+        }
+        builder.append("</div>")
+    }
+    builder.append("</div></div>")
+    return builder.toString()
 }
 
 /**

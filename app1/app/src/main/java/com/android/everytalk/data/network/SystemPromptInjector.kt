@@ -83,7 +83,7 @@ object SystemPromptInjector {
             - Or add a space around the boundary: `…）** 、 **下一段**` (Chinese) / `…)** , **next**` (English)
           - In short: never output `closing-paren + ** + punctuation + **` without separating/rewriting.
         - **Quotation Safety**: Use `“**text**”`, NEVER `**“text”**`.
-
+        
         ## Math Formula Rules (CRITICAL)
         - Use KaTeX-compatible syntax for all mathematical expressions.
         - **Inline math**: Use SINGLE dollar sign for formulas within text (e.g., The formula is [single dollar]E = mc^2[single dollar] where E is energy).
@@ -102,7 +102,40 @@ object SystemPromptInjector {
           - Use \frac{a}{b} instead of {a \over b}
           - Use \text{...} for text within formulas
           - Use \mathbf{...} for bold math, NOT \boldsymbol
-        - **Prohibited**: Do NOT use \[...\] or \(...\) delimiters
+          - **Prohibited**: Do NOT use \[...\] or \(...\) delimiters
+
+        ## Infographic 可视化块（推荐在合适场景使用）
+        - 当答案中存在 3 个及以上紧密相关的要点、步骤、对比项、流程阶段、优缺点列表时，请**考虑额外输出一个 infographic 代码块**，用来结构化展示关键信息。
+        - infographic 必须作为**单独的 Markdown 代码块**输出，语言标记为 `infographic`，例如：
+        
+        ```infographic
+        infographic
+        data
+        title 数据处理流程
+        items
+        - label 数据导入
+          desc 从外部系统导入原始数据
+          icon mdi:database-import
+        - label 清洗与转换
+          desc 过滤异常值并统一字段格式
+        - label 分析与可视化
+          desc 生成报表与图表
+          icon mdi:chart-line
+        ```
+        
+        - 语法说明（严格按行组织）：
+          - 第一行：`infographic`
+          - 第二行：`data`
+          - 可选标题行：`title 标题文本`
+          - 列表起始行：`items`
+          - 之后每个条目由一到三行组成：
+            - 必需：`- label 项名称`
+            - 可选：紧接一行 `desc 描述文本`
+            - 可选：再紧接一行 `icon 图标标识`，支持 `mdi:` 前缀，例如 `mdi:database-import`、`mdi:server-network`、`mdi:calendar-clock`
+        - infographic 是对正文的“结构化增强视图”，不是替代品：
+          - 先用正常段落/列表把内容讲清楚；
+          - 然后在答案后半部分或末尾再给出 1 个精炼的 infographic 代码块，总结核心要点。
+        - 不要为了使用 infographic 而生造结构；仅在它能明显提升可读性时使用。
 
         ## Self-Correction
         Before outputting, verify:
@@ -110,6 +143,7 @@ object SystemPromptInjector {
         2. Are list items separated into individual lines?
         3. Is the bold syntax correct relative to punctuation?
         4. Are math formulas using KaTeX-compatible dollar sign syntax (single for inline, double for block)?
+        5. If the answer包含多个清晰的要点/步骤/对比项，是否适合额外补充一个结构良好的 infographic 代码块？
         """.trimIndent()
 
     /**
@@ -168,6 +202,39 @@ Content here...
 - Use \text{...} for text in formulas
 - Do NOT use \[...\] or \(...\) delimiters, use dollar signs instead
 - Do NOT use LaTeX-only commands like \newcommand, \def
+
+## Infographic blocks (optional but recommended when helpful)
+- When your answer contains 3 or more closely related points, steps, pros/cons, workflow stages or comparison items, consider adding an extra infographic code block to summarize them visually.
+- The infographic must be a dedicated Markdown code block with language `infographic`, for example:
+
+```infographic
+infographic
+data
+title Data Processing Flow
+items
+- label Data Ingest
+  desc Import raw data from external systems
+  icon mdi:database-import
+- label Cleaning & Transform
+  desc Filter anomalies and unify formats
+- label Analysis & Reporting
+  desc Generate reports and charts
+  icon mdi:chart-line
+```
+
+- Syntax (one element per line, in this order):
+  - First line: `infographic`
+  - Second line: `data`
+  - Optional title line: `title Your title text`
+  - Items start line: `items`
+  - Then each item consists of 1–3 lines:
+    - Required: `- label Item name`
+    - Optional: next line `desc Description text`
+    - Optional: next line `icon Icon identifier`, supporting `mdi:` prefix such as `mdi:database-import`, `mdi:server-network`, `mdi:calendar-clock`
+- The infographic is a structured enhancement of your answer, not a replacement:
+  - First explain using normal paragraphs/lists;
+  - Then, near the end, add a concise infographic block summarizing the key points.
+- Do not force an infographic when structure is not natural; only use it when it clearly improves readability.
 """.trimIndent()
 
     /**

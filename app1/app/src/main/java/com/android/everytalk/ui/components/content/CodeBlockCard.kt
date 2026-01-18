@@ -264,7 +264,8 @@ private fun isPreviewSupported(language: String?): Boolean {
         "echarts", 
         "chartjs", 
         "flowchart", "flow", 
-        "vega", "vega-lite" -> true
+        "vega", "vega-lite",
+        "infographic" -> true
         else -> false
     }
 }

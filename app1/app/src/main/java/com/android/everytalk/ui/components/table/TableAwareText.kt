@@ -3,16 +3,40 @@ package com.android.everytalk.ui.components.table
 import android.view.ViewGroup
 import android.widget.ImageView
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AlignVerticalCenter
+import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Computer
+import androidx.compose.material.icons.filled.Functions
+import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Swipe
+import androidx.compose.material.icons.filled.ZoomOut
+import androidx.compose.material.icons.filled.Upload
+import androidx.compose.material.icons.outlined.Dns
+import androidx.compose.material.icons.outlined.FileDownload
+import androidx.compose.material.icons.outlined.GridOn
+import androidx.compose.material.icons.outlined.Storage
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -25,10 +49,14 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.android.everytalk.data.DataClass.Sender
@@ -157,21 +185,33 @@ fun TableAwareText(
                         )
                     }
                     is ContentPart.Code -> {
-                        val clipboard = LocalClipboardManager.current
-                        CodeBlockCard(
-                            language = part.language,
-                            code = part.content,
-                            modifier = Modifier.padding(vertical = 4.dp),
-                            isStreaming = isStreaming,
-                            onPreviewRequested = if (onCodePreviewRequested != null) {
-                                { onCodePreviewRequested(part.language ?: "", part.content) }
-                            } else null,
-                            onCopy = {
-                                clipboard.setText(AnnotatedString(part.content))
-                                onCodeCopied?.invoke()
-                            },
-                            onLongPress = onLongPress
-                        )
+                        val lang = part.language?.trim()?.lowercase()
+                        if (lang == "infographic") {
+                            InfographicBlock(
+                                raw = part.content,
+                                style = style,
+                                color = color,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                            )
+                        } else {
+                            val clipboard = LocalClipboardManager.current
+                            CodeBlockCard(
+                                language = part.language,
+                                code = part.content,
+                                modifier = Modifier.padding(vertical = 4.dp),
+                                isStreaming = isStreaming,
+                                onPreviewRequested = if (onCodePreviewRequested != null) {
+                                    { onCodePreviewRequested(part.language ?: "", part.content) }
+                                } else null,
+                                onCopy = {
+                                    clipboard.setText(AnnotatedString(part.content))
+                                    onCodeCopied?.invoke()
+                                },
+                                onLongPress = onLongPress
+                            )
+                        }
                     }
                     is ContentPart.Table -> {
                         TableRenderer(
@@ -254,5 +294,265 @@ fun TableAwareText(
             language = language,
             onDismiss = { previewState = null }
         )
+    }
+}
+
+private data class InfographicItem(
+    val label: String,
+    val desc: String,
+    val icon: String?
+)
+
+private fun parseInfographic(raw: String): Pair<String, List<InfographicItem>> {
+    val lines = raw.lines().map { it.trim() }.filter { it.isNotEmpty() }
+    if (lines.isEmpty()) return "" to emptyList()
+
+    var index = 0
+    while (index < lines.size && lines[index].startsWith("infographic", ignoreCase = true)) {
+        index++
+    }
+    if (index < lines.size && lines[index].equals("data", ignoreCase = true)) {
+        index++
+    }
+
+    var title = ""
+    val items = mutableListOf<InfographicItem>()
+
+    while (index < lines.size) {
+        val line = lines[index]
+        if (line.startsWith("title ", ignoreCase = true)) {
+            title = line.removePrefix("title").trim()
+            index++
+            continue
+        }
+        if (line.startsWith("items", ignoreCase = true)) {
+            index++
+            while (index < lines.size) {
+                val current = lines[index]
+                if (!current.startsWith("- label ", ignoreCase = true)) {
+                    index++
+                    continue
+                }
+                val label = current.removePrefix("- label").trim()
+                var desc = ""
+                var icon: String? = null
+
+                var next = index + 1
+                if (next < lines.size && lines[next].startsWith("desc ", ignoreCase = true)) {
+                    desc = lines[next].removePrefix("desc").trim()
+                    next++
+                }
+                if (next < lines.size && lines[next].startsWith("icon ", ignoreCase = true)) {
+                    icon = lines[next].removePrefix("icon").trim()
+                    next++
+                }
+
+                items.add(InfographicItem(label, desc, icon))
+                index = next
+            }
+            continue
+        }
+        index++
+    }
+
+    return title to items
+}
+
+private fun resolveInfographicIcon(icon: String): ImageVector? {
+    val normalized = icon.trim()
+    val lower = normalized.lowercase()
+    val key = if (lower.startsWith("mdi:")) {
+        lower.removePrefix("mdi:")
+    } else {
+        return null
+    }
+
+    val directMatch = when (key) {
+        "database-import" -> Icons.Outlined.FileDownload
+        "database-export" -> Icons.Filled.Upload
+        "calendar-clock" -> Icons.Filled.CalendarMonth
+        "format-vertical-align-center" -> Icons.Filled.AlignVerticalCenter
+        "sigma" -> Icons.Filled.Functions
+        "grid" -> Icons.Outlined.GridOn
+        "cog" -> Icons.Filled.Settings
+        "desktop-classic" -> Icons.Filled.Computer
+        "shield-lock" -> Icons.Filled.Security
+        "shieid-lock" -> Icons.Filled.Security
+        "gesture-swipe-horizontal" -> Icons.Filled.Swipe
+        "magnify-minus-outline" -> Icons.Filled.ZoomOut
+        else -> null
+    }
+
+    if (directMatch != null) return directMatch
+
+    return when {
+        key.contains("database") -> Icons.Outlined.Storage
+        key.contains("server") -> Icons.Outlined.Dns
+        key.contains("calendar") || key.contains("clock") -> Icons.Filled.CalendarMonth
+        key.contains("cloud") -> Icons.Filled.Cloud
+        key.contains("grid") -> Icons.Outlined.GridOn
+        key.contains("sigma") || key.contains("sum") -> Icons.Filled.Functions
+        key.contains("align") && key.contains("center") -> Icons.Filled.AlignVerticalCenter
+        key.contains("cog") || key.contains("gear") -> Icons.Filled.Settings
+        key.contains("desktop") || key.contains("monitor") -> Icons.Filled.Computer
+        (key.contains("shield") || key.contains("shieid")) && key.contains("lock") -> Icons.Filled.Security
+        key.contains("gesture") || key.contains("swipe") -> Icons.Filled.Swipe
+        key.contains("magnify") || key.contains("zoom") -> Icons.Filled.ZoomOut
+        else -> Icons.Filled.HelpOutline
+    }
+}
+
+@Composable
+private fun resolveMdiImageVector(icon: String): ImageVector? {
+    val normalized = icon.trim()
+    val lower = normalized.lowercase()
+    if (!lower.startsWith("mdi:")) return null
+    val key = lower.removePrefix("mdi:")
+    val resName = "zzz_" + key.replace("-", "_")
+    val context = LocalContext.current
+    val resId = remember(resName) {
+        context.resources.getIdentifier(resName, "drawable", context.packageName)
+    }
+    if (resId == 0) return null
+    return ImageVector.vectorResource(id = resId)
+}
+
+@Composable
+private fun InfographicBlock(
+    raw: String,
+    style: TextStyle,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    val (title, items) = remember(raw) { parseInfographic(raw) }
+
+    if (title.isBlank() && items.isEmpty()) {
+        MarkdownRenderer(
+            markdown = raw,
+            style = style,
+            color = color,
+            modifier = modifier,
+            isStreaming = false,
+            onLongPress = null,
+            onImageClick = null,
+            sender = Sender.AI,
+            contentKey = "",
+            disableVerticalPadding = true
+        )
+        return
+    }
+
+    val headlineColor = if (color != Color.Unspecified) color else MaterialTheme.colorScheme.onSurface
+    val secondaryColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val surface = MaterialTheme.colorScheme.surface
+    val chipBg = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f)
+    val chipText = MaterialTheme.colorScheme.onSurfaceVariant
+    val palette = listOf(
+        MaterialTheme.colorScheme.primaryContainer,
+        MaterialTheme.colorScheme.secondaryContainer,
+        MaterialTheme.colorScheme.tertiaryContainer,
+        MaterialTheme.colorScheme.errorContainer
+    )
+    val scrollState = rememberScrollState()
+
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(
+            containerColor = surface
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        shape = RoundedCornerShape(20.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = "infographic",
+                    style = style.copy(fontSize = style.fontSize * 0.85f, fontWeight = FontWeight.Medium),
+                    color = chipText,
+                    modifier = Modifier
+                        .background(chipBg, RoundedCornerShape(999.dp))
+                        .padding(horizontal = 10.dp, vertical = 3.dp)
+                )
+            }
+
+            if (title.isNotBlank()) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = title,
+                    style = style.copy(fontWeight = FontWeight.SemiBold),
+                    color = headlineColor,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                )
+            }
+
+            if (items.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(16.dp))
+                var colorIndex = 0
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(scrollState),
+                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp)
+                ) {
+                    items.forEach { item ->
+                        val bgColor = palette[colorIndex % palette.size]
+                        colorIndex++
+                        Card(
+                            modifier = Modifier.width(220.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = bgColor
+                            ),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                            ) {
+                                if (!item.icon.isNullOrBlank()) {
+                                    val iconText = item.icon
+                                    val mdiVector = resolveMdiImageVector(iconText)
+                                    val iconVector = mdiVector ?: resolveInfographicIcon(iconText)
+                                    if (iconVector != null) {
+                                        Icon(
+                                            imageVector = iconVector,
+                                            contentDescription = iconText,
+                                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            modifier = Modifier.padding(bottom = 4.dp)
+                                        )
+                                    } else {
+                                        Text(
+                                            text = iconText,
+                                            style = style.copy(fontWeight = FontWeight.Medium),
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            modifier = Modifier.padding(bottom = 4.dp)
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = item.label,
+                                    style = style.copy(fontWeight = FontWeight.SemiBold),
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.padding(bottom = if (item.desc.isNotBlank()) 2.dp else 0.dp)
+                                )
+                                if (item.desc.isNotBlank()) {
+                                    Text(
+                                        text = item.desc,
+                                        style = style.copy(fontWeight = FontWeight.Normal),
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
