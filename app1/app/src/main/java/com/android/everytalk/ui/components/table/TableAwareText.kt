@@ -65,6 +65,8 @@ import com.android.everytalk.ui.components.ContentPart
 import com.android.everytalk.ui.components.WebPreviewDialog
 import com.android.everytalk.ui.components.content.CodeBlockCard
 import com.android.everytalk.ui.components.markdown.MarkdownRenderer
+import com.android.everytalk.ui.components.icons.MdiIcon
+import com.android.everytalk.ui.components.icons.isMdiIconAvailable
 import com.android.everytalk.util.cache.ContentParseCache
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.catch
@@ -517,22 +519,31 @@ private fun InfographicBlock(
                             ) {
                                 if (!item.icon.isNullOrBlank()) {
                                     val iconText = item.icon
-                                    val mdiVector = resolveMdiImageVector(iconText)
-                                    val iconVector = mdiVector ?: resolveInfographicIcon(iconText)
-                                    if (iconVector != null) {
-                                        Icon(
-                                            imageVector = iconVector,
-                                            contentDescription = iconText,
+                                    if (isMdiIconAvailable(iconText)) {
+                                        val iconName = iconText.trim().lowercase().removePrefix("mdi:")
+                                        MdiIcon(
+                                            name = iconName,
                                             tint = MaterialTheme.colorScheme.onPrimaryContainer,
                                             modifier = Modifier.padding(bottom = 4.dp)
                                         )
                                     } else {
-                                        Text(
-                                            text = iconText,
-                                            style = style.copy(fontWeight = FontWeight.Medium),
-                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                            modifier = Modifier.padding(bottom = 4.dp)
-                                        )
+                                        val mdiVector = resolveMdiImageVector(iconText)
+                                        val iconVector = mdiVector ?: resolveInfographicIcon(iconText)
+                                        if (iconVector != null) {
+                                            Icon(
+                                                imageVector = iconVector,
+                                                contentDescription = iconText,
+                                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                modifier = Modifier.padding(bottom = 4.dp)
+                                            )
+                                        } else {
+                                            Text(
+                                                text = iconText,
+                                                style = style.copy(fontWeight = FontWeight.Medium),
+                                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                modifier = Modifier.padding(bottom = 4.dp)
+                                            )
+                                        }
                                     }
                                 }
                                 Text(

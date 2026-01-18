@@ -168,7 +168,8 @@ object ContentParser {
                 type == MarkdownElementTypes.ATX_6 ||
                 type == MarkdownElementTypes.BLOCK_QUOTE ||
                 type == MarkdownElementTypes.ORDERED_LIST ||
-                type == MarkdownElementTypes.UNORDERED_LIST
+                type == MarkdownElementTypes.UNORDERED_LIST ||
+                type == MarkdownElementTypes.HTML_BLOCK
     }
 
     /**
