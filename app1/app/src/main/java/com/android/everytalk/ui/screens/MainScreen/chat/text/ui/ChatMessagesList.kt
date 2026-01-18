@@ -127,8 +127,8 @@ fun ChatMessagesList(
                     .fillMaxSize()
                     .nestedScroll(scrollStateManager.nestedScrollConnection),
                 contentPadding = PaddingValues(
-                    start = 16.dp,
-                    end = 16.dp,
+                    start = 4.dp,
+                    end = 4.dp,
                     top = 8.dp,
                     bottom = 10.dp  // 增加底部padding以确保内容完全显示在输入框上方
                 ),

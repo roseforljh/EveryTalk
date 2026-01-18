@@ -104,7 +104,7 @@ fun TableRenderer(
                         content = header.trim(),
                         width = columnWidths.getOrElse(index) { 100.dp },
                         style = headerStyle,
-                        usePlainText = true, // 表头始终使用纯文本，避免复杂渲染
+                        usePlainText = false, // 表头也解析内联 Markdown
                         contentKey = if (contentKey.isNotBlank()) "${contentKey}_th_$index" else ""
                     )
                 }
@@ -118,6 +118,7 @@ fun TableRenderer(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.background)
                         .border(
                             width = 0.5.dp,
                             color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
@@ -161,7 +162,8 @@ private fun TableCell(
     contentKey: String
 ) {
     val textColor = MaterialTheme.colorScheme.onSurface
-    val codeBackground = MaterialTheme.colorScheme.surfaceVariant
+    // 内联代码不使用背景色
+    val codeBackground = Color.Transparent
 
     // 使用 remember 缓存解析结果
     val annotatedText = remember(content, usePlainText) {

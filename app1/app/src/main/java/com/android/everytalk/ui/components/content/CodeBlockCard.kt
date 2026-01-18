@@ -65,7 +65,12 @@ fun CodeBlockCard(
     val clipboard = LocalClipboardManager.current
     val isDarkTheme = isSystemInDarkTheme()
     val bg = MaterialTheme.chatColors.codeBlockBackground
-    val outline = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+    // 夜间模式使用白色边框，白天模式使用 outline 颜色
+    val outline = if (isDarkTheme) {
+        Color.White.copy(alpha = 0.3f)
+    } else {
+        MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+    }
     
     // 根据主题设置头部内容颜色：亮色系为黑色，暗色系为白色
     val headerContentColor = if (isDarkTheme) {
@@ -115,7 +120,7 @@ fun CodeBlockCard(
     Surface(
     modifier = modifier
         .fillMaxWidth()
-        .border(1.dp, outline, shape)
+        .border(1.5.dp, outline, shape)
         .pointerInput(onLongPress) {
             if (onLongPress != null) {
                 detectTapGestures(
@@ -136,7 +141,7 @@ fun CodeBlockCard(
             }
         },
     shape = shape,
-        color = Color.Transparent
+        color = bg  // 整个代码块统一使用灰色背景
     ) {
         // 使用 Column 布局：Header 在上，Content 在下，自然堆叠避免遮挡。
         // 通过 translationY 实现 Header 的视觉吸顶，同时利用 zIndex 确保其在滚动时覆盖 Content。
@@ -145,6 +150,7 @@ fun CodeBlockCard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .background(bg)  // Header 也使用相同背景色
                     // 动态吸顶偏移
                     .zIndex(1f) // 确保在内容之上绘制
                     .graphicsLayer {

@@ -100,6 +100,16 @@ private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): S
     val fullWidthParenBoldFix = Regex("）\\*\\*")
     s = s.replace(fullWidthParenBoldFix, "**）")
 
+    // 5.1 Fix: **"xxx"** 等引号包裹加粗无法渲染的问题
+    // CommonMark 规范：当 ** 后紧跟 Unicode 标点且前面非标点时，不满足 left-flanking 条件
+    // 解决方案：将引号移到加粗标记外部 **"xxx"** -> "**xxx**"
+    // 支持的引号类型：中文弯引号 "" ''、直角引号 「」『』、英文引号 "" ''、法式引号 «»
+    val quotedBoldPattern = Regex("""\*\*[""\u201C\u201D''\u2018\u2019「」『』«»](.+?)[""\u201C\u201D''\u2018\u2019「」『』«»]\*\*""")
+    s = s.replace(quotedBoldPattern) { mr ->
+        val inner = mr.groupValues[1]
+        "\"**${inner}**\""
+    }
+
     // 6. Headers: 确保 # 后有空格
     s = s.replace(Regex("(?<=^|\\n)(#{1,6})(?=[^#\\s])"), "$1 ")
     s = s.replace(Regex("^(#{1,6})(?=\\s.{50,})", RegexOption.MULTILINE)) { mr ->
@@ -383,8 +393,8 @@ fun MarkdownRenderer(
             val sp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
             val cacheKey = if (contentKey.isNotBlank() && !isStreaming) {
                 // Append version suffix to invalidate old cache entries after heading size fixes
-                // v27: Disabled heading preprocessing that caused top spacing issues
-                MarkdownSpansCache.generateKey(contentKey + "_v27", isDark, sp)
+                // v28: Fix **"xxx"** quoted bold not rendering due to CommonMark flanking rules
+                MarkdownSpansCache.generateKey(contentKey + "_v28", isDark, sp)
             } else ""
 
             val cachedSpanned = if (cacheKey.isNotBlank()) MarkdownSpansCache.get(cacheKey) else null

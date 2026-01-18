@@ -82,7 +82,31 @@ object SystemPromptInjector {
             - Prefer moving punctuation inside the first bold: `…**内容）**、**下一段**`
             - Or add a space around the boundary: `…）** 、 **下一段**` (Chinese) / `…)** , **next**` (English)
           - In short: never output `closing-paren + ** + punctuation + **` without separating/rewriting.
-        - **Quotation Safety**: Use `“**text**”`, NEVER `**“text”**`.
+
+        - **Quotation + Bold Rules** (ABSOLUTE CRITICAL - CommonMark Compatibility):
+          ⚠️ THESE RULES PREVENT RENDERING FAILURES ⚠️
+
+          **FORBIDDEN PATTERN**: `**"text"**` or `**"text"**` (bold markers wrapping quotes)
+          **REQUIRED PATTERN**: `"**text**"` or `"**text**"` (quotes wrapping bold markers)
+
+          Why: CommonMark's "flanking delimiter" rules require `**` to NOT be followed by Unicode punctuation (like `"` or `"`) unless preceded by punctuation/whitespace. Violating this causes bold to NOT render.
+
+          ✅ CORRECT examples:
+          - 这是"**重点内容**"的说明  (quotes outside bold)
+          - The "**key concept**" is important  (quotes outside bold)
+          - 它包含了「**核心数据**」  (CJK brackets outside bold)
+
+          ❌ WRONG examples (WILL NOT RENDER AS BOLD):
+          - 这是**"重点内容"**的说明  (bold wrapping quotes - BROKEN!)
+          - The **"key concept"** is important  (bold wrapping quotes - BROKEN!)
+          - 它包含了**「核心数据」**  (bold wrapping CJK brackets - BROKEN!)
+
+          **General Rule**: When combining bold with ANY quotation marks or brackets:
+          - Chinese quotes `""` `''` `「」` `『』` → Place OUTSIDE `**...**`
+          - English quotes `""` `''` → Place OUTSIDE `**...**`
+          - Parentheses `()` `（）` → Can be inside or outside, but prefer outside for safety
+
+          Before outputting bold with quotes, mentally rewrite: `**"X"**` → `"**X**"`
         
         ## Math Formula Rules (CRITICAL)
         - Use KaTeX-compatible syntax for all mathematical expressions.
@@ -191,8 +215,25 @@ Content here...
 - Use proper Markdown headers: # ## ###
 - Use proper lists: - for unordered, 1. 2. for ordered
 - Use **bold** and *italic* correctly
-- Never use **"text"** format, use "**text**" instead
 - Ensure all Markdown markers are properly closed
+
+## Bold + Quotation Rules (ABSOLUTE CRITICAL)
+⚠️ THESE RULES PREVENT RENDERING FAILURES ⚠️
+
+**FORBIDDEN**: `**"text"**` or `**"text"**` (bold wrapping quotes)
+**REQUIRED**: `"**text**"` or `"**text**"` (quotes wrapping bold)
+
+Why: CommonMark's flanking delimiter rules cause `**"text"**` to NOT render as bold.
+
+✅ CORRECT:
+- The "**key concept**" is important
+- 这是"**重点内容**"的说明
+
+❌ WRONG (WILL NOT RENDER):
+- The **"key concept"** is important
+- 这是**"重点内容"**的说明
+
+**Rule**: Always place quotes/brackets OUTSIDE bold markers: `**"X"**` → `"**X**"`
 
 ## Math Formula Rules (CRITICAL)
 - Use KaTeX-compatible syntax for all math expressions
