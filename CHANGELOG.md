@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.12.1](https://github.com/roseforljh/EveryTalk/compare/v1.12.0...v1.12.1) (2026-01-20)
+
+
+### Bug Fixes
+
+* optimize chat scroll position and prevent user bubble jump ([e30df7b](https://github.com/roseforljh/EveryTalk/commit/e30df7bab71058d238b88860ece20ff095e486e9))
+* **ui:** 修复输入区域弹出面板位置错误 ([3c86d87](https://github.com/roseforljh/EveryTalk/commit/3c86d87c1c179c652dd6bf15347826c751e0738d))
+
 ## [1.12.0](https://github.com/roseforljh/EveryTalk/compare/v1.11.3...v1.12.0) (2026-01-18)
 
 
