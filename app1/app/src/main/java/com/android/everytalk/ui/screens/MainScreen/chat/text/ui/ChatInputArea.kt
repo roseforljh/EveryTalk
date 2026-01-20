@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.MainScreen.chat.text.ui
 
+import kotlin.math.max
 import android.Manifest
 import android.content.Context
 import android.net.Uri
@@ -8,16 +9,35 @@ import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.text.TextRange
@@ -197,7 +217,148 @@ private fun safeDeleteTempFile(context: Context, uri: Uri?) {
     }
 }
 
+@Composable
+private fun FunctionPanelContent(
+    isWebSearchEnabled: Boolean,
+    onToggleWebSearch: () -> Unit,
+    isCodeExecutionEnabled: Boolean,
+    onToggleCodeExecution: () -> Unit,
+    isGeminiChannel: Boolean,
+    onToggleImagePanel: () -> Unit,
+    onToggleMoreOptionsPanel: () -> Unit,
+    hasContent: Boolean,
+    onClearContent: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .width(150.dp)
+            .wrapContentHeight(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceDim,
+        shadowElevation = 4.dp
+    ) {
+        Column(modifier = Modifier.padding(vertical = 4.dp)) {
+            // 网页搜索
+            FunctionPanelItem(
+                icon = Icons.Filled.Language,
+                label = if (isWebSearchEnabled) "关闭搜索" else "网页搜索",
+                tint = if (isWebSearchEnabled) com.android.everytalk.ui.theme.SeaBlue else MaterialTheme.colorScheme.onSurfaceVariant,
+                onClick = { onToggleWebSearch() }
+            )
+            // 代码执行 (仅 Gemini)
+            if (isGeminiChannel) {
+                FunctionPanelItem(
+                    icon = Icons.Filled.Code,
+                    label = if (isCodeExecutionEnabled) "关闭执行" else "代码执行",
+                    tint = if (isCodeExecutionEnabled) Color(0xFF9C27B0) else MaterialTheme.colorScheme.onSurfaceVariant,
+                    onClick = { onToggleCodeExecution() }
+                )
+            }
+            // 选择图片
+            FunctionPanelItem(
+                icon = Icons.Outlined.Image,
+                label = "选择图片",
+                tint = Color(0xff2cb334),
+                onClick = {
+                    onDismiss()
+                    onToggleImagePanel()
+                }
+            )
+            // 更多选项
+            FunctionPanelItem(
+                icon = Icons.Filled.Tune,
+                label = "更多选项",
+                tint = Color(0xfff76213),
+                onClick = {
+                    onDismiss()
+                    onToggleMoreOptionsPanel()
+                }
+            )
+            // 清除内容
+            if (hasContent) {
+                FunctionPanelItem(
+                    icon = Icons.Filled.Clear,
+                    label = "清除内容",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    onClick = {
+                        onClearContent()
+                        onDismiss()
+                    }
+                )
+            }
+        }
+    }
+}
 
+@Composable
+private fun FunctionPanelItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    tint: Color,
+    onClick: () -> Unit
+) {
+    // 颜色渐变动画
+    val animatedTint by animateColorAsState(
+        targetValue = tint,
+        animationSpec = tween(durationMillis = 250, easing = FastOutSlowInEasing),
+        label = "FunctionPanelItemTint"
+    )
+
+    // 点击缩放动画
+    var isPressed by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.92f else 1f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessLow
+        ),
+        label = "FunctionPanelItemScale"
+    )
+
+    Surface(
+        onClick = {
+            isPressed = true
+            onClick()
+        },
+        shape = RoundedCornerShape(12.dp),
+        color = Color.Transparent,
+        modifier = Modifier.graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+        }
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                tint = animatedTint,
+                modifier = Modifier.size(22.dp)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
+                ),
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+    }
+
+    // 重置按压状态
+    LaunchedEffect(isPressed) {
+        if (isPressed) {
+            kotlinx.coroutines.delay(150)
+            isPressed = false
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -225,6 +386,7 @@ fun ChatInputArea(
     onSendMessage: (messageText: String, isFromRegeneration: Boolean, attachments: List<SelectedMediaItem>, audioBase64: String?, mimeType: String?) -> Unit,
     viewModel: com.android.everytalk.statecontroller.AppViewModel,
     onShowVoiceInput: () -> Unit,
+    onHeightChange: (Int) -> Unit = {},
     // MCP 相关参数
     mcpServerStates: Map<String, McpServerState> = emptyMap(),
     onAddMcpServer: (McpServerConfig) -> Unit = {},
@@ -487,41 +649,37 @@ fun ChatInputArea(
             }
         }
 
+    val inputBackgroundColor = MaterialTheme.colorScheme.background
+    
+    // 使用 WindowInsets 组合逻辑来统一处理底部间距，消除手动计算带来的动画抖动
+    val navInsets = WindowInsets.navigationBarsIgnoringVisibility
+    val baseInsets = navInsets.add(WindowInsets(bottom = 24.dp))
+    val targetInsets = WindowInsets.ime.union(baseInsets)
+
     Box(modifier = Modifier
         .fillMaxWidth()
-        // 统一按 ime ∪ navigationBarsIgnoringVisibility 平滑上移，避免收起时回弹
-        .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBarsIgnoringVisibility))
+        .background(
+            brush = Brush.verticalGradient(
+                colors = listOf(
+                    inputBackgroundColor.copy(alpha = 0f),
+                    inputBackgroundColor
+                )
+            )
+        )
+        // 统一按 ime ∪ (navigationBars + 24dp) 处理，交由系统 Layout 阶段平滑过渡
+        .onSizeChanged { intSize -> 
+            chatInputContentHeightPx = intSize.height 
+            onHeightChange(intSize.height)
+        }
+        .windowInsetsPadding(targetInsets)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth(1f) // 稍微加宽
                 .align(Alignment.BottomCenter)
-                // 与底部留更大空间（使用 start/end/bottom 以匹配重载）
-                .padding(start = 6.dp, end = 6.dp, bottom = 10.dp)
-                .background(
-                    MaterialTheme.colorScheme.background
-                )
-                // 外层已统一处理 ime 与导航栏内边距
-                .onSizeChanged { intSize -> chatInputContentHeightPx = intSize.height }
+                // 仅保留左右 padding，底部由外层 WindowInsets 统一控制
+                .padding(start = 6.dp, end = 6.dp)
         ) {
-            val borderColor = if (isSystemInDarkTheme()) Color.Gray.copy(alpha = 0.6f) else Color.Black.copy(alpha = 0.2f)
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(if (isSystemInDarkTheme()) 1.dp else 0.5.dp)
-                    .background(
-                        brush = Brush.horizontalGradient(
-                            colors = listOf(
-                                Color.Transparent,
-                                borderColor,
-                                borderColor,
-                                Color.Transparent
-                            ),
-                            startX = 0f,
-                            endX = Float.POSITIVE_INFINITY
-                        )
-                    )
-            )
             Column(
                 modifier = Modifier
                     // 略减整体高度：上下内边距更紧凑
@@ -535,208 +693,315 @@ fun ChatInputArea(
 
                 // 🎯 性能优化：使用本地状态驱动 TextField，避免每次按键触发 ViewModel 更新
                 // 🔧 修复：使用 TextFieldValue 以更好地兼容各种 IME（包括华为小艺输入法）的剪贴板粘贴
-                OutlinedTextField(
-                    value = localTextFieldValue,
-                    onValueChange = { newValue ->
-                        // 立即更新本地状态，无延迟，保证输入流畅
-                        localTextFieldValue = newValue
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .focusRequester(focusRequester)
-                        .onFocusChanged { focusState ->
-                            // 获得焦点时滚动至底部，失去焦点时通知外层
-                            if (focusState.isFocused) {
-                                // 移除自动滚动到底部，避免打扰用户查看历史消息
-                                // onFocusChange(true)
-                            } else {
-                                onFocusChange(false)
-                            }
-                        }
-                        .padding(bottom = 4.dp),
-                    placeholder = { Text("输入消息…") },
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        unfocusedTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = Color.Transparent,
-                        cursorColor = MaterialTheme.colorScheme.primary,
-                        focusedBorderColor = Color.Transparent,
-                        unfocusedBorderColor = Color.Transparent,
-                    ),
-                    minLines = 1,
-                    maxLines = 5,
-                    shape = RoundedCornerShape(32.dp)
+                // 🎨 使用 BasicTextField 以完全控制内部 padding，实现更紧凑的 UI
+                val hasContent = localText.isNotEmpty() || selectedMediaItems.isNotEmpty()
+                val isDarkTheme = isSystemInDarkTheme()
+                var isFocused by remember { mutableStateOf(false) }
+                var showFunctionPanel by remember { mutableStateOf(false) }
+                var lastFunctionPanelDismissAt by remember { mutableStateOf(0L) }
+
+                // 功能面板动画状态
+                var renderFunctionPanel by remember { mutableStateOf(false) }
+                val functionPanelAlpha = remember { Animatable(0f) }
+                val functionPanelScale = remember { Animatable(0.8f) }
+
+                // 图片选择面板动画状态
+                var renderImageSelectionPanel by remember { mutableStateOf(false) }
+                val imageAlpha = remember { Animatable(0f) }
+                val imageScale = remember { Animatable(0.8f) }
+
+                // 更多选项面板动画状态
+                var renderMoreOptionsPanel by remember { mutableStateOf(false) }
+                val moreAlpha = remember { Animatable(0f) }
+                val moreScale = remember { Animatable(0.8f) }
+
+                LaunchedEffect(showFunctionPanel) {
+                    if (showFunctionPanel) {
+                        renderFunctionPanel = true
+                        launch { functionPanelAlpha.animateTo(1f, animationSpec = tween(durationMillis = 150)) }
+                        launch { functionPanelScale.animateTo(1f, animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) }
+                    } else if (renderFunctionPanel) {
+                        launch { functionPanelAlpha.animateTo(0f, animationSpec = tween(durationMillis = 140)) }
+                        launch { functionPanelScale.animateTo(0.8f, animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing)) }
+                            .invokeOnCompletion { renderFunctionPanel = false }
+                    }
+                }
+
+                // 图片选择面板动画
+                LaunchedEffect(showImageSelectionPanel) {
+                    if (showImageSelectionPanel) {
+                        renderImageSelectionPanel = true
+                        launch { imageAlpha.animateTo(1f, animationSpec = tween(durationMillis = 150)) }
+                        launch { imageScale.animateTo(1f, animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) }
+                    } else if (renderImageSelectionPanel) {
+                        launch { imageAlpha.animateTo(0f, animationSpec = tween(durationMillis = 140)) }
+                        launch { imageScale.animateTo(0.9f, animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing)) }
+                            .invokeOnCompletion { renderImageSelectionPanel = false }
+                    }
+                }
+
+                // 更多选项面板动画
+                LaunchedEffect(showMoreOptionsPanel) {
+                    if (showMoreOptionsPanel) {
+                        renderMoreOptionsPanel = true
+                        launch { moreAlpha.animateTo(1f, animationSpec = tween(durationMillis = 150)) }
+                        launch { moreScale.animateTo(1f, animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) }
+                    } else if (renderMoreOptionsPanel) {
+                        launch { moreAlpha.animateTo(0f, animationSpec = tween(durationMillis = 140)) }
+                        launch { moreScale.animateTo(0.9f, animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing)) }
+                            .invokeOnCompletion { renderMoreOptionsPanel = false }
+                    }
+                }
+
+                val buttonBackgroundColor by animateColorAsState(
+                    targetValue = if (isDarkTheme) Color(0xFFB3B3B3) else Color.Black,
+                    animationSpec = tween(durationMillis = 200),
+                    label = "SendButtonBackground"
+                )
+                val iconColor by animateColorAsState(
+                    targetValue = if (isDarkTheme) Color.Black else Color.White,
+                    animationSpec = tween(durationMillis = 200),
+                    label = "SendButtonIcon"
                 )
 
-                // 使用优化的控制按钮行组件
-                // 增强 Gemini 渠道检测：要求渠道为 Gemini 且模型名称包含 Gemini
+                // 增强 Gemini 渠道检测
                 val isGeminiChannel = selectedApiConfig?.let { config ->
                     config.channel.lowercase().contains("gemini") &&
                     config.model.lowercase().contains("gemini")
                 } == true
-                
-                // 🎯 性能优化：使用本地文本来判断按钮状态
-                OptimizedControlButtonsRow(
-                    isWebSearchEnabled = isWebSearchEnabled,
-                    onToggleWebSearch = onToggleWebSearch,
-                    isCodeExecutionEnabled = isCodeExecutionEnabled,
-                    onToggleCodeExecution = onToggleCodeExecution,
-                    showCodeExecutionToggle = isGeminiChannel,
-                    onToggleImagePanel = onToggleImagePanel,
-                    onToggleMoreOptionsPanel = onToggleMoreOptionsPanel,
-                    showImageSelectionPanel = showImageSelectionPanel,
-                    showMoreOptionsPanel = showMoreOptionsPanel,
-                    text = localText,
-                    selectedMediaItems = selectedMediaItems,
-                    onClearContent = {
-                        // 清空时也需要清空本地状态
-                        localTextFieldValue = TextFieldValue("", TextRange(0))
-                        lastExternalText = ""
-                        onTextChange("")
-                        onClearMediaItems()
-                        syncJob?.cancel()
-                    },
-                    onSendClick = onSendClick,
-                    isApiCalling = isApiCalling
-                )
+
+                // 输入框 + 加号按钮在同一行
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // 加号按钮
+                    Box {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .background(Color(0xFF3B3B3B), CircleShape)
+                                .border(1.dp, Color.White.copy(alpha = 0.3f), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            IconButton(
+                                onClick = {
+                                    val now = android.os.SystemClock.uptimeMillis()
+                                    // 防止长按松开后立即重新打开
+                                    if (!showFunctionPanel && now - lastFunctionPanelDismissAt < 200L) {
+                                        return@IconButton
+                                    }
+                                    showFunctionPanel = !showFunctionPanel
+                                },
+                                modifier = Modifier.size(40.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Add,
+                                    contentDescription = if (showFunctionPanel) "收起功能面板" else "展开功能面板",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                        }
+
+                        // 功能按钮面板弹出（带动画）
+                        if (renderFunctionPanel) {
+                            Popup(
+                                alignment = Alignment.BottomStart,
+                                offset = IntOffset(0, with(density) { (-56).dp.toPx().toInt() }),
+                                onDismissRequest = {
+                                    lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
+                                    if (showFunctionPanel) showFunctionPanel = false
+                                },
+                                properties = PopupProperties(
+                                    focusable = false,
+                                    dismissOnBackPress = true,
+                                    dismissOnClickOutside = true
+                                )
+                            ) {
+                                Box(modifier = Modifier.graphicsLayer {
+                                    alpha = functionPanelAlpha.value
+                                    scaleX = functionPanelScale.value
+                                    scaleY = functionPanelScale.value
+                                    transformOrigin = TransformOrigin(0f, 1f)
+                                }) {
+                                    FunctionPanelContent(
+                                        isWebSearchEnabled = isWebSearchEnabled,
+                                        onToggleWebSearch = onToggleWebSearch,
+                                        isCodeExecutionEnabled = isCodeExecutionEnabled,
+                                        onToggleCodeExecution = onToggleCodeExecution,
+                                        isGeminiChannel = isGeminiChannel,
+                                        onToggleImagePanel = onToggleImagePanel,
+                                        onToggleMoreOptionsPanel = onToggleMoreOptionsPanel,
+                                        hasContent = hasContent,
+                                        onClearContent = {
+                                            localTextFieldValue = TextFieldValue("", TextRange(0))
+                                            lastExternalText = ""
+                                            onTextChange("")
+                                            onClearMediaItems()
+                                            syncJob?.cancel()
+                                        },
+                                        onDismiss = {
+                                            lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
+                                            showFunctionPanel = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        // 图片选择面板弹出（带动画）- 在加号按钮上方
+                        if (renderImageSelectionPanel) {
+                            Popup(
+                                alignment = Alignment.BottomStart,
+                                offset = IntOffset(0, with(density) { (-56).dp.toPx().toInt() }),
+                                onDismissRequest = {
+                                    lastImagePanelDismissAt = android.os.SystemClock.uptimeMillis()
+                                    if (showImageSelectionPanel) showImageSelectionPanel = false
+                                },
+                                properties = PopupProperties(
+                                    focusable = false,
+                                    dismissOnBackPress = true,
+                                    dismissOnClickOutside = true
+                                )
+                            ) {
+                                Box(modifier = Modifier.graphicsLayer {
+                                    alpha = imageAlpha.value
+                                    scaleX = imageScale.value
+                                    scaleY = imageScale.value
+                                    transformOrigin = TransformOrigin(0f, 1f)
+                                }) {
+                                    OptimizedImageSelectionPanel { selectedOption ->
+                                        if (showImageSelectionPanel) showImageSelectionPanel = false
+                                        when (selectedOption) {
+                                            ImageSourceOption.ALBUM -> photoPickerLauncher.launch(
+                                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                                            )
+                                            ImageSourceOption.CAMERA -> cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // 更多选项面板弹出（带动画）- 在加号按钮上方
+                        if (renderMoreOptionsPanel) {
+                            Popup(
+                                alignment = Alignment.BottomStart,
+                                offset = IntOffset(0, with(density) { (-56).dp.toPx().toInt() }),
+                                onDismissRequest = {
+                                    lastMorePanelDismissAt = android.os.SystemClock.uptimeMillis()
+                                    if (showMoreOptionsPanel) showMoreOptionsPanel = false
+                                },
+                                properties = PopupProperties(
+                                    focusable = false,
+                                    dismissOnBackPress = true,
+                                    dismissOnClickOutside = true
+                                )
+                            ) {
+                                Box(modifier = Modifier.graphicsLayer {
+                                    alpha = moreAlpha.value
+                                    scaleX = moreScale.value
+                                    scaleY = moreScale.value
+                                    transformOrigin = TransformOrigin(0f, 1f)
+                                }) {
+                                    OptimizedMoreOptionsPanel { selectedOption ->
+                                        if (showMoreOptionsPanel) showMoreOptionsPanel = false
+                                        when (selectedOption) {
+                                            MoreOptionsType.CONVERSATION_PARAMS -> {
+                                                showConversationParamsDialog = true
+                                            }
+                                            MoreOptionsType.MCP -> {
+                                                showMcpServerListDialog = true
+                                            }
+                                            else -> {
+                                                val mimeTypesArray = Array(selectedOption.mimeTypes.size) { index ->
+                                                    selectedOption.mimeTypes[index]
+                                                }
+                                                filePickerLauncher.launch(mimeTypesArray)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.width(10.dp))
+
+                    // 输入框
+                    BasicTextField(
+                        value = localTextFieldValue,
+                        onValueChange = { newValue ->
+                            localTextFieldValue = newValue
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .focusRequester(focusRequester)
+                            .onFocusChanged { focusState ->
+                                isFocused = focusState.isFocused
+                                if (!focusState.isFocused) {
+                                    onFocusChange(false)
+                                }
+                            },
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        ),
+                        cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
+                        maxLines = 5,
+                        decorationBox = { innerTextField ->
+                            Row(
+                                modifier = Modifier
+                                    .background(Color(0xFF3B3B3B), CircleShape)
+                                    .border(
+                                        width = 1.dp,
+                                        color = if (isFocused) Color.White.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.3f),
+                                        shape = CircleShape
+                                    )
+                                    .padding(start = 14.dp, end = 5.dp, top = 6.dp, bottom = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(modifier = Modifier.weight(1f)) {
+                                    if (localText.isEmpty()) {
+                                        Text(
+                                            "输入消息...",
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                        )
+                                    }
+                                    innerTextField()
+                                }
+                                Spacer(Modifier.width(8.dp))
+                                FilledIconButton(
+                                    onClick = onSendClick,
+                                    shape = CircleShape,
+                                    colors = IconButtonDefaults.filledIconButtonColors(
+                                        containerColor = buttonBackgroundColor,
+                                        contentColor = iconColor
+                                    ),
+                                    modifier = Modifier.size(36.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = when {
+                                            isApiCalling -> Icons.Filled.Stop
+                                            hasContent -> Icons.Filled.KeyboardArrowUp
+                                            else -> Icons.Filled.GraphicEq
+                                        },
+                                        contentDescription = when {
+                                            isApiCalling -> "停止"
+                                            hasContent -> "发送"
+                                            else -> "语音输入"
+                                        },
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                        }
+                    )
+                }
             }
             
             // 已由 Column 自身处理 navigationBars + ime 内边距，移除额外 spacer
-        }
-
-        val yOffsetPx = -chatInputContentHeightPx.toFloat() - with(density) { 8.dp.toPx() }
-
-        // 带入场/退场动画的"相册"面板（使用渲染可见标志以支持退出动画）
-        var renderImageSelectionPanel by remember { mutableStateOf(false) }
-        val imageAlpha = remember { Animatable(0f) }
-        val imageScale = remember { Animatable(0.8f) }
-
-        LaunchedEffect(showImageSelectionPanel) {
-            if (showImageSelectionPanel) {
-                renderImageSelectionPanel = true
-                launch { imageAlpha.animateTo(1f, animationSpec = tween(durationMillis = 150)) }
-                launch { imageScale.animateTo(1f, animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) }
-            } else if (renderImageSelectionPanel) {
-                // 退出动画
-                launch { imageAlpha.animateTo(0f, animationSpec = tween(durationMillis = 140)) }
-                launch { imageScale.animateTo(0.9f, animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing)) }
-                    .invokeOnCompletion { renderImageSelectionPanel = false }
-            }
-        }
-
-        if (renderImageSelectionPanel) {
-            // 计算相册按钮在控制栏中的实际位置
-            // 左侧有: 网页搜索按钮(约70dp) + Spacer(8dp) + IconButton位置中心(24dp)
-            val webSearchButtonWidth = 70.dp
-            val spacerWidth = 8.dp
-            val iconButtonSize = 48.dp
-            val imageButtonCenterX = webSearchButtonWidth + spacerWidth + (iconButtonSize / 2)
-            val panelWidthDp = 150.dp
-            val xOffsetForPopup = imageButtonCenterX - (panelWidthDp / 2) + 45.dp // 向右偏移60dp微调
-            val xOffsetPx = with(density) { xOffsetForPopup.toPx() }
-            Popup(
-                alignment = Alignment.BottomStart,
-                offset = IntOffset(xOffsetPx.toInt(), yOffsetPx.toInt()),
-                onDismissRequest = {
-                    lastImagePanelDismissAt = android.os.SystemClock.uptimeMillis()
-                    // 将"目标状态"置为关闭，触发退场动画，动画结束后再移除渲染
-                    if (showImageSelectionPanel) showImageSelectionPanel = false
-                },
-                properties = PopupProperties(
-                    // 非可聚焦以避免收起输入法
-                    focusable = false,
-                    dismissOnBackPress = true,
-                    dismissOnClickOutside = true
-                )
-            ) {
-                Box(modifier = Modifier.graphicsLayer {
-                    this.alpha = imageAlpha.value
-                    this.scaleX = imageScale.value
-                    this.scaleY = imageScale.value
-                    this.transformOrigin = TransformOrigin(0.5f, 1f)
-                }) {
-                    OptimizedImageSelectionPanel { selectedOption ->
-                        // 点击选项后也触发优雅退场
-                        if (showImageSelectionPanel) showImageSelectionPanel = false
-                        when (selectedOption) {
-                            ImageSourceOption.ALBUM -> photoPickerLauncher.launch(
-                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
-                            )
-                            ImageSourceOption.CAMERA -> cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                        }
-                    }
-                }
-            }
-        }
-
-        // 带入场/退场动画的"更多"面板
-        var renderMoreOptionsPanel by remember { mutableStateOf(false) }
-        val moreAlpha = remember { Animatable(0f) }
-        val moreScale = remember { Animatable(0.8f) }
-
-        LaunchedEffect(showMoreOptionsPanel) {
-            if (showMoreOptionsPanel) {
-                renderMoreOptionsPanel = true
-                launch { moreAlpha.animateTo(1f, animationSpec = tween(durationMillis = 150)) }
-                launch { moreScale.animateTo(1f, animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) }
-            } else if (renderMoreOptionsPanel) {
-                launch { moreAlpha.animateTo(0f, animationSpec = tween(durationMillis = 140)) }
-                launch { moreScale.animateTo(0.9f, animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing)) }
-                    .invokeOnCompletion { renderMoreOptionsPanel = false }
-            }
-        }
-
-        if (renderMoreOptionsPanel) {
-            // 计算更多选项按钮在控制栏中的实际位置
-            // 左侧有: 网页搜索按钮(约70dp) + Spacer(8dp) + 相册按钮(48dp) + Spacer(8dp) + IconButton位置中心(24dp)
-            val webSearchButtonWidth = 70.dp
-            val spacerWidth = 8.dp
-            val iconButtonSize = 48.dp
-            val tuneButtonCenterX = webSearchButtonWidth + spacerWidth + iconButtonSize + spacerWidth + (iconButtonSize / 2)
-            val panelWidthDp = 150.dp
-            val xOffsetForPopup = tuneButtonCenterX - (panelWidthDp / 2) + 30.dp // 向右偏移30dp微调
-            val xOffsetForMoreOptionsPanelPx = with(density) { xOffsetForPopup.toPx() }
-
-            Popup(
-                alignment = Alignment.BottomStart,
-                offset = IntOffset(xOffsetForMoreOptionsPanelPx.toInt(), yOffsetPx.toInt()),
-                onDismissRequest = {
-                    lastMorePanelDismissAt = android.os.SystemClock.uptimeMillis()
-                    if (showMoreOptionsPanel) showMoreOptionsPanel = false
-                },
-                properties = PopupProperties(
-                    // 非可聚焦以避免收起输入法
-                    focusable = false,
-                    dismissOnBackPress = true,
-                    dismissOnClickOutside = true
-                )
-            ) {
-                Box(modifier = Modifier.graphicsLayer {
-                    this.alpha = moreAlpha.value
-                    this.scaleX = moreScale.value
-                    this.scaleY = moreScale.value
-                    this.transformOrigin = TransformOrigin(0.5f, 1f)
-                }) {
-                    OptimizedMoreOptionsPanel { selectedOption ->
-                        if (showMoreOptionsPanel) showMoreOptionsPanel = false
-                        when (selectedOption) {
-                            MoreOptionsType.CONVERSATION_PARAMS -> {
-                                showConversationParamsDialog = true
-                            }
-                            MoreOptionsType.MCP -> {
-                                showMcpServerListDialog = true
-                            }
-                            else -> {
-                                val mimeTypesArray = Array(selectedOption.mimeTypes.size) { index ->
-                                    selectedOption.mimeTypes[index]
-                                }
-                                filePickerLauncher.launch(mimeTypesArray)
-                            }
-                        }
-                    }
-                }
-            }
         }
     }
 
