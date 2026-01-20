@@ -61,7 +61,8 @@ fun ChatMessagesList(
     bubbleMaxWidth: Dp,
     onShowAiMessageOptions: (Message) -> Unit,
     onImageLoaded: () -> Unit,
-    onImageClick: (String) -> Unit
+    onImageClick: (String) -> Unit,
+    additionalBottomPadding: Dp = 0.dp
 ) {
     val haptic = LocalHapticFeedback.current
     val coroutineScope = rememberCoroutineScope()
@@ -129,8 +130,8 @@ fun ChatMessagesList(
                 contentPadding = PaddingValues(
                     start = 4.dp,
                     end = 4.dp,
-                    top = 8.dp,
-                    bottom = 10.dp  // 增加底部padding以确保内容完全显示在输入框上方
+                    top = 85.dp,
+                    bottom = additionalBottomPadding + 10.dp
                 ),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {

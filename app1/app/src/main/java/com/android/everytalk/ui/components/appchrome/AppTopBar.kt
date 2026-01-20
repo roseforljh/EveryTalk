@@ -26,7 +26,8 @@ package com.android.everytalk.ui.components
  import androidx.compose.ui.Modifier
  import androidx.compose.ui.draw.clip
  import androidx.compose.ui.draw.scale
- import androidx.compose.ui.graphics.Color
+ import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
  import androidx.compose.ui.text.font.FontWeight
  import androidx.compose.ui.text.style.TextAlign
  import androidx.compose.ui.text.style.TextOverflow
@@ -59,13 +60,19 @@ package com.android.everytalk.ui.components
      iconSize: Dp = 22.dp
  ) {
      val coroutineScope = rememberCoroutineScope()
-     Surface(
+     val backgroundColor = MaterialTheme.colorScheme.background
+     Box(
          modifier = modifier
              .fillMaxWidth()
              .height(barHeight)
-             .background(MaterialTheme.colorScheme.background),
- 
-         color = MaterialTheme.colorScheme.background,
+             .background(
+                 brush = Brush.verticalGradient(
+                     colors = listOf(
+                         backgroundColor,
+                         backgroundColor.copy(alpha = 0f)
+                     )
+                 )
+             )
      ) {
          Row(
              modifier = Modifier

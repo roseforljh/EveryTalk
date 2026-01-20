@@ -290,6 +290,9 @@ fun ChatScreen(
         derivedStateOf { imeHeightPx > 0 }
     }
 
+    var inputAreaHeightPx by remember { mutableIntStateOf(0) }
+    val inputAreaHeightDp = with(density) { inputAreaHeightPx.toDp() }
+
     val audioPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
         onResult = { isGranted ->
@@ -312,40 +315,7 @@ fun ChatScreen(
     Scaffold(
         modifier = modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
-        contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
-        topBar = {
-            AppTopBar(
-                selectedConfigName = selectedApiConfig?.name?.takeIf { it.isNotBlank() }
-                    ?: selectedApiConfig?.model ?: "选择配置",
-                onMenuClick = { coroutineScope.launch { viewModel.drawerState.open() } },
-                onSettingsClick = {
-                    navController.navigate(Screen.SETTINGS_SCREEN) {
-                        popUpTo(navController.graph.findStartDestination().id) {
-                            saveState = true
-                        }
-                        launchSingleTop = true
-                        restoreState = true
-                    }
-                },
-                onTitleClick = {
-                    coroutineScope.launch {
-                        if (filteredModelsForBottomSheet.isNotEmpty()) {
-                            showModelSelectionBottomSheet = true
-                        } else {
-                            viewModel.showSnackbar("当前无可用模型配置")
-                        }
-                    }
-                },
-                onSystemPromptClick = {
-                    viewModel.toggleSystemPromptExpanded()
-                    viewModel.showSystemPromptDialog()
-                },
-                systemPrompt = systemPrompt,
-                isSystemPromptExpanded = isSystemPromptExpanded,
-                isSystemPromptEngaged = isSystemPromptEngaged,
-                onToggleSystemPromptEngaged = { viewModel.toggleSystemPromptEngaged() }
-            )
-        },
+        contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
         floatingActionButton = {
             ScrollToBottomButton(
                 scrollStateManager = scrollStateManager
@@ -353,15 +323,14 @@ fun ChatScreen(
         },
         floatingActionButtonPosition = FabPosition.End
     ) { scaffoldPaddingValues ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(scaffoldPaddingValues)
         ) {
+            // 主内容区域 - 消息列表填满整个区域
             Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
+                modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.BottomCenter
             ) {
                 when {
@@ -410,16 +379,22 @@ fun ChatScreen(
                                 },
                                 onImageClick = { imageUrl ->
                                     viewModel.showImageViewer(imageUrl)
-                                }
+                                },
+                                additionalBottomPadding = inputAreaHeightDp
                             )
                             }
                         }
                     }
                 }
-
             }
 
-            ChatInputArea(
+            // 浮动输入框 - 对齐到底部
+            Box(
+                modifier = Modifier
+                    .fillMaxSize(),
+                contentAlignment = Alignment.BottomCenter
+            ) {
+                ChatInputArea(
                 text = text,
                 onTextChange = {
                     viewModel.onTextChange(it)
@@ -492,11 +467,46 @@ fun ChatScreen(
                 },
                 viewModel = viewModel,
                 onShowVoiceInput = { navController.navigate(Screen.VOICE_INPUT_SCREEN) },
+                onHeightChange = { height -> inputAreaHeightPx = height },
                 // MCP 相关参数
                 mcpServerStates = mcpServerStates,
                 onAddMcpServer = { viewModel.addMcpServer(it) },
                 onRemoveMcpServer = { viewModel.removeMcpServer(it) },
                 onToggleMcpServer = { id, enabled -> viewModel.toggleMcpServer(id, enabled) }
+            )
+            }
+
+            // 浮动顶栏 - 覆盖在内容上方
+            AppTopBar(
+                selectedConfigName = selectedApiConfig?.name?.takeIf { it.isNotBlank() }
+                    ?: selectedApiConfig?.model ?: "选择配置",
+                onMenuClick = { coroutineScope.launch { viewModel.drawerState.open() } },
+                onSettingsClick = {
+                    navController.navigate(Screen.SETTINGS_SCREEN) {
+                        popUpTo(navController.graph.findStartDestination().id) {
+                            saveState = true
+                        }
+                        launchSingleTop = true
+                        restoreState = true
+                    }
+                },
+                onTitleClick = {
+                    coroutineScope.launch {
+                        if (filteredModelsForBottomSheet.isNotEmpty()) {
+                            showModelSelectionBottomSheet = true
+                        } else {
+                            viewModel.showSnackbar("当前无可用模型配置")
+                        }
+                    }
+                },
+                onSystemPromptClick = {
+                    viewModel.toggleSystemPromptExpanded()
+                    viewModel.showSystemPromptDialog()
+                },
+                systemPrompt = systemPrompt,
+                isSystemPromptExpanded = isSystemPromptExpanded,
+                isSystemPromptEngaged = isSystemPromptEngaged,
+                onToggleSystemPromptEngaged = { viewModel.toggleSystemPromptEngaged() }
             )
         }
 

@@ -176,7 +176,7 @@ fun OptimizedImageSelectionPanel(
                         Unit
                     }
                 }
-                
+
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -185,10 +185,15 @@ fun OptimizedImageSelectionPanel(
                         .padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // 为每个选项设置不同颜色
+                    val iconTint = when (option) {
+                        ImageSourceOption.ALBUM -> Color(0xff2cb334)  // 绿色
+                        ImageSourceOption.CAMERA -> Color(0xff2196F3) // 蓝色
+                    }
                     Icon(
                         imageVector = option.icon,
                         contentDescription = option.label,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        tint = iconTint,
                         modifier = Modifier.size(24.dp)
                     )
                     Spacer(Modifier.width(12.dp))
@@ -235,7 +240,7 @@ fun OptimizedMoreOptionsPanel(
                         Unit
                     }
                 }
-                
+
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -244,10 +249,16 @@ fun OptimizedMoreOptionsPanel(
                         .padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // 为每个选项设置不同颜色
+                    val iconTint = when (option) {
+                        MoreOptionsType.ATTACHMENT -> Color(0xff607D8B)   // 蓝灰色
+                        MoreOptionsType.MCP -> Color(0xff9C27B0)          // 紫色
+                        MoreOptionsType.CONVERSATION_PARAMS -> Color(0xfff76213) // 橙色
+                    }
                     Icon(
                         imageVector = option.icon,
                         contentDescription = option.label,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        tint = iconTint,
                         modifier = Modifier.size(24.dp)
                     )
                     Spacer(Modifier.width(12.dp))
@@ -417,68 +428,13 @@ fun OptimizedControlButtonsRow(
             }
         }
 
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            if (text.isNotEmpty() || selectedMediaItems.isNotEmpty()) {
-                IconButton(onClick = onClearContent) {
-                    Icon(
-                        Icons.Filled.Clear,
-                        "清除内容和所选项目",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Spacer(Modifier.width(4.dp))
-            }
-            val hasContent = text.isNotEmpty() || selectedMediaItems.isNotEmpty()
-            val isDarkTheme = isSystemInDarkTheme()
-
-            val buttonBackgroundColor by animateColorAsState(
-                targetValue = if (isDarkTheme) Color(0xFFB3B3B3) else Color.Black,
-                animationSpec = tween(durationMillis = 200),
-                label = "SendButtonBackground"
-            )
-            val iconColor by animateColorAsState(
-                targetValue = if (isDarkTheme) Color.Black else Color.White,
-                animationSpec = tween(durationMillis = 200),
-                label = "SendButtonIcon"
-            )
-
-            val buttonScale = remember { androidx.compose.animation.core.Animatable(1f) }
-            // 记住上一次的状态，只在真正改变时播放动画
-            val previousState = remember { mutableStateOf(Pair(hasContent, isApiCalling)) }
-            
-            LaunchedEffect(hasContent, isApiCalling) {
-                val currentState = Pair(hasContent, isApiCalling)
-                // 只有当状态真正改变时才播放动画（避免页面重组时误触发）
-                if (currentState != previousState.value) {
-                    previousState.value = currentState
-                    buttonScale.animateTo(0.8f, animationSpec = tween(100))
-                    buttonScale.animateTo(1f, animationSpec = tween(100))
-                }
-            }
-
-            FilledIconButton(
-                onClick = onSendClick,
-                shape = CircleShape,
-                colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = buttonBackgroundColor,
-                    contentColor = iconColor
-                ),
-                modifier = Modifier.graphicsLayer {
-                    scaleX = buttonScale.value
-                    scaleY = buttonScale.value
-                }
-            ) {
+        // 清除按钮（发送按钮已移到输入框内部）
+        if (text.isNotEmpty() || selectedMediaItems.isNotEmpty()) {
+            IconButton(onClick = onClearContent) {
                 Icon(
-                    imageVector = when {
-                        isApiCalling -> Icons.Filled.Stop
-                        hasContent -> Icons.Filled.KeyboardArrowUp
-                        else -> Icons.Filled.GraphicEq
-                    },
-                    contentDescription = when {
-                        isApiCalling -> "停止"
-                        hasContent -> "发送"
-                        else -> "语音输入"
-                    }
+                    Icons.Filled.Clear,
+                    "清除内容和所选项目",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }

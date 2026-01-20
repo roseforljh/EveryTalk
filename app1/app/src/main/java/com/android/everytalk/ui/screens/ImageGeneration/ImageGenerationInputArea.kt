@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.ImageGeneration
 
+import kotlin.math.max
 import android.Manifest
 import android.content.Context
 import android.net.Uri
@@ -11,6 +12,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
@@ -18,6 +20,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBarsIgnoringVisibility
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -45,6 +48,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
@@ -533,21 +537,28 @@ fun ImageGenerationInputArea(
             }
         }
 
+    // 使用 WindowInsets 组合逻辑来统一处理底部间距，消除手动计算带来的动画抖动
+    val navInsets = WindowInsets.navigationBarsIgnoringVisibility
+    val baseInsets = navInsets.add(WindowInsets(bottom = 24.dp))
+    val targetInsets = WindowInsets.ime.union(baseInsets)
+
     Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBarsIgnoringVisibility))
-    ) {
-        Column(
             modifier = Modifier
-                .fillMaxWidth(1f)
-                .align(Alignment.BottomCenter)
-                .padding(start = 6.dp, end = 6.dp, bottom = 10.dp)
-                .background(
-                    MaterialTheme.colorScheme.background
-                )
+                .fillMaxWidth()
+                // 统一按 ime ∪ (navigationBars + 24dp) 处理，交由系统 Layout 阶段平滑过渡
                 .onSizeChanged { intSize -> chatInputContentHeightPx = intSize.height }
+                .windowInsetsPadding(targetInsets)
         ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth(1f)
+                    .align(Alignment.BottomCenter)
+                    // 仅保留左右 padding，底部由外层 WindowInsets 统一控制
+                    .padding(start = 6.dp, end = 6.dp)
+                    .background(
+                        MaterialTheme.colorScheme.background
+                    )
+            ) {
             val borderColor = if (isSystemInDarkTheme()) Color.Gray.copy(alpha = 0.3f) else Color.Gray.copy(alpha = 0.2f)
             Box(
                 modifier = Modifier

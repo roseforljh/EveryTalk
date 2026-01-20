@@ -78,13 +78,40 @@ class ChatScrollStateManager(
     val nestedScrollConnection = object : NestedScrollConnection {
         override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
             if (source == NestedScrollSource.UserInput) {
-                if (!_isAtBottom.value && !_showScrollToBottomButton.value) {
-                    showScrollToBottomButtonWithTimeout()
-                }
                 // 实时记录用户锚点，不再受 isAtBottom 限制
                 onUserScrollSnapshot(listState)
                 // User interaction re-enables auto-scroll
                 preventAutoScroll = false
+                
+                // 优化按钮显示逻辑：
+                // 1. 距离底部一个屏幕高度以内：始终隐藏
+                // 2. 距离底部超过一个屏幕高度：
+                //    - 往上滑动 (Gesture UP, Content DOWN) -> 显示
+                //    - 往下滑动 (Gesture DOWN, Content UP) -> 隐藏
+                
+                val layoutInfo = listState.layoutInfo
+                val totalItems = layoutInfo.totalItemsCount
+                val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
+                
+                // 判断是否在底部区域（最后一项可见）
+                // 简单起见，只要最后一项出现在屏幕中，就认为在底部区域（即距离底部小于一屏）
+                val isCloseToBottom = if (lastVisibleItem != null && totalItems > 0) {
+                    lastVisibleItem.index >= totalItems - 1
+                } else {
+                    true // 空列表或异常，默认视为在底部
+                }
+
+                if (isCloseToBottom) {
+                    _showScrollToBottomButton.value = false
+                } else {
+                    // available.y < 0: 手指向上滑 (查看底部) -> 消失 (用户正在手动去底部)
+                    // available.y > 0: 手指向下滑 (查看顶部/历史) -> 出现 (方便用户回到底部)
+                    if (available.y < -1f) { 
+                        _showScrollToBottomButton.value = false
+                    } else if (available.y > 1f) {
+                        _showScrollToBottomButton.value = true
+                    }
+                }
             }
             return Offset.Zero
         }
@@ -173,6 +200,7 @@ class ChatScrollStateManager(
     }
 
     suspend fun restoreAnchorIfNeeded(listState: LazyListState) {
+        if (isProgrammaticScroll || autoScrollJob?.isActive == true) return
         if (userAnchored && !_isAtBottom.value) {
             val now = System.currentTimeMillis()
             // Throttle restore to avoid fighting with layout
@@ -285,12 +313,8 @@ class ChatScrollStateManager(
             snapshotFlow { listState.layoutInfo.totalItemsCount }
                 .first { total -> total > index }
             
-            val desiredItemOffsetPx = listState.layoutInfo.beforeContentPadding
-            
-            userAnchored = true
-            anchorIndex = index
-            anchorScrollOffset = desiredItemOffsetPx
-            
+            val desiredItemOffsetPx = (listState.layoutInfo.beforeContentPadding * 0.35f).roundToInt()
+
             isProgrammaticScroll = true
             try {
                 listState.animateScrollToItemWithEasing(
@@ -301,21 +325,17 @@ class ChatScrollStateManager(
             } finally {
                 isProgrammaticScroll = false
             }
+            
+            withFrameNanos { }
+            userAnchored = true
+            anchorIndex = listState.firstVisibleItemIndex
+            anchorScrollOffset = listState.firstVisibleItemScrollOffset
         }
     }
 
     // Kept for compatibility
     fun handleStreamingScroll() {
         // No-op: logic is now fully reactive in init block
-    }
-
-    private fun showScrollToBottomButtonWithTimeout() {
-        cancelHideButtonJob()
-        _showScrollToBottomButton.value = true
-        hideButtonJob = coroutineScope.launch {
-            delay(3000)
-            _showScrollToBottomButton.value = false
-        }
     }
 
     private fun cancelHideButtonJob() {
