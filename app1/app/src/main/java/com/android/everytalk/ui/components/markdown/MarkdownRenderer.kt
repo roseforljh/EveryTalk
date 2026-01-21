@@ -72,10 +72,17 @@ private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): S
         .replace("<", "&lt;")
         .replace(">", "&gt;")
 
-    // 2. Currency: 避免 $$ 被误识别为数学公式
+    // 2. Currency: 避免 $ 或 $$ 后跟数字被误识别为数学公式
+    // 2.1 单个 $ 后跟数字（如 $12, $2.00）是货币符号，需转义避免被当作 LaTeX 分隔符
+    // 使用负向后视确保不会重复转义已转义的 \$
+    // 用 lambda 返回字面量，避免替换串中的 $ 被当作分组引用
+    val singleCurrencyPattern = Regex("(?<!\\\\)\\$(?=\\d)")
+    s = s.replace(singleCurrencyPattern) { "\\$" }
+
+    // 2.2 $$ 后跟数字的情况（兼容旧逻辑）
     if (s.contains("$$")) {
-        val currencyPattern = Regex("\\$\\$(?=\\d)")
-        s = s.replace(currencyPattern) { "\\$" }
+        val doubleCurrencyPattern = Regex("\\$\\$(?=\\d)")
+        s = s.replace(doubleCurrencyPattern) { "\\$" }
     }
 
     // 3. Base64 Image: 移除 Base64 中的空白
@@ -131,7 +138,8 @@ private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): S
         val isEmptyLine = line.isBlank()
         val isTableLine = line.contains("|")
         val hasUnbalancedBold = line.split("**").size % 2 == 0
-        val shouldSkipHardBreak = isTableLine || (isStreaming && hasUnbalancedBold)
+        // 无论是否流式渲染，有未闭合的 ** 都跳过硬换行，避免破坏加粗语法
+        val shouldSkipHardBreak = isTableLine || hasUnbalancedBold
 
         when {
             index == lastIndex -> line
@@ -145,19 +153,26 @@ private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): S
 
     // 8. 将 [double dollar] 占位符转换为实际的数学公式标记
     if (s.contains("[double dollar]")) {
-        // 8.1 行级占位符：单独成行的 [double dollar] -> $$
-        val blockPlaceholderPattern = Regex("(?m)^[ \\t]*\\[double dollar][ \\t]*$")
-        s = blockPlaceholderPattern.replace(s) { "$$" }
+        // 8.1 跨行块级公式：[double dollar]\n内容\n[double dollar] -> $$内容$$
+        // 必须先处理跨行格式，否则会被行级正则破坏
+        val multilineBlockPattern = Regex(
+            "\\[double dollar]\\s*\\n([\\s\\S]*?)\\n\\s*\\[double dollar]",
+            RegexOption.MULTILINE
+        )
+        s = s.replace(multilineBlockPattern) { matchResult ->
+            val inner = matchResult.groupValues[1].trim()
+            if (inner.isEmpty()) "" else "\$\$${inner}\$\$"
+        }
 
-        // 8.2 行内占位符：... [double dollar] f(x) [double dollar] ... -> $f(x)$
+        // 8.2 行级占位符：单独成行的 [double dollar] -> $$
+        val blockPlaceholderPattern = Regex("(?m)^[ \\t]*\\[double dollar][ \\t]*$")
+        s = blockPlaceholderPattern.replace(s) { "\$\$" }
+
+        // 8.3 行内占位符：... [double dollar] f(x) [double dollar] ... -> $f(x)$
         val inlinePlaceholderPattern = Regex("\\[double dollar]([^\\[]+?)\\[double dollar]")
         s = s.replace(inlinePlaceholderPattern) { matchResult ->
             val inner = matchResult.groupValues[1].trim()
-            if (inner.isEmpty()) {
-                ""
-            } else {
-                "$" + inner + "$"
-            }
+            if (inner.isEmpty()) "" else "\$${inner}\$"
         }
     }
 
@@ -393,8 +408,8 @@ fun MarkdownRenderer(
             val sp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
             val cacheKey = if (contentKey.isNotBlank() && !isStreaming) {
                 // Append version suffix to invalidate old cache entries after heading size fixes
-                // v28: Fix **"xxx"** quoted bold not rendering due to CommonMark flanking rules
-                MarkdownSpansCache.generateKey(contentKey + "_v28", isDark, sp)
+                // v30: Fix ** bold broken by hard break when not streaming
+                MarkdownSpansCache.generateKey(contentKey + "_v31", isDark, sp)
             } else ""
 
             val cachedSpanned = if (cacheKey.isNotBlank()) MarkdownSpansCache.get(cacheKey) else null
