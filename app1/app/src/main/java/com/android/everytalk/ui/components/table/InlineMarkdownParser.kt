@@ -167,4 +167,23 @@ object InlineMarkdownParser {
                 text.contains('`') ||
                 text.contains('~')
     }
+
+    /**
+     * 检查文本是否包含数学公式
+     * 支持 $...$ 和 $$...$$ 格式
+     */
+    fun containsMath(text: String): Boolean {
+        if (!text.contains('$')) return false
+        // 检测未转义的 $ 符号
+        // 简单检测：至少有两个 $（可能是一对 $...$ 或 $$...$$）
+        var dollarCount = 0
+        var i = 0
+        while (i < text.length) {
+            if (text[i] == '$' && (i == 0 || text[i - 1] != '\\')) {
+                dollarCount++
+            }
+            i++
+        }
+        return dollarCount >= 2
+    }
 }

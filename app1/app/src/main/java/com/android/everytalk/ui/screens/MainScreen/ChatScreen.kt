@@ -350,6 +350,9 @@ fun ChatScreen(
 
                         var stickyHeaderTopPx by remember { mutableFloatStateOf(0f) }
                         val contentPaddingTopPx = with(density) { 8.dp.toPx() }
+                        // 添加顶栏高度偏移：AppTopBar 是 85dp 高，浮动在内容上方
+                        // 代码块 Header 需要吸附在顶栏下方，而不是屏幕顶部
+                        val topBarHeightPx = with(density) { 85.dp.toPx() }
 
                         CompositionLocalProvider(LocalStickyHeaderTop provides stickyHeaderTopPx) {
                             Box(
@@ -357,8 +360,9 @@ fun ChatScreen(
                                     .fillMaxSize()
                                     .onGloballyPositioned { coordinates ->
                                         val y = coordinates.positionInWindow().y
-                                        if (y.isFinite() && y > 0f) {
-                                            stickyHeaderTopPx = y + contentPaddingTopPx
+                                        if (y.isFinite() && y >= 0f) {
+                                            // 吸顶位置 = 容器顶部 + 顶栏高度 + 内容 padding
+                                            stickyHeaderTopPx = y + topBarHeightPx + contentPaddingTopPx
                                         }
                                     }
                             ) {

@@ -151,26 +151,17 @@ fun CodeBlockCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(bg)  // Header 也使用相同背景色
-                    // 动态吸顶偏移
                     .zIndex(1f) // 确保在内容之上绘制
+                    // 动态吸顶偏移：使用 graphicsLayer 在绘制阶段计算偏移
                     .graphicsLayer {
-                        // 如果 stickyTop 无效 (NaN)，则不进行吸顶偏移，保持原位
-                        if (!stickyTop.isNaN()) {
-                            // stickyTop 是列表顶部的 Y 坐标（屏幕坐标）
-                            // cardTopPx 是当前卡片顶部的 Y 坐标（屏幕坐标）
-                            // diff 是卡片顶部已经滚出 stickyTop 的距离 (cardTopPx < stickyTop 时为正数)
-                            // 我们需要将 Header 向下平移 diff 的距离，使其保持在 stickyTop 位置
-                            
+                        // 直接在绘制阶段读取状态并计算偏移
+                        translationY = if (stickyTop.isNaN()) {
+                            0f
+                        } else {
                             val diff = stickyTop - cardTopPx
                             val offset = max(0f, diff)
-                            
-                            // 限制 Header 不能移出卡片底部
-                            // 注意：这里使用的是 Row 的布局高度，不会因为 translation 而改变
                             val maxOffset = max(0f, (cardHeightPx - headerHeightPx).toFloat())
-                            
-                            translationY = min(offset, maxOffset)
-                        } else {
-                            translationY = 0f
+                            min(offset, maxOffset)
                         }
                     }
                     .onSizeChanged { headerHeightPx = it.height },

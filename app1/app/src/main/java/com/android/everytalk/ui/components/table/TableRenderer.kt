@@ -27,6 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.android.everytalk.ui.components.markdown.MarkdownRenderer
 
 /**
  * 表格渲染器（优化版，参考 RikkaHub DataTable）
@@ -152,6 +153,7 @@ fun TableRenderer(
  * - 使用轻量级 InlineMarkdownParser 渲染内联 Markdown
  * - 纯 Compose AnnotatedString，无 AndroidView 开销
  * - 支持加粗、斜体、代码、删除线等格式
+ * - 当检测到数学公式时，使用 MarkdownRenderer 渲染（支持 LaTeX）
  */
 @Composable
 private fun TableCell(
@@ -165,17 +167,9 @@ private fun TableCell(
     // 内联代码不使用背景色
     val codeBackground = Color.Transparent
 
-    // 使用 remember 缓存解析结果
-    val annotatedText = remember(content, usePlainText) {
-        if (usePlainText || !InlineMarkdownParser.containsInlineMarkdown(content)) {
-            androidx.compose.ui.text.AnnotatedString(content)
-        } else {
-            InlineMarkdownParser.parse(
-                text = content,
-                baseColor = Color.Unspecified,
-                codeBackground = codeBackground
-            )
-        }
+    // 检测是否包含数学公式
+    val containsMath = remember(content) {
+        InlineMarkdownParser.containsMath(content)
     }
 
     Box(
@@ -184,12 +178,36 @@ private fun TableCell(
             .padding(horizontal = 12.dp),
         contentAlignment = Alignment.CenterStart
     ) {
-        Text(
-            text = annotatedText,
-            style = style,
-            color = textColor,
-            maxLines = 10,
-            overflow = TextOverflow.Ellipsis
-        )
+        if (containsMath && !usePlainText) {
+            // 包含数学公式：使用 MarkdownRenderer 渲染（支持 LaTeX）
+            MarkdownRenderer(
+                markdown = content,
+                style = style,
+                color = textColor,
+                contentKey = contentKey,
+                disableVerticalPadding = true
+            )
+        } else {
+            // 普通文本或纯文本模式：使用 AnnotatedString 渲染
+            val annotatedText = remember(content, usePlainText) {
+                if (usePlainText || !InlineMarkdownParser.containsInlineMarkdown(content)) {
+                    androidx.compose.ui.text.AnnotatedString(content)
+                } else {
+                    InlineMarkdownParser.parse(
+                        text = content,
+                        baseColor = Color.Unspecified,
+                        codeBackground = codeBackground
+                    )
+                }
+            }
+
+            Text(
+                text = annotatedText,
+                style = style,
+                color = textColor,
+                maxLines = 10,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
     }
 }
