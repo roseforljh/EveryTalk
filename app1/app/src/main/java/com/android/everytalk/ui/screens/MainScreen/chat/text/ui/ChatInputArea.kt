@@ -777,11 +777,13 @@ fun ChatInputArea(
                 ) {
                     // 加号按钮
                     Box {
+                        val addButtonBackground = if (isDarkTheme) Color(0xFF3B3B3B) else Color(0xFFE8E8E8)
+                        val addButtonBorderColor = if (isDarkTheme) Color.White.copy(alpha = 0.3f) else Color.Black.copy(alpha = 0.15f)
                         Box(
                             modifier = Modifier
                                 .size(40.dp)
-                                .background(Color(0xFF3B3B3B), CircleShape)
-                                .border(1.dp, Color.White.copy(alpha = 0.3f), CircleShape),
+                                .background(addButtonBackground, CircleShape)
+                                .border(1.dp, addButtonBorderColor, CircleShape),
                             contentAlignment = Alignment.Center
                         ) {
                             IconButton(
@@ -950,12 +952,18 @@ fun ChatInputArea(
                         cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
                         maxLines = 5,
                         decorationBox = { innerTextField ->
+                            val inputBackground = if (isDarkTheme) Color(0xFF3B3B3B) else Color(0xFFE8E8E8)
+                            val inputBorderColor = if (isDarkTheme) {
+                                if (isFocused) Color.White.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.3f)
+                            } else {
+                                if (isFocused) Color.Black.copy(alpha = 0.3f) else Color.Black.copy(alpha = 0.15f)
+                            }
                             Row(
                                 modifier = Modifier
-                                    .background(Color(0xFF3B3B3B), CircleShape)
+                                    .background(inputBackground, CircleShape)
                                     .border(
                                         width = 1.dp,
-                                        color = if (isFocused) Color.White.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.3f),
+                                        color = inputBorderColor,
                                         shape = CircleShape
                                     )
                                     .padding(start = 14.dp, end = 5.dp, top = 6.dp, bottom = 6.dp),
