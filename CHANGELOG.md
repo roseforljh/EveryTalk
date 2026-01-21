@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.12.3](https://github.com/roseforljh/EveryTalk/compare/v1.12.2...v1.12.3) (2026-01-21)
+
+
+### Bug Fixes
+
+* **ui:** 修复表格数学公式渲染和代码块吸顶问题 ([6b2532c](https://github.com/roseforljh/EveryTalk/commit/6b2532c4a7f391793187999c870b5c048fc8fbb8))
+* **ui:** 输入框多行时动态切换为圆角矩形 ([87f61d6](https://github.com/roseforljh/EveryTalk/commit/87f61d63cdaa6bb1bf25569621331b35d7383a7e))
+
 ## [1.12.2](https://github.com/roseforljh/EveryTalk/compare/v1.12.1...v1.12.2) (2026-01-21)
 
 
