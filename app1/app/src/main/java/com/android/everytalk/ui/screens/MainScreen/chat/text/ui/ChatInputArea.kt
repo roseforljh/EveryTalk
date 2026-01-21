@@ -958,13 +958,16 @@ fun ChatInputArea(
                             } else {
                                 if (isFocused) Color.Black.copy(alpha = 0.3f) else Color.Black.copy(alpha = 0.15f)
                             }
+                            // 根据文本行数动态选择形状：单行用圆形，多行用圆角矩形
+                            val isMultiLine = localText.contains('\n') || localText.length > 40
+                            val inputShape = if (isMultiLine) RoundedCornerShape(20.dp) else CircleShape
                             Row(
                                 modifier = Modifier
-                                    .background(inputBackground, CircleShape)
+                                    .background(inputBackground, inputShape)
                                     .border(
                                         width = 1.dp,
                                         color = inputBorderColor,
-                                        shape = CircleShape
+                                        shape = inputShape
                                     )
                                     .padding(start = 14.dp, end = 5.dp, top = 6.dp, bottom = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically
