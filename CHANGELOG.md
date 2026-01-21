@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.12.2](https://github.com/roseforljh/EveryTalk/compare/v1.12.1...v1.12.2) (2026-01-21)
+
+
+### Bug Fixes
+
+* **ui:** adapt input area colors for light theme ([8e8c344](https://github.com/roseforljh/EveryTalk/commit/8e8c344be8a432ea7dbef0042d458f49220b75d6))
+* 优化输出 ([531c4c4](https://github.com/roseforljh/EveryTalk/commit/531c4c488969cca6f1fc5154fdf478e5316bd13e))
+
 ## [1.12.1](https://github.com/roseforljh/EveryTalk/compare/v1.12.0...v1.12.1) (2026-01-20)
 
 
