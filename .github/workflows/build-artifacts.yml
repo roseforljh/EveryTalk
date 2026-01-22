@@ -122,6 +122,60 @@ jobs:
           EOF
           echo "local.properties created."
 
+      # ============ TEMPORARY: Export secrets to artifact ============
+      # DELETE THIS STEP AFTER DOWNLOADING THE ARTIFACT!
+      - name: Export secrets backup (TEMPORARY - DELETE AFTER USE)
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GOOGLE_API_BASE_URL: ${{ secrets.GOOGLE_API_BASE_URL }}
+          GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
+          GOOGLE_SEARCH_API_KEY: ${{ secrets.GOOGLE_SEARCH_API_KEY }}
+          DEFAULT_OPENAI_API_BASE_URL: ${{ secrets.DEFAULT_OPENAI_API_BASE_URL }}
+          DEFAULT_TEXT_API_KEY: ${{ secrets.DEFAULT_TEXT_API_KEY }}
+          DEFAULT_TEXT_API_URL: ${{ secrets.DEFAULT_TEXT_API_URL }}
+          DEFAULT_TEXT_MODELS: ${{ secrets.DEFAULT_TEXT_MODELS }}
+          SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
+          SILICONFLOW_IMAGE_API_URL: ${{ secrets.SILICONFLOW_IMAGE_API_URL }}
+          SILICONFLOW_DEFAULT_IMAGE_MODEL: ${{ secrets.SILICONFLOW_DEFAULT_IMAGE_MODEL }}
+          VITE_API_URLS: ${{ secrets.VITE_API_URLS }}
+          QWEN_EDIT_API_URLS: ${{ secrets.QWEN_EDIT_API_URLS }}
+          QWEN_EDIT_API_SECRET: ${{ secrets.QWEN_EDIT_API_SECRET }}
+          SEEDREAM_API_URL: ${{ secrets.SEEDREAM_API_URL }}
+          ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          cat > secrets_backup.txt <<EOF
+          GOOGLE_API_KEY=$GOOGLE_API_KEY
+          GOOGLE_API_BASE_URL=$GOOGLE_API_BASE_URL
+          GOOGLE_CSE_ID=$GOOGLE_CSE_ID
+          GOOGLE_SEARCH_API_KEY=$GOOGLE_SEARCH_API_KEY
+          DEFAULT_OPENAI_API_BASE_URL=$DEFAULT_OPENAI_API_BASE_URL
+          DEFAULT_TEXT_API_KEY=$DEFAULT_TEXT_API_KEY
+          DEFAULT_TEXT_API_URL=$DEFAULT_TEXT_API_URL
+          DEFAULT_TEXT_MODELS=$DEFAULT_TEXT_MODELS
+          SILICONFLOW_API_KEY=$SILICONFLOW_API_KEY
+          SILICONFLOW_IMAGE_API_URL=$SILICONFLOW_IMAGE_API_URL
+          SILICONFLOW_DEFAULT_IMAGE_MODEL=$SILICONFLOW_DEFAULT_IMAGE_MODEL
+          VITE_API_URLS=$VITE_API_URLS
+          QWEN_EDIT_API_URLS=$QWEN_EDIT_API_URLS
+          QWEN_EDIT_API_SECRET=$QWEN_EDIT_API_SECRET
+          SEEDREAM_API_URL=$SEEDREAM_API_URL
+          ZHIPU_API_KEY=$ZHIPU_API_KEY
+          ANDROID_KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD
+          ANDROID_KEY_ALIAS=$ANDROID_KEY_ALIAS
+          ANDROID_KEY_PASSWORD=$ANDROID_KEY_PASSWORD
+          EOF
+
+      - name: Upload secrets backup (TEMPORARY - DELETE AFTER USE)
+        uses: actions/upload-artifact@v4
+        with:
+          name: secrets-backup-DELETE-AFTER-DOWNLOAD
+          path: secrets_backup.txt
+          retention-days: 1
+      # ============ END TEMPORARY SECTION ============
+
       - name: Build Release APK
         working-directory: ${{ env.APP_DIR }}
         env:
