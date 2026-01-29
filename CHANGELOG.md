@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.12.4](https://github.com/roseforljh/EveryTalk/compare/v1.12.3...v1.12.4) (2026-01-29)
+
+
+### Bug Fixes
+
+* bug fix ([f2fcb04](https://github.com/roseforljh/EveryTalk/commit/f2fcb04439b8c131849e551a3fa2b74dca551f86))
+
 ## [1.12.3](https://github.com/roseforljh/EveryTalk/compare/v1.12.2...v1.12.3) (2026-01-21)
 
 
