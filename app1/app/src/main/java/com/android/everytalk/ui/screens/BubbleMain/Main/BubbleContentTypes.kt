@@ -567,12 +567,12 @@ fun MessageContextMenu(
         val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
         val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
         val estimatedMenuHeightPx = with(density) { (48.dp * 3 + 16.dp).toPx() }
- 
-        // 将菜单左上角"精确对齐"到手指按压位置（向上微移 16dp）；如越界再进行边界夹紧
-        val rawX = pressOffset.x
-        val rawY = pressOffset.y - with(density) { 71.dp.toPx() }
- 
-        // 边界夹紧（若越界则回退，但尽量保持角点贴手指的原则）
+
+        // 用户消息：右上角对准手指位置
+        val rawX = pressOffset.x - menuWidthPx
+        val rawY = pressOffset.y
+
+        // 边界夹紧
         val finalX = rawX.coerceIn(0f, screenWidthPx - menuWidthPx)
         val finalY = rawY.coerceIn(0f, screenHeightPx - estimatedMenuHeightPx)
 
