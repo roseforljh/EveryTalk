@@ -361,12 +361,18 @@ class DataPersistenceManager(
                     val isTextMode = config.modalityType == com.android.everytalk.data.DataClass.ModalityType.TEXT
                     
                     if (isDefaultProvider && isTextMode) {
+                        // 1. 同步默认配置的 URL 和 Key（确保与 BuildConfig 保持一致）
+                        if (newConfig.address != defaultApiUrl || newConfig.key != defaultApiKey) {
+                            Log.i(TAG, "loadInitialData: 同步默认配置地址/密钥: ${newConfig.address} -> $defaultApiUrl")
+                            newConfig = newConfig.copy(address = defaultApiUrl, key = defaultApiKey)
+                        }
+
                         // 2. 迁移 Gemini 模型的渠道为 "Gemini"
                         if (newConfig.model.startsWith("gemini") && newConfig.channel != "Gemini") {
                             Log.i(TAG, "loadInitialData: 自动迁移默认 Gemini 模型渠道: ${newConfig.channel} -> Gemini")
                             newConfig = newConfig.copy(channel = "Gemini")
                         }
-                        
+
                         // 3. 迁移 Imagen 模型的渠道为 "Gemini" (针对图像配置)
                         if (newConfig.model.startsWith("imagen") && newConfig.channel != "Gemini") {
                             Log.i(TAG, "loadInitialData: 自动迁移默认 Imagen 模型渠道: ${newConfig.channel} -> Gemini")
