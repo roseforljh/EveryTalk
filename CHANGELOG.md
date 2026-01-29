@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.12.5](https://github.com/roseforljh/EveryTalk/compare/v1.12.4...v1.12.5) (2026-01-29)
+
+
+### Bug Fixes
+
+* 自动识别最新环境变量 ([ee03270](https://github.com/roseforljh/EveryTalk/commit/ee03270e3777d842ba1ed54b9fda57d67620abff))
+
 ## [1.12.4](https://github.com/roseforljh/EveryTalk/compare/v1.12.3...v1.12.4) (2026-01-29)
 
 
