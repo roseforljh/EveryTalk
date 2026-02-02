@@ -7,6 +7,7 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -94,39 +95,105 @@ fun ChatMessagesList(
 
     val isAtBottom by scrollStateManager.isAtBottom
     
-    val reversedChatItems = remember(chatItems) { chatItems.asReversed() }
+    // 动态 spacer 高度：当新用户消息发送时，计算需要的滚动空间
+    var dynamicSpacerHeight by remember { mutableStateOf(0.dp) }
     
-    // 检测新用户消息，滚动到 index 0
-    val lastUserMessageId = remember(chatItems) {
-        chatItems.lastOrNull { it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage }
-            ?.stableId
+    // 检测最新用户消息的 index 和 id
+    val lastUserMessageInfo = remember(chatItems) {
+        var index = -1
+        var id: String? = null
+        chatItems.forEachIndexed { i, item ->
+            if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage) {
+                index = i
+                id = item.stableId
+            }
+        }
+        Pair(index, id)
     }
     
     var previousUserMessageId by remember { mutableStateOf<String?>(null) }
+    var scrollTargetUserIndex by remember { mutableStateOf(-1) }
     
-    LaunchedEffect(lastUserMessageId) {
-        if (lastUserMessageId != null && lastUserMessageId != previousUserMessageId) {
-            listState.scrollToItem(0)
-            previousUserMessageId = lastUserMessageId
-        }
-    }
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val viewportHeight = maxHeight
+            val topPadding = 85.dp
+            val density = LocalDensity.current
+            
+            // 当检测到新用户消息时，设置初始 spacer 高度并滚动
+            LaunchedEffect(lastUserMessageInfo) {
+                val (lastUserIndex, lastUserMessageId) = lastUserMessageInfo
+                if (lastUserMessageId != null && lastUserMessageId != previousUserMessageId && lastUserIndex >= 0) {
+                    delay(50)
+                    
+                    val layoutInfo = listState.layoutInfo
+                    val userItem = layoutInfo.visibleItemsInfo.find { it.index == lastUserIndex }
+                    
+                    if (userItem != null) {
+                        val userItemTop = userItem.offset
+                        val targetTop = with(density) { topPadding.roundToPx() }
+                        val scrollDistance = userItemTop - targetTop
+                        
+                        if (scrollDistance > 0) {
+                            dynamicSpacerHeight = with(density) { scrollDistance.toDp() }
+                            scrollTargetUserIndex = lastUserIndex
+                            delay(16)
+                            listState.animateScrollBy(scrollDistance.toFloat())
+                        }
+                    } else {
+                        dynamicSpacerHeight = viewportHeight - topPadding - 100.dp
+                        scrollTargetUserIndex = lastUserIndex
+                        delay(16)
+                        scrollStateManager.scrollItemToTop(lastUserIndex)
+                    }
+                    
+                    previousUserMessageId = lastUserMessageId
+                }
+            }
+            
+            // 监听内容变化，动态调整 spacer 高度
+            LaunchedEffect(chatItems.size, isApiCalling) {
+                if (scrollTargetUserIndex >= 0 && dynamicSpacerHeight > 0.dp) {
+                    delay(100)
+                    val layoutInfo = listState.layoutInfo
+                    val viewportEnd = layoutInfo.viewportEndOffset
+                    val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
+                    
+                    if (lastVisibleItem != null) {
+                        // 计算内容底部到 spacer 之间的实际空间
+                        // 如果 spacer 不可见，说明内容已经填满，可以移除 spacer
+                        val spacerItem = layoutInfo.visibleItemsInfo.find { 
+                            it.key == "dynamic_scroll_spacer" 
+                        }
+                        
+                        if (spacerItem == null && !isApiCalling) {
+                            // spacer 不在可见区域且 API 调用结束，清除 spacer
+                            dynamicSpacerHeight = 0.dp
+                            scrollTargetUserIndex = -1
+                        } else if (!isApiCalling) {
+                            // API 调用结束，清除 spacer
+                            dynamicSpacerHeight = 0.dp
+                            scrollTargetUserIndex = -1
+                        }
+                    }
+                }
+            }
+            
             LazyColumn(
                 state = listState,
-                reverseLayout = true,
+                reverseLayout = false,
                 modifier = Modifier
                     .fillMaxSize()
                     .nestedScroll(scrollStateManager.nestedScrollConnection),
                 contentPadding = PaddingValues(
                     start = 4.dp,
                     end = 4.dp,
-                    top = 85.dp,
+                    top = topPadding,
                     bottom = additionalBottomPadding + 10.dp
                 ),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 itemsIndexed(
-            items = reversedChatItems,
+            items = chatItems,
             key = { _, item -> item.stableId },
             contentType = { _, item -> 
                 when (item) {
@@ -419,6 +486,17 @@ fun ChatMessagesList(
                     }
                 }
             }
+                
+                // 动态 spacer：提供滚动空间让用户消息可以到达顶部
+                if (dynamicSpacerHeight > 0.dp) {
+                    item(key = "dynamic_scroll_spacer") {
+                        Spacer(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(dynamicSpacerHeight)
+                        )
+                    }
+                }
                 }
 
         contextMenuMessage?.let { message ->

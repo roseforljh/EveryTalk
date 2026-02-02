@@ -102,17 +102,16 @@ class ChatScrollStateManager(
             snapshotFlow {
                 val layoutInfo = listState.layoutInfo
                 val totalItems = layoutInfo.totalItemsCount
-                val firstVisibleItem = layoutInfo.visibleItemsInfo.firstOrNull()
+                val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
                 
-                // reverseLayout=true: index 0 在顶部，canScrollBackward 表示能否向上滚（到 index 0）
-                val isAtNewest = !listState.canScrollBackward || totalItems == 0
+                val isStrictlyAtBottom = !listState.canScrollForward || totalItems == 0
 
                 ScrollSnapshot(
                     isScrollInProgress = listState.isScrollInProgress,
-                    isStrictlyAtBottom = isAtNewest,
+                    isStrictlyAtBottom = isStrictlyAtBottom,
                     totalItems = totalItems,
-                    lastIndex = firstVisibleItem?.index ?: 0,
-                    lastSize = firstVisibleItem?.size ?: 0,
+                    lastIndex = lastVisibleItem?.index ?: 0,
+                    lastSize = lastVisibleItem?.size ?: 0,
                     firstVisibleIndex = listState.firstVisibleItemIndex,
                     firstVisibleOffset = listState.firstVisibleItemScrollOffset
                 )
@@ -228,18 +227,18 @@ class ChatScrollStateManager(
             preventAutoScroll = false
         }
 
-        logger.debug("Jumping to newest (smooth=$smooth).")
+        logger.debug("Jumping to bottom (smooth=$smooth).")
         if (autoScrollJob?.isActive == true) {
             autoScrollJob?.cancel()
         }
         autoScrollJob = coroutineScope.launch {
             val totalItems = listState.layoutInfo.totalItemsCount
             if (totalItems > 0) {
-                // reverseLayout=true: index 0 是最新消息
+                val lastIndex = totalItems - 1
                 if (smooth) {
-                    listState.animateScrollToItem(index = 0)
+                    listState.animateScrollToItem(index = lastIndex)
                 } else {
-                    listState.scrollToItem(index = 0)
+                    listState.scrollToItem(index = lastIndex)
                 }
             }
             _showScrollToBottomButton.value = false
