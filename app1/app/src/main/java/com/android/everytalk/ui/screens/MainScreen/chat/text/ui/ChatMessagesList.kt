@@ -121,7 +121,7 @@ fun ChatMessagesList(
     
     var previousUserMessageId by remember { mutableStateOf<String?>(null) }
     var dynamicBottomPaddingTarget by remember { mutableStateOf(0.dp) }
-    var firstUserMessageOffset by remember { mutableStateOf(-1) }
+    var firstBubbleScreenY by remember { mutableStateOf(-1) }
     
     val conversationId by viewModel.currentConversationId.collectAsState()
     
@@ -136,9 +136,9 @@ fun ChatMessagesList(
     
     LaunchedEffect(conversationId) {
         dynamicBottomPaddingTarget = 0.dp
-        firstUserMessageOffset = -1
+        firstBubbleScreenY = -1
         previousUserMessageId = null
-        android.util.Log.d("GrokScroll", "Session changed: $conversationId, reset state")
+        android.util.Log.d("GrokScroll", "Session changed, reset state")
     }
     
     LaunchedEffect(isApiCalling) {
@@ -161,45 +161,44 @@ fun ChatMessagesList(
                 if (lastUserMessageId == null || lastUserIndex < 0) return@LaunchedEffect
                 if (lastUserMessageId == previousUserMessageId) return@LaunchedEffect
                 
-                // 只在发送新消息时触发滚动，加载历史时不触发
                 if (!isApiCalling) {
                     previousUserMessageId = lastUserMessageId
-                    android.util.Log.d("GrokScroll", "Skipping scroll - not sending new message")
+                    android.util.Log.d("GrokScroll", "Skipping - not sending")
                     return@LaunchedEffect
                 }
                 
                 kotlinx.coroutines.delay(50)
                 
                 val li = listState.layoutInfo
+                val viewportStart = li.viewportStartOffset
                 val firstUserIndex = userMessageIndices.firstOrNull() ?: -1
                 
                 if (userMessageIndices.size == 1) {
                     val firstItem = li.visibleItemsInfo.firstOrNull { it.index == firstUserIndex }
                     if (firstItem != null) {
-                        firstUserMessageOffset = firstItem.offset
-                        android.util.Log.d("GrokScroll", "Recorded first user offset: $firstUserMessageOffset")
+                        firstBubbleScreenY = firstItem.offset - viewportStart
+                        android.util.Log.d("GrokScroll", "First bubble Y: $firstBubbleScreenY")
                     }
                     previousUserMessageId = lastUserMessageId
                     return@LaunchedEffect
                 }
                 
-                if (firstUserMessageOffset < 0) {
-                    firstUserMessageOffset = topPaddingPx
-                    android.util.Log.d("GrokScroll", "Using topPadding as target: $firstUserMessageOffset")
+                if (firstBubbleScreenY < 0) {
+                    firstBubbleScreenY = topPaddingPx
+                    android.util.Log.d("GrokScroll", "Using topPadding as target Y: $firstBubbleScreenY")
                 }
                 
-                val targetOffset = firstUserMessageOffset
-                android.util.Log.d("GrokScroll", "Target offset: $targetOffset")
+                val targetScreenY = firstBubbleScreenY
+                android.util.Log.d("GrokScroll", "Target Y: $targetScreenY")
                 
                 var currItem = li.visibleItemsInfo.firstOrNull { it.index == lastUserIndex }
                 
                 if (currItem == null) {
                     val viewportHeight = li.viewportEndOffset - li.viewportStartOffset
                     dynamicBottomPaddingTarget = with(density) { viewportHeight.toDp() }
-                    android.util.Log.d("GrokScroll", "Curr not visible, adding padding")
+                    android.util.Log.d("GrokScroll", "Adding padding to make item visible")
                     repeat(3) { kotlinx.coroutines.delay(16) }
                     
-                    // 瞬时跳转到消息位置，但偏移一段距离，留出动画空间
                     val animationDistance = with(density) { 200.dp.toPx().toInt() }
                     listState.scrollToItem(lastUserIndex, scrollOffset = -animationDistance)
                     kotlinx.coroutines.delay(50)
@@ -209,12 +208,13 @@ fun ChatMessagesList(
                 }
                 
                 if (currItem != null) {
-                    val scrollNeeded = currItem.offset - targetOffset
-                    android.util.Log.d("GrokScroll", "currOffset=${currItem.offset}, scrollNeeded=$scrollNeeded")
+                    val li3 = listState.layoutInfo
+                    val currScreenY = currItem.offset - li3.viewportStartOffset
+                    val scrollNeeded = currScreenY - targetScreenY
+                    android.util.Log.d("GrokScroll", "currScreenY=$currScreenY, scrollNeeded=$scrollNeeded")
                     
                     if (scrollNeeded != 0) {
                         if (scrollNeeded > 0) {
-                            val li3 = listState.layoutInfo
                             val viewportHeight = li3.viewportEndOffset - li3.viewportStartOffset
                             val lastItem = li3.visibleItemsInfo.lastOrNull()
                             val contentBottom = if (lastItem != null) lastItem.offset + lastItem.size else 0
@@ -223,7 +223,7 @@ fun ChatMessagesList(
                             if (scrollNeeded > canScroll) {
                                 val extraPadding = scrollNeeded - canScroll + 50
                                 dynamicBottomPaddingTarget = with(density) { extraPadding.toDp() }
-                                android.util.Log.d("GrokScroll", "Need extra padding: $extraPadding")
+                                android.util.Log.d("GrokScroll", "Extra padding: $extraPadding")
                                 repeat(3) { kotlinx.coroutines.delay(16) }
                             }
                         }
@@ -235,11 +235,10 @@ fun ChatMessagesList(
                                 easing = androidx.compose.animation.core.CubicBezierEasing(0.25f, 0.1f, 0.25f, 1.0f)
                             )
                         )
-                        android.util.Log.d("GrokScroll", "Animated scroll by $scrollNeeded")
+                        android.util.Log.d("GrokScroll", "Scrolled by $scrollNeeded")
                     }
                 }
                 
-                android.util.Log.d("GrokScroll", "Done")
                 previousUserMessageId = lastUserMessageId
             }
             
