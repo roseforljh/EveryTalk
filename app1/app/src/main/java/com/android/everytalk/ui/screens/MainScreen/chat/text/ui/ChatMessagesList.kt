@@ -252,7 +252,7 @@ fun ChatMessagesList(
                     start = 4.dp,
                     end = 4.dp,
                     top = topPadding,
-                    bottom = additionalBottomPadding + 10.dp + dynamicBottomPadding
+                    bottom = additionalBottomPadding + 10.dp
                 ),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
@@ -550,7 +550,13 @@ fun ChatMessagesList(
                     }
                 }
             }
+                
+            if (dynamicBottomPadding > 0.dp) {
+                item(key = "dynamic_padding_spacer") {
+                    Spacer(modifier = Modifier.height(dynamicBottomPadding))
+                }
             }
+        }
 
         contextMenuMessage?.let { message ->
             MessageContextMenu(
