@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.12.6](https://github.com/roseforljh/EveryTalk/compare/v1.12.5...v1.12.6) (2026-02-02)
+
+
+### Bug Fixes
+
+* **chat:** improve fall animation performance by using Spacer item instead of contentPadding ([8b847db](https://github.com/roseforljh/EveryTalk/commit/8b847db68db4a82e0eed736e9457cafb217638eb))
+* 历史名称重命名 ([11cda4d](https://github.com/roseforljh/EveryTalk/commit/11cda4dfb608bea5c9ecb6e9403d28f34c979723))
+
 ## [1.12.5](https://github.com/roseforljh/EveryTalk/compare/v1.12.4...v1.12.5) (2026-01-29)
 
 
