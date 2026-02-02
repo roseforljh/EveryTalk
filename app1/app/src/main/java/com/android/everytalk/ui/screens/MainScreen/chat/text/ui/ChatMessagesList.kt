@@ -52,6 +52,7 @@ import com.android.everytalk.ui.components.markdown.MarkdownRenderer
 import com.android.everytalk.ui.components.WebPreviewDialog
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 
 @Composable
 fun ChatMessagesList(
@@ -95,10 +96,16 @@ fun ChatMessagesList(
 
     val isAtBottom by scrollStateManager.isAtBottom
     
-    // 动态 spacer 高度：当新用户消息发送时，计算需要的滚动空间
-    var dynamicSpacerHeight by remember { mutableStateOf(0.dp) }
+    val userMessageIndices = remember(chatItems) {
+        val indices = mutableListOf<Int>()
+        chatItems.forEachIndexed { i, item ->
+            if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage) {
+                indices.add(i)
+            }
+        }
+        indices
+    }
     
-    // 检测最新用户消息的 index 和 id
     val lastUserMessageInfo = remember(chatItems) {
         var index = -1
         var id: String? = null
@@ -112,70 +119,56 @@ fun ChatMessagesList(
     }
     
     var previousUserMessageId by remember { mutableStateOf<String?>(null) }
-    var scrollTargetUserIndex by remember { mutableStateOf(-1) }
+    var dynamicBottomPadding by remember { mutableStateOf(0.dp) }
     
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-            val viewportHeight = maxHeight
             val topPadding = 85.dp
             val density = LocalDensity.current
             
-            // 当检测到新用户消息时，设置初始 spacer 高度并滚动
-            LaunchedEffect(lastUserMessageInfo) {
+            LaunchedEffect(lastUserMessageInfo.second) {
                 val (lastUserIndex, lastUserMessageId) = lastUserMessageInfo
-                if (lastUserMessageId != null && lastUserMessageId != previousUserMessageId && lastUserIndex >= 0) {
-                    delay(50)
-                    
-                    val layoutInfo = listState.layoutInfo
-                    val userItem = layoutInfo.visibleItemsInfo.find { it.index == lastUserIndex }
-                    
-                    if (userItem != null) {
-                        val userItemTop = userItem.offset
-                        val targetTop = with(density) { topPadding.roundToPx() }
-                        val scrollDistance = userItemTop - targetTop
-                        
-                        if (scrollDistance > 0) {
-                            dynamicSpacerHeight = with(density) { scrollDistance.toDp() }
-                            scrollTargetUserIndex = lastUserIndex
-                            delay(16)
-                            listState.animateScrollBy(scrollDistance.toFloat())
-                        }
-                    } else {
-                        dynamicSpacerHeight = viewportHeight - topPadding - 100.dp
-                        scrollTargetUserIndex = lastUserIndex
-                        delay(16)
-                        scrollStateManager.scrollItemToTop(lastUserIndex)
-                    }
-                    
+                android.util.Log.d("GrokScroll", "LaunchedEffect triggered: lastUserIndex=$lastUserIndex, id=$lastUserMessageId, prevId=$previousUserMessageId")
+                
+                if (lastUserMessageId == null || lastUserIndex < 0) return@LaunchedEffect
+                if (lastUserMessageId == previousUserMessageId) return@LaunchedEffect
+                
+                if (userMessageIndices.size <= 1) {
+                    android.util.Log.d("GrokScroll", "Skip: only ${userMessageIndices.size} user message(s)")
                     previousUserMessageId = lastUserMessageId
+                    return@LaunchedEffect
                 }
-            }
-            
-            // 监听内容变化，动态调整 spacer 高度
-            LaunchedEffect(chatItems.size, isApiCalling) {
-                if (scrollTargetUserIndex >= 0 && dynamicSpacerHeight > 0.dp) {
-                    delay(100)
-                    val layoutInfo = listState.layoutInfo
-                    val viewportEnd = layoutInfo.viewportEndOffset
-                    val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
+                
+                delay(50)
+                
+                val layoutInfo = listState.layoutInfo
+                val currentUserItem = layoutInfo.visibleItemsInfo.find { it.index == lastUserIndex }
+                val prevUserIndex = userMessageIndices.getOrNull(userMessageIndices.size - 2) ?: -1
+                val prevUserItem = layoutInfo.visibleItemsInfo.find { it.index == prevUserIndex }
+                
+                android.util.Log.d("GrokScroll", "currentUserItem=$currentUserItem, prevUserIndex=$prevUserIndex, prevUserItem=$prevUserItem")
+                
+                if (currentUserItem != null && prevUserItem != null) {
+                    val scrollDistancePx = currentUserItem.offset - prevUserItem.offset
+                    android.util.Log.d("GrokScroll", "scrollDistancePx=$scrollDistancePx (current.offset=${currentUserItem.offset}, prev.offset=${prevUserItem.offset})")
                     
-                    if (lastVisibleItem != null) {
-                        // 计算内容底部到 spacer 之间的实际空间
-                        // 如果 spacer 不可见，说明内容已经填满，可以移除 spacer
-                        val spacerItem = layoutInfo.visibleItemsInfo.find { 
-                            it.key == "dynamic_scroll_spacer" 
+                    if (scrollDistancePx > 0) {
+                        dynamicBottomPadding = with(density) { scrollDistancePx.toDp() }
+                        android.util.Log.d("GrokScroll", "Set dynamicBottomPadding=$dynamicBottomPadding")
+                        
+                        // 等待 Compose 完成布局更新（等待2帧确保 padding 生效）
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            androidx.compose.ui.platform.AndroidUiDispatcher.Main.awaitFrame()
+                            androidx.compose.ui.platform.AndroidUiDispatcher.Main.awaitFrame()
                         }
                         
-                        if (spacerItem == null && !isApiCalling) {
-                            // spacer 不在可见区域且 API 调用结束，清除 spacer
-                            dynamicSpacerHeight = 0.dp
-                            scrollTargetUserIndex = -1
-                        } else if (!isApiCalling) {
-                            // API 调用结束，清除 spacer
-                            dynamicSpacerHeight = 0.dp
-                            scrollTargetUserIndex = -1
-                        }
+                        android.util.Log.d("GrokScroll", "Executing animateScrollBy($scrollDistancePx)")
+                        listState.animateScrollBy(scrollDistancePx.toFloat())
                     }
+                } else {
+                    android.util.Log.d("GrokScroll", "One of the items is null, cannot calculate scroll distance")
                 }
+                
+                previousUserMessageId = lastUserMessageId
             }
             
             LazyColumn(
@@ -188,7 +181,7 @@ fun ChatMessagesList(
                     start = 4.dp,
                     end = 4.dp,
                     top = topPadding,
-                    bottom = additionalBottomPadding + 10.dp
+                    bottom = additionalBottomPadding + 10.dp + dynamicBottomPadding
                 ),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
@@ -486,18 +479,7 @@ fun ChatMessagesList(
                     }
                 }
             }
-                
-                // 动态 spacer：提供滚动空间让用户消息可以到达顶部
-                if (dynamicSpacerHeight > 0.dp) {
-                    item(key = "dynamic_scroll_spacer") {
-                        Spacer(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(dynamicSpacerHeight)
-                        )
-                    }
-                }
-                }
+            }
 
         contextMenuMessage?.let { message ->
             MessageContextMenu(
