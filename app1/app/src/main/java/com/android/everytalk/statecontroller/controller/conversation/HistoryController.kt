@@ -123,8 +123,10 @@ class HistoryController(
                         stateHolder._historicalConversations.value = updatedList.toList()
                     }
                 }
-                // 持久化交由上层 HistoryManager/持久化管线统一处理，避免直接依赖内部私有字段
-                // 这里不直接写盘，以减少耦合并避免非法访问
+                // 持久化重命名后的历史列表
+                withContext(Dispatchers.IO) {
+                    historyManager.persistHistoryListDirectly(isImageGeneration)
+                }
                 val loadedIndex = if (isImageGeneration) stateHolder._loadedImageGenerationHistoryIndex.value
                 else stateHolder._loadedHistoryIndex.value
                 if (loadedIndex == index) {
@@ -307,6 +309,13 @@ class HistoryController(
     }
 
     private fun generateQuickPreview(conversation: List<Message>, isImageGeneration: Boolean, index: Int): String {
+        // 优先使用用户自定义标题
+        val customTitle = conversation.firstOrNull {
+            it.sender == com.android.everytalk.data.DataClass.Sender.System && it.isPlaceholderName && it.text.isNotBlank()
+        }
+        if (customTitle != null) {
+            return customTitle.text.trim()
+        }
         val firstUserMessage = conversation.firstOrNull {
             it.sender == com.android.everytalk.data.DataClass.Sender.User && it.text.isNotBlank()
         }

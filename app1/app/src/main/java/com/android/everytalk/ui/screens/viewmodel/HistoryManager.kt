@@ -99,7 +99,7 @@ class HistoryManager(
                 if (msg.isError) return@filter false
                 when (msg.sender) {
                     Sender.User -> true
-                    Sender.System -> !msg.isPlaceholderName // 排除占位标题，避免去重误判
+                    Sender.System -> true // 保留所有 System 消息（包括用户自定义标题）
                     Sender.AI -> hasAiSubstance(msg)
                     else -> true
                 }
@@ -581,6 +581,22 @@ class HistoryManager(
             Log.d(TAG_HM, "Chat history list persisted after deletion. \"Last open chat\" cleared.")
             onHistoryModified()
         }
+    }
+
+    /**
+     * 直接持久化当前历史列表（不经过 filterMessagesForSaving）。
+     * 用于重命名等场景，确保包含标题消息的完整会话被保存。
+     */
+    suspend fun persistHistoryListDirectly(isImageGeneration: Boolean = false) {
+        val historicalConversations = if (isImageGeneration) {
+            stateHolder._imageGenerationHistoricalConversations.value
+        } else {
+            stateHolder._historicalConversations.value
+        }
+        withContext(Dispatchers.IO) {
+            persistenceManager.saveChatHistory(historicalConversations, isImageGeneration)
+        }
+        Log.d(TAG_HM, "History list persisted directly (${if (isImageGeneration) "IMAGE" else "TEXT"} mode)")
     }
 
     suspend fun clearAllHistory(isImageGeneration: Boolean = false) {

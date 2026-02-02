@@ -255,17 +255,27 @@ class CacheManager private constructor(private val context: Context) {
         if (messages.isEmpty()) {
             return ConversationNameHelper.getEmptyConversationName(isImageGeneration)
         }
-        
-        val firstUserMessage = messages.firstOrNull { 
-            it.sender == com.android.everytalk.data.DataClass.Sender.User &&
-            it.text.isNotBlank() 
+
+        // 优先使用用户自定义标题
+        val customTitle = messages.firstOrNull {
+            it.sender == com.android.everytalk.data.DataClass.Sender.System &&
+            it.isPlaceholderName &&
+            it.text.isNotBlank()
         }
-        
+        if (customTitle != null) {
+            return customTitle.text.trim()
+        }
+
+        val firstUserMessage = messages.firstOrNull {
+            it.sender == com.android.everytalk.data.DataClass.Sender.User &&
+            it.text.isNotBlank()
+        }
+
         val rawText = firstUserMessage?.text?.trim()
         if (rawText.isNullOrBlank()) {
             return ConversationNameHelper.getNoContentConversationName(isImageGeneration)
         }
-        
+
         return ConversationNameHelper.cleanAndTruncateText(rawText, 50)
     }
     

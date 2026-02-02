@@ -97,6 +97,13 @@ class ConversationPreviewController(
     }
 
     private fun generateQuickPreview(conversation: List<Message>, isImageGeneration: Boolean, index: Int): String {
+        // 优先使用用户自定义标题
+        val customTitle = conversation.firstOrNull {
+            it.sender == com.android.everytalk.data.DataClass.Sender.System && it.isPlaceholderName && it.text.isNotBlank()
+        }
+        if (customTitle != null) {
+            return customTitle.text.trim()
+        }
         val firstUserMessage = conversation.firstOrNull {
             it.sender == com.android.everytalk.data.DataClass.Sender.User && it.text.isNotBlank()
         }
