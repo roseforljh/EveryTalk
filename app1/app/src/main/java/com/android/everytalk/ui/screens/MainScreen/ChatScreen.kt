@@ -66,6 +66,7 @@ import com.android.everytalk.ui.screens.MainScreen.chat.dialog.SystemPromptDialo
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.EmptyChatView
 import com.android.everytalk.ui.screens.MainScreen.chat.models.ModelSelectionBottomSheet
 import com.android.everytalk.ui.screens.MainScreen.chat.text.state.rememberChatScrollStateManager
+import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.delay
@@ -138,11 +139,16 @@ fun ChatScreen(
     }
 
 
+    val lastSendAt = remember { mutableStateOf(0L) }
+
     val listState = remember(conversationId) {
         LazyListState(0, 0)
     }
 
     LaunchedEffect(conversationId) {
+        if (System.currentTimeMillis() - lastSendAt.value < 1200) {
+            return@LaunchedEffect
+        }
         val savedState = viewModel.getScrollState(conversationId)
         if (savedState != null && savedState.firstVisibleItemIndex > 0) {
             snapshotFlow { isLoadingHistory }
@@ -404,38 +410,11 @@ fun ChatScreen(
                     viewModel.onTextChange(it)
                 },
                 onSendMessageRequest = { messageText, _, attachments, mimeType ->
-                    // 立即锁定自动滚动，防止 onNewAiMessageAdded 触发的 jumpToBottom 覆盖后续的 scrollItemToTop
                     scrollStateManager.lockAutoScroll()
+                    lastSendAt.value = System.currentTimeMillis()
                     
-                    val initialCount = viewModel.chatListItems.value.size
                     viewModel.onSendMessage(messageText = messageText, attachments = attachments, audioBase64 = null, mimeType = mimeType)
                     keyboardController?.hide()
-                    coroutineScope.launch {
-                        // 等待键盘关闭
-                        snapshotFlow { imeInsets.getBottom(density) > 0 }
-                            .filter { isVisible -> !isVisible }
-                            .first()
-                        
-                        // 等待列表更新（确保找到了新发送的消息）
-                        var attempts = 0
-                        var targetIndex = -1
-                        while (attempts < 20) {
-                            val items = viewModel.chatListItems.value
-                            if (items.size > initialCount) {
-                                targetIndex = items.indexOfLast { it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage }
-                                if (targetIndex != -1) break
-                            }
-                            delay(50)
-                            attempts++
-                        }
-                        
-                        // 将用户刚发送的消息滚动到顶部，以便用户能看到完整的消息内容（包括附件）以及下方正在生成的AI回复
-                        if (targetIndex != -1) {
-                            scrollStateManager.scrollItemToTop(targetIndex)
-                        } else {
-                            scrollStateManager.smoothScrollToBottom(isUserAction = true)
-                        }
-                    }
                 },
                 selectedMediaItems = selectedMediaItems,
                 onAddMediaItem = { viewModel.addMediaItem(it) },
@@ -461,6 +440,7 @@ fun ChatScreen(
                     scrollStateManager.jumpToBottom()
                 },
                 onSendMessage = { messageText, isFromRegeneration, attachments, audioBase64, mimeType ->
+                    lastSendAt.value = System.currentTimeMillis()
                     viewModel.onSendMessage(
                         messageText = messageText,
                         isFromRegeneration = isFromRegeneration,

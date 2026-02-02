@@ -92,38 +92,28 @@ fun ChatMessagesList(
         }
     }
 
-    // 滚动锚点逻辑：当用户手动离开底部时，记录当前位置；当列表数据变化时，尝试恢复该位置
-    // 避免因底部内容高度变化（如Finish时）导致视图整体上移
     val isAtBottom by scrollStateManager.isAtBottom
-    LaunchedEffect(listState.isScrollInProgress, isAtBottom) {
-        if (listState.isScrollInProgress && !isAtBottom) {
-            scrollStateManager.onUserScrollSnapshot(listState)
-        }
+    
+    val reversedChatItems = remember(chatItems) { chatItems.asReversed() }
+    
+    // 检测新用户消息，滚动到 index 0
+    val lastUserMessageId = remember(chatItems) {
+        chatItems.lastOrNull { it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage }
+            ?.stableId
     }
-
-    // 构造内容签名：仅结合列表长度和最后一条AI消息的ID
-    // 修复：不再包含文本长度，避免流式输出过程中或结束时因长度变化触发强制锚点恢复导致跳动
-    val lastAiItem = chatItems.lastOrNull {
-        it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage ||
-        it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCode ||
-        it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageStreaming ||
-        it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCodeStreaming
-    }
-    val contentSignature = remember(chatItems.size, lastAiItem) {
-        "${chatItems.size}_${lastAiItem?.stableId}"
-    }
-
-    LaunchedEffect(contentSignature, isAtBottom) {
-        if (!isAtBottom) {
-            scrollStateManager.restoreAnchorIfNeeded(listState)
+    
+    var previousUserMessageId by remember { mutableStateOf<String?>(null) }
+    
+    LaunchedEffect(lastUserMessageId) {
+        if (lastUserMessageId != null && lastUserMessageId != previousUserMessageId) {
+            listState.scrollToItem(0)
+            previousUserMessageId = lastUserMessageId
         }
     }
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val availableHeight = maxHeight
-        
             LazyColumn(
                 state = listState,
-                reverseLayout = false,
+                reverseLayout = true,
                 modifier = Modifier
                     .fillMaxSize()
                     .nestedScroll(scrollStateManager.nestedScrollConnection),
@@ -136,7 +126,7 @@ fun ChatMessagesList(
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 itemsIndexed(
-            items = chatItems,
+            items = reversedChatItems,
             key = { _, item -> item.stableId },
             contentType = { _, item -> 
                 when (item) {
@@ -242,8 +232,6 @@ fun ChatMessagesList(
 
                         is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageReasoning -> {
                             val reasoningCompleteMap = viewModel.textReasoningCompleteMap
-                            // 放宽显示条件：一旦有推理文本且正文未开始，即显示思考框；
-                            // 完成后由 reasoning_finish 控制收起
                             val isReasoningStreaming = remember(
                                 item.message.reasoning,
                                 reasoningCompleteMap[item.message.id],
@@ -254,20 +242,10 @@ fun ChatMessagesList(
                                 !item.message.contentStarted
                             }
                             val isReasoningComplete = reasoningCompleteMap[item.message.id] ?: false
-                            val isLastItem = index == chatItems.lastIndex
-                            val shouldApplyMinHeight = isLastItem && chatItems.size >= 2
 
                             Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .then(
-                                        if (shouldApplyMinHeight) {
-                                            Modifier.heightIn(min = availableHeight * 0.85f)
-                                        } else {
-                                            Modifier
-                                        }
-                                    ),
-                                contentAlignment = if (shouldApplyMinHeight) Alignment.TopStart else Alignment.CenterStart
+                                modifier = Modifier.fillMaxWidth(),
+                                contentAlignment = Alignment.CenterStart
                             ) {
                                 ReasoningToggleAndContent(
                                     modifier = Modifier.fillMaxWidth(),
@@ -291,9 +269,6 @@ fun ChatMessagesList(
                                 val text = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage) item.text else message.text
                                 val hasReasoning = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage) item.hasReasoning else (item as com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageStreaming).hasReasoning
                                 val isStreaming = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageStreaming) true else (currentStreamingId == message.id)
-                                val isLastItem = index == chatItems.lastIndex
-                                // Apply min height even for the first conversation (size >= 2) to ensure user message scrolls to top.
-                                val shouldApplyMinHeight = isLastItem && chatItems.size >= 2
 
                                 Column(
                                     modifier = Modifier.fillMaxWidth(),
@@ -318,11 +293,6 @@ fun ChatMessagesList(
                                                 lastImagePreviewAt = now
                                                 onImageClick(url)
                                             }
-                                        },
-                                        modifier = if (shouldApplyMinHeight) {
-                                            Modifier.heightIn(min = availableHeight * 0.85f)
-                                        } else {
-                                            Modifier
                                         }
                                     )
                                 }
@@ -336,8 +306,6 @@ fun ChatMessagesList(
                                 val text = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCode) item.text else message.text
                                 val hasReasoning = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCode) item.hasReasoning else (item as com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCodeStreaming).hasReasoning
                                 val isStreaming = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCodeStreaming) true else (currentStreamingId == message.id)
-                                val isLastItem = index == chatItems.lastIndex
-                                val shouldApplyMinHeight = isLastItem && chatItems.size >= 2
 
                                 Column(
                                     modifier = Modifier.fillMaxWidth(),
@@ -345,7 +313,6 @@ fun ChatMessagesList(
                                 ) {
                                     AiMessageItem(
                                         message = message,
-                                        // 不再任何包裹：按原文渲染，避免把普通文本误判为代码
                                         text = text,
                                         maxWidth = bubbleMaxWidth,
                                         hasReasoning = hasReasoning,
@@ -363,11 +330,6 @@ fun ChatMessagesList(
                                                 lastImagePreviewAt = now
                                                 onImageClick(url)
                                             }
-                                        },
-                                        modifier = if (shouldApplyMinHeight) {
-                                            Modifier.heightIn(min = availableHeight * 0.85f)
-                                        } else {
-                                            Modifier
                                         }
                                     )
                                 }
@@ -404,23 +366,14 @@ fun ChatMessagesList(
                         }
 
                         is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.LoadingIndicator -> {
-                            val isLastItem = index == chatItems.lastIndex
-                            val shouldApplyMinHeight = isLastItem && chatItems.size >= 2
                             Row(
                                 modifier = Modifier
                                     .padding(
                                         start = ChatDimensions.HORIZONTAL_PADDING,
                                         top = ChatDimensions.VERTICAL_PADDING,
                                         bottom = ChatDimensions.VERTICAL_PADDING
-                                    )
-                                    .then(
-                                        if (shouldApplyMinHeight) {
-                                            Modifier.heightIn(min = availableHeight * 0.85f)
-                                        } else {
-                                            Modifier
-                                        }
                                     ),
-                                verticalAlignment = if (shouldApplyMinHeight) Alignment.Top else Alignment.Bottom,
+                                verticalAlignment = Alignment.Bottom,
                                 horizontalArrangement = Arrangement.Start
                             ) {
                                 Text(
@@ -466,9 +419,6 @@ fun ChatMessagesList(
                     }
                 }
             }
-                    item(key = "chat_screen_footer_spacer_in_list") {
-                        Spacer(modifier = Modifier.height(1.dp))
-                    }
                 }
 
         contextMenuMessage?.let { message ->

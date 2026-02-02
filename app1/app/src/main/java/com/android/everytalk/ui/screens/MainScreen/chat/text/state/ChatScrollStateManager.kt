@@ -51,7 +51,6 @@ class ChatScrollStateManager(
     private var hideButtonJob: Job? = null
     private var isStreaming by mutableStateOf(false)
     
-    // Bug 2 Fix: Hysteresis for bottom detection
     private var consecutiveBottomFrames = 0
     private var lastStreamingTransitionTime = 0L
     private val BOTTOM_DETECTION_THRESHOLD = 2
@@ -63,57 +62,38 @@ class ChatScrollStateManager(
     private val _showScrollToBottomButton = mutableStateOf(false)
     val showScrollToBottomButton: State<Boolean> = _showScrollToBottomButton
 
-    // User anchor state
-    private var userAnchored by mutableStateOf(false)
-    private var anchorIndex by mutableStateOf(0)
-    private var anchorScrollOffset by mutableStateOf(0)
-    private var lastRestoreTime = 0L
-    
-    // Flag to prevent auto-scroll (e.g. from image loading) when we want to stay anchored to top
     private var preventAutoScroll = false
-    
-    // Flag to indicate a programmatic scroll is in progress, so we shouldn't update the anchor from scroll snapshots
     private var isProgrammaticScroll = false
 
     val nestedScrollConnection = object : NestedScrollConnection {
         override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-            if (source == NestedScrollSource.UserInput) {
-                // 实时记录用户锚点，不再受 isAtBottom 限制
-                onUserScrollSnapshot(listState)
-                // User interaction re-enables auto-scroll
+            if (source == NestedScrollSource.UserInput || source == NestedScrollSource.SideEffect) {
                 preventAutoScroll = false
-                
-                // 优化按钮显示逻辑：
-                // 1. 距离底部一个屏幕高度以内：始终隐藏
-                // 2. 距离底部超过一个屏幕高度：
-                //    - 往上滑动 (Gesture UP, Content DOWN) -> 显示
-                //    - 往下滑动 (Gesture DOWN, Content UP) -> 隐藏
-                
-                val layoutInfo = listState.layoutInfo
-                val totalItems = layoutInfo.totalItemsCount
-                val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
-                
-                // 判断是否在底部区域（最后一项可见）
-                // 简单起见，只要最后一项出现在屏幕中，就认为在底部区域（即距离底部小于一屏）
-                val isCloseToBottom = if (lastVisibleItem != null && totalItems > 0) {
-                    lastVisibleItem.index >= totalItems - 1
-                } else {
-                    true // 空列表或异常，默认视为在底部
-                }
-
-                if (isCloseToBottom) {
-                    _showScrollToBottomButton.value = false
-                } else {
-                    // available.y < 0: 手指向上滑 (查看底部) -> 消失 (用户正在手动去底部)
-                    // available.y > 0: 手指向下滑 (查看顶部/历史) -> 出现 (方便用户回到底部)
-                    if (available.y < -1f) { 
-                        _showScrollToBottomButton.value = false
-                    } else if (available.y > 1f) {
-                        _showScrollToBottomButton.value = true
-                    }
-                }
+                updateScrollToBottomButton(available.y)
             }
             return Offset.Zero
+        }
+        
+        private fun updateScrollToBottomButton(availableY: Float) {
+            val layoutInfo = listState.layoutInfo
+            val totalItems = layoutInfo.totalItemsCount
+            val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
+            
+            val isCloseToBottom = if (lastVisibleItem != null && totalItems > 0) {
+                lastVisibleItem.index >= totalItems - 1
+            } else {
+                true
+            }
+
+            if (isCloseToBottom) {
+                _showScrollToBottomButton.value = false
+            } else {
+                if (availableY < -1f) { 
+                    _showScrollToBottomButton.value = false
+                } else if (availableY > 1f) {
+                    _showScrollToBottomButton.value = true
+                }
+            }
         }
     }
 
@@ -122,20 +102,17 @@ class ChatScrollStateManager(
             snapshotFlow {
                 val layoutInfo = listState.layoutInfo
                 val totalItems = layoutInfo.totalItemsCount
-                // With reverseLayout = false, last index is at the bottom
-                val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
+                val firstVisibleItem = layoutInfo.visibleItemsInfo.firstOrNull()
                 
-                // Strict check for "At Bottom"
-                // In reverseLayout = false, "forward" means scrolling towards the end (index N / bottom).
-                // If we cannot scroll forward, we are at the bottom.
-                val isStrictlyAtBottom = !listState.canScrollForward || totalItems == 0
+                // reverseLayout=true: index 0 在顶部，canScrollBackward 表示能否向上滚（到 index 0）
+                val isAtNewest = !listState.canScrollBackward || totalItems == 0
 
                 ScrollSnapshot(
                     isScrollInProgress = listState.isScrollInProgress,
-                    isStrictlyAtBottom = isStrictlyAtBottom,
+                    isStrictlyAtBottom = isAtNewest,
                     totalItems = totalItems,
-                    lastIndex = lastVisibleItem?.index ?: 0,
-                    lastSize = lastVisibleItem?.size ?: 0,
+                    lastIndex = firstVisibleItem?.index ?: 0,
+                    lastSize = firstVisibleItem?.size ?: 0,
                     firstVisibleIndex = listState.firstVisibleItemIndex,
                     firstVisibleOffset = listState.firstVisibleItemScrollOffset
                 )
@@ -171,24 +148,8 @@ class ChatScrollStateManager(
         val firstVisibleOffset: Int
     )
 
-    fun onUserScrollSnapshot(listState: LazyListState) {
-        // If we are scrolling programmatically (e.g. scrollItemToTop animation), ignore snapshots.
-        // The snapshot might capture an intermediate state during the animation, overwriting our target anchor.
-        if (isProgrammaticScroll) return
-
-        // 只要用户在手动滚动，就实时更新锚点，无论是否在底部
-        // 这样能确保锚点始终跟随用户的最新视线，避免在贴底滑动时锚点滞后
-        userAnchored = true
-        anchorIndex = listState.firstVisibleItemIndex
-        anchorScrollOffset = listState.firstVisibleItemScrollOffset
-        // logger.debug("User anchored at index=$anchorIndex, offset=$anchorScrollOffset")
-    }
-
     private fun onReachedBottom() {
-        if (userAnchored) {
-            userAnchored = false
-            // logger.debug("Reached bottom, clearing anchor")
-        }
+        // Grok 风格：到达底部时无需额外处理
     }
     
     fun updateStreamingState(streaming: Boolean) {
@@ -199,26 +160,54 @@ class ChatScrollStateManager(
         isStreaming = streaming
     }
 
-    suspend fun restoreAnchorIfNeeded(listState: LazyListState) {
-        if (isProgrammaticScroll || autoScrollJob?.isActive == true) return
-        if (userAnchored && !_isAtBottom.value) {
-            val now = System.currentTimeMillis()
-            // Throttle restore to avoid fighting with layout
-            if (now - lastRestoreTime > 100) {
-                // logger.debug("Restoring anchor to index=$anchorIndex, offset=$anchorScrollOffset")
-                listState.scrollToItem(anchorIndex, anchorScrollOffset)
-                lastRestoreTime = now
+    fun lockAutoScroll() {
+        preventAutoScroll = true
+        logger.debug("Auto-scroll locked")
+    }
+
+    /**
+     * 滚动到用户消息的 index，确保其显示在屏幕顶部区域
+     * 使用简单的 scrollToItem 而不是复杂的 easing 动画，避免被 canScrollForward/canScrollBackward 阻断
+     */
+    fun scrollToUserMessage(index: Int) {
+        logger.debug("Scrolling to user message at index $index")
+        if (autoScrollJob?.isActive == true) {
+            autoScrollJob?.cancel()
+        }
+        preventAutoScroll = true
+        
+        autoScrollJob = coroutineScope.launch {
+            snapshotFlow { listState.layoutInfo.totalItemsCount }
+                .first { total -> total > index }
+            
+            isProgrammaticScroll = true
+            try {
+                listState.scrollToItem(index = index, scrollOffset = 0)
+            } finally {
+                isProgrammaticScroll = false
             }
         }
     }
 
     /**
-     * 锁定自动滚动，防止 jumpToBottom 被自动触发。
-     * 用于发送消息时，在 scrollItemToTop 被调用前就阻止 onNewAiMessageAdded 等触发的自动滚动。
+     * Grok/Intercom-style: 滚动到 index 0 (配合 IntercomArrangement 实现新消息置顶效果)
+     * 当新用户消息发送时调用此方法
      */
-    fun lockAutoScroll() {
+    fun animateScrollToTop() {
+        logger.debug("Animating scroll to top (Grok-style)")
+        if (autoScrollJob?.isActive == true) {
+            autoScrollJob?.cancel()
+        }
         preventAutoScroll = true
-        logger.debug("Auto-scroll locked")
+        
+        autoScrollJob = coroutineScope.launch {
+            isProgrammaticScroll = true
+            try {
+                listState.animateScrollToItem(index = 0, scrollOffset = 0)
+            } finally {
+                isProgrammaticScroll = false
+            }
+        }
     }
 
     fun jumpToBottom(isUserAction: Boolean = false) {
@@ -239,54 +228,18 @@ class ChatScrollStateManager(
             preventAutoScroll = false
         }
 
-        logger.debug("Jumping to bottom (smooth=$smooth).")
+        logger.debug("Jumping to newest (smooth=$smooth).")
         if (autoScrollJob?.isActive == true) {
             autoScrollJob?.cancel()
         }
         autoScrollJob = coroutineScope.launch {
             val totalItems = listState.layoutInfo.totalItemsCount
             if (totalItems > 0) {
-                val lastIndex = totalItems - 1
-                
-                // First scroll to the item to ensure it's laid out
-                // Even for smooth scroll, we snap first if we are far away to avoid long animations
-                if (!smooth || totalItems - listState.firstVisibleItemIndex > 10) {
-                    listState.scrollToItem(index = lastIndex)
-                }
-                
-                // Wait for layout to update
-                withFrameNanos { }
-                
-                // Retry scroll to ensure we are truly at the bottom
-                // Sometimes layout changes (like keyboard or content resize) happen after the first scroll
-                delay(50)
-                
-                val layoutInfo = listState.layoutInfo
-                val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()
-                
-                if (lastVisible != null) {
-                    // Calculate the distance to the very bottom of the content
-                    val viewportHeight = layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset
-                    val contentHeight = lastVisible.offset + lastVisible.size
-                    
-                    // If the last item is visible but its bottom is below the viewport, scroll more
-                    if (lastVisible.index == lastIndex) {
-                         val remainingScroll = (lastVisible.offset + lastVisible.size) - layoutInfo.viewportEndOffset
-                         if (remainingScroll > 0) {
-                             if (smooth) {
-                                 listState.animateScrollBy(remainingScroll.toFloat())
-                             } else {
-                                 listState.scrollBy(remainingScroll.toFloat())
-                             }
-                         }
-                    } else {
-                        // If for some reason we are not even at the last index, try scrolling again
-                        if (smooth) {
-                            listState.animateScrollToItem(index = lastIndex)
-                        } else {
-                            listState.scrollToItem(index = lastIndex)
-                        }
-                    }
+                // reverseLayout=true: index 0 是最新消息
+                if (smooth) {
+                    listState.animateScrollToItem(index = 0)
+                } else {
+                    listState.scrollToItem(index = 0)
                 }
             }
             _showScrollToBottomButton.value = false
@@ -313,7 +266,7 @@ class ChatScrollStateManager(
             snapshotFlow { listState.layoutInfo.totalItemsCount }
                 .first { total -> total > index }
             
-            val desiredItemOffsetPx = (listState.layoutInfo.beforeContentPadding * 0.35f).roundToInt()
+            val desiredItemOffsetPx = listState.layoutInfo.beforeContentPadding.coerceAtLeast(0)
 
             isProgrammaticScroll = true
             try {
@@ -325,11 +278,28 @@ class ChatScrollStateManager(
             } finally {
                 isProgrammaticScroll = false
             }
-            
-            withFrameNanos { }
-            userAnchored = true
-            anchorIndex = listState.firstVisibleItemIndex
-            anchorScrollOffset = listState.firstVisibleItemScrollOffset
+        }
+    }
+
+    fun scrollToTop(smooth: Boolean = true) {
+        logger.debug("Scrolling to top (Intercom style, smooth=$smooth).")
+        if (autoScrollJob?.isActive == true) {
+            autoScrollJob?.cancel()
+        }
+        
+        preventAutoScroll = true
+        
+        autoScrollJob = coroutineScope.launch {
+            isProgrammaticScroll = true
+            try {
+                if (smooth) {
+                    listState.animateScrollToItem(index = 0, scrollOffset = 0)
+                } else {
+                    listState.scrollToItem(index = 0, scrollOffset = 0)
+                }
+            } finally {
+                isProgrammaticScroll = false
+            }
         }
     }
 

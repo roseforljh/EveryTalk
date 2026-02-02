@@ -201,28 +201,8 @@ fun ImageGenerationMessagesList(
     val isApiCalling by viewModel.isImageApiCalling.collectAsState()
     val currentStreamingId by viewModel.currentImageStreamingAiMessageId.collectAsState()
 
-    // 滚动锚点逻辑：当用户手动离开底部时，记录当前位置；当列表数据变化时，尝试恢复该位置
+    // Grok-style: 不再需要 anchor restore 逻辑
     val isAtBottom by scrollStateManager.isAtBottom
-    LaunchedEffect(listState.isScrollInProgress, isAtBottom) {
-        if (listState.isScrollInProgress && !isAtBottom) {
-            scrollStateManager.onUserScrollSnapshot(listState)
-        }
-    }
-
-    // 构造内容签名：仅结合列表长度和最后一条AI消息的ID
-    val lastAiItem = chatItems.lastOrNull {
-        it is ChatListItem.AiMessage ||
-        it is ChatListItem.AiMessageStreaming
-    }
-    val contentSignature = remember(chatItems.size, lastAiItem) {
-        "${chatItems.size}_${lastAiItem?.stableId}"
-    }
-
-    LaunchedEffect(contentSignature, isAtBottom) {
-        if (!isAtBottom) {
-            scrollStateManager.restoreAnchorIfNeeded(listState)
-        }
-    }
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val availableHeight = maxHeight
