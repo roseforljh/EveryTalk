@@ -120,13 +120,22 @@ fun ChatMessagesList(
     }
     
     var previousUserMessageId by remember { mutableStateOf<String?>(null) }
-    var dynamicBottomPadding by remember { mutableStateOf(0.dp) }
+    var dynamicBottomPaddingTarget by remember { mutableStateOf(0.dp) }
     var firstUserMessageOffset by remember { mutableStateOf(-1) }
     
+    val dynamicBottomPadding by androidx.compose.animation.core.animateDpAsState(
+        targetValue = dynamicBottomPaddingTarget,
+        animationSpec = androidx.compose.animation.core.tween(
+            durationMillis = 500,
+            easing = androidx.compose.animation.core.CubicBezierEasing(0.25f, 0.1f, 0.25f, 1.0f)
+        ),
+        label = "dynamicBottomPadding"
+    )
+    
     LaunchedEffect(isApiCalling) {
-        if (!isApiCalling && dynamicBottomPadding > 0.dp) {
+        if (!isApiCalling && dynamicBottomPaddingTarget > 0.dp) {
             kotlinx.coroutines.delay(300)
-            dynamicBottomPadding = 0.dp
+            dynamicBottomPaddingTarget = 0.dp
             android.util.Log.d("GrokScroll", "Cleared padding")
         }
     }
@@ -170,10 +179,13 @@ fun ChatMessagesList(
                 
                 if (currItem == null) {
                     val viewportHeight = li.viewportEndOffset - li.viewportStartOffset
-                    dynamicBottomPadding = with(density) { viewportHeight.toDp() }
-                    android.util.Log.d("GrokScroll", "Curr not visible, adding padding and scrollToItem")
+                    dynamicBottomPaddingTarget = with(density) { viewportHeight.toDp() }
+                    android.util.Log.d("GrokScroll", "Curr not visible, adding padding")
                     repeat(3) { kotlinx.coroutines.delay(16) }
-                    listState.scrollToItem(lastUserIndex)
+                    
+                    // 瞬时跳转到消息位置，但偏移一段距离，留出动画空间
+                    val animationDistance = with(density) { 200.dp.toPx().toInt() }
+                    listState.scrollToItem(lastUserIndex, scrollOffset = -animationDistance)
                     kotlinx.coroutines.delay(50)
                     
                     val li2 = listState.layoutInfo
@@ -184,22 +196,30 @@ fun ChatMessagesList(
                     val scrollNeeded = currItem.offset - targetOffset
                     android.util.Log.d("GrokScroll", "currOffset=${currItem.offset}, scrollNeeded=$scrollNeeded")
                     
-                    if (scrollNeeded > 0) {
-                        val li3 = listState.layoutInfo
-                        val viewportHeight = li3.viewportEndOffset - li3.viewportStartOffset
-                        val lastItem = li3.visibleItemsInfo.lastOrNull()
-                        val contentBottom = if (lastItem != null) lastItem.offset + lastItem.size else 0
-                        val canScroll = contentBottom - viewportHeight + li3.afterContentPadding
-                        
-                        if (scrollNeeded > canScroll) {
-                            val extraPadding = scrollNeeded - canScroll + 50
-                            dynamicBottomPadding = with(density) { extraPadding.toDp() }
-                            android.util.Log.d("GrokScroll", "Need extra padding: $extraPadding")
-                            repeat(3) { kotlinx.coroutines.delay(16) }
+                    if (scrollNeeded != 0) {
+                        if (scrollNeeded > 0) {
+                            val li3 = listState.layoutInfo
+                            val viewportHeight = li3.viewportEndOffset - li3.viewportStartOffset
+                            val lastItem = li3.visibleItemsInfo.lastOrNull()
+                            val contentBottom = if (lastItem != null) lastItem.offset + lastItem.size else 0
+                            val canScroll = contentBottom - viewportHeight + li3.afterContentPadding
+                            
+                            if (scrollNeeded > canScroll) {
+                                val extraPadding = scrollNeeded - canScroll + 50
+                                dynamicBottomPaddingTarget = with(density) { extraPadding.toDp() }
+                                android.util.Log.d("GrokScroll", "Need extra padding: $extraPadding")
+                                repeat(3) { kotlinx.coroutines.delay(16) }
+                            }
                         }
                         
-                        listState.scrollBy(scrollNeeded.toFloat())
-                        android.util.Log.d("GrokScroll", "Scrolled by $scrollNeeded")
+                        listState.animateScrollBy(
+                            scrollNeeded.toFloat(),
+                            androidx.compose.animation.core.tween(
+                                durationMillis = 500,
+                                easing = androidx.compose.animation.core.CubicBezierEasing(0.25f, 0.1f, 0.25f, 1.0f)
+                            )
+                        )
+                        android.util.Log.d("GrokScroll", "Animated scroll by $scrollNeeded")
                     }
                 }
                 
