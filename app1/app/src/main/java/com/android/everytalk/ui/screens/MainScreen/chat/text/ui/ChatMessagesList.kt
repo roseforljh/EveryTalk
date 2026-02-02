@@ -8,6 +8,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -121,6 +122,14 @@ fun ChatMessagesList(
     var previousUserMessageId by remember { mutableStateOf<String?>(null) }
     var dynamicBottomPadding by remember { mutableStateOf(0.dp) }
     
+    LaunchedEffect(isApiCalling) {
+        if (!isApiCalling && dynamicBottomPadding > 0.dp) {
+            kotlinx.coroutines.delay(300)
+            dynamicBottomPadding = 0.dp
+            android.util.Log.d("GrokScroll", "Cleared dynamicBottomPadding after streaming ended")
+        }
+    }
+    
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val topPadding = 85.dp
             val density = LocalDensity.current
@@ -138,36 +147,39 @@ fun ChatMessagesList(
                     return@LaunchedEffect
                 }
                 
-                delay(50)
+                val viewportHeight = with(density) { maxHeight.toPx() }
+                dynamicBottomPadding = maxHeight
+                android.util.Log.d("GrokScroll", "Set dynamicBottomPadding=$dynamicBottomPadding (viewportHeight=${viewportHeight}px)")
                 
-                val layoutInfo = listState.layoutInfo
-                val currentUserItem = layoutInfo.visibleItemsInfo.find { it.index == lastUserIndex }
-                val prevUserIndex = userMessageIndices.getOrNull(userMessageIndices.size - 2) ?: -1
-                val prevUserItem = layoutInfo.visibleItemsInfo.find { it.index == prevUserIndex }
+                repeat(3) { kotlinx.coroutines.delay(16) }
                 
-                android.util.Log.d("GrokScroll", "currentUserItem=$currentUserItem, prevUserIndex=$prevUserIndex, prevUserItem=$prevUserItem")
+                android.util.Log.d("GrokScroll", "scrollToItem(index=$lastUserIndex)")
+                listState.scrollToItem(lastUserIndex)
                 
-                if (currentUserItem != null && prevUserItem != null) {
-                    val scrollDistancePx = currentUserItem.offset - prevUserItem.offset
-                    android.util.Log.d("GrokScroll", "scrollDistancePx=$scrollDistancePx (current.offset=${currentUserItem.offset}, prev.offset=${prevUserItem.offset})")
+                repeat(4) { iteration ->
+                    kotlinx.coroutines.delay(16)
                     
-                    if (scrollDistancePx > 0) {
-                        dynamicBottomPadding = with(density) { scrollDistancePx.toDp() }
-                        android.util.Log.d("GrokScroll", "Set dynamicBottomPadding=$dynamicBottomPadding")
-                        
-                        // 等待 Compose 完成布局更新（等待2帧确保 padding 生效）
-                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                            androidx.compose.ui.platform.AndroidUiDispatcher.Main.awaitFrame()
-                            androidx.compose.ui.platform.AndroidUiDispatcher.Main.awaitFrame()
-                        }
-                        
-                        android.util.Log.d("GrokScroll", "Executing animateScrollBy($scrollDistancePx)")
-                        listState.animateScrollBy(scrollDistancePx.toFloat())
+                    val li = listState.layoutInfo
+                    val itemInfo = li.visibleItemsInfo.firstOrNull { it.index == lastUserIndex }
+                    if (itemInfo == null) {
+                        android.util.Log.d("GrokScroll", "Iteration $iteration: item not visible")
+                        return@repeat
                     }
-                } else {
-                    android.util.Log.d("GrokScroll", "One of the items is null, cannot calculate scroll distance")
+                    
+                    val targetTop = li.beforeContentPadding
+                    val deltaPx = itemInfo.offset - targetTop
+                    
+                    android.util.Log.d("GrokScroll", "Iteration $iteration: itemOffset=${itemInfo.offset}, targetTop=$targetTop, deltaPx=$deltaPx")
+                    
+                    if (kotlin.math.abs(deltaPx) <= 1) {
+                        android.util.Log.d("GrokScroll", "Aligned!")
+                        return@repeat
+                    }
+                    
+                    listState.scrollBy(deltaPx.toFloat())
                 }
                 
+                android.util.Log.d("GrokScroll", "Scroll completed")
                 previousUserMessageId = lastUserMessageId
             }
             
