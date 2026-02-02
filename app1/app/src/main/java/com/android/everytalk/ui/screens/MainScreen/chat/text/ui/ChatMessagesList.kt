@@ -123,6 +123,8 @@ fun ChatMessagesList(
     var dynamicBottomPaddingTarget by remember { mutableStateOf(0.dp) }
     var firstUserMessageOffset by remember { mutableStateOf(-1) }
     
+    val conversationId by viewModel.currentConversationId.collectAsState()
+    
     val dynamicBottomPadding by androidx.compose.animation.core.animateDpAsState(
         targetValue = dynamicBottomPaddingTarget,
         animationSpec = androidx.compose.animation.core.tween(
@@ -131,6 +133,13 @@ fun ChatMessagesList(
         ),
         label = "dynamicBottomPadding"
     )
+    
+    LaunchedEffect(conversationId) {
+        dynamicBottomPaddingTarget = 0.dp
+        firstUserMessageOffset = -1
+        previousUserMessageId = null
+        android.util.Log.d("GrokScroll", "Session changed: $conversationId, reset state")
+    }
     
     LaunchedEffect(isApiCalling) {
         if (!isApiCalling && dynamicBottomPaddingTarget > 0.dp) {
@@ -147,10 +156,17 @@ fun ChatMessagesList(
             
             LaunchedEffect(lastUserMessageInfo.second) {
                 val (lastUserIndex, lastUserMessageId) = lastUserMessageInfo
-                android.util.Log.d("GrokScroll", "Triggered: index=$lastUserIndex, id=$lastUserMessageId")
+                android.util.Log.d("GrokScroll", "Triggered: index=$lastUserIndex, id=$lastUserMessageId, isApiCalling=$isApiCalling")
                 
                 if (lastUserMessageId == null || lastUserIndex < 0) return@LaunchedEffect
                 if (lastUserMessageId == previousUserMessageId) return@LaunchedEffect
+                
+                // 只在发送新消息时触发滚动，加载历史时不触发
+                if (!isApiCalling) {
+                    previousUserMessageId = lastUserMessageId
+                    android.util.Log.d("GrokScroll", "Skipping scroll - not sending new message")
+                    return@LaunchedEffect
+                }
                 
                 kotlinx.coroutines.delay(50)
                 
