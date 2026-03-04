@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.12.8](https://github.com/roseforljh/EveryTalk/compare/v1.12.7...v1.12.8) (2026-03-04)
+
+
+### Bug Fixes
+
+* Introduce Markdown rendering with preprocessing, system prompt injection, and prompt leak guard utilities. ([43e29f5](https://github.com/roseforljh/EveryTalk/commit/43e29f54089dfa0517fc921d6ab220998140cb7c))
+
 ## [1.12.7](https://github.com/roseforljh/EveryTalk/compare/v1.12.6...v1.12.7) (2026-03-04)
 
 
