@@ -62,10 +62,17 @@ fun TableRenderer(
         Triple(parsedHeaders, parsedDataRows, parsedColumnWidths)
     }
 
-    // 根据表格规模决定渲染策略：单元格总量大时禁用单元格内Markdown以避免递归渲染
-    // 参考 RikkaHub：使用纯 Compose Text 而非 AndroidView，大幅减少重组开销
+    // 根据表格规模决定渲染策略：大表格默认降级为纯文本，但若检测到 Markdown 语法仍保留解析
+    // 避免出现 **bold**、`code` 等在单元格中原样显示的问题
     val totalCells = headers.size * dataRows.size
-    val usePlainTextCells = totalCells > 40 || !renderMarkdownInCells
+    val hasMarkdownSyntaxInCells = remember(lines) {
+        lines.drop(2).any { rowLine ->
+            TableUtils.parseTableRow(rowLine).any { cell ->
+                InlineMarkdownParser.containsInlineMarkdown(cell) || InlineMarkdownParser.containsMath(cell)
+            }
+        }
+    }
+    val usePlainTextCells = !renderMarkdownInCells || (totalCells > 40 && !hasMarkdownSyntaxInCells)
 
     val cornerRadius = 12.dp
     val tableShape = RoundedCornerShape(cornerRadius)

@@ -280,11 +280,9 @@ internal fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): 
     s = s.replace(SINGLE_CURRENCY_PATTERN) { "\\$" }
     s = s.replace(DOUBLE_CURRENCY_PATTERN) { "\\\\$" }
 
-    // 最后一步：流式期间，仅转义残留的未闭合数学标记
-    // 已闭合的公式保留原样，允许立即渲染
-    if (isStreaming) {
-        s = escapeUnclosedMathForStreaming(s)
-    }
+    // 最后一步：统一转义残留的未闭合数学标记（流式/非流式都处理）
+    // 避免 "$$2.82" 这类未闭合分隔符触发整段错误数学渲染导致布局混乱。
+    s = escapeUnclosedMathForStreaming(s)
 
     return s.trimStart('\n')
 }

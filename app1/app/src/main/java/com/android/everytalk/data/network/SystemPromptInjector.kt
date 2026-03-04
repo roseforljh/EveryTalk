@@ -113,6 +113,11 @@ object SystemPromptInjector {
         - **Inline math**: Use SINGLE dollar sign `$...$` for formulas within text (e.g., The formula is ${'$'}E = mc^2${'$'} where E is energy).
         - **Block math**: Use DOUBLE dollar signs `$$...$$` ONLY on their own separate line, NEVER inline with text.
         - **VERY IMPORTANT**: Double dollar signs must be on a line by themselves, not mixed with other text.
+        - **Currency Safety (ABSOLUTE CRITICAL)**:
+          - NEVER use double-dollar math delimiters for money values.
+          - For currency amounts, prefer escaped dollar examples or currency code format such as `USD 2.82`.
+          - NEVER output a double-dollar marker immediately followed by digits unless it is a valid closed math block.
+          - If content is financial data (EPS, revenue, profit, valuation), treat dollar symbols as currency, NOT as math delimiters.
         
         ✅ Correct inline: Our goal is to prove ${'$'}f(x) = 1${'$'}.
         ❌ Wrong inline: Our goal is to prove ${'$'}${'$'}f(x) = 1${'$'}${'$'}. (NEVER use double dollar inline!)
@@ -167,7 +172,8 @@ object SystemPromptInjector {
         2. Are list items separated into individual lines?
         3. Is the bold syntax correct relative to punctuation?
         4. Are math formulas using KaTeX-compatible dollar sign syntax (single for inline, double for block)?
-        5. If the answer包含多个清晰的要点/步骤/对比项，是否适合额外补充一个结构良好的 infographic 代码块？
+        5. Did I accidentally use double-dollar math markers for currency? If yes, rewrite to currency-safe format such as `USD 2.82`.
+        6. If the answer包含多个清晰的要点/步骤/对比项，是否适合额外补充一个结构良好的 infographic 代码块？
         """.trimIndent()
 
     /**
@@ -243,6 +249,10 @@ Why: CommonMark's flanking delimiter rules cause `**"text"**` to NOT render as b
 - Use \text{...} for text in formulas
 - Do NOT use \[...\] or \(...\) delimiters, use dollar signs instead
 - Do NOT use LaTeX-only commands like \newcommand, \def
+- Currency safety: NEVER use double-dollar math delimiters for money values.
+- For currency amounts, prefer currency code format like `USD 2.82`.
+- NEVER output a double-dollar marker immediately followed by digits unless it is a valid closed math block.
+- If content is financial data (EPS, revenue, profit, valuation), treat dollar symbols as currency, NOT as math delimiters.
 
 ## Infographic blocks (optional but recommended when helpful)
 - When your answer contains 3 or more closely related points, steps, pros/cons, workflow stages or comparison items, consider adding an extra infographic code block to summarize them visually.
