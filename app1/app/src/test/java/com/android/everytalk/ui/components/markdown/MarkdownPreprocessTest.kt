@@ -41,4 +41,15 @@ class MarkdownPreprocessTest {
         assertTrue("Currency should be escaped", output.contains("\\\$12"))
         assertTrue("Double currency should be escaped", output.contains("\\\$24"))
     }
+
+    @Test
+    fun `sports score wrapped by single dollar should be rendered as plain score without dollar`() {
+        val input = "比分可能会以 ${'$'}1:0${'$'} 或 ${'$'}3：2${'$'} 的比分再次捧起大耳朵杯"
+        val output = preprocessAiMarkdown(input, isStreaming = false)
+
+        assertTrue("Sports score should be kept as plain text", output.contains("1:0"))
+        assertTrue("Full-width colon sports score should be kept as plain text", output.contains("3：2"))
+        assertTrue("Dollar wrapper should be removed for score", !output.contains("${'$'}1:0${'$'}"))
+        assertTrue("Dollar wrapper should be removed for full-width score", !output.contains("${'$'}3：2${'$'}"))
+    }
 }

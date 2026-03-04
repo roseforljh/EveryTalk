@@ -118,6 +118,11 @@ object SystemPromptInjector {
           - For currency amounts, prefer escaped dollar examples or currency code format such as `USD 2.82`.
           - NEVER output a double-dollar marker immediately followed by digits unless it is a valid closed math block.
           - If content is financial data (EPS, revenue, profit, valuation), treat dollar symbols as currency, NOT as math delimiters.
+        - **Sports Score / Ratio / Time Safety (ABSOLUTE CRITICAL)**:
+          - Sports scores or plain ratios MUST be plain text (e.g., `1:0`, `3：2`, `2-1`), NEVER math delimiters.
+          - NEVER wrap scores/ratios/time-like tokens with single dollar, e.g. `${'$'}1:0${'$'}` / `${'$'}3：2${'$'}` / `${'$'}03:30${'$'}` are forbidden.
+          - If user input already contains score-like `${'$'}x:y${'$'}`, rewrite to plain text `x:y` before answering.
+          - Use math delimiters only for real formulas, not for match score, date range, time, version, or section number.
         
         ✅ Correct inline: Our goal is to prove ${'$'}f(x) = 1${'$'}.
         ❌ Wrong inline: Our goal is to prove ${'$'}${'$'}f(x) = 1${'$'}${'$'}. (NEVER use double dollar inline!)
@@ -165,6 +170,8 @@ object SystemPromptInjector {
           - 先用正常段落/列表把内容讲清楚；
           - 然后在答案后半部分或末尾再给出 1 个精炼的 infographic 代码块，总结核心要点。
         - 不要为了使用 infographic 而生造结构；仅在它能明显提升可读性时使用。
+        - 表格输出时必须使用标准 Markdown 表格语法（表头行 + 分隔行 + 数据行），每一行独立换行，不得把多行挤在同一行。
+        - 若同时输出正文与 infographic，正文在前、infographic 在后，且只输出一个精炼 infographic 代码块。
 
         ## Self-Correction
         Before outputting, verify:
@@ -172,8 +179,10 @@ object SystemPromptInjector {
         2. Are list items separated into individual lines?
         3. Is the bold syntax correct relative to punctuation?
         4. Are math formulas using KaTeX-compatible dollar sign syntax (single for inline, double for block)?
-        5. Did I accidentally use double-dollar math markers for currency? If yes, rewrite to currency-safe format such as `USD 2.82`.
-        6. If the answer包含多个清晰的要点/步骤/对比项，是否适合额外补充一个结构良好的 infographic 代码块？
+        5. Did I accidentally treat score/ratio/time-like text as math (e.g., `${'$'}1:0${'$'}`)? If yes, rewrite to plain text `1:0`.
+        6. Did I accidentally use double-dollar math markers for currency? If yes, rewrite to currency-safe format such as `USD 2.82`.
+        7. If using a table, does it have valid header/separator/data rows with one row per line?
+        8. If the answer包含多个清晰的要点/步骤/对比项，是否适合额外补充一个结构良好的 infographic 代码块？
         """.trimIndent()
 
     /**
@@ -253,6 +262,10 @@ Why: CommonMark's flanking delimiter rules cause `**"text"**` to NOT render as b
 - For currency amounts, prefer currency code format like `USD 2.82`.
 - NEVER output a double-dollar marker immediately followed by digits unless it is a valid closed math block.
 - If content is financial data (EPS, revenue, profit, valuation), treat dollar symbols as currency, NOT as math delimiters.
+- Sports score / ratio / time safety: scores and plain ratios must stay plain text, e.g. `1:0`, `3：2`, `2-1`, `03:30`.
+- NEVER wrap score/ratio/time-like tokens with single-dollar math delimiters such as `${'$'}1:0${'$'}`.
+- If user text already contains score-like `${'$'}x:y${'$'}`, rewrite it to plain text `x:y` before output.
+- Use math delimiters only for real formulas, not for score, date range, time, version, or section number.
 
 ## Infographic blocks (optional but recommended when helpful)
 - When your answer contains 3 or more closely related points, steps, pros/cons, workflow stages or comparison items, consider adding an extra infographic code block to summarize them visually.
@@ -286,6 +299,8 @@ items
   - First explain using normal paragraphs/lists;
   - Then, near the end, add a concise infographic block summarizing the key points.
 - Do not force an infographic when structure is not natural; only use it when it clearly improves readability.
+- For tables, always use valid Markdown table syntax (header row + separator row + data rows), one row per line.
+- If both prose and infographic are present, keep prose first and a single concise infographic block near the end.
 """.trimIndent()
 
     /**

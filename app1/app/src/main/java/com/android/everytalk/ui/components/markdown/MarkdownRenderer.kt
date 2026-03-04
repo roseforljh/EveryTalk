@@ -55,6 +55,7 @@ private val MULTILINE_BLOCK_DOLLAR_PATTERN = Regex(
 )
 private val BLOCK_PLACEHOLDER_PATTERN = Regex("(?m)^[ \\t]*\\[double dollar][ \\t]*$")
 private val INLINE_MATH_PATTERN = Regex("(?<!\\\\)(?<!\\$)\\$([^$\\n]+?)(?<!\\\\)(?<!\\$)\\$")
+private val SPORTS_SCORE_PATTERN = Regex("^\\d{1,3}\\s*[:：]\\s*\\d{1,3}$")
 private val TRIPLE_DOLLAR_CURRENCY_PATTERN = Regex("(?<=^|\\s)\\$\\$\\$(?=\\d)")
 private val SINGLE_CURRENCY_PATTERN = Regex("(?<=^|\\s)(?<!\\\\)\\$(?=\\d)")
 private val DOUBLE_CURRENCY_PATTERN = Regex("(?<=^|\\s)\\$\\$(?=\\d)")
@@ -267,9 +268,16 @@ internal fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): 
     s = MathDelimiterNormalizer.normalize(s)
 
     // 9. Inline Math: 将单个 $ 转换为 $$（统一交给 JLatexMath 的 $$ 分隔符渲染）
+    // 对体育比分（如 $1:0$ / $3：2$）去掉 $ 包裹并按普通文本输出
     if (s.contains("$")) {
         s = s.replace(INLINE_MATH_PATTERN) { matchResult ->
-            "$$" + matchResult.groupValues[1] + "$$"
+            val rawContent = matchResult.groupValues[1]
+            val normalizedContent = rawContent.trim()
+            if (SPORTS_SCORE_PATTERN.matches(normalizedContent)) {
+                rawContent
+            } else {
+                "$$" + rawContent + "$$"
+            }
         }
     }
 
