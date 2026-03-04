@@ -110,17 +110,17 @@ object SystemPromptInjector {
         
         ## Math Formula Rules (CRITICAL)
         - Use KaTeX-compatible syntax for all mathematical expressions.
-        - **Inline math**: Use SINGLE dollar sign for formulas within text (e.g., The formula is [single dollar]E = mc^2[single dollar] where E is energy).
-        - **Block math**: Use DOUBLE dollar signs ONLY on their own separate line, NEVER inline with text.
+        - **Inline math**: Use SINGLE dollar sign `$...$` for formulas within text (e.g., The formula is ${'$'}E = mc^2${'$'} where E is energy).
+        - **Block math**: Use DOUBLE dollar signs `$$...$$` ONLY on their own separate line, NEVER inline with text.
         - **VERY IMPORTANT**: Double dollar signs must be on a line by themselves, not mixed with other text.
         
-        ✅ Correct inline: Our goal is to prove [single dollar]f(x) = 1[single dollar].
-        ❌ Wrong inline: Our goal is to prove [double dollar]f(x) = 1[double dollar]. (NEVER use double dollar inline!)
+        ✅ Correct inline: Our goal is to prove ${'$'}f(x) = 1${'$'}.
+        ❌ Wrong inline: Our goal is to prove ${'$'}${'$'}f(x) = 1${'$'}${'$'}. (NEVER use double dollar inline!)
         
         ✅ Correct block (on its own line):
-        [double dollar]
+        ${'$'}${'$'}
         f(x) = 1
-        [double dollar]
+        ${'$'}${'$'}
         
         - **KaTeX compatibility**: 
           - Use \frac{a}{b} instead of {a \over b}

@@ -62,7 +62,7 @@ private data class MarkdownRenderSignature(
  *
  * 由于代码块和表格已由 ContentParser 提取，此函数只需处理纯文本内容。
  */
-private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): String {
+internal fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): String {
     if (input.isBlank()) return input
 
     var s = input
@@ -72,20 +72,7 @@ private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): S
         .replace("<", "&lt;")
         .replace(">", "&gt;")
 
-    // 2. Currency: 避免 $ 或 $$ 后跟数字被误识别为数学公式
-    // 2.1 单个 $ 后跟数字（如 $12, $2.00）是货币符号，需转义避免被当作 LaTeX 分隔符
-    // 使用负向后视确保不会重复转义已转义的 \$
-    // 用 lambda 返回字面量，避免替换串中的 $ 被当作分组引用
-    val singleCurrencyPattern = Regex("(?<!\\\\)\\$(?=\\d)")
-    s = s.replace(singleCurrencyPattern) { "\\$" }
-
-    // 2.2 $$ 后跟数字的情况（兼容旧逻辑）
-    if (s.contains("$$")) {
-        val doubleCurrencyPattern = Regex("\\$\\$(?=\\d)")
-        s = s.replace(doubleCurrencyPattern) { "\\$" }
-    }
-
-    // 3. Base64 Image: 移除 Base64 中的空白
+    // 2. Base64 Image: 移除 Base64 中的空白
     if (s.contains("data:image/")) {
         val base64ImagePattern = Regex("(\\!\\[[^\\]]*\\]\\()\\s*(<?)(data:image\\/[^)>]+)(>?)\\s*(\\))", setOf(RegexOption.DOT_MATCHES_ALL))
         s = s.replace(base64ImagePattern) { mr ->
@@ -151,9 +138,8 @@ private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): S
         }
     }.joinToString("")
 
-    // 8. 将 [double dollar]/[single dollar] 占位符与被转义的数学分隔符转换为实际标记
+    // 8. 块级 [double dollar] 占位符转换（仅处理独立行/跨行块）
     if (s.contains("[double dollar]")) {
-        // 8.1 跨行块级公式：[double dollar]\n内容\n[double dollar] -> $$内容$$
         val multilineBlockPattern = Regex(
             "\\[double dollar]\\s*\\n([\\s\\S]*?)\\n\\s*\\[double dollar]",
             RegexOption.MULTILINE
@@ -163,42 +149,16 @@ private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): S
             if (inner.isEmpty()) "" else "\$\$${inner}\$\$"
         }
 
-        // 8.2 行级占位符：单独成行的 [double dollar] -> $$
         val blockPlaceholderPattern = Regex("(?m)^[ \\t]*\\[double dollar][ \\t]*$")
         s = blockPlaceholderPattern.replace(s) { "\$\$" }
-
-        // 8.3 行内占位符：... [double dollar] f(x) [double dollar] ... -> $f(x)$
-        val inlinePlaceholderPattern = Regex("\\[double dollar]([^\\[]+?)\\[double dollar]")
-        s = s.replace(inlinePlaceholderPattern) { matchResult ->
-            val inner = matchResult.groupValues[1].trim()
-            if (inner.isEmpty()) "" else "\$${inner}\$"
-        }
     }
 
-    if (s.contains("[single dollar]")) {
-        // 8.4 行内占位符：[single dollar] x [single dollar] -> $x$
-        val inlineSinglePlaceholderPattern = Regex("\\[single dollar]([^\\[]+?)\\[single dollar]")
-        s = s.replace(inlineSinglePlaceholderPattern) { matchResult ->
-            val inner = matchResult.groupValues[1].trim()
-            if (inner.isEmpty()) "" else "\$${inner}\$"
-        }
-
-        // 8.5 单独占位符：[single dollar] -> $
-        val singlePlaceholderPattern = Regex("\\[single dollar]")
-        s = singlePlaceholderPattern.replace(s, "$")
-    }
-
-    // 8.6 兼容被转义的行内公式分隔符：\$x\$ -> $x$
-    // 仅处理成对分隔符，避免误伤单个货币符号\$12
-    val escapedInlineMathPattern = Regex("\\\\\\$([^$\\n]+?)\\\\\\$")
-    if (s.contains("\\$")) {
-        s = s.replace(escapedInlineMathPattern) { matchResult ->
-            "\$" + matchResult.groupValues[1].trim() + "\$"
-        }
-    }
+    // 8. 行内数学分隔符单向规范化（跳过代码围栏/行内代码）
+    s = MathDelimiterNormalizer.normalize(s)
 
     // 9. Inline Math: 将单个 $ 转换为 $$（统一交给 JLatexMath 的 $$ 分隔符渲染）
-    // 仅匹配非转义、非双美元场景，避免误伤已有 $$...$$
+    // 为了防止被误伤的 Currency 拦截真正的单 $ 公式（如 `$1 - x$` 刚好在行首），
+    // 我们的 Currency 正则已经增加了空格限定。同时此处转换依然有效。
     val inlineMathPattern = Regex("(?<!\\\\)(?<!\\$)\\$([^$\\n]+?)(?<!\\\\)(?<!\\$)\\$")
     if (s.contains("$")) {
         s = s.replace(inlineMathPattern) { matchResult ->
@@ -206,8 +166,12 @@ private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): S
         }
     }
 
-    // 10. 保留行内 $$...$$ 原样，块级 $$\n...\n$$ 同样保持不变
-    // 不再进行 $$ -> $ 的归一化，避免导致公式无法命中渲染
+    // 10. Currency: 只有在确认没有配对成公式之后，才对独立的 $数字 或 $$数字 做货币转义
+    // 避免误伤诸如 $1 - x$ 这样的情况
+    val singleCurrencyPattern = Regex("(?<=^|\\s)(?<!\\\\)\\$(?=\\d)")
+    s = s.replace(singleCurrencyPattern) { "\\$" }
+    val doubleCurrencyPattern = Regex("(?<=^|\\s)\\$\\$(?=\\d)")
+    s = s.replace(doubleCurrencyPattern) { "\\$" }
 
     return s.trimStart('\n')
 }
@@ -433,8 +397,8 @@ fun MarkdownRenderer(
             val sp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
             val cacheKey = if (contentKey.isNotBlank() && !isStreaming) {
                 // Append version suffix to invalidate old cache entries after markdown preprocess changes
-                // v34: keep $$ inline and restore $ -> $$ normalization
-                MarkdownSpansCache.generateKey(contentKey + "_v34", isDark, sp)
+                // v38: update version string to ensure UI completely rerenders math
+                MarkdownSpansCache.generateKey(contentKey + "_v38", isDark, sp)
             } else ""
 
             val cachedSpanned = if (cacheKey.isNotBlank()) MarkdownSpansCache.get(cacheKey) else null
