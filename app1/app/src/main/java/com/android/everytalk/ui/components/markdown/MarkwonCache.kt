@@ -37,8 +37,8 @@ object MarkwonCache {
         imageClickListener: ((String) -> Unit)? = null
     ): Markwon {
         val roundedSize = textSize.toInt()
-        // v9: reordered plugins - JLatexMathPlugin before MarkwonInlineParserPlugin for proper inline math
-        val cacheKey = "v9_dark=${isDark}_size=${roundedSize}"
+        // v11: restore plugin order for stable inline math rendering
+        val cacheKey = "v11_dark=${isDark}_size=${roundedSize}"
         
         synchronized(lock) {
             cacheMap[cacheKey]?.let { return it }

@@ -151,10 +151,9 @@ private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): S
         }
     }.joinToString("")
 
-    // 8. 将 [double dollar] 占位符转换为实际的数学公式标记
+    // 8. 将 [double dollar]/[single dollar] 占位符与被转义的数学分隔符转换为实际标记
     if (s.contains("[double dollar]")) {
         // 8.1 跨行块级公式：[double dollar]\n内容\n[double dollar] -> $$内容$$
-        // 必须先处理跨行格式，否则会被行级正则破坏
         val multilineBlockPattern = Regex(
             "\\[double dollar]\\s*\\n([\\s\\S]*?)\\n\\s*\\[double dollar]",
             RegexOption.MULTILINE
@@ -176,13 +175,39 @@ private fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): S
         }
     }
 
-    // 9. Inline Math: 将单个 $ 转换为 $$
+    if (s.contains("[single dollar]")) {
+        // 8.4 行内占位符：[single dollar] x [single dollar] -> $x$
+        val inlineSinglePlaceholderPattern = Regex("\\[single dollar]([^\\[]+?)\\[single dollar]")
+        s = s.replace(inlineSinglePlaceholderPattern) { matchResult ->
+            val inner = matchResult.groupValues[1].trim()
+            if (inner.isEmpty()) "" else "\$${inner}\$"
+        }
+
+        // 8.5 单独占位符：[single dollar] -> $
+        val singlePlaceholderPattern = Regex("\\[single dollar]")
+        s = singlePlaceholderPattern.replace(s, "$")
+    }
+
+    // 8.6 兼容被转义的行内公式分隔符：\$x\$ -> $x$
+    // 仅处理成对分隔符，避免误伤单个货币符号\$12
+    val escapedInlineMathPattern = Regex("\\\\\\$([^$\\n]+?)\\\\\\$")
+    if (s.contains("\\$")) {
+        s = s.replace(escapedInlineMathPattern) { matchResult ->
+            "\$" + matchResult.groupValues[1].trim() + "\$"
+        }
+    }
+
+    // 9. Inline Math: 将单个 $ 转换为 $$（统一交给 JLatexMath 的 $$ 分隔符渲染）
+    // 仅匹配非转义、非双美元场景，避免误伤已有 $$...$$
     val inlineMathPattern = Regex("(?<!\\\\)(?<!\\$)\\$([^$\\n]+?)(?<!\\\\)(?<!\\$)\\$")
     if (s.contains("$")) {
         s = s.replace(inlineMathPattern) { matchResult ->
             "$$" + matchResult.groupValues[1] + "$$"
         }
     }
+
+    // 10. 保留行内 $$...$$ 原样，块级 $$\n...\n$$ 同样保持不变
+    // 不再进行 $$ -> $ 的归一化，避免导致公式无法命中渲染
 
     return s.trimStart('\n')
 }
@@ -407,9 +432,9 @@ fun MarkdownRenderer(
             // 缓存优化：尝试从缓存获取 Spanned 对象
             val sp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
             val cacheKey = if (contentKey.isNotBlank() && !isStreaming) {
-                // Append version suffix to invalidate old cache entries after heading size fixes
-                // v30: Fix ** bold broken by hard break when not streaming
-                MarkdownSpansCache.generateKey(contentKey + "_v31", isDark, sp)
+                // Append version suffix to invalidate old cache entries after markdown preprocess changes
+                // v34: keep $$ inline and restore $ -> $$ normalization
+                MarkdownSpansCache.generateKey(contentKey + "_v34", isDark, sp)
             } else ""
 
             val cachedSpanned = if (cacheKey.isNotBlank()) MarkdownSpansCache.get(cacheKey) else null
