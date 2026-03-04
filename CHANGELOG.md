@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.12.7](https://github.com/roseforljh/EveryTalk/compare/v1.12.6...v1.12.7) (2026-03-04)
+
+
+### Bug Fixes
+
+* Add Markdown rendering with enhanced preprocessing for math, bolding, and text formatting. ([8901d56](https://github.com/roseforljh/EveryTalk/commit/8901d567d0dfcf0ef62e8545b13f5664343d88e2))
+* Add Markwon caching and custom rendering with markdown preprocessing utilities. ([430740c](https://github.com/roseforljh/EveryTalk/commit/430740c374e4fe48ae66f7cd8e802c307d88ec8c))
+* Implement a new chat screen featuring markdown rendering, typewriter effect, and robust data persistence for messages and media. ([3ebc5d4](https://github.com/roseforljh/EveryTalk/commit/3ebc5d4e0141b5fe7a93e59980e94c37c79d9c33))
+* Implement new UI components for table and Markdown rendering, add infographic parsing, and introduce system prompt injection. ([a6e6eef](https://github.com/roseforljh/EveryTalk/commit/a6e6eeff3d770a1389b55ae8378db16990a6b22f))
+
 ## [1.12.6](https://github.com/roseforljh/EveryTalk/compare/v1.12.5...v1.12.6) (2026-02-02)
 
 
