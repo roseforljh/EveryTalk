@@ -5,5 +5,5 @@ plugins {
 
     // 2) Android Gradle Plugin
     alias(libs.plugins.android.application) apply false
-    id("com.android.library") version "8.7.3" apply false
+    id("com.android.library") version "9.1.0" apply false
 }

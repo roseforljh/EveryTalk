@@ -24,6 +24,7 @@ class LifecycleCoordinator(
     private val historyManager: HistoryManager,
     private val cacheManager: CacheManager,
     private val conversationPreviewController: ConversationPreviewController,
+    private val persistScrollStates: suspend () -> Unit,
     private val scope: CoroutineScope,
     private val logger: (String) -> Unit = { msg -> Log.d("LifecycleCoordinator", msg) }
 ) {
@@ -44,6 +45,7 @@ class LifecycleCoordinator(
                         isImageGeneration = true,
                         forceSave = true
                     )
+                    persistScrollStates()
                 }
                 logger("App state saved on stop/pause")
             } catch (e: Exception) {

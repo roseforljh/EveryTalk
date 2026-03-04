@@ -2,9 +2,6 @@
 package com.android.everytalk.ui.screens.MainScreen.chat.text.ui
 import com.android.everytalk.R
 
-import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.animateScrollBy
@@ -653,12 +650,6 @@ fun AiMessageItem(
         ) {
             Box(
                 modifier = Modifier
-                    .animateContentSize(
-                        animationSpec = spring(
-                            dampingRatio = Spring.DampingRatioNoBouncy,
-                            stiffness = Spring.StiffnessMediumLow
-                        )
-                    )
                     .padding(
                         horizontal = ChatDimensions.BUBBLE_INNER_PADDING_HORIZONTAL,
                         vertical = ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL

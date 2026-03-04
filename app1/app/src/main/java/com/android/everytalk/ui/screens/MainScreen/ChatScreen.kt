@@ -145,12 +145,19 @@ fun ChatScreen(
         LazyListState(0, 0)
     }
 
-    LaunchedEffect(conversationId) {
+    val savedStateForConversation by remember(conversationId) {
+        derivedStateOf { viewModel.getScrollState(conversationId) }
+    }
+
+    LaunchedEffect(conversationId, savedStateForConversation) {
         if (System.currentTimeMillis() - lastSendAt.value < 1200) {
             return@LaunchedEffect
         }
-        val savedState = viewModel.getScrollState(conversationId)
-        if (savedState != null && savedState.firstVisibleItemIndex > 0) {
+        val savedState = savedStateForConversation
+        val shouldRestore = savedState != null && (
+            savedState.firstVisibleItemIndex > 0 || savedState.firstVisibleItemScrollOffset > 0
+        )
+        if (shouldRestore) {
             snapshotFlow { isLoadingHistory }
                 .filter { !it }
                 .first()
@@ -176,6 +183,28 @@ fun ChatScreen(
     }
 
 
+
+    LaunchedEffect(conversationId, listState) {
+        snapshotFlow {
+            Triple(
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset,
+                listState.isScrollInProgress
+            )
+        }
+            .distinctUntilChanged()
+            .filter { (_, _, isScrolling) -> !isScrolling }
+            .collect { (index, offset, _) ->
+                viewModel.cacheScrollState(
+                    conversationId,
+                    ConversationScrollState(
+                        firstVisibleItemIndex = index,
+                        firstVisibleItemScrollOffset = offset,
+                        userScrolledAway = !isAtBottom,
+                    )
+                )
+            }
+    }
 
     DisposableEffect(conversationId, isAtBottom) {
         val idToSaveFor = conversationId

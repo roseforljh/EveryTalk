@@ -40,6 +40,25 @@ private val MULTIPLE_SPACES_REGEX = Regex(" {2,}")
 private val ENUM_ITEM_REGEX = Regex("(?<!\n)\\s+([A-DＡ-Ｄ][\\.．、])\\s")
 private val WINDOWS_PATH_REGEX = Regex("^[A-Za-z]:\\\\")
 
+// 预编译 preprocessAiMarkdown 中的正则，避免每帧重复编译
+private val BASE64_IMAGE_PATTERN = Regex(
+    "(\\![\\[^\\]]*\\]\\()\\s*(<?)(:?data:image\\/[^)>]+)(>?)\\s*(\\))",
+    setOf(RegexOption.DOT_MATCHES_ALL)
+)
+private val FULL_WIDTH_PAREN_BOLD_REGEX = Regex("）\\*\\*")
+private val QUOTED_BOLD_PATTERN = Regex("""\*\*[""\u201C\u201D''\u2018\u2019「」『』«»](.+?)[""\u201C\u201D''\u2018\u2019「」『』«»]\*\*""")
+private val HEADER_SPACE_REGEX = Regex("(?<=^|\\n)(#{1,6})(?=[^#\\s])")
+private val LONG_HEADER_REGEX = Regex("^(#{1,6})(?=\\s.{50,})", RegexOption.MULTILINE)
+private val MULTILINE_BLOCK_DOLLAR_PATTERN = Regex(
+    "\\[double dollar]\\s*\\n([\\s\\S]*?)\\n\\s*\\[double dollar]",
+    RegexOption.MULTILINE
+)
+private val BLOCK_PLACEHOLDER_PATTERN = Regex("(?m)^[ \\t]*\\[double dollar][ \\t]*$")
+private val INLINE_MATH_PATTERN = Regex("(?<!\\\\)(?<!\\$)\\$([^$\\n]+?)(?<!\\\\)(?<!\\$)\\$")
+private val TRIPLE_DOLLAR_CURRENCY_PATTERN = Regex("(?<=^|\\s)\\$\\$\\$(?=\\d)")
+private val SINGLE_CURRENCY_PATTERN = Regex("(?<=^|\\s)(?<!\\\\)\\$(?=\\d)")
+private val DOUBLE_CURRENCY_PATTERN = Regex("(?<=^|\\s)\\$\\$(?=\\d)")
+
 private fun isSupportedImageSource(raw: String?): Boolean {
     if (raw.isNullOrBlank()) return false
     val s = raw.trim()
@@ -52,10 +71,109 @@ private fun isSupportedImageSource(raw: String?): Boolean {
 }
 
 private data class MarkdownRenderSignature(
-    val markdown: String,
+    val processed: String, // 预处理后的文本，包含转义逻辑的结果
     val isDark: Boolean,
     val textSizeSp: Float
 )
+
+/**
+ * 流式输出时：仅转义未闭合的数学公式标记。
+ * 已闭合的公式（如 $$E=mc^2$$）保留原样，允许 JLatexMath 立即渲染。
+ * 未闭合的公式（如 $$\int_0^1 f(x)）的起始标记被转义，
+ * 防止 JLatexMath 尝试解析残缺公式导致布局跳变。
+ */
+private fun escapeUnclosedMathForStreaming(input: String): String {
+    if (!input.contains('$') && !input.contains("\\[")) return input
+    
+    var inInlineCode = false
+    var inMathBlock = false
+    var mathBlockStart = -1
+    var mathBlockMarker = ""
+    var inInlineMath = false
+    var inlineMathStart = -1
+    
+    var i = 0
+    while (i < input.length) {
+        val ch = input[i]
+        
+        // 跟踪行内代码
+        if (ch == '`') {
+            inInlineCode = !inInlineCode
+            i++
+            continue
+        }
+        if (inInlineCode) { i++; continue }
+        
+        // 如果在数学块内，寻找闭合标记
+        if (inMathBlock) {
+            if (input.startsWith(mathBlockMarker, i)) {
+                inMathBlock = false
+                mathBlockStart = -1
+                i += mathBlockMarker.length
+                continue
+            }
+            i++
+            continue
+        }
+        
+        // 检测 $$ 开启
+        if (input.startsWith("$$", i)) {
+            inMathBlock = true
+            mathBlockMarker = "$$"
+            mathBlockStart = i
+            i += 2
+            continue
+        }
+        
+        // 检测 \[ 开启
+        if (ch == '\\' && i + 1 < input.length && input[i + 1] == '[') {
+            inMathBlock = true
+            mathBlockMarker = "\\]"
+            mathBlockStart = i
+            i += 2
+            continue
+        }
+        
+        // 检测 $ （行内数学开关）
+        if (ch == '$') {
+            val isCurrency = i + 1 < input.length && input[i + 1].isDigit()
+            if (!isCurrency) {
+                inInlineMath = !inInlineMath
+                if (inInlineMath) inlineMathStart = i else inlineMathStart = -1
+            }
+            i++
+            continue
+        }
+        
+        i++
+    }
+    
+    // 所有标签都已闭合，直接返回，允许完整渲染
+    if (!inMathBlock && !inInlineMath) return input
+    
+    // 仅转义未闭合的开启标记
+    val sb = StringBuilder(input)
+    data class Edit(val pos: Int, val origLen: Int, val replacement: String)
+    val edits = mutableListOf<Edit>()
+    
+    if (inMathBlock && mathBlockStart >= 0) {
+        if (input.startsWith("$$", mathBlockStart)) {
+            edits.add(Edit(mathBlockStart, 2, "\\$\\$"))
+        } else if (input.startsWith("\\[", mathBlockStart)) {
+            edits.add(Edit(mathBlockStart, 2, "\\\\["))
+        }
+    }
+    if (inInlineMath && inlineMathStart >= 0) {
+        edits.add(Edit(inlineMathStart, 1, "\\$"))
+    }
+    
+    edits.sortByDescending { it.pos }
+    for (edit in edits) {
+        sb.replace(edit.pos, edit.pos + edit.origLen, edit.replacement)
+    }
+    
+    return sb.toString()
+}
 
 /**
  * 预处理 Markdown 文本（简化版）
@@ -91,22 +209,17 @@ internal fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): 
         .replace("\u3000", " ")
 
     // 5. Full-width Paren Bold Fix
-    val fullWidthParenBoldFix = Regex("）\\*\\*")
-    s = s.replace(fullWidthParenBoldFix, "**）")
+    s = s.replace(FULL_WIDTH_PAREN_BOLD_REGEX, "**）")
 
     // 5.1 Fix: **"xxx"** 等引号包裹加粗无法渲染的问题
-    // CommonMark 规范：当 ** 后紧跟 Unicode 标点且前面非标点时，不满足 left-flanking 条件
-    // 解决方案：将引号移到加粗标记外部 **"xxx"** -> "**xxx**"
-    // 支持的引号类型：中文弯引号 "" ''、直角引号 「」『』、英文引号 "" ''、法式引号 «»
-    val quotedBoldPattern = Regex("""\*\*[""\u201C\u201D''\u2018\u2019「」『』«»](.+?)[""\u201C\u201D''\u2018\u2019「」『』«»]\*\*""")
-    s = s.replace(quotedBoldPattern) { mr ->
+    s = s.replace(QUOTED_BOLD_PATTERN) { mr ->
         val inner = mr.groupValues[1]
         "\"**${inner}**\""
     }
 
     // 6. Headers: 确保 # 后有空格
-    s = s.replace(Regex("(?<=^|\\n)(#{1,6})(?=[^#\\s])"), "$1 ")
-    s = s.replace(Regex("^(#{1,6})(?=\\s.{50,})", RegexOption.MULTILINE)) { mr ->
+    s = s.replace(HEADER_SPACE_REGEX, "$1 ")
+    s = s.replace(LONG_HEADER_REGEX) { mr ->
         "\\" + mr.groupValues[1]
     }
 
@@ -125,8 +238,10 @@ internal fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): 
         val isEmptyLine = line.isBlank()
         val isTableLine = line.contains("|")
         val hasUnbalancedBold = line.split("**").size % 2 == 0
+        val trimmedEnd = line.trimEnd()
+        val endsWithMathDelimiter = trimmedEnd.endsWith("$$") || trimmedEnd.endsWith("$")
         // 无论是否流式渲染，有未闭合的 ** 都跳过硬换行，避免破坏加粗语法
-        val shouldSkipHardBreak = isTableLine || hasUnbalancedBold
+        val shouldSkipHardBreak = isTableLine || hasUnbalancedBold || endsWithMathDelimiter
 
         when {
             index == lastIndex -> line
@@ -140,38 +255,36 @@ internal fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): 
 
     // 8. 块级 [double dollar] 占位符转换（仅处理独立行/跨行块）
     if (s.contains("[double dollar]")) {
-        val multilineBlockPattern = Regex(
-            "\\[double dollar]\\s*\\n([\\s\\S]*?)\\n\\s*\\[double dollar]",
-            RegexOption.MULTILINE
-        )
-        s = s.replace(multilineBlockPattern) { matchResult ->
+        s = s.replace(MULTILINE_BLOCK_DOLLAR_PATTERN) { matchResult ->
             val inner = matchResult.groupValues[1].trim()
             if (inner.isEmpty()) "" else "\$\$${inner}\$\$"
         }
 
-        val blockPlaceholderPattern = Regex("(?m)^[ \\t]*\\[double dollar][ \\t]*$")
-        s = blockPlaceholderPattern.replace(s) { "\$\$" }
+        s = BLOCK_PLACEHOLDER_PATTERN.replace(s) { "\$\$" }
     }
 
-    // 8. 行内数学分隔符单向规范化（跳过代码围栏/行内代码）
+    // 8.5 行内数学分隔符单向规范化（跳过代码围栏/行内代码）
     s = MathDelimiterNormalizer.normalize(s)
 
     // 9. Inline Math: 将单个 $ 转换为 $$（统一交给 JLatexMath 的 $$ 分隔符渲染）
-    // 为了防止被误伤的 Currency 拦截真正的单 $ 公式（如 `$1 - x$` 刚好在行首），
-    // 我们的 Currency 正则已经增加了空格限定。同时此处转换依然有效。
-    val inlineMathPattern = Regex("(?<!\\\\)(?<!\\$)\\$([^$\\n]+?)(?<!\\\\)(?<!\\$)\\$")
     if (s.contains("$")) {
-        s = s.replace(inlineMathPattern) { matchResult ->
+        s = s.replace(INLINE_MATH_PATTERN) { matchResult ->
             "$$" + matchResult.groupValues[1] + "$$"
         }
     }
 
+    // 9.5 修复由单 $货币 转义导致的 $$$数字 形态
+    s = s.replace(TRIPLE_DOLLAR_CURRENCY_PATTERN) { "\\\\$" }
+
     // 10. Currency: 只有在确认没有配对成公式之后，才对独立的 $数字 或 $$数字 做货币转义
-    // 避免误伤诸如 $1 - x$ 这样的情况
-    val singleCurrencyPattern = Regex("(?<=^|\\s)(?<!\\\\)\\$(?=\\d)")
-    s = s.replace(singleCurrencyPattern) { "\\$" }
-    val doubleCurrencyPattern = Regex("(?<=^|\\s)\\$\\$(?=\\d)")
-    s = s.replace(doubleCurrencyPattern) { "\\$" }
+    s = s.replace(SINGLE_CURRENCY_PATTERN) { "\\$" }
+    s = s.replace(DOUBLE_CURRENCY_PATTERN) { "\\\\$" }
+
+    // 最后一步：流式期间，仅转义残留的未闭合数学标记
+    // 已闭合的公式保留原样，允许立即渲染
+    if (isStreaming) {
+        s = escapeUnclosedMathForStreaming(s)
+    }
 
     return s.trimStart('\n')
 }
@@ -382,8 +495,9 @@ fun MarkdownRenderer(
             }
         },
         update = { tv ->
+            val processed = preprocessAiMarkdown(markdown, isStreaming)
             val signature = MarkdownRenderSignature(
-                markdown = markdown,
+                processed = processed,
                 isDark = isDark,
                 textSizeSp = textSizeSp
             )
@@ -394,11 +508,11 @@ fun MarkdownRenderer(
             tv.tag = signature
 
             // 缓存优化：尝试从缓存获取 Spanned 对象
+            // 流式期间：上游 TableAwareText 只对已稳定的 part 提供 contentKey
+            // 最后一个（持续变化的）part 的 contentKey 为空，不缓存
             val sp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
-            val cacheKey = if (contentKey.isNotBlank() && !isStreaming) {
-                // Append version suffix to invalidate old cache entries after markdown preprocess changes
-                // v38: update version string to ensure UI completely rerenders math
-                MarkdownSpansCache.generateKey(contentKey + "_v38", isDark, sp)
+            val cacheKey = if (contentKey.isNotBlank()) {
+                MarkdownSpansCache.generateKey(contentKey + "_v40", isDark, sp)
             } else ""
 
             val cachedSpanned = if (cacheKey.isNotBlank()) MarkdownSpansCache.get(cacheKey) else null
@@ -411,18 +525,14 @@ fun MarkdownRenderer(
                 }
             } else {
                 // 未命中缓存：执行完整解析
-                // 即使完全移除了差异化逻辑，保留参数接口以便后续扩展，但目前逻辑已统一
-                val processed = preprocessAiMarkdown(markdown, isStreaming)
-
+                // 注意：这里不再需要调用 preprocessAiMarkdown，因为上面已经调用过了
+                
                 // 调试：检查是否包含数学公式
                 if (processed.contains("$")) {
                     android.util.Log.d("MarkdownRenderer", "检测到数学公式标记: ${processed.take(100)}")
                 }
 
                 // 分步解析以支持缓存
-                // markwon.setMarkdown(tv, processed) // 原逻辑
-                
-                // 新逻辑：Parse -> Render -> Cache -> Set
                 val node = markwon.parse(processed)
                 val spanned = markwon.render(node)
                 

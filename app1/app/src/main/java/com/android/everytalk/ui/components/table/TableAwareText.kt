@@ -2,7 +2,7 @@ package com.android.everytalk.ui.components.table
 
 import android.view.ViewGroup
 import android.widget.ImageView
-import androidx.compose.animation.animateContentSize
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -118,6 +118,9 @@ fun TableAwareText(
         )
     }
 
+    // 增量解析：记录上一次解析时的文本，用于判断是否为 append-only
+    var previousText by remember { mutableStateOf("") }
+
     val updatedText by rememberUpdatedState(text)
     val updatedIsStreaming by rememberUpdatedState(isStreaming)
     val effectiveCacheKey = if (contentKey.isNotBlank() && !isStreaming) {
@@ -125,11 +128,44 @@ fun TableAwareText(
     } else ""
 
     LaunchedEffect(Unit) {
-        snapshotFlow { Triple(updatedText, updatedIsStreaming, effectiveCacheKey) }
+        // 仅监听文本本身的变化来触发重新解析
+        // 不再将 isStreaming 纳入触发条件，避免流式结束瞬间因 isStreaming 切换
+        // 而触发全量重解析+Compose全量重组，引发整个气泡闪一下
+        snapshotFlow { updatedText }
             .distinctUntilChanged()
-            .mapLatest { (currentText, streaming, cacheKey) ->
+            .mapLatest { currentText ->
+                val streaming = updatedIsStreaming
+                val cacheKey = if (contentKey.isNotBlank() && !streaming) {
+                    "${contentKey}_${currentText.hashCode()}_v${ContentParseCache.PARSER_VERSION}"
+                } else ""
+
                 if (!streaming && cacheKey.isNotBlank()) {
-                    ContentParseCache.get(cacheKey)?.let { return@mapLatest it }
+                    ContentParseCache.get(cacheKey)?.let {
+                        previousText = currentText
+                        return@mapLatest it
+                    }
+                }
+
+                // 增量解析保护：流式期间，如果新文本只是旧文本的追加，
+                // 只更新最后一个 Text 块，不全量重建 AST
+                val prevParts = parsedParts
+                if (streaming && prevParts.isNotEmpty()
+                    && previousText.isNotEmpty()
+                    && currentText.startsWith(previousText)
+                ) {
+                    val lastPart = prevParts.last()
+                    if (lastPart is ContentPart.Text) {
+                        val delta = currentText.substring(previousText.length)
+                        val updatedLast = ContentPart.Text(
+                            lastPart.content + delta,
+                            lastPart.startOffset
+                        )
+                        val newParts = prevParts.toMutableList()
+                        newParts[newParts.lastIndex] = updatedLast
+                        previousText = currentText
+                        // 检查追加的文本是否构成了完整的数学公式块
+                        return@mapLatest ContentParser.splitMathBlocksPublic(newParts)
+                    }
                 }
 
                 val parts = ContentParser.parseCompleteContent(currentText, isStreaming = streaming)
@@ -138,6 +174,7 @@ fun TableAwareText(
                     ContentParseCache.put(cacheKey, parts)
                 }
 
+                previousText = currentText
                 parts
             }
             .catch { e ->
@@ -148,6 +185,15 @@ fun TableAwareText(
             .collect { parts ->
                 parsedParts = parts
             }
+    }
+
+    // 当 isStreaming 从 true 切换为 false 时，直接将已有的解析结果写入缓存，
+    // 而不是触发重新解析（重新解析会产生新的 list 实例 → 触发 Compose 全量重组 → 闪烁）
+    LaunchedEffect(isStreaming) {
+        if (!isStreaming && parsedParts.isNotEmpty() && contentKey.isNotBlank()) {
+            val cacheKey = "${contentKey}_${text.hashCode()}_v${ContentParseCache.PARSER_VERSION}"
+            ContentParseCache.put(cacheKey, parsedParts)
+        }
     }
 
     if (parsedParts.isEmpty() && text.isNotEmpty()) {
@@ -169,9 +215,18 @@ fun TableAwareText(
         modifier = modifier
             .fillMaxWidth()
             .padding(vertical = verticalPaddingDp)
-            .animateContentSize()
+            // 移除 animateContentSize()！
+            // 流式输出中每帧 Column 子项的数量、尺寸都在变化，
+            // animateContentSize 会对这些变化施加弹簧动画，
+            // 正是导致画面疯狂跳动闪烁的最大元凶之一。
     ) {
         parsedParts.forEachIndexed { index, part ->
+            // 始终使用 类型+索引 作为 key，不包含 contentHash
+            // 1. 流式期间：contentHash 每帧变化 → 组件被销毁重建 → 闪烁
+            // 2. 流式结束：isStreaming 从 true→false 会导致 key 策略切换，
+            //    所有 key 同时变化 → 全部组件重建 → 结束瞬间闪一下
+            // MarkdownRenderer 内部已有 MarkdownRenderSignature tag 检查，
+            // 内容不变时不会重新渲染，所以 key 里不需要 contentHash
             val stableKey = "${part.javaClass.simpleName}_$index"
 
             androidx.compose.runtime.key(stableKey) {
@@ -186,8 +241,16 @@ fun TableAwareText(
                             onLongPress = onLongPress,
                             onImageClick = onImageClick,
                             sender = sender,
-                            contentKey = if (contentKey.isNotBlank() && !isStreaming) {
-                                "${contentKey}_part_${index}_${part.content.hashCode()}"
+                            contentKey = if (contentKey.isNotBlank()) {
+                                if (isStreaming) {
+                                    // 流式期间：对已经不会再变化的 part 也启用缓存
+                                    // 最后一个 part 会持续变化，不缓存
+                                    if (index < parsedParts.size - 1) {
+                                        "${contentKey}_part_${index}_${part.content.hashCode()}"
+                                    } else ""
+                                } else {
+                                    "${contentKey}_part_${index}_${part.content.hashCode()}"
+                                }
                             } else "",
                             disableVerticalPadding = true
                         )
@@ -267,6 +330,10 @@ fun TableAwareText(
                                 }
                             },
                             update = { imageView ->
+                                // 内容守卫：如果公式内容未变，跳过昂贵的 JLatexMathDrawable 重建
+                                val currentTag = imageView.tag as? String
+                                if (currentTag == mathContent) return@AndroidView
+                                imageView.tag = mathContent
                                 try {
                                     val drawable = JLatexMathDrawable.builder(mathContent)
                                         .textSize(textSizePx)

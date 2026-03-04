@@ -481,6 +481,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
        historyManager = historyManager,
        cacheManager = cacheManager,
        conversationPreviewController = conversationPreviewController,
+       persistScrollStates = {
+           persistenceManager.saveConversationScrollStates(stateHolder.conversationScrollStates.toMap())
+       },
        scope = viewModelScope
    )
 
@@ -575,6 +578,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     Log.d("AppViewModel", "置顶集合已加载 - 文本: ${pinnedTextIds.size}, 图像: ${pinnedImageIds.size}")
                 } catch (e: Exception) {
                     Log.e("AppViewModel", "加载置顶集合失败", e)
+                }
+            }
+
+            // 加载会话滚动位置
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    val states = persistenceManager.loadConversationScrollStates()
+                    withContext(Dispatchers.Main) {
+                        stateHolder.conversationScrollStates.clear()
+                        stateHolder.conversationScrollStates.putAll(states)
+                    }
+                    Log.d("AppViewModel", "会话滚动位置已加载 - 共 ${states.size} 条")
+                } catch (e: Exception) {
+                    Log.e("AppViewModel", "加载会话滚动位置失败", e)
                 }
             }
 
@@ -1381,8 +1398,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         return messages.find { it.id == id } ?: imageGenerationMessages.find { it.id == id }
     }
 
+    fun cacheScrollState(conversationId: String, scrollState: ConversationScrollState) {
+        scrollStateController.saveScrollState(conversationId, scrollState)
+    }
+
     fun saveScrollState(conversationId: String, scrollState: ConversationScrollState) {
         scrollStateController.saveScrollState(conversationId, scrollState)
+        viewModelScope.launch(Dispatchers.IO) {
+            persistenceManager.saveConversationScrollStates(stateHolder.conversationScrollStates.toMap())
+        }
     }
 
     fun appendReasoningToMessage(messageId: String, text: String, isImageGeneration: Boolean = false) {

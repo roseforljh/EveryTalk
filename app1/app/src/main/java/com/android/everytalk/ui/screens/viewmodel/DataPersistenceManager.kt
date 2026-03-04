@@ -9,6 +9,7 @@ import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.database.RoomDataSource
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.statecontroller.ViewModelStateHolder
+import com.android.everytalk.statecontroller.ConversationScrollState
 import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.VoiceBackendConfig
 import kotlinx.coroutines.CoroutineScope
@@ -21,6 +22,7 @@ import coil3.ImageLoader
 import android.util.Base64
 import java.io.FileOutputStream
 import java.util.Locale
+import kotlinx.serialization.json.Json
 
 class DataPersistenceManager(
     private val context: Context,
@@ -30,12 +32,14 @@ class DataPersistenceManager(
 ) {
     private val TAG = "PersistenceManager"
     private val conversationGroupsSaveMutex = kotlinx.coroutines.sync.Mutex()
+    private val conversationScrollStatesSaveMutex = kotlinx.coroutines.sync.Mutex()
     
     // Room 数据源
     private val roomDataSource by lazy { RoomDataSource(context) }
     
     // 默认配置初始化标志位 (存储在 Room 数据库中)
     private val KEY_DEFAULT_CONFIGS_INITIALIZED = "default_configs_initialized_v1"
+    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     suspend fun loadCustomProviders(): Set<String> {
         return withContext(Dispatchers.IO) {
@@ -1263,6 +1267,33 @@ class DataPersistenceManager(
             } catch (e: Exception) {
                 Log.e(TAG, "loadPinnedIds failed", e)
                 emptySet()
+            }
+        }
+    }
+
+    suspend fun saveConversationScrollStates(states: Map<String, ConversationScrollState>) {
+        conversationScrollStatesSaveMutex.withLock {
+            withContext(Dispatchers.IO) {
+                try {
+                    val serialized = json.encodeToString(states)
+                    roomDataSource.setSetting("conversation_scroll_states_v1", serialized)
+                    Log.d(TAG, "saveConversationScrollStates: saved ${states.size} items")
+                } catch (e: Exception) {
+                    Log.e(TAG, "saveConversationScrollStates failed", e)
+                }
+            }
+        }
+    }
+
+    suspend fun loadConversationScrollStates(): Map<String, ConversationScrollState> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val raw = roomDataSource.getSetting("conversation_scroll_states_v1", "") ?: ""
+                if (raw.isBlank()) return@withContext emptyMap()
+                json.decodeFromString<Map<String, ConversationScrollState>>(raw)
+            } catch (e: Exception) {
+                Log.e(TAG, "loadConversationScrollStates failed", e)
+                emptyMap()
             }
         }
     }

@@ -5,12 +5,15 @@ import com.android.everytalk.ui.components.streaming.rememberTypewriterState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.wrapContentWidth
+import android.os.SystemClock
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.PlatformTextStyle
@@ -18,6 +21,84 @@ import androidx.compose.ui.text.TextStyle
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.statecontroller.AppViewModel
+
+private fun hasMathSyntax(text: String): Boolean {
+    return text.contains('$') || text.contains("\\[") || text.contains("\\(")
+}
+
+private fun hasUnclosedMathDelimiter(text: String): Boolean {
+    var inInlineCode = false
+    var inBlockMath = false
+    var inInlineMath = false
+    var blockMarker = ""
+
+    var i = 0
+    while (i < text.length) {
+        val ch = text[i]
+
+        if (ch == '`') {
+            inInlineCode = !inInlineCode
+            i++
+            continue
+        }
+        if (inInlineCode) {
+            i++
+            continue
+        }
+
+        if (inBlockMath) {
+            if (text.startsWith(blockMarker, i)) {
+                inBlockMath = false
+                i += blockMarker.length
+                continue
+            }
+            i++
+            continue
+        }
+
+        if (text.startsWith("$$", i)) {
+            inBlockMath = true
+            blockMarker = "$$"
+            i += 2
+            continue
+        }
+
+        if (ch == '\\' && i + 1 < text.length && text[i + 1] == '[') {
+            inBlockMath = true
+            blockMarker = "\\]"
+            i += 2
+            continue
+        }
+
+        if (ch == '$') {
+            val isCurrency = i + 1 < text.length && text[i + 1].isDigit()
+            if (!isCurrency) {
+                inInlineMath = !inInlineMath
+            }
+            i++
+            continue
+        }
+
+        i++
+    }
+
+    return inBlockMath || inInlineMath
+}
+
+private fun shouldForceMathBoundaryRefresh(previous: String, current: String): Boolean {
+    if (current.length <= previous.length) return true
+    if (!current.startsWith(previous)) return true
+
+    val delta = current.substring(previous.length)
+    if (delta.isEmpty()) return false
+
+    return delta.contains("$$") ||
+        delta.contains("\\]") ||
+        delta.contains('\n') ||
+        delta.contains('。') ||
+        delta.contains('！') ||
+        delta.contains('？')
+}
 
 /**
  * 增强的Markdown文本显示组件
@@ -78,12 +159,13 @@ fun EnhancedMarkdownText(
         remember(message.text) { mutableStateOf(message.text) }
     }
     
-    // 🔍 调试：记录content更新
+    // 🔍 调试：仅在 content 实际变化时记录，避免每次重组都打日志
     if (isStreaming && com.android.everytalk.BuildConfig.DEBUG) {
-        androidx.compose.runtime.SideEffect {
-            // 每次content变化都记录
-            android.util.Log.d("EnhancedMarkdownText",
-                "📝 Streaming content updated: msgId=${message.id.take(8)}, len=${content.length}, preview=${content.take(30)}")
+        LaunchedEffect(content) {
+            android.util.Log.d(
+                "EnhancedMarkdownText",
+                "📝 Streaming content updated: msgId=${message.id.take(8)}, len=${content.length}, preview=${content.take(30)}"
+            )
         }
     }
 
@@ -103,24 +185,63 @@ fun EnhancedMarkdownText(
     Box(
         modifier = modifier.then(widthModifier)
     ) {
-        val isActuallyStreaming = isStreaming || 
+        val isActuallyStreaming = isStreaming ||
             (viewModel?.streamingMessageStateManager?.isStreaming(message.id) == true)
-        
-        val typewriterState = rememberTypewriterState(
-            targetText = content,
-            isStreaming = isActuallyStreaming,
-            charsPerFrame = 3,
-            frameDelayMs = 16L,
-            maxCharsPerFrame = 50,
-            catchUpDivisor = 5
-        )
-        
-        val displayText = if (isActuallyStreaming) {
-            typewriterState.displayedText
-        } else {
-            content
+
+        var throttledMathContent by remember(message.id) { mutableStateOf(content) }
+        var lastRawMathContent by remember(message.id) { mutableStateOf(content) }
+        var lastMathUpdateAt by remember(message.id) { mutableStateOf(0L) }
+        var lastMathUnclosed by remember(message.id) { mutableStateOf(false) }
+
+        LaunchedEffect(content, isActuallyStreaming) {
+            if (!isActuallyStreaming) {
+                throttledMathContent = content
+                lastRawMathContent = content
+                lastMathUnclosed = hasUnclosedMathDelimiter(content)
+                lastMathUpdateAt = SystemClock.elapsedRealtime()
+                return@LaunchedEffect
+            }
+
+            if (!hasMathSyntax(content)) {
+                throttledMathContent = content
+                lastRawMathContent = content
+                lastMathUnclosed = false
+                lastMathUpdateAt = SystemClock.elapsedRealtime()
+                return@LaunchedEffect
+            }
+
+            val now = SystemClock.elapsedRealtime()
+            val currentUnclosed = hasUnclosedMathDelimiter(content)
+            val boundaryRefresh =
+                shouldForceMathBoundaryRefresh(lastRawMathContent, content) || (lastMathUnclosed && !currentUnclosed)
+            val throttleWindowMs = if (currentUnclosed) 120L else 80L
+
+            if (boundaryRefresh || now - lastMathUpdateAt >= throttleWindowMs) {
+                throttledMathContent = content
+                lastMathUpdateAt = now
+            }
+
+            lastRawMathContent = content
+            lastMathUnclosed = currentUnclosed
         }
-        
+
+        val hasMath = hasMathSyntax(throttledMathContent)
+        val useTypewriter = isActuallyStreaming && !hasMath
+
+        val typewriterState = rememberTypewriterState(
+            targetText = throttledMathContent,
+            isStreaming = useTypewriter,
+            charsPerFrame = 6,
+            frameDelayMs = 32L,
+            maxCharsPerFrame = 60,
+            catchUpDivisor = 4
+        )
+
+        val displayText = when {
+            useTypewriter -> typewriterState.displayedText
+            else -> throttledMathContent
+        }
+
         ContentCoordinator(
             text = displayText,
             style = style,

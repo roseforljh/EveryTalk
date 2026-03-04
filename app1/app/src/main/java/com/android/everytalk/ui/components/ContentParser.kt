@@ -215,6 +215,13 @@ object ContentParser {
         return merged
     }
 
+    /**
+     * 公开的 splitMathBlocks 接口，供增量解析路径使用。
+     * 当 TableAwareText 在流式期间只追加了文本到最后一个 Text 块时，
+     * 需要重新检查是否有完整的 $$ 数学公式块可以拆分出来。
+     */
+    fun splitMathBlocksPublic(parts: List<ContentPart>): List<ContentPart> = splitMathBlocks(parts)
+
     private fun splitMathBlocks(parts: List<ContentPart>): List<ContentPart> {
         if (parts.isEmpty()) return parts
 
