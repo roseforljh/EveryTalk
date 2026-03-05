@@ -55,9 +55,10 @@ fun BreakableLatexRenderer(
     // 必须将 sp 转换为 px，否则在高 DPI 设备上公式会非常小。
     val textSizeForJLatex = with(density) { textSizeSp.sp.toPx() }
 
-    // 从 $$ 或 \[ 分隔符中提取纯 LaTeX 内容
+    // 从 $$ 或 \[ 分隔符中提取纯 LaTeX 内容，并预处理防止数字被拆行
     val pureMath = remember(latex) {
-        extractPureMathContent(latex)
+        val raw = extractPureMathContent(latex)
+        preventNumberBreaking(raw)
     }
 
     BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
@@ -137,6 +138,21 @@ private fun extractPureMathContent(latex: String): String {
         trimmed.startsWith("\\[") && trimmed.endsWith("\\]") ->
             trimmed.removePrefix("\\[").removeSuffix("\\]").trim()
         else -> trimmed
+    }
+}
+
+/**
+ * 预处理 LaTeX 字符串，防止多位数字被 BreakFormula 拆行。
+ *
+ * JLatexMath 的换行算法将每个数字字符视为独立原子，可能在中间断行
+ * （如 576 → 57\n6）。将 2 位以上的数字包裹在 \mbox{} 中，
+ * 使其成为不可拆分的水平盒子。数字在数学和文本模式下都是竖直体，
+ * 视觉效果完全一致。
+ */
+private fun preventNumberBreaking(latex: String): String {
+    // 匹配 2+ 位连续数字（可含小数点），但排除已在 \mbox{} 或 \text{} 内的
+    return latex.replace(Regex("(?<!\\\\mbox\\{)(?<!\\\\text\\{)(\\d{2,}(?:\\.\\d+)?)")) {
+        "\\mbox{${it.value}}"
     }
 }
 
