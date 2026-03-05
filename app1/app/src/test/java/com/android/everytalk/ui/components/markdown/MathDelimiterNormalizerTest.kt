@@ -1,4 +1,4 @@
-package com.android.everytalk.ui.components.markdown
+﻿package com.android.everytalk.ui.components.markdown
 
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -7,24 +7,24 @@ import org.junit.Test
 class MathDelimiterNormalizerTest {
 
     @Test
-    fun `normalize inline double dollar to single dollar`() {
+    fun `preserve inline double dollar delimiters`() {
         val input = "A \$\$x+1\$\$ B"
         val output = MathDelimiterNormalizer.normalize(input)
-        assertEquals("A \$x+1\$ B", output)
+        assertEquals("A \$\$x+1\$\$ B", output)
     }
 
     @Test
-    fun `normalize placeholders to dollar delimiters`() {
+    fun `normalize placeholders to double dollar delimiters`() {
         val input = "[single dollar]x[single dollar] and [double dollar]y[double dollar]"
         val output = MathDelimiterNormalizer.normalize(input)
-        assertEquals("\$x\$ and \$y\$", output)
+        assertEquals("\$\$x\$\$ and \$\$y\$\$", output)
     }
 
     @Test
-    fun `normalize escaped delimiters`() {
+    fun `normalize escaped delimiters to double dollar`() {
         val input = "\\\$SYN=1\\\$"
         val output = MathDelimiterNormalizer.normalize(input)
-        assertEquals("\$SYN=1\$", output)
+        assertEquals("\$\$SYN=1\$\$", output)
     }
 
     @Test
@@ -42,6 +42,6 @@ class MathDelimiterNormalizerTest {
     fun `skip inline code`() {
         val input = "Use `\$\$raw\$\$` but render \$\$x\$\$"
         val output = MathDelimiterNormalizer.normalize(input)
-        assertEquals("Use `\$\$raw\$\$` but render \$x\$", output)
+        assertEquals("Use `\$\$raw\$\$` but render \$\$x\$\$", output)
     }
 }

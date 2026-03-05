@@ -1,22 +1,18 @@
-package com.android.everytalk.ui.components.markdown
+﻿package com.android.everytalk.ui.components.markdown
 
 /**
  * 数学分隔符规范化：
- * - 行内 $$...$$ -> $...$
- * - [single dollar]... / [double dollar]...（行内成对）-> $...$
- * - 成对转义分隔符 \$...\$ -> $...$
+ * - [single dollar]... / [double dollar]...（行内成对）-> $$...$$
+ * - 成对转义分隔符 \$...\$ -> $$...$$
  *
  * 注意：
  * - 不处理块级 $$\n...\n$$
- * - 跳过代码围栏与行内代码，避免误改代码内容
+ * - 跳过代码围栏与行内代码
  */
 internal object MathDelimiterNormalizer {
 
-    private val inlineDoubleDollarPattern = Regex("(?<!\\$)\\$\\$([^\\n$][^\\n]*?)\\$\\$(?!\\$)")
-    private val inlineDoublePlaceholderPattern = Regex("\\[double dollar]([^\\[]+?)\\[double dollar]")
-    private val inlineSinglePlaceholderPattern = Regex("\\[single dollar]([^\\[]+?)\\[single dollar]")
-    private val singlePlaceholderPattern = Regex("\\[single dollar]")
-    private val escapedInlineMathPattern = Regex("\\\\\\$([^$\\n]+?)\\\\\\$")
+    private const val DOUBLE_PLACEHOLDER = "[double dollar]"
+    private const val SINGLE_PLACEHOLDER = "[single dollar]"
 
     fun normalize(input: String): String {
         if (input.isEmpty()) return input
@@ -26,8 +22,7 @@ internal object MathDelimiterNormalizer {
         var inFence = false
         var fenceMarker = ""
 
-        lines.forEachIndexed { index, rawLine ->
-            val line = rawLine
+        lines.forEachIndexed { index, line ->
             val trimmed = line.trimStart()
 
             if (!inFence && (trimmed.startsWith("```") || trimmed.startsWith("~~~"))) {
@@ -51,7 +46,7 @@ internal object MathDelimiterNormalizer {
     }
 
     private fun normalizeOutsideInlineCode(line: String): String {
-        if (line.isEmpty() || !line.contains('$') && !line.contains("[single dollar]") && !line.contains("[double dollar]")) {
+        if (line.isEmpty() || (!line.contains('$') && !line.contains(SINGLE_PLACEHOLDER) && !line.contains(DOUBLE_PLACEHOLDER))) {
             return line
         }
 
@@ -91,29 +86,49 @@ internal object MathDelimiterNormalizer {
     private fun normalizeSegment(text: String): String {
         if (text.isEmpty()) return text
 
-        var s = text
+        val out = StringBuilder(text.length)
+        var i = 0
 
-        // 行内占位符先归一
-        s = s.replace(inlineDoublePlaceholderPattern) { mr ->
-            val inner = mr.groupValues[1].trim()
-            if (inner.isEmpty()) "" else "\$${inner}\$"
-        }
-        s = s.replace(inlineSinglePlaceholderPattern) { mr ->
-            val inner = mr.groupValues[1].trim()
-            if (inner.isEmpty()) "" else "\$${inner}\$"
-        }
-        s = s.replace(singlePlaceholderPattern, "$")
+        while (i < text.length) {
+            if (text.startsWith(DOUBLE_PLACEHOLDER, i)) {
+                val close = text.indexOf(DOUBLE_PLACEHOLDER, i + DOUBLE_PLACEHOLDER.length)
+                if (close >= 0) {
+                    val inner = text.substring(i + DOUBLE_PLACEHOLDER.length, close).trim()
+                    if (inner.isNotEmpty()) out.append("$$").append(inner).append("$$")
+                    i = close + DOUBLE_PLACEHOLDER.length
+                    continue
+                }
+            }
 
-        // 成对转义分隔符
-        s = s.replace(escapedInlineMathPattern) { mr ->
-            "\$" + mr.groupValues[1].trim() + "\$"
+            if (text.startsWith(SINGLE_PLACEHOLDER, i)) {
+                val close = text.indexOf(SINGLE_PLACEHOLDER, i + SINGLE_PLACEHOLDER.length)
+                if (close >= 0) {
+                    val inner = text.substring(i + SINGLE_PLACEHOLDER.length, close).trim()
+                    if (inner.isNotEmpty()) out.append("$$").append(inner).append("$$")
+                    i = close + SINGLE_PLACEHOLDER.length
+                    continue
+                }
+                // 兼容旧行为：孤立 [single dollar] 也替换为 $
+                out.append('$')
+                i += SINGLE_PLACEHOLDER.length
+                continue
+            }
+
+            // 成对转义分隔符：\$...\$ -> $$...$$
+            if (i + 1 < text.length && text[i] == '\\' && text[i + 1] == '$') {
+                val close = text.indexOf("\\$", i + 2)
+                if (close >= 0) {
+                    val inner = text.substring(i + 2, close).trim()
+                    out.append("$$").append(inner).append("$$")
+                    i = close + 2
+                    continue
+                }
+            }
+
+            out.append(text[i])
+            i++
         }
 
-        // 行内 $$...$$ -> $...$
-        s = s.replace(inlineDoubleDollarPattern) { mr ->
-            "\$" + mr.groupValues[1].trim() + "\$"
-        }
-
-        return s
+        return out.toString()
     }
 }

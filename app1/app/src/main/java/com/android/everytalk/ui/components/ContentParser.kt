@@ -16,6 +16,13 @@ import org.intellij.markdown.parser.MarkdownParser
 object ContentParser {
     private val flavour = GFMFlavourDescriptor()
     private val parser = MarkdownParser(flavour)
+    private val standaloneBlockMathRegex = Regex("^\\s*\\$\\$[\\s\\S]+\\$\\$\\s*$")
+    private val standaloneInlineDollarMathRegex = Regex("^\\s*\\$(?!\\$)[^\\n$]+\\$(?!\\$)\\s*$")
+    private val standaloneBracketMathRegex = Regex("^\\s*\\\\\\[[\\s\\S]+\\\\\\]\\s*$")
+    private val standaloneParenMathRegex = Regex("^\\s*\\\\\\([\\s\\S]+\\\\\\)\\s*$")
+    private val trailingMathRegex = Regex(
+        "^(.*?)(\\$\\$(?!\\$)[^\\n]+?\\$\\$|\\$(?!\\$)[^\\n$]+?\\$(?!\\$)|\\\\\\[[^\\n]+\\\\\\]|\\\\\\([^\\n]+\\\\\\))\\s*$"
+    )
 
     fun parseCompleteContent(text: String, isStreaming: Boolean = false): List<ContentPart> {
         if (text.isEmpty()) return emptyList()
@@ -228,74 +235,122 @@ object ContentParser {
         val result = mutableListOf<ContentPart>()
 
         parts.forEach { part ->
-            if (part is ContentPart.Text && part.content.contains("$$")) {
-                val text = part.content
-                val regex = Regex("\\$\\$[\\s\\S]*?\\$\\$")
-
-                val blockMatches = regex.findAll(text).filter { match ->
-                    val start = match.range.first
-                    val endInclusive = match.range.last
-                    val endExclusive = endInclusive + 1
-
-                    val beforeChar = if (start == 0) '\n' else text[start - 1]
-                    val afterChar = if (endExclusive >= text.length) '\n' else text[endExclusive]
-
-                    (beforeChar == '\n' || beforeChar == '\r') &&
-                            (afterChar == '\n' || afterChar == '\r')
-                }.toList()
-
-                if (blockMatches.isEmpty()) {
-                    result.add(part)
-                    return@forEach
-                }
-
-                var currentIndex = 0
-
-                blockMatches.forEach { match ->
-                    val start = match.range.first
-                    val endInclusive = match.range.last
-                    val endExclusive = endInclusive + 1
-
-                    if (start > currentIndex) {
-                        val prefix = text.substring(currentIndex, start)
-                        if (prefix.isNotEmpty()) {
-                            result.add(
-                                ContentPart.Text(
-                                    prefix,
-                                    part.startOffset + currentIndex
-                                )
-                            )
-                        }
-                    }
-
-                    val mathContent = text.substring(start, endExclusive)
-                    result.add(
-                        ContentPart.Math(
-                            mathContent,
-                            part.startOffset + start
-                        )
-                    )
-
-                    currentIndex = endExclusive
-                }
-
-                if (currentIndex < text.length) {
-                    val suffix = text.substring(currentIndex)
-                    if (suffix.isNotEmpty()) {
-                        result.add(
-                            ContentPart.Text(
-                                suffix,
-                                part.startOffset + currentIndex
-                            )
-                        )
-                    }
-                }
+            if (part is ContentPart.Text) {
+                result.addAll(splitTextPartMathLines(part))
             } else {
                 result.add(part)
             }
         }
 
         return result
+    }
+
+    private fun splitTextPartMathLines(part: ContentPart.Text): List<ContentPart> {
+        val text = part.content
+        if (text.isEmpty()) return listOf(part)
+
+        val out = mutableListOf<ContentPart>()
+        val textBuffer = StringBuilder()
+        var textBufferStart = 0
+
+        fun flushTextBuffer() {
+            if (textBuffer.isNotEmpty()) {
+                out.add(ContentPart.Text(textBuffer.toString(), part.startOffset + textBufferStart))
+                textBuffer.clear()
+            }
+        }
+
+        var index = 0
+        while (index < text.length) {
+            val lineStart = index
+            var lineEnd = index
+            while (lineEnd < text.length && text[lineEnd] != '\n') {
+                lineEnd++
+            }
+            val hasLineBreak = lineEnd < text.length && text[lineEnd] == '\n'
+            val contentEndExclusive = if (hasLineBreak) lineEnd else text.length
+            val fullLineEndExclusive = if (hasLineBreak) lineEnd + 1 else contentEndExclusive
+
+            val lineContent = text.substring(lineStart, contentEndExclusive)
+            val trimmed = lineContent.trim()
+            val isStandaloneMathLine = trimmed.isNotEmpty() && isStandaloneMath(trimmed)
+
+            if (isStandaloneMathLine) {
+                flushTextBuffer()
+                out.add(ContentPart.Math(trimmed, part.startOffset + lineStart + lineContent.indexOf(trimmed)))
+                if (hasLineBreak) {
+                    out.add(ContentPart.Text("\n", part.startOffset + lineEnd))
+                }
+            } else {
+                val trailingMathMatch = trailingMathRegex.matchEntire(lineContent)
+                if (trailingMathMatch != null) {
+                    val prefix = trailingMathMatch.groupValues[1]
+                    val mathToken = trailingMathMatch.groupValues[2]
+                    if (shouldPromoteTrailingMath(prefix, mathToken)) {
+                        flushTextBuffer()
+                        if (prefix.isNotEmpty()) {
+                            out.add(ContentPart.Text(prefix, part.startOffset + lineStart))
+                        }
+                        out.add(ContentPart.Math(mathToken, part.startOffset + lineStart + lineContent.indexOf(mathToken)))
+                        if (hasLineBreak) {
+                            out.add(ContentPart.Text("\n", part.startOffset + lineEnd))
+                        }
+                        index = fullLineEndExclusive
+                        continue
+                    }
+                }
+
+                if (textBuffer.isEmpty()) {
+                    textBufferStart = lineStart
+                }
+                textBuffer.append(text.substring(lineStart, fullLineEndExclusive))
+            }
+
+            index = fullLineEndExclusive
+        }
+
+        flushTextBuffer()
+        return if (out.isEmpty()) listOf(part) else out
+    }
+
+    private fun shouldPromoteTrailingMath(prefix: String, mathToken: String): Boolean {
+        val trimmedPrefix = prefix.trim()
+        if (trimmedPrefix.isEmpty()) return false
+
+        // 避免破坏列表语义
+        val listMarkerOnly = trimmedPrefix == "-" ||
+            trimmedPrefix == "*" ||
+            trimmedPrefix == "+" ||
+            Regex("^\\d+[.)]$").matches(trimmedPrefix)
+        if (listMarkerOnly) return false
+
+        val mathBody = mathToken
+            .removePrefix("$$")
+            .removeSuffix("$$")
+            .removePrefix("$")
+            .removeSuffix("$")
+            .removePrefix("\\[")
+            .removeSuffix("\\]")
+            .removePrefix("\\(")
+            .removeSuffix("\\)")
+            .trim()
+
+        val isLong = mathBody.length >= 24
+        val hasComplexToken = mathBody.contains("\\frac") ||
+            mathBody.contains("\\sum") ||
+            mathBody.contains("\\int") ||
+            mathBody.contains("\\prod") ||
+            mathBody.contains("\\lim") ||
+            mathBody.contains("\\begin")
+
+        return isLong || hasComplexToken
+    }
+
+    private fun isStandaloneMath(trimmedLine: String): Boolean {
+        return standaloneBlockMathRegex.matches(trimmedLine) ||
+            standaloneInlineDollarMathRegex.matches(trimmedLine) ||
+            standaloneBracketMathRegex.matches(trimmedLine) ||
+            standaloneParenMathRegex.matches(trimmedLine)
     }
 }
 

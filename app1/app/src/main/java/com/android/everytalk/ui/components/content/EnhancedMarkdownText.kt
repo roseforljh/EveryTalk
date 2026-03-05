@@ -1,4 +1,4 @@
-package com.android.everytalk.ui.components
+﻿package com.android.everytalk.ui.components
 import com.android.everytalk.ui.components.coordinator.ContentCoordinator
 import com.android.everytalk.ui.components.streaming.rememberTypewriterState
 
@@ -22,99 +22,30 @@ import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.statecontroller.AppViewModel
 
-private fun hasMathSyntax(text: String): Boolean {
-    return text.contains('$') || text.contains("\\[") || text.contains("\\(")
-}
+private fun hasMathSyntax(text: String): Boolean = MathStreamingPolicy.hasMathSyntax(text)
 
-private fun hasUnclosedMathDelimiter(text: String): Boolean {
-    var inInlineCode = false
-    var inBlockMath = false
-    var inInlineMath = false
-    var blockMarker = ""
+private fun hasUnclosedMathDelimiter(text: String): Boolean =
+    MathStreamingPolicy.hasUnclosedMathDelimiter(text)
 
-    var i = 0
-    while (i < text.length) {
-        val ch = text[i]
+private fun shouldForceMathBoundaryRefresh(previous: String, current: String): Boolean =
+    MathStreamingPolicy.shouldForceMathBoundaryRefresh(previous, current)
 
-        if (ch == '`') {
-            inInlineCode = !inInlineCode
-            i++
-            continue
-        }
-        if (inInlineCode) {
-            i++
-            continue
-        }
-
-        if (inBlockMath) {
-            if (text.startsWith(blockMarker, i)) {
-                inBlockMath = false
-                i += blockMarker.length
-                continue
-            }
-            i++
-            continue
-        }
-
-        if (text.startsWith("$$", i)) {
-            inBlockMath = true
-            blockMarker = "$$"
-            i += 2
-            continue
-        }
-
-        if (ch == '\\' && i + 1 < text.length && text[i + 1] == '[') {
-            inBlockMath = true
-            blockMarker = "\\]"
-            i += 2
-            continue
-        }
-
-        if (ch == '$') {
-            val isCurrency = i + 1 < text.length && text[i + 1].isDigit()
-            if (!isCurrency) {
-                inInlineMath = !inInlineMath
-            }
-            i++
-            continue
-        }
-
-        i++
-    }
-
-    return inBlockMath || inInlineMath
-}
-
-private fun shouldForceMathBoundaryRefresh(previous: String, current: String): Boolean {
-    if (current.length <= previous.length) return true
-    if (!current.startsWith(previous)) return true
-
-    val delta = current.substring(previous.length)
-    if (delta.isEmpty()) return false
-
-    return delta.contains("$$") ||
-        delta.contains("\\]") ||
-        delta.contains('\n') ||
-        delta.contains('。') ||
-        delta.contains('！') ||
-        delta.contains('？')
-}
 
 /**
- * 增强的Markdown文本显示组件
+ * 澧炲己鐨凪arkdown鏂囨湰鏄剧ず缁勪欢
  * 
- * 支持功能：
- * - Markdown格式（标题、列表、粗体、斜体等）- 通过外部库实时转换
- * - 代码块（自适应滚动）
- * - 表格渲染
- * - 数学公式（KaTeX）
- * - 流式实时更新
+ * 鏀寔鍔熻兘锛?
+ * - Markdown鏍煎紡锛堟爣棰樸€佸垪琛ㄣ€佺矖浣撱€佹枩浣撶瓑锛? 閫氳繃澶栭儴搴撳疄鏃惰浆鎹?
+ * - 浠ｇ爜鍧楋紙鑷€傚簲婊氬姩锛?
+ * - 琛ㄦ牸娓叉煋
+ * - 鏁板鍏紡锛圞aTeX锛?
+ * - 娴佸紡瀹炴椂鏇存柊
  * 
- *  架构说明（重构后）：
- * - 使用 collectAsState 订阅流式内容，实现实时更新
- * - 委托给 ContentCoordinator 统一调度不同类型的内容
- * - 单向数据流：Flow → State → UI（无反向依赖，避免无限重组）
- * - 添加重组监控，及时发现潜在问题
+ *  鏋舵瀯璇存槑锛堥噸鏋勫悗锛夛細
+ * - 浣跨敤 collectAsState 璁㈤槄娴佸紡鍐呭锛屽疄鐜板疄鏃舵洿鏂?
+ * - 濮旀墭缁?ContentCoordinator 缁熶竴璋冨害涓嶅悓绫诲瀷鐨勫唴瀹?
+ * - 鍗曞悜鏁版嵁娴侊細Flow 鈫?State 鈫?UI锛堟棤鍙嶅悜渚濊禆锛岄伩鍏嶆棤闄愰噸缁勶級
+ * - 娣诲姞閲嶇粍鐩戞帶锛屽強鏃跺彂鐜版綔鍦ㄩ棶棰?
  */
 @Composable
 fun EnhancedMarkdownText(
@@ -127,9 +58,9 @@ fun EnhancedMarkdownText(
     inTableContext: Boolean = false,
     onLongPress: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null,
     inSelectionDialog: Boolean = false,
-    onImageClick: ((String) -> Unit)? = null, //  新增
-    onCodePreviewRequested: ((String, String) -> Unit)? = null, // 新增：代码预览回调 (language, code)
-    onCodeCopied: (() -> Unit)? = null, // 新增：代码复制回调
+    onImageClick: ((String) -> Unit)? = null, //  鏂板
+    onCodePreviewRequested: ((String, String) -> Unit)? = null, // 鏂板锛氫唬鐮侀瑙堝洖璋?(language, code)
+    onCodeCopied: (() -> Unit)? = null, // 鏂板锛氫唬鐮佸鍒跺洖璋?
     viewModel: AppViewModel? = null
 ) {
     val textColor = when {
@@ -138,10 +69,10 @@ fun EnhancedMarkdownText(
         else -> MaterialTheme.colorScheme.onSurface
     }
     
-    //  获取实时流式内容
-    // 使用 collectAsState 订阅Flow，实现流式效果
-    //  优化：流式结束后继续订阅 StateFlow，直到组件销毁或显式重置
-    // 避免 isStreaming 从 true -> false 瞬间切换数据源导致重组闪烁
+    //  鑾峰彇瀹炴椂娴佸紡鍐呭
+    // 浣跨敤 collectAsState 璁㈤槄Flow锛屽疄鐜版祦寮忔晥鏋?
+    //  浼樺寲锛氭祦寮忕粨鏉熷悗缁х画璁㈤槄 StateFlow锛岀洿鍒扮粍浠堕攢姣佹垨鏄惧紡閲嶇疆
+    // 閬垮厤 isStreaming 浠?true -> false 鐬棿鍒囨崲鏁版嵁婧愬鑷撮噸缁勯棯鐑?
     val streamingStateFlow = remember(message.id, viewModel) {
         if (viewModel != null) {
             viewModel.streamingMessageStateManager.getOrCreateStreamingState(message.id)
@@ -151,31 +82,31 @@ fun EnhancedMarkdownText(
     }
 
     val content by if (streamingStateFlow != null && (isStreaming || viewModel?.streamingMessageStateManager?.isStreaming(message.id) == true)) {
-        // 如果有可用的 StateFlow 且 (正在流式 OR 状态管理器认为还在流式)，优先使用流式数据
-        // 即使 isStreaming 变为 false，只要 StateFlow 还在，就继续用它，防止切回 message.text 的瞬间闪烁
+        // 濡傛灉鏈夊彲鐢ㄧ殑 StateFlow 涓?(姝ｅ湪娴佸紡 OR 鐘舵€佺鐞嗗櫒璁や负杩樺湪娴佸紡)锛屼紭鍏堜娇鐢ㄦ祦寮忔暟鎹?
+        // 鍗充娇 isStreaming 鍙樹负 false锛屽彧瑕?StateFlow 杩樺湪锛屽氨缁х画鐢ㄥ畠锛岄槻姝㈠垏鍥?message.text 鐨勭灛闂撮棯鐑?
         streamingStateFlow.collectAsState(initial = message.text)
     } else {
-        // 完全非流式或无 ViewModel：使用 remember 包装 message.text
+        // 瀹屽叏闈炴祦寮忔垨鏃?ViewModel锛氫娇鐢?remember 鍖呰 message.text
         remember(message.text) { mutableStateOf(message.text) }
     }
     
-    // 🔍 调试：仅在 content 实际变化时记录，避免每次重组都打日志
+    // 馃攳 璋冭瘯锛氫粎鍦?content 瀹為檯鍙樺寲鏃惰褰曪紝閬垮厤姣忔閲嶇粍閮芥墦鏃ュ織
     if (isStreaming && com.android.everytalk.BuildConfig.DEBUG) {
         LaunchedEffect(content) {
             android.util.Log.d(
                 "EnhancedMarkdownText",
-                "📝 Streaming content updated: msgId=${message.id.take(8)}, len=${content.length}, preview=${content.take(30)}"
+                "馃摑 Streaming content updated: msgId=${message.id.take(8)}, len=${content.length}, preview=${content.take(30)}"
             )
         }
     }
 
-    //  委托给 ContentCoordinator 统一调度
-    // 优势：
-    // 1. 职责分离：数学、表格、纯文本各自独立
-    // 2. 易于维护：修改某个模块不影响其他模块
-    // 3. 易于扩展：添加新类型（如图表）只需添加新模块
-    // 4. 缓存机制：使用消息ID作为key，避免LazyColumn回收后重复解析
-    //  根据发送者决定宽度策略
+    //  濮旀墭缁?ContentCoordinator 缁熶竴璋冨害
+    // 浼樺娍锛?
+    // 1. 鑱岃矗鍒嗙锛氭暟瀛︺€佽〃鏍笺€佺函鏂囨湰鍚勮嚜鐙珛
+    // 2. 鏄撲簬缁存姢锛氫慨鏀规煇涓ā鍧椾笉褰卞搷鍏朵粬妯″潡
+    // 3. 鏄撲簬鎵╁睍锛氭坊鍔犳柊绫诲瀷锛堝鍥捐〃锛夊彧闇€娣诲姞鏂版ā鍧?
+    // 4. 缂撳瓨鏈哄埗锛氫娇鐢ㄦ秷鎭疘D浣滀负key锛岄伩鍏峀azyColumn鍥炴敹鍚庨噸澶嶈В鏋?
+    //  鏍规嵁鍙戦€佽€呭喅瀹氬搴︾瓥鐣?
     val widthModifier = if (message.sender == Sender.User) {
         Modifier.wrapContentWidth()
     } else {
@@ -260,7 +191,7 @@ fun EnhancedMarkdownText(
 }
 
 /**
- * 简化的静态文本显示组件
+ * 绠€鍖栫殑闈欐€佹枃鏈樉绀虹粍浠?
  */
 @Composable
 fun StableMarkdownText(
@@ -276,3 +207,4 @@ fun StableMarkdownText(
         )
     )
 }
+

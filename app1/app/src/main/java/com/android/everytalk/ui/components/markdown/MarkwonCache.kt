@@ -57,6 +57,8 @@ object MarkwonCache {
                 .usePlugin(JLatexMathPlugin.create(mathTextSize) { builder ->
                     // 启用内联数学公式支持
                     builder.inlinesEnabled(true)
+                    // 长块公式保持统一字号，不自动缩小到画布宽度
+                    builder.theme().blockFitCanvas(false)
                 })
                 .usePlugin(MarkwonInlineParserPlugin.create())
                 .usePlugin(object : AbstractMarkwonPlugin() {

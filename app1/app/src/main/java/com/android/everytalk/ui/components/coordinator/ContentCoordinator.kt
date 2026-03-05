@@ -10,6 +10,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import com.android.everytalk.ui.components.MathStreamingPolicy
 import com.android.everytalk.ui.components.table.TableAwareText
 import com.android.everytalk.data.DataClass.Sender
 
@@ -36,6 +37,10 @@ fun ContentCoordinator(
     onCodePreviewRequested: ((String, String) -> Unit)? = null, // 代码预览回调
     onCodeCopied: (() -> Unit)? = null // 代码复制回调
 ) {
+    fun hasMathSyntax(input: String): Boolean {
+        return MathStreamingPolicy.hasMathSyntax(input)
+    }
+
     // 根据发送者决定宽度策略
     val widthModifier = if (sender == Sender.User) {
         Modifier.wrapContentWidth()
@@ -73,7 +78,7 @@ fun ContentCoordinator(
     // 只有同时包含 | 和 - 才可能是表格（表头分隔线至少包含 --- 或 :---）
     val hasTable = text.contains("|") && text.contains("-")
     // 数学公式块检测
-    val hasMathBlock = text.contains("$$")
+    val hasMath = hasMathSyntax(text)
 
     // 流式阶段：使用轻量模式，避免频繁解析
     // 流式结束后：触发完整解析，将代码块转换为CodeBlock组件
@@ -81,7 +86,7 @@ fun ContentCoordinator(
     //   - TableAwareText 延迟250ms解析大型内容（>8000字符）
     //   - 使用后台线程（Dispatchers.Default）避免阻塞UI
     // 优化：AI 消息始终走 TableAwareText，避免流式输出时因检测到代码块而切换渲染器导致闪烁
-    if (sender == Sender.AI || hasCodeBlock || hasTable || hasMathBlock) {
+    if (sender == Sender.AI || hasCodeBlock || hasTable || hasMath) {
         // 只根据流式状态判断是否使用轻量模式
         // 如果包含表格，即使是流式也建议走 TableAwareText 以便正确渲染表格（虽然 TableAwareText 内部对流式有优化）
         // 但为了性能，流式期间如果只有表格没有代码块，也可以考虑暂缓？

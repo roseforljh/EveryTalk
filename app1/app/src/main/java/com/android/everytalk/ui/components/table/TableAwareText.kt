@@ -1,7 +1,5 @@
-package com.android.everytalk.ui.components.table
+﻿package com.android.everytalk.ui.components.table
 
-import android.view.ViewGroup
-import android.widget.ImageView
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -63,7 +61,6 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.ui.components.ContentParser
 import com.android.everytalk.ui.components.ContentPart
@@ -79,19 +76,18 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.mapLatest
-import ru.noties.jlatexmath.JLatexMathDrawable
 
 /**
- * 表格感知文本渲染器（优化版 + 实时渲染）
+ * 琛ㄦ牸鎰熺煡鏂囨湰娓叉煋鍣紙浼樺寲鐗?+ 瀹炴椂娓叉煋锛?
  *
- * 核心策略：
- * - 流式模式：实时分块渲染，表格/代码块即时显示
- * - 非流式模式：分块渲染，每种 ContentPart 类型使用最优组件
- * - 后台解析：使用 flowOn(Dispatchers.Default) 在后台线程解析 AST
- * - referentialEqualityPolicy：避免不必要的状态更新导致重组
- * - 稳定 Key：使用索引作为 key，避免内容变化导致组件重建
+ * 鏍稿績绛栫暐锛?
+ * - 娴佸紡妯″紡锛氬疄鏃跺垎鍧楁覆鏌擄紝琛ㄦ牸/浠ｇ爜鍧楀嵆鏃舵樉绀?
+ * - 闈炴祦寮忔ā寮忥細鍒嗗潡娓叉煋锛屾瘡绉?ContentPart 绫诲瀷浣跨敤鏈€浼樼粍浠?
+ * - 鍚庡彴瑙ｆ瀽锛氫娇鐢?flowOn(Dispatchers.Default) 鍦ㄥ悗鍙扮嚎绋嬭В鏋?AST
+ * - referentialEqualityPolicy锛氶伩鍏嶄笉蹇呰鐨勭姸鎬佹洿鏂板鑷撮噸缁?
+ * - 绋冲畾 Key锛氫娇鐢ㄧ储寮曚綔涓?key锛岄伩鍏嶅唴瀹瑰彉鍖栧鑷寸粍浠堕噸寤?
  *
- * 缓存机制：通过 contentKey 持久化解析结果，避免 LazyColumn 回收导致重复解析
+ * 缂撳瓨鏈哄埗锛氶€氳繃 contentKey 鎸佷箙鍖栬В鏋愮粨鏋滐紝閬垮厤 LazyColumn 鍥炴敹瀵艰嚧閲嶅瑙ｆ瀽
  */
 @Composable
 fun TableAwareText(
@@ -101,14 +97,14 @@ fun TableAwareText(
     isStreaming: Boolean = false,
     modifier: Modifier = Modifier,
     recursionDepth: Int = 0,
-    contentKey: String = "",  // 新增：用于缓存key（通常为消息ID）
+    contentKey: String = "",  // 鏂板锛氱敤浜庣紦瀛榢ey锛堥€氬父涓烘秷鎭疘D锛?
     onLongPress: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null,
     onImageClick: ((String) -> Unit)? = null,
     sender: Sender = Sender.AI,
-    onCodePreviewRequested: ((String, String) -> Unit)? = null, // 代码预览回调
-    onCodeCopied: (() -> Unit)? = null // 代码复制回调
+    onCodePreviewRequested: ((String, String) -> Unit)? = null, // 浠ｇ爜棰勮鍥炶皟
+    onCodeCopied: (() -> Unit)? = null // 浠ｇ爜澶嶅埗鍥炶皟
 ) {
-    // 预览状态管理
+    // 棰勮鐘舵€佺鐞?
     var previewState by remember { mutableStateOf<Pair<String, String>?>(null) } // (code, language)
 
     var parsedParts by remember {
@@ -118,7 +114,7 @@ fun TableAwareText(
         )
     }
 
-    // 增量解析：记录上一次解析时的文本，用于判断是否为 append-only
+    // 澧為噺瑙ｆ瀽锛氳褰曚笂涓€娆¤В鏋愭椂鐨勬枃鏈紝鐢ㄤ簬鍒ゆ柇鏄惁涓?append-only
     var previousText by remember { mutableStateOf("") }
 
     val updatedText by rememberUpdatedState(text)
@@ -128,9 +124,9 @@ fun TableAwareText(
     } else ""
 
     LaunchedEffect(Unit) {
-        // 仅监听文本本身的变化来触发重新解析
-        // 不再将 isStreaming 纳入触发条件，避免流式结束瞬间因 isStreaming 切换
-        // 而触发全量重解析+Compose全量重组，引发整个气泡闪一下
+        // 浠呯洃鍚枃鏈湰韬殑鍙樺寲鏉ヨЕ鍙戦噸鏂拌В鏋?
+        // 涓嶅啀灏?isStreaming 绾冲叆瑙﹀彂鏉′欢锛岄伩鍏嶆祦寮忕粨鏉熺灛闂村洜 isStreaming 鍒囨崲
+        // 鑰岃Е鍙戝叏閲忛噸瑙ｆ瀽+Compose鍏ㄩ噺閲嶇粍锛屽紩鍙戞暣涓皵娉￠棯涓€涓?
         snapshotFlow { updatedText }
             .distinctUntilChanged()
             .mapLatest { currentText ->
@@ -146,8 +142,8 @@ fun TableAwareText(
                     }
                 }
 
-                // 增量解析保护：流式期间，如果新文本只是旧文本的追加，
-                // 只更新最后一个 Text 块，不全量重建 AST
+                // 澧為噺瑙ｆ瀽淇濇姢锛氭祦寮忔湡闂达紝濡傛灉鏂版枃鏈彧鏄棫鏂囨湰鐨勮拷鍔狅紝
+                // 鍙洿鏂版渶鍚庝竴涓?Text 鍧楋紝涓嶅叏閲忛噸寤?AST
                 val prevParts = parsedParts
                 if (streaming && prevParts.isNotEmpty()
                     && previousText.isNotEmpty()
@@ -163,7 +159,7 @@ fun TableAwareText(
                         val newParts = prevParts.toMutableList()
                         newParts[newParts.lastIndex] = updatedLast
                         previousText = currentText
-                        // 检查追加的文本是否构成了完整的数学公式块
+                        // 妫€鏌ヨ拷鍔犵殑鏂囨湰鏄惁鏋勬垚浜嗗畬鏁寸殑鏁板鍏紡鍧?
                         return@mapLatest ContentParser.splitMathBlocksPublic(newParts)
                     }
                 }
@@ -187,11 +183,11 @@ fun TableAwareText(
             }
     }
 
-    // 当 isStreaming 从 true 切换为 false 时，做一次全量重解析检查结构变化。
-    // 增量路径可能将代码块（infographic/code/table）合并进 Text，
-    // 此处通过结构比较（类型+数量）决定是否替换 parsedParts：
-    // - 结构一致 → 保持原解析，无闪烁
-    // - 结构不同 → 替换为正确解析结果（必要的一次重组）
+    // 褰?isStreaming 浠?true 鍒囨崲涓?false 鏃讹紝鍋氫竴娆″叏閲忛噸瑙ｆ瀽妫€鏌ョ粨鏋勫彉鍖栥€?
+    // 澧為噺璺緞鍙兘灏嗕唬鐮佸潡锛坕nfographic/code/table锛夊悎骞惰繘 Text锛?
+    // 姝ゅ閫氳繃缁撴瀯姣旇緝锛堢被鍨?鏁伴噺锛夊喅瀹氭槸鍚︽浛鎹?parsedParts锛?
+    // - 缁撴瀯涓€鑷?鈫?淇濇寔鍘熻В鏋愶紝鏃犻棯鐑?
+    // - 缁撴瀯涓嶅悓 鈫?鏇挎崲涓烘纭В鏋愮粨鏋滐紙蹇呰鐨勪竴娆￠噸缁勶級
     LaunchedEffect(isStreaming) {
         if (!isStreaming && parsedParts.isNotEmpty()) {
             val freshParts = ContentParser.parseCompleteContent(text)
@@ -226,45 +222,76 @@ fun TableAwareText(
         modifier = modifier
             .fillMaxWidth()
             .padding(vertical = verticalPaddingDp)
-            // 移除 animateContentSize()！
-            // 流式输出中每帧 Column 子项的数量、尺寸都在变化，
-            // animateContentSize 会对这些变化施加弹簧动画，
-            // 正是导致画面疯狂跳动闪烁的最大元凶之一。
+            // 绉婚櫎 animateContentSize()锛?
+            // 娴佸紡杈撳嚭涓瘡甯?Column 瀛愰」鐨勬暟閲忋€佸昂瀵搁兘鍦ㄥ彉鍖栵紝
+            // animateContentSize 浼氬杩欎簺鍙樺寲鏂藉姞寮圭哀鍔ㄧ敾锛?
+            // 姝ｆ槸瀵艰嚧鐢婚潰鐤媯璺冲姩闂儊鐨勬渶澶у厓鍑朵箣涓€銆?
     ) {
         parsedParts.forEachIndexed { index, part ->
-            // 始终使用 类型+索引 作为 key，不包含 contentHash
-            // 1. 流式期间：contentHash 每帧变化 → 组件被销毁重建 → 闪烁
-            // 2. 流式结束：isStreaming 从 true→false 会导致 key 策略切换，
-            //    所有 key 同时变化 → 全部组件重建 → 结束瞬间闪一下
-            // MarkdownRenderer 内部已有 MarkdownRenderSignature tag 检查，
-            // 内容不变时不会重新渲染，所以 key 里不需要 contentHash
+            // 濮嬬粓浣跨敤 绫诲瀷+绱㈠紩 浣滀负 key锛屼笉鍖呭惈 contentHash
+            // 1. 娴佸紡鏈熼棿锛歝ontentHash 姣忓抚鍙樺寲 鈫?缁勪欢琚攢姣侀噸寤?鈫?闂儊
+            // 2. 娴佸紡缁撴潫锛歩sStreaming 浠?true鈫抐alse 浼氬鑷?key 绛栫暐鍒囨崲锛?
+            //    鎵€鏈?key 鍚屾椂鍙樺寲 鈫?鍏ㄩ儴缁勪欢閲嶅缓 鈫?缁撴潫鐬棿闂竴涓?
+            // MarkdownRenderer 鍐呴儴宸叉湁 MarkdownRenderSignature tag 妫€鏌ワ紝
+            // 鍐呭涓嶅彉鏃朵笉浼氶噸鏂版覆鏌擄紝鎵€浠?key 閲屼笉闇€瑕?contentHash
             val stableKey = "${part.javaClass.simpleName}_$index"
 
             androidx.compose.runtime.key(stableKey) {
                 when (part) {
                     is ContentPart.Text -> {
-                        MarkdownRenderer(
-                            markdown = part.content,
-                            style = style,
-                            color = color,
-                            modifier = Modifier.fillMaxWidth(),
-                            isStreaming = isStreaming,
-                            onLongPress = onLongPress,
-                            onImageClick = onImageClick,
-                            sender = sender,
-                            contentKey = if (contentKey.isNotBlank()) {
-                                if (isStreaming) {
-                                    // 流式期间：对已经不会再变化的 part 也启用缓存
-                                    // 最后一个 part 会持续变化，不缓存
-                                    if (index < parsedParts.size - 1) {
+                        val shouldHorizontalScroll = shouldEnableHorizontalScrollForTextPart(part.content)
+                        if (shouldHorizontalScroll) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState())
+                            ) {
+                                MarkdownRenderer(
+                                    markdown = part.content,
+                                    style = style,
+                                    color = color,
+                                    modifier = Modifier.wrapContentWidth(),
+                                    isStreaming = isStreaming,
+                                    onLongPress = onLongPress,
+                                    onImageClick = onImageClick,
+                                    sender = sender,
+                                    contentKey = if (contentKey.isNotBlank()) {
+                                        if (isStreaming) {
+                                            if (index < parsedParts.size - 1) {
+                                                "${contentKey}_part_${index}_${part.content.hashCode()}"
+                                            } else ""
+                                        } else {
+                                            "${contentKey}_part_${index}_${part.content.hashCode()}"
+                                        }
+                                    } else "",
+                                    disableVerticalPadding = true
+                                )
+                                Spacer(modifier = Modifier.width(16.dp))
+                            }
+                        } else {
+                            MarkdownRenderer(
+                                markdown = part.content,
+                                style = style,
+                                color = color,
+                                modifier = Modifier.fillMaxWidth(),
+                                isStreaming = isStreaming,
+                                onLongPress = onLongPress,
+                                onImageClick = onImageClick,
+                                sender = sender,
+                                contentKey = if (contentKey.isNotBlank()) {
+                                    if (isStreaming) {
+                                        // 娴佸紡鏈熼棿锛氬宸茬粡涓嶄細鍐嶅彉鍖栫殑 part 涔熷惎鐢ㄧ紦瀛?
+                                        // 鏈€鍚庝竴涓?part 浼氭寔缁彉鍖栵紝涓嶇紦瀛?
+                                        if (index < parsedParts.size - 1) {
+                                            "${contentKey}_part_${index}_${part.content.hashCode()}"
+                                        } else ""
+                                    } else {
                                         "${contentKey}_part_${index}_${part.content.hashCode()}"
-                                    } else ""
-                                } else {
-                                    "${contentKey}_part_${index}_${part.content.hashCode()}"
-                                }
-                            } else "",
-                            disableVerticalPadding = true
-                        )
+                                    }
+                                } else "",
+                                disableVerticalPadding = true
+                            )
+                        }
                     }
                     is ContentPart.Code -> {
                         val lang = part.language?.trim()?.lowercase()
@@ -311,75 +338,68 @@ fun TableAwareText(
                         )
                     }
                     is ContentPart.Math -> {
-                        // 数学公式块部分：支持横向滚动
+                        // 统一数学入口：数学块也交给 MarkdownRenderer（Markwon + JLatexMathPlugin）
                         Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 8.dp)
-                            .horizontalScroll(rememberScrollState())
-                    ) {
-                        // 尝试直接使用 JLatexMathDrawable 渲染，绕过 Markwon 解析
-                        // 这样可以避免 Markwon 对 $$ 块的解析问题
-                        val mathContent = part.content.trim().removePrefix("$$").removeSuffix("$$").trim()
-                        val density = androidx.compose.ui.platform.LocalDensity.current.density
-                        val textSizePx = style.fontSize.value * density
-                        
-                        // 修复：避免在非 Composable 上下文中使用 Composable 函数
-                        val defaultColor = MaterialTheme.colorScheme.onSurface
-                        val finalColor = if (color != Color.Unspecified) color else defaultColor
-                        val textColorInt = finalColor.toArgb()
-
-                        AndroidView(
-                            factory = { context ->
-                                ImageView(context).apply {
-                                    layoutParams = ViewGroup.LayoutParams(
-                                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                                        ViewGroup.LayoutParams.WRAP_CONTENT
-                                    )
-                                    scaleType = ImageView.ScaleType.FIT_START
-                                    adjustViewBounds = true
-                                }
-                            },
-                            update = { imageView ->
-                                // 内容守卫：如果公式内容未变，跳过昂贵的 JLatexMathDrawable 重建
-                                val currentTag = imageView.tag as? String
-                                if (currentTag == mathContent) return@AndroidView
-                                imageView.tag = mathContent
-                                try {
-                                    val drawable = JLatexMathDrawable.builder(mathContent)
-                                        .textSize(textSizePx)
-                                        .padding(0) // 移除多余的 padding
-                                        .background(0) // Transparent
-                                        .align(JLatexMathDrawable.ALIGN_LEFT)
-                                        .color(textColorInt)
-                                        .build()
-                                    imageView.setImageDrawable(drawable)
-                                } catch (e: Throwable) {
-                                    // 降级处理：如果直接渲染失败（如依赖缺失），回退到 MarkdownRenderer
-                                    android.util.Log.e("TableAwareText", "JLatexMath direct render failed", e)
-                                    // 这里无法直接切换回 Composable，只能显示错误或尝试用 TextView 显示源码
-                                    // 简单起见，我们不处理回退，因为如果库存在，通常只会因 LaTeX 语法错误失败
-                                }
-                            },
                             modifier = Modifier
-                                .wrapContentWidth()
-                                .padding(horizontal = 8.dp)
-                                )
-                                Spacer(modifier = Modifier.width(16.dp))
-                            }
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp)
+                                .horizontalScroll(rememberScrollState())
+                        ) {
+                            MarkdownRenderer(
+                                markdown = part.content,
+                                style = style,
+                                color = color,
+                                modifier = Modifier
+                                    .wrapContentWidth()
+                                    .padding(horizontal = 8.dp),
+                                isStreaming = isStreaming,
+                                onLongPress = onLongPress,
+                                onImageClick = onImageClick,
+                                sender = sender,
+                                contentKey = if (contentKey.isNotBlank()) {
+                                    "${contentKey}_math_${index}_${part.content.hashCode()}"
+                                } else "",
+                                disableVerticalPadding = true
+                            )
+                            Spacer(modifier = Modifier.width(16.dp))
                         }
                     }
                 }
             }
         }
+    }
 
-    // 显示预览对话框
+    // 鏄剧ず棰勮瀵硅瘽妗?
     previewState?.let { (code, language) ->
         WebPreviewDialog(
             code = code,
             language = language,
             onDismiss = { previewState = null }
         )
+    }
+}
+
+private fun shouldEnableHorizontalScrollForTextPart(text: String): Boolean {
+    if (text.isBlank()) return false
+
+    return text.lines().any { line ->
+        val trimmed = line.trim()
+        if (trimmed.length < 24) return@any false
+
+        val hasMathMarkers = trimmed.contains("$$") ||
+            Regex("\\$(?!\\$).+?\\$(?!\\$)").containsMatchIn(trimmed) ||
+            trimmed.contains("\\frac") ||
+            trimmed.contains("\\sum") ||
+            trimmed.contains("\\int") ||
+            trimmed.contains("\\prod") ||
+            trimmed.contains("\\lim") ||
+            trimmed.contains("\\implies")
+
+        val operatorCount = trimmed.count { ch ->
+            ch == '=' || ch == '+' || ch == '-' || ch == '*' || ch == '/' || ch == '^'
+        }
+
+        hasMathMarkers || (trimmed.contains('\\') && operatorCount >= 5)
     }
 }
 
@@ -532,7 +552,7 @@ private fun InfographicBlock(
     val secondaryColor = MaterialTheme.colorScheme.onSurfaceVariant
     val isDark = androidx.compose.foundation.isSystemInDarkTheme()
 
-    // 多彩图标颜色
+    // 澶氬僵鍥炬爣棰滆壊
     val iconColors = listOf(
         Color(0xFF4285F4), // Google Blue
         Color(0xFF34A853), // Google Green
@@ -544,7 +564,7 @@ private fun InfographicBlock(
         Color(0xFF3F51B5)  // Indigo
     )
 
-    // 时间轴连接线颜色
+    // 鏃堕棿杞磋繛鎺ョ嚎棰滆壊
     val lineColor = if (isDark) {
         Color.White.copy(alpha = 0.2f)
     } else {
@@ -554,7 +574,7 @@ private fun InfographicBlock(
     Column(
         modifier = modifier.fillMaxWidth()
     ) {
-        // 标题（如果有）
+        // 鏍囬锛堝鏋滄湁锛?
         if (title.isNotBlank()) {
             Text(
                 text = title,
@@ -567,7 +587,7 @@ private fun InfographicBlock(
             )
         }
 
-        // 时间轴布局
+        // 鏃堕棿杞村竷灞€
         items.forEachIndexed { index, item ->
             val currentIconColor = iconColors[index % iconColors.size]
             val isLast = index == items.lastIndex
@@ -576,11 +596,11 @@ private fun InfographicBlock(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp)
             ) {
-                // 左侧：图标 + 连接线
+                // 宸︿晶锛氬浘鏍?+ 杩炴帴绾?
                 Column(
                     horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally
                 ) {
-                    // 图标圆圈
+                    // 鍥炬爣鍦嗗湀
                     Box(
                         modifier = Modifier
                             .size(36.dp)
@@ -614,7 +634,7 @@ private fun InfographicBlock(
                         }
                     }
 
-                    // 连接线（非最后一项才显示）
+                    // 杩炴帴绾匡紙闈炴渶鍚庝竴椤规墠鏄剧ず锛?
                     if (!isLast) {
                         Box(
                             modifier = Modifier
@@ -625,7 +645,7 @@ private fun InfographicBlock(
                     }
                 }
 
-                // 右侧：文字内容
+                // 鍙充晶锛氭枃瀛楀唴瀹?
                 Column(
                     modifier = Modifier
                         .weight(1f)
