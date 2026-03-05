@@ -1,6 +1,7 @@
 package com.android.everytalk.ui.components.markdown
 
 import android.util.TypedValue
+import android.view.MotionEvent
 import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.FrameLayout
@@ -85,7 +86,9 @@ fun BreakableLatexRenderer(
                     setPadding(paddingPx, paddingPx, paddingPx, paddingPx)
                 }
 
-                HorizontalScrollView(ctx).apply {
+                // 自定义 HorizontalScrollView 解决嵌套滚动冲突
+                // 参照 Gemini qsx.smali 的 dispatchTouchEvent → requestDisallowInterceptTouchEvent
+                NestedScrollableHorizontalScrollView(ctx).apply {
                     // 隐藏滚动条，视觉更简洁
                     isHorizontalScrollBarEnabled = false
                     // 允许内容超出容器宽度
@@ -163,3 +166,36 @@ private class ScrollViewTag(
     var cacheKey: String,
     val imageView: ImageView
 )
+
+/**
+ * 参照 Gemini qsx.smali 的嵌套滚动处理。
+ * 在 LazyColumn 等纵向滚动容器内，防止父容器拦截水平触摸事件。
+ */
+private class NestedScrollableHorizontalScrollView(
+    context: android.content.Context
+) : HorizontalScrollView(context) {
+
+    override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                // 如果内容可水平滚动，禁止父容器拦截
+                if (canScrollHorizontally(1) || canScrollHorizontally(-1)) {
+                    parent?.requestDisallowInterceptTouchEvent(true)
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                parent?.requestDisallowInterceptTouchEvent(false)
+            }
+        }
+        return super.onInterceptTouchEvent(ev)
+    }
+
+    override fun onTouchEvent(ev: MotionEvent): Boolean {
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                parent?.requestDisallowInterceptTouchEvent(false)
+            }
+        }
+        return super.onTouchEvent(ev)
+    }
+}

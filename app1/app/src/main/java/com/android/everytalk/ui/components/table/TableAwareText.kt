@@ -312,8 +312,8 @@ fun TableAwareText(
                             (trimmed.startsWith("$$") && trimmed.endsWith("$$")) ||
                                 (trimmed.startsWith("\\[") && trimmed.endsWith("\\]"))
                         }
-                        if (isBlockMath && !isStreaming) {
-                            // 块级公式：使用 BreakableLatexRenderer 实现自动换行
+                        if (isBlockMath) {
+                            // 块级公式：使用 BreakableLatexRenderer 实现自动换行（流式时也实时渲染）
                             BreakableLatexRenderer(
                                 latex = part.content,
                                 modifier = Modifier
