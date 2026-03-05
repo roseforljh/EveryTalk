@@ -671,10 +671,8 @@ internal fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): 
     // - 使用状态机避免误匹配 `$$...$$`、货币、以及代码片段中的 `$`
     s = convertSingleDollarMathToDouble(s)
 
-    // 9.5 长公式提升：当行内公式过长/复杂时，自动提升为独立块公式（Gemini 同类行为）
-    s = promoteLongInlineMathToBlock(s)
-    // 9.6 文本与长块公式分行：同一行出现“中文文本 + 长公式”时强制拆行
-    s = separateTextAndLongBlockMathLines(s)
+    // 9.5/9.6 关闭“行内公式自动升级块级”策略，避免渲染尺寸突变。
+    // 按 Gemini 风格保持分隔符语义稳定：行内留在行内，块级仅在模型明确输出块级时渲染为块级。
 
     // 最后一步仅在流式阶段执行：
     // 1) safe-points 开启时，统一转义全部数学分隔符，避免流式阶段触发数学引擎重排/报错导致闪烁。

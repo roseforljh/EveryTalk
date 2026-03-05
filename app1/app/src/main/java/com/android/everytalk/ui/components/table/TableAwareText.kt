@@ -66,6 +66,7 @@ import com.android.everytalk.ui.components.ContentParser
 import com.android.everytalk.ui.components.ContentPart
 import com.android.everytalk.ui.components.WebPreviewDialog
 import com.android.everytalk.ui.components.content.CodeBlockCard
+import com.android.everytalk.ui.components.markdown.BreakableLatexRenderer
 import com.android.everytalk.ui.components.markdown.MarkdownRenderer
 import com.android.everytalk.ui.components.icons.MdiIcon
 import com.android.everytalk.ui.components.icons.MdiIconAdaptive
@@ -306,41 +307,33 @@ fun TableAwareText(
                         )
                     }
                     is ContentPart.Math -> {
-                        val enableHorizontalScroll = shouldEnableHorizontalScrollForMathPart(part.content)
-                        if (enableHorizontalScroll) {
-                            Row(
+                        val isBlockMath = remember(part.content) {
+                            val trimmed = part.content.trim()
+                            (trimmed.startsWith("$$") && trimmed.endsWith("$$")) ||
+                                (trimmed.startsWith("\\[") && trimmed.endsWith("\\]"))
+                        }
+                        if (isBlockMath && !isStreaming) {
+                            // 块级公式：使用 BreakableLatexRenderer 实现自动换行
+                            BreakableLatexRenderer(
+                                latex = part.content,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(vertical = 8.dp)
-                                    .horizontalScroll(rememberScrollState())
-                            ) {
-                                MarkdownRenderer(
-                                    markdown = part.content,
-                                    style = style,
-                                    color = color,
-                                    modifier = Modifier
-                                        .wrapContentWidth()
-                                        .padding(horizontal = 8.dp),
-                                    isStreaming = isStreaming,
-                                    onLongPress = onLongPress,
-                                    onImageClick = onImageClick,
-                                    sender = sender,
-                                    contentKey = if (contentKey.isNotBlank()) {
-                                        "${contentKey}_math_${index}_${part.content.hashCode()}"
-                                    } else "",
-                                    disableVerticalPadding = true,
-                                    enablePureMathHorizontalScroll = false
-                                )
-                                Spacer(modifier = Modifier.width(16.dp))
-                            }
+                                    .padding(vertical = 8.dp),
+                                style = style,
+                                color = color,
+                                contentKey = if (contentKey.isNotBlank()) {
+                                    "${contentKey}_math_${index}_${part.content.hashCode()}"
+                                } else ""
+                            )
                         } else {
+                            // 行内公式 或 流式模式下：使用 MarkdownRenderer
                             MarkdownRenderer(
                                 markdown = part.content,
                                 style = style,
                                 color = color,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(vertical = 8.dp),
+                                    .padding(vertical = if (isBlockMath) 8.dp else 0.dp),
                                 isStreaming = isStreaming,
                                 onLongPress = onLongPress,
                                 onImageClick = onImageClick,
