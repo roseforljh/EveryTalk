@@ -227,6 +227,37 @@ private fun normalizeComparisonEntities(input: String): String {
         .replace("&lt;", "<", ignoreCase = true)
 }
 
+private fun normalizeAccidentalIndentedNonCode(input: String): String {
+    if (!input.contains("    ") && !input.contains('\t')) return input
+
+    val codeLineRegex = Regex(
+        "^\\s*(fun\\b|class\\b|val\\b|var\\b|import\\b|public\\b|private\\b|return\\b|if\\b|else\\b|for\\b|while\\b|switch\\b|case\\b|try\\b|catch\\b|def\\b|from\\b|const\\b|let\\b|function\\b|#include\\b|SELECT\\b|INSERT\\b|UPDATE\\b|DELETE\\b|CREATE\\b|ALTER\\b|DROP\\b)"
+    )
+
+    return input.lines().joinToString("\n") { line ->
+        val hasIndent = line.startsWith("    ") || line.startsWith("\t")
+        if (!hasIndent) return@joinToString line
+
+        val body = line.removePrefix("    ").removePrefix("\t")
+        val trimmed = body.trim()
+        if (trimmed.isEmpty()) return@joinToString body
+
+        val hasMathSignals = trimmed.contains('$') ||
+            trimmed.contains("\\frac") ||
+            trimmed.contains("\\sum") ||
+            trimmed.contains("\\int") ||
+            trimmed.contains("\\sqrt") ||
+            trimmed.contains("\\begin") ||
+            trimmed.contains("\\end")
+        val hasCjk = trimmed.any { it.code in 0x4E00..0x9FFF }
+        val strongCodeTokens = listOf("{", "}", ";", "=>", "->", "::")
+            .sumOf { token -> Regex(Regex.escape(token)).findAll(trimmed).count() }
+        val isCodeLike = codeLineRegex.containsMatchIn(trimmed) || strongCodeTokens >= 3
+
+        if ((hasMathSignals || hasCjk) && !isCodeLike) body else line
+    }
+}
+
 private fun convertSingleDollarMathToDouble(input: String): String {
     if (!input.contains('$')) return input
 
@@ -450,6 +481,9 @@ internal fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): 
     s = s.replace(LONG_HEADER_REGEX) { mr ->
         "\\" + mr.groupValues[1]
     }
+
+    // 6.5 防误判缩进代码块：把数学/中文说明的 4 空格缩进恢复为普通文本
+    s = normalizeAccidentalIndentedNonCode(s)
 
     // 7. Hard Break Enforcement
     val lines = s.lines()

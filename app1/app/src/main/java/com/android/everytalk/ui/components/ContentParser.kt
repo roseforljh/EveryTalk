@@ -56,7 +56,11 @@ object ContentParser {
                     val code = node.getTextInNode(text).toString()
                         .lines()
                         .joinToString("\n") { it.removePrefix("    ").removePrefix("\t") }
-                    parts.add(ContentPart.Code(null, code, node.startOffset))
+                    if (isLikelyIndentedCodeBlock(code)) {
+                        parts.add(ContentPart.Code(null, code, node.startOffset))
+                    } else {
+                        parts.add(ContentPart.Text(code, node.startOffset))
+                    }
                 }
                 GFMElementTypes.TABLE -> {
                     flushTextBuffer()
@@ -243,6 +247,41 @@ object ContentParser {
         }
 
         return result
+    }
+
+    /**
+     * 某些模型会把普通说明段落前面加 4 个空格，Markdown 会误判为缩进代码块。
+     * 聊天场景里仅在“强代码特征”明显时才保留代码块，其余按普通文本处理。
+     */
+    private fun isLikelyIndentedCodeBlock(content: String): Boolean {
+        if (content.isBlank()) return false
+
+        val normalized = content.trim()
+        if (normalized.contains("```")) return true
+
+        // 数学/中文说明优先视为普通文本，避免 $$...$$、\frac 等被灰块包裹
+        val hasMathSignals = normalized.contains('$') ||
+            normalized.contains("\\frac") ||
+            normalized.contains("\\sum") ||
+            normalized.contains("\\int") ||
+            normalized.contains("\\sqrt") ||
+            normalized.contains("\\begin") ||
+            normalized.contains("\\end")
+        val hasCjk = normalized.any { it.code in 0x4E00..0x9FFF }
+        if (hasMathSignals || hasCjk) return false
+
+        val lines = normalized.lines().filter { it.isNotBlank() }
+        if (lines.isEmpty()) return false
+
+        val codeLineRegex = Regex(
+            "^\\s*(fun\\b|class\\b|val\\b|var\\b|import\\b|public\\b|private\\b|return\\b|if\\b|else\\b|for\\b|while\\b|switch\\b|case\\b|try\\b|catch\\b|def\\b|from\\b|const\\b|let\\b|function\\b|#include\\b|SELECT\\b|INSERT\\b|UPDATE\\b|DELETE\\b|CREATE\\b|ALTER\\b|DROP\\b)"
+        )
+        val codeLikeLines = lines.count { codeLineRegex.containsMatchIn(it) }
+        val strongTokenCount = listOf("{", "}", ";", "=>", "->", "::")
+            .sumOf { token -> Regex(Regex.escape(token)).findAll(normalized).count() }
+
+        val mostlyCodeLines = codeLikeLines * 2 >= lines.size
+        return mostlyCodeLines || strongTokenCount >= 3
     }
 
     private fun splitTextPartMathLines(part: ContentPart.Text): List<ContentPart> {
