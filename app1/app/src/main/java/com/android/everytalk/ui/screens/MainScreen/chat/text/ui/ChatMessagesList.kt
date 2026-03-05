@@ -66,12 +66,12 @@ fun ChatMessagesList(
 ) {
     val haptic = LocalHapticFeedback.current
     val coroutineScope = rememberCoroutineScope()
-    // 永久化：移除animatedItems，不再需要追踪动画状态
+    // 濮橀晲绠欓崠鏍电窗缁夊娅巃nimatedItems閿涘奔绗夐崘宥夋付鐟曚浇鎷烽煪顏勫З閻㈣崵濮搁幀?
 
     var isContextMenuVisible by remember { mutableStateOf(false) }
     var contextMenuMessage by remember { mutableStateOf<Message?>(null) }
     var contextMenuPressOffset by remember { mutableStateOf(Offset.Zero) }
-    // 防重复触发：在极短时间内只允许一次预览弹出
+    // 闂冩煡鍣告径宥埿曢崣鎴窗閸︺劍鐎惌顓熸闂傛潙鍞撮崣顏勫帒鐠侀晲绔村▎锟狀暕鐟欏牆鑴婇崙?
     var lastImagePreviewAt by remember { mutableStateOf(0L) }
 
     val isApiCalling by viewModel.isTextApiCalling.collectAsState()
@@ -269,12 +269,12 @@ fun ChatMessagesList(
                 }
             }
         ) { index, item ->
-            // 根据消息类型决定Box是否占满宽度
+            // 閺嶈宓佸☉鍫熶紖缁鐎烽崘鍐茬暰Box閺勵垰鎯侀崡鐘冲姬鐎硅棄瀹?
             val isUserMessage = item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage ||
                 (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.ErrorMessage &&
                  viewModel.getMessageById((item as com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.ErrorMessage).messageId)?.sender == com.android.everytalk.data.DataClass.Sender.User)
             
-            // 父容器统一控制左右对齐，避免子树重组/图片尺寸回调致对齐失效
+            // 閻栬泛顔愰崳銊х埠娑撯偓閹貉冨煑瀹革箑褰哥€靛綊缍堥敍宀勪缉閸忓秴鐡欓弽鎴﹀櫢缂?閸ュ墽澧栫亸鍝勵嚟閸ョ偠鐨熼懛鏉戭嚠姒绘劕銇戦弫?
             val itemAlignment = when (item) {
                 is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage -> Alignment.CenterEnd
                 is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.ErrorMessage -> {
@@ -297,10 +297,10 @@ fun ChatMessagesList(
                 contentAlignment = itemAlignment
             ) {
 
-                    // 用户消息直接渲染，不需要Column包装
+                    // 閻劍鍩涘☉鍫熶紖閻╁瓨甯村〒鍙夌厠閿涘奔绗夐棁鈧憰涓唎lumn閸栧懓顥?
                     when (item) {
                         is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage -> {
-                            // 使用 Row + Arrangement.End 强制右贴齐，避免任何重组或父对齐变化造成漂移
+                            // 娴ｈ法鏁?Row + Arrangement.End 瀵搫鍩楅崣瀹犲垱姒绘劧绱濋柆鍨帳娴犺缍嶉柌宥囩矋閹存牜鍩楃€靛綊缍堥崣妯哄闁姵鍨氬鍌溞?
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.End,
@@ -336,7 +336,7 @@ fun ChatMessagesList(
                                             )
                                         }
                                         if (item.text.isNotBlank()) {
-                                            // 复用文本气泡渲染
+                                            // 婢跺秶鏁ら弬鍥ㄦ拱濮樻梹鍦哄〒鍙夌厠
                                             UserOrErrorMessageContent(
                                                 message = message,
                                                 displayedText = item.text,
@@ -397,6 +397,13 @@ fun ChatMessagesList(
                                 val text = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage) item.text else message.text
                                 val hasReasoning = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage) item.hasReasoning else (item as com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageStreaming).hasReasoning
                                 val isStreaming = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageStreaming) true else (currentStreamingId == message.id)
+                                val blockPayload = item as? com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage
+                                if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage && item.hasPendingMath) {
+                                    android.util.Log.d(
+                                        "ChatMessagesList",
+                                        "Pending math block: msgId=${item.messageId.take(8)}, blocks=${item.blocks.size}, hash=${item.blocksHash}"
+                                    )
+                                }
 
                                 Column(
                                     modifier = Modifier.fillMaxWidth(),
@@ -414,6 +421,7 @@ fun ChatMessagesList(
                                         isStreaming = isStreaming,
                                         messageOutputType = message.outputType,
                                         viewModel = viewModel,
+                                        blockPayload = blockPayload,
                                         showMenuButton = false,
                                         onImageClick = { url ->
                                             val now = SystemClock.elapsedRealtime()
@@ -561,7 +569,7 @@ fun ChatMessagesList(
                 message = message,
                 pressOffset = with(density) {
                     if (message.sender == com.android.everytalk.data.DataClass.Sender.User) {
-                        // 文本模式用户气泡：进一步下移以贴近手指
+                        // 閺傚洦婀板Ο鈥崇础閻劍鍩涘鏃€鍦洪敍姘崇箻娑撯偓濮濄儰绗呯粔璁充簰鐠愮绻庨幍瀣瘹
                         Offset(contextMenuPressOffset.x, contextMenuPressOffset.y)
                     } else {
                         Offset(contextMenuPressOffset.x, contextMenuPressOffset.y)
@@ -587,11 +595,11 @@ fun ChatMessagesList(
 }
 
 enum class ContentType {
-    SIMPLE         // 普通内容，使用正常内边距
+    SIMPLE         // 閺咁噣鈧艾鍞寸€圭櫢绱濇担璺ㄦ暏濮濓絽鐖堕崘鍛扮珶鐠?
 }
 
 fun detectContentTypeForPadding(text: String): ContentType {
-    // 所有内容都使用正常内边距
+    // 閹碘偓閺堝鍞寸€瑰綊鍏樻担璺ㄦ暏濮濓絽鐖堕崘鍛扮珶鐠?
     return ContentType.SIMPLE
 }
 
@@ -608,13 +616,13 @@ fun AiMessageItem(
     isFastScroll: Boolean = false,
     messageOutputType: String,
     viewModel: AppViewModel,
+    blockPayload: com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage? = null,
     showMenuButton: Boolean = true,
     onImageClick: ((String) -> Unit)? = null
 ) {
     val shape = RectangleShape
     val aiReplyMessageDescription = stringResource(id = R.string.ai_reply_message)
-    
-    // 代码预览状态
+
     var previewCode by remember { mutableStateOf<String?>(null) }
     var previewLanguage by remember { mutableStateOf("text") }
 
@@ -630,48 +638,106 @@ fun AiMessageItem(
     }
 
     Row(
-        modifier = modifier
-            .wrapContentWidth(),
+        modifier = modifier.wrapContentWidth(),
         horizontalArrangement = Arrangement.Start
     ) {
         Surface(
             modifier = Modifier
                 .wrapContentWidth()
-                .widthIn(max = maxWidth) // AI气泡最大宽度设置为100%
-                // 移除 pointerInput(detectTapGestures)，因为它会拦截子 View 的点击事件
-                // 长按事件现由 MarkdownRenderer 内部的 setOnLongClickListener 处理
-                .semantics {
-                    contentDescription = aiReplyMessageDescription
-                },
+                .widthIn(max = maxWidth)
+                .semantics { contentDescription = aiReplyMessageDescription },
             shape = shape,
             color = Color.Transparent,
             contentColor = MaterialTheme.colorScheme.onSurface,
             shadowElevation = 0.dp
         ) {
             Box(
-                modifier = Modifier
-                    .padding(
-                        horizontal = ChatDimensions.BUBBLE_INNER_PADDING_HORIZONTAL,
-                        vertical = ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL
-                    )
-            ) {
-                EnhancedMarkdownText(
-                    message = message,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    isStreaming = isStreaming,
-                    messageOutputType = messageOutputType,
-                    onLongPress = { _ -> onLongPress() },
-                    onImageClick = onImageClick,
-                    onCodePreviewRequested = { lang, code ->
-                        previewLanguage = lang
-                        previewCode = code
-                    },
-                    onCodeCopied = {
-                        viewModel.showSnackbar("已复制代码")
-                    },
-                    viewModel = viewModel
+                modifier = Modifier.padding(
+                    horizontal = ChatDimensions.BUBBLE_INNER_PADDING_HORIZONTAL,
+                    vertical = ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL
                 )
+            ) {
+                val mergedSegments = remember(blockPayload?.blocksHash, messageOutputType) {
+                    val sourceBlocks = blockPayload?.blocks.orEmpty()
+                    if (sourceBlocks.isEmpty() || messageOutputType == "code") {
+                        emptyList()
+                    } else {
+                        val result = mutableListOf<String>()
+                        val inlineBuffer = StringBuilder()
+
+                        fun flushInlineBuffer() {
+                            if (inlineBuffer.isNotEmpty()) {
+                                result.add(inlineBuffer.toString())
+                                inlineBuffer.setLength(0)
+                            }
+                        }
+
+                        sourceBlocks.forEach { block ->
+                            when (block.type) {
+                                com.android.everytalk.ui.components.streaming.StreamBlockType.CODE_BLOCK,
+                                com.android.everytalk.ui.components.streaming.StreamBlockType.MATH_BLOCK -> {
+                                    flushInlineBuffer()
+                                    result.add(block.text)
+                                }
+                                else -> inlineBuffer.append(block.text)
+                            }
+                        }
+
+                        flushInlineBuffer()
+                        result.filter { it.isNotEmpty() }
+                    }
+                }
+
+                // 流式阶段保持单组件订阅，避免实时输出丢失。
+                if (!isStreaming && mergedSegments.size > 1) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(0.dp)
+                    ) {
+                        mergedSegments.forEachIndexed { index, segmentText ->
+                            key("${message.id}:segment:$index", blockPayload?.blocksHash) {
+                                EnhancedMarkdownText(
+                                    message = message,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    isStreaming = false,
+                                    messageOutputType = messageOutputType,
+                                    onLongPress = { _ -> onLongPress() },
+                                    onImageClick = onImageClick,
+                                    onCodePreviewRequested = { lang, code ->
+                                        previewLanguage = lang
+                                        previewCode = code
+                                    },
+                                    onCodeCopied = {
+                                        viewModel.showSnackbar("已复制代码")
+                                    },
+                                    viewModel = viewModel,
+                                    contentOverride = segmentText,
+                                    contentKeyOverride = "${message.id}:segment:$index",
+                                    disableStreamingSubscription = true
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    EnhancedMarkdownText(
+                        message = message,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        isStreaming = isStreaming,
+                        messageOutputType = messageOutputType,
+                        onLongPress = { _ -> onLongPress() },
+                        onImageClick = onImageClick,
+                        onCodePreviewRequested = { lang, code ->
+                            previewLanguage = lang
+                            previewCode = code
+                        },
+                        onCodeCopied = {
+                            viewModel.showSnackbar("已复制代码")
+                        },
+                        viewModel = viewModel
+                    )
+                }
             }
         }
     }
@@ -699,3 +765,4 @@ fun AiMessageFooterItem(
         }
     }
 }
+

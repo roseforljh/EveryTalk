@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
+import com.android.everytalk.config.PerformanceConfig
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.statecontroller.AppViewModel
@@ -27,8 +28,13 @@ private fun hasMathSyntax(text: String): Boolean = MathStreamingPolicy.hasMathSy
 private fun hasUnclosedMathDelimiter(text: String): Boolean =
     MathStreamingPolicy.hasUnclosedMathDelimiter(text)
 
+private fun findMathAffectedRange(previous: String, current: String): MathStreamingPolicy.AffectedRange? =
+    MathStreamingPolicy.findMathAffectedRange(previous, current)
+
 private fun shouldForceMathBoundaryRefresh(previous: String, current: String): Boolean =
     MathStreamingPolicy.shouldForceMathBoundaryRefresh(previous, current)
+
+private const val MATH_STREAM_LOG_TAG = "MathStreamThrottle"
 
 
 /**
@@ -61,8 +67,14 @@ fun EnhancedMarkdownText(
     onImageClick: ((String) -> Unit)? = null, //  鏂板
     onCodePreviewRequested: ((String, String) -> Unit)? = null, // 鏂板锛氫唬鐮侀瑙堝洖璋?(language, code)
     onCodeCopied: (() -> Unit)? = null, // 鏂板锛氫唬鐮佸鍒跺洖璋?
-    viewModel: AppViewModel? = null
+    viewModel: AppViewModel? = null,
+    contentOverride: String? = null,
+    contentKeyOverride: String? = null,
+    disableStreamingSubscription: Boolean = false
 ) {
+    val resolvedContentKey = contentKeyOverride ?: message.id
+    val staticContent = contentOverride ?: message.text
+
     val textColor = when {
         color != Color.Unspecified -> color
         style.color != Color.Unspecified -> style.color
@@ -73,8 +85,8 @@ fun EnhancedMarkdownText(
     // 浣跨敤 collectAsState 璁㈤槄Flow锛屽疄鐜版祦寮忔晥鏋?
     //  浼樺寲锛氭祦寮忕粨鏉熷悗缁х画璁㈤槄 StateFlow锛岀洿鍒扮粍浠堕攢姣佹垨鏄惧紡閲嶇疆
     // 閬垮厤 isStreaming 浠?true -> false 鐬棿鍒囨崲鏁版嵁婧愬鑷撮噸缁勯棯鐑?
-    val streamingStateFlow = remember(message.id, viewModel) {
-        if (viewModel != null) {
+    val streamingStateFlow = remember(message.id, viewModel, disableStreamingSubscription) {
+        if (viewModel != null && !disableStreamingSubscription) {
             viewModel.streamingMessageStateManager.getOrCreateStreamingState(message.id)
         } else {
             null
@@ -84,10 +96,10 @@ fun EnhancedMarkdownText(
     val content by if (streamingStateFlow != null && (isStreaming || viewModel?.streamingMessageStateManager?.isStreaming(message.id) == true)) {
         // 濡傛灉鏈夊彲鐢ㄧ殑 StateFlow 涓?(姝ｅ湪娴佸紡 OR 鐘舵€佺鐞嗗櫒璁や负杩樺湪娴佸紡)锛屼紭鍏堜娇鐢ㄦ祦寮忔暟鎹?
         // 鍗充娇 isStreaming 鍙樹负 false锛屽彧瑕?StateFlow 杩樺湪锛屽氨缁х画鐢ㄥ畠锛岄槻姝㈠垏鍥?message.text 鐨勭灛闂撮棯鐑?
-        streamingStateFlow.collectAsState(initial = message.text)
+        streamingStateFlow.collectAsState(initial = staticContent)
     } else {
         // 瀹屽叏闈炴祦寮忔垨鏃?ViewModel锛氫娇鐢?remember 鍖呰 message.text
-        remember(message.text) { mutableStateOf(message.text) }
+        remember(staticContent) { mutableStateOf(staticContent) }
     }
     
     // 馃攳 璋冭瘯锛氫粎鍦?content 瀹為檯鍙樺寲鏃惰褰曪紝閬垮厤姣忔閲嶇粍閮芥墦鏃ュ織
@@ -119,10 +131,10 @@ fun EnhancedMarkdownText(
         val isActuallyStreaming = isStreaming ||
             (viewModel?.streamingMessageStateManager?.isStreaming(message.id) == true)
 
-        var throttledMathContent by remember(message.id) { mutableStateOf(content) }
-        var lastRawMathContent by remember(message.id) { mutableStateOf(content) }
-        var lastMathUpdateAt by remember(message.id) { mutableStateOf(0L) }
-        var lastMathUnclosed by remember(message.id) { mutableStateOf(false) }
+        var throttledMathContent by remember(resolvedContentKey) { mutableStateOf(content) }
+        var lastRawMathContent by remember(resolvedContentKey) { mutableStateOf(content) }
+        var lastMathUpdateAt by remember(resolvedContentKey) { mutableStateOf(0L) }
+        var lastMathUnclosed by remember(resolvedContentKey) { mutableStateOf(false) }
 
         LaunchedEffect(content, isActuallyStreaming) {
             if (!isActuallyStreaming) {
@@ -143,11 +155,35 @@ fun EnhancedMarkdownText(
 
             val now = SystemClock.elapsedRealtime()
             val currentUnclosed = hasUnclosedMathDelimiter(content)
+            val affectedRange = findMathAffectedRange(lastRawMathContent, content)
             val boundaryRefresh =
-                shouldForceMathBoundaryRefresh(lastRawMathContent, content) || (lastMathUnclosed && !currentUnclosed)
+                shouldForceMathBoundaryRefresh(lastRawMathContent, content) ||
+                    affectedRange != null ||
+                    (lastMathUnclosed && !currentUnclosed)
             val throttleWindowMs = if (currentUnclosed) 120L else 80L
+            val elapsedSinceLastUpdate = now - lastMathUpdateAt
+            val shouldUpdate = boundaryRefresh || elapsedSinceLastUpdate >= throttleWindowMs
+            val shouldLogMathStreaming = com.android.everytalk.BuildConfig.DEBUG &&
+                PerformanceConfig.ENABLE_RENDER_TRANSITION_LOGGING
 
-            if (boundaryRefresh || now - lastMathUpdateAt >= throttleWindowMs) {
+            if (shouldLogMathStreaming) {
+                val deltaLen = content.length - lastRawMathContent.length
+                val reason = when {
+                    boundaryRefresh -> "boundary"
+                    shouldUpdate -> "throttle-window"
+                    else -> "skip"
+                }
+                android.util.Log.d(
+                    MATH_STREAM_LOG_TAG,
+                    "msgId=${resolvedContentKey.take(24)} action=${if (shouldUpdate) "update" else "skip"} " +
+                        "reason=$reason len=${content.length} delta=$deltaLen " +
+                        "range=${affectedRange?.start ?: -1}-${affectedRange?.endExclusive ?: -1} " +
+                        "unclosed=$currentUnclosed prevUnclosed=$lastMathUnclosed " +
+                        "elapsed=${elapsedSinceLastUpdate}ms window=${throttleWindowMs}ms"
+                )
+            }
+
+            if (shouldUpdate) {
                 throttledMathContent = content
                 lastMathUpdateAt = now
             }
@@ -179,7 +215,7 @@ fun EnhancedMarkdownText(
             color = textColor,
             isStreaming = isActuallyStreaming,
             modifier = widthModifier,
-            contentKey = message.id,
+            contentKey = resolvedContentKey,
             onLongPress = onLongPress,
             onImageClick = onImageClick,
             sender = message.sender,
@@ -207,4 +243,3 @@ fun StableMarkdownText(
         )
     )
 }
-

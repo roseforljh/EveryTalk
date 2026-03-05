@@ -1,6 +1,7 @@
 package com.android.everytalk.ui.screens.MainScreen.chat.core
 
 import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.ui.components.streaming.StreamBlock
 
 sealed interface ChatListItem {
     val stableId: String
@@ -17,7 +18,10 @@ sealed interface ChatListItem {
     data class AiMessage(
         val messageId: String,
         val text: String,
-        val hasReasoning: Boolean
+        val hasReasoning: Boolean,
+        val blocksHash: String = "",
+        val hasPendingMath: Boolean = false,
+        val blocks: List<StreamBlock> = emptyList()
     ) : ChatListItem {
         override val stableId: String = messageId
     }

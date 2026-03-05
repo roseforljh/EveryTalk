@@ -5,6 +5,7 @@ import com.android.everytalk.config.PerformanceConfig
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.statecontroller.ViewModelStateHolder
+import com.android.everytalk.ui.components.streaming.StreamBlockParser
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -35,6 +36,8 @@ class MessageItemsController(
         val reasoning: String?,
         val outputType: String,
         val hasReasoning: Boolean,
+        val blocksHash: String,
+        val hasPendingMath: Boolean,
         val imageUrls: List<String>?,
         val contentStarted: Boolean,
         val executionStatus: String?,
@@ -73,6 +76,7 @@ class MessageItemsController(
                             val cached = chatListItemCache[message.id]
                             val hasReasoning = !message.reasoning.isNullOrBlank()
                             val isCurrentlyStreaming = isApiCalling && message.id == currentStreamingAiMessageId
+                            val parseResult = StreamBlockParser.parse(message.text, message.id)
 
                             // 定义仅流式状态下允许存在的组件类型
                             val hasStreamingOnlyItems = cached?.items?.any {
@@ -83,10 +87,11 @@ class MessageItemsController(
                             } ?: false
 
                             val cacheValid = cached != null &&
-                                cached.text == message.text &&
                                 cached.reasoning == message.reasoning &&
                                 cached.outputType == message.outputType &&
                                 cached.hasReasoning == hasReasoning &&
+                                cached.blocksHash == parseResult.blocksHash &&
+                                cached.hasPendingMath == parseResult.hasPendingMath &&
                                 cached.imageUrls == message.imageUrls &&
                                 cached.contentStarted == message.contentStarted &&
                                 cached.executionStatus == message.executionStatus &&
@@ -107,12 +112,15 @@ class MessageItemsController(
                                 android.util.Log.d(
                                     "MessageItemsController",
                                     "Cache MISS for ${message.id.take(8)}, text.len=${message.text.length}, " +
-                                        "contentStarted=${message.contentStarted}, cached.contentStarted=${cached?.contentStarted}"
+                                        "contentStarted=${message.contentStarted}, cached.contentStarted=${cached?.contentStarted}, " +
+                                        "blocksHash=${parseResult.blocksHash}, cachedHash=${cached?.blocksHash}, " +
+                                        "pendingMath=${parseResult.hasPendingMath}, cachedPending=${cached?.hasPendingMath}"
                                 )
                                 val newItems = createAiMessageItems(
                                     message,
                                     isApiCalling,
-                                    currentStreamingAiMessageId
+                                    currentStreamingAiMessageId,
+                                    parseResult = parseResult
                                 )
 
                                 chatListItemCache[message.id] = CacheEntry(
@@ -120,6 +128,8 @@ class MessageItemsController(
                                     reasoning = message.reasoning,
                                     outputType = message.outputType,
                                     hasReasoning = hasReasoning,
+                                    blocksHash = parseResult.blocksHash,
+                                    hasPendingMath = parseResult.hasPendingMath,
                                     imageUrls = message.imageUrls,
                                     contentStarted = message.contentStarted,
                                     executionStatus = message.executionStatus,
@@ -158,12 +168,14 @@ class MessageItemsController(
                             val cached = imageGenerationChatListItemCache[message.id]
                             val hasReasoning = !message.reasoning.isNullOrBlank()
                             val isCurrentlyStreaming = isApiCalling && message.id == currentStreamingAiMessageId
+                            val parseResult = StreamBlockParser.parse(message.text, message.id)
 
                             val cacheValid = cached != null &&
-                                cached.text == message.text &&
                                 cached.reasoning == message.reasoning &&
                                 cached.outputType == message.outputType &&
                                 cached.hasReasoning == hasReasoning &&
+                                cached.blocksHash == parseResult.blocksHash &&
+                                cached.hasPendingMath == parseResult.hasPendingMath &&
                                 cached.imageUrls == message.imageUrls &&
                                 (isCurrentlyStreaming == (cached.items.any { it is ChatListItem.LoadingIndicator }))
 
@@ -171,6 +183,8 @@ class MessageItemsController(
                                 "MessageItemsController",
                                 "[IMAGE CACHE] messageId=${message.id.take(8)}, " +
                                     "cacheValid=$cacheValid, " +
+                                    "blocksHash=${parseResult.blocksHash}, " +
+                                    "cachedHash=${cached?.blocksHash}, " +
                                     "cached.imageUrls=${cached?.imageUrls?.size}, " +
                                     "message.imageUrls=${message.imageUrls?.size}"
                             )
@@ -184,6 +198,7 @@ class MessageItemsController(
                                     message,
                                     isApiCalling,
                                     currentStreamingAiMessageId,
+                                    parseResult = parseResult,
                                     isImageGeneration = true
                                 )
 
@@ -192,6 +207,8 @@ class MessageItemsController(
                                     reasoning = message.reasoning,
                                     outputType = message.outputType,
                                     hasReasoning = hasReasoning,
+                                    blocksHash = parseResult.blocksHash,
+                                    hasPendingMath = parseResult.hasPendingMath,
                                     imageUrls = message.imageUrls,
                                     contentStarted = message.contentStarted,
                                     executionStatus = message.executionStatus,
@@ -311,10 +328,12 @@ class MessageItemsController(
         message: Message,
         isApiCalling: Boolean,
         currentStreamingAiMessageId: String?,
+        parseResult: StreamBlockParser.ParseResult? = null,
         isImageGeneration: Boolean = false
     ): List<ChatListItem> {
         val sm = getBubbleStateMachine(message.id)
         val state = computeBubbleState(message, isApiCalling, currentStreamingAiMessageId, isImageGeneration)
+        val resolvedParseResult = parseResult ?: StreamBlockParser.parse(message.text, message.id)
 
         return when (state) {
             is com.android.everytalk.ui.state.AiBubbleState.Connecting -> {
@@ -342,7 +361,14 @@ class MessageItemsController(
                 // 这样在 Finish 事件到来时不会切换 item 类型，避免 LazyColumn 发生一次布局重排导致页面跳动
                 val streamingItem: ChatListItem = when (message.outputType) {
                     "code" -> ChatListItem.AiMessageCode(message.id, message.text, state.hasReasoning)
-                    else -> ChatListItem.AiMessage(message.id, message.text, state.hasReasoning)
+                    else -> ChatListItem.AiMessage(
+                        messageId = message.id,
+                        text = message.text,
+                        hasReasoning = state.hasReasoning,
+                        blocksHash = resolvedParseResult.blocksHash,
+                        hasPendingMath = resolvedParseResult.hasPendingMath,
+                        blocks = resolvedParseResult.blocks
+                    )
                 }
                 items.add(streamingItem)
                 
@@ -371,7 +397,14 @@ class MessageItemsController(
                     items.add(
                         when (message.outputType) {
                             "code" -> ChatListItem.AiMessageCode(message.id, message.text, !message.reasoning.isNullOrBlank())
-                            else -> ChatListItem.AiMessage(message.id, message.text, !message.reasoning.isNullOrBlank())
+                            else -> ChatListItem.AiMessage(
+                                messageId = message.id,
+                                text = message.text,
+                                hasReasoning = !message.reasoning.isNullOrBlank(),
+                                blocksHash = resolvedParseResult.blocksHash,
+                                hasPendingMath = resolvedParseResult.hasPendingMath,
+                                blocks = resolvedParseResult.blocks
+                            )
                         }
                     )
                     android.util.Log.d(

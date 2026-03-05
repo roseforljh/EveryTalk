@@ -2,6 +2,11 @@
 
 internal object MathStreamingPolicy {
 
+    data class AffectedRange(
+        val start: Int,
+        val endExclusive: Int
+    )
+
     fun hasMathSyntax(text: String): Boolean {
         return text.contains('$') || text.contains("\\[") || text.contains("\\(")
     }
@@ -65,20 +70,29 @@ internal object MathStreamingPolicy {
         return inBlockMath || inInlineMath
     }
 
+    fun findMathAffectedRange(previous: String, current: String): AffectedRange? {
+        if (previous == current) return null
+        if (current.isEmpty()) return null
+
+        if (current.length < previous.length || !current.startsWith(previous)) {
+            return AffectedRange(0, current.length)
+        }
+
+        val deltaStart = previous.length
+        val deltaEnd = current.length
+        if (deltaStart >= deltaEnd) return null
+
+        val contextPadding = 96
+        val start = (deltaStart - contextPadding).coerceAtLeast(0)
+        val end = (deltaEnd + contextPadding).coerceAtMost(current.length)
+        val window = current.substring(start, end)
+        if (!hasMathSyntax(window)) return null
+
+        return AffectedRange(start, end)
+    }
+
     fun shouldForceMathBoundaryRefresh(previous: String, current: String): Boolean {
-        if (current.length <= previous.length) return true
-        if (!current.startsWith(previous)) return true
-
-        val delta = current.substring(previous.length)
-        if (delta.isEmpty()) return false
-
-        return delta.contains("$$") ||
-            delta.contains("\\]") ||
-            delta.any {
-                it == '\n' ||
-                    it == '.' || it == '!' || it == '?' ||
-                    it == '\u3002' || it == '\uFF01' || it == '\uFF1F'
-            }
+        return findMathAffectedRange(previous, current) != null
     }
 
     fun escapeUnclosedMathDelimiters(input: String): String {

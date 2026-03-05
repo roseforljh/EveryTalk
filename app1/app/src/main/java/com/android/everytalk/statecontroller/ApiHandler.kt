@@ -279,6 +279,18 @@ class ApiHandler(
 
         val job = viewModelScope.launch {
             val thisJob = coroutineContext[Job]
+            var finalSyncDone = false
+            suspend fun ensureFinalStreamingSync(source: String) {
+                if (finalSyncDone) return
+                try {
+                    stateHolder.flushStreamingBuffer(aiMessageId)
+                    stateHolder.syncStreamingMessageToList(aiMessageId, isImageGeneration)
+                    finalSyncDone = true
+                    logger.debug("Final streaming sync completed from $source for message: $aiMessageId")
+                } catch (e: Exception) {
+                    logger.warn("Final streaming sync from $source failed: ${e.message}")
+                }
+            }
             if (isImageGeneration) {
                 stateHolder.imageApiJob = thisJob
             } else {
@@ -399,8 +411,7 @@ class ApiHandler(
                             
                             // 🎯 无论成功还是取消/错误，都必须在此处进行最终的同步
                             // 确保流式缓冲区中的残余内容被刷新并写入消息列表
-                            stateHolder.flushStreamingBuffer(aiMessageId)
-                            stateHolder.syncStreamingMessageToList(aiMessageId, isImageGeneration)
+                            ensureFinalStreamingSync("flow.onCompletion")
                             
                             val currentJob = if (isImageGeneration) stateHolder.imageApiJob else stateHolder.textApiJob
                             val isThisJobStillTheCurrentOne = currentJob == thisJob
@@ -476,8 +487,7 @@ class ApiHandler(
                     val isNormalFinish = e.message?.contains("Stream finished with event:") == true
 
                     // 🎯 Save partial content to history on cancellation (Requirements: 7.5)
-                    stateHolder.flushStreamingBuffer(aiMessageId)
-                    logger.debug("Flushed StreamingBuffer on cancellation for message: $aiMessageId")
+                    ensureFinalStreamingSync("stream cancellation")
 
                     // Get partial content from message processor
                     val partialText = currentMessageProcessor.getCurrentText().trim()
@@ -495,21 +505,13 @@ class ApiHandler(
 
                     // 🎯 只有在用户主动取消时才立即清理 StreamingBuffer
                     // 正常结束时，延迟到 finally 块中 sync 完成后再清理
-                    if (!isNormalFinish) {
-                        stateHolder.clearStreamingBuffer(aiMessageId)
-                        logger.debug("Cleared StreamingBuffer on user cancellation for message: $aiMessageId")
-                    }
+                    if (!isNormalFinish) logger.debug("User cancellation detected, buffer cleanup deferred to finally")
                 }
             } finally {
                 // 🎯 最终安全网：如果在 onCompletion 中因异常未执行同步，这里再尝试一次
                 // 但为了避免重复执行，syncStreamingMessageToList 内部有空值检查
                 // 注意：在 finally 中不应抛出异常
-                try {
-                    stateHolder.flushStreamingBuffer(aiMessageId)
-                    stateHolder.syncStreamingMessageToList(aiMessageId, isImageGeneration)
-                } catch (e: Exception) {
-                    logger.warn("Final sync in finally block failed: ${e.message}")
-                }
+                ensureFinalStreamingSync("job.finally")
 
                 // 🎯 最后统一清理 StreamingBuffer，确保 sync 完成后再清理
                 try {

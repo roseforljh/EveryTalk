@@ -90,7 +90,7 @@ object PerformanceConfig {
     const val MATH_RENDER_MODE = "webview" // 当前仅支持 webview
     const val MATH_RENDER_TIMEOUT_MS = 1200L // 单个公式渲染超时（毫秒）
     const val MATH_MAX_FORMULA_LEN = 4096 // 超长直接回退原文
-    const val MATH_STREAMING_RENDER_SAFEPOINTS = true // 流式仅在数学安全闭合点提交
+    const val MATH_STREAMING_RENDER_SAFEPOINTS = false // 流式仅在数学安全闭合点提交
 
     // Markdown解析
     const val MARKDOWN_PARSE_CACHE_SIZE = 50 // 缓存50个已解析Markdown

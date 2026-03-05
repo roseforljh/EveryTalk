@@ -239,59 +239,27 @@ fun TableAwareText(
             androidx.compose.runtime.key(stableKey) {
                 when (part) {
                     is ContentPart.Text -> {
-                        val shouldHorizontalScroll = shouldEnableHorizontalScrollForTextPart(part.content)
-                        if (shouldHorizontalScroll) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .horizontalScroll(rememberScrollState())
-                            ) {
-                                MarkdownRenderer(
-                                    markdown = part.content,
-                                    style = style,
-                                    color = color,
-                                    modifier = Modifier.wrapContentWidth(),
-                                    isStreaming = isStreaming,
-                                    onLongPress = onLongPress,
-                                    onImageClick = onImageClick,
-                                    sender = sender,
-                                    contentKey = if (contentKey.isNotBlank()) {
-                                        if (isStreaming) {
-                                            if (index < parsedParts.size - 1) {
-                                                "${contentKey}_part_${index}_${part.content.hashCode()}"
-                                            } else ""
-                                        } else {
-                                            "${contentKey}_part_${index}_${part.content.hashCode()}"
-                                        }
-                                    } else "",
-                                    disableVerticalPadding = true
-                                )
-                                Spacer(modifier = Modifier.width(16.dp))
-                            }
-                        } else {
-                            MarkdownRenderer(
-                                markdown = part.content,
-                                style = style,
-                                color = color,
-                                modifier = Modifier.fillMaxWidth(),
-                                isStreaming = isStreaming,
-                                onLongPress = onLongPress,
-                                onImageClick = onImageClick,
-                                sender = sender,
-                                contentKey = if (contentKey.isNotBlank()) {
-                                    if (isStreaming) {
-                                        // 娴佸紡鏈熼棿锛氬宸茬粡涓嶄細鍐嶅彉鍖栫殑 part 涔熷惎鐢ㄧ紦瀛?
-                                        // 鏈€鍚庝竴涓?part 浼氭寔缁彉鍖栵紝涓嶇紦瀛?
-                                        if (index < parsedParts.size - 1) {
-                                            "${contentKey}_part_${index}_${part.content.hashCode()}"
-                                        } else ""
-                                    } else {
+                        MarkdownRenderer(
+                            markdown = part.content,
+                            style = style,
+                            color = color,
+                            modifier = Modifier.fillMaxWidth(),
+                            isStreaming = isStreaming,
+                            onLongPress = onLongPress,
+                            onImageClick = onImageClick,
+                            sender = sender,
+                            contentKey = if (contentKey.isNotBlank()) {
+                                if (isStreaming) {
+                                    // 流式阶段：稳定片段可缓存，尾片段持续变化不缓存
+                                    if (index < parsedParts.size - 1) {
                                         "${contentKey}_part_${index}_${part.content.hashCode()}"
-                                    }
-                                } else "",
-                                disableVerticalPadding = true
-                            )
-                        }
+                                    } else ""
+                                } else {
+                                    "${contentKey}_part_${index}_${part.content.hashCode()}"
+                                }
+                            } else "",
+                            disableVerticalPadding = true
+                        )
                     }
                     is ContentPart.Code -> {
                         val lang = part.language?.trim()?.lowercase()
@@ -338,20 +306,41 @@ fun TableAwareText(
                         )
                     }
                     is ContentPart.Math -> {
-                        // 统一数学入口：数学块也交给 MarkdownRenderer（Markwon + JLatexMathPlugin）
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 8.dp)
-                                .horizontalScroll(rememberScrollState())
-                        ) {
+                        val enableHorizontalScroll = shouldEnableHorizontalScrollForMathPart(part.content)
+                        if (enableHorizontalScroll) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp)
+                                    .horizontalScroll(rememberScrollState())
+                            ) {
+                                MarkdownRenderer(
+                                    markdown = part.content,
+                                    style = style,
+                                    color = color,
+                                    modifier = Modifier
+                                        .wrapContentWidth()
+                                        .padding(horizontal = 8.dp),
+                                    isStreaming = isStreaming,
+                                    onLongPress = onLongPress,
+                                    onImageClick = onImageClick,
+                                    sender = sender,
+                                    contentKey = if (contentKey.isNotBlank()) {
+                                        "${contentKey}_math_${index}_${part.content.hashCode()}"
+                                    } else "",
+                                    disableVerticalPadding = true,
+                                    enablePureMathHorizontalScroll = false
+                                )
+                                Spacer(modifier = Modifier.width(16.dp))
+                            }
+                        } else {
                             MarkdownRenderer(
                                 markdown = part.content,
                                 style = style,
                                 color = color,
                                 modifier = Modifier
-                                    .wrapContentWidth()
-                                    .padding(horizontal = 8.dp),
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp),
                                 isStreaming = isStreaming,
                                 onLongPress = onLongPress,
                                 onImageClick = onImageClick,
@@ -361,7 +350,6 @@ fun TableAwareText(
                                 } else "",
                                 disableVerticalPadding = true
                             )
-                            Spacer(modifier = Modifier.width(16.dp))
                         }
                     }
                 }
@@ -379,28 +367,32 @@ fun TableAwareText(
     }
 }
 
-private fun shouldEnableHorizontalScrollForTextPart(text: String): Boolean {
-    if (text.isBlank()) return false
+private fun shouldEnableHorizontalScrollForMathPart(math: String): Boolean {
+    val trimmed = math.trim()
+    if (trimmed.isEmpty()) return false
 
-    return text.lines().any { line ->
-        val trimmed = line.trim()
-        if (trimmed.length < 24) return@any false
+    val isBlockMath = (trimmed.startsWith("$$") && trimmed.endsWith("$$")) ||
+        (trimmed.startsWith("\\[") && trimmed.endsWith("\\]"))
+    if (!isBlockMath) return false
 
-        val hasMathMarkers = trimmed.contains("$$") ||
-            Regex("\\$(?!\\$).+?\\$(?!\\$)").containsMatchIn(trimmed) ||
-            trimmed.contains("\\frac") ||
-            trimmed.contains("\\sum") ||
-            trimmed.contains("\\int") ||
-            trimmed.contains("\\prod") ||
-            trimmed.contains("\\lim") ||
-            trimmed.contains("\\implies")
+    val normalized = trimmed
+        .removePrefix("$$")
+        .removeSuffix("$$")
+        .removePrefix("\\[")
+        .removeSuffix("\\]")
+        .trim()
 
-        val operatorCount = trimmed.count { ch ->
-            ch == '=' || ch == '+' || ch == '-' || ch == '*' || ch == '/' || ch == '^'
-        }
+    val longestLineLength = normalized.lines().maxOfOrNull { it.length } ?: 0
+    val hasLongComplexMath = longestLineLength >= 56 &&
+        (normalized.contains("\\frac") ||
+            normalized.contains("\\sum") ||
+            normalized.contains("\\int") ||
+            normalized.contains("\\prod") ||
+            normalized.contains("\\begin") ||
+            normalized.contains("\\left") ||
+            normalized.contains("\\right"))
 
-        hasMathMarkers || (trimmed.contains('\\') && operatorCount >= 5)
-    }
+    return longestLineLength >= 72 || hasLongComplexMath
 }
 
 private data class InfographicItem(

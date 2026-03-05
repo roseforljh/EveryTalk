@@ -6,8 +6,10 @@ import android.view.MotionEvent
 import android.view.GestureDetector
 import android.view.Gravity
 import android.widget.TextView
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -30,9 +32,9 @@ import android.graphics.Typeface
 import android.text.style.StyleSpan
 import android.text.style.ForegroundColorSpan
 import android.text.style.ClickableSpan
-import android.text.method.ScrollingMovementMethod
 import android.view.View
 import android.text.Spannable
+import android.text.SpannableStringBuilder
 import io.noties.markwon.image.AsyncDrawable // 浣跨敤 AsyncDrawable
 import io.noties.markwon.image.AsyncDrawableSpan
 import com.android.everytalk.data.DataClass.Sender
@@ -61,6 +63,8 @@ private val BLOCK_PLACEHOLDER_PATTERN = Regex("(?m)^[ \\t]*\\[double dollar][ \\
 private val SPORTS_SCORE_PATTERN = Regex("^\\d{1,3}\\s*[:：]\\s*\\d{1,3}$")
 private val PURE_BLOCK_DOLLAR_MATH_REGEX = Regex("^\\s*\\$\\$[\\s\\S]*\\$\\$\\s*$")
 private val PURE_BLOCK_BRACKET_MATH_REGEX = Regex("^\\s*\\\\\\[[\\s\\S]*\\\\\\]\\s*$")
+private val INLINE_DOUBLE_DOLLAR_MATH_REGEX = Regex("\\$\\$(?!\\$)([^\\n]+?)\\$\\$(?!\\$)")
+private val FIRST_BLOCK_MATH_TOKEN_REGEX = Regex("\\$\\$(?!\\$)[\\s\\S]+?\\$\\$(?!\\$)")
 private val plainLatexReplacements = listOf(
     "\\Longleftrightarrow" to "⇔",
     "\\Leftrightarrow" to "⇔",
@@ -96,6 +100,12 @@ private data class MarkdownRenderSignature(
     val textSizeSp: Float
 )
 
+private data class MarkdownRenderViewState(
+    val signature: MarkdownRenderSignature,
+    val processed: String,
+    val pureMathBlockMessage: Boolean
+)
+
 private data class MarkdownRenderSession(
     val contentKey: String,
     val isStreaming: Boolean,
@@ -127,6 +137,33 @@ private fun logMarkdownRenderSession(session: MarkdownRenderSession) {
             "pre=${session.preprocessMs}ms parse=${session.parseMs}ms render=${session.renderMs}ms " +
             "total=${session.totalMs}ms cacheHit=${session.cacheHit} err=${session.errorCode ?: "none"}"
     )
+}
+
+private fun hasUnclosedFence(text: String): Boolean {
+    var count = 0
+    var index = 0
+    while (true) {
+        val pos = text.indexOf("```", index)
+        if (pos < 0) break
+        count++
+        index = pos + 3
+    }
+    return (count % 2) == 1
+}
+
+private fun findSafeStreamingSplitIndex(previousProcessed: String, currentProcessed: String): Int {
+    if (previousProcessed.isEmpty()) return -1
+    if (!currentProcessed.startsWith(previousProcessed)) return -1
+    if (currentProcessed.length <= previousProcessed.length) return -1
+
+    val nearestParagraphBoundary = currentProcessed.lastIndexOf("\n\n", previousProcessed.length)
+    if (nearestParagraphBoundary <= 0) return -1
+
+    val splitIndex = nearestParagraphBoundary + 2
+    val head = currentProcessed.substring(0, splitIndex)
+    if (hasUnclosedFence(head)) return -1
+    if (MathStreamingPolicy.hasUnclosedMathDelimiter(head)) return -1
+    return splitIndex
 }
 
 /**
@@ -323,6 +360,101 @@ private fun convertSingleDollarMathToDouble(input: String): String {
     }
 
     return out.toString()
+}
+
+private fun shouldPromoteInlineMathToBlock(mathBody: String): Boolean {
+    val body = mathBody.trim()
+    if (body.isEmpty()) return false
+    if (SPORTS_SCORE_PATTERN.matches(body)) return false
+
+    val hasComplexToken = body.contains("\\frac") ||
+        body.contains("\\sum") ||
+        body.contains("\\int") ||
+        body.contains("\\prod") ||
+        body.contains("\\lim") ||
+        body.contains("\\begin") ||
+        body.contains("\\left") ||
+        body.contains("\\right") ||
+        body.contains("\\matrix") ||
+        body.contains("\\cases")
+
+    return body.length >= 36 || hasComplexToken
+}
+
+private fun promoteLongInlineMathToBlock(input: String): String {
+    if (!input.contains("$$")) return input
+
+    val lines = input.lines()
+    val rebuilt = mutableListOf<String>()
+
+    lines.forEach { originalLine ->
+        var line = originalLine
+        val matches = INLINE_DOUBLE_DOLLAR_MATH_REGEX.findAll(line).toList()
+        if (matches.isEmpty()) {
+            rebuilt.add(line)
+            return@forEach
+        }
+
+        var promoted = false
+        matches.asReversed().forEach { match ->
+            val mathToken = match.value
+            val mathBody = match.groupValues.getOrElse(1) { "" }
+            if (!shouldPromoteInlineMathToBlock(mathBody)) return@forEach
+
+            val prefix = line.substring(0, match.range.first)
+            val suffix = line.substring(match.range.last + 1)
+            val hasTextAround = prefix.trim().isNotEmpty() || suffix.trim().isNotEmpty()
+            if (!hasTextAround) return@forEach
+
+            val replacement = "\n${mathToken}\n"
+            line = line.replaceRange(match.range, replacement)
+            promoted = true
+        }
+
+        if (promoted) {
+            rebuilt.addAll(line.split('\n').map { it.trimEnd() })
+        } else {
+            rebuilt.add(line)
+        }
+    }
+
+    return rebuilt.joinToString("\n")
+}
+
+private fun separateTextAndLongBlockMathLines(input: String): String {
+    if (!input.contains("$$")) return input
+
+    val rebuilt = mutableListOf<String>()
+    input.lines().forEach { rawLine ->
+        val line = rawLine.trimEnd()
+        val match = FIRST_BLOCK_MATH_TOKEN_REGEX.find(line)
+        if (match == null) {
+            rebuilt.add(line)
+            return@forEach
+        }
+
+        val prefix = line.substring(0, match.range.first).trim()
+        val mathToken = match.value.trim()
+        val suffix = line.substring(match.range.last + 1).trim()
+
+        val mathBody = mathToken.removePrefix("$$").removeSuffix("$$").trim()
+        val hasTextAround = prefix.isNotEmpty() || suffix.isNotEmpty()
+        val hasCjkAround = (prefix + suffix).any { it.code in 0x4E00..0x9FFF }
+        val shouldSplit = hasTextAround &&
+            hasCjkAround &&
+            shouldPromoteInlineMathToBlock(mathBody)
+
+        if (!shouldSplit) {
+            rebuilt.add(line)
+            return@forEach
+        }
+
+        if (prefix.isNotEmpty()) rebuilt.add(prefix)
+        rebuilt.add(mathToken)
+        if (suffix.isNotEmpty()) rebuilt.add(suffix)
+    }
+
+    return rebuilt.joinToString("\n")
 }
 
 private fun escapeCurrencyOutsideMath(input: String): String {
@@ -539,10 +671,24 @@ internal fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): 
     // - 使用状态机避免误匹配 `$$...$$`、货币、以及代码片段中的 `$`
     s = convertSingleDollarMathToDouble(s)
 
-    // 最后一步仅在流式阶段执行：转义未闭合数学标记，避免残缺 token 触发错误排版。
-    // 非流式完整文本不做这一步，避免误伤已经成对的行内公式。
+    // 9.5 长公式提升：当行内公式过长/复杂时，自动提升为独立块公式（Gemini 同类行为）
+    s = promoteLongInlineMathToBlock(s)
+    // 9.6 文本与长块公式分行：同一行出现“中文文本 + 长公式”时强制拆行
+    s = separateTextAndLongBlockMathLines(s)
+
+    // 最后一步仅在流式阶段执行：
+    // 1) safe-points 开启时，统一转义全部数学分隔符，避免流式阶段触发数学引擎重排/报错导致闪烁。
+    // 2) 否则保留原策略，只转义未闭合数学标记。
     if (isStreaming) {
-        s = escapeUnclosedMathForStreaming(s)
+        if (com.android.everytalk.config.PerformanceConfig.MATH_STREAMING_RENDER_SAFEPOINTS) {
+            s = MathStreamingPolicy.escapeAllMathDelimiters(s)
+            android.util.Log.d(
+                "MathStreamThrottle",
+                "strategy=streaming_math_plaintext action=escape-all len=${s.length}"
+            )
+        } else {
+            s = escapeUnclosedMathForStreaming(s)
+        }
     }
 
     // 收口：确保比较符实体不会作为字面量显示
@@ -562,7 +708,8 @@ fun MarkdownRenderer(
     onImageClick: ((String) -> Unit)? = null,
     sender: Sender = Sender.AI,
     contentKey: String = "",
-    disableVerticalPadding: Boolean = false // 鏂板鍙傛暟锛氬厑璁哥鐢ㄥ瀭鐩磒adding
+    disableVerticalPadding: Boolean = false, // 鏂板鍙傛暟锛氬厑璁哥鐢ㄥ瀭鐩磒adding
+    enablePureMathHorizontalScroll: Boolean = true
 ) {
     val context = LocalContext.current
     val isDark = isSystemInDarkTheme()
@@ -584,11 +731,26 @@ fun MarkdownRenderer(
         else -> MaterialTheme.colorScheme.onSurface
     }
 
+    val processedMarkdown = remember(markdown, isStreaming) {
+        preprocessAiMarkdown(markdown, isStreaming)
+    }
+    val pureMathBlockLayout = remember(processedMarkdown) {
+        val normalized = processedMarkdown.trim()
+        PURE_BLOCK_DOLLAR_MATH_REGEX.matches(normalized) ||
+            PURE_BLOCK_BRACKET_MATH_REGEX.matches(normalized)
+    }
+
     // 
-    val viewModifier = if (sender == Sender.User) {
+    val baseViewModifier = if (sender == Sender.User) {
         modifier.wrapContentWidth()
     } else {
         modifier
+    }
+    val viewModifier = if (pureMathBlockLayout && enablePureMathHorizontalScroll) {
+        baseViewModifier
+            .horizontalScroll(rememberScrollState())
+    } else {
+        baseViewModifier
     }
     
     AndroidView(
@@ -671,6 +833,18 @@ fun MarkdownRenderer(
                     var lastTouchRawY = 0f
 
                     setOnTouchListener { v, event ->
+                        val tvLocal = v as TextView
+                        val isPureMathBlock = (tvLocal.tag as? MarkdownRenderViewState)?.pureMathBlockMessage == true
+
+                        if (isPureMathBlock) {
+                            if (event.action == MotionEvent.ACTION_DOWN) {
+                                lastTouchRawX = event.rawX
+                                lastTouchRawY = event.rawY
+                            }
+                            // 纯块数学的横向滚动由 Compose 外层容器处理，这里不拦截触摸链
+                            return@setOnTouchListener false
+                        }
+
                         if (event.action == MotionEvent.ACTION_DOWN) {
                             lastTouchRawX = event.rawX
                             lastTouchRawY = event.rawY
@@ -678,7 +852,6 @@ fun MarkdownRenderer(
                         
                         // 浠呭湪 ACTION_UP 鏃舵娴嬪浘鐗囩偣鍑?
                         if (onImageClick != null && event.action == MotionEvent.ACTION_UP) {
-                            val tvLocal = v as TextView
                             val text = tvLocal.text
                             if (text is android.text.Spannable) {
                                 var x = event.x.toInt()
@@ -759,7 +932,7 @@ fun MarkdownRenderer(
         update = { tv ->
             val updateStartNs = SystemClock.elapsedRealtimeNanos()
             val preprocessStartNs = updateStartNs
-            val processed = preprocessAiMarkdown(markdown, isStreaming)
+            val processed = processedMarkdown
             val preprocessMs = (SystemClock.elapsedRealtimeNanos() - preprocessStartNs) / 1_000_000L
             val normalizedProcessed = processed.trim()
             val pureMathBlockMessage =
@@ -771,23 +944,21 @@ fun MarkdownRenderer(
                 textSizeSp = textSizeSp
             )
 
-            if (tv.tag == signature) {
+            val previousState = tv.tag as? MarkdownRenderViewState
+            if (previousState?.signature == signature) {
                 return@AndroidView
             }
-            tv.tag = signature
+            tv.tag = MarkdownRenderViewState(
+                signature = signature,
+                processed = processed,
+                pureMathBlockMessage = pureMathBlockMessage
+            )
 
-            // 纯数学块消息：保持统一字号并允许横向滚动查看长公式
+            // 纯数学块：内容保持单行（不自动折行），由 Compose 外层承载横向滚动
             tv.setHorizontallyScrolling(pureMathBlockMessage)
-            tv.isHorizontalScrollBarEnabled = pureMathBlockMessage
-            tv.overScrollMode =
-                if (pureMathBlockMessage) View.OVER_SCROLL_IF_CONTENT_SCROLLS else View.OVER_SCROLL_NEVER
-            if (onImageClick == null && onLongPress == null) {
-                tv.movementMethod = if (pureMathBlockMessage) {
-                    ScrollingMovementMethod.getInstance()
-                } else {
-                    null
-                }
-            }
+            tv.isHorizontalScrollBarEnabled = false
+            tv.overScrollMode = View.OVER_SCROLL_NEVER
+            tv.movementMethod = null
 
             // 缂撳瓨浼樺寲锛氬皾璇曚粠缂撳瓨鑾峰彇 Spanned 瀵硅薄
             // 娴佸紡鏈熼棿锛氫笂娓?TableAwareText 鍙宸茬ǔ瀹氱殑 part 鎻愪緵 contentKey
@@ -802,6 +973,12 @@ fun MarkdownRenderer(
             var renderMs = 0L
             var cacheHit = false
             var errorCode: String? = null
+            val previousProcessed = previousState?.processed.orEmpty()
+            val segmentSplitIndex = if (isStreaming) {
+                findSafeStreamingSplitIndex(previousProcessed, processed)
+            } else {
+                -1
+            }
 
             try {
                 if (cachedSpanned != null) {
@@ -809,6 +986,63 @@ fun MarkdownRenderer(
                     tv.text = cachedSpanned
                     if (com.android.everytalk.config.PerformanceConfig.ENABLE_PERFORMANCE_LOGGING) {
                         android.util.Log.d("MarkdownRenderer", "Spans Cache HIT: $cacheKey")
+                    }
+                } else if (segmentSplitIndex > 0) {
+                    val headText = processed.substring(0, segmentSplitIndex)
+                    val tailText = processed.substring(segmentSplitIndex)
+
+                    val headKey = if (contentKey.isNotBlank()) {
+                        MarkdownSpansCache.generateKey(
+                            "${contentKey}_seg_head_${headText.hashCode()}_v42",
+                            isDark,
+                            sp
+                        )
+                    } else ""
+
+                    val tailKey = if (contentKey.isNotBlank()) {
+                        MarkdownSpansCache.generateKey(
+                            "${contentKey}_seg_tail_${tailText.hashCode()}_v42",
+                            isDark,
+                            sp
+                        )
+                    } else ""
+
+                    val parseStartNs = SystemClock.elapsedRealtimeNanos()
+                    val headSpanned = if (headKey.isNotBlank()) {
+                        MarkdownSpansCache.get(headKey) ?: run {
+                            val node = markwon.parse(headText)
+                            val spanned = markwon.render(node)
+                            MarkdownSpansCache.put(headKey, spanned)
+                            spanned
+                        }
+                    } else {
+                        markwon.render(markwon.parse(headText))
+                    }
+
+                    val tailSpanned = if (tailKey.isNotBlank()) {
+                        MarkdownSpansCache.get(tailKey) ?: run {
+                            val node = markwon.parse(tailText)
+                            val spanned = markwon.render(node)
+                            MarkdownSpansCache.put(tailKey, spanned)
+                            spanned
+                        }
+                    } else {
+                        markwon.render(markwon.parse(tailText))
+                    }
+
+                    parseMs = (SystemClock.elapsedRealtimeNanos() - parseStartNs) / 1_000_000L
+                    renderMs = 0L
+
+                    val merged = SpannableStringBuilder().apply {
+                        append(headSpanned)
+                        append(tailSpanned)
+                    }
+                    tv.text = merged
+                    if (com.android.everytalk.config.PerformanceConfig.ENABLE_PERFORMANCE_LOGGING) {
+                        android.util.Log.d(
+                            "MarkdownRenderer",
+                            "Spans Segment MISS split=$segmentSplitIndex"
+                        )
                     }
                 } else {
                     if (processed.contains("$")) {
@@ -858,9 +1092,6 @@ fun MarkdownRenderer(
                     tv.text = processed
                 }
             }
-
-            tv.requestLayout()
-            tv.invalidate()
 
             val totalMs = (SystemClock.elapsedRealtimeNanos() - updateStartNs) / 1_000_000L
             logMarkdownRenderSession(
