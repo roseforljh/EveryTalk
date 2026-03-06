@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.12.9](https://github.com/roseforljh/EveryTalk/compare/v1.12.8...v1.12.9) (2026-03-06)
+
+
+### Bug Fixes
+
+* add BreakableLatexRenderer component for markdown UI. ([d843bc0](https://github.com/roseforljh/EveryTalk/commit/d843bc0748175fb2408b04ad387cc4b3c95da19a))
+* add TableAwareText component for rich text rendering with Markdown, LaTeX, and table support, including streaming and caching. ([41f1b43](https://github.com/roseforljh/EveryTalk/commit/41f1b435aecddd6bdd7fb2a5d59e69481ef5f24f))
+* Implement a comprehensive Markdown rendering and content parsing system with JLatexMath support, streaming policies, and Markwon caching. ([9ddb236](https://github.com/roseforljh/EveryTalk/commit/9ddb2366ff4e735f5bca6249757a5bc3ebce3b54))
+* Implement Gemini-like streaming architecture for AI chat responses, including new state management, parsing, and UI rendering components. ([ac9da3e](https://github.com/roseforljh/EveryTalk/commit/ac9da3eee5def3a4f4f1b8c989e4e9f303a4de6d))
+* Introduce `TableAwareText` and `BreakableLatexRenderer` for enhanced content rendering with incremental parsing and caching. ([a7ea493](https://github.com/roseforljh/EveryTalk/commit/a7ea493c9e9d1847ae92ceb4ffc94846cb71bb13))
+* introduce Markdown content parsing into structured components for rendering and add system prompt injection. ([5dbd80f](https://github.com/roseforljh/EveryTalk/commit/5dbd80ff83c7e12108423a0eeec8392f3159b9d0))
+* Introduce streaming chat message processing with enhanced UI components for markdown, math, and tables. ([5ca838f](https://github.com/roseforljh/EveryTalk/commit/5ca838f86b0f965878a1047ac1f7da6e35c43c29))
+
 ## [1.12.8](https://github.com/roseforljh/EveryTalk/compare/v1.12.7...v1.12.8) (2026-03-04)
 
 
