@@ -4,6 +4,14 @@ import java.util.Locale
 
 object StreamBlockParser {
 
+    private data class DelimiterMatch(
+        val start: Int,
+        val token: String,
+        val type: StreamBlockType,
+        val stateWhenClosed: MathBlockState,
+        val stateWhenPending: MathBlockState,
+    )
+
     private fun shouldPromoteInlineMathToBlock(mathBody: String): Boolean {
         val body = mathBody.trim()
         if (body.isEmpty()) return false
@@ -60,11 +68,15 @@ object StreamBlockParser {
             val codeStart = content.indexOf("```", cursor)
             val mathBlockStart = content.indexOf("$$", cursor)
             val inlineStart = content.indexOf('$', cursor)
+            val escapedInlineStart = content.indexOf("\\(", cursor)
+            val escapedBlockStart = content.indexOf("\\[", cursor)
 
             val candidates = mutableListOf<Int>()
             if (codeStart >= 0) candidates.add(codeStart)
             if (mathBlockStart >= 0) candidates.add(mathBlockStart)
             if (inlineStart >= 0) candidates.add(inlineStart)
+            if (escapedInlineStart >= 0) candidates.add(escapedInlineStart)
+            if (escapedBlockStart >= 0) candidates.add(escapedBlockStart)
             val nextSpecial = candidates.minOrNull()
 
             if (nextSpecial == null) {
@@ -114,7 +126,7 @@ object StreamBlockParser {
                             text = content.substring(cursor, end),
                             start = cursor,
                             endExclusive = end,
-                            state = MathBlockState.COMPLETE
+                            state = MathBlockState.RENDERED
                         )
                     )
                     cursor = end
@@ -126,9 +138,75 @@ object StreamBlockParser {
                             text = content.substring(cursor),
                             start = cursor,
                             endExclusive = content.length,
-                            state = MathBlockState.PENDING
+                            state = MathBlockState.RAW
                         )
                     )
+                    cursor = content.length
+                }
+                continue
+            }
+
+            val escapedDelimiter = when {
+                content.startsWith("\\[", cursor) -> DelimiterMatch(
+                    start = cursor,
+                    token = "\\[",
+                    type = StreamBlockType.MATH_BLOCK,
+                    stateWhenClosed = MathBlockState.RENDERED,
+                    stateWhenPending = MathBlockState.RAW,
+                )
+                content.startsWith("\\(", cursor) -> DelimiterMatch(
+                    start = cursor,
+                    token = "\\(",
+                    type = StreamBlockType.MATH_INLINE,
+                    stateWhenClosed = MathBlockState.RENDERED,
+                    stateWhenPending = MathBlockState.RAW,
+                )
+                else -> null
+            }
+
+            if (escapedDelimiter != null) {
+                val closingToken = if (escapedDelimiter.token == "\\[") "\\]" else "\\)"
+                val close = content.indexOf(closingToken, cursor + escapedDelimiter.token.length)
+                if (close >= 0) {
+                    val end = close + closingToken.length
+                    val tokenText = content.substring(cursor, end)
+                    val block = when (escapedDelimiter.type) {
+                        StreamBlockType.MATH_BLOCK -> StreamBlock.MathBlock(
+                            stableId = nextId(StreamBlockType.MATH_BLOCK),
+                            text = tokenText,
+                            start = cursor,
+                            endExclusive = end,
+                            state = escapedDelimiter.stateWhenClosed,
+                        )
+                        else -> StreamBlock.MathInline(
+                            stableId = nextId(StreamBlockType.MATH_INLINE),
+                            text = tokenText,
+                            start = cursor,
+                            endExclusive = end,
+                            state = escapedDelimiter.stateWhenClosed,
+                        )
+                    }
+                    blocks.add(block)
+                    cursor = end
+                } else {
+                    hasPendingMath = true
+                    val block = when (escapedDelimiter.type) {
+                        StreamBlockType.MATH_BLOCK -> StreamBlock.MathBlock(
+                            stableId = nextId(StreamBlockType.MATH_BLOCK),
+                            text = content.substring(cursor),
+                            start = cursor,
+                            endExclusive = content.length,
+                            state = escapedDelimiter.stateWhenPending,
+                        )
+                        else -> StreamBlock.MathInline(
+                            stableId = nextId(StreamBlockType.MATH_INLINE),
+                            text = content.substring(cursor),
+                            start = cursor,
+                            endExclusive = content.length,
+                            state = escapedDelimiter.stateWhenPending,
+                        )
+                    }
+                    blocks.add(block)
                     cursor = content.length
                 }
                 continue
@@ -148,7 +226,7 @@ object StreamBlockParser {
                                 text = blockToken,
                                 start = cursor,
                                 endExclusive = end,
-                                state = MathBlockState.COMPLETE
+                                state = MathBlockState.RENDERED
                             )
                         )
                     } else {
@@ -158,7 +236,7 @@ object StreamBlockParser {
                                 text = inlineToken,
                                 start = cursor,
                                 endExclusive = end,
-                                state = MathBlockState.COMPLETE
+                                state = MathBlockState.RENDERED
                             )
                         )
                     }
@@ -171,7 +249,7 @@ object StreamBlockParser {
                             text = content.substring(cursor),
                             start = cursor,
                             endExclusive = content.length,
-                            state = MathBlockState.PENDING
+                            state = MathBlockState.RAW
                         )
                     )
                     cursor = content.length

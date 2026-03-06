@@ -59,6 +59,7 @@ import com.android.everytalk.statecontroller.controller.config.SettingsControlle
 import com.android.everytalk.statecontroller.controller.conversation.HistoryController
 import com.android.everytalk.statecontroller.controller.media.MediaController
 import com.android.everytalk.statecontroller.controller.conversation.MessageContentController
+import com.android.everytalk.ui.components.streaming.StreamingRenderState
 import com.android.everytalk.statecontroller.controller.conversation.ConversationPreviewController
 import com.android.everytalk.statecontroller.controller.config.ModelAndConfigController
 import com.android.everytalk.statecontroller.controller.conversation.RegenerateController
@@ -341,7 +342,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
    // 控制器：系统提示
    private val systemPromptController = SystemPromptController(stateHolder, dialogManager, historyManager, viewModelScope)
    // 委托到 MessageItemsController，减少 AppViewModel 体积
-   private val messageItemsController = MessageItemsController(stateHolder, viewModelScope)
+   private val messageItemsController = MessageItemsController(
+       stateHolder = stateHolder,
+       streamingMessageStateManager = streamingMessageStateManager,
+       scope = viewModelScope,
+   )
    val chatListItems: StateFlow<List<ChatListItem>> get() = messageItemsController.chatListItems
    val imageGenerationChatListItems: StateFlow<List<ChatListItem>> get() = messageItemsController.imageGenerationChatListItems
    private val modelFetchManager = com.android.everytalk.statecontroller.viewmodel.ModelFetchManager()
@@ -639,6 +644,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun getStreamingText(messageId: String): StateFlow<String> {
         return messageContentController.getStreamingText(messageId)
+    }
+
+    fun getStreamingRenderState(messageId: String): StateFlow<StreamingRenderState> {
+        return stateHolder.streamingMessageStateManager.getOrCreateRenderState(messageId)
     }
 
     fun showAboutDialog() {
@@ -1397,6 +1406,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun getMessageById(id: String): Message? {
         return messages.find { it.id == id } ?: imageGenerationMessages.find { it.id == id }
     }
+
+    fun getStreamingReasoning(messageId: String) = stateHolder.getStreamingReasoning(messageId)
 
     fun cacheScrollState(conversationId: String, scrollState: ConversationScrollState) {
         scrollStateController.saveScrollState(conversationId, scrollState)

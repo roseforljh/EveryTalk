@@ -1,6 +1,8 @@
 package com.android.everytalk.statecontroller
 
 import android.util.Log
+import com.android.everytalk.ui.components.streaming.StreamingRenderState
+import com.android.everytalk.ui.components.streaming.buildStreamingRenderState
 import com.android.everytalk.util.debug.PerformanceMonitor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -37,6 +39,9 @@ class StreamingMessageStateManager {
     
     // Map of message ID to its streaming content StateFlow
     private val streamingStates = ConcurrentHashMap<String, MutableStateFlow<String>>()
+
+    // Map of message ID to its structured render state (blocks/tokens lifecycle)
+    private val streamingRenderStates = ConcurrentHashMap<String, MutableStateFlow<StreamingRenderState>>()
     
     // Track which messages are currently streaming
     private val activeStreamingMessages = ConcurrentHashMap.newKeySet<String>()
@@ -68,6 +73,19 @@ class StreamingMessageStateManager {
             MutableStateFlow("")
         }.asStateFlow()
     }
+
+    fun getOrCreateRenderState(messageId: String): StateFlow<StreamingRenderState> {
+        return streamingRenderStates.getOrPut(messageId) {
+            MutableStateFlow(
+                buildStreamingRenderState(
+                    messageId = messageId,
+                    content = "",
+                    isStreaming = activeStreamingMessages.contains(messageId),
+                    isComplete = false,
+                )
+            )
+        }.asStateFlow()
+    }
     
     /**
      * Start streaming for a message
@@ -77,6 +95,14 @@ class StreamingMessageStateManager {
         streamingStates.getOrPut(messageId) {
             MutableStateFlow("")
         }
+        streamingRenderStates[messageId] = MutableStateFlow(
+            buildStreamingRenderState(
+                messageId = messageId,
+                content = streamingStates[messageId]?.value.orEmpty(),
+                isStreaming = true,
+                isComplete = false,
+            )
+        )
         pendingBuffers.remove(messageId)
         pendingJobs.remove(messageId)?.cancel()
         Log.d("StreamingMessageStateManager", "Started streaming for message: $messageId")
@@ -158,6 +184,7 @@ class StreamingMessageStateManager {
         PerformanceMonitor.recordStateFlowFlush(messageId, delta.length, currentLength + delta.length)
         
         stateFlow.value = stateFlow.value + delta
+        updateRenderState(messageId, stateFlow.value, isComplete = false)
         lastFlushTime[messageId] = now
     }
 
@@ -173,10 +200,19 @@ class StreamingMessageStateManager {
             pendingBuffers.remove(messageId)
             pendingJobs.remove(messageId)?.cancel()
             stateFlow.value = content
+            updateRenderState(messageId, content, isComplete = false)
         } else {
             // Create new state if it doesn't exist
             Log.w("STREAM_DEBUG", "[StreamingMessageStateManager] ⚠️ Creating new state: msgId=$messageId, len=${content.length}")
             streamingStates[messageId] = MutableStateFlow(content)
+            streamingRenderStates[messageId] = MutableStateFlow(
+                buildStreamingRenderState(
+                    messageId = messageId,
+                    content = content,
+                    isStreaming = activeStreamingMessages.contains(messageId),
+                    isComplete = false,
+                )
+            )
         }
     }
     
@@ -204,6 +240,7 @@ class StreamingMessageStateManager {
         if (stateFlow != null && buf != null && buf.isNotEmpty()) {
              val delta = buf.toString()
              stateFlow.value = stateFlow.value + delta
+             updateRenderState(messageId, stateFlow.value, isComplete = false)
              // Clear buffer
              buf.setLength(0)
              
@@ -212,6 +249,7 @@ class StreamingMessageStateManager {
         
         activeStreamingMessages.remove(messageId)
         val finalContent = streamingStates[messageId]?.value ?: ""
+        updateRenderState(messageId, finalContent, isComplete = true)
         Log.d("StreamingMessageStateManager",
             "Finished streaming for message: $messageId, final length: ${finalContent.length}")
         return finalContent
@@ -225,6 +263,7 @@ class StreamingMessageStateManager {
         pendingJobs.remove(messageId)?.cancel()
         pendingBuffers.remove(messageId)
         streamingStates.remove(messageId)
+        streamingRenderStates.remove(messageId)
         Log.d("StreamingMessageStateManager", "Cleared streaming state for message: $messageId")
     }
     
@@ -239,6 +278,7 @@ class StreamingMessageStateManager {
         pendingJobs.clear()
         pendingBuffers.clear()
         streamingStates.clear()
+        streamingRenderStates.clear()
         Log.d("StreamingMessageStateManager", "Cleared all streaming states (count: $count)")
     }
     
@@ -251,6 +291,17 @@ class StreamingMessageStateManager {
         val base = streamingStates[messageId]?.value ?: ""
         val buf = pendingBuffers[messageId]?.toString().orEmpty()
         return base + buf
+    }
+
+    fun getCurrentRenderState(messageId: String): StreamingRenderState {
+        val current = streamingRenderStates[messageId]?.value
+        if (current != null) return current
+        return buildStreamingRenderState(
+            messageId = messageId,
+            content = getCurrentContent(messageId),
+            isStreaming = isStreaming(messageId),
+            isComplete = !isStreaming(messageId),
+        )
     }
     
     fun getActiveStreamingCount(): Int {
@@ -279,10 +330,11 @@ class StreamingMessageStateManager {
         
         // Clear all buffers
         pendingBuffers.clear()
-        
+
         // Clear streaming states
         activeStreamingMessages.clear()
         streamingStates.clear()
+        streamingRenderStates.clear()
         
         // Cancel the coroutine scope
         scope.cancel()
@@ -301,5 +353,15 @@ class StreamingMessageStateManager {
             idx = p + 3
         }
         return (count % 2) == 1
+    }
+
+    private fun updateRenderState(messageId: String, content: String, isComplete: Boolean) {
+        val state = buildStreamingRenderState(
+            messageId = messageId,
+            content = content,
+            isStreaming = activeStreamingMessages.contains(messageId) && !isComplete,
+            isComplete = isComplete,
+        )
+        streamingRenderStates.getOrPut(messageId) { MutableStateFlow(state) }.value = state
     }
 }

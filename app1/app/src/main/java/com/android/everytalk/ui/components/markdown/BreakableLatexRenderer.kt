@@ -62,72 +62,75 @@ fun BreakableLatexRenderer(
         preventNumberBreaking(raw)
     }
 
-    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
-        val maxWidthPx = with(density) { maxWidth.toPx() }
-        // 使用全部可用宽度（ImageView 自身有 4dp padding）
-        val effectiveMaxWidth = maxWidthPx
+    val configuration = androidx.compose.ui.platform.LocalConfiguration.current
+    // 扣除常见的边距 (32dp) 以获得有效可用宽度，避免依赖 BoxWithConstraints 引发流式 recompose 闪烁
+    val effectiveMaxWidth = with(density) { (configuration.screenWidthDp.dp - 32.dp).toPx() }
 
-        val cacheKey = remember(pureMath, isDark, textSizeSp, effectiveMaxWidth) {
-            "breakable_${pureMath.hashCode()}_${isDark}_${textSizeSp.toInt()}_${effectiveMaxWidth.toInt()}"
-        }
-
-        AndroidView(
-            modifier = Modifier.fillMaxWidth(),
-            factory = { ctx ->
-                // 参照 Gemini 的 qsx.smali：HorizontalScrollView 包裹 ImageView
-                // 当公式换行后仍超宽时（如矩阵），可水平滑动
-                val imageView = ImageView(ctx).apply {
-                    scaleType = ImageView.ScaleType.FIT_START
-                    adjustViewBounds = true
-                    val paddingPx = TypedValue.applyDimension(
-                        TypedValue.COMPLEX_UNIT_DIP, 4f,
-                        ctx.resources.displayMetrics
-                    ).toInt()
-                    setPadding(paddingPx, paddingPx, paddingPx, paddingPx)
-                }
-
-                // 自定义 HorizontalScrollView 解决嵌套滚动冲突
-                // 参照 Gemini qsx.smali 的 dispatchTouchEvent → requestDisallowInterceptTouchEvent
-                NestedScrollableHorizontalScrollView(ctx).apply {
-                    // 隐藏滚动条，视觉更简洁
-                    isHorizontalScrollBarEnabled = false
-                    // 允许内容超出容器宽度
-                    isFillViewport = false
-                    addView(imageView, FrameLayout.LayoutParams(
-                        FrameLayout.LayoutParams.WRAP_CONTENT,
-                        FrameLayout.LayoutParams.WRAP_CONTENT
-                    ))
-                    // 将 imageView 存在 tag 中以便 update 时使用
-                    tag = ScrollViewTag("", imageView)
-                }
-            },
-            update = { scrollView ->
-                val tagData = scrollView.tag as? ScrollViewTag ?: return@AndroidView
-                val imageView = tagData.imageView
-
-                if (tagData.cacheKey == cacheKey) return@AndroidView
-                tagData.cacheKey = cacheKey
-
-                try {
-                    val drawable = BreakableLatexDrawable.create(
-                        latex = pureMath,
-                        textSize = textSizeForJLatex,
-                        color = colorArgb,
-                        maxWidthPx = effectiveMaxWidth,
-                        align = BreakableLatexDrawable.ALIGN_LEFT,
-                        interlineSpacing = 0.5f
-                    )
-                    imageView.setImageDrawable(drawable)
-
-                    // 重置滚动位置
-                    scrollView.scrollTo(0, 0)
-                } catch (e: Exception) {
-                    android.util.Log.e("BreakableLatexRenderer", "Failed to render: ${e.message}", e)
-                    imageView.setImageDrawable(null)
-                }
-            }
-        )
+    val cacheKey = remember(pureMath, isDark, textSizeSp, effectiveMaxWidth) {
+        "breakable_${pureMath.hashCode()}_${isDark}_${textSizeSp.toInt()}_${effectiveMaxWidth.toInt()}"
     }
+
+    // 内存缓存 Drawable: 避免 JLatexMath 主线程解析耗时引起 Jank，同时增强流式状态恢复
+    val drawable = remember(cacheKey) {
+        drawableCache.get(cacheKey) ?: try {
+            val newDrawable = BreakableLatexDrawable.create(
+                latex = pureMath,
+                textSize = textSizeForJLatex,
+                color = colorArgb,
+                maxWidthPx = effectiveMaxWidth,
+                align = BreakableLatexDrawable.ALIGN_LEFT,
+                interlineSpacing = 0.5f
+            )
+            drawableCache.put(cacheKey, newDrawable)
+            newDrawable
+        } catch (e: Exception) {
+            android.util.Log.e("BreakableLatexRenderer", "Failed to render: ${e.message}", e)
+            null
+        }
+    }
+
+    AndroidView(
+        modifier = modifier.fillMaxWidth(),
+        factory = { ctx ->
+            // 参照 Gemini 的 qsx.smali：HorizontalScrollView 包裹 ImageView
+            // 当公式换行后仍超宽时（如矩阵），可水平滑动
+            val imageView = ImageView(ctx).apply {
+                scaleType = ImageView.ScaleType.FIT_START
+                adjustViewBounds = true
+                val paddingPx = TypedValue.applyDimension(
+                    TypedValue.COMPLEX_UNIT_DIP, 4f,
+                    ctx.resources.displayMetrics
+                ).toInt()
+                setPadding(paddingPx, paddingPx, paddingPx, paddingPx)
+            }
+
+            // 自定义 HorizontalScrollView 解决嵌套滚动冲突
+            // 参照 Gemini qsx.smali 的 dispatchTouchEvent → requestDisallowInterceptTouchEvent
+            NestedScrollableHorizontalScrollView(ctx).apply {
+                // 隐藏滚动条，视觉更简洁
+                isHorizontalScrollBarEnabled = false
+                // 允许内容超出容器宽度
+                isFillViewport = false
+                addView(imageView, FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT
+                ))
+                // 将 imageView 存在 tag 中以便 update 时使用
+                tag = ScrollViewTag("", imageView)
+            }
+        },
+        update = { scrollView ->
+            val tagData = scrollView.tag as? ScrollViewTag ?: return@AndroidView
+            val imageView = tagData.imageView
+
+            if (tagData.cacheKey == cacheKey) return@AndroidView
+            tagData.cacheKey = cacheKey
+
+            imageView.setImageDrawable(drawable)
+            // 重置滚动位置
+            scrollView.scrollTo(0, 0)
+        }
+    )
 }
 
 /**
@@ -158,6 +161,11 @@ private fun preventNumberBreaking(latex: String): String {
         "\\mbox{${it.value}}"
     }
 }
+
+/**
+ * 全局 Drawable 缓存，加速流式期间的公式绘制并避免频繁 GC 和掉帧
+ */
+private val drawableCache = android.util.LruCache<String, BreakableLatexDrawable>(50)
 
 /**
  * HorizontalScrollView tag 数据持有类

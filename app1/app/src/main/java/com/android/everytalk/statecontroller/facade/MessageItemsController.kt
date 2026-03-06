@@ -4,6 +4,7 @@ import android.util.Log
 import com.android.everytalk.config.PerformanceConfig
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.statecontroller.StreamingMessageStateManager
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import com.android.everytalk.ui.components.streaming.StreamBlockParser
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
@@ -28,6 +29,7 @@ import java.util.concurrent.ConcurrentHashMap
  */
 class MessageItemsController(
     private val stateHolder: ViewModelStateHolder,
+    private val streamingMessageStateManager: StreamingMessageStateManager,
     scope: CoroutineScope
 ) {
 
@@ -76,7 +78,10 @@ class MessageItemsController(
                             val cached = chatListItemCache[message.id]
                             val hasReasoning = !message.reasoning.isNullOrBlank()
                             val isCurrentlyStreaming = isApiCalling && message.id == currentStreamingAiMessageId
-                            val parseResult = StreamBlockParser.parse(message.text, message.id)
+                            val parseResult = resolveParseResult(
+                                message = message,
+                                preferStreamingState = isCurrentlyStreaming,
+                            )
 
                             // 定义仅流式状态下允许存在的组件类型
                             val hasStreamingOnlyItems = cached?.items?.any {
@@ -333,7 +338,10 @@ class MessageItemsController(
     ): List<ChatListItem> {
         val sm = getBubbleStateMachine(message.id)
         val state = computeBubbleState(message, isApiCalling, currentStreamingAiMessageId, isImageGeneration)
-        val resolvedParseResult = parseResult ?: StreamBlockParser.parse(message.text, message.id)
+        val resolvedParseResult = parseResult ?: resolveParseResult(
+            message = message,
+            preferStreamingState = isApiCalling && message.id == currentStreamingAiMessageId,
+        )
 
         return when (state) {
             is com.android.everytalk.ui.state.AiBubbleState.Connecting -> {
@@ -360,8 +368,9 @@ class MessageItemsController(
                 // 始终使用“完成态”组件类型，依靠 EnhancedMarkdownText 的 isStreaming 实时订阅更新内容
                 // 这样在 Finish 事件到来时不会切换 item 类型，避免 LazyColumn 发生一次布局重排导致页面跳动
                 val streamingItem: ChatListItem = when (message.outputType) {
-                    "code" -> ChatListItem.AiMessageCode(message.id, message.text, state.hasReasoning)
+                    "code" -> ChatListItem.AiMessageCode(message, message.id, message.text, state.hasReasoning)
                     else -> ChatListItem.AiMessage(
+                        message = message,
                         messageId = message.id,
                         text = message.text,
                         hasReasoning = state.hasReasoning,
@@ -396,8 +405,9 @@ class MessageItemsController(
                 if (hasTextContent || (isImageGeneration && hasImageContent)) {
                     items.add(
                         when (message.outputType) {
-                            "code" -> ChatListItem.AiMessageCode(message.id, message.text, !message.reasoning.isNullOrBlank())
+                            "code" -> ChatListItem.AiMessageCode(message, message.id, message.text, !message.reasoning.isNullOrBlank())
                             else -> ChatListItem.AiMessage(
+                                message = message,
                                 messageId = message.id,
                                 text = message.text,
                                 hasReasoning = !message.reasoning.isNullOrBlank(),
@@ -474,5 +484,31 @@ class MessageItemsController(
     fun clearStreamingTimestamp(messageId: String) {
         streamingStartTimestamps.remove(messageId)
         android.util.Log.d("MessageItemsController", "Cleared streaming timestamp for message: ${messageId.take(8)}")
+    }
+
+    private fun resolveParseResult(
+        message: Message,
+        preferStreamingState: Boolean,
+    ): StreamBlockParser.ParseResult {
+        val shouldUseStreamingState = preferStreamingState || streamingMessageStateManager.isStreaming(message.id)
+        if (!shouldUseStreamingState) {
+            return StreamBlockParser.parse(message.text, message.id)
+        }
+
+        val renderState = streamingMessageStateManager.getCurrentRenderState(message.id)
+        val content = renderState.content.ifBlank { message.text }
+
+        if (content != message.text && content.isNotBlank()) {
+            android.util.Log.d(
+                "MessageItemsController",
+                "Using streaming render state for ${message.id.take(8)}: len=${content.length}, hash=${renderState.blocksHash}"
+            )
+        }
+
+        return StreamBlockParser.ParseResult(
+            blocks = renderState.blocks,
+            hasPendingMath = renderState.hasPendingMath,
+            blocksHash = renderState.blocksHash,
+        )
     }
 }

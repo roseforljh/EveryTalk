@@ -1,6 +1,5 @@
 ﻿package com.android.everytalk.ui.components
 import com.android.everytalk.ui.components.coordinator.ContentCoordinator
-import com.android.everytalk.ui.components.streaming.rememberTypewriterState
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -192,22 +191,7 @@ fun EnhancedMarkdownText(
             lastMathUnclosed = currentUnclosed
         }
 
-        val hasMath = hasMathSyntax(throttledMathContent)
-        val useTypewriter = isActuallyStreaming && !hasMath
-
-        val typewriterState = rememberTypewriterState(
-            targetText = throttledMathContent,
-            isStreaming = useTypewriter,
-            charsPerFrame = 6,
-            frameDelayMs = 32L,
-            maxCharsPerFrame = 60,
-            catchUpDivisor = 4
-        )
-
-        val displayText = when {
-            useTypewriter -> typewriterState.displayedText
-            else -> throttledMathContent
-        }
+        val displayText = throttledMathContent
 
         ContentCoordinator(
             text = displayText,

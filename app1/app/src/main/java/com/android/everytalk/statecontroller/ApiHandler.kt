@@ -671,6 +671,26 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                 }
                 is AppStreamEvent.Reasoning -> {
                     if (processedResult is com.android.everytalk.util.messageprocessor.ProcessedEventResult.ReasoningUpdated) {
+                        val reasoningChunk = appEvent.text
+                        if (reasoningChunk.isNotBlank()) {
+                            if (currentMessage.reasoning.isNullOrBlank()) {
+                                messageList[messageIndex] = currentMessage.copy(reasoning = reasoningChunk)
+                            }
+                            PerformanceMonitor.recordEvent(aiMessageId, "Reasoning", reasoningChunk.length)
+                            stateHolder.appendReasoningToMessage(aiMessageId, reasoningChunk, isImageGeneration)
+                            if (isImageGeneration) {
+                                stateHolder.isImageConversationDirty.value = true
+                            } else {
+                                stateHolder.isTextConversationDirty.value = true
+                            }
+                            viewModelScope.launch(Dispatchers.IO) {
+                                try {
+                                    historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration)
+                                } catch (_: Exception) {
+                                }
+                            }
+                        }
+                        return@withContext
                         // 推理增量更新
                         updatedMessage = updatedMessage.copy(reasoning = processedResult.reasoning)
                         

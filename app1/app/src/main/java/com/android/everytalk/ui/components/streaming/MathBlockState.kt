@@ -1,7 +1,8 @@
 package com.android.everytalk.ui.components.streaming
 
 enum class MathBlockState {
-    COMPLETE,
-    PENDING
+    RAW,
+    PARSING,
+    RENDERED,
+    FAILED,
 }
-

@@ -18,6 +18,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -52,6 +54,7 @@ data class PendingConfigParams(
 
     // 新增：记录每条流式消息已提交到 UI 的长度，用于只追加增量，避免重复全量赋值造成卡顿
     private val streamingLastLengths = mutableMapOf<String, Int>()
+    private val streamingReasoningStates = mutableMapOf<String, MutableStateFlow<String>>()
 
     // 🎯 记录已完成同步的消息ID，避免重复同步导致UI抖动
     private val syncedMessageIds = mutableSetOf<String>()
@@ -98,7 +101,11 @@ data class PendingConfigParams(
             conversationGenerationConfigs.value = initialParams
         }
     }
-    
+
+    fun getStreamingReasoning(messageId: String): StateFlow<String> {
+        return streamingReasoningStates.getOrPut(messageId) { MutableStateFlow("") }.asStateFlow()
+    }
+
     /**
      * Initialize coroutine scope for StreamingBuffer operations
      * Must be called from AppViewModel during initialization
@@ -479,6 +486,7 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
 
         // 初始化已提交长度为0
         streamingLastLengths[messageId] = 0
+        streamingReasoningStates[messageId] = MutableStateFlow("")
 
         // Create new buffer with callback -> 仅追加"增量"，避免反复全量赋值
         val buffer = StreamingBuffer(
@@ -598,6 +606,7 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
 
         // 🎯 Clear streaming state in StreamingMessageStateManager
         streamingMessageStateManager.clearStreamingState(messageId)
+        streamingReasoningStates.remove(messageId)
 
         android.util.Log.d("ViewModelStateHolder", "Cleared StreamingBuffer and streaming state for message: $messageId")
     }
@@ -736,6 +745,21 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
         return metrics
     }
     fun appendReasoningToMessage(messageId: String, text: String, isImageGeneration: Boolean = false) {
+        val state = streamingReasoningStates.getOrPut(messageId) { MutableStateFlow("") }
+        state.value += text
+
+        android.util.Log.i(
+            "STREAM_DEBUG",
+            "[ViewModelStateHolder] 鉁?Streaming reasoning updated: msgId=$messageId, totalLen=${state.value.length}"
+        )
+
+        if (isImageGeneration) {
+            isImageConversationDirty.value = true
+        } else {
+            isTextConversationDirty.value = true
+        }
+        return
+
         val messageList = if (isImageGeneration) imageGenerationMessages else messages
         val index = messageList.indexOfFirst { it.id == messageId }
         if (index != -1) {

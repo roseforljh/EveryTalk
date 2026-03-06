@@ -160,8 +160,11 @@ fun TableAwareText(
                         val newParts = prevParts.toMutableList()
                         newParts[newParts.lastIndex] = updatedLast
                         previousText = currentText
-                        // 妫€鏌ヨ拷鍔犵殑鏂囨湰鏄惁鏋勬垚浜嗗畬鏁寸殑鏁板鍏紡鍧?
-                        return@mapLatest ContentParser.splitMathBlocksPublic(newParts)
+                        // 流式期间不拆分 Math 块！
+                        // splitMathBlocksPublic 会改变 parts 列表结构（如 [Text] → [Text,Math,Text]），
+                        // 导致 Column 子项突变 → UI 重建 → 闪烁。
+                        // MarkdownRenderer 内部的 JLatexMathPlugin 已能渲染 math。
+                        return@mapLatest newParts
                     }
                 }
 
@@ -312,8 +315,10 @@ fun TableAwareText(
                             (trimmed.startsWith("$$") && trimmed.endsWith("$$")) ||
                                 (trimmed.startsWith("\\[") && trimmed.endsWith("\\]"))
                         }
-                        if (isBlockMath) {
-                            // 块级公式：使用 BreakableLatexRenderer 实现自动换行（流式时也实时渲染）
+                        if (isBlockMath && !isStreaming) {
+                            // 块级公式：流式结束后使用 BreakableLatexRenderer（自动换行+水平滑动）
+                            // 流式期间不能用 AndroidView——Compose 的 recomposition 每个 token 都会
+                            // 触发 AndroidView update 回调，导致布局抖动（Gemini 用 Litho 异步布局避免此问题）
                             BreakableLatexRenderer(
                                 latex = part.content,
                                 modifier = Modifier

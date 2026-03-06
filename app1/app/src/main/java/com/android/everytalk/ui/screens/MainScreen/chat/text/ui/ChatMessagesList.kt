@@ -47,6 +47,7 @@ import com.android.everytalk.ui.theme.chatColors
 import com.android.everytalk.ui.components.EnhancedMarkdownText
 import com.android.everytalk.ui.components.StableMarkdownText
 import com.android.everytalk.ui.components.markdown.MarkdownRenderer
+import com.android.everytalk.ui.components.streaming.StreamBlocksRenderer
 import com.android.everytalk.ui.components.WebPreviewDialog
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
@@ -360,12 +361,21 @@ fun ChatMessagesList(
 
                         is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageReasoning -> {
                             val reasoningCompleteMap = viewModel.textReasoningCompleteMap
+                            val streamingReasoning by remember(item.message.id) {
+                                viewModel.getStreamingReasoning(item.message.id)
+                            }.collectAsState(initial = item.message.reasoning ?: "")
+                            val displayedReasoningText =
+                                if (currentStreamingId == item.message.id && streamingReasoning.isNotBlank()) {
+                                    streamingReasoning
+                                } else {
+                                    item.message.reasoning ?: ""
+                                }
                             val isReasoningStreaming = remember(
-                                item.message.reasoning,
+                                displayedReasoningText,
                                 reasoningCompleteMap[item.message.id],
                                 item.message.contentStarted
                             ) {
-                                (item.message.reasoning?.isNotBlank() == true) &&
+                                displayedReasoningText.isNotBlank() &&
                                 (reasoningCompleteMap[item.message.id] != true) &&
                                 !item.message.contentStarted
                             }
@@ -378,7 +388,7 @@ fun ChatMessagesList(
                                 ReasoningToggleAndContent(
                                     modifier = Modifier.fillMaxWidth(),
                                     currentMessageId = item.message.id,
-                                    displayedReasoningText = item.message.reasoning ?: "",
+                                    displayedReasoningText = displayedReasoningText,
                                     isReasoningStreaming = isReasoningStreaming,
                                     isReasoningComplete = isReasoningComplete,
                                     messageIsError = item.message.isError,
@@ -392,7 +402,7 @@ fun ChatMessagesList(
 
                         is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage, is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageStreaming -> {
                             val messageId = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage) item.messageId else (item as com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageStreaming).messageId
-                            val message = viewModel.getMessageById(messageId)
+                            val message = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage) item.message else viewModel.getMessageById(messageId)
                             if (message != null) {
                                 val text = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage) item.text else message.text
                                 val hasReasoning = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage) item.hasReasoning else (item as com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageStreaming).hasReasoning
@@ -437,7 +447,7 @@ fun ChatMessagesList(
 
                         is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCode, is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCodeStreaming -> {
                             val messageId = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCode) item.messageId else (item as com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCodeStreaming).messageId
-                            val message = viewModel.getMessageById(messageId)
+                            val message = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCode) item.message else viewModel.getMessageById(messageId)
                             if (message != null) {
                                 val text = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCode) item.text else message.text
                                 val hasReasoning = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCode) item.hasReasoning else (item as com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCodeStreaming).hasReasoning
@@ -657,74 +667,57 @@ fun AiMessageItem(
                     vertical = ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL
                 )
             ) {
-                val mergedSegments = remember(blockPayload?.blocksHash, messageOutputType) {
-                    val sourceBlocks = blockPayload?.blocks.orEmpty()
-                    if (sourceBlocks.isEmpty() || messageOutputType == "code") {
-                        emptyList()
-                    } else {
-                        val result = mutableListOf<String>()
-                        val inlineBuffer = StringBuilder()
+                val streamingRenderState by remember(message.id, viewModel) {
+                    viewModel.getStreamingRenderState(message.id)
+                }.collectAsState()
 
-                        fun flushInlineBuffer() {
-                            if (inlineBuffer.isNotEmpty()) {
-                                result.add(inlineBuffer.toString())
-                                inlineBuffer.setLength(0)
-                            }
-                        }
+                val shouldPreferStreamingBlocks =
+                    isStreaming ||
+                        streamingRenderState.isStreaming ||
+                        (streamingRenderState.isComplete && streamingRenderState.content.isNotBlank())
 
-                        sourceBlocks.forEach { block ->
-                            when (block.type) {
-                                com.android.everytalk.ui.components.streaming.StreamBlockType.CODE_BLOCK,
-                                com.android.everytalk.ui.components.streaming.StreamBlockType.MATH_BLOCK -> {
-                                    flushInlineBuffer()
-                                    result.add(block.text)
-                                }
-                                else -> inlineBuffer.append(block.text)
-                            }
-                        }
-
-                        flushInlineBuffer()
-                        result.filter { it.isNotEmpty() }
-                    }
+                val effectiveContent = if (shouldPreferStreamingBlocks) {
+                    streamingRenderState.content.ifBlank { message.text }
+                } else {
+                    message.text
                 }
 
-                // 流式阶段保持单组件订阅，避免实时输出丢失。
-                if (!isStreaming && mergedSegments.size > 1) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(0.dp)
-                    ) {
-                        mergedSegments.forEachIndexed { index, segmentText ->
-                            key("${message.id}:segment:$index", blockPayload?.blocksHash) {
-                                EnhancedMarkdownText(
-                                    message = message,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    isStreaming = false,
-                                    messageOutputType = messageOutputType,
-                                    onLongPress = { _ -> onLongPress() },
-                                    onImageClick = onImageClick,
-                                    onCodePreviewRequested = { lang, code ->
-                                        previewLanguage = lang
-                                        previewCode = code
-                                    },
-                                    onCodeCopied = {
-                                        viewModel.showSnackbar("已复制代码")
-                                    },
-                                    viewModel = viewModel,
-                                    contentOverride = segmentText,
-                                    contentKeyOverride = "${message.id}:segment:$index",
-                                    disableStreamingSubscription = true
-                                )
-                            }
-                        }
-                    }
+                val effectiveBlocks = if (shouldPreferStreamingBlocks && streamingRenderState.blocks.isNotEmpty()) {
+                    streamingRenderState.blocks
                 } else {
-                    EnhancedMarkdownText(
+                    blockPayload?.blocks.orEmpty()
+                }
+
+                val renderMessage = if (effectiveContent == message.text) {
+                    message
+                } else {
+                    message.copy(text = effectiveContent)
+                }
+
+                if (messageOutputType != "code" && effectiveBlocks.isNotEmpty()) {
+                    StreamBlocksRenderer(
                         message = message,
+                        blocks = effectiveBlocks,
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurface,
-                        isStreaming = isStreaming,
+                        messageOutputType = messageOutputType,
+                        viewModel = viewModel,
+                        onLongPress = onLongPress,
+                        onImageClick = onImageClick,
+                        onCodePreviewRequested = { lang, code ->
+                            previewLanguage = lang
+                            previewCode = code
+                        },
+                        onCodeCopied = {
+                            viewModel.showSnackbar("已复制代码")
+                        }
+                    )
+                } else {
+                    EnhancedMarkdownText(
+                        message = renderMessage,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        isStreaming = false,
                         messageOutputType = messageOutputType,
                         onLongPress = { _ -> onLongPress() },
                         onImageClick = onImageClick,
@@ -735,7 +728,10 @@ fun AiMessageItem(
                         onCodeCopied = {
                             viewModel.showSnackbar("已复制代码")
                         },
-                        viewModel = viewModel
+                        viewModel = viewModel,
+                        contentOverride = effectiveContent,
+                        contentKeyOverride = message.id,
+                        disableStreamingSubscription = true
                     )
                 }
             }

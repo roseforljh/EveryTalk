@@ -16,6 +16,7 @@ sealed interface ChatListItem {
 
     // 简化的 AI 消息项，直接使用文本内容而不是复杂的 Markdown 块
     data class AiMessage(
+        val message: Message,
         val messageId: String,
         val text: String,
         val hasReasoning: Boolean,
@@ -27,6 +28,7 @@ sealed interface ChatListItem {
     }
 
     data class AiMessageCode(
+        val message: Message,
         val messageId: String,
         val text: String,
         val hasReasoning: Boolean
