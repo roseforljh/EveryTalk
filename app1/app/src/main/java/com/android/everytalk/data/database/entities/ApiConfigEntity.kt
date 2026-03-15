@@ -26,6 +26,8 @@ data class ApiConfigEntity(
     val guidanceScale: Float?,
     val toolsJson: String?,
     val enableCodeExecution: Boolean?,
+    val openClawAccessMode: String = "bridge",
+    val openClawBridgeUrl: String? = null,
     // Use this field to differentiate between text (false) and image (true) configs if needed by queries,
     // though modalityType might be enough. SharedPreferences kept them in separate lists.
     // I will add a type column to distinguish "text_config_list" vs "image_config_list" if needed,
@@ -56,7 +58,9 @@ fun ApiConfigEntity.toApiConfig(): ApiConfig {
         numInferenceSteps = numInferenceSteps,
         guidanceScale = guidanceScale,
         toolsJson = toolsJson,
-        enableCodeExecution = enableCodeExecution
+        enableCodeExecution = enableCodeExecution,
+        openClawAccessMode = openClawAccessMode,
+        openClawBridgeUrl = openClawBridgeUrl
     )
 }
 
@@ -80,6 +84,8 @@ fun ApiConfig.toEntity(isImageGenConfig: Boolean = false): ApiConfigEntity {
         guidanceScale = guidanceScale,
         toolsJson = toolsJson,
         enableCodeExecution = enableCodeExecution,
+        openClawAccessMode = openClawAccessMode,
+        openClawBridgeUrl = openClawBridgeUrl,
         isImageGenConfig = isImageGenConfig
     )
 }

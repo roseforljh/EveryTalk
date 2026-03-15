@@ -1525,6 +1525,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         stateHolder._showAutoFetchConfirmDialog.value = false
         val params = stateHolder._pendingConfigParams.value ?: return
 
+        if (params.channel.equals("OpenClaw", ignoreCase = true) || params.provider.equals("OpenClaw", ignoreCase = true)) {
+            onManualInput()
+            return
+        }
+
         // 触发拉取
         fetchModels(params.address, params.key)
 

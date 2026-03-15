@@ -25,5 +25,7 @@ data class ApiConfig(
     // 新增：Function Calling 工具配置 (JSON字符串)
     val toolsJson: String? = null,
     // 新增：是否启用代码执行
-    val enableCodeExecution: Boolean? = null
+    val enableCodeExecution: Boolean? = null,
+    val openClawAccessMode: String = "bridge",
+    val openClawBridgeUrl: String? = null
 )

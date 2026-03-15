@@ -36,6 +36,8 @@ object SettingsDefaults {
         "siliconflow" to "https://api.siliconflow.cn",
         "google" to "https://generativelanguage.googleapis.com",
         "谷歌" to "https://generativelanguage.googleapis.com",
+        "openclaw" to "ws://127.0.0.1:18789",
+        "OpenClaw" to "ws://127.0.0.1:18789",
         "阿里云百炼" to "https://dashscope.aliyuncs.com/compatible-mode",
         "火山引擎" to "https://ark.cn-beijing.volces.com/api/v3/chat/completions#",
         "深度求索" to "https://api.deepseek.com",

@@ -573,6 +573,9 @@ private data class AttachmentProcessingResult(
                     apiKey = currentConfig.key,
                     model = currentConfig.model,
                     deviceId = com.android.everytalk.util.DeviceIdManager.getDeviceId(application),
+                    conversationId = stateHolder._currentConversationId.value,
+                    openClawAccessMode = currentConfig.openClawAccessMode,
+                    openClawBridgeUrl = currentConfig.openClawBridgeUrl,
                     useWebSearch = stateHolder._isWebSearchEnabled.value,
                     // 显式传递代码执行开关状态
                     enableCodeExecution = enableCodeExecutionForRequest,

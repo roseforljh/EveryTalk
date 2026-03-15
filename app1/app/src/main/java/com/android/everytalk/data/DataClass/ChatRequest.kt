@@ -98,6 +98,15 @@ data class ChatRequest(
     @SerialName("device_id")
     val deviceId: String? = null,
 
+    @SerialName("conversationId")
+    val conversationId: String? = null,
+
+    @SerialName("openClawAccessMode")
+    val openClawAccessMode: String? = null,
+
+    @SerialName("openClawBridgeUrl")
+    val openClawBridgeUrl: String? = null,
+
     // 代码执行工具控制：None=auto(智能判断), True=强制开启, False=强制关闭
     @SerialName("enableCodeExecution")
     val enableCodeExecution: Boolean? = null

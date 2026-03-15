@@ -10,6 +10,7 @@ import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.network.AppStreamEvent
 import com.android.everytalk.data.DataClass.ApiContentPart
 import com.android.everytalk.data.network.ApiClient
+import com.android.everytalk.data.network.openclaw.OpenClawRuntimeState
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.models.SelectedMediaItem.Audio
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
@@ -69,6 +70,10 @@ class ApiHandler(
     private val retryCountMap = mutableMapOf<String, Int>()
 
     fun cancelCurrentApiJob(reason: String, isNewMessageSend: Boolean = false, isImageGeneration: Boolean = false) {
+        val selectedConfig = if (isImageGeneration) stateHolder._selectedImageGenApiConfig.value else stateHolder._selectedApiConfig.value
+        if (selectedConfig?.channel.equals("OpenClaw", ignoreCase = true) || selectedConfig?.provider.equals("OpenClaw", ignoreCase = true)) {
+            OpenClawRuntimeState.clear()
+        }
         // 关键修复：增强日志，明确显示模式信息
         val modeInfo = if (isImageGeneration) "IMAGE_MODE" else "TEXT_MODE"
         logger.debug("Cancelling API job: $reason, Mode=$modeInfo, isNewMessageSend=$isNewMessageSend, isImageGeneration=$isImageGeneration")

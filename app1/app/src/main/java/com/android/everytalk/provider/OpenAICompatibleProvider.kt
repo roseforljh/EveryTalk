@@ -27,10 +27,11 @@ class OpenAICompatibleProvider(
     override fun canHandle(request: ChatRequest): Boolean {
         val channel = request.channel.lowercase()
         val provider = request.provider.lowercase()
-        
+
+        if (channel.contains("openclaw") || provider.contains("openclaw")) return false
         if (supportedChannels.any { channel.contains(it) }) return true
         if (channel.contains("gemini")) return false
-        
+
         return !provider.contains("gemini") && !request.model.contains("gemini", ignoreCase = true)
     }
     

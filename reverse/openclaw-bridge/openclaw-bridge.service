@@ -1,0 +1,18 @@
+[Unit]
+Description=OpenClaw Bridge
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/openclaw-bridge
+ExecStart=/usr/bin/node src/server.js
+Restart=always
+RestartSec=2
+Environment=NODE_ENV=production
+Environment=OPENCLAW_BRIDGE_PORT=8787
+Environment=OPENCLAW_BRIDGE_HOST=0.0.0.0
+Environment=OPENCLAW_BRIDGE_PATH=/ws
+Environment=OPENCLAW_BRIDGE_HEALTH_PATH=/health
+
+[Install]
+WantedBy=multi-user.target

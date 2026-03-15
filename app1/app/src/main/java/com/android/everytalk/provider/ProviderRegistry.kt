@@ -12,6 +12,7 @@ class ProviderRegistry(
 ) {
     private val providers: List<LLMProvider> = listOf(
         GeminiProvider(httpClient),
+        OpenClawProvider(httpClient),
         OpenAICompatibleProvider(httpClient)
     )
     

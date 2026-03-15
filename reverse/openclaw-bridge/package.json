@@ -1,0 +1,14 @@
+{
+  "name": "openclaw-bridge",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "start": "node src/server.js",
+    "start:prod": "node src/server.js",
+    "quick:start:hint": "node -e \"console.log('Use: OPENCLAW_GATEWAY_TOKEN=your_token bash quick-start-bridge.sh')\""
+  },
+  "dependencies": {
+    "ws": "^8.19.0"
+  }
+}

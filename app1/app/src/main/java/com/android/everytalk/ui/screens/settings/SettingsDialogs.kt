@@ -80,108 +80,6 @@ internal fun SettingsFieldLabel(
     )
 }
 
-private fun normalizeBaseUrlForPreview(url: String): String =
-    url.trim().trimEnd('#')
-
-private fun shouldBypassPath(url: String): Boolean =
-    url.trim().endsWith("#")
-
-private fun endsWithSlash(url: String): Boolean {
-    val u = url.trim().trimEnd('#')
-    return u.endsWith("/")
-}
-
-private fun hasPathAfterHost(url: String): Boolean {
-    val u = url.trim().trimEnd('#').trimEnd('/')
-    val schemeIdx = u.indexOf("://")
-    return if (schemeIdx >= 0) {
-        u.indexOf('/', schemeIdx + 3) >= 0
-    } else {
-        u.indexOf('/') >= 0
-    }
-}
-
-private fun endpointPathFor(provider: String, channel: String?, withV1: Boolean): String {
-    val p = provider.lowercase().trim()
-    val ch = channel?.lowercase()?.trim().orEmpty()
-    return if (p.contains("google") || ch.contains("gemini")) {
-        if (withV1) "v1beta/models:generateContent" else "models:generateContent"
-    } else {
-        if (withV1) "v1/chat/completions" else "chat/completions"
-    }
-}
-
-private fun buildFullEndpointPreview(base: String, provider: String, channel: String?): String {
-    val raw = base.trim()
-    if (raw.isEmpty()) return ""
-    val noHash = raw.trimEnd('#')
-    
-    val p = provider.lowercase().trim()
-    val ch = channel?.lowercase()?.trim().orEmpty()
-    val isGemini = p.contains("google") || ch.contains("gemini")
-
-    // 规则1: 末尾有#，直接使用用户地址，不添加任何路径
-    if (shouldBypassPath(raw)) {
-        return noHash
-    }
-
-    // Gemini特殊处理：官方API接口固定，不按通用逻辑处理
-    if (isGemini) {
-        // 规则3: 地址已经包含路径，按输入直连
-        if (hasPathAfterHost(noHash) || endsWithSlash(noHash)) {
-            return noHash.trimEnd('/')
-        }
-        // 规则4: 什么都没有，自动添加Gemini固定路径
-        val path = endpointPathFor(provider, channel, true)
-        return "$noHash/$path"
-    }
-
-    // 非Gemini的通用逻辑
-    // 规则2: 末尾有/，不要v1，添加/chat/completions
-    if (endsWithSlash(noHash)) {
-        val path = endpointPathFor(provider, channel, false)
-        return noHash + path
-    }
-
-    // 规则3: 地址已经包含路径，按输入直连
-    if (hasPathAfterHost(noHash)) {
-        return noHash
-    }
-
-    // 规则4: 什么都没有，自动添加/v1/...
-    val path = endpointPathFor(provider, channel, true)
-    return "$noHash/$path"
-}
-
-private fun buildEndpointHintForPreview(base: String, provider: String, channel: String?): String {
-    val raw = base.trim()
-    if (shouldBypassPath(raw)) {
-        return "末尾#：直连，不追加任何路径（自动去掉#）"
-    }
-    
-    val noHash = raw.trimEnd('#')
-    val p = provider.lowercase().trim()
-    val ch = channel?.lowercase()?.trim().orEmpty()
-    val isGemini = p.contains("google") || ch.contains("gemini")
-    
-    if (isGemini) {
-        if (hasPathAfterHost(noHash) || endsWithSlash(noHash)) {
-            return "Gemini官方API：按输入直连（去掉末尾/）"
-        }
-        return "仅域名→ 自动拼接Gemini固定路径 /v1beta/models:generateContent"
-    }
-    
-    if (endsWithSlash(noHash)) {
-        return "末尾/：不要v1，添加/chat/completions"
-    }
-    
-    if (hasPathAfterHost(noHash)) {
-        return "地址已含路径→ 按输入直连，不追加路径"
-    }
-    
-    return "仅域名→ 自动拼接默认路径 /v1/chat/completions"
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun AddProviderDialog(
@@ -413,7 +311,7 @@ internal fun AddNewFullConfigDialog(
 ) {
     var providerMenuExpanded by remember { mutableStateOf(false) }
     var channelMenuExpanded by remember { mutableStateOf(false) }
-    val channels = listOf("OpenAI兼容", "Gemini")
+    val channels = listOf("OpenAI兼容", "Gemini", "OpenClaw")
     var selectedChannel by remember { mutableStateOf(channels.first()) }
     // val focusRequesterApiKey = remember { FocusRequester() } // Removed auto-focus
     var textFieldAnchorBounds by remember { mutableStateOf<Rect?>(null) }
@@ -686,7 +584,12 @@ internal fun AddNewFullConfigDialog(
                         // 实时预览 + 固定使用说明
                         if (selectedChannel != "Gemini") {
                             val fullUrlPreview = remember(apiAddress, provider, selectedChannel) {
-                                buildFullEndpointPreview(apiAddress, provider, selectedChannel)
+                                OpenClawSettingsRules.buildFullEndpointPreview(
+                                    base = apiAddress,
+                                    provider = provider,
+                                    channel = selectedChannel,
+                                    accessMode = if (OpenClawSettingsRules.isOpenClaw(provider, selectedChannel)) "bridge" else null
+                                )
                             }
                             if (fullUrlPreview.isNotEmpty()) {
                                 Text(
@@ -816,7 +719,7 @@ internal fun EditConfigDialog(
     val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
     val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
 
-    val channelTypes = listOf("OpenAI兼容", "Gemini")
+    val channelTypes = listOf("OpenAI兼容", "Gemini", "OpenClaw")
     
     var channelMenuExpanded by remember { mutableStateOf(false) }
     var channelTextFieldAnchorBounds by remember { mutableStateOf<Rect?>(null) }
@@ -938,8 +841,13 @@ internal fun EditConfigDialog(
                         colors = DialogTextFieldColors
                     )
                     if (selectedChannel != "Gemini") {
-                        val fullUrlPreview = remember(apiAddress) {
-                            buildFullEndpointPreview(apiAddress, representativeConfig.provider, null)
+                        val fullUrlPreview = remember(apiAddress, provider, selectedChannel) {
+                            OpenClawSettingsRules.buildFullEndpointPreview(
+                                base = apiAddress,
+                                provider = provider,
+                                channel = selectedChannel,
+                                accessMode = if (OpenClawSettingsRules.isOpenClaw(provider, selectedChannel)) "bridge" else null
+                            )
                         }
                         if (fullUrlPreview.isNotEmpty()) {
                             Text(
