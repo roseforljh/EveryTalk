@@ -15,130 +15,58 @@ EveryTalk
 - ET 不直接连接 VPS 本机 `127.0.0.1`
 - 对外暴露的是 Bridge，不是 OpenClaw Gateway
 - OpenClaw Gateway 仍只监听 VPS 本机回环地址
+- 反代、域名、TLS 由用户后续自行处理，脚本默认直接输出公网 IP + 端口
 
-## 2. VPS 侧部署参数
+## 2. 最终推荐安装方式
 
-Bridge 服务目录：`reverse/openclaw-bridge/`
-
-建议生产环境使用以下环境变量：
-
-```bash
-NODE_ENV=production
-
-OPENCLAW_BRIDGE_HOST=0.0.0.0
-OPENCLAW_BRIDGE_PORT=8787
-OPENCLAW_BRIDGE_PATH=/ws
-OPENCLAW_BRIDGE_HEALTH_PATH=/health
-OPENCLAW_BRIDGE_TOKEN=替换成你自己的高强度随机字符串
-
-OPENCLAW_GATEWAY_URL=ws://127.0.0.1:18789
-OPENCLAW_GATEWAY_TOKEN=替换成你的 OpenClaw Gateway Token
-
-OPENCLAW_BRIDGE_CLIENT_PING_INTERVAL_MS=30000
-OPENCLAW_BRIDGE_GATEWAY_RECONNECT_DELAY_MS=2000
-OPENCLAW_BRIDGE_SHUTDOWN_GRACE_MS=5000
-```
-
-说明：
-- `OPENCLAW_BRIDGE_TOKEN`：ET 连接 Bridge 时使用
-- `OPENCLAW_GATEWAY_TOKEN`：Bridge 连接 OpenClaw Gateway 时使用
-- 这两个 token 建议分开，不要共用
-
-## 3. Bridge 启动方式
-
-### 3.1 直接启动
+推荐只保留这一种安装方式：
 
 ```bash
-cd reverse/openclaw-bridge
-npm install
-npm run start:prod
+curl -fsSL https://claw.everytalk.cc | bash
 ```
 
-### 3.2 PM2
+脚本会交互式询问：
+- OpenClaw Gateway Token
+- Bridge 对外端口（默认 `8787`）
 
-项目已提供：`reverse/openclaw-bridge/ecosystem.config.cjs`
+然后自动完成：
+- 在服务器上部署 OpenClaw Bridge
+- 自动探测公网 IP
+- 自动生成 Bridge Token
+- 自动启动服务
+- 最后直接输出 ET 可填写的地址与 Key
 
-```bash
-cd reverse/openclaw-bridge
-pm2 start ecosystem.config.cjs
-pm2 save
+## 3. 脚本执行完成后会输出什么
+
+脚本完成后会直接打印类似：
+
+```text
+ET 端请填写：
+地址: ws://你的公网IP:8787/ws
+Key: 自动生成的 Bridge Token
 ```
 
-### 3.3 systemd
+同时还会给出健康检查地址：
 
-项目已提供：`reverse/openclaw-bridge/openclaw-bridge.service`
-
-把它放到：
-
-```bash
-/etc/systemd/system/openclaw-bridge.service
+```text
+http://你的公网IP:8787/health
 ```
 
-然后执行：
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable openclaw-bridge
-sudo systemctl start openclaw-bridge
-```
-
-### 3.4 Docker
-
-项目已提供：`reverse/openclaw-bridge/Dockerfile`
-
-```bash
-cd reverse/openclaw-bridge
-docker build -t openclaw-bridge .
-docker run -d \
-  --name openclaw-bridge \
-  -p 8787:8787 \
-  -e OPENCLAW_BRIDGE_HOST=0.0.0.0 \
-  -e OPENCLAW_BRIDGE_PORT=8787 \
-  -e OPENCLAW_BRIDGE_PATH=/ws \
-  -e OPENCLAW_BRIDGE_HEALTH_PATH=/health \
-  -e OPENCLAW_BRIDGE_TOKEN=你的bridge-token \
-  -e OPENCLAW_GATEWAY_URL=ws://127.0.0.1:18789 \
-  -e OPENCLAW_GATEWAY_TOKEN=你的gateway-token \
-  openclaw-bridge
-```
-
-## 4. 对外访问方式
-
-推荐只暴露 Bridge：
-
-- WebSocket：`wss://你的域名/ws`
-- 健康检查：`https://你的域名/health`
-
-也可以临时直接使用：
-
-- `ws://你的公网IP:8787/ws`
-
-但更推荐使用域名 + 反向代理 + TLS。
-
-## 5. ET 端填写方式
+## 4. ET 端最终填写方式
 
 在 EveryTalk 中新增或编辑 OpenClaw 配置时：
 
 ### 必填项
 
 - 渠道：`OpenClaw`
-- 地址：Bridge 地址，而不是 Gateway 地址
-- Key：`OPENCLAW_BRIDGE_TOKEN`
+- 地址：脚本输出的 Bridge 地址
+- Key：脚本输出的 Bridge Token
 
-### 推荐填写示例
-
-如果你有域名：
+### 示例
 
 ```text
-地址: wss://bridge.example.com/ws
-Key: 你的 OPENCLAW_BRIDGE_TOKEN
-```
-
-如果你直接走端口：
-
-```text
-地址: ws://你的公网IP:8787/ws
-Key: 你的 OPENCLAW_BRIDGE_TOKEN
+地址: ws://123.45.67.89:8787/ws
+Key: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
 ### 不要填错
@@ -149,15 +77,41 @@ Key: 你的 OPENCLAW_BRIDGE_TOKEN
 ws://127.0.0.1:18789
 ```
 
-这个地址只给 VPS 本机 Bridge 用，不能给手机上的 ET 用。
+这个地址只给 VPS 本机 Bridge 使用，不能给手机上的 ET 使用。
+
+## 5. VPS 侧内部运行参数
+
+虽然用户不需要手动部署整个项目，但脚本内部实际仍会按以下参数启动 Bridge：
+
+```bash
+NODE_ENV=production
+
+OPENCLAW_BRIDGE_HOST=0.0.0.0
+OPENCLAW_BRIDGE_PORT=8787
+OPENCLAW_BRIDGE_PATH=/ws
+OPENCLAW_BRIDGE_HEALTH_PATH=/health
+OPENCLAW_BRIDGE_TOKEN=自动生成或用户指定
+
+OPENCLAW_GATEWAY_URL=ws://127.0.0.1:18789
+OPENCLAW_GATEWAY_TOKEN=用户交互输入
+
+OPENCLAW_BRIDGE_CLIENT_PING_INTERVAL_MS=30000
+OPENCLAW_BRIDGE_GATEWAY_RECONNECT_DELAY_MS=2000
+OPENCLAW_BRIDGE_SHUTDOWN_GRACE_MS=5000
+```
+
+说明：
+- `OPENCLAW_BRIDGE_TOKEN`：ET 连接 Bridge 时使用
+- `OPENCLAW_GATEWAY_TOKEN`：Bridge 连接 OpenClaw Gateway 时使用
+- 两个 token 建议保持不同
 
 ## 6. 运行链路说明
 
 ET 发起请求时：
 
 1. ET 连接 Bridge
-2. Bridge 校验 `OPENCLAW_BRIDGE_TOKEN`
-3. Bridge 在 VPS 本机连接 `OPENCLAW_GATEWAY_URL`
+2. Bridge 校验 Bridge Token
+3. Bridge 在 VPS 本机连接 `ws://127.0.0.1:18789`
 4. Bridge 转发 `chat.send/chat.abort/chat.history`
 5. Gateway 的流式事件被 Bridge 转成 ET 可消费的事件流
 
@@ -171,21 +125,34 @@ ET 发起请求时：
 - Bridge 路径、健康检查、鉴权
 - 客户端保活、网关断线后重新建连基础
 - PM2 / systemd / Docker 部署入口
+- 远程单文件安装脚本
 
-## 8. 建议上线方案
+## 8. Cloudflare Worker 入口
+
+推荐把 `claw.everytalk.cc` 配成 Cloudflare Worker，然后由 Worker 返回 GitHub 上的原始安装脚本文本。
+
+这样最终用户只需要记住：
+
+```bash
+curl -fsSL https://claw.everytalk.cc | bash
+```
+
+而不需要关心 GitHub Raw 地址。
+
+## 9. 建议上线方案
 
 如果目标是“任何时间任何地点通过 ET 控制龙虾”，推荐最终配置是：
 
 ```text
 ET
-  -> wss://bridge.yourdomain.com/ws
+  -> ws://公网IP:端口/ws
   -> VPS OpenClaw Bridge
   -> ws://127.0.0.1:18789
   -> OpenClaw Gateway / 龙虾
 ```
 
-推荐：
-- 只暴露 Bridge
-- Gateway 继续只监听本地回环
-- Bridge token 与 Gateway token 分离
-- 使用域名 + TLS
+后续如果用户自己做反代或 TLS，则可以再把 ET 地址改成：
+
+```text
+wss://你的域名/ws
+```
