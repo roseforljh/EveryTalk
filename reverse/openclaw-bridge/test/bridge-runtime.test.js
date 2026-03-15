@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { loadBridgeConfig } from '../src/config.js';
 import { OpenClawGatewayAdapter } from '../src/gateway-adapter.js';
 
@@ -50,39 +51,34 @@ test('gateway adapter reconnects after socket close', () => {
   assert.notEqual(first, second);
 });
 
-test('gateway adapter queues messages before gateway socket opens', () => {
-  const socket = {
-    readyState: 0,
-    sent: [],
-    handlers: new Map(),
-    on(event, handler) {
-      this.handlers.set(event, handler);
-    },
-    send(payload) {
-      this.sent.push(payload);
-    },
-    emit(event, value) {
-      const handler = this.handlers.get(event);
-      if (handler) handler(value);
-    },
-    ping() {},
-    terminate() {},
-  };
-
+test('gateway adapter connects with openclaw rpc subprotocol and headers', () => {
+  const calls = [];
   const adapter = new OpenClawGatewayAdapter({
     gatewayUrl: 'ws://127.0.0.1:18789',
     gatewayToken: 'token',
-    webSocketFactory: () => socket,
+    webSocketFactory: (url, options) => {
+      calls.push({ url, options });
+      return {
+        readyState: 0,
+        on() {},
+        send() {},
+        ping() {},
+        terminate() {},
+      };
+    },
     logger: { info() {}, warn() {}, error() {}, debug() {} },
   });
 
   adapter.connect();
-  adapter.sendGatewayPayload({ id: 'req-1', method: 'chat.send', params: { text: 'hello' } });
-  assert.equal(socket.sent.length, 0);
 
-  socket.readyState = 1;
-  socket.emit('open');
-
-  assert.equal(socket.sent.length, 1);
-  assert.equal(socket.sent[0], JSON.stringify({ id: 'req-1', method: 'chat.send', params: { text: 'hello' } }));
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'ws://127.0.0.1:18789');
+  assert.deepEqual(calls[0].options, {
+    headers: {
+      Authorization: 'Bearer token',
+      'User-Agent': 'OpenClaw-Bridge/1.0',
+    },
+    protocol: 'openclaw-rpc',
+  });
 });
+

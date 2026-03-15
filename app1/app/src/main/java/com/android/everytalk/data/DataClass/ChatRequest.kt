@@ -101,9 +101,10 @@ data class ChatRequest(
     @SerialName("conversationId")
     val conversationId: String? = null,
 
-    @SerialName("openClawAccessMode")
-    val openClawAccessMode: String? = null,
+    @SerialName("openClawSessionId")
+    val openClawSessionId: String? = null,
 
+    // legacy field: keep only for backward compatibility with persisted data during migration window
     @SerialName("openClawBridgeUrl")
     val openClawBridgeUrl: String? = null,
 

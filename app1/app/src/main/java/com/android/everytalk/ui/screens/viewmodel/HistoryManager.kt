@@ -443,7 +443,7 @@ class HistoryManager(
                 if (isImageGeneration) {
                     stateHolder._currentImageGenerationConversationId.value = stableId
                 } else {
-                    stateHolder._currentConversationId.value = stableId
+                    stateHolder.setCurrentConversationId(stableId)
                 }
                 // 不再触发滚动到底部事件，而是依赖 scrollState 的迁移和 ChatScreen 的恢复逻辑。
                 // 强制触发 jumpToBottom 会导致“重新回答”时的平滑滚动被覆盖为瞬间跳转。
@@ -561,7 +561,7 @@ class HistoryManager(
                         if (isImageGeneration) {
                             stateHolder._currentImageGenerationConversationId.value = stableIdLoaded
                         } else {
-                            stateHolder._currentConversationId.value = stableIdLoaded
+                            stateHolder.setCurrentConversationId(stableIdLoaded)
                         }
                     }
                 }

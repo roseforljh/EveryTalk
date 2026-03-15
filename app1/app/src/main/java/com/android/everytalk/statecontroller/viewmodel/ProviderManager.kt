@@ -13,6 +13,8 @@ import kotlinx.coroutines.flow.stateIn
  */
 class ProviderManager(scope: CoroutineScope) {
     private val predefinedPlatformsList = listOf(
+        "OpenClaw",
+        "OpenClaw Remote",
         "openai compatible",
         "google",
         "硅基流动",

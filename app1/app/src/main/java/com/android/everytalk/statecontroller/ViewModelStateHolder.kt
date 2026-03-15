@@ -29,6 +29,18 @@ data class ConversationScrollState(
     val userScrolledAway: Boolean = false
 )
 
+enum class OpenClawGatewayConnectionState {
+    DISCONNECTED,
+    PAIRING_PENDING,
+    CONNECTED
+}
+
+data class OpenClawGatewayStatus(
+    val connectionState: OpenClawGatewayConnectionState = OpenClawGatewayConnectionState.DISCONNECTED,
+    val pendingDeviceId: String? = null,
+    val statusText: String? = null
+)
+
 /**
  * 待处理的配置参数
  * 用于在添加配置流程中临时保存用户输入的参数
@@ -200,6 +212,42 @@ val _isStreamingPaused = MutableStateFlow(false)
     fun setConversationIdForHistory(historyIndex: Int) {
         // 使用历史索引生成稳定的ID
         _currentConversationId.value = "history_chat_$historyIndex"
+        _currentOpenClawSessionId.value = "history_chat_$historyIndex"
+    }
+
+    fun setCurrentConversationId(conversationId: String) {
+        _currentConversationId.value = conversationId
+    }
+
+    fun updateOpenClawSessionId(sessionId: String?) {
+        _currentOpenClawSessionId.value = sessionId?.takeIf { it.isNotBlank() } ?: "main"
+    }
+
+    fun updateOpenClawGatewayStatus(stage: String?) {
+        val previous = _openClawGatewayStatus.value
+        _openClawGatewayStatus.value = when {
+            stage.isNullOrBlank() -> OpenClawGatewayStatus()
+            stage.startsWith("pairing_pending:") -> {
+                val deviceId = stage.substringAfter(':', "").ifBlank { null }
+                OpenClawGatewayStatus(
+                    connectionState = OpenClawGatewayConnectionState.PAIRING_PENDING,
+                    pendingDeviceId = deviceId,
+                    statusText = "等待 OpenClaw 配对批准"
+                )
+            }
+            stage == "connected" -> OpenClawGatewayStatus(
+                connectionState = OpenClawGatewayConnectionState.CONNECTED,
+                statusText = "OpenClaw Gateway 已连接"
+            )
+            previous.connectionState == OpenClawGatewayConnectionState.CONNECTED -> OpenClawGatewayStatus(
+                connectionState = OpenClawGatewayConnectionState.CONNECTED,
+                statusText = "远程控制中 · $stage"
+            )
+            else -> OpenClawGatewayStatus(
+                connectionState = OpenClawGatewayConnectionState.DISCONNECTED,
+                statusText = stage
+            )
+        }
     }
     
     // 清理未使用的会话参数（保留最近50个会话的参数）
@@ -308,6 +356,7 @@ val _isStreamingPaused = MutableStateFlow(false)
         
         // 分配全新会话ID（不迁移任何旧会话参数，保持完全独立）
         _currentConversationId.value = "new_chat_${System.currentTimeMillis()}"
+        _currentOpenClawSessionId.value = "main"
         
         // 新会话默认关闭参数：不做任何继承或默认值注入
         
@@ -371,6 +420,8 @@ val _isStreamingPaused = MutableStateFlow(false)
     val _shouldShowImageGenerationError = MutableStateFlow(false)
     val _isLoadingHistoryData = MutableStateFlow(false)
     val _currentConversationId = MutableStateFlow<String>("new_chat_${System.currentTimeMillis()}")
+    val _currentOpenClawSessionId = MutableStateFlow<String>("main")
+    val _openClawGatewayStatus = MutableStateFlow(OpenClawGatewayStatus())
     val _currentImageGenerationConversationId = MutableStateFlow<String>("new_image_generation_${System.currentTimeMillis()}")
     // 待加载的图像历史索引（用于跨页面导航时抑制"新建图像会话"）
     val _pendingImageHistoryIndex = MutableStateFlow<Int?>(null)
@@ -843,6 +894,18 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
                 currentWebSearchStage = currentWebSearchStage
             )
             messageList[index] = updatedMessage
+        }
+    }
+
+    fun clearMessageStatus(messageId: String, isImageGeneration: Boolean = false) {
+        val messageList = if (isImageGeneration) imageGenerationMessages else messages
+        val index = messageList.indexOfFirst { it.id == messageId }
+        if (index != -1) {
+            val currentMessage = messageList[index]
+            messageList[index] = currentMessage.copy(
+                currentWebSearchStage = null,
+                executionStatus = null
+            )
         }
     }
     

@@ -198,6 +198,20 @@ class ApiHandler(
         mimeType: String? = null,
         isImageGeneration: Boolean = false
     ) {
+        logger.debug(
+            "streamChatResponse request summary: rawInputText='$userMessageTextForContext', trimmedInputText='${userMessageTextForContext.trim()}', messages.size=${requestBody.messages.size}, conversationId=${requestBody.conversationId}"
+        )
+        requestBody.messages.forEachIndexed { index, message ->
+            val preview = when (message) {
+                is com.android.everytalk.data.DataClass.SimpleTextApiMessage -> message.content
+                is com.android.everytalk.data.DataClass.PartsApiMessage -> message.parts
+                    .filterIsInstance<ApiContentPart.Text>()
+                    .joinToString(" ") { it.text }
+                else -> ""
+            }.replace("\n", "\\n").take(80)
+            logger.debug("requestMessage[$index]: role=${message.role}, preview=$preview")
+        }
+
         val contextForLog = when (val lastUserMsg = requestBody.messages.lastOrNull {
             it.role == "user"
         }) {
@@ -747,6 +761,17 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                 is AppStreamEvent.WebSearchStatus -> {
                     updatedMessage = updatedMessage.copy(currentWebSearchStage = appEvent.stage)
                 }
+                is AppStreamEvent.StatusUpdate -> {
+                    updatedMessage = updatedMessage.copy(currentWebSearchStage = appEvent.stage)
+                    stateHolder.updateOpenClawGatewayStatus(appEvent.stage)
+                    if (appEvent.stage.startsWith("agent_run:")) {
+                        val runId = appEvent.stage.substringAfter(':', "").ifBlank { null }
+                        val current = OpenClawRuntimeState.current()
+                        current?.sessionKey?.let { sessionKey ->
+                            OpenClawRuntimeState.update(sessionKey = sessionKey, runId = runId)
+                        }
+                    }
+                }
                 is AppStreamEvent.WebSearchResults -> {
                     updatedMessage = updatedMessage.copy(webSearchResults = appEvent.results)
                 }
@@ -822,6 +847,24 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     // 核心修复：在消息处理完成并最终化之后，在这里触发强制保存
                     viewModelScope.launch(Dispatchers.IO) {
                         historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration)
+                    }
+
+                    stateHolder.clearMessageStatus(aiMessageId, isImageGeneration)
+
+                    if (!isImageGeneration) {
+                        if (stateHolder._currentTextStreamingAiMessageId.value == aiMessageId) {
+                            stateHolder._isTextApiCalling.value = false
+                            stateHolder._currentTextStreamingAiMessageId.value = null
+                        }
+                    } else {
+                        if (stateHolder._currentImageStreamingAiMessageId.value == aiMessageId) {
+                            stateHolder._isImageApiCalling.value = false
+                            stateHolder._currentImageStreamingAiMessageId.value = null
+                        }
+                    }
+                    stateHolder.updateOpenClawSessionId(null)
+                    OpenClawRuntimeState.current()?.sessionKey?.let { sessionKey ->
+                        OpenClawRuntimeState.update(sessionKey = sessionKey, runId = null)
                     }
                     
                     // 🔥 正确的修复：不要删除处理器！让它保留在内存中
@@ -925,7 +968,8 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                         isError = true,
                         contentStarted = true,
                         reasoning = if (existingContent == msg.reasoning && errorPrefix.isNotBlank()) null else msg.reasoning,
-                        currentWebSearchStage = msg.currentWebSearchStage ?: "error_occurred"
+                        currentWebSearchStage = null,
+                        executionStatus = null
                     )
                     messageList[idx] = errorMsg
                     val animationMap = if (isImageGeneration) stateHolder.imageMessageAnimationStates else stateHolder.textMessageAnimationStates

@@ -467,21 +467,7 @@ internal fun AddNewFullConfigDialog(
                                                     modifier = Modifier.weight(1f)
                                                 )
                                                 // 统一删除策略：仅保护部分系统预置平台，其他均可删除
-                                                val lower = providerItem.lowercase().trim()
-                                                val nonDeletableProviders = listOf(
-                                                    "openai compatible",
-                                                    "google",
-                                                    "阿里云百炼",
-                                                    "火山引擎",
-                                                    "深度求索",
-                                                    "openrouter",
-                                                    "硅基流动",
-                                                    "siliconflow",
-                                                    "siliconflow",
-                                                    "seedream",
-                                                    "gemini"
-                                                )
-                                                val canDelete = !nonDeletableProviders.contains(lower)
+                                                val canDelete = OpenClawSettingsRules.canDeleteProvider(providerItem)
                                                 if (canDelete) {
                                                     IconButton(
                                                         onClick = {
@@ -569,7 +555,7 @@ internal fun AddNewFullConfigDialog(
                             }
                         }
 
-                        SettingsFieldLabel("API接口地址")
+                        SettingsFieldLabel(OpenClawSettingsRules.addressLabelFor(provider, selectedChannel))
                         OutlinedTextField(
                             value = apiAddress,
                             onValueChange = onApiAddressChange,
@@ -601,7 +587,7 @@ internal fun AddNewFullConfigDialog(
                             }
                         }
 
-                        SettingsFieldLabel("API密钥")
+                        SettingsFieldLabel(OpenClawSettingsRules.keyLabelFor(provider, selectedChannel))
                         OutlinedTextField(
                             value = apiKey,
                             onValueChange = onApiKeyChange,

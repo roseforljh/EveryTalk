@@ -522,7 +522,10 @@ object ApiClient {
         try {
             val providerRegistry = org.koin.java.KoinJavaComponent.getKoin().get<com.android.everytalk.provider.ProviderRegistry>()
             val provider = providerRegistry.getProvider(requestForDirect)
-            android.util.Log.i("ApiClient", "Using provider: ${provider.providerName} (model=${effectiveRequest.model})")
+            android.util.Log.i(
+                "ApiClient",
+                "Using provider: ${provider.providerName} (request.provider=${requestForDirect.provider}, channel=${requestForDirect.channel}, model=${effectiveRequest.model})"
+            )
             
             providerRegistry.streamChat(requestForDirect, attachments, applicationContext)
                 .collect { event -> send(event) }

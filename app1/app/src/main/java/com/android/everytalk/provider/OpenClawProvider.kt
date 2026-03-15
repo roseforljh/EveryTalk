@@ -3,15 +3,16 @@ package com.android.everytalk.provider
 import android.content.Context
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.network.AppStreamEvent
-import com.android.everytalk.data.network.openclaw.OpenClawBridgeTransport
 import com.android.everytalk.data.network.openclaw.OpenClawChatTransport
+import com.android.everytalk.data.network.openclaw.OpenClawDeviceIdentityManager
 import com.android.everytalk.data.network.openclaw.OpenClawGatewayClient
 import com.android.everytalk.models.SelectedMediaItem
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.flow.Flow
 
 open class OpenClawProvider(
-    private val httpClient: HttpClient
+    private val httpClient: HttpClient,
+    private val deviceIdentityManager: OpenClawDeviceIdentityManager
 ) : LLMProvider {
 
     override val providerName: String = "OpenClaw"
@@ -37,12 +38,10 @@ open class OpenClawProvider(
     }
 
     protected open fun resolveTransport(request: ChatRequest): OpenClawChatTransport {
-        val mode = request.openClawAccessMode?.lowercase()?.trim().orEmpty()
-        return if (mode == "direct") {
-            OpenClawGatewayClient(httpClient)
-        } else {
-            OpenClawBridgeTransport(httpClient)
-        }
+        return OpenClawGatewayClient(
+            httpClient = httpClient,
+            deviceIdentityManager = deviceIdentityManager
+        )
     }
 
     override suspend fun getAvailableModels(apiUrl: String, apiKey: String): List<String> {

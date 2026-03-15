@@ -40,6 +40,35 @@ class OpenClawSessionKeyTest {
         assertTrue(encoded.contains("\"sessionKey\":\"et:conv-42\""))
     }
 
+    @Test
+    fun `explicit remote session id has priority over local conversation id`() {
+        val request = createRequest(
+            conversationId = "local-conv-42",
+            deviceId = "device-1"
+        ).copy(openClawSessionId = "remote-desktop")
+
+        val sessionKey = OpenClawGatewayClient.resolveSessionKey(request)
+
+        assertEquals("et:remote-desktop", sessionKey)
+    }
+
+    @Test
+    fun `remote provider falls back to deterministic remote session key`() {
+        val request = ChatRequest(
+            messages = emptyList(),
+            provider = "OpenClaw Remote",
+            channel = "OpenClaw",
+            apiAddress = "wss://gateway.example.com",
+            apiKey = "token",
+            model = "",
+            conversationId = "local-conv-42"
+        )
+
+        val sessionKey = OpenClawGatewayClient.resolveSessionKey(request)
+
+        assertEquals("et:remote:gateway.example.com", sessionKey)
+    }
+
     private fun createRequest(conversationId: String, deviceId: String): ChatRequest {
         return ChatRequest(
             messages = emptyList(),

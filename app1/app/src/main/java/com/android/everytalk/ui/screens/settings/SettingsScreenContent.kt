@@ -340,14 +340,18 @@ private fun ApiKeyItemGroup(
     }
     val providerName =
         configsInGroup.firstOrNull()?.provider?.ifBlank { null } ?: "综合平台"
+    val displayTitle = OpenClawSettingsRules.displayTitleForSettingsGroup(providerName)
+    val displaySubtitle = OpenClawSettingsRules.displaySubtitleForSettingsGroup(providerName)
+    val connectionSummary = OpenClawSettingsRules.connectionSummaryLabel(providerName, configsInGroup.firstOrNull()?.address.orEmpty())
+    val secretSummary = OpenClawSettingsRules.secretSummaryLabel(providerName, apiKey)
+    val remoteTargetSummary = OpenClawSettingsRules.remoteTargetLabel(configsInGroup.firstOrNull()?.openClawSessionId.orEmpty())
     // 默认配置组标识：
     // - 始终将“默认/default”视为默认组
     // - 在图像模式下，将“硅基流动/siliconflow”视为默认组（不可删除）
     val firstCfg = configsInGroup.firstOrNull()
-    val isDefaultGroup = firstCfg != null && (
-        firstCfg.provider.trim().lowercase() in listOf("默认","default") ||
-        (modalityType == ModalityType.IMAGE && firstCfg.provider.trim().lowercase() in listOf("硅基流动","siliconflow"))
-    )
+    val isPinnedGroup = firstCfg != null && OpenClawSettingsRules.isPinnedSettingsGroup(firstCfg.provider)
+    val isEditableGroup = firstCfg != null && OpenClawSettingsRules.isSettingsGroupEditable(firstCfg.provider)
+    val canExpandModels = firstCfg != null && OpenClawSettingsRules.canExpandSettingsModels(firstCfg.provider)
     val isDarkMode = isSystemInDarkTheme()
     val cardContainerColor = MaterialTheme.colorScheme.surface
     val cardBorderColor = if (isDarkMode) {
@@ -377,8 +381,7 @@ private fun ApiKeyItemGroup(
                 modifier = Modifier
                     .fillMaxWidth()
                     .let { base ->
-                        // 图像模式“默认”卡片：完全禁用点击与按压效果
-                        if (isDefaultGroup) base
+                        if (!isEditableGroup) base
                         else base.clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null
@@ -389,26 +392,53 @@ private fun ApiKeyItemGroup(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = providerName,
+                        text = displayTitle,
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                    if (!displaySubtitle.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = displaySubtitle,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                     Spacer(modifier = Modifier.height(4.dp))
                     // 图像模式“默认”配置卡片内不显示 Key 信息
-                    if (!isDefaultGroup) {
+                    if (!isPinnedGroup) {
                         Text(
-                            text = "Key: ${maskApiKey(apiKey)}",
+                            text = connectionSummary,
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontWeight = FontWeight.Normal
                         )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = secretSummary,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = FontWeight.Normal
+                        )
+                        if (!remoteTargetSummary.isNullOrBlank()) {
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = remoteTargetSummary,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
                     }
                 }
                 // 图像模式"默认"配置显示钉子图标,表示固定不可删除
-                if (isDefaultGroup) {
+                if (isPinnedGroup) {
                     Icon(
                         imageVector = Icons.Filled.PushPin,
                         contentDescription = "默认配置(固定)",
@@ -444,11 +474,11 @@ private fun ApiKeyItemGroup(
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(8.dp))
                     .clickable(
-                        enabled = !isDefaultGroup,
+                        enabled = canExpandModels,
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
                     ) {
-                        if (!isDefaultGroup) {
+                        if (canExpandModels) {
                             expandedModels = !expandedModels
                         }
                     }
@@ -474,7 +504,7 @@ private fun ApiKeyItemGroup(
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     // 默认配置和图像模式都不显示刷新按钮
-                    if (modalityType != ModalityType.IMAGE && !isDefaultGroup) {
+                    if (modalityType != ModalityType.IMAGE && !isPinnedGroup) {
                         if (isRefreshing) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(20.dp),
@@ -496,7 +526,7 @@ private fun ApiKeyItemGroup(
                         }
                     }
                     // 图像模式“默认”卡片不显示“添加模型”按钮
-                    if (!isDefaultGroup) {
+                    if (!isPinnedGroup) {
                         IconButton(
                             onClick = onAddModelForApiKeyClick,
                             modifier = Modifier.size(36.dp)

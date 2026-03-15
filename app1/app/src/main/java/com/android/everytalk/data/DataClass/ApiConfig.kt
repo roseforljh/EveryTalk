@@ -27,5 +27,6 @@ data class ApiConfig(
     // 新增：是否启用代码执行
     val enableCodeExecution: Boolean? = null,
     val openClawAccessMode: String = "bridge",
-    val openClawBridgeUrl: String? = null
+    val openClawBridgeUrl: String? = null,
+    val openClawSessionId: String? = null
 )

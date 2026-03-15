@@ -11,8 +11,10 @@ import android.util.Log
 import androidx.core.content.FileProvider
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.util.storage.FileManager
+import com.android.everytalk.data.DataClass.AbstractApiMessage
 import com.android.everytalk.data.DataClass.ApiContentPart
 import com.android.everytalk.data.DataClass.ChatRequest
+import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.util.image.ImageScaleCalculator
 import com.android.everytalk.data.DataClass.Message as UiMessage
@@ -75,6 +77,68 @@ private data class AttachmentProcessingResult(
         private const val TARGET_IMAGE_HEIGHT = 1024
         @Deprecated("Use ImageScaleConfig instead", ReplaceWith("ImageScaleConfig.CHAT_MODE.compressionQuality"))
         private const val JPEG_COMPRESSION_QUALITY = 80
+    }
+
+    private fun logUiMessages(stage: String, messages: List<UiMessage>) {
+        Log.d("MessageSender", "$stage.size=${messages.size}")
+        messages.forEachIndexed { index, message ->
+            val preview = message.text.replace("\n", "\\n").take(80)
+            Log.d(
+                "MessageSender",
+                "$stage[$index]: role=${message.role} text=$preview attachments=${message.attachments.size} sender=${message.sender}"
+            )
+        }
+    }
+
+    private fun describeApiMessage(message: AbstractApiMessage): String {
+        return when (message) {
+            is SimpleTextApiMessage -> message.content.replace("\n", "\\n").take(80)
+            is PartsApiMessage -> message.parts.joinToString(separator = " | ") { part ->
+                when (part) {
+                    is ApiContentPart.Text -> "text=" + part.text.replace("\n", "\\n").take(80)
+                    is ApiContentPart.InlineData -> "inlineData(${part.mimeType})"
+                    is ApiContentPart.FileUri -> "fileUri(${part.mimeType})"
+                }
+            }.take(160)
+        }
+    }
+
+    private fun logApiMessages(stage: String, messages: List<AbstractApiMessage>) {
+        Log.d("MessageSender", "$stage.size=${messages.size}")
+        messages.forEachIndexed { index, message ->
+            Log.d(
+                "MessageSender",
+                "$stage[$index]: role=${message.role} preview=${describeApiMessage(message)}"
+            )
+        }
+    }
+
+    private fun extractPrimaryText(message: AbstractApiMessage): String {
+        return when (message) {
+            is SimpleTextApiMessage -> message.content
+            is PartsApiMessage -> message.parts.filterIsInstance<ApiContentPart.Text>().joinToString("\n") { it.text }
+        }
+    }
+
+    private fun ensureUserMessagePresent(
+        messages: MutableList<AbstractApiMessage>,
+        currentUserMessage: AbstractApiMessage
+    ): MutableList<AbstractApiMessage> {
+        val currentUserText = extractPrimaryText(currentUserMessage).trim()
+        if (currentUserText.isBlank()) {
+            return messages
+        }
+        val existingUserIndex = messages.indexOfFirst { message ->
+            message.role == "user" && extractPrimaryText(message).trim() == currentUserText
+        }
+        if (existingUserIndex == -1) {
+            Log.w(
+                "MessageSender",
+                "current user input missing from request messages, injecting fallback user message text=${currentUserText.take(80)}"
+            )
+            messages.add(currentUserMessage)
+        }
+        return messages
     }
 
     /**
@@ -301,6 +365,10 @@ private data class AttachmentProcessingResult(
         
         // 🔥 关键调试：检查配置状态
         Log.d("MessageSender", "=== SEND MESSAGE DEBUG ===")
+        Log.d("MessageSender", "rawInputText=$messageText")
+        Log.d("MessageSender", "trimmedInputText=$textToActuallySend")
+        Log.d("MessageSender", "textConversationId=${stateHolder._currentConversationId.value}")
+        Log.d("MessageSender", "imageConversationId=${stateHolder._currentImageGenerationConversationId.value}")
         Log.d("MessageSender", "isImageGeneration: $isImageGeneration")
         Log.d("MessageSender", "selectedImageGenApiConfig: ${stateHolder._selectedImageGenApiConfig.value}")
         Log.d("MessageSender", "selectedApiConfig: ${stateHolder._selectedApiConfig.value}")
@@ -442,6 +510,7 @@ private data class AttachmentProcessingResult(
 
             withContext(Dispatchers.IO) {
                 val messagesInChatUiSnapshot = if (isImageGeneration) stateHolder.imageGenerationMessages.toList() else stateHolder.messages.toList()
+                logUiMessages("rawMessages", messagesInChatUiSnapshot)
                 val historyEndIndex = messagesInChatUiSnapshot.indexOfFirst { it.id == newUserMessageForUi.id }
                 val historyUiMessagesRaw = if (historyEndIndex != -1) messagesInChatUiSnapshot.subList(0, historyEndIndex) else messagesInChatUiSnapshot
 
@@ -451,10 +520,17 @@ private data class AttachmentProcessingResult(
                     historyUiMessagesRaw
                 } else {
                     historyUiMessagesRaw.filter { msg ->
-                        // 保留非系统消息；若有系统占位标题(isPlaceholderName)可选择保留，这里彻底禁用非占位系统提示
-                        !(msg.sender == UiSender.System && !msg.isPlaceholderName)
+                        val filteredOut = msg.sender == UiSender.System && !msg.isPlaceholderName
+                        if (filteredOut) {
+                            Log.d(
+                                "MessageSender",
+                                "filteredOutUiMessage: role=${msg.role} reason=systemPromptPaused text=${msg.text.replace("\n", "\\n").take(80)}"
+                            )
+                        }
+                        !filteredOut
                     }
                 }
+                logUiMessages("filteredMessages", historyUiMessages)
 
                 // 图像会话的稳定会话ID规则：
                 // 第一次消息（historyEndIndex==0 且非从历史加载）时，用"首条用户消息ID"作为 conversationId，
@@ -468,16 +544,19 @@ private data class AttachmentProcessingResult(
                 }
 
                 // 🔥 修复：使用带Context的toApiMessage方法获取真实MIME类型
-                val apiMessagesForBackend = historyUiMessages.map { it.toApiMessage(uriToBase64Encoder, application) }.toMutableList()
+                val historyApiMessages = historyUiMessages.map { it.toApiMessage(uriToBase64Encoder, application) }.toMutableList()
+                logApiMessages("historyApiMessages", historyApiMessages)
 
-                // Add the current user message with attachments
-                // 🔥 修复：使用带Context的toApiMessage方法获取真实MIME类型
-                apiMessagesForBackend.add(newUserMessageForUi.toApiMessage(uriToBase64Encoder, application))
+                val currentUserApiMessage = newUserMessageForUi.toApiMessage(uriToBase64Encoder, application)
+                Log.d(
+                    "MessageSender",
+                    "currentUserApiMessage: role=${currentUserApiMessage.role} preview=${describeApiMessage(currentUserApiMessage)}"
+                )
 
+                val apiMessagesForBackend = ensureUserMessagePresent(historyApiMessages, currentUserApiMessage)
 
                 if (!systemPrompt.isNullOrBlank()) {
                     val systemMessage = SimpleTextApiMessage(role = "system", content = systemPrompt)
-                    // a more robust way to handle system messages
                     val existingSystemMessageIndex = apiMessagesForBackend.indexOfFirst { it.role == "system" }
                     if (existingSystemMessageIndex != -1) {
                         apiMessagesForBackend[existingSystemMessageIndex] = systemMessage
@@ -485,6 +564,8 @@ private data class AttachmentProcessingResult(
                         apiMessagesForBackend.add(0, systemMessage)
                     }
                 }
+
+                logApiMessages("finalMessages", apiMessagesForBackend)
 
                 if (apiMessagesForBackend.isEmpty() || apiMessagesForBackend.lastOrNull()?.role != "user") {
                     withContext(Dispatchers.Main.immediate) {
@@ -574,8 +655,7 @@ private data class AttachmentProcessingResult(
                     model = currentConfig.model,
                     deviceId = com.android.everytalk.util.DeviceIdManager.getDeviceId(application),
                     conversationId = stateHolder._currentConversationId.value,
-                    openClawAccessMode = currentConfig.openClawAccessMode,
-                    openClawBridgeUrl = currentConfig.openClawBridgeUrl,
+                    openClawSessionId = stateHolder._currentOpenClawSessionId.value,
                     useWebSearch = stateHolder._isWebSearchEnabled.value,
                     // 显式传递代码执行开关状态
                     enableCodeExecution = enableCodeExecutionForRequest,

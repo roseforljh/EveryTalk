@@ -204,6 +204,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         get() = stateHolder._isLoadingHistoryData.asStateFlow()
     val currentConversationId: StateFlow<String>
         get() = stateHolder._currentConversationId.asStateFlow()
+    val currentOpenClawSessionId: StateFlow<String>
+        get() = stateHolder._currentOpenClawSessionId.asStateFlow()
+    val openClawGatewayStatus: StateFlow<OpenClawGatewayStatus>
+        get() = stateHolder._openClawGatewayStatus.asStateFlow()
     val currentImageGenerationConversationId: StateFlow<String>
         get() = stateHolder._currentImageGenerationConversationId.asStateFlow()
     val apiConfigs: StateFlow<List<ApiConfig>>

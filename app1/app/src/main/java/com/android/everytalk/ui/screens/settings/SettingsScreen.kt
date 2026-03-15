@@ -38,6 +38,8 @@ object SettingsDefaults {
         "谷歌" to "https://generativelanguage.googleapis.com",
         "openclaw" to "ws://127.0.0.1:18789",
         "OpenClaw" to "ws://127.0.0.1:18789",
+        "openclaw remote" to "ws://127.0.0.1:18789",
+        "OpenClaw Remote" to "ws://127.0.0.1:18789",
         "阿里云百炼" to "https://dashscope.aliyuncs.com/compatible-mode",
         "火山引擎" to "https://ark.cn-beijing.volces.com/api/v3/chat/completions#",
         "深度求索" to "https://api.deepseek.com",
@@ -367,6 +369,33 @@ fun SettingsScreen(
                         )
                         viewModel.addConfig(config, isImageGen = false)
                     }
+                    showAddFullConfigDialog = false
+                    viewModel.clearFetchedModels()
+                } else if (
+                    key.isNotBlank() &&
+                    providerTrim.isNotBlank() &&
+                    address.isNotBlank() &&
+                    OpenClawSettingsRules.shouldSaveWithoutModel(providerTrim, channel)
+                ) {
+                    OpenClawSettingsRules.validateRemoteConfigOrNull(providerTrim, address)?.let { errorMessage ->
+                        viewModel.showSnackbar(errorMessage)
+                        return@AddNewFullConfigDialog
+                    }
+                    val config = ApiConfig(
+                        id = UUID.randomUUID().toString(),
+                        name = providerTrim,
+                        provider = providerTrim,
+                        address = address,
+                        key = key,
+                        model = "",
+                        modalityType = ModalityType.TEXT,
+                        channel = channel,
+                        isValid = true,
+                        enableCodeExecution = enableCodeExecution,
+                        toolsJson = toolsJson
+                    )
+                    viewModel.addConfig(config, isImageGen = false)
+                    viewModel.showSnackbar(OpenClawSettingsRules.addSuccessMessageFor(providerTrim))
                     showAddFullConfigDialog = false
                     viewModel.clearFetchedModels()
                 } else if (key.isNotBlank() && providerTrim.isNotBlank() && address.isNotBlank()) {

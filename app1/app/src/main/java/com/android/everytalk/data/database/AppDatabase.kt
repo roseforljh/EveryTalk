@@ -36,7 +36,7 @@ import com.android.everytalk.data.database.entities.VoiceBackendConfigEntity
         ConversationParamsEntity::class,
         McpServerConfigEntity::class
     ],
-    version = 4,
+    version = 6,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -58,7 +58,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "eztalk_room_database"
                 )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 .build()
                 INSTANCE = instance
                 instance
@@ -66,24 +66,24 @@ abstract class AppDatabase : RoomDatabase() {
         }
         
         val MIGRATION_1_2 = object : Migration(1, 2) {
-            override fun migrate(database: SupportSQLiteDatabase) {
+            override fun migrate(db: SupportSQLiteDatabase) {
                 // 添加版本 1 到 2 的迁移逻辑
                 // 如果没有具体变更，可以是空实现
             }
         }
         
         val MIGRATION_2_3 = object : Migration(2, 3) {
-            override fun migrate(database: SupportSQLiteDatabase) {
+            override fun migrate(db: SupportSQLiteDatabase) {
                 // Add useRealtimeStreaming column to voice_backend_configs table
                 // SQLite doesn't support BOOLEAN type directly, uses INTEGER (0/1)
-                database.execSQL("ALTER TABLE voice_backend_configs ADD COLUMN useRealtimeStreaming INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE voice_backend_configs ADD COLUMN useRealtimeStreaming INTEGER NOT NULL DEFAULT 0")
             }
         }
 
         val MIGRATION_3_4 = object : Migration(3, 4) {
-            override fun migrate(database: SupportSQLiteDatabase) {
+            override fun migrate(db: SupportSQLiteDatabase) {
                 // Create MCP server configs table
-                database.execSQL("""
+                db.execSQL("""
                     CREATE TABLE IF NOT EXISTS mcp_server_configs (
                         id TEXT NOT NULL PRIMARY KEY,
                         name TEXT NOT NULL,
@@ -93,6 +93,22 @@ abstract class AppDatabase : RoomDatabase() {
                         headers TEXT NOT NULL DEFAULT '{}'
                     )
                 """.trimIndent())
+            }
+        }
+
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE api_configs ADD COLUMN openClawAccessMode TEXT NOT NULL DEFAULT 'bridge'")
+                db.execSQL("ALTER TABLE api_configs ADD COLUMN openClawBridgeUrl TEXT")
+                db.execSQL("ALTER TABLE api_configs ADD COLUMN openClawSessionId TEXT")
+                db.execSQL("UPDATE api_configs SET openClawSessionId = NULL")
+            }
+        }
+
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE api_configs ADD COLUMN openClawSessionId TEXT")
+                db.execSQL("UPDATE api_configs SET openClawSessionId = NULL")
             }
         }
     }

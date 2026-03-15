@@ -36,4 +36,16 @@ class OpenClawAbortStateTest {
 
         assertNull(OpenClawRuntimeState.current())
     }
+
+    @Test
+    fun `update with null run id preserves session key and clears run id`() {
+        OpenClawRuntimeState.update(sessionKey = "et:conv-1", runId = "run-1")
+        OpenClawRuntimeState.update(sessionKey = "et:conv-1", runId = null)
+
+        val current = OpenClawRuntimeState.current()
+
+        assertEquals("et:conv-1", current?.sessionKey)
+        assertNull(current?.runId)
+        assertEquals(false, current?.abortRequested)
+    }
 }

@@ -5,8 +5,8 @@ object OpenClawAbortApi {
         requestId: String,
         sessionKey: String,
         runId: String?
-    ): OpenClawAbortRequest {
-        return OpenClawAbortRequest(
+    ): OpenClawRpcRequest<OpenClawAbortParams> {
+        return OpenClawRpcRequest(
             id = requestId,
             method = "chat.abort",
             params = OpenClawAbortParams(

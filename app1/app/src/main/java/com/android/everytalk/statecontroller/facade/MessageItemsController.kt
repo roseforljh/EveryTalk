@@ -27,7 +27,7 @@ import java.util.concurrent.ConcurrentHashMap
  * - chatListItems: 文本对话的 ChatListItem 列表
  * - imageGenerationChatListItems: 图像对话的 ChatListItem 列表
  */
-class MessageItemsController(
+open class MessageItemsController(
     private val stateHolder: ViewModelStateHolder,
     private val streamingMessageStateManager: StreamingMessageStateManager,
     scope: CoroutineScope
@@ -434,6 +434,18 @@ class MessageItemsController(
                 listOf(ChatListItem.ErrorMessage(message.id, message.text))
             }
             else -> emptyList()
+        }
+    }
+
+    protected fun normalizeStatusText(message: Message): String {
+        val status = message.currentWebSearchStage.orEmpty()
+        if (status.startsWith("远程控制中")) return status
+
+        val toolResultPrefix = "[工具结果] "
+        return if (message.text.startsWith(toolResultPrefix)) {
+            "工具结果 · " + message.text.removePrefix(toolResultPrefix)
+        } else {
+            status
         }
     }
 

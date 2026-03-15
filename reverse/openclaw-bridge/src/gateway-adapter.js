@@ -10,11 +10,18 @@ import { createLogger } from './logger.js';
 const OPEN_STATE = 1;
 
 export class OpenClawGatewayAdapter {
-  constructor({ gatewayUrl, gatewayToken, webSocketFactory, logger = createLogger('gateway-adapter') }) {
+  constructor({
+    gatewayUrl,
+    gatewayToken,
+    webSocketFactory,
+    logger = createLogger('gateway-adapter'),
+    createRequestId = () => crypto.randomUUID(),
+  }) {
     this.gatewayUrl = gatewayUrl;
     this.gatewayToken = gatewayToken;
     this.webSocketFactory = webSocketFactory;
     this.logger = logger;
+    this.createRequestId = createRequestId;
     this.gatewaySocket = null;
     this.pendingMessages = [];
     this.gatewayListenersBound = false;
@@ -26,7 +33,13 @@ export class OpenClawGatewayAdapter {
     }
 
     this.gatewaySocket = this.webSocketFactory(this.gatewayUrl, {
-      headers: this.gatewayToken ? { Authorization: `Bearer ${this.gatewayToken}` } : undefined,
+      headers: this.gatewayToken ? {
+        Authorization: `Bearer ${this.gatewayToken}`,
+        'User-Agent': 'OpenClaw-Bridge/1.0',
+      } : {
+        'User-Agent': 'OpenClaw-Bridge/1.0',
+      },
+      protocol: 'openclaw-rpc',
     });
     this.gatewayListenersBound = false;
     this.bindGatewayLifecycle();
@@ -42,6 +55,7 @@ export class OpenClawGatewayAdapter {
     this.gatewayListenersBound = true;
     this.gatewaySocket.on('open', () => {
       this.logger.info('gateway socket opened');
+      this.sendConnectPayload();
       this.flushPendingMessages();
     });
     this.gatewaySocket.on('close', () => {
@@ -62,6 +76,23 @@ export class OpenClawGatewayAdapter {
       return;
     }
     this.pendingMessages.push(encoded);
+  }
+
+  sendConnectPayload() {
+    if (!this.gatewaySocket || this.gatewaySocket.readyState !== OPEN_STATE) {
+      return;
+    }
+
+    const payload = {
+      id: this.createRequestId(),
+      method: 'connect',
+      params: {
+        auth: {
+          token: this.gatewayToken || '',
+        },
+      },
+    };
+    this.gatewaySocket.send(JSON.stringify(payload));
   }
 
   flushPendingMessages() {

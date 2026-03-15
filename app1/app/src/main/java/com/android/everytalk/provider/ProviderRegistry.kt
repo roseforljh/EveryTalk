@@ -8,17 +8,25 @@ import io.ktor.client.HttpClient
 import kotlinx.coroutines.flow.Flow
 
 class ProviderRegistry(
+    private val context: Context,
     httpClient: HttpClient
 ) {
     private val providers: List<LLMProvider> = listOf(
         GeminiProvider(httpClient),
-        OpenClawProvider(httpClient),
+        OpenClawProvider(
+            httpClient = httpClient,
+            deviceIdentityManager = com.android.everytalk.data.network.openclaw.OpenClawDeviceIdentityManager(context)
+        ),
         OpenAICompatibleProvider(httpClient)
     )
     
     fun getProvider(request: ChatRequest): LLMProvider {
-        return providers.find { it.canHandle(request) }
-            ?: providers.last()
+        val matched = providers.find { it.canHandle(request) }
+        android.util.Log.i(
+            "ProviderRegistry",
+            "resolved provider=${matched?.providerName ?: providers.last().providerName}, request.provider=${request.provider}, channel=${request.channel}, model=${request.model}"
+        )
+        return matched ?: providers.last()
     }
     
     suspend fun streamChat(
