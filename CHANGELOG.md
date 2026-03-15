@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.13.0](https://github.com/roseforljh/EveryTalk/compare/v1.12.9...v1.13.0) (2026-03-15)
+
+
+### Features
+
+* add openclaw bridge integration and remote installer ([06e5ebb](https://github.com/roseforljh/EveryTalk/commit/06e5ebb87f4cb5f5bb4b7192159c2767d463de26))
+* 接入openclaw ([77edbf9](https://github.com/roseforljh/EveryTalk/commit/77edbf946f6017a3503b1dc60f23fbde8ecbb01b))
+
 ## [1.12.9](https://github.com/roseforljh/EveryTalk/compare/v1.12.8...v1.12.9) (2026-03-06)
 
 
