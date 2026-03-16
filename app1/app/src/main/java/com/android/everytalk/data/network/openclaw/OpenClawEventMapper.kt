@@ -22,6 +22,10 @@ object OpenClawEventMapper {
 
             when {
                 envelopeType == "event" && eventName == "connect.challenge" -> null
+                envelopeType == "res" && payloadData != null && payloadData["runId"] != null -> {
+                    val runId = payloadData["runId"]?.jsonPrimitive?.content.orEmpty()
+                    if (runId.isBlank()) null else AppStreamEvent.StatusUpdate("chat_run:$runId")
+                }
                 eventName == "agent" && payloadData != null -> {
                     val stream = payloadData["stream"]?.jsonPrimitive?.content.orEmpty()
                     val runId = payloadData["runId"]?.jsonPrimitive?.content
@@ -55,11 +59,34 @@ object OpenClawEventMapper {
                     val chatState = payloadData["state"]?.jsonPrimitive?.content.orEmpty()
                         .ifBlank { data["state"]?.jsonPrimitive?.content.orEmpty() }
                     when (chatState) {
-                        "final" -> AppStreamEvent.Finish(
-                            payloadData["reason"]?.jsonPrimitive?.content
-                                ?: data["reason"]?.jsonPrimitive?.content
-                                ?: "completed"
-                        )
+                        "final" -> {
+                            val runId = payloadData["runId"]?.jsonPrimitive?.content
+                                ?: data["runId"]?.jsonPrimitive?.content
+                            val finalText = payloadData["message"]
+                                ?.jsonObject
+                                ?.get("content")
+                                ?.jsonArray
+                                ?.firstNotNullOfOrNull { element ->
+                                    runCatching {
+                                        element.jsonObject["text"]?.jsonPrimitive?.content
+                                    }.getOrNull()?.takeIf { it.isNotBlank() }
+                                }
+                            if (!runId.isNullOrBlank() && !finalText.isNullOrBlank()) {
+                                AppStreamEvent.OpenClawRuntimeFinal(
+                                    runId = runId,
+                                    state = chatState,
+                                    text = finalText
+                                )
+                            } else if (!finalText.isNullOrBlank()) {
+                                AppStreamEvent.ContentFinal(finalText)
+                            } else {
+                                AppStreamEvent.Finish(
+                                    payloadData["reason"]?.jsonPrimitive?.content
+                                        ?: data["reason"]?.jsonPrimitive?.content
+                                        ?: "completed"
+                                )
+                            }
+                        }
                         "delta" -> null
                         else -> null
                     }

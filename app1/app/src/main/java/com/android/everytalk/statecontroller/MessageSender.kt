@@ -22,6 +22,7 @@ import com.android.everytalk.data.DataClass.Sender as UiSender
 import com.android.everytalk.data.DataClass.ThinkingConfig
 import com.android.everytalk.data.DataClass.ImageGenRequest
 import com.android.everytalk.data.DataClass.GenerationConfig
+import com.android.everytalk.statecontroller.defaultReasoningBudgetForModel
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -665,16 +666,9 @@ private data class AttachmentProcessingResult(
                         topP = currentConfig.topP,
                         maxOutputTokens = null,
                         thinkingConfig = if (modelIsGeminiType) {
-                            // 为 2.5 系列明确设置思考预算：Flash≈低、Pro≈中、其他≈高
-                            val modelLower = currentConfig.model.lowercase()
-                            val budget = when {
-                                "flash" in modelLower -> 1024
-                                "pro" in modelLower -> 8192
-                                else -> 24576
-                            }
                             ThinkingConfig(
                                 includeThoughts = true,
-                                thinkingBudget = budget
+                                thinkingBudget = defaultReasoningBudgetForModel(currentConfig.model)
                             )
                         } else null
                     ).let { if (it.temperature != null || it.topP != null || it.maxOutputTokens != null || it.thinkingConfig != null) it else null },

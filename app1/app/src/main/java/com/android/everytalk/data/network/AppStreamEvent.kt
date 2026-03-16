@@ -47,6 +47,14 @@ sealed class AppStreamEvent {
     data class StatusUpdate(val stage: String) : AppStreamEvent()
 
     @Serializable
+    @SerialName("openclaw_runtime_final")
+    data class OpenClawRuntimeFinal(
+        val runId: String,
+        val state: String,
+        val text: String
+    ) : AppStreamEvent()
+
+    @Serializable
     @SerialName("tool_call")
     data class ToolCall(
         val id: String,

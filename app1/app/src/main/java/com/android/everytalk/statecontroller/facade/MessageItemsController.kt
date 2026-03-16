@@ -459,6 +459,13 @@ open class MessageItemsController(
                         attachments = message.attachments
                     )
                 )
+            message.sender == Sender.System ->
+                listOf(
+                    ChatListItem.SystemMessage(
+                        messageId = message.id,
+                        text = message.text
+                    )
+                )
             message.isError ->
                 listOf(ChatListItem.ErrorMessage(messageId = message.id, text = message.text))
             else -> emptyList()

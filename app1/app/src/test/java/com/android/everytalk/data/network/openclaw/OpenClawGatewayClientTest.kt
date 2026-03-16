@@ -117,6 +117,17 @@ class OpenClawGatewayClientTest {
     }
 
     @Test
+    fun `build models list request targets models list method`() {
+        val request = OpenClawGatewayClient.buildModelsListRequest(requestId = "req-models-1")
+        val encoded = json.encodeToString(request)
+
+        assertTrue(encoded.contains("\"type\":\"req\""))
+        assertTrue(encoded.contains("\"method\":\"models.list\""))
+        assertTrue(encoded.contains("\"id\":\"req-models-1\""))
+        assertTrue(encoded.contains("\"params\":{}"))
+    }
+
+    @Test
     fun `build history request targets session key`() {
         val request = OpenClawGatewayClient.buildHistoryRequest("main")
         val encoded = json.encodeToString(request)

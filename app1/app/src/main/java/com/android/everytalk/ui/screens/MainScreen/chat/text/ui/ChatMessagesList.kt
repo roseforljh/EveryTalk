@@ -359,6 +359,33 @@ fun ChatMessagesList(
                             }
                         }
 
+                        is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.SystemMessage -> {
+                            val message = viewModel.getMessageById(item.messageId)
+                            if (message != null) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.Start,
+                                    verticalAlignment = Alignment.Top
+                                ) {
+                                    UserOrErrorMessageContent(
+                                        message = message,
+                                        displayedText = item.text,
+                                        showLoadingDots = false,
+                                        bubbleColor = MaterialTheme.chatColors.aiBubble,
+                                        contentColor = MaterialTheme.colorScheme.onSurface,
+                                        isError = false,
+                                        maxWidth = bubbleMaxWidth,
+                                        onLongPress = { msg, offset ->
+                                            contextMenuMessage = msg
+                                            contextMenuPressOffset = offset
+                                            isContextMenuVisible = true
+                                        },
+                                        scrollStateManager = scrollStateManager
+                                    )
+                                }
+                            }
+                        }
+
                         is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageReasoning -> {
                             val reasoningCompleteMap = viewModel.textReasoningCompleteMap
                             val streamingReasoning by remember(item.message.id) {

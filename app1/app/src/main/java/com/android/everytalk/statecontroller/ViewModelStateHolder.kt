@@ -908,7 +908,59 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
             )
         }
     }
-    
+
+    fun startLocalSlashLoading(messageId: String, isImageGeneration: Boolean = false) {
+        if (isImageGeneration) {
+            _currentImageStreamingAiMessageId.value = messageId
+            _isImageApiCalling.value = true
+        } else {
+            _currentTextStreamingAiMessageId.value = messageId
+            _isTextApiCalling.value = true
+        }
+    }
+
+    fun finishLocalSlashLoading(
+        messageId: String,
+        finalText: String,
+        isImageGeneration: Boolean = false
+    ) {
+        val messageList = if (isImageGeneration) imageGenerationMessages else messages
+        val index = messageList.indexOfFirst { it.id == messageId }
+        android.util.Log.d(
+            "SlashCommand",
+            "finishLocalSlashLoading messageId=$messageId index=$index finalText=${finalText.take(120)}"
+        )
+        if (index != -1) {
+            val currentMessage = messageList[index]
+            messageList[index] = currentMessage.copy(
+                text = finalText,
+                contentStarted = finalText.isNotBlank(),
+                timestamp = System.currentTimeMillis()
+            )
+            android.util.Log.d(
+                "SlashCommand",
+                "finishLocalSlashLoading updated contentStarted=${finalText.isNotBlank()} textLen=${finalText.length}"
+            )
+            if (isImageGeneration) {
+                isImageConversationDirty.value = true
+            } else {
+                isTextConversationDirty.value = true
+            }
+        }
+
+        if (isImageGeneration) {
+            if (_currentImageStreamingAiMessageId.value == messageId) {
+                _currentImageStreamingAiMessageId.value = null
+            }
+            _isImageApiCalling.value = false
+        } else {
+            if (_currentTextStreamingAiMessageId.value == messageId) {
+                _currentTextStreamingAiMessageId.value = null
+            }
+            _isTextApiCalling.value = false
+        }
+    }
+
     /**
      * 同步流式消息到 messages 列表
      * 🎯 在流式结束时调用，将缓冲区的文本同步到持久化存储

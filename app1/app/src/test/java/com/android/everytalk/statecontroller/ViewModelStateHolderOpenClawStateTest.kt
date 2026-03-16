@@ -1,6 +1,10 @@
 package com.android.everytalk.statecontroller
 
+import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.data.DataClass.Sender
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ViewModelStateHolderOpenClawStateTest {
@@ -50,4 +54,30 @@ class ViewModelStateHolderOpenClawStateTest {
         assertEquals("远程控制中 · 正在修改 /workspace/app/main.kt", holder._openClawGatewayStatus.value.statusText)
     }
 
+    @Test
+    fun `local slash loading state marks ai placeholder as streaming and completes with final text`() {
+        val holder = ViewModelStateHolder()
+        val aiMessageId = "ai-slash-1"
+        holder.messages.add(
+            Message(
+                id = aiMessageId,
+                text = "",
+                sender = Sender.AI,
+                contentStarted = false
+            )
+        )
+
+        holder.startLocalSlashLoading(aiMessageId)
+
+        assertTrue(holder._isTextApiCalling.value)
+        assertEquals(aiMessageId, holder._currentTextStreamingAiMessageId.value)
+
+        holder.finishLocalSlashLoading(aiMessageId, "Providers:\n- foo")
+
+        assertFalse(holder._isTextApiCalling.value)
+        assertEquals(null, holder._currentTextStreamingAiMessageId.value)
+        val updated = holder.messages.first { it.id == aiMessageId }
+        assertEquals("Providers:\n- foo", updated.text)
+        assertTrue(updated.contentStarted)
+    }
 }

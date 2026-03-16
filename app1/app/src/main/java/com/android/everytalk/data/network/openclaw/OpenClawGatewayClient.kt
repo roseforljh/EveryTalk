@@ -18,7 +18,11 @@ import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -152,6 +156,79 @@ class OpenClawGatewayClient(
         readerJob.join()
     }
 
+    suspend fun queryModelsCatalog(request: ChatRequest, provider: String? = null): ModelsCatalogQueryResult {
+        val rawAddress = request.apiAddress?.trim().orEmpty()
+        if (rawAddress.isBlank()) {
+            return ModelsCatalogQueryResult(
+                ok = false,
+                supported = false,
+                errorMessage = "Gateway address is empty"
+            )
+        }
+
+        val uri = java.net.URI(rawAddress)
+        val scheme = if (uri.scheme.equals("wss", ignoreCase = true)) URLProtocol.WSS else URLProtocol.WS
+        val path = uri.rawPath?.takeIf { it.isNotBlank() } ?: "/"
+        val requestId = UUID.randomUUID().toString()
+
+        return runCatching {
+            val session = httpClient.webSocketSession {
+                url {
+                    protocol = scheme
+                    host = uri.host
+                    port = if (uri.port == -1) scheme.defaultPort else uri.port
+                    encodedPath = path
+                    uri.rawQuery?.let { parameters.appendAll(parseQueryString(it)) }
+                }
+                if (request.apiKey.isNotBlank()) {
+                    headers.append(HttpHeaders.Authorization, "Bearer ${request.apiKey}")
+                }
+            }
+
+            try {
+                connectionState = GatewayConnectionState.SOCKET_CONNECTED
+                val identity = deviceIdentityManager.getOrCreate().toClientIdentity()
+                ensureConnected(session = session, request = request, identity = identity)
+
+                val catalogRequest = buildModelsListRequest(requestId = requestId)
+                val encodedRequest = json.encodeToString(catalogRequest)
+                Log.d("OpenClawGateway", "models.list args=${provider.orEmpty()}")
+                session.send(Frame.Text(encodedRequest))
+
+                while (true) {
+                    when (val frame = session.incoming.receive()) {
+                        is Frame.Text -> {
+                            val raw = frame.readText()
+                            Log.d("OpenClawGateway", "models.list raw response=$raw")
+                            parseModelsCatalogResponse(raw, requestId, provider)?.let { return@runCatching it }
+                        }
+                        is Frame.Close -> {
+                            return@runCatching ModelsCatalogQueryResult(
+                                ok = false,
+                                supported = false,
+                                errorMessage = "Gateway closed before models.list response"
+                            )
+                        }
+                        else -> Unit
+                    }
+                }
+                ModelsCatalogQueryResult(
+                    ok = false,
+                    supported = false,
+                    errorMessage = "Gateway does not expose models.list"
+                )
+            } finally {
+                connectionState = GatewayConnectionState.DISCONNECTED
+            }
+        }.getOrElse { error ->
+            ModelsCatalogQueryResult(
+                ok = false,
+                supported = false,
+                errorMessage = error.message ?: "Gateway does not expose models.list"
+            )
+        }
+    }
+
     companion object {
         private const val CLIENT_ID = "openclaw-android"
         private const val CLIENT_MODE = "ui"
@@ -272,6 +349,14 @@ class OpenClawGatewayClient(
                     sessionKey = sessionKey,
                     runId = runId
                 )
+            )
+        }
+
+        fun buildModelsListRequest(requestId: String): OpenClawRpcRequest<Map<String, String>> {
+            return OpenClawRpcRequest(
+                id = requestId,
+                method = "models.list",
+                params = emptyMap()
             )
         }
 
@@ -398,6 +483,99 @@ class OpenClawGatewayClient(
                 null
             }
         }.getOrNull()
+    }
+
+    private fun parseModelsCatalogResponse(raw: String, requestId: String, provider: String?): ModelsCatalogQueryResult? {
+        return runCatching {
+            val root = json.parseToJsonElement(raw).jsonObject
+            val type = root["type"]?.jsonPrimitive?.content
+            val id = root["id"]?.jsonPrimitive?.content
+            if (type != "res" || id != requestId) {
+                return null
+            }
+
+            val ok = root["ok"]?.jsonPrimitive?.booleanOrNull
+            if (ok != true) {
+                val errorObject = root["error"]?.jsonObject
+                val errorMessage = errorObject?.get("message")?.jsonPrimitive?.content ?: raw
+                val unsupported = errorMessage.contains("unknown method", ignoreCase = true)
+                return ModelsCatalogQueryResult(
+                    ok = false,
+                    supported = !unsupported,
+                    errorMessage = if (unsupported) {
+                        "当前请求的方法不存在，models.list 不可用"
+                    } else {
+                        "models.list 请求失败：$errorMessage"
+                    }
+                )
+            }
+
+            val payload = root["payload"] ?: return ModelsCatalogQueryResult(
+                ok = false,
+                supported = true,
+                errorMessage = "Gateway returned empty models.list payload"
+            )
+            val groups = extractProviderGroups(payload, provider)
+            ModelsCatalogQueryResult(
+                ok = groups.isNotEmpty(),
+                supported = true,
+                providerGroups = groups,
+                rawPayloadSummary = payload.toString(),
+                errorMessage = if (groups.isEmpty()) "models.list 未返回可展示的 provider/model 目录" else null
+            )
+        }.getOrNull()
+    }
+
+    private fun extractProviderGroups(payload: JsonElement, providerFilter: String?): List<OpenClawProviderModelsGroup> {
+        val grouped = linkedMapOf<String, MutableList<String>>()
+
+        fun addModel(provider: String?, model: String?) {
+            val normalizedProvider = provider?.trim().orEmpty().ifBlank { inferProviderFromModel(model) ?: "unknown" }
+            val normalizedModel = model?.trim().orEmpty()
+            val bucket = grouped.getOrPut(normalizedProvider) { mutableListOf() }
+            if (normalizedModel.isNotBlank()) {
+                bucket += normalizedModel
+            }
+        }
+
+        fun walk(element: JsonElement, inheritedProvider: String? = null) {
+            when (element) {
+                is JsonObject -> {
+                    val provider = element["provider"]?.jsonPrimitive?.content ?: inheritedProvider
+                    val model = element["model"]?.jsonPrimitive?.content
+                        ?: element["name"]?.jsonPrimitive?.content
+                        ?: element["id"]?.jsonPrimitive?.content
+                    if (!provider.isNullOrBlank() || !model.isNullOrBlank()) {
+                        addModel(provider, model)
+                    }
+                    element.forEach { (key, value) ->
+                        if (key != "provider" && key != "model" && key != "name" && key != "id") {
+                            walk(value, provider)
+                        }
+                    }
+                }
+                is JsonArray -> element.forEach { walk(it, inheritedProvider) }
+                else -> Unit
+            }
+        }
+
+        walk(payload)
+
+        val normalizedFilter = providerFilter?.trim()?.lowercase().orEmpty()
+        return grouped.entries
+            .map { (provider, models) ->
+                OpenClawProviderModelsGroup(
+                    provider = provider,
+                    models = models.distinct().sorted()
+                )
+            }
+            .filter { group -> normalizedFilter.isBlank() || group.provider.lowercase() == normalizedFilter }
+            .sortedBy { it.provider }
+    }
+
+    private fun inferProviderFromModel(model: String?): String? {
+        val normalizedModel = model?.trim().orEmpty()
+        return normalizedModel.substringBefore('/', missingDelimiterValue = "").takeIf { it.isNotBlank() }
     }
 
     private fun OpenClawDeviceIdentity.toClientIdentity(): DeviceIdentity {

@@ -91,6 +91,82 @@ class OpenClawEventMapperTest {
     }
 
     @Test
+    fun `maps final chat message text to content final before finish`() {
+        val event = OpenClawEventMapper.mapChatEvent(
+            """
+            {
+              "type": "event",
+              "event": "chat",
+              "payload": {
+                "state": "final",
+                "message": {
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "Current: custom-12newapi/gpt-5.4"
+                    }
+                  ]
+                }
+              }
+            }
+            """.trimIndent(),
+            json
+        )
+
+        assertTrue(event is AppStreamEvent.ContentFinal)
+        assertEquals("Current: custom-12newapi/gpt-5.4", (event as AppStreamEvent.ContentFinal).text)
+    }
+
+    @Test
+    fun `maps chat send started response to run status update`() {
+        val event = OpenClawEventMapper.mapChatEvent(
+            """
+            {
+              "type": "res",
+              "id": "req-1",
+              "ok": true,
+              "payload": {
+                "runId": "run-123",
+                "status": "started"
+              }
+            }
+            """.trimIndent(),
+            json
+        )
+
+        assertTrue(event is AppStreamEvent.StatusUpdate)
+        assertEquals("chat_run:run-123", (event as AppStreamEvent.StatusUpdate).stage)
+    }
+
+    @Test
+    fun `maps chat final state with run id to runtime final event`() {
+        val event = OpenClawEventMapper.mapChatEvent(
+            """
+            {
+              "type": "event",
+              "event": "chat",
+              "payload": {
+                "runId": "run-123",
+                "state": "final",
+                "message": {
+                  "content": [
+                    {"type": "text", "text": "Current: gpt-5.4"}
+                  ]
+                }
+              }
+            }
+            """.trimIndent(),
+            json
+        )
+
+        assertTrue(event is AppStreamEvent.OpenClawRuntimeFinal)
+        event as AppStreamEvent.OpenClawRuntimeFinal
+        assertEquals("run-123", event.runId)
+        assertEquals("final", event.state)
+        assertEquals("Current: gpt-5.4", event.text)
+    }
+
+    @Test
     fun `maps error event to error`() {
         val event = OpenClawEventMapper.mapChatEvent(
             """
