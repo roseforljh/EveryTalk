@@ -7,9 +7,9 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.requiredWidthIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -17,6 +17,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -76,13 +77,15 @@ fun TableRenderer(
 
     val cornerRadius = 12.dp
     val tableShape = RoundedCornerShape(cornerRadius)
-
-    // 使用 ScrollState 来支持水平滚动
     val scrollState = rememberScrollState()
-
-    Column(
+    val outlineColor = MaterialTheme.colorScheme.outline
+    val headerBackgroundColor = MaterialTheme.colorScheme.surfaceVariant
+    val rowBackgroundColor = MaterialTheme.colorScheme.background
+    val rowDividerColor = outlineColor.copy(alpha = 0.3f)
+    val columnDividerColor = outlineColor.copy(alpha = 0.2f)
+    Box(
         modifier = modifier
-            .fillMaxWidth()
+            .wrapContentWidth()
             .clip(tableShape)
             .pointerInput(onLongPress) {
                 if (onLongPress != null) {
@@ -94,56 +97,69 @@ fun TableRenderer(
                     )
                 }
             }
-            .horizontalScroll(scrollState)
-            .background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, MaterialTheme.colorScheme.outline, tableShape)
+            .background(headerBackgroundColor)
+            .border(1.dp, outlineColor, tableShape)
     ) {
-        // 渲染表头
-        Row(
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .padding(vertical = 8.dp)
+                .wrapContentWidth()
+                .horizontalScroll(scrollState)
         ) {
-            headers.forEachIndexed { index, header ->
-                // 使用稳定的 key 避免重组
-                key("header_$index") {
-                    TableCell(
-                        content = header.trim(),
-                        width = columnWidths.getOrElse(index) { 100.dp },
-                        style = headerStyle,
-                        usePlainText = false, // 表头也解析内联 Markdown
-                        contentKey = if (contentKey.isNotBlank()) "${contentKey}_th_$index" else ""
-                    )
+            // 渲染表头
+            Row(
+                modifier = Modifier
+                    .wrapContentWidth()
+                    .background(headerBackgroundColor)
+                    .padding(vertical = 8.dp)
+            ) {
+                headers.forEachIndexed { index, header ->
+                    key("header_$index") {
+                        TableCell(
+                            content = header.trim(),
+                            width = columnWidths.getOrElse(index) { 100.dp },
+                            style = headerStyle,
+                            usePlainText = false,
+                            contentKey = if (contentKey.isNotBlank()) "${contentKey}_th_$index" else "",
+                            backgroundColor = headerBackgroundColor,
+                            drawRightSeparator = index < headers.lastIndex,
+                            separatorColor = columnDividerColor
+                        )
+                    }
                 }
             }
-        }
 
-        // 渲染数据行
-        dataRows.forEachIndexed { rowIndex, row ->
-            // 使用稳定的 key 避免重组
-            key("row_$rowIndex") {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.background)
-                        .border(
-                            width = 0.5.dp,
-                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
-                        )
-                        .padding(vertical = 8.dp)
-                ) {
-                    row.forEachIndexed { colIndex, cell ->
-                        if (colIndex < columnWidths.size) {
-                            // 使用稳定的 key 避免重组
-                            key("cell_${rowIndex}_$colIndex") {
-                                TableCell(
-                                    content = cell.trim(),
-                                    width = columnWidths[colIndex],
-                                    style = cellStyle,
-                                    usePlainText = usePlainTextCells,
-                                    contentKey = if (contentKey.isNotBlank()) "${contentKey}_tr_${rowIndex}_td_$colIndex" else ""
+            // 渲染数据行
+            dataRows.forEachIndexed { rowIndex, row ->
+                key("row_$rowIndex") {
+                    Row(
+                        modifier = Modifier
+                            .wrapContentWidth()
+                            .background(rowBackgroundColor)
+                            .drawBehind {
+                                val strokeWidth = 0.5.dp.toPx()
+                                drawLine(
+                                    color = rowDividerColor,
+                                    start = androidx.compose.ui.geometry.Offset(0f, size.height - strokeWidth / 2f),
+                                    end = androidx.compose.ui.geometry.Offset(size.width, size.height - strokeWidth / 2f),
+                                    strokeWidth = strokeWidth
                                 )
+                            }
+                            .padding(vertical = 8.dp)
+                    ) {
+                        row.forEachIndexed { colIndex, cell ->
+                            if (colIndex < columnWidths.size) {
+                                key("cell_${rowIndex}_$colIndex") {
+                                    TableCell(
+                                        content = cell.trim(),
+                                        width = columnWidths[colIndex],
+                                        style = cellStyle,
+                                        usePlainText = usePlainTextCells,
+                                        contentKey = if (contentKey.isNotBlank()) "${contentKey}_tr_${rowIndex}_td_$colIndex" else "",
+                                        backgroundColor = rowBackgroundColor,
+                                        drawRightSeparator = colIndex < row.lastIndex,
+                                        separatorColor = columnDividerColor
+                                    )
+                                }
                             }
                         }
                     }
@@ -168,7 +184,10 @@ private fun TableCell(
     width: androidx.compose.ui.unit.Dp,
     style: TextStyle,
     usePlainText: Boolean,
-    contentKey: String
+    contentKey: String,
+    backgroundColor: Color,
+    drawRightSeparator: Boolean = false,
+    separatorColor: Color = Color.Transparent
 ) {
     val textColor = MaterialTheme.colorScheme.onSurface
     // 内联代码不使用背景色
@@ -181,7 +200,19 @@ private fun TableCell(
 
     Box(
         modifier = Modifier
-            .width(width)
+            .requiredWidthIn(min = width)
+            .drawBehind {
+                drawRect(backgroundColor)
+                if (drawRightSeparator) {
+                    val strokeWidth = 0.5.dp.toPx()
+                    drawLine(
+                        color = separatorColor,
+                        start = androidx.compose.ui.geometry.Offset(size.width - strokeWidth / 2f, 0f),
+                        end = androidx.compose.ui.geometry.Offset(size.width - strokeWidth / 2f, size.height),
+                        strokeWidth = strokeWidth
+                    )
+                }
+            }
             .padding(horizontal = 12.dp),
         contentAlignment = Alignment.CenterStart
     ) {

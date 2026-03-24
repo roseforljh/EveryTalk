@@ -1,5 +1,6 @@
 package com.android.everytalk.data.network
 
+import android.annotation.SuppressLint
 import android.media.*
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
@@ -890,6 +891,7 @@ class VoiceChatSession(
     /**
      * 创建AudioRecord
      */
+    @SuppressLint("MissingPermission")
     private fun createAudioRecord(): AudioRecord? {
         val minBufSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
         val bufSize = (if (minBufSize > 0) minBufSize else 2048) * 2

@@ -107,8 +107,7 @@ abstract class AppDatabase : RoomDatabase() {
 
         val MIGRATION_5_6 = object : Migration(5, 6) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("ALTER TABLE api_configs ADD COLUMN openClawSessionId TEXT")
-                db.execSQL("UPDATE api_configs SET openClawSessionId = NULL")
+                // openClawSessionId 已在 4 -> 5 中添加，这里保持空迁移，避免重复加列导致闪退。
             }
         }
     }

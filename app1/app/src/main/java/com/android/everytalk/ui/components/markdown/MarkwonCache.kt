@@ -37,8 +37,7 @@ object MarkwonCache {
         imageClickListener: ((String) -> Unit)? = null
     ): Markwon {
         val roundedSize = textSize.toInt()
-        // v11: restore plugin order for stable inline math rendering
-        val cacheKey = "v11_dark=${isDark}_size=${roundedSize}"
+        val cacheKey = "v12_dark=${isDark}_size=${roundedSize}"
         
         synchronized(lock) {
             cacheMap[cacheKey]?.let { return it }
@@ -57,7 +56,8 @@ object MarkwonCache {
                 .usePlugin(JLatexMathPlugin.create(mathTextSize) { builder ->
                     // 启用内联数学公式支持
                     builder.inlinesEnabled(true)
-                    // 块公式自动缩放以适配画布宽度（fallback，BreakableLatexRenderer 优先处理换行）
+                    // 块公式保持原始结构与尺寸，不做自动 fit-canvas 压缩，
+                    // 由上层横向滚动/专用渲染器处理超宽场景，避免矩阵、求和、偏导被挤压失真。
                     builder.theme().blockFitCanvas(false)
                 })
                 .usePlugin(MarkwonInlineParserPlugin.create())

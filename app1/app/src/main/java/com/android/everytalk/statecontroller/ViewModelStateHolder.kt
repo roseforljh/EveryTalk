@@ -13,6 +13,7 @@ import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.VoiceBackendConfig
 import com.android.everytalk.models.SelectedMediaItem
+import com.android.everytalk.util.AppLogger
 import com.android.everytalk.util.ScrollController
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CoroutineScope
@@ -917,7 +918,7 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
     ) {
         val messageList = if (isImageGeneration) imageGenerationMessages else messages
         val index = messageList.indexOfFirst { it.id == messageId }
-        android.util.Log.d(
+        AppLogger.debug(
             "SlashCommand",
             "finishLocalSlashLoading messageId=$messageId index=$index finalText=${finalText.take(120)}"
         )
@@ -928,7 +929,7 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
                 contentStarted = finalText.isNotBlank(),
                 timestamp = System.currentTimeMillis()
             )
-            android.util.Log.d(
+            AppLogger.debug(
                 "SlashCommand",
                 "finishLocalSlashLoading updated contentStarted=${finalText.isNotBlank()} textLen=${finalText.length}"
             )

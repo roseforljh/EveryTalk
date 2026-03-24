@@ -36,8 +36,9 @@ class OpenClawSessionKeyTest {
         )
 
         val encoded = json.encodeToString(payload)
-        assertTrue(encoded.contains("\"agentId\":\"main\""))
         assertTrue(encoded.contains("\"sessionKey\":\"et:conv-42\""))
+        assertTrue(encoded.contains("\"message\":\"hello\""))
+        assertTrue(encoded.contains("\"idempotencyKey\":\"msg-1\""))
     }
 
     @Test

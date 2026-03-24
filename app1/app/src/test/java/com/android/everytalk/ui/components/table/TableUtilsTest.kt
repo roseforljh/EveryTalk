@@ -167,4 +167,5 @@ class TableUtilsTest {
         assertEquals(5, tableLines.size)
         assertEquals(5, nextIndex)
     }
+
 }

@@ -33,14 +33,13 @@ items
 
         val parts = ContentParser.parseCompleteContent(input)
 
-        // Print all parts for debugging
         parts.forEachIndexed { index, part ->
-            println("Part $index: ${part.javaClass.simpleName}")
             when (part) {
-                is ContentPart.Text -> println("  Text content (first 100 chars): ${part.content.take(100)}")
-                is ContentPart.Code -> println("  Language: '${part.language}', Code (first 100 chars): ${part.content.take(100)}")
-                is ContentPart.Table -> println("  Table lines: ${part.lines.size}")
-                is ContentPart.Math -> println("  Math content: ${part.content.take(100)}")
+                is ContentPart.Text -> assertNotNull(index)
+                is ContentPart.Code -> assertNotNull(part.language)
+                is ContentPart.StreamingCode -> assertNotNull(part.content)
+                is ContentPart.Table -> assertTrue(part.lines.isNotEmpty())
+                is ContentPart.Math -> assertNotNull(part.content)
             }
         }
 
@@ -68,12 +67,12 @@ items
         val parts = ContentParser.parseCompleteContent(input)
 
         parts.forEachIndexed { index, part ->
-            println("Part $index: ${part.javaClass.simpleName}")
             when (part) {
-                is ContentPart.Text -> println("  Text: '${part.content}'")
-                is ContentPart.Code -> println("  Language: '${part.language}', Content: '${part.content}'")
-                is ContentPart.Table -> println("  Table")
-                is ContentPart.Math -> println("  Math")
+                is ContentPart.Text -> assertNotNull(index)
+                is ContentPart.Code -> assertNotNull(part.language)
+                is ContentPart.StreamingCode -> assertNotNull(part.content)
+                is ContentPart.Table -> assertTrue(part.lines.isNotEmpty())
+                is ContentPart.Math -> assertNotNull(part.content)
             }
         }
 

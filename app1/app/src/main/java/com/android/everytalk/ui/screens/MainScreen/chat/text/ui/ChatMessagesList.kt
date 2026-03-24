@@ -147,7 +147,7 @@ fun ChatMessagesList(
         }
     }
     
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier.fillMaxSize()) {
             val topPadding = 85.dp
             val density = LocalDensity.current
             val topPaddingPx = with(density) { topPadding.toPx().toInt() }

@@ -306,6 +306,7 @@ android {
         testImplementation("io.mockk:mockk:1.13.8")
         testImplementation("app.cash.turbine:turbine:1.0.0")
         testImplementation("org.robolectric:robolectric:4.11.1")
+        testImplementation("androidx.compose.ui:ui-test-junit4")
         androidTestImplementation(libs.androidx.junit)
         androidTestImplementation(libs.androidx.espresso.core)
         androidTestImplementation(libs.androidx.ui.test.junit4)

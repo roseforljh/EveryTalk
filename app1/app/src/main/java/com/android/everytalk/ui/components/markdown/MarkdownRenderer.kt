@@ -205,6 +205,68 @@ private fun decodeCommonHtmlEntities(input: String): String {
     return s
 }
 
+private val SIMPLE_INLINE_MATH_SYMBOL_REPLACEMENTS = mapOf(
+    "\\hbar" to "ℏ",
+    "\\nabla" to "∇",
+    "\\nabla^2" to "∇²",
+    "\\partial" to "∂"
+)
+
+private fun normalizeSimpleInlineMathToUnicode(input: String): String {
+    if (!input.contains('$')) return input
+
+    val out = StringBuilder(input.length)
+    var inInlineCode = false
+    var i = 0
+
+    fun findClosingSingleDollar(start: Int): Int {
+        var j = start
+        while (j < input.length) {
+            val ch = input[j]
+            val escaped = j > 0 && input[j - 1] == '\\'
+            if (ch == '`' && !escaped) return -1
+            if (ch == '$' && !escaped) return j
+            if (ch == '\n') return -1
+            j++
+        }
+        return -1
+    }
+
+    while (i < input.length) {
+        val ch = input[i]
+        val escaped = i > 0 && input[i - 1] == '\\'
+
+        if (ch == '`' && !escaped) {
+            inInlineCode = !inInlineCode
+            out.append(ch)
+            i++
+            continue
+        }
+
+        if (!inInlineCode && ch == '$' && !escaped) {
+            val isDouble = i + 1 < input.length && input[i + 1] == '$'
+            if (!isDouble) {
+                val close = findClosingSingleDollar(i + 1)
+                if (close > i) {
+                    val rawContent = input.substring(i + 1, close)
+                    val normalized = rawContent.trim()
+                    val replacement = SIMPLE_INLINE_MATH_SYMBOL_REPLACEMENTS[normalized]
+                    if (replacement != null) {
+                        out.append(replacement)
+                        i = close + 1
+                        continue
+                    }
+                }
+            }
+        }
+
+        out.append(ch)
+        i++
+    }
+
+    return out.toString()
+}
+
 private fun normalizePlainLatexCommandsOutsideMath(input: String): String {
     if (!input.contains('\\')) return input
 
@@ -695,6 +757,10 @@ internal fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): 
 
     // 8.5 行内数学分隔符单向规范化（跳过代码围栏/行内代码）
     s = MathDelimiterNormalizer.normalize(s)
+
+    // 8.6 对极简单的行内数学符号（如 $\\hbar$、$\\partial$、$\\nabla$）做 Unicode 降级，
+    // 避免插件链在个别机型/组合场景下将这类极短公式整段吞掉，表现为“公式不显示”。
+    s = normalizeSimpleInlineMathToUnicode(s)
 
     // 非数学上下文中的裸 LaTeX 指令降级为可读符号，避免显示 \implies 这类原始命令
     s = normalizePlainLatexCommandsOutsideMath(s)

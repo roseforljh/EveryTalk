@@ -2,12 +2,19 @@ package com.android.everytalk.statecontroller
 
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.util.AppLogger
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 
 class ViewModelStateHolderOpenClawStateTest {
+
+    @Before
+    fun setUp() {
+        AppLogger.setDebugEnabled(false)
+    }
 
     @Test
     fun `conversation id change does not backfill openclaw session id`() {

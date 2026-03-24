@@ -272,9 +272,10 @@ open class MessageItemsController(
             false
         }
 
-        if (Log.isLoggable("AppViewModelVerbose", Log.VERBOSE)) {
+        val verboseTag = "AppViewModelVerbose"
+        if (Log.isLoggable(verboseTag, Log.VERBOSE)) {
             Log.v(
-                "AppViewModelVerbose",
+                verboseTag,
                 "computeBubbleState: id=${message.id.take(8)}, " +
                     "isStreaming=$isCurrentStreaming, hasReasoning=$hasReasoning, " +
                     "reasoningComplete=$reasoningComplete, contentStarted=${message.contentStarted}, " +

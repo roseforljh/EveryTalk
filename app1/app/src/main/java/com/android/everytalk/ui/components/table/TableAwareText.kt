@@ -347,7 +347,7 @@ fun TableAwareText(
                         TableRenderer(
                             lines = part.lines,
                             modifier = Modifier
-                                .fillMaxWidth()
+                                .wrapContentWidth()
                                 .padding(vertical = 8.dp),
                             isStreaming = false,
                             contentKey = if (contentKey.isNotBlank() && !isStreaming) {
@@ -364,39 +364,54 @@ fun TableAwareText(
                             (trimmed.startsWith("$$") && trimmed.endsWith("$$")) ||
                                 (trimmed.startsWith("\\[") && trimmed.endsWith("\\]"))
                         }
-                        if (isBlockMath && !isStreaming) {
-                            // 块级公式：流式结束后使用 BreakableLatexRenderer（自动换行+水平滑动）
-                            // 流式期间不能用 AndroidView——Compose 的 recomposition 每个 token 都会
-                            // 触发 AndroidView update 回调，导致布局抖动（Gemini 用 Litho 异步布局避免此问题）
-                            BreakableLatexRenderer(
-                                latex = part.content,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 8.dp),
-                                style = style,
-                                color = color,
-                                contentKey = if (contentKey.isNotBlank()) {
-                                    "${contentKey}_math_${index}_${part.content.hashCode()}"
-                                } else ""
-                            )
-                        } else {
-                            // 行内公式 或 流式模式下：使用 MarkdownRenderer
-                            MarkdownRenderer(
-                                markdown = part.content,
-                                style = style,
-                                color = color,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = if (isBlockMath) 8.dp else 0.dp),
-                                isStreaming = isStreaming,
-                                onLongPress = onLongPress,
-                                onImageClick = onImageClick,
-                                sender = sender,
-                                contentKey = if (contentKey.isNotBlank()) {
-                                    "${contentKey}_math_${index}_${part.content.hashCode()}"
-                                } else "",
-                                disableVerticalPadding = true
-                            )
+                        val forceMarkdownRenderer = remember(part.content) {
+                            MathRenderStrategy.shouldForceMarkdownRendererForMathPart(part.content)
+                        }
+                        val preferStableNativeRenderer = remember(part.content) {
+                            MathRenderStrategy.shouldPreferStableNativeMathRenderer(part.content)
+                        }
+                        val shouldUseBreakableMathRenderer = remember(part.content, isStreaming) {
+                            isBlockMath && !isStreaming &&
+                                !forceMarkdownRenderer &&
+                                !preferStableNativeRenderer &&
+                                MathRenderStrategy.shouldEnableHorizontalScrollForMathPart(part.content)
+                        }
+                        when {
+                            shouldUseBreakableMathRenderer -> {
+                                // 仅对超长且非结构化块公式启用 BreakableLatexRenderer。
+                                BreakableLatexRenderer(
+                                    latex = part.content,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 8.dp),
+                                    style = style,
+                                    color = color,
+                                    contentKey = if (contentKey.isNotBlank()) {
+                                        "${contentKey}_math_${index}_${part.content.hashCode()}"
+                                    } else ""
+                                )
+                            }
+                            else -> {
+                                // 矩阵 / 环境类公式强制使用 MarkdownRenderer；
+                                // 其余非超长块公式也统一走这里，避免专用 Drawable 路径整块空白。
+                                MarkdownRenderer(
+                                    markdown = part.content,
+                                    style = style,
+                                    color = color,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = if (isBlockMath) 8.dp else 0.dp),
+                                    isStreaming = isStreaming,
+                                    onLongPress = onLongPress,
+                                    onImageClick = onImageClick,
+                                    sender = sender,
+                                    contentKey = if (contentKey.isNotBlank()) {
+                                        "${contentKey}_math_${index}_${part.content.hashCode()}"
+                                    } else "",
+                                    disableVerticalPadding = true,
+                                    enablePureMathHorizontalScroll = isBlockMath
+                                )
+                            }
                         }
                     }
                 }
@@ -489,34 +504,6 @@ private fun StreamingCodeBlockCard(
             )
         }
     }
-}
-
-private fun shouldEnableHorizontalScrollForMathPart(math: String): Boolean {
-    val trimmed = math.trim()
-    if (trimmed.isEmpty()) return false
-
-    val isBlockMath = (trimmed.startsWith("$$") && trimmed.endsWith("$$")) ||
-        (trimmed.startsWith("\\[") && trimmed.endsWith("\\]"))
-    if (!isBlockMath) return false
-
-    val normalized = trimmed
-        .removePrefix("$$")
-        .removeSuffix("$$")
-        .removePrefix("\\[")
-        .removeSuffix("\\]")
-        .trim()
-
-    val longestLineLength = normalized.lines().maxOfOrNull { it.length } ?: 0
-    val hasLongComplexMath = longestLineLength >= 56 &&
-        (normalized.contains("\\frac") ||
-            normalized.contains("\\sum") ||
-            normalized.contains("\\int") ||
-            normalized.contains("\\prod") ||
-            normalized.contains("\\begin") ||
-            normalized.contains("\\left") ||
-            normalized.contains("\\right"))
-
-    return longestLineLength >= 72 || hasLongComplexMath
 }
 
 private data class InfographicItem(
