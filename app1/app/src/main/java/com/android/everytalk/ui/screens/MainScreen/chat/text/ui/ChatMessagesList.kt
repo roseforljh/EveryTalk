@@ -698,21 +698,14 @@ fun AiMessageItem(
                     viewModel.getStreamingRenderState(message.id)
                 }.collectAsState()
 
-                val shouldPreferStreamingBlocks =
+                val shouldPreferStreamingContent =
                     isStreaming ||
-                        streamingRenderState.isStreaming ||
-                        (streamingRenderState.isComplete && streamingRenderState.content.isNotBlank())
+                        streamingRenderState.isStreaming
 
-                val effectiveContent = if (shouldPreferStreamingBlocks) {
+                val effectiveContent = if (shouldPreferStreamingContent) {
                     streamingRenderState.content.ifBlank { message.text }
                 } else {
                     message.text
-                }
-
-                val effectiveBlocks = if (shouldPreferStreamingBlocks && streamingRenderState.blocks.isNotEmpty()) {
-                    streamingRenderState.blocks
-                } else {
-                    blockPayload?.blocks.orEmpty()
                 }
 
                 val renderMessage = if (effectiveContent == message.text) {
@@ -721,46 +714,29 @@ fun AiMessageItem(
                     message.copy(text = effectiveContent)
                 }
 
-                if (messageOutputType != "code" && effectiveBlocks.isNotEmpty()) {
-                    StreamBlocksRenderer(
-                        message = message,
-                        blocks = effectiveBlocks,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        messageOutputType = messageOutputType,
-                        viewModel = viewModel,
-                        onLongPress = onLongPress,
-                        onImageClick = onImageClick,
-                        onCodePreviewRequested = { lang, code ->
-                            previewLanguage = lang
-                            previewCode = code
-                        },
-                        onCodeCopied = {
-                            viewModel.showSnackbar("已复制代码")
-                        }
-                    )
-                } else {
-                    EnhancedMarkdownText(
-                        message = renderMessage,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        isStreaming = false,
-                        messageOutputType = messageOutputType,
-                        onLongPress = { _ -> onLongPress() },
-                        onImageClick = onImageClick,
-                        onCodePreviewRequested = { lang, code ->
-                            previewLanguage = lang
-                            previewCode = code
-                        },
-                        onCodeCopied = {
-                            viewModel.showSnackbar("已复制代码")
-                        },
-                        viewModel = viewModel,
-                        contentOverride = effectiveContent,
-                        contentKeyOverride = message.id,
-                        disableStreamingSubscription = true
-                    )
-                }
+                // 流式阶段也始终对累计全文做结构化分块解析，
+                // UI 依靠块级 stable key 复用前面已稳定的 block，
+                // 而不是让单个 MarkdownRenderer 重排整段文本。
+                EnhancedMarkdownText(
+                    message = renderMessage,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    isStreaming = shouldPreferStreamingContent,
+                    messageOutputType = messageOutputType,
+                    onLongPress = { _ -> onLongPress() },
+                    onImageClick = onImageClick,
+                    onCodePreviewRequested = { lang, code ->
+                        previewLanguage = lang
+                        previewCode = code
+                    },
+                    onCodeCopied = {
+                        viewModel.showSnackbar("已复制代码")
+                    },
+                    viewModel = viewModel,
+                    contentOverride = effectiveContent,
+                    contentKeyOverride = message.id,
+                    disableStreamingSubscription = true
+                )
             }
         }
     }

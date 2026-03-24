@@ -25,6 +25,116 @@ object OpenAIDirectClient {
     private const val TAG = "OpenAIDirectClient"
     private const val MAX_TOOL_LOOPS = 5
 
+    private class StreamingContentAggregator {
+        private val buffer = StringBuilder()
+
+        fun append(delta: String): List<String> {
+            if (delta.isEmpty()) return emptyList()
+            buffer.append(delta)
+            val out = mutableListOf<String>()
+            while (true) {
+                val flushLen = findFlushablePrefixLength(buffer.toString())
+                if (flushLen <= 0) break
+                out += buffer.substring(0, flushLen)
+                buffer.delete(0, flushLen)
+            }
+            return out
+        }
+
+        fun flushRemaining(): String {
+            val remaining = buffer.toString()
+            buffer.setLength(0)
+            return remaining
+        }
+
+        private fun findFlushablePrefixLength(text: String): Int {
+            if (text.isEmpty()) return -1
+            if (text.length >= 96) return findSafeCut(text, 96)
+
+            val doubleNewline = text.lastIndexOf("\n\n")
+            if (doubleNewline >= 0) {
+                val cut = doubleNewline + 2
+                return if (isSafePrefix(text.substring(0, cut))) cut else -1
+            }
+
+            val singleNewline = text.lastIndexOf('\n')
+            if (singleNewline >= 0) {
+                val cut = singleNewline + 1
+                return if (isSafePrefix(text.substring(0, cut))) cut else -1
+            }
+
+            val punctuationCut = findLastPunctuationBoundary(text)
+            if (punctuationCut > 0) {
+                return if (isSafePrefix(text.substring(0, punctuationCut))) punctuationCut else -1
+            }
+
+            val whitespaceCut = text.lastIndexOf(' ')
+            if (whitespaceCut > 0) {
+                val cut = whitespaceCut + 1
+                return if (isSafePrefix(text.substring(0, cut))) cut else -1
+            }
+
+            return -1
+        }
+
+        private fun findSafeCut(text: String, preferred: Int): Int {
+            val safeRegion = text.take(preferred)
+            val punctuationCut = findLastPunctuationBoundary(safeRegion)
+            if (punctuationCut > 0 && isSafePrefix(text.substring(0, punctuationCut))) return punctuationCut
+
+            val newlineCut = safeRegion.lastIndexOf('\n').takeIf { it >= 0 }?.plus(1) ?: -1
+            if (newlineCut > 0 && isSafePrefix(text.substring(0, newlineCut))) return newlineCut
+
+            val whitespaceCut = safeRegion.lastIndexOf(' ').takeIf { it >= 0 }?.plus(1) ?: -1
+            if (whitespaceCut > 0 && isSafePrefix(text.substring(0, whitespaceCut))) return whitespaceCut
+
+            return if (isSafePrefix(safeRegion)) safeRegion.length else -1
+        }
+
+        private fun findLastPunctuationBoundary(text: String): Int {
+            for (i in text.indices.reversed()) {
+                val ch = text[i]
+                if (ch == '。' || ch == '！' || ch == '？' || ch == '；' || ch == ':' || ch == '：' || ch == ',' || ch == '，') {
+                    return i + 1
+                }
+            }
+            return -1
+        }
+
+        private fun isSafePrefix(prefix: String): Boolean {
+            return !endsWithDangerousFragment(prefix) && !isInsideUnclosedFence(prefix)
+        }
+
+        private fun endsWithDangerousFragment(text: String): Boolean {
+            val line = text.substringAfterLast('\n')
+            val trimmed = line.trimEnd()
+            val startTrimmed = trimmed.trimStart()
+
+            if (startTrimmed == "#" || startTrimmed == "##" || startTrimmed == "###" ||
+                startTrimmed == "####" || startTrimmed == "#####" || startTrimmed == "######") return true
+            if (startTrimmed == "-" || startTrimmed == "+" || startTrimmed == "*" || startTrimmed == ">") return true
+            if (Regex("^\\d+\\.$").matches(startTrimmed)) return true
+            if (trimmed == "`" || trimmed == "``" || trimmed == "```") return true
+            if (trimmed == "**") return true
+            if (trimmed == "'" || trimmed == "\"") return true
+            if (trimmed.endsWith("</") || trimmed.endsWith("<")) return true
+            if (trimmed.endsWith("|") && trimmed.count { it == '|' } >= 2) return true
+            return false
+        }
+
+        private fun isInsideUnclosedFence(text: String): Boolean {
+            var idx = 0
+            var count = 0
+            while (true) {
+                val pos = text.indexOf("```", idx)
+                if (pos < 0) break
+                count++
+                idx = pos + 3
+            }
+            return (count % 2) == 1
+        }
+    }
+
     private var mcpToolExecutor: (suspend (String, JsonObject) -> JsonElement)? = null
 
     fun setMcpToolExecutor(executor: (suspend (String, JsonObject) -> JsonElement)?) {
@@ -608,6 +718,7 @@ object OpenAIDirectClient {
         var reasoningStarted = false
         var reasoningFinished = false
         var contentStarted = false
+        val contentAggregator = StreamingContentAggregator()
 
         try {
             while (!channel.isClosedForRead) {
@@ -630,7 +741,10 @@ object OpenAIDirectClient {
                                 val jsonChunk = Json.parseToJsonElement(chunk).jsonObject
 
                                 // 解析 OpenAI-compat choices[].delta
-                                val choice = jsonChunk["choices"]?.jsonArray?.firstOrNull()?.jsonObject
+                                val choicesElement = jsonChunk["choices"]
+                                val choice = (choicesElement as? JsonArray)
+                                    ?.firstOrNull()
+                                    ?.jsonObject
                                 if (choice != null) {
                                     val delta = choice["delta"]?.jsonObject
 
@@ -853,6 +967,7 @@ object OpenAIDirectClient {
         var reasoningStarted = false
         var reasoningFinished = false
         var contentStarted = false
+        val contentAggregator = StreamingContentAggregator()
         var hasToolCalls = false
 
         // 用于聚合流式的 tool_calls（OpenAI 会分多个 chunk 发送）
@@ -875,7 +990,10 @@ object OpenAIDirectClient {
                             }
                             try {
                                 val jsonChunk = Json.parseToJsonElement(chunk).jsonObject
-                                val choice = jsonChunk["choices"]?.jsonArray?.firstOrNull()?.jsonObject
+                                val choicesElement = jsonChunk["choices"]
+                                val choice = (choicesElement as? JsonArray)
+                                    ?.firstOrNull()
+                                    ?.jsonObject
 
                                 if (choice != null) {
                                     val delta = choice["delta"]?.jsonObject
@@ -901,29 +1019,35 @@ object OpenAIDirectClient {
                                         }
                                         if (!contentStarted) contentStarted = true
                                         fullText += contentText
-                                        emitEvent(AppStreamEvent.Content(contentText, null, null))
+                                        val aggregatedChunks = contentAggregator.append(contentText)
+                                        aggregatedChunks.forEach { aggregated ->
+                                            emitEvent(AppStreamEvent.Content(aggregated, null, ""))
+                                        }
                                     }
 
                                     // 处理工具调用 (OpenAI 格式: delta.tool_calls)
-                                    delta?.get("tool_calls")?.jsonArray?.forEach { tcElement ->
-                                        val tcObj = tcElement.jsonObject
-                                        val index = tcObj["index"]?.jsonPrimitive?.intOrNull ?: 0
-                                        val id = tcObj["id"]?.jsonPrimitive?.contentOrNull
-                                        val function = tcObj["function"]?.jsonObject
-                                        val name = function?.get("name")?.jsonPrimitive?.contentOrNull
-                                        val argumentsDelta = function?.get("arguments")?.jsonPrimitive?.contentOrNull ?: ""
+                                    val toolCallsElement = delta?.get("tool_calls")
+                                    if (toolCallsElement is JsonArray) {
+                                        toolCallsElement.forEach { tcElement ->
+                                            val tcObj = tcElement.jsonObject
+                                            val index = tcObj["index"]?.jsonPrimitive?.intOrNull ?: 0
+                                            val id = tcObj["id"]?.jsonPrimitive?.contentOrNull
+                                            val function = tcObj["function"]?.jsonObject
+                                            val name = function?.get("name")?.jsonPrimitive?.contentOrNull
+                                            val argumentsDelta = function?.get("arguments")?.jsonPrimitive?.contentOrNull ?: ""
 
-                                        val existing = toolCallsMap[index]
-                                        if (existing != null) {
-                                            existing.third.append(argumentsDelta)
-                                        } else {
-                                            toolCallsMap[index] = Triple(
-                                                id ?: "call_${System.currentTimeMillis()}_$index",
-                                                name ?: "",
-                                                StringBuilder(argumentsDelta)
-                                            )
+                                            val existing = toolCallsMap[index]
+                                            if (existing != null) {
+                                                existing.third.append(argumentsDelta)
+                                            } else {
+                                                toolCallsMap[index] = Triple(
+                                                    id ?: "call_${System.currentTimeMillis()}_$index",
+                                                    name ?: "",
+                                                    StringBuilder(argumentsDelta)
+                                                )
+                                            }
+                                            hasToolCalls = true
                                         }
-                                        hasToolCalls = true
                                     }
 
                                     // 检查 finish_reason
@@ -947,6 +1071,12 @@ object OpenAIDirectClient {
                         // SSE 注释/心跳，忽略
                     }
                 }
+            }
+
+            // 处理完成后，先冲刷剩余正文缓冲
+            val remainingContent = contentAggregator.flushRemaining()
+            if (remainingContent.isNotEmpty()) {
+                emitEvent(AppStreamEvent.Content(remainingContent, null, ""))
             }
 
             // 处理完成后，发送聚合的工具调用

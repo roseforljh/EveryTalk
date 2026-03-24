@@ -840,7 +840,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         // 仅在“接入系统提示”开启时，才把系统提示注入到本次会话
-        val engaged = stateHolder.systemPromptEngagedState[stateHolder._currentConversationId.value] ?: true
+        val engaged = stateHolder.systemPromptEngagedState[stateHolder._currentConversationId.value] ?: false
         val promptToUse = if (engaged) systemPrompt.value else null
         messageSender.sendMessage(
             messageText,

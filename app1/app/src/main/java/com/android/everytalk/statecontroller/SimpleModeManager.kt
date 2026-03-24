@@ -145,7 +145,6 @@ class SimpleModeManager(
             stateHolder._currentConversationId.value = newId
             stateHolder.updateOpenClawSessionId(null)
             stateHolder.systemPrompts[newId] = ""
-            stateHolder.systemPromptEngagedState[newId] = true
             // 不为新会话自动回填会话参数，保持默认关闭
         }
         

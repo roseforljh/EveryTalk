@@ -6,6 +6,7 @@ import android.content.ClipData
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -41,6 +42,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -52,6 +54,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
@@ -62,9 +65,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.ui.components.ContentParser
 import com.android.everytalk.ui.components.ContentPart
@@ -75,6 +80,7 @@ import com.android.everytalk.ui.components.markdown.MarkdownRenderer
 import com.android.everytalk.ui.components.icons.MdiIcon
 import com.android.everytalk.ui.components.icons.MdiIconAdaptive
 import com.android.everytalk.ui.components.icons.isMdiIconAvailable
+import com.android.everytalk.ui.theme.chatColors
 import com.android.everytalk.util.cache.ContentParseCache
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
@@ -151,31 +157,9 @@ fun TableAwareText(
                     }
                 }
 
-                // 增量解析保护：流式期间，如果新文本只是旧文本的追加，
-                // 只更新最后一个 Text 块，不全量重建 AST
-                val prevParts = parsedParts
-                if (streaming && prevParts.isNotEmpty()
-                    && previousText.isNotEmpty()
-                    && currentText.startsWith(previousText)
-                ) {
-                    val lastPart = prevParts.last()
-                    if (lastPart is ContentPart.Text) {
-                        val delta = currentText.substring(previousText.length)
-                        val updatedLast = ContentPart.Text(
-                            lastPart.content + delta,
-                            lastPart.startOffset
-                        )
-                        val newParts = prevParts.toMutableList()
-                        newParts[newParts.lastIndex] = updatedLast
-                        previousText = currentText
-                        // 流式期间不拆分 Math 块！
-                        // splitMathBlocksPublic 会改变 parts 列表结构（如 [Text] → [Text,Math,Text]），
-                        // 导致 Column 子项突变 → UI 重建 → 闪烁。
-                        // MarkdownRenderer 内部的 JLatexMathPlugin 已能渲染 math。
-                        return@mapLatest newParts
-                    }
-                }
-
+                // 流式阶段也对完整累计文本做后台结构化解析。
+                // 不再走“仅追加最后一个 Text 块”的快捷路径，否则列表/标题/表格/代码围栏
+                // 会长期停留在错误结构，直到结束才一次性纠正。
                 val parts = ContentParser.parseCompleteContent(currentText, isStreaming = streaming)
 
                 if (!streaming && cacheKey.isNotBlank()) {
@@ -240,13 +224,9 @@ fun TableAwareText(
             // 这正是导致画面疯狂跳动闪烁的最大元凶之一。
     ) {
         parsedParts.forEachIndexed { index, part ->
-            // 始终使用 类型+索引 作为 key，不包含 contentHash
-            // 1. 流式期间，contentHash 每帧变化 -> 组件被销毁重建 -> 闪烁
-            // 2. 流式结束，isStreaming 从 true→false 会导致 key 策略切换，
-            //    所有 key 同时变化 -> 全部组件重建 -> 结束瞬间闪一下
-            // MarkdownRenderer 内部已有 MarkdownRenderSignature tag 检查，
-            // 内容不变时不会重新渲染，所以 key 里不需要 contentHash
-            val stableKey = "${part.javaClass.simpleName}_$index"
+            // 使用类型 + startOffset 作为主 key，尽量贴近“结构块身份”而不是索引身份。
+            // 这样当前面块稳定、只更新尾部块时，前面的 Compose 子树可被最大化复用。
+            val stableKey = "${part.javaClass.simpleName}_${part.startOffset}"
 
             androidx.compose.runtime.key(stableKey) {
                 when (part) {
@@ -282,7 +262,8 @@ fun TableAwareText(
                                 color = color,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(vertical = 4.dp)
+                                    .padding(vertical = 4.dp),
+                                isStreaming = isStreaming
                             )
                         } else {
                             val clipboard = LocalClipboard.current
@@ -290,7 +271,7 @@ fun TableAwareText(
                                 language = part.language,
                                 code = part.content,
                                 modifier = Modifier.padding(vertical = 4.dp),
-                                isStreaming = isStreaming,
+                                isStreaming = false,
                                 onPreviewRequested = if (onCodePreviewRequested != null) {
                                     { onCodePreviewRequested(part.language ?: "", part.content) }
                                 } else null,
@@ -308,13 +289,21 @@ fun TableAwareText(
                             )
                         }
                     }
+                    is ContentPart.StreamingCode -> {
+                        StreamingCodeBlockCard(
+                            language = part.language,
+                            code = part.content,
+                            modifier = Modifier.padding(vertical = 4.dp),
+                            onLongPress = onLongPress
+                        )
+                    }
                     is ContentPart.Table -> {
                         TableRenderer(
                             lines = part.lines,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(vertical = 8.dp),
-                            isStreaming = isStreaming,
+                            isStreaming = false,
                             contentKey = if (contentKey.isNotBlank() && !isStreaming) {
                                 "${contentKey}_table_${index}_${part.lines.size}"
                             } else "",
@@ -376,6 +365,71 @@ fun TableAwareText(
             language = language,
             onDismiss = { previewState = null }
         )
+    }
+}
+
+@Composable
+private fun StreamingCodeBlockCard(
+    language: String?,
+    code: String,
+    modifier: Modifier = Modifier,
+    onLongPress: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null,
+) {
+    val displayLanguage = language?.trim()?.ifBlank { "CODE" }?.uppercase() ?: "CODE"
+    val isDarkTheme = androidx.compose.foundation.isSystemInDarkTheme()
+    val bg = MaterialTheme.chatColors.codeBlockBackground
+    val outline = if (isDarkTheme) {
+        Color.White.copy(alpha = 0.3f)
+    } else {
+        MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+    }
+    val headerContentColor = if (isDarkTheme) Color.White else Color.Black
+
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .border(1.5.dp, outline, RoundedCornerShape(8.dp)),
+        shape = RoundedCornerShape(8.dp),
+        color = bg
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(bg)
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = displayLanguage,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = headerContentColor,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                )
+                Text(
+                    text = "生成中",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = headerContentColor.copy(alpha = 0.7f)
+                )
+            }
+
+            val scrollState = rememberScrollState()
+            Text(
+                text = code.ifBlank { "\n" },
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp,
+                    color = MaterialTheme.colorScheme.onSurface
+                ),
+                softWrap = false,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(scrollState)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            )
+        }
     }
 }
 
@@ -532,9 +586,92 @@ private fun InfographicBlock(
     raw: String,
     style: TextStyle,
     color: Color,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isStreaming: Boolean = false
 ) {
     val (title, items) = remember(raw) { parseInfographic(raw) }
+
+    if (isStreaming) {
+        val reservedItemCount = remember(items.size) {
+            when {
+                items.size >= 4 -> items.size
+                raw.contains("items", ignoreCase = true) -> maxOf(items.size, 3)
+                else -> maxOf(items.size, 2)
+            }
+        }
+        val showSkeleton = raw.contains("infographic", ignoreCase = true) ||
+            raw.contains("title ", ignoreCase = true) ||
+            raw.contains("items", ignoreCase = true) ||
+            items.isNotEmpty()
+
+        if (showSkeleton) {
+            val headlineColor = if (color != Color.Unspecified) color else MaterialTheme.colorScheme.onSurface
+            val secondaryColor = MaterialTheme.colorScheme.onSurfaceVariant
+            val placeholderLineColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)
+
+            Column(modifier = modifier.fillMaxWidth()) {
+                Text(
+                    text = title.ifBlank { "正在生成信息图..." },
+                    style = style.copy(
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = style.fontSize * 1.1f
+                    ),
+                    color = headlineColor,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+
+                repeat(reservedItemCount) { index ->
+                    val item = items.getOrNull(index)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp)
+                    ) {
+                        Column(
+                            horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .background(placeholderLineColor, CircleShape)
+                            )
+
+                            if (index != reservedItemCount - 1) {
+                                Box(
+                                    modifier = Modifier
+                                        .width(2.dp)
+                                        .height(44.dp)
+                                        .background(placeholderLineColor)
+                                )
+                            }
+                        }
+
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(bottom = if (index != reservedItemCount - 1) 10.dp else 0.dp)
+                        ) {
+                            Text(
+                                text = item?.label?.ifBlank { "正在生成..." } ?: "正在生成...",
+                                style = style.copy(fontWeight = FontWeight.Medium),
+                                color = headlineColor,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = item?.desc?.ifBlank { "内容生成中" } ?: "内容生成中",
+                                style = style.copy(color = secondaryColor),
+                                color = secondaryColor,
+                                maxLines = 3,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
+            return
+        }
+    }
 
     if (title.isBlank() && items.isEmpty()) {
         MarkdownRenderer(

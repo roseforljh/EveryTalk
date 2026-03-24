@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.components
 
+import com.android.everytalk.ui.components.table.TableUtils
 import org.intellij.markdown.IElementType
 import org.intellij.markdown.MarkdownElementTypes
 import org.intellij.markdown.MarkdownTokenTypes
@@ -26,6 +27,12 @@ object ContentParser {
 
     fun parseCompleteContent(text: String, isStreaming: Boolean = false): List<ContentPart> {
         if (text.isEmpty()) return emptyList()
+
+        if (isStreaming) {
+            val streamingParts = parseStreamingFriendlyContent(text)
+            if (streamingParts.isNotEmpty()) return streamingParts
+        }
+
         val astTree = parser.buildMarkdownTreeFromString(text)
         return extractParts(astTree, text)
     }
@@ -99,6 +106,93 @@ object ContentParser {
 
         val merged = mergeAdjacentTextParts(parts)
         return splitMathBlocks(merged)
+    }
+
+    private fun parseStreamingFriendlyContent(text: String): List<ContentPart> {
+        val parts = mutableListOf<ContentPart>()
+        val lines = text.replace("\r\n", "\n").replace("\r", "\n").split('\n')
+        val textBuffer = StringBuilder()
+        var textStartOffset = 0
+        var offset = 0
+        var index = 0
+
+        fun flushText() {
+            if (textBuffer.isNotEmpty()) {
+                parts.add(ContentPart.Text(textBuffer.toString(), textStartOffset))
+                textBuffer.setLength(0)
+            }
+        }
+
+        while (index < lines.size) {
+            val line = lines[index]
+            val nextOffset = offset + line.length + 1
+
+            val fenceStart = line.trimStart()
+            if (fenceStart.startsWith("```")) {
+                flushText()
+                val startOffset = offset
+                val language = fenceStart.removePrefix("```").trim().ifBlank { null }
+                val rawFence = line
+                val codeBuilder = StringBuilder()
+                index++
+                offset = nextOffset
+                var closed = false
+                while (index < lines.size) {
+                    val currentLine = lines[index]
+                    val currentTrimmed = currentLine.trimStart()
+                    val currentNextOffset = offset + currentLine.length + 1
+                    if (currentTrimmed.startsWith("```")) {
+                        closed = true
+                        index++
+                        offset = currentNextOffset
+                        break
+                    }
+                    if (codeBuilder.isNotEmpty()) codeBuilder.append('\n')
+                    codeBuilder.append(currentLine)
+                    index++
+                    offset = currentNextOffset
+                }
+                if (closed) {
+                    parts.add(ContentPart.Code(language, codeBuilder.toString(), startOffset))
+                } else {
+                    parts.add(
+                        ContentPart.StreamingCode(
+                            language = language,
+                            content = codeBuilder.toString(),
+                            rawFence = rawFence,
+                            startOffset = startOffset,
+                        )
+                    )
+                    break
+                }
+                continue
+            }
+
+            if (TableUtils.isValidTableStart(lines, index)) {
+                flushText()
+                val startOffset = offset
+                val (tableLines, nextIndex) = TableUtils.extractTableLines(lines, index)
+                if (tableLines.isNotEmpty()) {
+                    parts.add(ContentPart.Table(tableLines, startOffset))
+                    while (index < nextIndex) {
+                        offset += lines[index].length + 1
+                        index++
+                    }
+                    continue
+                }
+            }
+
+            if (textBuffer.isEmpty()) {
+                textStartOffset = offset
+            }
+            if (textBuffer.isNotEmpty()) textBuffer.append('\n')
+            textBuffer.append(line)
+            index++
+            offset = nextOffset
+        }
+
+        flushText()
+        return splitMathBlocks(mergeAdjacentTextParts(parts))
     }
 
     private fun parseCodeFence(node: ASTNode, text: String): Pair<String?, String> {
@@ -410,6 +504,12 @@ sealed class ContentPart {
     
     data class Text(val content: String, override val startOffset: Int = 0) : ContentPart()
     data class Code(val language: String?, val content: String, override val startOffset: Int = 0) : ContentPart()
+    data class StreamingCode(
+        val language: String?,
+        val content: String,
+        val rawFence: String,
+        override val startOffset: Int = 0,
+    ) : ContentPart()
     data class Table(val lines: List<String>, override val startOffset: Int = 0) : ContentPart()
     data class Math(val content: String, override val startOffset: Int = 0) : ContentPart()
 
@@ -420,6 +520,7 @@ sealed class ContentPart {
     fun contentHash(): Int = when (this) {
         is Text -> content.hashCode()
         is Code -> (language.hashCode() * 31) + content.hashCode()
+        is StreamingCode -> ((language.hashCode() * 31) + content.hashCode()) * 31 + rawFence.hashCode()
         is Table -> lines.hashCode()
         is Math -> content.hashCode()
     }
@@ -431,6 +532,7 @@ sealed class ContentPart {
     fun contentPreview(): String = when (this) {
         is Text -> content
         is Code -> content
+        is StreamingCode -> content
         is Table -> lines.joinToString("\n")
         is Math -> content
     }

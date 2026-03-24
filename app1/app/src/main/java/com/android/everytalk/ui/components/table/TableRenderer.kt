@@ -212,8 +212,7 @@ private fun TableCell(
                 text = annotatedText,
                 style = style,
                 color = textColor,
-                maxLines = 10,
-                overflow = TextOverflow.Ellipsis
+                overflow = TextOverflow.Clip
             )
         }
     }

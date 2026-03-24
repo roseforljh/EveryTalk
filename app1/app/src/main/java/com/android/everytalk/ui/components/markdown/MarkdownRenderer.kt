@@ -63,6 +63,10 @@ private val BLOCK_PLACEHOLDER_PATTERN = Regex("(?m)^[ \\t]*\\[double dollar][ \\
 private val SPORTS_SCORE_PATTERN = Regex("^\\d{1,3}\\s*[:：]\\s*\\d{1,3}$")
 private val PURE_BLOCK_DOLLAR_MATH_REGEX = Regex("^\\s*\\$\\$[\\s\\S]*\\$\\$\\s*$")
 private val PURE_BLOCK_BRACKET_MATH_REGEX = Regex("^\\s*\\\\\\[[\\s\\S]*\\\\\\]\\s*$")
+private val STREAMING_TAIL_HEADING_REGEX = Regex("(?m)^(#{1,6})(?=\\S)")
+private val STREAMING_TAIL_UNORDERED_LIST_REGEX = Regex("(?m)^(\\s*)([-+*])\\s+")
+private val STREAMING_TAIL_ORDERED_LIST_REGEX = Regex("(?m)^(\\s*)(\\d+)\\.\\s+")
+private val STREAMING_TAIL_BLOCKQUOTE_REGEX = Regex("(?m)^(\\s*)>\\s+")
 private val INLINE_DOUBLE_DOLLAR_MATH_REGEX = Regex("\\$\\$(?!\\$)([^\\n]+?)\\$\\$(?!\\$)")
 private val FIRST_BLOCK_MATH_TOKEN_REGEX = Regex("\\$\\$(?!\\$)[\\s\\S]+?\\$\\$(?!\\$)")
 private val plainLatexReplacements = listOf(
@@ -563,6 +567,32 @@ private fun escapeCurrencyOutsideMath(input: String): String {
     return out.toString()
 }
 
+private fun freezeStreamingTailBlockSyntax(input: String): String {
+    if (input.isBlank()) return input
+
+    val lastBoundary = input.lastIndexOf("\n\n")
+    if (lastBoundary < 0 || lastBoundary + 2 >= input.length) return input
+
+    val stable = input.substring(0, lastBoundary + 2)
+    var tail = input.substring(lastBoundary + 2)
+
+    tail = STREAMING_TAIL_HEADING_REGEX.replace(tail) { mr -> "\\${mr.groupValues[1]}" }
+    tail = STREAMING_TAIL_UNORDERED_LIST_REGEX.replace(tail) { mr -> "${mr.groupValues[1]}\\${mr.groupValues[2]} " }
+    tail = STREAMING_TAIL_ORDERED_LIST_REGEX.replace(tail) { mr -> "${mr.groupValues[1]}${mr.groupValues[2]}\\. " }
+    tail = STREAMING_TAIL_BLOCKQUOTE_REGEX.replace(tail) { mr -> "${mr.groupValues[1]}\\> " }
+
+    val lines = tail.lines()
+    val looksLikeTable = lines.count { it.contains('|') } >= 2 &&
+        lines.any { it.contains("|---") || it.contains("---|") || it.contains(":---") || it.contains("---:") }
+    if (looksLikeTable) {
+        tail = lines.joinToString("\n") { line ->
+            if (line.contains('|')) line.replace("|", "\\|") else line
+        }
+    }
+
+    return stable + tail
+}
+
 /**
  * 预处理 Markdown 文本（简化版）
  *
@@ -616,6 +646,12 @@ internal fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): 
 
     // 6.5 防误判缩进代码块：把数学/中文说明的 4 空格缩进恢复为普通文本
     s = normalizeAccidentalIndentedNonCode(s)
+
+    // 6.7 流式阶段：冻结最后一段未稳定尾巴中的块级 Markdown 语法，
+    // 避免标题/列表/引用/表格在尚未完成时触发整段结构重排。
+    if (isStreaming) {
+        s = freezeStreamingTailBlockSyntax(s)
+    }
 
     // 7. Hard Break Enforcement
     val lines = s.lines()
