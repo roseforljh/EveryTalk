@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.13.1](https://github.com/roseforljh/EveryTalk/compare/v1.13.0...v1.13.1) (2026-03-24)
+
+
+### Bug Fixes
+
+* "/model、/models" ([31d9fe3](https://github.com/roseforljh/EveryTalk/commit/31d9fe3c424ef0acbfb1ee1bef515c3eb7cc59cb))
+* 修复openai兼容渠道 ([db45344](https://github.com/roseforljh/EveryTalk/commit/db45344c540307f36e393af63e705c97ff95517e))
+* 修复乱码 ([73042ab](https://github.com/roseforljh/EveryTalk/commit/73042abbc6939c3f52069bca0b40b3fbb4502a0e))
+* 删除垃圾日志 ([56d1b84](https://github.com/roseforljh/EveryTalk/commit/56d1b841e0fb0aeda70ddcc54936d9744af38291))
+* 输出优化 ([02221d9](https://github.com/roseforljh/EveryTalk/commit/02221d94e694e0e3ced38aa2c48c09e0b6143145))
+
 ## [1.13.0](https://github.com/roseforljh/EveryTalk/compare/v1.12.9...v1.13.0) (2026-03-15)
 
 
