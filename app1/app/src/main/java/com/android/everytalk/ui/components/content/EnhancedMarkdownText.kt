@@ -101,15 +101,6 @@ fun EnhancedMarkdownText(
         remember(staticContent) { mutableStateOf(staticContent) }
     }
     
-    // 调试：仅在 content 实际变化时记录，避免每次重组都打日志
-    if (isStreaming && com.android.everytalk.BuildConfig.DEBUG) {
-        LaunchedEffect(content) {
-            android.util.Log.d(
-                "EnhancedMarkdownText",
-                "馃摑 Streaming content updated: msgId=${message.id.take(8)}, len=${content.length}, preview=${content.take(30)}"
-            )
-        }
-    }
 
     // 委托给 ContentCoordinator 统一调度
     // 优势：

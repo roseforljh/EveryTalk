@@ -94,7 +94,6 @@ class StreamingBuffer(
         }
         
         if (newInterval != updateInterval) {
-            Log.d(TAG, "[$messageId] Adaptive interval: ${updateInterval}ms -> ${newInterval}ms (${charsPerSecond} chars/s)")
             updateInterval = newInterval
         }
         
@@ -106,7 +105,6 @@ class StreamingBuffer(
                     val newThreshold = (dynamicBatchThreshold + BATCH_THRESHOLD_INCREMENT)
                         .coerceAtMost(MAX_DYNAMIC_BATCH_THRESHOLD)
                     if (newThreshold != dynamicBatchThreshold) {
-                        Log.d(TAG, "[$messageId] Batch threshold: $dynamicBatchThreshold -> $newThreshold chars")
                         dynamicBatchThreshold = newThreshold
                     }
                 }
@@ -158,7 +156,7 @@ class StreamingBuffer(
         
         PerformanceMonitor.recordBufferFlush(messageId, incrementalContent.length, fullContent.length)
         
-        if (flushCount % PerformanceConfig.STREAMING_BUFFER_LOG_SAMPLE_INTERVAL == 0) {
+        if (flushCount % PerformanceConfig.STREAMING_BUFFER_LOG_SAMPLE_INTERVAL == 0 && PerformanceMonitor.enabled) {
             val avgCharsPerFlush = if (flushCount > 0) totalCharsProcessed / flushCount else 0
             Log.d(TAG, "[$messageId] Flush #$flushCount: interval=${updateInterval}ms, avg=$avgCharsPerFlush chars/flush")
         }
@@ -199,7 +197,9 @@ class StreamingBuffer(
             pendingFlushJob = null
             
             val avgCharsPerFlush = if (flushCount > 0) totalCharsProcessed / flushCount else 0
-            Log.d(TAG, "[$messageId] Cleared. Stats: totalChars=$totalCharsProcessed, flushes=$flushCount, avg=$avgCharsPerFlush")
+            if (PerformanceMonitor.enabled) {
+                Log.d(TAG, "[$messageId] Cleared. Stats: totalChars=$totalCharsProcessed, flushes=$flushCount, avg=$avgCharsPerFlush")
+            }
             
             buffer.clear()
             accumulatedContent.clear()

@@ -249,11 +249,8 @@ class ApiHandler(
             logger.debug("Memory pressure cleanup triggered before starting new stream")
         }
         
-        // 🎯 启动流式状态管理
-        stateHolder.streamingMessageStateManager.startStreaming(aiMessageId)
-        logger.debug("Started streaming for message: $aiMessageId")
-        
         // 🎯 创建 StreamingBuffer 用于节流更新（Requirements: 1.1, 3.1, 3.2）
+        // StreamingMessageStateManager 的初始化统一由 createStreamingBuffer 负责，避免重复 startStreaming
         stateHolder.createStreamingBuffer(aiMessageId, isImageGeneration)
         logger.debug("Created StreamingBuffer for message: $aiMessageId")
 
@@ -451,14 +448,9 @@ class ApiHandler(
                             }
                         }
                         .onCompletion { cause ->
-                            logger.debug("=== STREAM COMPLETION START ===")
                             logger.debug("Stream completion for messageId: $aiMessageId, cause: $cause, isImageGeneration: $isImageGeneration")
                         }
                         .collect { appEvent ->
-                            // 🔍 [STREAM_DEBUG] 记录每个事件的接收时间
-                            val timestamp = System.currentTimeMillis()
-                            android.util.Log.i("STREAM_DEBUG", "[ApiHandler] 🔥 EVENT RECEIVED at $timestamp: ${appEvent::class.simpleName}, msgId=$aiMessageId")
-                            
                             val currentJob = if (isImageGeneration) stateHolder.imageApiJob else stateHolder.textApiJob
                             val currentStreamingId = if (isImageGeneration)
                                 stateHolder._currentImageStreamingAiMessageId.value
@@ -482,8 +474,6 @@ class ApiHandler(
                             
                             processStreamEvent(appEvent, aiMessageId, isImageGeneration)
                             newEventChannel.trySend(appEvent)
-                            
-                            android.util.Log.i("STREAM_DEBUG", "[ApiHandler] ✅ EVENT PROCESSED at ${System.currentTimeMillis()}: took ${System.currentTimeMillis() - timestamp}ms")
 
                             // 🎯 如果收到终止事件，主动结束流收集，确保触发 onCompletion 从而重置按钮状态
                             if (appEvent is AppStreamEvent.Finish || appEvent is AppStreamEvent.StreamEnd || appEvent is AppStreamEvent.Error) {
@@ -595,8 +585,6 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                             }
                             // sampling-based performance record
                             PerformanceMonitor.recordEvent(aiMessageId, "Content", filteredChunk.length)
-                            // 🔍 [STREAM_DEBUG_ANDROID]
-                            android.util.Log.i("STREAM_DEBUG", "[ApiHandler] ✅ Content event received: msgId=$aiMessageId, chunkLen=${filteredChunk.length}, preview='${filteredChunk.take(30)}'")
                             stateHolder.appendContentToMessage(aiMessageId, filteredChunk, isImageGeneration)
                             // 🎯 第一个非空内容到来时，标记contentStarted = true
                             // 这样思考框会收起，正式内容开始流式展示
@@ -784,12 +772,6 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
 
                     // 🎯 刷新 StreamingBuffer 确保所有内容已提交（Requirements: 3.3, 7.1, 7.2）
                     stateHolder.flushStreamingBuffer(aiMessageId)
-                    logger.debug("Flushed StreamingBuffer for message: $aiMessageId")
-                    
-                    // 🎯 强制 StreamingMessageStateManager 最终 flush (忽略代码块闭合检查)
-                    // 这一步至关重要，确保 UI 层的 StateFlow 接收到最后一段可能被暂缓的文本
-                    stateHolder.streamingMessageStateManager.finalizeMessage(aiMessageId)
-                    logger.debug("Finalized StreamingMessageStateManager for message: $aiMessageId")
                     
                     // 🎯 Task 11: Log performance metrics at stream completion
                     // This provides a summary of streaming performance for debugging

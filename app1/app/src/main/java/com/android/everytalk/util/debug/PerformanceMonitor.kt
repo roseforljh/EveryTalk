@@ -21,7 +21,7 @@ import kotlin.math.max
 object PerformanceMonitor {
 
     // Config (can be made dynamic via PerformanceConfig later)
-    @Volatile var enabled: Boolean = true
+    @Volatile var enabled: Boolean = false
     @Volatile var tag: String = "STREAM"
     @Volatile var firstNStraightLogs: Int = 5       // first N items are logged verbosely
     @Volatile var everyMSampled: Int = 10           // then sample every Mth item

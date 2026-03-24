@@ -73,7 +73,7 @@ object PerformanceConfig {
     const val POPUP_ANIMATION_DURATION_MS = 200L
     
     // 日志配置
-    const val ENABLE_PERFORMANCE_LOGGING = true
+    const val ENABLE_PERFORMANCE_LOGGING = false
     const val LOG_TAG_PERFORMANCE = "AppPerformance"
     
     // 主线程监控
@@ -136,7 +136,7 @@ object PerformanceConfig {
     /**
      * 启用渲染切换日志：记录isStreaming切换、解析完成、高度变化
      */
-    const val ENABLE_RENDER_TRANSITION_LOGGING = true
+    const val ENABLE_RENDER_TRANSITION_LOGGING = false
     
     // ===== Markwon缓存配置 =====
     /**

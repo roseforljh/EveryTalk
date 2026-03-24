@@ -46,6 +46,9 @@ class StreamingMessageStateManager {
     // Track which messages are currently streaming
     private val activeStreamingMessages = ConcurrentHashMap.newKeySet<String>()
 
+    // Track messages that have already been finalized to keep finish idempotent
+    private val finalizedMessages = ConcurrentHashMap.newKeySet<String>()
+
     private val supervisorJob = SupervisorJob()
     private val scope = CoroutineScope(Dispatchers.Default + supervisorJob)
     private val pendingBuffers: MutableMap<String, StringBuilder> = ConcurrentHashMap()
@@ -80,6 +83,7 @@ class StreamingMessageStateManager {
 
     fun startStreaming(messageId: String) {
         activeStreamingMessages.add(messageId)
+        finalizedMessages.remove(messageId)
         streamingStates.getOrPut(messageId) {
             MutableStateFlow("")
         }
@@ -153,9 +157,9 @@ class StreamingMessageStateManager {
         buf.setLength(0)
 
         if (delta.length >= 50 || currentLength > 3000) {
-            Log.i(
-                "STREAM_DEBUG",
-                "[StreamingMessageStateManager] ✅ Flush: len=${currentLength}, delta=${delta.length}, interval=${adaptiveInterval}ms"
+            Log.d(
+                "StreamingMessageStateManager",
+                "Flush: len=$currentLength, delta=${delta.length}, interval=${adaptiveInterval}ms"
             )
         }
         PerformanceMonitor.recordStateFlowFlush(messageId, delta.length, currentLength + delta.length)
@@ -168,18 +172,14 @@ class StreamingMessageStateManager {
     fun updateContent(messageId: String, content: String) {
         val stateFlow = streamingStates[messageId]
         if (stateFlow != null) {
-            Log.i(
-                "STREAM_DEBUG",
-                "[StreamingMessageStateManager] ✅ Content updated: msgId=$messageId, len=${content.length}, preview='${content.take(50)}'"
-            )
             pendingBuffers.remove(messageId)
             pendingJobs.remove(messageId)?.cancel()
             stateFlow.value = content
             updateRenderState(messageId, content, isComplete = false)
         } else {
             Log.w(
-                "STREAM_DEBUG",
-                "[StreamingMessageStateManager] ⚠️ Creating new state: msgId=$messageId, len=${content.length}"
+                "StreamingMessageStateManager",
+                "Creating new state for message: $messageId, len=${content.length}"
             )
             streamingStates[messageId] = MutableStateFlow(content)
             streamingRenderStates[messageId] = MutableStateFlow(
@@ -198,6 +198,10 @@ class StreamingMessageStateManager {
     }
 
     fun finalizeMessage(messageId: String): String {
+        if (!finalizedMessages.add(messageId)) {
+            return streamingStates[messageId]?.value ?: ""
+        }
+
         pendingJobs.remove(messageId)?.cancel()
 
         val stateFlow = streamingStates[messageId]
@@ -209,9 +213,9 @@ class StreamingMessageStateManager {
             updateRenderState(messageId, stateFlow.value, isComplete = false)
             buf.setLength(0)
 
-            Log.i(
-                "STREAM_DEBUG",
-                "[StreamingMessageStateManager] 🏁 Final flush for $messageId: deltaLen=${delta.length}, totalLen=${stateFlow.value.length}"
+            Log.d(
+                "StreamingMessageStateManager",
+                "Final flush for $messageId: deltaLen=${delta.length}, totalLen=${stateFlow.value.length}"
             )
         }
 

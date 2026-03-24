@@ -620,13 +620,9 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
         streamingBuffers[messageId]?.let { buffer ->
             buffer.flush()
 
-            // 🎯 Finish streaming in StreamingMessageStateManager
-            streamingMessageStateManager.finishStreaming(messageId)
-
+            // 这里只负责把缓冲区内容推进到 StreamingMessageStateManager，最终收尾统一由 syncStreamingMessageToList 负责
             // 重置增量计数器，避免后续错误计算
             streamingLastLengths.remove(messageId)
-
-            android.util.Log.d("ViewModelStateHolder", "Flushed StreamingBuffer and finished streaming for message: $messageId")
         }
     }
     
@@ -798,11 +794,6 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
     fun appendReasoningToMessage(messageId: String, text: String, isImageGeneration: Boolean = false) {
         val state = streamingReasoningStates.getOrPut(messageId) { MutableStateFlow("") }
         state.value += text
-
-        android.util.Log.i(
-            "STREAM_DEBUG",
-            "[ViewModelStateHolder] 鉁?Streaming reasoning updated: msgId=$messageId, totalLen=${state.value.length}"
-        )
 
         if (isImageGeneration) {
             isImageConversationDirty.value = true

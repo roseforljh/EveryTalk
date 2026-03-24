@@ -1170,10 +1170,7 @@ fun MarkdownRenderer(
                             }
                         }, start, end, Spannable.SPAN_EXCLUSIVE_INCLUSIVE)
                     }
-                    // 若 asyncSpans 为空，打印一次日志帮助定位
-                    if (asyncSpans.isEmpty()) {
-                        android.util.Log.d("MarkdownRenderer", "No AsyncDrawableSpan found; will fallback to ImageSpan")
-                    }
+                    // 若 asyncSpans 为空，直接继续回退到 ImageSpan，无需重复打印日志
 
                     val imageSpans = text.getSpans(0, text.length, android.text.style.ImageSpan::class.java)
                     imageSpans.forEach { imageSpan ->
