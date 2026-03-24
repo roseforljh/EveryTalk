@@ -67,12 +67,12 @@ fun ChatMessagesList(
 ) {
     val haptic = LocalHapticFeedback.current
     val coroutineScope = rememberCoroutineScope()
-    // 濮橀晲绠欓崠鏍电窗缁夊娅巃nimatedItems閿涘奔绗夐崘宥夋付鐟曚浇鎷烽煪顏勫З閻㈣崵濮搁幀?
+    // 防止 AnimatedItems 等状态在重组时被重复触发
 
     var isContextMenuVisible by remember { mutableStateOf(false) }
     var contextMenuMessage by remember { mutableStateOf<Message?>(null) }
     var contextMenuPressOffset by remember { mutableStateOf(Offset.Zero) }
-    // 闂冩煡鍣告径宥埿曢崣鎴窗閸︺劍鐎惌顓熸闂傛潙鍞撮崣顏勫帒鐠侀晲绔村▎锟狀暕鐟欏牆鑴婇崙?
+    // 防重复触发：在极短时间内只允许一次预览弹出
     var lastImagePreviewAt by remember { mutableStateOf(0L) }
 
     val isApiCalling by viewModel.isTextApiCalling.collectAsState()
@@ -270,12 +270,12 @@ fun ChatMessagesList(
                 }
             }
         ) { index, item ->
-            // 閺嶈宓佸☉鍫熶紖缁鐎烽崘鍐茬暰Box閺勵垰鎯侀崡鐘冲姬鐎硅棄瀹?
+            // 判断是否为用户消息，用于决定布局和对齐方式
             val isUserMessage = item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage ||
                 (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.ErrorMessage &&
                  viewModel.getMessageById((item as com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.ErrorMessage).messageId)?.sender == com.android.everytalk.data.DataClass.Sender.User)
             
-            // 閻栬泛顔愰崳銊х埠娑撯偓閹貉冨煑瀹革箑褰哥€靛綊缍堥敍宀勪缉閸忓秴鐡欓弽鎴﹀櫢缂?閸ュ墽澧栫亸鍝勵嚟閸ョ偠鐨熼懛鏉戭嚠姒绘劕銇戦弫?
+                    // 根据消息类型决定对齐方式和气泡布局
             val itemAlignment = when (item) {
                 is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage -> Alignment.CenterEnd
                 is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.ErrorMessage -> {
@@ -298,10 +298,10 @@ fun ChatMessagesList(
                 contentAlignment = itemAlignment
             ) {
 
-                    // 閻劍鍩涘☉鍫熶紖閻╁瓨甯村〒鍙夌厠閿涘奔绗夐棁鈧憰涓唎lumn閸栧懓顥?
+                    // 根据消息类型渲染不同内容；这里不用 Column 包裹以避免额外布局抖动
                     when (item) {
                         is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage -> {
-                            // 娴ｈ法鏁?Row + Arrangement.End 瀵搫鍩楅崣瀹犲垱姒绘劧绱濋柆鍨帳娴犺缍嶉柌宥囩矋閹存牜鍩楃€靛綊缍堥崣妯哄闁姵鍨氬鍌溞?
+                            // 使用 Row + Arrangement.End，确保用户消息稳定靠右显示
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.End,
@@ -337,7 +337,7 @@ fun ChatMessagesList(
                                             )
                                         }
                                         if (item.text.isNotBlank()) {
-                                            // 婢跺秶鏁ら弬鍥ㄦ拱濮樻梹鍦哄〒鍙夌厠
+                                            // 纯文本用户消息内容
                                             UserOrErrorMessageContent(
                                                 message = message,
                                                 displayedText = item.text,
@@ -606,7 +606,7 @@ fun ChatMessagesList(
                 message = message,
                 pressOffset = with(density) {
                     if (message.sender == com.android.everytalk.data.DataClass.Sender.User) {
-                        // 閺傚洦婀板Ο鈥崇础閻劍鍩涘鏃€鍦洪敍姘崇箻娑撯偓濮濄儰绗呯粔璁充簰鐠愮绻庨幍瀣瘹
+                        // 文本模式用户气泡：进一步下移以贴近手指
                         Offset(contextMenuPressOffset.x, contextMenuPressOffset.y)
                     } else {
                         Offset(contextMenuPressOffset.x, contextMenuPressOffset.y)
@@ -632,11 +632,11 @@ fun ChatMessagesList(
 }
 
 enum class ContentType {
-    SIMPLE         // 閺咁噣鈧艾鍞寸€圭櫢绱濇担璺ㄦ暏濮濓絽鐖堕崘鍛扮珶鐠?
+    SIMPLE         // 普通内容，使用正常内边距
 }
 
 fun detectContentTypeForPadding(text: String): ContentType {
-    // 閹碘偓閺堝鍞寸€瑰綊鍏樻担璺ㄦ暏濮濓絽鐖堕崘鍛扮珶鐠?
+    // 所有内容都使用正常内边距
     return ContentType.SIMPLE
 }
 

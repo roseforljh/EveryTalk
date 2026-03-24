@@ -1,5 +1,7 @@
 ﻿package com.android.everytalk.ui.components.table
 
+import android.content.ClipData
+
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -24,7 +26,7 @@ import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.Functions
-import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
@@ -45,6 +47,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.referentialEqualityPolicy
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -53,7 +56,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.AnnotatedString
@@ -72,24 +76,27 @@ import com.android.everytalk.ui.components.icons.MdiIcon
 import com.android.everytalk.ui.components.icons.MdiIconAdaptive
 import com.android.everytalk.ui.components.icons.isMdiIconAvailable
 import com.android.everytalk.util.cache.ContentParseCache
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.mapLatest
 
 /**
- * 琛ㄦ牸鎰熺煡鏂囨湰娓叉煋鍣紙浼樺寲鐗?+ 瀹炴椂娓叉煋锛?
+ * 表格感知文本渲染器（优化版 + 实时渲染）
  *
- * 鏍稿績绛栫暐锛?
- * - 娴佸紡妯″紡锛氬疄鏃跺垎鍧楁覆鏌擄紝琛ㄦ牸/浠ｇ爜鍧楀嵆鏃舵樉绀?
- * - 闈炴祦寮忔ā寮忥細鍒嗗潡娓叉煋锛屾瘡绉?ContentPart 绫诲瀷浣跨敤鏈€浼樼粍浠?
- * - 鍚庡彴瑙ｆ瀽锛氫娇鐢?flowOn(Dispatchers.Default) 鍦ㄥ悗鍙扮嚎绋嬭В鏋?AST
- * - referentialEqualityPolicy锛氶伩鍏嶄笉蹇呰鐨勭姸鎬佹洿鏂板鑷撮噸缁?
- * - 绋冲畾 Key锛氫娇鐢ㄧ储寮曚綔涓?key锛岄伩鍏嶅唴瀹瑰彉鍖栧鑷寸粍浠堕噸寤?
+ * 核心策略：
+ * - 流式模式：实时分块渲染，表格/代码块即时显示
+ * - 非流式模式：分块渲染，每种 ContentPart 类型使用最优组件
+ * - 后台解析：使用 flowOn(Dispatchers.Default) 在后台线程解析 AST
+ * - referentialEqualityPolicy：避免不必要的状态更新导致重组
+ * - 稳定 Key：使用索引作为 key，避免内容变化导致组件重建
  *
- * 缂撳瓨鏈哄埗锛氶€氳繃 contentKey 鎸佷箙鍖栬В鏋愮粨鏋滐紝閬垮厤 LazyColumn 鍥炴敹瀵艰嚧閲嶅瑙ｆ瀽
+ * 缓存机制：通过 contentKey 持久化解析结果，避免 LazyColumn 回收导致重复解析
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 @Composable
 fun TableAwareText(
     text: String,
@@ -98,14 +105,15 @@ fun TableAwareText(
     isStreaming: Boolean = false,
     modifier: Modifier = Modifier,
     recursionDepth: Int = 0,
-    contentKey: String = "",  // 鏂板锛氱敤浜庣紦瀛榢ey锛堥€氬父涓烘秷鎭疘D锛?
+    contentKey: String = "",  // 新增：用于缓存 key（通常为消息 ID）
     onLongPress: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null,
     onImageClick: ((String) -> Unit)? = null,
     sender: Sender = Sender.AI,
-    onCodePreviewRequested: ((String, String) -> Unit)? = null, // 浠ｇ爜棰勮鍥炶皟
-    onCodeCopied: (() -> Unit)? = null // 浠ｇ爜澶嶅埗鍥炶皟
+    onCodePreviewRequested: ((String, String) -> Unit)? = null, // 代码预览回调
+    onCodeCopied: (() -> Unit)? = null // 代码复制回调
 ) {
-    // 棰勮鐘舵€佺鐞?
+    // 预览状态管理
+    val coroutineScope = rememberCoroutineScope()
     var previewState by remember { mutableStateOf<Pair<String, String>?>(null) } // (code, language)
 
     var parsedParts by remember {
@@ -115,7 +123,7 @@ fun TableAwareText(
         )
     }
 
-    // 澧為噺瑙ｆ瀽锛氳褰曚笂涓€娆¤В鏋愭椂鐨勬枃鏈紝鐢ㄤ簬鍒ゆ柇鏄惁涓?append-only
+    // 增量解析：记录上一次解析时的文本，用于判断是否为 append-only
     var previousText by remember { mutableStateOf("") }
 
     val updatedText by rememberUpdatedState(text)
@@ -125,9 +133,9 @@ fun TableAwareText(
     } else ""
 
     LaunchedEffect(Unit) {
-        // 浠呯洃鍚枃鏈湰韬殑鍙樺寲鏉ヨЕ鍙戦噸鏂拌В鏋?
-        // 涓嶅啀灏?isStreaming 绾冲叆瑙﹀彂鏉′欢锛岄伩鍏嶆祦寮忕粨鏉熺灛闂村洜 isStreaming 鍒囨崲
-        // 鑰岃Е鍙戝叏閲忛噸瑙ｆ瀽+Compose鍏ㄩ噺閲嶇粍锛屽紩鍙戞暣涓皵娉￠棯涓€涓?
+        // 仅监听文本本身的变化来触发重新解析
+        // 不再将 isStreaming 纳入触发条件，避免流式结束瞬间因 isStreaming 切换
+        // 而触发全量重解析 + Compose 全量重组，导致整个气泡闪一下
         snapshotFlow { updatedText }
             .distinctUntilChanged()
             .mapLatest { currentText ->
@@ -143,8 +151,8 @@ fun TableAwareText(
                     }
                 }
 
-                // 澧為噺瑙ｆ瀽淇濇姢锛氭祦寮忔湡闂达紝濡傛灉鏂版枃鏈彧鏄棫鏂囨湰鐨勮拷鍔狅紝
-                // 鍙洿鏂版渶鍚庝竴涓?Text 鍧楋紝涓嶅叏閲忛噸寤?AST
+                // 增量解析保护：流式期间，如果新文本只是旧文本的追加，
+                // 只更新最后一个 Text 块，不全量重建 AST
                 val prevParts = parsedParts
                 if (streaming && prevParts.isNotEmpty()
                     && previousText.isNotEmpty()
@@ -187,11 +195,11 @@ fun TableAwareText(
             }
     }
 
-    // 褰?isStreaming 浠?true 鍒囨崲涓?false 鏃讹紝鍋氫竴娆″叏閲忛噸瑙ｆ瀽妫€鏌ョ粨鏋勫彉鍖栥€?
-    // 澧為噺璺緞鍙兘灏嗕唬鐮佸潡锛坕nfographic/code/table锛夊悎骞惰繘 Text锛?
-    // 姝ゅ閫氳繃缁撴瀯姣旇緝锛堢被鍨?鏁伴噺锛夊喅瀹氭槸鍚︽浛鎹?parsedParts锛?
-    // - 缁撴瀯涓€鑷?鈫?淇濇寔鍘熻В鏋愶紝鏃犻棯鐑?
-    // - 缁撴瀯涓嶅悓 鈫?鏇挎崲涓烘纭В鏋愮粨鏋滐紙蹇呰鐨勪竴娆￠噸缁勶級
+    // 当 isStreaming 从 true 切换为 false 时，做一次全量重解析检查结构变化。
+    // 增量路径可能将代码块（infographic/code/table）合并进 Text，
+    // 此处通过结构比较（类型 + 数量）决定是否替换 parsedParts：
+    // - 结构一致 -> 保持原解析，避免闪烁
+    // - 结构不同 -> 替换为正确解析结果（必要的一次重组）
     LaunchedEffect(isStreaming) {
         if (!isStreaming && parsedParts.isNotEmpty()) {
             val freshParts = ContentParser.parseCompleteContent(text)
@@ -226,18 +234,18 @@ fun TableAwareText(
         modifier = modifier
             .fillMaxWidth()
             .padding(vertical = verticalPaddingDp)
-            // 绉婚櫎 animateContentSize()锛?
-            // 娴佸紡杈撳嚭涓瘡甯?Column 瀛愰」鐨勬暟閲忋€佸昂瀵搁兘鍦ㄥ彉鍖栵紝
-            // animateContentSize 浼氬杩欎簺鍙樺寲鏂藉姞寮圭哀鍔ㄧ敾锛?
-            // 姝ｆ槸瀵艰嚧鐢婚潰鐤媯璺冲姩闂儊鐨勬渶澶у厓鍑朵箣涓€銆?
+            // 移除 animateContentSize()
+            // 流式输出中每一帧 Column 子项的数量、尺寸都在变化，
+            // animateContentSize 会对这些变化施加补间动画，
+            // 这正是导致画面疯狂跳动闪烁的最大元凶之一。
     ) {
         parsedParts.forEachIndexed { index, part ->
-            // 濮嬬粓浣跨敤 绫诲瀷+绱㈠紩 浣滀负 key锛屼笉鍖呭惈 contentHash
-            // 1. 娴佸紡鏈熼棿锛歝ontentHash 姣忓抚鍙樺寲 鈫?缁勪欢琚攢姣侀噸寤?鈫?闂儊
-            // 2. 娴佸紡缁撴潫锛歩sStreaming 浠?true鈫抐alse 浼氬鑷?key 绛栫暐鍒囨崲锛?
-            //    鎵€鏈?key 鍚屾椂鍙樺寲 鈫?鍏ㄩ儴缁勪欢閲嶅缓 鈫?缁撴潫鐬棿闂竴涓?
-            // MarkdownRenderer 鍐呴儴宸叉湁 MarkdownRenderSignature tag 妫€鏌ワ紝
-            // 鍐呭涓嶅彉鏃朵笉浼氶噸鏂版覆鏌擄紝鎵€浠?key 閲屼笉闇€瑕?contentHash
+            // 始终使用 类型+索引 作为 key，不包含 contentHash
+            // 1. 流式期间，contentHash 每帧变化 -> 组件被销毁重建 -> 闪烁
+            // 2. 流式结束，isStreaming 从 true→false 会导致 key 策略切换，
+            //    所有 key 同时变化 -> 全部组件重建 -> 结束瞬间闪一下
+            // MarkdownRenderer 内部已有 MarkdownRenderSignature tag 检查，
+            // 内容不变时不会重新渲染，所以 key 里不需要 contentHash
             val stableKey = "${part.javaClass.simpleName}_$index"
 
             androidx.compose.runtime.key(stableKey) {
@@ -277,7 +285,7 @@ fun TableAwareText(
                                     .padding(vertical = 4.dp)
                             )
                         } else {
-                            val clipboard = LocalClipboardManager.current
+                            val clipboard = LocalClipboard.current
                             CodeBlockCard(
                                 language = part.language,
                                 code = part.content,
@@ -287,8 +295,14 @@ fun TableAwareText(
                                     { onCodePreviewRequested(part.language ?: "", part.content) }
                                 } else null,
                                 onCopy = {
-                                    clipboard.setText(AnnotatedString(part.content))
-                                    onCodeCopied?.invoke()
+                                    coroutineScope.launch {
+                                        clipboard.setClipEntry(
+                                            ClipEntry(
+                                                ClipData.newPlainText("code", part.content)
+                                            )
+                                        )
+                                        onCodeCopied?.invoke()
+                                    }
                                 },
                                 onLongPress = onLongPress
                             )
@@ -355,7 +369,7 @@ fun TableAwareText(
         }
     }
 
-    // 鏄剧ず棰勮瀵硅瘽妗?
+    // 显示预览对话框
     previewState?.let { (code, language) ->
         WebPreviewDialog(
             code = code,
@@ -494,7 +508,7 @@ private fun resolveInfographicIcon(icon: String): ImageVector? {
         (key.contains("shield") || key.contains("shieid")) && key.contains("lock") -> Icons.Filled.Security
         key.contains("gesture") || key.contains("swipe") -> Icons.Filled.Swipe
         key.contains("magnify") || key.contains("zoom") -> Icons.Filled.ZoomOut
-        else -> Icons.Filled.HelpOutline
+        else -> Icons.AutoMirrored.Filled.HelpOutline
     }
 }
 
@@ -542,7 +556,7 @@ private fun InfographicBlock(
     val secondaryColor = MaterialTheme.colorScheme.onSurfaceVariant
     val isDark = androidx.compose.foundation.isSystemInDarkTheme()
 
-    // 澶氬僵鍥炬爣棰滆壊
+    // 多彩图标颜色
     val iconColors = listOf(
         Color(0xFF4285F4), // Google Blue
         Color(0xFF34A853), // Google Green
@@ -554,7 +568,7 @@ private fun InfographicBlock(
         Color(0xFF3F51B5)  // Indigo
     )
 
-    // 鏃堕棿杞磋繛鎺ョ嚎棰滆壊
+    // 时间轴连接线颜色
     val lineColor = if (isDark) {
         Color.White.copy(alpha = 0.2f)
     } else {
@@ -564,7 +578,7 @@ private fun InfographicBlock(
     Column(
         modifier = modifier.fillMaxWidth()
     ) {
-        // 鏍囬锛堝鏋滄湁锛?
+        // 标题（如果有）
         if (title.isNotBlank()) {
             Text(
                 text = title,
@@ -577,7 +591,7 @@ private fun InfographicBlock(
             )
         }
 
-        // 鏃堕棿杞村竷灞€
+        // 时间轴布局
         items.forEachIndexed { index, item ->
             val currentIconColor = iconColors[index % iconColors.size]
             val isLast = index == items.lastIndex
@@ -586,11 +600,11 @@ private fun InfographicBlock(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp)
             ) {
-                // 宸︿晶锛氬浘鏍?+ 杩炴帴绾?
+                // 左侧：图标 + 连接线
                 Column(
                     horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally
                 ) {
-                    // 鍥炬爣鍦嗗湀
+                    // 图标圆圈
                     Box(
                         modifier = Modifier
                             .size(36.dp)
@@ -624,7 +638,7 @@ private fun InfographicBlock(
                         }
                     }
 
-                    // 杩炴帴绾匡紙闈炴渶鍚庝竴椤规墠鏄剧ず锛?
+                    // 连接线（非最后一项才显示）
                     if (!isLast) {
                         Box(
                             modifier = Modifier
@@ -635,7 +649,7 @@ private fun InfographicBlock(
                     }
                 }
 
-                // 鍙充晶锛氭枃瀛楀唴瀹?
+                // 右侧：文字内容
                 Column(
                     modifier = Modifier
                         .weight(1f)

@@ -356,6 +356,7 @@ val _isStreamingPaused = MutableStateFlow(false)
         
         // 分配全新会话ID（不迁移任何旧会话参数，保持完全独立）
         _currentConversationId.value = "new_chat_${System.currentTimeMillis()}"
+        systemPromptEngagedState[_currentConversationId.value] = true
         _currentOpenClawSessionId.value = "main"
         
         // 新会话默认关闭参数：不做任何继承或默认值注入

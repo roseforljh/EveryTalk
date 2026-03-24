@@ -32,6 +32,7 @@ import com.android.everytalk.util.cache.CacheManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.widget.Toast
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -83,6 +84,7 @@ import com.android.everytalk.data.network.OpenAIDirectClient
 import com.android.everytalk.util.storage.IncrementalBackupManager
 
 // Constructor changed: removed dataSource
+@OptIn(ExperimentalCoroutinesApi::class)
 class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val json = Json {
@@ -838,7 +840,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         // 仅在“接入系统提示”开启时，才把系统提示注入到本次会话
-        val engaged = stateHolder.systemPromptEngagedState[stateHolder._currentConversationId.value] ?: false
+        val engaged = stateHolder.systemPromptEngagedState[stateHolder._currentConversationId.value] ?: true
         val promptToUse = if (engaged) systemPrompt.value else null
         messageSender.sendMessage(
             messageText,

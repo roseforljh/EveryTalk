@@ -22,6 +22,7 @@ import com.android.everytalk.data.DataClass.Sender as UiSender
 import com.android.everytalk.data.DataClass.ThinkingConfig
 import com.android.everytalk.data.DataClass.ImageGenRequest
 import com.android.everytalk.data.DataClass.GenerationConfig
+import com.android.everytalk.data.network.WebSearchSupport
 import com.android.everytalk.statecontroller.defaultReasoningBudgetForModel
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import kotlinx.coroutines.CoroutineScope
@@ -628,12 +629,12 @@ private data class AttachmentProcessingResult(
 
                 // 检查是否为Gemini渠道且开启了联网搜索
                 // 增强检测：要求渠道为 Gemini 且模型名称包含 Gemini，才视为原生 Gemini 支持环境
-                val isGeminiChannel = currentConfig.channel.lowercase().contains("gemini") &&
-                                      currentConfig.model.lowercase().contains("gemini")
+                val isGeminiChannel = WebSearchSupport.isGeminiNativeSearch(currentConfig)
+                val supportsNativeWebSearch = WebSearchSupport.supportsNativeWebSearch(currentConfig)
                 val shouldEnableGoogleSearch = isGeminiChannel && stateHolder._isWebSearchEnabled.value
-                
+
                 // 添加调试日志
-                Log.d("MessageSender", "Channel: ${currentConfig.channel}, isGeminiChannel: $isGeminiChannel, webSearchEnabled: ${stateHolder._isWebSearchEnabled.value}, shouldEnableGoogleSearch: $shouldEnableGoogleSearch")
+                Log.d("MessageSender", "Channel: ${currentConfig.channel}, model: ${currentConfig.model}, supportsNativeWebSearch: $supportsNativeWebSearch, webSearchEnabled: ${stateHolder._isWebSearchEnabled.value}, shouldEnableGoogleSearch: $shouldEnableGoogleSearch")
 
                 // 3. 代码执行启用逻辑 - 用户全权控制
                 val enableCodeExecutionForRequest: Boolean? =
@@ -657,7 +658,7 @@ private data class AttachmentProcessingResult(
                     deviceId = com.android.everytalk.util.DeviceIdManager.getDeviceId(application),
                     conversationId = stateHolder._currentConversationId.value,
                     openClawSessionId = stateHolder._currentOpenClawSessionId.value,
-                    useWebSearch = stateHolder._isWebSearchEnabled.value,
+                    useWebSearch = supportsNativeWebSearch && stateHolder._isWebSearchEnabled.value,
                     // 显式传递代码执行开关状态
                     enableCodeExecution = enableCodeExecutionForRequest,
                     // 新会话未设置时，只回落温度/TopP；maxTokens 一律保持关闭（null）
@@ -672,7 +673,7 @@ private data class AttachmentProcessingResult(
                             )
                         } else null
                     ).let { if (it.temperature != null || it.topP != null || it.maxOutputTokens != null || it.thinkingConfig != null) it else null },
-                    qwenEnableSearch = if (currentConfig.model.lowercase().contains("qwen") && stateHolder._isWebSearchEnabled.value) true else null,
+                    qwenEnableSearch = if (WebSearchSupport.shouldEnableQwenNativeSearch(currentConfig, stateHolder._isWebSearchEnabled.value)) true else null,
                     customModelParameters = if (modelIsGeminiType) {
                         // 为Gemini模型添加reasoning_effort参数
                         // 根据模型类型设置不同的思考级别

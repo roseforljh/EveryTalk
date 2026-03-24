@@ -6,6 +6,14 @@ import org.junit.Test
 class SystemPromptInjectorRenderSafetyTest {
 
     @Test
+    fun `zh system prompt should not contain mojibake markers`() {
+        val prompt = SystemPromptInjector.getSystemPrompt("zh-CN")
+        assertTrue(prompt.contains("## System Prompt"))
+        assertTrue(prompt.contains("## Header Rules"))
+        assertTrue(prompt.contains("## List Rules"))
+    }
+
+    @Test
     fun `zh system prompt should include render stability rules`() {
         val prompt = SystemPromptInjector.getSystemPrompt("zh-CN")
         assertTrue(prompt.contains("Rendering Stability Rules"))

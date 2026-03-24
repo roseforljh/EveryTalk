@@ -45,7 +45,7 @@ private val MULTIPLE_SPACES_REGEX = Regex(" {2,}")
 private val ENUM_ITEM_REGEX = Regex("(?<!\\n)\\s+([A-D])[\\.)]\\s")
 private val WINDOWS_PATH_REGEX = Regex("^[A-Za-z]:\\\\")
 
-// 棰勭紪璇?preprocessAiMarkdown 涓殑姝ｅ垯锛岄伩鍏嶆瘡甯ч噸澶嶇紪璇?
+// 预编译 preprocessAiMarkdown 中的正则，避免每帧重复编译
 private val BASE64_IMAGE_PATTERN = Regex(
     "(\\![\\[^\\]]*\\]\\()\\s*(<?)(:?data:image\\/[^)>]+)(>?)\\s*(\\))",
     setOf(RegexOption.DOT_MATCHES_ALL)
@@ -95,7 +95,7 @@ private fun isSupportedImageSource(raw: String?): Boolean {
 }
 
 private data class MarkdownRenderSignature(
-    val processed: String, // 棰勫鐞嗗悗鐨勬枃鏈紝鍖呭惈杞箟閫昏緫鐨勭粨鏋?
+    val processed: String, // 预处理后的文本，包含转义逻辑的结果
     val isDark: Boolean,
     val textSizeSp: Float
 )
@@ -167,10 +167,10 @@ private fun findSafeStreamingSplitIndex(previousProcessed: String, currentProces
 }
 
 /**
- * 娴佸紡杈撳嚭鏃讹細浠呰浆涔夋湭闂悎鐨勬暟瀛﹀叕寮忔爣璁般€?
- * 宸查棴鍚堢殑鍏紡锛堝 $$E=mc^2$$锛変繚鐣欏師鏍凤紝鍏佽 JLatexMath 绔嬪嵆娓叉煋銆?
- * 鏈棴鍚堢殑鍏紡锛堝 $$\int_0^1 f(x)锛夌殑璧峰鏍囪琚浆涔夛紝
- * 闃叉 JLatexMath 灏濊瘯瑙ｆ瀽娈嬬己鍏紡瀵艰嚧甯冨眬璺冲彉銆?
+ * 流式输出时：仅转义未闭合的数学公式标记。
+ * 已闭合的公式（如 $$E=mc^2$$）保留原样，允许 JLatexMath 立即渲染。
+ * 未闭合的公式（如 $$\\int_0^1 f(x)）的起始标记会被转义，
+ * 防止 JLatexMath 尝试解析残缺公式导致布局跳变。
  */
 private fun escapeUnclosedMathForStreaming(input: String): String {
     return MathStreamingPolicy.escapeUnclosedMathDelimiters(input)
@@ -564,9 +564,9 @@ private fun escapeCurrencyOutsideMath(input: String): String {
 }
 
 /**
- * 棰勫鐞?Markdown 鏂囨湰锛堢畝鍖栫増锛?
+ * 预处理 Markdown 文本（简化版）
  *
- * 鐢变簬浠ｇ爜鍧楀拰琛ㄦ牸宸茬敱 ContentParser 鎻愬彇锛屾鍑芥暟鍙渶澶勭悊绾枃鏈唴瀹广€?
+ * 由于代码块和表格已由 ContentParser 提取，此函数只需处理纯文本内容。
  */
 internal fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): String {
     if (input.isBlank()) return input
@@ -581,7 +581,7 @@ internal fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): 
         .replace("<", "&lt;")
         .replace(">", "&gt;")
 
-    // 2. Base64 Image: 绉婚櫎 Base64 涓殑绌虹櫧
+    // 2. Base64 Image: 移除 Base64 中的空白
     if (s.contains("data:image/")) {
         val base64ImagePattern = Regex("(\\!\\[[^\\]]*\\]\\()\\s*(<?)(data:image\\/[^)>]+)(>?)\\s*(\\))", setOf(RegexOption.DOT_MATCHES_ALL))
         s = s.replace(base64ImagePattern) { mr ->
@@ -602,13 +602,13 @@ internal fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): 
     // 5. Full-width Paren Bold Fix
     s = s.replace(FULL_WIDTH_PAREN_BOLD_REGEX, "**(")
 
-    // 5.1 Fix: **"xxx"** 绛夊紩鍙峰寘瑁瑰姞绮楁棤娉曟覆鏌撶殑闂
+    // 5.1 Fix: 修复 **"xxx"** 这类带引号的加粗无法正确渲染的问题
     s = s.replace(QUOTED_BOLD_PATTERN) { mr ->
         val inner = mr.groupValues[1]
         "\"**${inner}**\""
     }
 
-    // 6. Headers: 纭繚 # 鍚庢湁绌烘牸
+    // 6. Headers: 确保 # 后有空格
     s = s.replace(HEADER_SPACE_REGEX, "$1 ")
     s = s.replace(LONG_HEADER_REGEX) { mr ->
         "\\" + mr.groupValues[1]
@@ -634,7 +634,7 @@ internal fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): 
         val hasUnbalancedBold = line.split("**").size % 2 == 0
         val trimmedEnd = line.trimEnd()
         val endsWithMathDelimiter = trimmedEnd.endsWith("$$") || trimmedEnd.endsWith("$")
-        // 鏃犺鏄惁娴佸紡娓叉煋锛屾湁鏈棴鍚堢殑 ** 閮借烦杩囩‖鎹㈣锛岄伩鍏嶇牬鍧忓姞绮楄娉?
+        // 无论是否流式渲染，有未闭合的 ** 都跳过硬换行，避免破坏加粗语法
         val shouldSkipHardBreak = isTableLine || hasUnbalancedBold || endsWithMathDelimiter
 
         when {
@@ -647,7 +647,7 @@ internal fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): 
         }
     }.joinToString("")
 
-    // 8. 鍧楃骇 [double dollar] 鍗犱綅绗﹁浆鎹紙浠呭鐞嗙嫭绔嬭/璺ㄨ鍧楋級
+    // 8. 块级 [double dollar] 占位符转换（仅处理独立行/跨行块）
     if (s.contains("[double dollar]")) {
         s = s.replace(MULTILINE_BLOCK_DOLLAR_PATTERN) { matchResult ->
             val inner = matchResult.groupValues[1].trim()
@@ -657,7 +657,7 @@ internal fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): 
         s = BLOCK_PLACEHOLDER_PATTERN.replace(s) { "\$\$" }
     }
 
-    // 8.5 琛屽唴鏁板鍒嗛殧绗﹀崟鍚戣鑼冨寲锛堣烦杩囦唬鐮佸洿鏍?琛屽唴浠ｇ爜锛?
+    // 8.5 行内数学分隔符单向规范化（跳过代码围栏/行内代码）
     s = MathDelimiterNormalizer.normalize(s)
 
     // 非数学上下文中的裸 LaTeX 指令降级为可读符号，避免显示 \implies 这类原始命令
@@ -706,14 +706,14 @@ fun MarkdownRenderer(
     onImageClick: ((String) -> Unit)? = null,
     sender: Sender = Sender.AI,
     contentKey: String = "",
-    disableVerticalPadding: Boolean = false, // 鏂板鍙傛暟锛氬厑璁哥鐢ㄥ瀭鐩磒adding
+    disableVerticalPadding: Boolean = false, // 新增参数：允许禁用垂直 padding
     enablePureMathHorizontalScroll: Boolean = true
 ) {
     val context = LocalContext.current
     val isDark = isSystemInDarkTheme()
     
     val baseTextSizeSp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
-    // 缁熶竴姘旀场鍐呮枃鏈瓧鍙凤細鐢ㄦ埛涓?AI 涓€鏍凤紝鏁翠綋鐣ュ皬浜庝箣鍓嶇殑 AI 鏀惧ぇ鏁堟灉
+    // 统一气泡内文本字号：用户与 AI 一样，整体略小于之前的 AI 放大效果
     val textSizeSp = baseTextSizeSp * 1.05f
     val markwon = remember(isDark, textSizeSp) {
         MarkwonCache.getOrCreate(
@@ -755,34 +755,34 @@ fun MarkdownRenderer(
         modifier = viewModifier,
         factory = {
             TextView(it).apply {
-                // 缁熶竴鏂囨湰鏍峰紡锛堝瓧鍙凤級
+                // 统一文本样式（字号）
                 val baseSp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
-                // 鐢ㄦ埛涓?AI 浣跨敤鐩稿悓瀛楀彿锛屾暣浣撶暐灏忎簬涔嬪墠鐨?AI 鏀惧ぇ鏁堟灉
+                // 用户与 AI 使用相同字号，整体略小于之前的 AI 放大效果
                 val sp = baseSp * 1.05f
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
                 setTextColor(finalColor.toArgb())
-                // 绋冲畾鍩虹嚎锛屽噺灏戣烦鍔?
-                // setIncludeFontPadding(false) // 瀵艰嚧鏁板鍏紡鍨傜洿琚埅鏂紝蹇呴』寮€鍚?
+                // 稳定基线，减少跳动
+                // setIncludeFontPadding(false) // 会导致数学公式垂直被裁切，必须开启
                 setIncludeFontPadding(true)
                 
-                // TextView鍐呴儴padding - 鐢ㄦ埛姘旀场浣跨敤鐩哥瓑鐨勪笂涓媝adding瀹炵幇鍨傜洿灞呬腑
+                // TextView 内部 padding：用户气泡使用相等的上下 padding 实现垂直居中
                 if (sender == Sender.User) {
-                    // 鐢ㄦ埛姘旀场锛氫娇鐢ㄧ浉绛夌殑涓婁笅padding锛屽噺灏忔按骞硃adding
+                    // 用户气泡：使用相等的上下 padding，减少水平 padding
                     val horizontalPaddingPx = TypedValue.applyDimension(
                         TypedValue.COMPLEX_UNIT_DIP,
-                        1f,  // 鍑忓皬姘村钩padding
+                        1f,  // 减小水平 padding
                         resources.displayMetrics
                     ).toInt()
                     val verticalPaddingPx = if (disableVerticalPadding) 0 else TypedValue.applyDimension(
                         TypedValue.COMPLEX_UNIT_DIP,
-                        4f,  // 澧炲姞鍨傜洿padding浠ュ疄鐜拌瑙夊眳涓?
+                        4f,  // 增加垂直 padding 以实现视觉居中
                         resources.displayMetrics
                     ).toInt()
                     setPadding(horizontalPaddingPx, verticalPaddingPx, horizontalPaddingPx, verticalPaddingPx)
                 } else {
-                    // AI姘旀场
-                    // 澧炲姞 padding 浠ラ槻姝㈡暟瀛﹀叕寮忥紙鐗瑰埆鏄枩浣?绉垎绗﹀彿锛夊湪杈圭紭琚埅鏂?
-                    // 16dp 搴旇瓒冲瀹圭撼澶ч儴鍒嗘孩鍑虹殑瀛楀舰
+                    // AI 气泡
+                    // 增加 padding 以防止数学公式（特别是斜体、积分符号）在边缘被裁切
+                    // 16dp 应该足够容纳大部分溢出的字形
                     val paddingPx = TypedValue.applyDimension(
                         TypedValue.COMPLEX_UNIT_DIP,
                         1f,
@@ -794,9 +794,9 @@ fun MarkdownRenderer(
                     setPadding(paddingPx, verticalPaddingPx, paddingPx, verticalPaddingPx)
                 }
                 
-                // 琛岄棿璺?- 鐢ㄦ埛涓?AI 鍖哄垎璁剧疆
-                // 鐢ㄦ埛淇濇寔鐣ョ揣鍑戯紝AI 閫傚害鍔犲ぇ涓婁笅琛岃窛绂?
-                // 鏍规嵁鍙嶉"绋嶅井鍑忔枃鏈箣闂寸殑璺濈"锛屽皢 AI 琛岄棿璺濅粠 6f 璋冩暣涓?5f
+                // 行间距：用户与 AI 区分设置
+                // 用户保持略紧凑，AI 适度增大上下行距
+                // 根据反馈“稍微减小文本之间的距离”，将 AI 行间距从 6f 调整为 5f
                 val lineSpacingDp = if (sender == Sender.User) 2f else 5f
                 setLineSpacing(
                     TypedValue.applyDimension(
@@ -807,22 +807,22 @@ fun MarkdownRenderer(
                     1.0f
                 )
                 
-                // 瀛楃闂磋窛 - 缁熶竴鍑忓皬宸﹀彸闂磋窛锛屼娇 AI 姘旀场鍐呮枃鏈洿绱у噾锛屽悓鏃朵繚鎸佺敤鎴蜂笌 AI 涓€鑷?
+                // 字符间距：统一略微减小左右间距，使 AI 气泡内文本更紧凑，同时保持用户与 AI 一致
                 letterSpacing = 0.02f
                 
-                // 璁剧疆灞呬腑瀵归綈 - 瀵瑰琛屾枃鏈湁鏁?
-                // gravity = Gravity.CENTER_VERTICAL // 绉婚櫎鍨傜洿灞呬腑锛岄伩鍏嶉暱鏂?鍥剧墖鏄剧ず寮傚父
+                // 设置居中对齐 - 对多行文本有效
+                // gravity = Gravity.CENTER_VERTICAL // 移除垂直居中，避免长文本/图片显示异常
                 
-                // 绂佺敤鏂囨湰閫夋嫨浣嗕繚鐣欓暱鎸夊姛鑳?
+                // 禁用文本选择但保留长按功能
                 setTextIsSelectable(false)
                 highlightColor = android.graphics.Color.TRANSPARENT
                 
                 isFocusable = false
                 isFocusableInTouchMode = false
                 
-                // 缁熶竴澶勭悊瑙︽懜浜嬩欢锛氬浘鐗囩偣鍑?+ 闀挎寜鍧愭爣鎹曡幏
+                // 统一处理触摸事件：图片点击 + 长按坐标捕获
                 if (onImageClick != null || onLongPress != null) {
-                    movementMethod = null // 绂佺敤 LinkMovementMethod锛屽畬鍏ㄦ墜鍔ㄦ帴绠?
+                    movementMethod = null // 禁用 LinkMovementMethod，完全手动接管
                     linksClickable = false
                     isClickable = true
                     isLongClickable = true
@@ -848,7 +848,7 @@ fun MarkdownRenderer(
                             lastTouchRawY = event.rawY
                         }
                         
-                        // 浠呭湪 ACTION_UP 鏃舵娴嬪浘鐗囩偣鍑?
+                        // 仅在 ACTION_UP 时检测图片点击
                         if (onImageClick != null && event.action == MotionEvent.ACTION_UP) {
                             val text = tvLocal.text
                             if (text is android.text.Spannable) {
@@ -864,7 +864,7 @@ fun MarkdownRenderer(
                                 if (layout != null) {
                                     val line = layout.getLineForVertical(y)
                                 
-                                    // 鍑犱綍鍛戒腑娴嬭瘯锛氱洿鎺ユ鏌ヨЕ鎽哥偣鏄惁鍦?ImageSpan 鐨?bounds 鍐?
+                                    // 几何命中测试：直接检查触摸点是否落在 ImageSpan 的 bounds 内
                                     val lineStart = layout.getLineStart(line)
                                     val lineEnd = layout.getLineEnd(line)
                                 
@@ -906,7 +906,7 @@ fun MarkdownRenderer(
                                 }
                             }
                         }
-                        // 杩斿洖 false锛岃 View 缁х画澶勭悊闀挎寜绛夊叾浠栦簨浠?
+                        // 返回 false，让 View 继续处理长按等其他事件
                         false
                     }
 
@@ -958,9 +958,9 @@ fun MarkdownRenderer(
             tv.overScrollMode = View.OVER_SCROLL_NEVER
             tv.movementMethod = null
 
-            // 缂撳瓨浼樺寲锛氬皾璇曚粠缂撳瓨鑾峰彇 Spanned 瀵硅薄
-            // 娴佸紡鏈熼棿锛氫笂娓?TableAwareText 鍙宸茬ǔ瀹氱殑 part 鎻愪緵 contentKey
-            // 鏈€鍚庝竴涓紙鎸佺画鍙樺寲鐨勶級part 鐨?contentKey 涓虹┖锛屼笉缂撳瓨
+            // 缓存优化：尝试从缓存获取 Spanned 对象
+            // 流式期间：上游 TableAwareText 只对已稳定的 part 提供 contentKey
+            // 最后一个（持续变化的）part 的 contentKey 为空，不缓存
             val sp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
             val cacheKey = if (contentKey.isNotBlank()) {
                 MarkdownSpansCache.generateKey(contentKey + "_v42", isDark, sp)
@@ -1044,7 +1044,7 @@ fun MarkdownRenderer(
                     }
                 } else {
                     if (processed.contains("$")) {
-                        android.util.Log.d("MarkdownRenderer", "妫€娴嬪埌鏁板鍏紡鏍囪: ${processed.take(100)}")
+                        android.util.Log.d("MarkdownRenderer", "检测到数学公式标记: ${processed.take(100)}")
                     }
 
                     val parseStartNs = SystemClock.elapsedRealtimeNanos()
@@ -1108,7 +1108,7 @@ fun MarkdownRenderer(
                 )
             )
 
-            // 澶勭悊鍥剧墖鐐瑰嚮浜嬩欢锛堝吋瀹?AsyncDrawableSpan 涓?ImageSpan锛?
+            // 处理图片点击事件（兼容 AsyncDrawableSpan 与 ImageSpan）
             if (onImageClick != null) {
                 val text = tv.text
                 if (text is Spannable) {
@@ -1134,7 +1134,7 @@ fun MarkdownRenderer(
                             }
                         }, start, end, Spannable.SPAN_EXCLUSIVE_INCLUSIVE)
                     }
-                    // 鑻?asyncSpans 涓虹┖锛屾墦鍗颁竴娆℃棩蹇楀府鍔╁畾浣?
+                    // 若 asyncSpans 为空，打印一次日志帮助定位
                     if (asyncSpans.isEmpty()) {
                         android.util.Log.d("MarkdownRenderer", "No AsyncDrawableSpan found; will fallback to ImageSpan")
                     }
@@ -1163,7 +1163,7 @@ fun MarkdownRenderer(
                 }
             }
 
-            // 鏇存柊闀挎寜鐩戝惉鍣?- 绉婚櫎锛屾敼鐢?Compose 灞傜粺涓€澶勭悊
+            // 更新长按监听器：移除，改由 Compose 层统一处理
             // if (onLongPress != null) {
             //    tv.setOnLongClickListener {
             //        onLongPress.invoke()

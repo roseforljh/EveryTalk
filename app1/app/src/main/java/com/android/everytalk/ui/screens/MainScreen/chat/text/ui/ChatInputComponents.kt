@@ -34,6 +34,10 @@ import com.android.everytalk.models.MoreOptionsType
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.theme.SeaBlue
 
+internal fun webSearchToggleLabel(isSupported: Boolean, isEnabled: Boolean): String {
+    return if (!isSupported) "搜索不可用" else if (isEnabled) "关闭搜索" else "网页搜索"
+}
+
 /**
  * 优化的媒体项预览组件 - 使用记忆化避免重复渲染
  */

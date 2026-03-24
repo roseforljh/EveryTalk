@@ -5,7 +5,6 @@ import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.DataClass.ApiContentPart
-import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.data.network.NetworkUtils.configureSSERequest
 import io.ktor.client.*
 import io.ktor.client.request.*
@@ -31,8 +30,6 @@ object OpenAIDirectClient {
     fun setMcpToolExecutor(executor: (suspend (String, JsonObject) -> JsonElement)?) {
         mcpToolExecutor = executor
     }
-
-    private data class SearchHit(val title: String, val href: String, val snippet: String)
     
     @OptIn(ExperimentalCoroutinesApi::class)
     suspend fun streamChatDirect(
@@ -47,49 +44,6 @@ object OpenAIDirectClient {
             if (request.model.contains("qwen-long", ignoreCase = true)) {
                 effectiveRequest = handleQwenUploads(client, effectiveRequest) { status ->
                     send(AppStreamEvent.StatusUpdate(status))
-                }
-            }
-
-            if (request.useWebSearch == true && request.qwenEnableSearch != true) {
-                val userQuery = extractLastUserText(request).let { it ?: "" }.trim()
-
-                if (userQuery.isNotBlank()) {
-                    val endpoint = (request.customExtraBody?.get("webSearchEndpoint") as? String)?.trim()
-                    val customKey = (request.customExtraBody?.get("webSearchKey") as? String)?.trim()
-                    val googleCseId = com.android.everytalk.BuildConfig.GOOGLE_CSE_ID
-                    val googleApiKey = com.android.everytalk.BuildConfig.GOOGLE_SEARCH_API_KEY
-
-                    var searchResults: List<SearchHit> = emptyList()
-                    var searchSource = "None"
-
-                    try {
-                        if (!endpoint.isNullOrBlank()) {
-                            searchSource = "Custom Endpoint"
-                            send(AppStreamEvent.StatusUpdate("Searching web (Custom)..."))
-                            searchResults = tryFetchWebSearch(client, endpoint, customKey, userQuery)
-                        } else if (googleCseId.isNotBlank() && googleApiKey.isNotBlank()) {
-                            searchSource = "Google CSE"
-                            send(AppStreamEvent.StatusUpdate("Searching Google..."))
-                            val results = WebSearchClient.search(client, userQuery, googleApiKey, googleCseId)
-                            searchResults = results.map { SearchHit(it.title, it.href, it.snippet) }
-                        } else {
-                            send(AppStreamEvent.StatusUpdate("Web search skipped (no configuration)..."))
-                        }
-
-                        if (searchResults.isNotEmpty()) {
-                            val listForUi = searchResults.mapIndexed { idx, hit ->
-                                WebSearchResult(index = idx + 1, title = hit.title, snippet = hit.snippet, href = hit.href)
-                            }
-                            send(AppStreamEvent.WebSearchResults(listForUi))
-                            effectiveRequest = injectSearchResultsIntoRequest(request, userQuery, searchResults)
-                            send(AppStreamEvent.StatusUpdate("Answering with search results..."))
-                        } else if (searchSource != "None") {
-                            send(AppStreamEvent.StatusUpdate("No search results, answering directly..."))
-                        }
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Web search failed ($searchSource), skip injection: ${e.message}")
-                        send(AppStreamEvent.StatusUpdate("Search failed, answering directly..."))
-                    }
                 }
             }
 
@@ -559,110 +513,6 @@ object OpenAIDirectClient {
         }
     }
 
-    // -------------------- Helper: Extract last user text -------------------- 
-    private fun extractLastUserText(req: ChatRequest): String? {
-        val lastUser = req.messages.lastOrNull { it.role == "user" } ?: return null
-        return when (lastUser) {
-            is SimpleTextApiMessage -> lastUser.content
-            is PartsApiMessage -> {
-                lastUser.parts.firstOrNull { it is ApiContentPart.Text }?.let { (it as ApiContentPart.Text).text }
-            }
-            else -> null
-        }?.trim()
-    }
-
-    // -------------------- Helper: Fetch web search results -------------------- 
-    // Endpoint should return JSON with a top-level array under one of ["results","items","data"] or be an array.
-    // Each item ideally contains {title, href|url|link, snippet|description|abstract}
-    private suspend fun tryFetchWebSearch(
-        client: HttpClient,
-        endpoint: String,
-        apiKey: String?,
-        query: String
-    ): List<SearchHit> {
-        val responseText = client.get(endpoint) {
-            url {
-                parameters.append("q", query)
-                parameters.append("count", "5")
-            }
-            header(HttpHeaders.Accept, "application/json")
-            if (!apiKey.isNullOrBlank()) {
-                header(HttpHeaders.Authorization, "Bearer $apiKey")
-            }
-        }.bodyAsText()
-
-        val root = Json.parseToJsonElement(responseText)
-        val arr = when {
-            root is JsonObject && root["results"] is JsonArray -> root["results"]!!.jsonArray
-            root is JsonObject && root["items"] is JsonArray -> root["items"]!!.jsonArray
-            root is JsonObject && root["data"] is JsonArray -> root["data"]!!.jsonArray
-            root is JsonArray -> root
-            else -> JsonArray(emptyList())
-        }
-
-        return arr.mapNotNull { el ->
-            try {
-                val obj = el.jsonObject
-                val title = obj["title"]?.jsonPrimitive?.contentOrNull
-                    ?: obj["name"]?.jsonPrimitive?.contentOrNull
-                    ?: obj["heading"]?.jsonPrimitive?.contentOrNull
-                    ?: return@mapNotNull null
-                val href = obj["href"]?.jsonPrimitive?.contentOrNull
-                    ?: obj["url"]?.jsonPrimitive?.contentOrNull
-                    ?: obj["link"]?.jsonPrimitive?.contentOrNull
-                    ?: ""
-                val snippet = obj["snippet"]?.jsonPrimitive?.contentOrNull
-                    ?: obj["description"]?.jsonPrimitive?.contentOrNull
-                    ?: obj["abstract"]?.jsonPrimitive?.contentOrNull
-                    ?: ""
-                SearchHit(title = title, href = href, snippet = snippet)
-            } catch (_: Exception) {
-                null
-            }
-        }.take(5)
-    }
-
-    // -------------------- Helper: Inject search results into last user message -------------------- 
-    private fun injectSearchResultsIntoRequest(
-        req: ChatRequest,
-        query: String,
-        results: List<SearchHit>
-    ): ChatRequest {
-        if (results.isEmpty()) return req
-        val formatted = buildString {
-            append("Search results for \"").append(query).append("\":\n\n")
-            results.forEachIndexed { idx, hit ->
-                append(idx + 1).append(". ").append(hit.title).append("\n")
-                if (hit.snippet.isNotBlank()) append(hit.snippet).append("\n")
-                if (hit.href.isNotBlank()) append(hit.href).append("\n\n")
-            }
-            append("Please answer based on the search results above.\n")
-        }
-
-        val msgs = req.messages.toMutableList()
-        val lastIdx = msgs.indexOfLast { it.role == "user" }
-        if (lastIdx < 0) return req
-
-        val last = msgs[lastIdx]
-        val newLast = when (last) {
-            is SimpleTextApiMessage -> last.copy(content = formatted + "\n\n" + last.content)
-            is PartsApiMessage -> {
-                val parts = last.parts.toMutableList()
-                val firstTextIdx = parts.indexOfFirst { it is ApiContentPart.Text }
-                if (firstTextIdx >= 0) {
-                    val t = parts[firstTextIdx] as ApiContentPart.Text
-                    parts[firstTextIdx] = ApiContentPart.Text(formatted + "\n\n" + t.text)
-                } else {
-                    parts.add(0, ApiContentPart.Text(formatted))
-                }
-                last.copy(parts = parts)
-            }
-            else -> last
-        }
-        msgs[lastIdx] = newLast
-        return req.copy(messages = msgs)
-    }
-    
     /**
      * 处理 Qwen 模型的文件上传
      */

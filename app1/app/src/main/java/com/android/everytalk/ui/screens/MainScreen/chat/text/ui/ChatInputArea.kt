@@ -220,6 +220,7 @@ private fun safeDeleteTempFile(context: Context, uri: Uri?) {
 @Composable
 private fun FunctionPanelContent(
     isWebSearchEnabled: Boolean,
+    supportsNativeWebSearch: Boolean,
     onToggleWebSearch: () -> Unit,
     isCodeExecutionEnabled: Boolean,
     onToggleCodeExecution: () -> Unit,
@@ -242,8 +243,9 @@ private fun FunctionPanelContent(
             // 网页搜索
             FunctionPanelItem(
                 icon = Icons.Filled.Language,
-                label = if (isWebSearchEnabled) "关闭搜索" else "网页搜索",
-                tint = if (isWebSearchEnabled) com.android.everytalk.ui.theme.SeaBlue else MaterialTheme.colorScheme.onSurfaceVariant,
+                label = webSearchToggleLabel(supportsNativeWebSearch, isWebSearchEnabled),
+                tint = if (isWebSearchEnabled && supportsNativeWebSearch) com.android.everytalk.ui.theme.SeaBlue else MaterialTheme.colorScheme.onSurfaceVariant,
+                enabled = supportsNativeWebSearch,
                 onClick = { onToggleWebSearch() }
             )
             // 代码执行 (仅 Gemini)
@@ -296,11 +298,12 @@ private fun FunctionPanelItem(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
     tint: Color,
+    enabled: Boolean = true,
     onClick: () -> Unit
 ) {
     // 颜色渐变动画
     val animatedTint by animateColorAsState(
-        targetValue = tint,
+        targetValue = if (enabled) tint else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
         animationSpec = tween(durationMillis = 250, easing = FastOutSlowInEasing),
         label = "FunctionPanelItemTint"
     )
@@ -318,6 +321,7 @@ private fun FunctionPanelItem(
 
     Surface(
         onClick = {
+            if (!enabled) return@Surface
             isPressed = true
             onClick()
         },
@@ -372,6 +376,7 @@ fun ChatInputArea(
     onClearMediaItems: () -> Unit,
     isApiCalling: Boolean,
     isWebSearchEnabled: Boolean,
+    supportsNativeWebSearch: Boolean,
     onToggleWebSearch: () -> Unit,
     isCodeExecutionEnabled: Boolean = false,
     onToggleCodeExecution: () -> Unit = {},
@@ -766,8 +771,10 @@ fun ChatInputArea(
 
                 // 增强 Gemini 渠道检测
                 val isGeminiChannel = selectedApiConfig?.let { config ->
-                    config.channel.lowercase().contains("gemini") &&
-                    config.model.lowercase().contains("gemini")
+                    com.android.everytalk.data.network.WebSearchSupport.isGeminiNativeSearch(config)
+                } == true
+                val supportsNativeWebSearch = selectedApiConfig?.let { config ->
+                    com.android.everytalk.data.network.WebSearchSupport.supportsNativeWebSearch(config)
                 } == true
 
                 // 输入框 + 加号按钮在同一行
@@ -829,6 +836,7 @@ fun ChatInputArea(
                                 }) {
                                     FunctionPanelContent(
                                         isWebSearchEnabled = isWebSearchEnabled,
+                                        supportsNativeWebSearch = supportsNativeWebSearch,
                                         onToggleWebSearch = onToggleWebSearch,
                                         isCodeExecutionEnabled = isCodeExecutionEnabled,
                                         onToggleCodeExecution = onToggleCodeExecution,

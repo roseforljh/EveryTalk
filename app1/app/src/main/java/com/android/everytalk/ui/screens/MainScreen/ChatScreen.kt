@@ -97,6 +97,9 @@ fun ChatScreen(
     val currentStreamingAiMessageId by viewModel.currentTextStreamingAiMessageId.collectAsState()
     val isWebSearchEnabled by viewModel.isWebSearchEnabled.collectAsState()
     val isCodeExecutionEnabled by viewModel.isCodeExecutionEnabled.collectAsState()
+    val supportsNativeWebSearch by remember(selectedApiConfig) {
+        derivedStateOf { com.android.everytalk.data.network.WebSearchSupport.supportsNativeWebSearch(selectedApiConfig) }
+    }
     val selectedMediaItems = viewModel.selectedMediaItems
     val isLoadingHistory by viewModel.isLoadingHistory.collectAsState()
     val mcpServerStates by viewModel.mcpServerStates.collectAsState()
@@ -451,8 +454,13 @@ fun ChatScreen(
                 onClearMediaItems = { viewModel.clearMediaItems() },
                 isApiCalling = isApiCalling,
                 isWebSearchEnabled = isWebSearchEnabled,
+                supportsNativeWebSearch = supportsNativeWebSearch,
                 onToggleWebSearch = {
-                    viewModel.toggleWebSearchMode(!isWebSearchEnabled)
+                    if (supportsNativeWebSearch) {
+                        viewModel.toggleWebSearchMode(!isWebSearchEnabled)
+                    } else {
+                        viewModel.showSnackbar("当前模型不支持原生联网搜索")
+                    }
                 },
                 isCodeExecutionEnabled = isCodeExecutionEnabled,
                 onToggleCodeExecution = {
