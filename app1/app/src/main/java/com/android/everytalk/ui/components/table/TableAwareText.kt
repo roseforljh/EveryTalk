@@ -75,8 +75,12 @@ import com.android.everytalk.ui.components.ContentParser
 import com.android.everytalk.ui.components.ContentPart
 import com.android.everytalk.ui.components.WebPreviewDialog
 import com.android.everytalk.ui.components.content.CodeBlockCard
+import com.android.everytalk.ui.components.StableMarkdownText
 import com.android.everytalk.ui.components.markdown.BreakableLatexRenderer
 import com.android.everytalk.ui.components.markdown.MarkdownRenderer
+import com.android.everytalk.ui.components.syntax.HighlightCache
+import com.android.everytalk.ui.components.syntax.SyntaxHighlightTheme
+import com.android.everytalk.ui.components.syntax.SyntaxHighlighter
 import com.android.everytalk.ui.components.icons.MdiIcon
 import com.android.everytalk.ui.components.icons.MdiIconAdaptive
 import com.android.everytalk.ui.components.icons.isMdiIconAvailable
@@ -231,27 +235,60 @@ fun TableAwareText(
             androidx.compose.runtime.key(stableKey) {
                 when (part) {
                     is ContentPart.Text -> {
-                        MarkdownRenderer(
-                            markdown = part.content,
-                            style = style,
-                            color = color,
-                            modifier = Modifier.fillMaxWidth(),
-                            isStreaming = isStreaming,
-                            onLongPress = onLongPress,
-                            onImageClick = onImageClick,
-                            sender = sender,
-                            contentKey = if (contentKey.isNotBlank()) {
-                                if (isStreaming) {
-                                    // 流式阶段：稳定片段可缓存，尾片段持续变化不缓存
-                                    if (index < parsedParts.size - 1) {
-                                        "${contentKey}_part_${index}_${part.content.hashCode()}"
-                                    } else ""
-                                } else {
-                                    "${contentKey}_part_${index}_${part.content.hashCode()}"
-                                }
-                            } else "",
-                            disableVerticalPadding = true
-                        )
+                        val isTrailingStreamingText = isStreaming && index == parsedParts.lastIndex
+                        val trailingLooksLightweightMarkdown = isTrailingStreamingText &&
+                            !part.content.contains("```") &&
+                            !part.content.contains("```infographic", ignoreCase = true) &&
+                            !(part.content.contains('|') && part.content.contains("---")) &&
+                            !part.content.contains("$$") &&
+                            !part.content.contains("\\[") &&
+                            !part.content.contains("\\(")
+
+                        when {
+                            trailingLooksLightweightMarkdown -> {
+                                MarkdownRenderer(
+                                    markdown = part.content,
+                                    style = style,
+                                    color = color,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    isStreaming = true,
+                                    onLongPress = onLongPress,
+                                    onImageClick = onImageClick,
+                                    sender = sender,
+                                    contentKey = "",
+                                    disableVerticalPadding = true
+                                )
+                            }
+                            isTrailingStreamingText -> {
+                                StableMarkdownText(
+                                    markdown = part.content,
+                                    style = style,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                            else -> {
+                                MarkdownRenderer(
+                                    markdown = part.content,
+                                    style = style,
+                                    color = color,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    isStreaming = isStreaming,
+                                    onLongPress = onLongPress,
+                                    onImageClick = onImageClick,
+                                    sender = sender,
+                                    contentKey = if (contentKey.isNotBlank()) {
+                                        if (isStreaming) {
+                                            if (index < parsedParts.size - 1) {
+                                                "${contentKey}_part_${index}_${part.content.hashCode()}"
+                                            } else ""
+                                        } else {
+                                            "${contentKey}_part_${index}_${part.content.hashCode()}"
+                                        }
+                                    } else "",
+                                    disableVerticalPadding = true
+                                )
+                            }
+                        }
                     }
                     is ContentPart.Code -> {
                         val lang = part.language?.trim()?.lowercase()
@@ -264,6 +301,14 @@ fun TableAwareText(
                                     .fillMaxWidth()
                                     .padding(vertical = 4.dp),
                                 isStreaming = isStreaming
+                            )
+                        } else if (isStreaming) {
+                            StreamingCodeBlockCard(
+                                language = part.language,
+                                code = part.content,
+                                modifier = Modifier.padding(vertical = 4.dp),
+                                isCompleted = true,
+                                onLongPress = onLongPress
                             )
                         } else {
                             val clipboard = LocalClipboard.current
@@ -294,6 +339,7 @@ fun TableAwareText(
                             language = part.language,
                             code = part.content,
                             modifier = Modifier.padding(vertical = 4.dp),
+                            isCompleted = false,
                             onLongPress = onLongPress
                         )
                     }
@@ -373,6 +419,7 @@ private fun StreamingCodeBlockCard(
     language: String?,
     code: String,
     modifier: Modifier = Modifier,
+    isCompleted: Boolean,
     onLongPress: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null,
 ) {
     val displayLanguage = language?.trim()?.ifBlank { "CODE" }?.uppercase() ?: "CODE"
@@ -384,6 +431,17 @@ private fun StreamingCodeBlockCard(
         MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
     }
     val headerContentColor = if (isDarkTheme) Color.White else Color.Black
+    val syntaxTheme = remember(isDarkTheme) {
+        if (isDarkTheme) SyntaxHighlightTheme.Dark else SyntaxHighlightTheme.Light
+    }
+    val highlightedCode = remember(code, language, isDarkTheme) {
+        val cacheKey = HighlightCache.generateKey(code, language, isDarkTheme)
+        HighlightCache.get(cacheKey) ?: run {
+            val result = SyntaxHighlighter.highlight(code, language, syntaxTheme)
+            HighlightCache.put(cacheKey, result)
+            result
+        }
+    }
 
     Surface(
         modifier = modifier
@@ -405,10 +463,10 @@ private fun StreamingCodeBlockCard(
                     text = displayLanguage,
                     style = MaterialTheme.typography.labelSmall,
                     color = headerContentColor,
-                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                    fontFamily = FontFamily.Monospace
                 )
                 Text(
-                    text = "生成中",
+                    text = if (isCompleted) "代码块" else "生成中",
                     style = MaterialTheme.typography.labelSmall,
                     color = headerContentColor.copy(alpha = 0.7f)
                 )
@@ -416,9 +474,9 @@ private fun StreamingCodeBlockCard(
 
             val scrollState = rememberScrollState()
             Text(
-                text = code.ifBlank { "\n" },
+                text = highlightedCode,
                 style = MaterialTheme.typography.bodyMedium.copy(
-                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    fontFamily = FontFamily.Monospace,
                     fontSize = 13.sp,
                     lineHeight = 18.sp,
                     color = MaterialTheme.colorScheme.onSurface
