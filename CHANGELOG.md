@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.13.2](https://github.com/roseforljh/EveryTalk/compare/v1.13.1...v1.13.2) (2026-03-29)
+
+
+### Bug Fixes
+
+* 修复复杂数学公式渲染链路 ([8c6efb2](https://github.com/roseforljh/EveryTalk/commit/8c6efb2dd1e1f66ab8ce4e83230099048c7d32e5))
+* 修复数据库导致app崩溃和表格渲染 ([8c4bd0d](https://github.com/roseforljh/EveryTalk/commit/8c4bd0d75318b62b5519a25ae38ab1ed20ea26cc))
+
 ## [1.13.1](https://github.com/roseforljh/EveryTalk/compare/v1.13.0...v1.13.1) (2026-03-24)
 
 
