@@ -81,7 +81,22 @@ import com.android.everytalk.statecontroller.controller.cache.CacheController
 import com.android.everytalk.statecontroller.viewmodel.McpManager
 import com.android.everytalk.data.network.GeminiDirectClient
 import com.android.everytalk.data.network.OpenAIDirectClient
+import com.android.everytalk.data.network.WebFetchToolExecutor
 import com.android.everytalk.util.storage.IncrementalBackupManager
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+
+internal suspend fun executeSharedToolCall(
+    toolName: String,
+    arguments: JsonObject,
+    localWebFetchExecutor: suspend (JsonObject) -> JsonElement = { WebFetchToolExecutor.execute(it) },
+    fallbackExecutor: suspend (String, JsonObject) -> JsonElement,
+): JsonElement {
+    if (toolName.equals(BUILT_IN_WEBFETCH_TOOL_NAME, ignoreCase = true)) {
+        return localWebFetchExecutor(arguments)
+    }
+    return fallbackExecutor(toolName, arguments)
+}
 
 // Constructor changed: removed dataSource
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -511,12 +526,24 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
    )
 
   init {
-        GeminiDirectClient.setMcpToolExecutor { toolName, arguments ->
-            mcpManager.callTool(toolName, arguments)
-        }
-        OpenAIDirectClient.setMcpToolExecutor { toolName, arguments ->
-            mcpManager.callTool(toolName, arguments)
-        }
+         GeminiDirectClient.setMcpToolExecutor { toolName, arguments ->
+            executeSharedToolCall(
+                toolName = toolName,
+                arguments = arguments,
+                fallbackExecutor = { fallbackToolName, fallbackArguments ->
+                    mcpManager.callTool(fallbackToolName, fallbackArguments)
+                }
+            )
+         }
+         OpenAIDirectClient.setMcpToolExecutor { toolName, arguments ->
+            executeSharedToolCall(
+                toolName = toolName,
+                arguments = arguments,
+                fallbackExecutor = { fallbackToolName, fallbackArguments ->
+                    mcpManager.callTool(fallbackToolName, fallbackArguments)
+                }
+            )
+         }
         
         // 初始化 StateHolder 的持久化回调
         viewModelScope.launch(Dispatchers.IO) {
