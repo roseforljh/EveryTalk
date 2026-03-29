@@ -50,8 +50,53 @@ internal const val BUILT_IN_WEBFETCH_TOOL_NAME = "webfetch"
 
 private val HTTP_URL_REGEX = Regex("""https?://[^\s<>()\"]+""", RegexOption.IGNORE_CASE)
 
-internal fun shouldExposeBuiltInWebFetchTool(messageText: String): Boolean {
+private val WEBFETCH_NEGATIVE_INTENT_KEYWORDS = listOf(
+    "先别打开", "不要打开", "别打开", "先别访问", "不要访问", "别访问",
+    "不要读取", "别读取", "先别读", "不要分析", "别分析",
+    "不要总结", "别总结", "不要抓取", "别抓取", "不用打开",
+    "don't open", "do not open", "don't fetch", "do not fetch", "without opening", "without visiting"
+)
+
+private val WEBFETCH_ACTION_KEYWORDS = listOf(
+    "看", "看看", "读取", "打开", "分析", "总结", "提炼", "翻译", "解释",
+    "提取", "核对", "对比", "比较", "判断",
+    "read", "open", "analyze", "analyse", "summarize", "summarise",
+    "translate", "extract", "compare", "check", "review"
+)
+
+private val WEBFETCH_TARGET_KEYWORDS = listOf(
+    "链接", "网页", "页面", "文章", "网站", "网址", "url", "link",
+    "page", "webpage", "website", "article"
+)
+
+private val WEBFETCH_CONTENT_QUESTION_KEYWORDS = listOf(
+    "讲了什么", "说了什么", "写了什么", "内容是什么", "主要内容",
+    "核心观点", "要点", "重点", "主旨", "main point",
+    "what does this", "what is on", "what's on"
+)
+
+internal fun containsHttpUrl(messageText: String): Boolean {
     return HTTP_URL_REGEX.containsMatchIn(messageText)
+}
+
+internal fun hasExplicitWebReadIntent(messageText: String): Boolean {
+    val normalizedText = messageText.lowercase()
+    if (WEBFETCH_NEGATIVE_INTENT_KEYWORDS.any { it in normalizedText }) {
+        return false
+    }
+
+    val hasTargetKeyword = WEBFETCH_TARGET_KEYWORDS.any { it in normalizedText }
+    if (!hasTargetKeyword) {
+        return false
+    }
+
+    val hasActionKeyword = WEBFETCH_ACTION_KEYWORDS.any { it in normalizedText }
+    val hasContentQuestionKeyword = WEBFETCH_CONTENT_QUESTION_KEYWORDS.any { it in normalizedText }
+    return hasActionKeyword || hasContentQuestionKeyword
+}
+
+internal fun shouldExposeBuiltInWebFetchTool(messageText: String): Boolean {
+    return containsHttpUrl(messageText) && hasExplicitWebReadIntent(messageText)
 }
 
 internal fun builtInWebFetchToolDefinition(): Map<String, Any> {

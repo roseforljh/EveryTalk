@@ -2,6 +2,7 @@
 package com.android.everytalk.ui.screens.MainScreen.chat.text.ui
 import com.android.everytalk.R
 
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.animateScrollBy
@@ -549,11 +550,23 @@ fun ChatMessagesList(
                                 verticalAlignment = Alignment.Bottom,
                                 horizontalArrangement = Arrangement.Start
                             ) {
-                                Text(
-                                    text = stringResource(id = R.string.connecting_to_model),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
+                                val defaultText = stringResource(id = R.string.connecting_to_model)
+                                val displayText = item.text ?: defaultText
+                                
+                                androidx.compose.animation.AnimatedContent(
+                                    targetState = displayText,
+                                    transitionSpec = {
+                                        (androidx.compose.animation.slideInVertically { height -> height } + androidx.compose.animation.fadeIn())
+                                            .togetherWith(androidx.compose.animation.slideOutVertically { height -> -height } + androidx.compose.animation.fadeOut())
+                                    },
+                                    label = "LoadingTextAnimation"
+                                ) { text ->
+                                    Text(
+                                        text = text,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
                                 Spacer(Modifier.width(ChatDimensions.LOADING_SPACER_WIDTH))
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(ChatDimensions.LOADING_INDICATOR_SIZE),

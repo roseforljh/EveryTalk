@@ -389,9 +389,9 @@ object OpenAIDirectClient {
         }
     }
 
-    private var mcpToolExecutor: (suspend (String, JsonObject) -> JsonElement)? = null
+    private var mcpToolExecutor: (suspend (String, JsonObject, suspend (String?) -> Unit) -> JsonElement)? = null
 
-    fun setMcpToolExecutor(executor: (suspend (String, JsonObject) -> JsonElement)?) {
+    fun setMcpToolExecutor(executor: (suspend (String, JsonObject, suspend (String?) -> Unit) -> JsonElement)?) {
         mcpToolExecutor = executor
     }
     
@@ -532,7 +532,9 @@ object OpenAIDirectClient {
 
                         val result = withContext(NonCancellable) {
                             Log.d(TAG, "🔧 开始执行工具: ${toolInfo.name}")
-                            mcpToolExecutor!!.invoke(toolInfo.name, argsJson)
+                            mcpToolExecutor!!.invoke(toolInfo.name, argsJson) { status ->
+                                send(AppStreamEvent.ExecutionStatusUpdate(status))
+                            }
                         }
                         Log.i(TAG, "🔧 工具 ${toolInfo.name} 执行成功: ${result.toString().take(100)}")
 

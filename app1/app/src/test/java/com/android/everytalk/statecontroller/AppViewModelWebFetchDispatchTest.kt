@@ -22,10 +22,12 @@ class AppViewModelWebFetchDispatchTest {
             put("ok", JsonPrimitive(true))
         }
         var fallbackCalled = false
+        val statusUpdates = mutableListOf<String?>()
 
         val result = executeSharedToolCall(
             toolName = BUILT_IN_WEBFETCH_TOOL_NAME,
             arguments = arguments,
+            updateStatus = { statusUpdates.add(it) },
             localWebFetchExecutor = { localResult },
             fallbackExecutor = { _, _ ->
                 fallbackCalled = true
@@ -35,6 +37,7 @@ class AppViewModelWebFetchDispatchTest {
 
         assertSame(localResult, result)
         assertTrue(!fallbackCalled)
+        assertEquals(listOf("正在分析链接", null), statusUpdates)
     }
 
     @Test
@@ -47,10 +50,12 @@ class AppViewModelWebFetchDispatchTest {
         val fallbackResult = buildJsonObject {
             put("source", JsonPrimitive("mcp"))
         }
+        val statusUpdates = mutableListOf<String?>()
 
         val result = executeSharedToolCall(
             toolName = "search_docs",
             arguments = arguments,
+            updateStatus = { statusUpdates.add(it) },
             localWebFetchExecutor = {
                 error("local webfetch executor should not run")
             },
@@ -64,5 +69,6 @@ class AppViewModelWebFetchDispatchTest {
         assertSame(fallbackResult, result)
         assertEquals("search_docs", fallbackToolName)
         assertEquals(arguments, fallbackArguments)
+        assertTrue(statusUpdates.isEmpty())
     }
 }

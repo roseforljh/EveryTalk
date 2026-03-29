@@ -9,9 +9,9 @@ import org.junit.Test
 class MessageSenderWebFetchToolTest {
 
     @Test
-    fun `url bearing prompt injects built in webfetch tool`() {
+    fun `explicit web reading prompt with url injects built in webfetch tool`() {
         val tools = appendBuiltInWebFetchToolIfNeeded(
-            messageText = "请阅读 https://example.com/article",
+            messageText = "请阅读这个链接并总结内容 https://example.com/article",
             tools = emptyList(),
         )
 
@@ -42,11 +42,46 @@ class MessageSenderWebFetchToolTest {
     }
 
     @Test
+    fun `bare url does not expose webfetch tool`() {
+        val tools = appendBuiltInWebFetchToolIfNeeded(
+            messageText = "https://example.com/article",
+            tools = emptyList(),
+        )
+
+        assertTrue(tools.isEmpty())
+        assertTrue(containsHttpUrl("https://example.com/article"))
+        assertFalse(hasExplicitWebReadIntent("https://example.com/article"))
+        assertFalse(shouldExposeBuiltInWebFetchTool("https://example.com/article"))
+    }
+
+    @Test
+    fun `shared link without explicit read intent does not expose webfetch tool`() {
+        val tools = appendBuiltInWebFetchToolIfNeeded(
+            messageText = "分享个链接给你 https://example.com/article",
+            tools = emptyList(),
+        )
+
+        assertTrue(tools.isEmpty())
+        assertFalse(shouldExposeBuiltInWebFetchTool("分享个链接给你 https://example.com/article"))
+    }
+
+    @Test
+    fun `negative intent with url does not expose webfetch tool`() {
+        val tools = appendBuiltInWebFetchToolIfNeeded(
+            messageText = "先别打开这个链接，直接回答 https://example.com/article",
+            tools = emptyList(),
+        )
+
+        assertTrue(tools.isEmpty())
+        assertFalse(hasExplicitWebReadIntent("先别打开这个链接，直接回答 https://example.com/article"))
+    }
+
+    @Test
     fun `existing webfetch tool avoids duplicate collision`() {
         val existingWebFetchTool = builtInWebFetchToolDefinition()
 
         val tools = appendBuiltInWebFetchToolIfNeeded(
-            messageText = "请总结 http://example.com",
+            messageText = "请总结这个链接 http://example.com",
             tools = listOf(existingWebFetchTool),
         )
 
@@ -55,8 +90,13 @@ class MessageSenderWebFetchToolTest {
     }
 
     @Test
-    fun `http and https urls are both recognized`() {
-        assertTrue(shouldExposeBuiltInWebFetchTool("http://example.com"))
-        assertTrue(shouldExposeBuiltInWebFetchTool("https://example.com"))
+    fun `http and https urls can be recognized as candidates`() {
+        assertTrue(containsHttpUrl("http://example.com"))
+        assertTrue(containsHttpUrl("https://example.com"))
+    }
+
+    @Test
+    fun `english explicit read intent also exposes webfetch tool`() {
+        assertTrue(shouldExposeBuiltInWebFetchTool("Please summarize this link https://example.com/article"))
     }
 }

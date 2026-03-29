@@ -347,7 +347,7 @@ open class MessageItemsController(
         return when (state) {
             is com.android.everytalk.ui.state.AiBubbleState.Connecting -> {
                 android.util.Log.d("MessageItemsController", "createAiMessageItems: Connecting -> LoadingIndicator")
-                listOf(ChatListItem.LoadingIndicator(message.id))
+                listOf(ChatListItem.LoadingIndicator(message.id, message.executionStatus))
             }
             is com.android.everytalk.ui.state.AiBubbleState.Reasoning -> {
                 android.util.Log.d(

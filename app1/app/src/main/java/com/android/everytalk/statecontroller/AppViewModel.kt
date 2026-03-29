@@ -89,11 +89,15 @@ import kotlinx.serialization.json.JsonObject
 internal suspend fun executeSharedToolCall(
     toolName: String,
     arguments: JsonObject,
+    updateStatus: suspend (String?) -> Unit = {},
     localWebFetchExecutor: suspend (JsonObject) -> JsonElement = { WebFetchToolExecutor.execute(it) },
     fallbackExecutor: suspend (String, JsonObject) -> JsonElement,
 ): JsonElement {
     if (toolName.equals(BUILT_IN_WEBFETCH_TOOL_NAME, ignoreCase = true)) {
-        return localWebFetchExecutor(arguments)
+        updateStatus("正在分析链接")
+        val result = localWebFetchExecutor(arguments)
+        updateStatus(null)
+        return result
     }
     return fallbackExecutor(toolName, arguments)
 }
@@ -526,19 +530,21 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
    )
 
   init {
-         GeminiDirectClient.setMcpToolExecutor { toolName, arguments ->
+         GeminiDirectClient.setMcpToolExecutor { toolName, arguments, updateStatus ->
             executeSharedToolCall(
                 toolName = toolName,
                 arguments = arguments,
+                updateStatus = updateStatus,
                 fallbackExecutor = { fallbackToolName, fallbackArguments ->
                     mcpManager.callTool(fallbackToolName, fallbackArguments)
                 }
             )
          }
-         OpenAIDirectClient.setMcpToolExecutor { toolName, arguments ->
+         OpenAIDirectClient.setMcpToolExecutor { toolName, arguments, updateStatus ->
             executeSharedToolCall(
                 toolName = toolName,
                 arguments = arguments,
+                updateStatus = updateStatus,
                 fallbackExecutor = { fallbackToolName, fallbackArguments ->
                     mcpManager.callTool(fallbackToolName, fallbackArguments)
                 }

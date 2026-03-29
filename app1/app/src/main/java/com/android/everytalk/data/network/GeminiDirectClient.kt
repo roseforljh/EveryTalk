@@ -20,9 +20,9 @@ object GeminiDirectClient {
     private const val TAG = "GeminiDirectClient"
     private const val MAX_TOOL_LOOPS = 5
     
-    private var mcpToolExecutor: (suspend (String, JsonObject) -> JsonElement)? = null
+    private var mcpToolExecutor: (suspend (String, JsonObject, suspend (String?) -> Unit) -> JsonElement)? = null
     
-    fun setMcpToolExecutor(executor: (suspend (String, JsonObject) -> JsonElement)?) {
+    fun setMcpToolExecutor(executor: (suspend (String, JsonObject, suspend (String?) -> Unit) -> JsonElement)?) {
         mcpToolExecutor = executor
     }
     
@@ -117,7 +117,9 @@ object GeminiDirectClient {
                     try {
                         val result = withContext(NonCancellable) {
                             Log.d(TAG, "🔧 开始执行工具: $toolName")
-                            mcpToolExecutor!!.invoke(toolName, args)
+                            mcpToolExecutor!!.invoke(toolName, args) { status ->
+                                send(AppStreamEvent.ExecutionStatusUpdate(status))
+                            }
                         }
                         Log.i(TAG, "🔧 工具 $toolName 执行成功: ${result.toString().take(100)}")
                         toolResponses.add(buildJsonObject {

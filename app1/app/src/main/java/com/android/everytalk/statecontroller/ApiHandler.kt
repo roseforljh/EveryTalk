@@ -22,7 +22,6 @@ import io.ktor.client.statement.HttpResponse
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.onStart
@@ -39,6 +38,19 @@ import java.util.concurrent.CancellationException
 
 @Serializable
 private data class BackendErrorContent(val message: String? = null, val code: Int? = null)
+
+internal fun shouldReturnEarlyForNetworkRetry(
+    allowRetry: Boolean,
+    isNetworkError: Boolean,
+    currentRetryCount: Int,
+    maxRetryAttempts: Int,
+    hasRetryAction: Boolean,
+): Boolean {
+    return allowRetry &&
+        isNetworkError &&
+        currentRetryCount < maxRetryAttempts &&
+        hasRetryAction
+}
 
 class ApiHandler(
     private val stateHolder: ViewModelStateHolder,
@@ -66,7 +78,6 @@ class ApiHandler(
     
     // 🎯 Retry mechanism configuration (Requirements: 7.3)
     private val MAX_RETRY_ATTEMPTS = 3
-    private val RETRY_DELAY_MS = 2000L
     private val retryCountMap = mutableMapOf<String, Int>()
 
     fun cancelCurrentApiJob(reason: String, isNewMessageSend: Boolean = false, isImageGeneration: Boolean = false) {
@@ -760,6 +771,9 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                         }
                     }
                 }
+                is AppStreamEvent.ExecutionStatusUpdate -> {
+                    updatedMessage = updatedMessage.copy(executionStatus = appEvent.status)
+                }
                 is AppStreamEvent.WebSearchResults -> {
                     updatedMessage = updatedMessage.copy(webSearchResults = appEvent.results)
                 }
@@ -904,20 +918,27 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
         logger.debug("Flushed StreamingBuffer before error for message: $messageId")
         
         // 🎯 检查是否应该重试（Requirements: 7.3）
-        if (allowRetry && isNetworkError(error)) {
-            val currentRetryCount = retryCountMap.getOrDefault(messageId, 0)
-            if (currentRetryCount < MAX_RETRY_ATTEMPTS) {
-                logger.debug("Network error detected, attempting retry ${currentRetryCount + 1}/$MAX_RETRY_ATTEMPTS for message: $messageId")
-                retryCountMap[messageId] = currentRetryCount + 1
-                // 延迟后重试
-                delay(RETRY_DELAY_MS)
-                // 这里可以添加重试逻辑，重新发送请求
-                // 注意：实际重试需要在调用方实现，这里只是标记和延迟
-                return
-            } else {
-                logger.debug("Max retry attempts reached for message: $messageId")
-                retryCountMap.remove(messageId)
-            }
+        val currentRetryCount = retryCountMap.getOrDefault(messageId, 0)
+        if (shouldReturnEarlyForNetworkRetry(
+                allowRetry = allowRetry,
+                isNetworkError = isNetworkError(error),
+                currentRetryCount = currentRetryCount,
+                maxRetryAttempts = MAX_RETRY_ATTEMPTS,
+                hasRetryAction = false,
+            )) {
+            logger.debug("Network error detected, attempting retry ${currentRetryCount + 1}/$MAX_RETRY_ATTEMPTS for message: $messageId")
+            retryCountMap[messageId] = currentRetryCount + 1
+            return
+        }
+
+        if (allowRetry && isNetworkError(error) && currentRetryCount < MAX_RETRY_ATTEMPTS) {
+            logger.warn(
+                "Network error detected but no retry action is implemented; handling as terminal error for message: $messageId"
+            )
+            retryCountMap.remove(messageId)
+        } else if (allowRetry && isNetworkError(error)) {
+            logger.debug("Max retry attempts reached for message: $messageId")
+            retryCountMap.remove(messageId)
         }
         
         // 获取当前消息ID对应的处理器并重置
