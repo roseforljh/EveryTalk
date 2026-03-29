@@ -46,6 +46,65 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.longOrNull
 
+internal const val BUILT_IN_WEBFETCH_TOOL_NAME = "webfetch"
+
+private val HTTP_URL_REGEX = Regex("""https?://[^\s<>()\"]+""", RegexOption.IGNORE_CASE)
+
+internal fun shouldExposeBuiltInWebFetchTool(messageText: String): Boolean {
+    return HTTP_URL_REGEX.containsMatchIn(messageText)
+}
+
+internal fun builtInWebFetchToolDefinition(): Map<String, Any> {
+    return mapOf(
+        "type" to "function",
+        "function" to mapOf(
+            "name" to BUILT_IN_WEBFETCH_TOOL_NAME,
+            "description" to "Fetch a web page and return readable text content.",
+            "parameters" to mapOf(
+                "type" to "object",
+                "properties" to mapOf(
+                    "url" to mapOf(
+                        "type" to "string",
+                        "description" to "HTTP or HTTPS URL to fetch."
+                    ),
+                    "max_chars" to mapOf(
+                        "type" to "integer",
+                        "description" to "Maximum characters to return."
+                    )
+                ),
+                "required" to listOf("url")
+            )
+        )
+    )
+}
+
+internal fun appendBuiltInWebFetchToolIfNeeded(
+    messageText: String,
+    tools: List<Map<String, Any>>,
+): List<Map<String, Any>> {
+    if (!shouldExposeBuiltInWebFetchTool(messageText)) {
+        return tools
+    }
+
+    val hasWebFetchTool = tools.any { toolDefinition ->
+        extractToolName(toolDefinition)?.equals(BUILT_IN_WEBFETCH_TOOL_NAME, ignoreCase = true) == true
+    }
+    if (hasWebFetchTool) {
+        return tools
+    }
+
+    return tools + builtInWebFetchToolDefinition()
+}
+
+private fun extractToolName(toolDefinition: Map<String, Any>): String? {
+    val functionDefinition = toolDefinition["function"] as? Map<*, *>
+    val functionName = functionDefinition?.get("name") as? String
+    if (!functionName.isNullOrBlank()) {
+        return functionName
+    }
+    return toolDefinition["name"] as? String
+}
+
 private data class AttachmentProcessingResult(
     val success: Boolean,
     val processedAttachmentsForUi: List<SelectedMediaItem> = emptyList(),
@@ -726,8 +785,16 @@ private data class AttachmentProcessingResult(
                             Log.d("MessageSender", "注入 ${mcpTools.size} 个 MCP 工具")
                             toolsList.addAll(mcpTools)
                         }
-                        
-                        toolsList.ifEmpty { null }
+
+                        val effectiveTools = appendBuiltInWebFetchToolIfNeeded(
+                            messageText = textToActuallySend,
+                            tools = toolsList,
+                        )
+                        if (effectiveTools.size != toolsList.size) {
+                            Log.d("MessageSender", "为含 URL 的当前消息注入内建 webfetch 工具")
+                        }
+
+                        effectiveTools.ifEmpty { null }
                     },
                     imageGenRequest = if (isImageGeneration) {
                         // 调试信息：检查发送的配置
