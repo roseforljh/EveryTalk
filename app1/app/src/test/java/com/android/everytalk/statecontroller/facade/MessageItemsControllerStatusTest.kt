@@ -46,6 +46,13 @@ class MessageItemsControllerStatusTest {
         val controller = MessageItemsControllerTestAccess.newController()
         controller.stateHolder.messages.add(
             Message(
+                id = "user-1",
+                text = "hello",
+                sender = Sender.User
+            )
+        )
+        controller.stateHolder.messages.add(
+            Message(
                 id = "system-1",
                 text = "slash 输出",
                 sender = Sender.System
@@ -54,10 +61,42 @@ class MessageItemsControllerStatusTest {
 
         val items = controller.chatListItemsForTest()
 
-        assertEquals(1, items.size)
-        assertTrue(items.first() is ChatListItem.SystemMessage)
-        val item = items.first() as ChatListItem.SystemMessage
+        assertEquals(2, items.size)
+        assertTrue(items[1] is ChatListItem.SystemMessage)
+        val item = items[1] as ChatListItem.SystemMessage
         assertEquals("system-1", item.messageId)
         assertEquals("slash 输出", item.text)
+    }
+
+    @Test
+    fun `leading legacy system prompt messages are filtered from chat list items`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder.messages.add(
+            Message(
+                id = "system_history_prompt",
+                text = "你是翻译助手",
+                sender = Sender.System
+            )
+        )
+        controller.stateHolder.messages.add(
+            Message(
+                id = "system_runtime_prompt",
+                text = "你是翻译助手",
+                sender = Sender.System,
+                contentStarted = true
+            )
+        )
+        controller.stateHolder.messages.add(
+            Message(
+                id = "user-1",
+                text = "hello",
+                sender = Sender.User
+            )
+        )
+
+        val items = controller.chatListItemsForTest()
+
+        assertEquals(1, items.size)
+        assertTrue(items.first() is ChatListItem.UserMessage)
     }
 }

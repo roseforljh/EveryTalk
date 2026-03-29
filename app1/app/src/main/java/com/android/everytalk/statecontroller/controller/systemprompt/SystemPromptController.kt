@@ -1,7 +1,5 @@
 package com.android.everytalk.statecontroller.controller.systemprompt
 
-import com.android.everytalk.data.DataClass.Message
-import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import com.android.everytalk.statecontroller.viewmodel.DialogManager
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
@@ -24,7 +22,6 @@ class SystemPromptController(
     private val scope: CoroutineScope
 ) {
     private val historyMutex = Mutex()
-    private val messagesMutex = Mutex()
 
     private var originalSystemPrompt: String? = null
 
@@ -63,7 +60,6 @@ class SystemPromptController(
 
     fun saveSystemPrompt() {
         val conversationId = stateHolder._currentConversationId.value
-        val newPrompt = stateHolder.systemPrompts[conversationId] ?: ""
 
         dialogManager.dismissSystemPromptDialog()
         originalSystemPrompt = null
@@ -71,57 +67,8 @@ class SystemPromptController(
 
         scope.launch {
             historyMutex.withLock {
-                var modifiedMessages: List<Message>? = null
-                messagesMutex.withLock {
-                    val currentMessages = stateHolder.messages.toMutableList()
-                    val systemMessageIndex =
-                        currentMessages.indexOfFirst { it.sender == Sender.System && !it.isPlaceholderName }
-
-                    var changed = false
-                    if (systemMessageIndex != -1) {
-                        val oldPrompt = currentMessages[systemMessageIndex].text
-                        if (newPrompt.isNotBlank()) {
-                            if (oldPrompt != newPrompt) {
-                                currentMessages[systemMessageIndex] =
-                                    currentMessages[systemMessageIndex].copy(text = newPrompt)
-                                changed = true
-                            }
-                        } else {
-                            currentMessages.removeAt(systemMessageIndex)
-                            changed = true
-                        }
-                    } else if (newPrompt.isNotBlank()) {
-                        val systemMessage = Message(
-                            id = "system_${conversationId}",
-                            text = newPrompt,
-                            sender = Sender.System,
-                            timestamp = System.currentTimeMillis(),
-                            contentStarted = true
-                        )
-                        currentMessages.add(0, systemMessage)
-                        changed = true
-                    }
-
-                    if (changed) {
-                        modifiedMessages = currentMessages.toList()
-                        stateHolder.messages.clear()
-                        stateHolder.messages.addAll(modifiedMessages!!)
-                    }
-                    stateHolder.isTextConversationDirty.value = true
-                }
-
-                if (modifiedMessages != null) {
-                    val loadedIndex = stateHolder._loadedHistoryIndex.value
-                    if (loadedIndex != null) {
-                        val currentHistory = stateHolder._historicalConversations.value.toMutableList()
-                        if (loadedIndex >= 0 && loadedIndex < currentHistory.size) {
-                            currentHistory[loadedIndex] = modifiedMessages!!
-                            stateHolder._historicalConversations.value = currentHistory.toList()
-                            // 触发预览名重新计算
-                        }
-                    }
-                    historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
-                }
+                stateHolder.isTextConversationDirty.value = true
+                historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
             }
         }
     }

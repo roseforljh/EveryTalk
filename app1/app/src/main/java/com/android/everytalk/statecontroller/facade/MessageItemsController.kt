@@ -71,7 +71,7 @@ open class MessageItemsController(
             stateHolder._isTextApiCalling,
             stateHolder._currentTextStreamingAiMessageId
         ) { messages, isApiCalling, currentStreamingAiMessageId ->
-            messages
+            filterRenderableMessages(messages)
                 .map { message ->
                     when (message.sender) {
                         Sender.AI -> {
@@ -166,7 +166,7 @@ open class MessageItemsController(
                 "MessageItemsController",
                 "[IMAGE FLOW] Triggered - messages.size=${messages.size}, isApiCalling=$isApiCalling"
             )
-            messages
+            filterRenderableMessages(messages)
                 .map { message ->
                     when (message.sender) {
                         Sender.AI -> {
@@ -435,6 +435,12 @@ open class MessageItemsController(
                 listOf(ChatListItem.ErrorMessage(message.id, message.text))
             }
             else -> emptyList()
+        }
+    }
+
+    private fun filterRenderableMessages(messages: List<Message>): List<Message> {
+        return messages.dropWhile {
+            it.sender == Sender.System && !it.isPlaceholderName && it.text.isNotBlank()
         }
     }
 

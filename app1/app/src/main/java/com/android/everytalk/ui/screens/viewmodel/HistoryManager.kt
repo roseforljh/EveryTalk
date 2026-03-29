@@ -77,6 +77,12 @@ class HistoryManager(
     }
 
     private fun filterMessagesForSaving(messagesToFilter: List<Message>): List<Message> {
+        fun isLegacySystemPromptMessage(msg: Message): Boolean {
+            return msg.sender == Sender.System && !msg.isPlaceholderName && msg.text.isNotBlank()
+        }
+        fun stripLeadingLegacySystemPromptMessages(messages: List<Message>): List<Message> {
+            return messages.dropWhile { isLegacySystemPromptMessage(it) }
+        }
         fun hasValidParts(parts: List<com.android.everytalk.ui.components.MarkdownPart>): Boolean {
             return parts.any { part ->
                 when (part) {
@@ -94,7 +100,7 @@ class HistoryManager(
             val hasImages = !msg.imageUrls.isNullOrEmpty()
             return hasText || hasReasoning || hasParts || hasImages
         }
-        return messagesToFilter
+        return stripLeadingLegacySystemPromptMessages(messagesToFilter)
             .filter { msg ->
                 if (msg.isError) return@filter false
                 when (msg.sender) {
@@ -158,16 +164,8 @@ class HistoryManager(
         } else {
             stateHolder._currentConversationId.value
         }
-        val currentPrompt = if (!isImageGeneration) {
-            stateHolder.systemPrompts[currentConversationId] ?: ""
-        } else ""
-        val messagesWithPrompt = if (currentPrompt.isNotBlank()) {
-            listOf(Message(sender = Sender.System, text = currentPrompt)) + currentMessagesSnapshot
-        } else {
-            currentMessagesSnapshot
-        }
-        
-        val messagesToSave = filterMessagesForSaving(messagesWithPrompt)
+
+        val messagesToSave = filterMessagesForSaving(currentMessagesSnapshot)
         var historyListModified = false
         var loadedIndexChanged = false
 
