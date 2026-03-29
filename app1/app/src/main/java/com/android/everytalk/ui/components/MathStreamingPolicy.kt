@@ -8,13 +8,18 @@ internal object MathStreamingPolicy {
     )
 
     fun hasMathSyntax(text: String): Boolean {
-        return text.contains('$') || text.contains("\\[") || text.contains("\\(")
+        return text.contains('$') ||
+            text.contains("\\[") ||
+            text.contains("\\]") ||
+            text.contains("\\(") ||
+            text.contains("\\)")
     }
 
     fun hasUnclosedMathDelimiter(text: String): Boolean {
         var inInlineCode = false
         var inBlockMath = false
         var inInlineMath = false
+        var inEscapedInlineMath = false
         var blockMarker = ""
 
         var i = 0
@@ -55,6 +60,18 @@ internal object MathStreamingPolicy {
                 continue
             }
 
+            if (ch == '\\' && i + 1 < text.length && text[i + 1] == '(') {
+                inEscapedInlineMath = true
+                i += 2
+                continue
+            }
+
+            if (ch == '\\' && i + 1 < text.length && text[i + 1] == ')' && inEscapedInlineMath) {
+                inEscapedInlineMath = false
+                i += 2
+                continue
+            }
+
             if (ch == '$') {
                 val isCurrency = i + 1 < text.length && text[i + 1].isDigit()
                 if (!isCurrency) {
@@ -67,7 +84,7 @@ internal object MathStreamingPolicy {
             i++
         }
 
-        return inBlockMath || inInlineMath
+        return inBlockMath || inInlineMath || inEscapedInlineMath
     }
 
     fun findMathAffectedRange(previous: String, current: String): AffectedRange? {
@@ -104,6 +121,8 @@ internal object MathStreamingPolicy {
         var mathBlockMarker = ""
         var inInlineMath = false
         var inlineMathStart = -1
+        var inEscapedInlineMath = false
+        var escapedInlineMathStart = -1
 
         var i = 0
         while (i < input.length) {
@@ -146,6 +165,20 @@ internal object MathStreamingPolicy {
                 continue
             }
 
+            if (ch == '\\' && i + 1 < input.length && input[i + 1] == '(') {
+                inEscapedInlineMath = true
+                escapedInlineMathStart = i
+                i += 2
+                continue
+            }
+
+            if (ch == '\\' && i + 1 < input.length && input[i + 1] == ')' && inEscapedInlineMath) {
+                inEscapedInlineMath = false
+                escapedInlineMathStart = -1
+                i += 2
+                continue
+            }
+
             if (ch == '$') {
                 val isCurrency = i + 1 < input.length && input[i + 1].isDigit()
                 if (!isCurrency) {
@@ -159,7 +192,7 @@ internal object MathStreamingPolicy {
             i++
         }
 
-        if (!inMathBlock && !inInlineMath) return input
+        if (!inMathBlock && !inInlineMath && !inEscapedInlineMath) return input
 
         data class Edit(val pos: Int, val origLen: Int, val replacement: String)
         val edits = mutableListOf<Edit>()
@@ -173,6 +206,9 @@ internal object MathStreamingPolicy {
         }
         if (inInlineMath && inlineMathStart >= 0) {
             edits.add(Edit(inlineMathStart, 1, "\\$"))
+        }
+        if (inEscapedInlineMath && escapedInlineMathStart >= 0) {
+            edits.add(Edit(escapedInlineMathStart, 2, "\\\\("))
         }
 
         val sb = StringBuilder(input)

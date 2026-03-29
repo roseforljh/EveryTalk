@@ -55,9 +55,29 @@ internal object MathRenderStrategy {
         return isVeryLongSingleLine || isLongOperatorFormula
     }
 
+    fun shouldForceNativeBlockRendererForMathPart(math: String): Boolean {
+        val trimmed = math.trim()
+        if (trimmed.isEmpty()) return false
+
+        return trimmed.contains("\\begin{pmatrix}") ||
+            trimmed.contains("\\begin{bmatrix}") ||
+            trimmed.contains("\\begin{vmatrix}") ||
+            trimmed.contains("\\begin{Vmatrix}") ||
+            trimmed.contains("\\begin{matrix}") ||
+            trimmed.contains("\\end{pmatrix}") ||
+            trimmed.contains("\\end{bmatrix}") ||
+            trimmed.contains("\\end{vmatrix}") ||
+            trimmed.contains("\\end{Vmatrix}") ||
+            trimmed.contains("\\end{matrix}")
+    }
+
     fun shouldForceMarkdownRendererForMathPart(math: String): Boolean {
         val trimmed = math.trim()
         if (trimmed.isEmpty()) return false
+
+        if (shouldForceNativeBlockRendererForMathPart(trimmed)) {
+            return false
+        }
 
         val normalized = trimmed
             .removePrefix("$$")
@@ -81,6 +101,10 @@ internal object MathRenderStrategy {
     fun shouldPreferStableNativeMathRenderer(math: String): Boolean {
         val trimmed = math.trim()
         if (trimmed.isEmpty()) return true
+
+        if (shouldForceNativeBlockRendererForMathPart(trimmed)) {
+            return false
+        }
 
         val normalized = trimmed
             .removePrefix("$$")

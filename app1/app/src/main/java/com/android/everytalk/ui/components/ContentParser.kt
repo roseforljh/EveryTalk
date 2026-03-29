@@ -21,6 +21,9 @@ object ContentParser {
     private val standaloneInlineDollarMathRegex = Regex("^\\s*\\$(?!\\$)[^\\n$]+\\$(?!\\$)\\s*$")
     private val standaloneBracketMathRegex = Regex("^\\s*\\\\\\[[\\s\\S]+\\\\\\]\\s*$")
     private val standaloneParenMathRegex = Regex("^\\s*\\\\\\([\\s\\S]+\\\\\\)\\s*$")
+    private val multilineStandaloneMathRegex = Regex(
+        "^[ \\t]*(\\$\\$[\\s\\S]+?\\$\\$|\\\\\\[[\\s\\S]+?\\\\\\])[ \\t]*(?=\\n|$)"
+    )
     private val trailingMathRegex = Regex(
         "^(.*?)(\\$\\$(?!\\$)[^\\n]+?\\$\\$|\\$(?!\\$)[^\\n$]+?\\$(?!\\$)|\\\\\\[[^\\n]+\\\\\\]|\\\\\\([^\\n]+\\\\\\))\\s*$"
     )
@@ -395,6 +398,26 @@ object ContentParser {
 
         var index = 0
         while (index < text.length) {
+            val multilineMathMatch = multilineStandaloneMathRegex.find(text.substring(index))
+                ?.takeIf { match ->
+                    match.range.first == 0 &&
+                        match.value.contains('\n') &&
+                        isStandaloneMath(match.groupValues[1].trim())
+                }
+            if (multilineMathMatch != null) {
+                flushTextBuffer()
+                val mathGroup = multilineMathMatch.groups[1]!!
+                val mathStart = index + mathGroup.range.first
+                val mathEndExclusive = index + mathGroup.range.last + 1
+                out.add(ContentPart.Math(text.substring(mathStart, mathEndExclusive), part.startOffset + mathStart))
+                index += multilineMathMatch.range.last + 1
+                if (index < text.length && text[index] == '\n') {
+                    out.add(ContentPart.Text("\n", part.startOffset + index))
+                    index++
+                }
+                continue
+            }
+
             val lineStart = index
             var lineEnd = index
             while (lineEnd < text.length && text[lineEnd] != '\n') {

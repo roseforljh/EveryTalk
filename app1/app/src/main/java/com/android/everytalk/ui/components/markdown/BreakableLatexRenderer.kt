@@ -2,6 +2,7 @@ package com.android.everytalk.ui.components.markdown
 
 import android.util.TypedValue
 import android.view.MotionEvent
+import android.view.ViewGroup
 import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.FrameLayout
@@ -62,6 +63,10 @@ fun BreakableLatexRenderer(
         preventNumberBreaking(raw)
     }
 
+    remember(context) {
+        NativeLatexSupport.ensureInitialized(context)
+    }
+
     val configuration = androidx.compose.ui.platform.LocalConfiguration.current
     // 扣除常见的边距 (32dp) 以获得有效可用宽度，避免依赖 BoxWithConstraints 引发流式 recompose 闪烁
     val effectiveMaxWidth = with(density) { (configuration.screenWidthDp.dp - 32.dp).toPx() }
@@ -97,6 +102,10 @@ fun BreakableLatexRenderer(
             val imageView = ImageView(ctx).apply {
                 scaleType = ImageView.ScaleType.FIT_START
                 adjustViewBounds = true
+                layoutParams = FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
                 val paddingPx = TypedValue.applyDimension(
                     TypedValue.COMPLEX_UNIT_DIP, 4f,
                     ctx.resources.displayMetrics
@@ -122,11 +131,16 @@ fun BreakableLatexRenderer(
         update = { scrollView ->
             val tagData = scrollView.tag as? ScrollViewTag ?: return@AndroidView
             val imageView = tagData.imageView
-
-            if (tagData.cacheKey == cacheKey) return@AndroidView
-            tagData.cacheKey = cacheKey
-
             imageView.setImageDrawable(drawable)
+            val intrinsicWidth = drawable?.intrinsicWidth ?: ViewGroup.LayoutParams.WRAP_CONTENT
+            val intrinsicHeight = drawable?.intrinsicHeight ?: ViewGroup.LayoutParams.WRAP_CONTENT
+            imageView.layoutParams = (imageView.layoutParams as? FrameLayout.LayoutParams)?.apply {
+                width = intrinsicWidth
+                height = intrinsicHeight
+            } ?: FrameLayout.LayoutParams(intrinsicWidth, intrinsicHeight)
+            imageView.requestLayout()
+            scrollView.requestLayout()
+            tagData.cacheKey = cacheKey
             // 重置滚动位置
             scrollView.scrollTo(0, 0)
         }

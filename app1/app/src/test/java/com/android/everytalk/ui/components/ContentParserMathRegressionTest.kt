@@ -7,6 +7,55 @@ import org.junit.Test
 class ContentParserMathRegressionTest {
 
     @Test
+    fun `multiline matrix block should be parsed as one math part`() {
+        val input = """
+            在矩阵展开前：
+
+            $$
+            \begin{bmatrix}
+            a & b \\
+            c & d
+            \end{bmatrix}
+            $$
+
+            在矩阵展开后。
+        """.trimIndent()
+
+        val parts = ContentParser.parseCompleteContent(input)
+        val mathParts = parts.filterIsInstance<ContentPart.Math>()
+
+        assertEquals(1, mathParts.size)
+        assertTrue(mathParts.first().content.startsWith("$$"))
+        assertTrue(mathParts.first().content.contains("\\begin{bmatrix}"))
+        assertTrue(mathParts.first().content.contains("\na & b"))
+        assertTrue(mathParts.first().content.contains("\\end{bmatrix}"))
+    }
+
+    @Test
+    fun `multiline bracket math block should be parsed as one math part`() {
+        val input = """
+            先看定义：
+
+            \[
+            f(x) =
+            \begin{cases}
+            x^2, & x > 0 \\
+            0, & x \le 0
+            \end{cases}
+            \]
+        """.trimIndent()
+
+        val parts = ContentParser.parseCompleteContent(input)
+        val mathParts = parts.filterIsInstance<ContentPart.Math>()
+
+        assertEquals(1, mathParts.size)
+        assertTrue(mathParts.first().content.startsWith("\\["))
+        assertTrue(mathParts.first().content.contains("\\begin{cases}"))
+        assertTrue(mathParts.first().content.contains("x \\le 0"))
+        assertTrue(mathParts.first().content.endsWith("\\]"))
+    }
+
+    @Test
     fun `matrix block from bug sample should be parsed as one math part`() {
         val input = """
             $$ M = \begin{bmatrix} \frac{\partial^2 f}{\partial x^2} & \frac{\partial^2 f}{\partial x \partial y} & \frac{\partial^2 f}{\partial x \partial z} \\ \frac{\partial^2 f}{\partial y \partial x} & \frac{\partial^2 f}{\partial y^2} & \frac{\partial^2 f}{\partial y \partial z} \\ \frac{\partial^2 f}{\partial z \partial x} & \frac{\partial^2 f}{\partial z \partial y} & \frac{\partial^2 f}{\partial z^2} \end{bmatrix} $$

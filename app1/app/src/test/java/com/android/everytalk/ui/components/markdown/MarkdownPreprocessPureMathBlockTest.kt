@@ -14,7 +14,7 @@ class MarkdownPreprocessPureMathBlockTest {
         """.trimIndent()
 
         val output = preprocessAiMarkdown(input, isStreaming = false)
-        assertEquals(input.trim(), output)
+        assertEquals("\\[\\frac{a+b}{2} > 10 \\text{ and } $12\\]", output)
     }
 
     @Test
@@ -29,4 +29,3 @@ class MarkdownPreprocessPureMathBlockTest {
         assertEquals(input.trim(), output)
     }
 }
-

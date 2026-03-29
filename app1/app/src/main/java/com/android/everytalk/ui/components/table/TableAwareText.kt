@@ -78,6 +78,8 @@ import com.android.everytalk.ui.components.content.CodeBlockCard
 import com.android.everytalk.ui.components.StableMarkdownText
 import com.android.everytalk.ui.components.markdown.BreakableLatexRenderer
 import com.android.everytalk.ui.components.markdown.MarkdownRenderer
+import com.android.everytalk.ui.components.markdown.NativeLatexSupport
+import com.android.everytalk.ui.components.markdown.StableLatexRenderer
 import com.android.everytalk.ui.components.syntax.HighlightCache
 import com.android.everytalk.ui.components.syntax.SyntaxHighlightTheme
 import com.android.everytalk.ui.components.syntax.SyntaxHighlighter
@@ -93,6 +95,25 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.mapLatest
+
+internal fun shouldRenderTrailingStreamingTextWithMarkdown(content: String): Boolean {
+    return !content.contains("```") &&
+        !content.contains("```infographic", ignoreCase = true) &&
+        !(content.contains('|') && content.contains("---")) &&
+        !content.contains("$$") &&
+        !content.contains("\\[")
+}
+
+internal fun shouldRenderStableNativeMathPart(
+    isBlockMath: Boolean,
+    isStreaming: Boolean,
+    forceNativeRenderer: Boolean,
+    preferStableNativeRenderer: Boolean,
+    canRenderNatively: Boolean,
+): Boolean {
+    if (!isBlockMath || !canRenderNatively) return false
+    return forceNativeRenderer || preferStableNativeRenderer || !isStreaming
+}
 
 /**
  * 表格感知文本渲染器（优化版 + 实时渲染）
@@ -237,12 +258,7 @@ fun TableAwareText(
                     is ContentPart.Text -> {
                         val isTrailingStreamingText = isStreaming && index == parsedParts.lastIndex
                         val trailingLooksLightweightMarkdown = isTrailingStreamingText &&
-                            !part.content.contains("```") &&
-                            !part.content.contains("```infographic", ignoreCase = true) &&
-                            !(part.content.contains('|') && part.content.contains("---")) &&
-                            !part.content.contains("$$") &&
-                            !part.content.contains("\\[") &&
-                            !part.content.contains("\\(")
+                            shouldRenderTrailingStreamingTextWithMarkdown(part.content)
 
                         when {
                             trailingLooksLightweightMarkdown -> {
@@ -359,10 +375,15 @@ fun TableAwareText(
                         )
                     }
                     is ContentPart.Math -> {
+                        val localContext = LocalContext.current
+                        val onSurfaceColor = MaterialTheme.colorScheme.onSurface
                         val isBlockMath = remember(part.content) {
                             val trimmed = part.content.trim()
                             (trimmed.startsWith("$$") && trimmed.endsWith("$$")) ||
                                 (trimmed.startsWith("\\[") && trimmed.endsWith("\\]"))
+                        }
+                        val forceNativeRenderer = remember(part.content) {
+                            MathRenderStrategy.shouldForceNativeBlockRendererForMathPart(part.content)
                         }
                         val forceMarkdownRenderer = remember(part.content) {
                             MathRenderStrategy.shouldForceMarkdownRendererForMathPart(part.content)
@@ -370,13 +391,56 @@ fun TableAwareText(
                         val preferStableNativeRenderer = remember(part.content) {
                             MathRenderStrategy.shouldPreferStableNativeMathRenderer(part.content)
                         }
+                        val canRenderNatively = remember(part.content, color, style, onSurfaceColor, localContext) {
+                            NativeLatexSupport.ensureInitialized(localContext)
+                            val baseSp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
+                            val textSizeSp = baseSp * 1.05f
+                            val density = localContext.resources.displayMetrics.scaledDensity
+                            val textSizePx = textSizeSp * density
+                            val colorArgb = when {
+                                color != Color.Unspecified -> color.toArgb()
+                                style.color != Color.Unspecified -> style.color.toArgb()
+                                else -> onSurfaceColor.toArgb()
+                            }
+                            NativeLatexSupport.canRenderNatively(part.content, textSizePx, colorArgb)
+                        }
                         val shouldUseBreakableMathRenderer = remember(part.content, isStreaming) {
                             isBlockMath && !isStreaming &&
                                 !forceMarkdownRenderer &&
                                 !preferStableNativeRenderer &&
                                 MathRenderStrategy.shouldEnableHorizontalScrollForMathPart(part.content)
                         }
+                        val shouldUseStableNativeRenderer = remember(
+                            isBlockMath,
+                            isStreaming,
+                            forceNativeRenderer,
+                            preferStableNativeRenderer,
+                            canRenderNatively,
+                        ) {
+                            shouldRenderStableNativeMathPart(
+                                isBlockMath = isBlockMath,
+                                isStreaming = isStreaming,
+                                forceNativeRenderer = forceNativeRenderer,
+                                preferStableNativeRenderer = preferStableNativeRenderer,
+                                canRenderNatively = canRenderNatively,
+                            )
+                        }
                         when {
+                            shouldUseStableNativeRenderer -> {
+                                // 真机 release 上 breakable 路径可能被底层 JLatexMath 反射问题击穿。
+                                // 只要块公式已经确认可原生渲染，就优先走稳定的 native + 横向滚动路径。
+                                StableLatexRenderer(
+                                    latex = part.content,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 8.dp),
+                                    style = style,
+                                    color = color,
+                                    contentKey = if (contentKey.isNotBlank()) {
+                                        "${contentKey}_math_${index}_${part.content.hashCode()}"
+                                    } else ""
+                                )
+                            }
                             shouldUseBreakableMathRenderer -> {
                                 // 仅对超长且非结构化块公式启用 BreakableLatexRenderer。
                                 BreakableLatexRenderer(
@@ -392,24 +456,18 @@ fun TableAwareText(
                                 )
                             }
                             else -> {
-                                // 矩阵 / 环境类公式强制使用 MarkdownRenderer；
-                                // 其余非超长块公式也统一走这里，避免专用 Drawable 路径整块空白。
-                                MarkdownRenderer(
-                                    markdown = part.content,
-                                    style = style,
-                                    color = color,
+                                // 数学回退到纯文本 Markdown 会显示原始 LaTeX；
+                                // native 不可用时统一走可换行的原生数学渲染器，至少保证可见。
+                                BreakableLatexRenderer(
+                                    latex = part.content,
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .padding(vertical = if (isBlockMath) 8.dp else 0.dp),
-                                    isStreaming = isStreaming,
-                                    onLongPress = onLongPress,
-                                    onImageClick = onImageClick,
-                                    sender = sender,
                                     contentKey = if (contentKey.isNotBlank()) {
                                         "${contentKey}_math_${index}_${part.content.hashCode()}"
                                     } else "",
-                                    disableVerticalPadding = true,
-                                    enablePureMathHorizontalScroll = isBlockMath
+                                    style = style,
+                                    color = color
                                 )
                             }
                         }

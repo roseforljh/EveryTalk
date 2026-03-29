@@ -55,8 +55,9 @@ class MarkdownMathRegressionTest {
 
         val output = preprocessAiMarkdown(input, isStreaming = true)
 
-        assertTrue(output.contains("$$"))
+        assertTrue(output.startsWith("\\["))
         assertTrue(output.contains("\\begin{pmatrix}"))
         assertTrue(output.contains("\\det"))
+        assertTrue(output.endsWith("\\]"))
     }
 }

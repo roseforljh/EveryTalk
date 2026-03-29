@@ -91,7 +91,8 @@ class BreakableLatexDrawable private constructor(
             interlineSpacing: Float = 0.5f,
             padding: Insets? = null
         ): BreakableLatexDrawable {
-            val icon = TeXFormula(latex)
+            val normalizedLatex = NativeLatexSupport.normalizeForNativeBlockRenderer(latex)
+            val icon = TeXFormula(normalizedLatex)
                 .TeXIconBuilder()
                 .setStyle(TeXConstants.STYLE_DISPLAY)
                 .setSize(textSize)
@@ -119,7 +120,7 @@ class BreakableLatexDrawable private constructor(
             maxWidthPx: Float
         ): Boolean {
             return try {
-                val icon = TeXFormula(latex)
+                val icon = TeXFormula(NativeLatexSupport.normalizeForNativeBlockRenderer(latex))
                     .TeXIconBuilder()
                     .setStyle(TeXConstants.STYLE_DISPLAY)
                     .setSize(textSize)

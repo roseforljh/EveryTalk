@@ -55,4 +55,16 @@ class MathStreamingPolicyTest {
             MathStreamingPolicy.escapeAllMathDelimiters("code `${'$'}x${'$'}`")
         )
     }
+
+    @Test
+    fun `hasUnclosedMathDelimiter should detect unclosed escaped inline math`() {
+        assertTrue(MathStreamingPolicy.hasUnclosedMathDelimiter("calc: \\(x+1"))
+        assertFalse(MathStreamingPolicy.hasUnclosedMathDelimiter("calc: \\(x+1\\)"))
+    }
+
+    @Test
+    fun `escapeUnclosedMathDelimiters should escape unclosed escaped inline math but keep closed escaped inline math`() {
+        assertEquals("""calc: \(x+1""", MathStreamingPolicy.escapeUnclosedMathDelimiters("""calc: \(x+1"""))
+        assertEquals("calc: \\(x+1\\)", MathStreamingPolicy.escapeUnclosedMathDelimiters("calc: \\(x+1\\)"))
+    }
 }

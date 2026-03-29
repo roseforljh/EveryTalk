@@ -663,7 +663,7 @@ private fun freezeStreamingTailBlockSyntax(input: String): String {
 internal fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): String {
     if (input.isBlank()) return input
     if (PURE_BLOCK_DOLLAR_MATH_REGEX.matches(input) || PURE_BLOCK_BRACKET_MATH_REGEX.matches(input)) {
-        return input.trim()
+        return normalizePureMathBlock(input)
     }
 
     var s = decodeCommonHtmlEntities(input)
@@ -795,6 +795,18 @@ internal fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): 
     s = normalizeComparisonEntities(s)
 
     return s.trimStart('\n')
+}
+
+private fun normalizePureMathBlock(input: String): String {
+    val trimmed = input.trim()
+    return when {
+        PURE_BLOCK_DOLLAR_MATH_REGEX.matches(trimmed) -> {
+            val inner = trimmed.removePrefix("$$").removeSuffix("$$").trim()
+            "\\[$inner\\]"
+        }
+        PURE_BLOCK_BRACKET_MATH_REGEX.matches(trimmed) -> trimmed
+        else -> trimmed
+    }
 }
 
 @Composable

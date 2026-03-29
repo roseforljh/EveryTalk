@@ -2,6 +2,7 @@ package com.android.everytalk
 
 import android.app.Application
 import com.android.everytalk.di.allModules
+import com.android.everytalk.ui.components.markdown.NativeLatexSupport
 import com.android.everytalk.ui.components.icons.MdiIconMap
 import org.koin.android.ext.koin.androidContext
 import org.koin.android.ext.koin.androidLogger
@@ -13,6 +14,7 @@ class EveryTalkApplication : Application() {
     override fun onCreate() {
         super.onCreate()
 
+        NativeLatexSupport.ensureInitialized(this)
         MdiIconMap.init(this)
 
         startKoin {

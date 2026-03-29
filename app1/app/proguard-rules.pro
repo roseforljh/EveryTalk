@@ -157,3 +157,18 @@
 # ===== PDFBox (Fix R8 missing classes) =====
 -dontwarn com.gemalto.jp2.**
 -dontwarn com.tom_roush.pdfbox.**
+
+# ===== JLatexMath / Markwon Latex (release 反射保活) =====
+-keep class org.scilab.forge.jlatexmath.** { *; }
+-keep class ru.noties.jlatexmath.** { *; }
+-keepclassmembers class org.scilab.forge.jlatexmath.NewCommandMacro {
+    public static *;
+    public static *** executeMacro(...);
+}
+-keepclassmembers class org.scilab.forge.jlatexmath.MacroInfo {
+    java.lang.reflect.Method macro;
+    <fields>;
+    <methods>;
+}
+-dontwarn org.scilab.forge.jlatexmath.**
+-dontwarn ru.noties.jlatexmath.**

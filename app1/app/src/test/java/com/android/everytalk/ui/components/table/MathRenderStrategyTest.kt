@@ -7,19 +7,21 @@ import org.junit.Test
 class MathRenderStrategyTest {
 
     @Test
-    fun `pmatrix block should force markdown renderer`() {
+    fun `pmatrix block should force native renderer`() {
         val input = "$$ \\det \\begin{pmatrix} A & B \\\\ C & D \\end{pmatrix} = \\det(A) \\det(D - CA^{-1}B) $$"
 
-        assertTrue(MathRenderStrategy.shouldForceMarkdownRendererForMathPart(input))
+        assertTrue(MathRenderStrategy.shouldForceNativeBlockRendererForMathPart(input))
+        assertFalse(MathRenderStrategy.shouldForceMarkdownRendererForMathPart(input))
         assertFalse(MathRenderStrategy.shouldEnableHorizontalScrollForMathPart(input))
         assertFalse(MathRenderStrategy.shouldPreferStableNativeMathRenderer(input))
     }
 
     @Test
-    fun `bmatrix block should force markdown renderer`() {
-        val input = "$$ M = \\begin{bmatrix} \\frac{\\partial^2 f}{\\partial x^2} & \\frac{\\partial^2 f}{\\partial x \\partial y} \\\\ \\frac{\\partial^2 f}{\\partial y \\partial x} & \\frac{\\partial^2 f}{\\partial y^2} \\end{bmatrix} $$"
+    fun `bmatrix block should force native renderer`() {
+        val input = "$$ M = ${'\\'}begin{bmatrix} a & b ${'\\'}${'\\'} c & d ${'\\'}end{bmatrix} $$"
 
-        assertTrue(MathRenderStrategy.shouldForceMarkdownRendererForMathPart(input))
+        assertTrue(MathRenderStrategy.shouldForceNativeBlockRendererForMathPart(input))
+        assertFalse(MathRenderStrategy.shouldForceMarkdownRendererForMathPart(input))
         assertFalse(MathRenderStrategy.shouldEnableHorizontalScrollForMathPart(input))
         assertFalse(MathRenderStrategy.shouldPreferStableNativeMathRenderer(input))
     }

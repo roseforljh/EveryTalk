@@ -24,8 +24,12 @@ class StableLatexDrawable(
     }
 
     override fun draw(canvas: Canvas) {
+        val bounds = bounds
         val save = canvas.save()
         try {
+            if (bounds.left != 0 || bounds.top != 0) {
+                canvas.translate(bounds.left.toFloat(), bounds.top.toFloat())
+            }
             graphics2D.setCanvas(canvas)
             icon.paintIcon(null, graphics2D, 0, 0)
         } finally {

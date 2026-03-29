@@ -2,6 +2,8 @@ package com.android.everytalk.ui.components.markdown
 
 import android.util.TypedValue
 import android.view.MotionEvent
+import android.view.View
+import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.ImageView
@@ -18,9 +20,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import org.scilab.forge.jlatexmath.TeXConstants
-import org.scilab.forge.jlatexmath.TeXFormula
-import ru.noties.jlatexmath.awt.Color as JColor
+import org.scilab.forge.jlatexmath.TeXIcon
 
 /**
  * 稳定块级公式渲染器：
@@ -54,29 +54,22 @@ fun StableLatexRenderer(
     val textSizeSp = baseSp * 1.05f
     val textSizePx = with(density) { textSizeSp.sp.toPx() }
     val pureMath = remember(latex) {
-        val trimmed = latex.trim()
-        when {
-            trimmed.startsWith("$$") && trimmed.endsWith("$$") ->
-                trimmed.removePrefix("$$").removeSuffix("$$").trim()
-            trimmed.startsWith("\\[") && trimmed.endsWith("\\]") ->
-                trimmed.removePrefix("\\[").removeSuffix("\\]").trim()
-            else -> trimmed
-        }
+        NativeLatexSupport.extractPureMathContent(latex)
+    }
+
+    remember(context) {
+        NativeLatexSupport.ensureInitialized(context)
     }
 
     val cacheKey = remember(pureMath, isDark, textSizeSp, colorArgb, contentKey) {
         "stable_${contentKey}_${pureMath.hashCode()}_${isDark}_${textSizeSp.toInt()}_$colorArgb"
     }
 
-    val drawable = remember(cacheKey) {
+    val icon = remember(cacheKey) {
         stableDrawableCache.get(cacheKey) ?: try {
-            val icon = TeXFormula(pureMath)
-                .TeXIconBuilder()
-                .setStyle(TeXConstants.STYLE_DISPLAY)
-                .setSize(textSizePx)
-                .setFGColor(JColor(colorArgb))
-                .build()
-            StableLatexDrawable(icon).also { stableDrawableCache.put(cacheKey, it) }
+            NativeLatexSupport.buildDisplayIcon(latex, textSizePx, colorArgb).also {
+                stableDrawableCache.put(cacheKey, it)
+            }
         } catch (e: Exception) {
             android.util.Log.e("StableLatexRenderer", "Failed to render: ${e.message}", e)
             null
@@ -89,6 +82,11 @@ fun StableLatexRenderer(
             val imageView = ImageView(ctx).apply {
                 scaleType = ImageView.ScaleType.FIT_START
                 adjustViewBounds = true
+                setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+                layoutParams = FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
                 val paddingPx = TypedValue.applyDimension(
                     TypedValue.COMPLEX_UNIT_DIP,
                     4f,
@@ -112,13 +110,26 @@ fun StableLatexRenderer(
         },
         update = { scrollView ->
             val imageView = scrollView.tag as? ImageView ?: return@AndroidView
+            val drawable = icon?.let(::StableLatexDrawable)
             imageView.setImageDrawable(drawable)
+            val intrinsicWidth = drawable?.intrinsicWidth?.let {
+                it + imageView.paddingLeft + imageView.paddingRight
+            } ?: ViewGroup.LayoutParams.WRAP_CONTENT
+            val intrinsicHeight = drawable?.intrinsicHeight?.let {
+                it + imageView.paddingTop + imageView.paddingBottom
+            } ?: ViewGroup.LayoutParams.WRAP_CONTENT
+            imageView.layoutParams = (imageView.layoutParams as? FrameLayout.LayoutParams)?.apply {
+                width = intrinsicWidth
+                height = intrinsicHeight
+            } ?: FrameLayout.LayoutParams(intrinsicWidth, intrinsicHeight)
+            imageView.requestLayout()
+            scrollView.requestLayout()
             scrollView.scrollTo(0, 0)
         }
     )
 }
 
-private val stableDrawableCache = android.util.LruCache<String, StableLatexDrawable>(50)
+private val stableDrawableCache = android.util.LruCache<String, TeXIcon>(50)
 
 private class NestedStableHorizontalScrollView(
     context: android.content.Context
