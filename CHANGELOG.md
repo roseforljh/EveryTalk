@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.14.0](https://github.com/roseforljh/EveryTalk/compare/v1.13.2...v1.14.0) (2026-03-29)
+
+
+### Features
+
+* webfetch按链接注入内建工具 ([b14af72](https://github.com/roseforljh/EveryTalk/commit/b14af7215c1e0ab3b59cdff063e2ecf725f45d85))
+* webfetch新增原生抓取服务 ([04ae2b3](https://github.com/roseforljh/EveryTalk/commit/04ae2b3e04edb2bc9e84cc7049202930e3c58505))
+
+
+### Bug Fixes
+
+* webfetch修复工具状态与连接卡死问题 ([833953b](https://github.com/roseforljh/EveryTalk/commit/833953bb174243d32cc861608f38dadf3f846aae))
+* 修复自定义提示词误显示到对话界面 ([1e19af5](https://github.com/roseforljh/EveryTalk/commit/1e19af556ac74547e2295f40ea2b138ba1c6f75e))
+
 ## [1.13.2](https://github.com/roseforljh/EveryTalk/compare/v1.13.1...v1.13.2) (2026-03-29)
 
 
