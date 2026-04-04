@@ -20,6 +20,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.material3.TabRowDefaults
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.wrapContentSize
+import androidx.compose.foundation.layout.width
 import androidx.navigation.NavController
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ModalityType
@@ -275,7 +279,36 @@ fun SettingsScreen(
                 TabRow(
                     selectedTabIndex = pagerState.currentPage,
                     containerColor = MaterialTheme.colorScheme.background,
-                    contentColor = MaterialTheme.colorScheme.onSurface
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                    indicator = { tabPositions ->
+                        if (pagerState.currentPage < tabPositions.size) {
+                            val fraction = pagerState.currentPageOffsetFraction
+                            val currentTab = tabPositions[pagerState.currentPage]
+                            
+                            val targetPage = if (fraction > 0) {
+                                (pagerState.currentPage + 1).coerceAtMost(tabPositions.lastIndex)
+                            } else if (fraction < 0) {
+                                (pagerState.currentPage - 1).coerceAtLeast(0)
+                            } else {
+                                pagerState.currentPage
+                            }
+                            
+                            val targetTab = tabPositions[targetPage]
+                            val absFraction = kotlin.math.abs(fraction)
+                            
+                            val width = androidx.compose.ui.unit.lerp(currentTab.width, targetTab.width, absFraction)
+                            val left = androidx.compose.ui.unit.lerp(currentTab.left, targetTab.left, absFraction)
+                            
+                            TabRowDefaults.SecondaryIndicator(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .wrapContentSize(Alignment.BottomStart)
+                                    .offset(x = left)
+                                    .width(width),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
                 ) {
                     tabs.forEachIndexed { index, title ->
                         val isSelected = pagerState.currentPage == index
