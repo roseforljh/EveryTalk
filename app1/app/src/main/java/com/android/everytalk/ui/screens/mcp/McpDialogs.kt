@@ -75,34 +75,33 @@ fun McpServerListContent(
     }
 
     Column(modifier = modifier.fillMaxSize()) {
-        Row(
+        ElevatedButton(
+            onClick = { showAddDialog = true },
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+                .padding(bottom = 16.dp)
+                .height(56.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = ButtonDefaults.elevatedButtonColors(
+                containerColor = Color(0xFF616161),
+                contentColor = Color.White
+            ),
+            elevation = ButtonDefaults.elevatedButtonElevation(
+                defaultElevation = 4.dp,
+                pressedElevation = 8.dp
+            )
         ) {
-            Column {
-                Text(
-                    text = "MCP 服务器",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = "管理您的 MCP 连接",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            FilledTonalIconButton(
-                onClick = { showAddDialog = true },
-                colors = IconButtonDefaults.filledTonalIconButtonColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-            ) {
-                Icon(Icons.Filled.Add, contentDescription = "添加服务器")
-            }
+            Icon(
+                Icons.Filled.Add,
+                contentDescription = "添加 MCP 服务器",
+                modifier = Modifier.size(24.dp)
+            )
+            Spacer(Modifier.width(12.dp))
+            Text(
+                "添加 MCP 服务器",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
         }
 
         if (serverStates.isEmpty()) {
