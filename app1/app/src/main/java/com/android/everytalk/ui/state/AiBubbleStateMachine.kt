@@ -8,7 +8,7 @@ import android.util.Log
  */
 sealed class AiBubbleState {
     object Idle : AiBubbleState()
-    object Connecting : AiBubbleState()
+    data class Connecting(val text: String? = null) : AiBubbleState()
     data class Reasoning(
         val content: String,
         val isComplete: Boolean = false
@@ -55,7 +55,7 @@ class AiBubbleStateMachine(
         val before = _currentState
         _currentState = when (val s = _currentState) {
             is AiBubbleState.Idle -> when (event) {
-                is BubbleEvent.Connect -> AiBubbleState.Connecting
+                is BubbleEvent.Connect -> AiBubbleState.Connecting()
                 is BubbleEvent.ReasoningStart -> AiBubbleState.Reasoning(event.content, isComplete = false)
                 is BubbleEvent.ContentStart -> AiBubbleState.Streaming(content = event.content)
                 is BubbleEvent.ErrorOccurred -> AiBubbleState.Error(event.message)
@@ -88,11 +88,11 @@ class AiBubbleStateMachine(
                 else -> s
             }
             is AiBubbleState.Complete -> when (event) {
-                is BubbleEvent.Connect -> AiBubbleState.Connecting
+                is BubbleEvent.Connect -> AiBubbleState.Connecting()
                 else -> s
             }
             is AiBubbleState.Error -> when (event) {
-                is BubbleEvent.Connect -> AiBubbleState.Connecting
+                is BubbleEvent.Connect -> AiBubbleState.Connecting()
                 else -> s
             }
         }

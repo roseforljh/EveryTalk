@@ -796,13 +796,6 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
         val state = streamingReasoningStates.getOrPut(messageId) { MutableStateFlow("") }
         state.value += text
 
-        if (isImageGeneration) {
-            isImageConversationDirty.value = true
-        } else {
-            isTextConversationDirty.value = true
-        }
-        return
-
         val messageList = if (isImageGeneration) imageGenerationMessages else messages
         val index = messageList.indexOfFirst { it.id == messageId }
         if (index != -1) {

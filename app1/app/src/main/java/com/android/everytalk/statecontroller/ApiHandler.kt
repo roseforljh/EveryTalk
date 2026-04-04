@@ -52,6 +52,13 @@ internal fun shouldReturnEarlyForNetworkRetry(
         hasRetryAction
 }
 
+internal fun reconcileMessageAfterStatusClear(updatedMessage: Message, clearedMessage: Message): Message {
+    return updatedMessage.copy(
+        currentWebSearchStage = clearedMessage.currentWebSearchStage,
+        executionStatus = clearedMessage.executionStatus,
+    )
+}
+
 class ApiHandler(
     private val stateHolder: ViewModelStateHolder,
     private val viewModelScope: CoroutineScope,
@@ -846,6 +853,10 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     }
 
                     stateHolder.clearMessageStatus(aiMessageId, isImageGeneration)
+                    updatedMessage = reconcileMessageAfterStatusClear(
+                        updatedMessage = updatedMessage,
+                        clearedMessage = messageList[messageIndex],
+                    )
 
                     if (!isImageGeneration) {
                         if (stateHolder._currentTextStreamingAiMessageId.value == aiMessageId) {
@@ -885,7 +896,10 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     
                     stateHolder.updateMessageStatus(
                         aiMessageId,
-                        "正在调用工具: $toolName",
+                        when (toolName.lowercase()) {
+                            "webfetch" -> "我先帮你读一下网页内容…"
+                            else -> "我先调用一下 $toolName 看看…"
+                        },
                         isImageGeneration
                     )
                 }
