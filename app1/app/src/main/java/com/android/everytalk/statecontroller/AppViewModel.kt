@@ -53,6 +53,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.flow.map
 import com.android.everytalk.statecontroller.viewmodel.DialogManager
 import com.android.everytalk.statecontroller.viewmodel.DrawerManager
 import com.android.everytalk.statecontroller.viewmodel.ProviderManager
@@ -79,23 +80,54 @@ import com.android.everytalk.statecontroller.controller.config.ConfigFacade
 import com.android.everytalk.statecontroller.controller.config.ProviderController
 import com.android.everytalk.statecontroller.controller.cache.CacheController
 import com.android.everytalk.statecontroller.viewmodel.McpManager
+import com.android.everytalk.data.mcp.McpServerConfig
+import com.android.everytalk.data.mcp.McpServerState
+import com.android.everytalk.data.mcp.McpStatus
 import com.android.everytalk.data.network.GeminiDirectClient
 import com.android.everytalk.data.network.OpenAIDirectClient
 import com.android.everytalk.data.network.WebFetchToolExecutor
 import com.android.everytalk.util.storage.IncrementalBackupManager
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 
 internal suspend fun executeSharedToolCall(
     toolName: String,
     arguments: JsonObject,
     updateStatus: suspend (String?) -> Unit = {},
     localWebFetchExecutor: suspend (JsonObject) -> JsonElement = { WebFetchToolExecutor.execute(it) },
+    localCurrentTimeExecutor: suspend () -> JsonElement = {
+        val now = Date()
+        val timezone = TimeZone.getDefault()
+        val isoFormatter = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US).apply {
+            timeZone = timezone
+        }
+        val displayFormatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).apply {
+            timeZone = timezone
+        }
+        buildJsonObject {
+            put("datetime", JsonPrimitive(isoFormatter.format(now)))
+            put("local_time", JsonPrimitive(displayFormatter.format(now)))
+            put("timezone", JsonPrimitive(timezone.id))
+            put("timestamp_ms", JsonPrimitive(now.time))
+        }
+    },
     fallbackExecutor: suspend (String, JsonObject) -> JsonElement,
 ): JsonElement {
     if (toolName.equals(BUILT_IN_WEBFETCH_TOOL_NAME, ignoreCase = true)) {
         updateStatus("正在分析链接")
         val result = localWebFetchExecutor(arguments)
+        updateStatus(null)
+        return result
+    }
+    if (toolName.equals(BUILT_IN_CURRENT_TIME_TOOL_NAME, ignoreCase = true)) {
+        updateStatus("正在获取当前时间")
+        val result = localCurrentTimeExecutor()
         updateStatus(null)
         return result
     }
@@ -160,6 +192,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     // MCP Manager
     val mcpManager = McpManager(application.applicationContext)
     val mcpServerStates = mcpManager.serverStates
+    val allMcpConfigs: StateFlow<Map<String, McpServerState>> = mcpManager.getAllConfigs()
+        .map { configs: List<McpServerConfig> ->
+            configs.associate { config: McpServerConfig ->
+                val status = if (config.enabled) McpStatus.Connecting else McpStatus.Idle
+                config.id to McpServerState(
+                    config = config,
+                    status = status,
+                    tools = emptyList()
+                )
+            }
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = emptyMap()
+        )
 
     private val uiStateFacade by lazy { UiStateFacade(stateHolder, simpleModeManager) }
     val ui: UiStateFacade
@@ -555,6 +603,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             // 加载初始会话参数
             val initialParams = persistenceManager.loadConversationParameters()
+            val initialToggleStates = persistenceManager.loadConversationFunctionToggleStates()
             
             withContext(Dispatchers.Main) {
                 stateHolder.initializePersistence(
@@ -565,6 +614,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     },
                     initialParams = initialParams
                 )
+                stateHolder.conversationFunctionToggleStates.value = initialToggleStates
             }
         }
 
@@ -821,11 +871,28 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun toggleWebSearchMode(enabled: Boolean) {
+        stateHolder.updateCurrentConversationFunctionToggleState { it.copy(webSearchEnabled = enabled) }
         stateHolder._isWebSearchEnabled.value = enabled
+        viewModelScope.launch {
+            persistenceManager.saveConversationFunctionToggleStates(stateHolder.conversationFunctionToggleStates.value)
+        }
     }
 
     fun toggleCodeExecutionEnabled() {
-        stateHolder._isCodeExecutionEnabled.value = !stateHolder._isCodeExecutionEnabled.value
+        val newValue = !stateHolder._isCodeExecutionEnabled.value
+        stateHolder.updateCurrentConversationFunctionToggleState { it.copy(codeExecutionEnabled = newValue) }
+        stateHolder._isCodeExecutionEnabled.value = newValue
+        viewModelScope.launch {
+            persistenceManager.saveConversationFunctionToggleStates(stateHolder.conversationFunctionToggleStates.value)
+        }
+    }
+
+    fun setMcpEnabledForNextRequest(enabled: Boolean) {
+        stateHolder.updateCurrentConversationFunctionToggleState { it.copy(mcpEnabled = enabled) }
+        stateHolder._isMcpEnabledForNextRequest.value = enabled
+        viewModelScope.launch {
+            persistenceManager.saveConversationFunctionToggleStates(stateHolder.conversationFunctionToggleStates.value)
+        }
     }
 
 
@@ -2000,6 +2067,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 showSnackbar("已移除服务器")
             } catch (e: Exception) {
                 showSnackbar("移除服务器失败: ${e.message}")
+            }
+        }
+    }
+
+    fun updateMcpServer(config: com.android.everytalk.data.mcp.McpServerConfig) {
+        viewModelScope.launch {
+            try {
+                mcpManager.updateServer(config)
+                showSnackbar("已更新服务器: ${config.name}")
+            } catch (e: Exception) {
+                showSnackbar("更新服务器失败: ${e.message}")
             }
         }
     }

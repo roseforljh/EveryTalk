@@ -24,6 +24,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.android.everytalk.data.mcp.*
@@ -34,12 +36,15 @@ import com.android.everytalk.ui.screens.settings.DialogTextFieldColors
 fun McpServerListContent(
     serverStates: Map<String, McpServerState>,
     onAddServer: (McpServerConfig) -> Unit,
+    onUpdateServer: (McpServerConfig) -> Unit,
     onRemoveServer: (String) -> Unit,
     onToggleServer: (String, Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var showAddDialog by remember { mutableStateOf(false) }
+    var serverToEdit by remember { mutableStateOf<McpServerConfig?>(null) }
     var serverToDeleteId by remember { mutableStateOf<String?>(null) }
+    var serverForToolsDialog by remember { mutableStateOf<McpServerState?>(null) }
 
     if (serverToDeleteId != null) {
         val server = serverStates[serverToDeleteId]
@@ -155,6 +160,8 @@ fun McpServerListContent(
                 items(serverStates.values.toList(), key = { it.config.id }) { state ->
                     McpServerItem(
                         serverState = state,
+                        onClick = { serverToEdit = state.config },
+                        onToolsClick = { serverForToolsDialog = state },
                         onToggle = { onToggleServer(state.config.id, it) },
                         onDeleteClick = { serverToDeleteId = state.config.id }
                     )
@@ -172,6 +179,24 @@ fun McpServerListContent(
             onDismiss = { showAddDialog = false }
         )
     }
+
+    serverToEdit?.let { editingConfig ->
+        AddMcpServerDialog(
+            existingConfig = editingConfig,
+            onConfirm = { updatedConfig ->
+                onUpdateServer(updatedConfig)
+                serverToEdit = null
+            },
+            onDismiss = { serverToEdit = null }
+        )
+    }
+
+    serverForToolsDialog?.let { selectedServer ->
+        McpServerToolsDialog(
+            serverState = selectedServer,
+            onDismiss = { serverForToolsDialog = null }
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -179,6 +204,7 @@ fun McpServerListContent(
 fun McpServerListDialog(
     serverStates: Map<String, McpServerState>,
     onAddServer: (McpServerConfig) -> Unit,
+    onUpdateServer: (McpServerConfig) -> Unit,
     onRemoveServer: (String) -> Unit,
     onToggleServer: (String, Boolean) -> Unit,
     onDismiss: () -> Unit
@@ -197,6 +223,7 @@ fun McpServerListDialog(
             McpServerListContent(
                 serverStates = serverStates,
                 onAddServer = onAddServer,
+                onUpdateServer = onUpdateServer,
                 onRemoveServer = onRemoveServer,
                 onToggleServer = onToggleServer,
                 modifier = Modifier.heightIn(max = 600.dp)
@@ -249,6 +276,8 @@ private fun getServerIconColor(name: String): Color {
 @Composable
 private fun McpServerItem(
     serverState: McpServerState,
+    onClick: () -> Unit,
+    onToolsClick: () -> Unit,
     onToggle: (Boolean) -> Unit,
     onDeleteClick: () -> Unit
 ) {
@@ -258,22 +287,24 @@ private fun McpServerItem(
     val iconColor = getServerIconColor(config.name)
     val icon = getServerIcon(config.name)
 
-    val containerColor = MaterialTheme.colorScheme.surfaceContainerHighest
+    val containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
     val contentColor = MaterialTheme.colorScheme.onSurface
 
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(
             containerColor = containerColor
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         border = BorderStroke(
-            width = 1.dp,
+            width = 1.25.dp,
             color = if (config.enabled && status is McpStatus.Connected)
-                iconColor.copy(alpha = 0.2f)
+                iconColor.copy(alpha = 0.65f)
             else
-                MaterialTheme.colorScheme.outline.copy(alpha = 0.1f)
+                Color.White.copy(alpha = 0.42f)
         )
     ) {
         Column(
@@ -335,7 +366,12 @@ private fun McpServerItem(
                                 is McpStatus.Idle -> "已暂停"
                             },
                             style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = if (status is McpStatus.Connected && serverState.tools.isNotEmpty()) {
+                                Modifier.clickable(onClick = onToolsClick)
+                            } else {
+                                Modifier
+                            }
                         )
                     }
                 }
@@ -390,6 +426,90 @@ private fun McpServerItem(
     }
 }
 
+@Composable
+private fun McpServerToolsDialog(
+    serverState: McpServerState,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = DialogShape,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        title = {
+            Column {
+                Text(
+                    text = "可用工具",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = serverState.config.name,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        text = {
+            if (serverState.tools.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(120.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "暂无可用工具",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 360.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(serverState.tools, key = { it.name }) { tool ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp)
+                            ) {
+                                Text(
+                                    text = tool.name,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                tool.description?.takeIf { it.isNotBlank() }?.let { description ->
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = description,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("关闭")
+            }
+        }
+    )
+}
+
 /**
  * MCP 服务器预设
  */
@@ -442,14 +562,32 @@ enum class McpServerPreset(
 
 @Composable
 fun AddMcpServerDialog(
+    existingConfig: McpServerConfig? = null,
     onConfirm: (McpServerConfig) -> Unit,
     onDismiss: () -> Unit
 ) {
-    var selectedPreset by remember { mutableStateOf(McpServerPreset.CUSTOM) }
-    var name by remember { mutableStateOf("") }
-    var url by remember { mutableStateOf("") }
+    var selectedPreset by remember(existingConfig) {
+        mutableStateOf(
+            when {
+                existingConfig == null -> McpServerPreset.CUSTOM
+                existingConfig.url.contains("mcp.exa.ai", ignoreCase = true) -> McpServerPreset.EXA_SEARCH
+                existingConfig.url.contains("mcp.firecrawl.dev", ignoreCase = true) -> McpServerPreset.FIRECRAWL
+                else -> McpServerPreset.CUSTOM
+            }
+        )
+    }
+    var name by remember(existingConfig) { mutableStateOf(existingConfig?.name.orEmpty()) }
+    var url by remember(existingConfig) { mutableStateOf(existingConfig?.url.orEmpty()) }
     var apiKey by remember { mutableStateOf("") }
-    var transportType by remember { mutableStateOf(McpTransportType.SSE) }
+    var apiKeyVisible by remember { mutableStateOf(false) }
+    var transportType by remember(existingConfig) {
+        mutableStateOf(
+            when (existingConfig) {
+                is McpServerConfig.StreamableHTTPServer -> McpTransportType.HTTP
+                else -> McpTransportType.SSE
+            }
+        )
+    }
 
     LaunchedEffect(selectedPreset) {
         if (selectedPreset != McpServerPreset.CUSTOM) {
@@ -478,7 +616,7 @@ fun AddMcpServerDialog(
         ),
         title = {
             Text(
-                text = "新建连接",
+                text = if (existingConfig == null) "新建连接" else "编辑连接",
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold
             )
@@ -622,12 +760,22 @@ fun AddMcpServerDialog(
                             onValueChange = { apiKey = it },
                             label = { Text(selectedPreset.apiKeyPlaceholder) },
                             placeholder = { Text("粘贴 API Key") },
+                            visualTransformation = if (apiKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                             shape = textFieldShape,
                             colors = DialogTextFieldColors,
                             leadingIcon = {
                                 Icon(Icons.Outlined.Key, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            },
+                            trailingIcon = {
+                                IconButton(onClick = { apiKeyVisible = !apiKeyVisible }) {
+                                    Icon(
+                                        imageVector = if (apiKeyVisible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
+                                        contentDescription = if (apiKeyVisible) "隐藏 API Key" else "显示 API Key",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                         )
                     }
@@ -652,12 +800,24 @@ fun AddMcpServerDialog(
                         url = finalUrl,
                         transportType = if (selectedPreset == McpServerPreset.CUSTOM) transportType else selectedPreset.transportType,
                         headers = headers
+                    ).clone(
+                        id = existingConfig?.id ?: McpServerConfig.createDefault(
+                            name = name.trim(),
+                            url = finalUrl,
+                            transportType = if (selectedPreset == McpServerPreset.CUSTOM) transportType else selectedPreset.transportType,
+                            headers = headers
+                        ).id,
+                        commonOptions = McpCommonOptions(
+                            enable = existingConfig?.enabled ?: true,
+                            name = name.trim(),
+                            headers = headers.toList()
+                        )
                     )
                     onConfirm(config)
                 },
                 enabled = isValid
             ) {
-                Text("添加")
+                Text(if (existingConfig == null) "添加" else "保存")
             }
         },
         dismissButton = {

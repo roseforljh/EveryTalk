@@ -407,6 +407,16 @@ class HistoryManager(
                 Log.d(TAG_HM, "Migrated config binding from '$currentId' to stable key '$stableId' (${if (isImageGeneration) "IMAGE" else "TEXT"} mode)")
             }
 
+            val currentToggleStates = stateHolder.conversationFunctionToggleStates.value
+            if (currentToggleStates.containsKey(currentId) && currentId != stableId) {
+                val newToggleStates = currentToggleStates.toMutableMap()
+                newToggleStates[stableId] = currentToggleStates[currentId]!!
+                newToggleStates.remove(currentId)
+                stateHolder.conversationFunctionToggleStates.value = newToggleStates
+                persistenceManager.saveConversationFunctionToggleStates(newToggleStates)
+                Log.d(TAG_HM, "Migrated function toggles from '$currentId' to stable key '$stableId'")
+            }
+
             // 迁移系统提示及其相关状态
             if (currentId != stableId) {
                 val currentSysPrompt = stateHolder.systemPrompts[currentId]

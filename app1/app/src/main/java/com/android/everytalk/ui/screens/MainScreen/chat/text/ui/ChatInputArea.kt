@@ -917,15 +917,16 @@ fun ChatInputArea(
                                     transformOrigin = TransformOrigin(0f, 1f)
                                 }) {
                                     OptimizedMoreOptionsPanel(isMcpEnabled = isMcpEnabled) { selectedOption ->
-                                        if (showMoreOptionsPanel) showMoreOptionsPanel = false
                                         when (selectedOption) {
                                             MoreOptionsType.CONVERSATION_PARAMS -> {
+                                                if (showMoreOptionsPanel) showMoreOptionsPanel = false
                                                 showConversationParamsDialog = true
                                             }
                                             MoreOptionsType.MCP -> {
-                                                viewModel.stateHolder._isMcpEnabledForNextRequest.value = !isMcpEnabled
+                                                viewModel.setMcpEnabledForNextRequest(!isMcpEnabled)
                                             }
                                             else -> {
+                                                if (showMoreOptionsPanel) showMoreOptionsPanel = false
                                                 val mimeTypesArray = Array(selectedOption.mimeTypes.size) { index ->
                                                     selectedOption.mimeTypes[index]
                                                 }
@@ -1048,6 +1049,7 @@ fun ChatInputArea(
         McpServerListDialog(
             serverStates = mcpServerStates,
             onAddServer = onAddMcpServer,
+            onUpdateServer = onAddMcpServer,
             onRemoveServer = onRemoveMcpServer,
             onToggleServer = onToggleMcpServer,
             onDismiss = { showMcpServerListDialog = false }

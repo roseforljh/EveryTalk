@@ -55,6 +55,13 @@ data class PendingConfigParams(
     val enableCodeExecution: Boolean? = null,
     val toolsJson: String? = null
 )
+
+@Serializable
+data class ConversationFunctionToggleState(
+    val webSearchEnabled: Boolean = false,
+    val codeExecutionEnabled: Boolean = false,
+    val mcpEnabled: Boolean = false
+)
  
  class ViewModelStateHolder {
     // 🎯 Streaming message state manager for efficient UI updates
@@ -156,6 +163,22 @@ val _isStreamingPaused = MutableStateFlow(false)
 
     // 会话ID -> 使用的API配置ID的映射
     val conversationApiConfigIds: MutableStateFlow<Map<String, String>> = MutableStateFlow(emptyMap())
+    val conversationFunctionToggleStates: MutableStateFlow<Map<String, ConversationFunctionToggleState>> =
+        MutableStateFlow(emptyMap())
+
+    fun getCurrentConversationFunctionToggleState(): ConversationFunctionToggleState {
+        return conversationFunctionToggleStates.value[_currentConversationId.value] ?: ConversationFunctionToggleState()
+    }
+
+    fun updateCurrentConversationFunctionToggleState(
+        update: (ConversationFunctionToggleState) -> ConversationFunctionToggleState
+    ) {
+        val conversationId = _currentConversationId.value
+        val currentMap = conversationFunctionToggleStates.value.toMutableMap()
+        val currentState = currentMap[conversationId] ?: ConversationFunctionToggleState()
+        currentMap[conversationId] = update(currentState)
+        conversationFunctionToggleStates.value = currentMap
+    }
     
     // 获取当前会话的生成配置（仅按当前会话ID的内存映射读取）
     fun getCurrentConversationConfig(): GenerationConfig? {
@@ -214,11 +237,20 @@ val _isStreamingPaused = MutableStateFlow(false)
     fun setConversationIdForHistory(historyIndex: Int) {
         // 使用历史索引生成稳定的ID
         _currentConversationId.value = "history_chat_$historyIndex"
+        applyCurrentConversationFunctionToggleState()
         _currentOpenClawSessionId.value = "history_chat_$historyIndex"
     }
 
     fun setCurrentConversationId(conversationId: String) {
         _currentConversationId.value = conversationId
+        applyCurrentConversationFunctionToggleState()
+    }
+
+    fun applyCurrentConversationFunctionToggleState() {
+        val toggleState = getCurrentConversationFunctionToggleState()
+        _isWebSearchEnabled.value = toggleState.webSearchEnabled
+        _isCodeExecutionEnabled.value = toggleState.codeExecutionEnabled
+        _isMcpEnabledForNextRequest.value = toggleState.mcpEnabled
     }
 
     fun updateOpenClawSessionId(sessionId: String?) {
@@ -358,6 +390,7 @@ val _isStreamingPaused = MutableStateFlow(false)
         
         // 分配全新会话ID（不迁移任何旧会话参数，保持完全独立）
         _currentConversationId.value = "new_chat_${System.currentTimeMillis()}"
+        applyCurrentConversationFunctionToggleState()
         _currentOpenClawSessionId.value = "main"
         
         // 新会话默认关闭参数：不做任何继承或默认值注入

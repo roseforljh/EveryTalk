@@ -22,6 +22,7 @@ import coil3.ImageLoader
 import android.util.Base64
 import java.io.FileOutputStream
 import java.util.Locale
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 
 class DataPersistenceManager(
@@ -745,6 +746,7 @@ class DataPersistenceManager(
                         val textConvId = lastOpenChat.firstOrNull()?.id ?: "new_chat_${System.currentTimeMillis()}"
                         val imageConvId = lastOpenImageGenChat.firstOrNull()?.id ?: "image_resume_${System.currentTimeMillis()}"
                         stateHolder._currentConversationId.value = textConvId
+                        stateHolder.applyCurrentConversationFunctionToggleState()
                         stateHolder._currentImageGenerationConversationId.value = imageConvId
 
                         // 清空历史索引（处于"继续未存档会话"的状态）
@@ -837,6 +839,43 @@ class DataPersistenceManager(
                 Log.d(TAG, "saveSelectedConfigIdentifier: 保存选中配置ID '$configId' 到 RoomDataSource...")
                 roomDataSource.saveSelectedConfigId(configId)
                 Log.i(TAG, "saveSelectedConfigIdentifier: 选中配置ID已通过 RoomDataSource 保存。")
+            }
+        }
+    }
+
+    suspend fun saveConversationFunctionToggleStates(
+        states: Map<String, com.android.everytalk.statecontroller.ConversationFunctionToggleState>
+    ) {
+        withContext(Dispatchers.IO) {
+            val jsonString = json.encodeToString(
+                kotlinx.serialization.builtins.MapSerializer(
+                    String.serializer(),
+                    com.android.everytalk.statecontroller.ConversationFunctionToggleState.serializer()
+                ),
+                states
+            )
+            roomDataSource.setSetting("conversation_function_toggle_states", jsonString)
+        }
+    }
+
+    suspend fun loadConversationFunctionToggleStates(): Map<String, com.android.everytalk.statecontroller.ConversationFunctionToggleState> {
+        return withContext(Dispatchers.IO) {
+            val jsonString = roomDataSource.getSetting("conversation_function_toggle_states")
+            if (jsonString.isNullOrBlank()) {
+                emptyMap()
+            } else {
+                try {
+                    json.decodeFromString(
+                        kotlinx.serialization.builtins.MapSerializer(
+                            String.serializer(),
+                            com.android.everytalk.statecontroller.ConversationFunctionToggleState.serializer()
+                        ),
+                        jsonString
+                    )
+                } catch (e: Exception) {
+                    Log.e(TAG, "loadConversationFunctionToggleStates 失败", e)
+                    emptyMap()
+                }
             }
         }
     }

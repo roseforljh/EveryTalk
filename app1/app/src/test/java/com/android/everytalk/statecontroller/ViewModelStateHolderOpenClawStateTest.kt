@@ -87,4 +87,23 @@ class ViewModelStateHolderOpenClawStateTest {
         assertEquals("Providers:\n- foo", updated.text)
         assertTrue(updated.contentStarted)
     }
+
+    @Test
+    fun `unknown conversation uses disabled defaults for function toggles`() {
+        val holder = ViewModelStateHolder()
+        holder.conversationFunctionToggleStates.value = mapOf(
+            holder._currentConversationId.value to ConversationFunctionToggleState(
+                webSearchEnabled = true,
+                codeExecutionEnabled = true,
+                mcpEnabled = true
+            )
+        )
+
+        holder.setCurrentConversationId("new_chat_test_default")
+
+        val newState = holder.getCurrentConversationFunctionToggleState()
+        assertFalse(newState.webSearchEnabled)
+        assertFalse(newState.codeExecutionEnabled)
+        assertFalse(newState.mcpEnabled)
+    }
 }

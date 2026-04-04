@@ -3,6 +3,9 @@ package com.android.everytalk.ui.screens.MainScreen.chat.text.ui
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -231,43 +234,68 @@ fun OptimizedMoreOptionsPanel(
         Column {
             MoreOptionsType.values().forEach { option ->
                 val isSelected = activeOption == option
+                val shouldHighlightBackground = option != MoreOptionsType.MCP && isSelected
                 val animatedBackgroundColor by animateColorAsState(
-                    targetValue = if (isSelected) darkerBackgroundColor else panelBackgroundColor,
+                    targetValue = if (shouldHighlightBackground) darkerBackgroundColor else panelBackgroundColor,
                     animationSpec = tween(durationMillis = 150), // 减少动画时间
                     label = "MoreOptionPanelItemBackground"
+                )
+                var isPressed by remember(option) { mutableStateOf(false) }
+                val scale by animateFloatAsState(
+                    targetValue = if (isPressed) 0.92f else 1f,
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioMediumBouncy,
+                        stiffness = Spring.StiffnessLow
+                    ),
+                    label = "MoreOptionPanelItemScale"
                 )
                 
                 // 记忆化点击回调
                 val onClickCallback = remember(option) {
                     {
                         activeOption = option
+                        isPressed = true
                         onOptionSelected(option)
                         Unit
                     }
                 }
 
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(onClick = onClickCallback)
-                        .background(animatedBackgroundColor)
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // 为每个选项设置不同颜色
-                    val iconTint = when (option) {
-                        MoreOptionsType.ATTACHMENT -> Color(0xff607D8B)   // 蓝灰色
-                        MoreOptionsType.MCP -> if (isMcpEnabled) Color(0xff9C27B0) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)          // 紫色
-                        MoreOptionsType.CONVERSATION_PARAMS -> Color(0xfff76213) // 橙色
+                Surface(
+                    onClick = onClickCallback,
+                    shape = RoundedCornerShape(12.dp),
+                    color = animatedBackgroundColor,
+                    modifier = Modifier.graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
                     }
-                    Icon(
-                        imageVector = option.icon,
-                        contentDescription = option.label,
-                        tint = iconTint,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Text(text = option.label, color = MaterialTheme.colorScheme.onSurface, fontSize = 16.sp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val iconTint = when (option) {
+                            MoreOptionsType.ATTACHMENT -> Color(0xff607D8B)
+                            MoreOptionsType.MCP -> if (isMcpEnabled) Color(0xff9C27B0) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            MoreOptionsType.CONVERSATION_PARAMS -> Color(0xfff76213)
+                        }
+                        Icon(
+                            imageVector = option.icon,
+                            contentDescription = option.label,
+                            tint = iconTint,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(text = option.label, color = MaterialTheme.colorScheme.onSurface, fontSize = 16.sp)
+                    }
+                }
+
+                LaunchedEffect(isPressed) {
+                    if (isPressed) {
+                        kotlinx.coroutines.delay(150)
+                        isPressed = false
+                    }
                 }
             }
         }
@@ -295,151 +323,6 @@ fun OptimizedMediaItemsList(
                 OptimizedSelectedItemPreview(
                     mediaItem = media,
                     onRemoveClicked = { onRemoveMediaItemAtIndex(index) }
-                )
-            }
-        }
-    }
-}
-
-/**
- * 优化的控制按钮行组件 - 记忆化所有回调
- */
-@Composable
-fun OptimizedControlButtonsRow(
-    isWebSearchEnabled: Boolean,
-    onToggleWebSearch: () -> Unit,
-    isCodeExecutionEnabled: Boolean = false,
-    onToggleCodeExecution: () -> Unit = {},
-    showCodeExecutionToggle: Boolean = false,
-    onToggleImagePanel: () -> Unit,
-    onToggleMoreOptionsPanel: () -> Unit,
-    showImageSelectionPanel: Boolean,
-    showMoreOptionsPanel: Boolean,
-    text: String,
-    selectedMediaItems: List<SelectedMediaItem>,
-    onClearContent: () -> Unit,
-    onSendClick: () -> Unit,
-    isApiCalling: Boolean,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Surface(
-                shape = RoundedCornerShape(50),
-                color = Color.Transparent,
-                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier
-                    .height(40.dp)
-                    .then(
-                        if (isWebSearchEnabled) {
-                            Modifier.border(width = 1.dp, color = SeaBlue, shape = RoundedCornerShape(50))
-                        } else {
-                            Modifier
-                        }
-                    )
-                    .animateContentSize(
-                        animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing)
-                    )
-                    .clip(RoundedCornerShape(50))
-                    .clickable(onClick = onToggleWebSearch)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 10.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Language,
-                        contentDescription = if (isWebSearchEnabled) "网页搜索已开启" else "网页搜索已关闭",
-                        tint = SeaBlue,
-                        modifier = Modifier.size(25.dp)
-                    )
-                    
-                    if (isWebSearchEnabled) {
-                        Spacer(Modifier.width(8.dp))
-                        Icon(
-                            imageVector = Icons.Filled.Close,
-                            contentDescription = "关闭",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
-            }
-            
-            if (showCodeExecutionToggle) {
-                Spacer(Modifier.width(8.dp))
-                Surface(
-                    shape = RoundedCornerShape(50),
-                    color = Color.Transparent,
-                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .height(40.dp)
-                        .then(
-                            if (isCodeExecutionEnabled) {
-                                Modifier.border(width = 1.dp, color = Color(0xFF9C27B0), shape = RoundedCornerShape(50))
-                            } else {
-                                Modifier
-                            }
-                        )
-                        .animateContentSize(
-                            animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing)
-                        )
-                        .clip(RoundedCornerShape(50))
-                        .clickable(onClick = onToggleCodeExecution)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 10.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Code,
-                            contentDescription = if (isCodeExecutionEnabled) "代码执行已开启" else "代码执行已关闭",
-                            tint = Color(0xFF9C27B0),
-                            modifier = Modifier.size(25.dp)
-                        )
-                        
-                        if (isCodeExecutionEnabled) {
-                            Spacer(Modifier.width(8.dp))
-                            Icon(
-                                imageVector = Icons.Filled.Close,
-                                contentDescription = "关闭",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    }
-                }
-            }
-
-            Spacer(Modifier.width(8.dp))
-            IconButton(onClick = onToggleImagePanel) {
-                Icon(
-                    Icons.Outlined.Image,
-                    if (showImageSelectionPanel) "关闭图片选项" else "选择图片",
-                    tint = Color(0xff2cb334)
-                )
-            }
-            Spacer(Modifier.width(8.dp))
-            IconButton(onClick = onToggleMoreOptionsPanel) {
-                Icon(
-                    Icons.Filled.Tune,
-                    if (showMoreOptionsPanel) "关闭更多选项" else "更多选项",
-                    tint = Color(0xfff76213)
-                )
-            }
-        }
-
-        // 清除按钮（发送按钮已移到输入框内部）
-        if (text.isNotEmpty() || selectedMediaItems.isNotEmpty()) {
-            IconButton(onClick = onClearContent) {
-                Icon(
-                    Icons.Filled.Clear,
-                    "清除内容和所选项目",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }

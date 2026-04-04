@@ -35,6 +35,7 @@ import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 import java.util.UUID
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -47,6 +48,7 @@ import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.longOrNull
 
 internal const val BUILT_IN_WEBFETCH_TOOL_NAME = "webfetch"
+internal const val BUILT_IN_CURRENT_TIME_TOOL_NAME = "get_current_datetime"
 
 private val HTTP_URL_REGEX = Regex("""https?://[^\s<>()\"]+""", RegexOption.IGNORE_CASE)
 
@@ -75,6 +77,32 @@ private val WEBFETCH_CONTENT_QUESTION_KEYWORDS = listOf(
     "what does this", "what is on", "what's on"
 )
 
+private val MCP_REALTIME_OR_NEWS_KEYWORDS = listOf(
+    "今天", "今日", "刚刚", "刚才", "最新", "最近", "近期", "实时", "当前", "现在",
+    "新闻", "热点", "热搜", "头条", "突发", "时事", "发生了什么", "进展", "动态",
+    "股价", "市值", "行情", "比赛结果", "比分", "战绩", "天气", "汇率", "排名",
+    "today", "latest", "recent", "breaking", "current", "real-time", "realtime",
+    "news", "headline", "headlines", "hot topic", "update", "updates", "what happened",
+    "stock", "stocks", "market", "price", "weather", "score", "match result", "who won", "ranking"
+)
+
+private const val MCP_BASE_USAGE_GUIDANCE = """
+当 MCP 已启用时，你应主动判断当前问题是否需要借助 MCP 工具来获得更准确、更新或更专业的信息。
+
+以下情况优先考虑调用 MCP：
+1. 时事新闻、热点事件、近期政策、比赛结果、股价、天气、实时数据
+2. 需要联网检索、读取外部知识源、查询数据库或访问第三方服务
+3. 用户问题明显依赖最新信息或外部事实
+
+如果问题可以仅凭已有知识准确回答，则无需调用 MCP。
+如果有多个 MCP 工具可用，优先选择最相关、最直接、成本最低的工具。
+在调用工具后，基于工具结果进行最终回答，不要忽略工具返回内容。
+"""
+
+private const val MCP_REALTIME_NEWS_GUIDANCE = """
+当前问题明显依赖最新外部信息，请优先考虑调用最合适的 MCP 工具后再回答。
+"""
+
 internal fun containsHttpUrl(messageText: String): Boolean {
     return HTTP_URL_REGEX.containsMatchIn(messageText)
 }
@@ -97,6 +125,56 @@ internal fun hasExplicitWebReadIntent(messageText: String): Boolean {
 
 internal fun shouldExposeBuiltInWebFetchTool(messageText: String): Boolean {
     return containsHttpUrl(messageText) && hasExplicitWebReadIntent(messageText)
+}
+
+internal fun looksLikeRealtimeOrNewsQuery(messageText: String): Boolean {
+    val normalizedText = messageText.lowercase()
+    return MCP_REALTIME_OR_NEWS_KEYWORDS.any { it in normalizedText }
+}
+
+internal fun buildMcpUsageGuidance(
+    messageText: String,
+    isMcpEnabled: Boolean,
+    hasMcpTools: Boolean,
+): String? {
+    if (!isMcpEnabled || !hasMcpTools) {
+        return null
+    }
+
+    return buildString {
+        append(MCP_BASE_USAGE_GUIDANCE.trim())
+        if (looksLikeRealtimeOrNewsQuery(messageText)) {
+            append("\n\n")
+            append(MCP_REALTIME_NEWS_GUIDANCE.trim())
+        }
+    }
+}
+
+internal fun mergeSystemPromptWithGuidance(
+    systemPrompt: String?,
+    guidance: String?,
+): String? {
+    val basePrompt = systemPrompt?.trim().orEmpty()
+    val extraGuidance = guidance?.trim().orEmpty()
+    return when {
+        basePrompt.isBlank() && extraGuidance.isBlank() -> null
+        basePrompt.isBlank() -> extraGuidance
+        extraGuidance.isBlank() -> basePrompt
+        else -> "$basePrompt\n\n$extraGuidance"
+    }
+}
+
+internal fun buildCurrentTimeGuidance(now: Date = Date()): String {
+    val timezone = TimeZone.getDefault()
+    val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+    formatter.timeZone = timezone
+    val currentTime = formatter.format(now)
+    return """
+当前本地时间：$currentTime
+时区：${timezone.id}
+
+如果用户询问今天、现在、当前、最近、最新、截止目前等时间敏感问题，请基于这个时间上下文回答；如果需要更精确的当前时间，请主动调用时间工具。
+""".trim()
 }
 
 internal fun builtInWebFetchToolDefinition(): Map<String, Any> {
@@ -123,6 +201,20 @@ internal fun builtInWebFetchToolDefinition(): Map<String, Any> {
     )
 }
 
+internal fun builtInCurrentTimeToolDefinition(): Map<String, Any> {
+    return mapOf(
+        "type" to "function",
+        "function" to mapOf(
+            "name" to BUILT_IN_CURRENT_TIME_TOOL_NAME,
+            "description" to "Get the current local date, time, timezone, and Unix timestamp from the device.",
+            "parameters" to mapOf(
+                "type" to "object",
+                "properties" to emptyMap<String, Any>()
+            )
+        )
+    )
+}
+
 internal fun appendBuiltInWebFetchToolIfNeeded(
     messageText: String,
     tools: List<Map<String, Any>>,
@@ -139,6 +231,18 @@ internal fun appendBuiltInWebFetchToolIfNeeded(
     }
 
     return tools + builtInWebFetchToolDefinition()
+}
+
+internal fun appendBuiltInCurrentTimeTool(
+    tools: List<Map<String, Any>>,
+): List<Map<String, Any>> {
+    val hasCurrentTimeTool = tools.any { toolDefinition ->
+        extractToolName(toolDefinition)?.equals(BUILT_IN_CURRENT_TIME_TOOL_NAME, ignoreCase = true) == true
+    }
+    if (hasCurrentTimeTool) {
+        return tools
+    }
+    return tools + builtInCurrentTimeToolDefinition()
 }
 
 private fun extractToolName(toolDefinition: Map<String, Any>): String? {
@@ -661,8 +765,26 @@ private data class AttachmentProcessingResult(
 
                 val apiMessagesForBackend = ensureUserMessagePresent(historyApiMessages, currentUserApiMessage)
 
-                if (!systemPrompt.isNullOrBlank()) {
-                    val systemMessage = SimpleTextApiMessage(role = "system", content = systemPrompt)
+                val isMcpEnabledForRequest = stateHolder._isMcpEnabledForNextRequest.value
+                val mcpToolsForRequest = if (isMcpEnabledForRequest) {
+                    getMcpToolsForRequest()
+                } else {
+                    emptyList()
+                }
+                val combinedSystemPrompt = mergeSystemPromptWithGuidance(
+                    systemPrompt = mergeSystemPromptWithGuidance(
+                        systemPrompt = systemPrompt,
+                        guidance = buildCurrentTimeGuidance()
+                    ),
+                    guidance = buildMcpUsageGuidance(
+                        messageText = textToActuallySend,
+                        isMcpEnabled = isMcpEnabledForRequest,
+                        hasMcpTools = mcpToolsForRequest.isNotEmpty(),
+                    )
+                )
+
+                if (!combinedSystemPrompt.isNullOrBlank()) {
+                    val systemMessage = SimpleTextApiMessage(role = "system", content = combinedSystemPrompt)
                     val existingSystemMessageIndex = apiMessagesForBackend.indexOfFirst { it.role == "system" }
                     if (existingSystemMessageIndex != -1) {
                         apiMessagesForBackend[existingSystemMessageIndex] = systemMessage
@@ -825,12 +947,9 @@ private data class AttachmentProcessingResult(
                         }
                         
                         // 4. MCP 工具 (来自 MCP 服务器)
-                        val mcpTools = if (stateHolder._isMcpEnabledForNextRequest.value) {
-                            getMcpToolsForRequest()
-                        } else emptyList()
-                        if (mcpTools.isNotEmpty()) {
-                            Log.d("MessageSender", "注入 ${mcpTools.size} 个 MCP 工具")
-                            toolsList.addAll(mcpTools)
+                        if (mcpToolsForRequest.isNotEmpty()) {
+                            Log.d("MessageSender", "注入 ${mcpToolsForRequest.size} 个 MCP 工具")
+                            toolsList.addAll(mcpToolsForRequest)
                         }
 
                         val effectiveTools = appendBuiltInWebFetchToolIfNeeded(
@@ -840,8 +959,12 @@ private data class AttachmentProcessingResult(
                         if (effectiveTools.size != toolsList.size) {
                             Log.d("MessageSender", "为含 URL 的当前消息注入内建 webfetch 工具")
                         }
+                        val effectiveToolsWithCurrentTime = appendBuiltInCurrentTimeTool(effectiveTools)
+                        if (effectiveToolsWithCurrentTime.size != effectiveTools.size) {
+                            Log.d("MessageSender", "注入内建当前时间工具")
+                        }
 
-                        effectiveTools.ifEmpty { null }
+                        effectiveToolsWithCurrentTime.ifEmpty { null }
                     },
                     imageGenRequest = if (isImageGeneration) {
                         // 调试信息：检查发送的配置

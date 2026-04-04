@@ -90,6 +90,7 @@ fun SettingsScreen(
     val showModelSelection by viewModel.showModelSelectionDialog.collectAsState()
     
     val mcpServerStates by viewModel.mcpServerStates.collectAsState()
+    val allMcpConfigs by viewModel.allMcpConfigs.collectAsState()
     val scope = rememberCoroutineScope()
     val coroutineScope = rememberCoroutineScope()
 
@@ -438,9 +439,14 @@ fun SettingsScreen(
                                 modifier = Modifier.fillMaxSize().padding(20.dp)
                             ) {
                                 McpServerListContent(
-                                    serverStates = mcpServerStates,
+                                    serverStates = allMcpConfigs.mapValues { (id, persistedState) ->
+                                        mcpServerStates[id] ?: persistedState
+                                    },
                                     onAddServer = { config -> 
                                         viewModel.addMcpServer(config) 
+                                    },
+                                    onUpdateServer = { config ->
+                                        viewModel.updateMcpServer(config)
                                     },
                                     onRemoveServer = { id -> 
                                         viewModel.removeMcpServer(id) 

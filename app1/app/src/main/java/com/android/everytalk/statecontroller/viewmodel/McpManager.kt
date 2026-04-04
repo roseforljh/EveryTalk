@@ -12,6 +12,38 @@ import kotlinx.serialization.json.JsonObject
 
 private const val TAG = "McpManager"
 
+private val MCP_SEARCH_TOOL_HINT_KEYWORDS = listOf("search", "exa", "news", "web", "query")
+private val MCP_BROWSER_TOOL_HINT_KEYWORDS = listOf("fetch", "browser", "page", "crawl", "scrape")
+private val MCP_FINANCE_TOOL_HINT_KEYWORDS = listOf("finance", "stock", "market", "price", "quote")
+private val MCP_LOCATION_TOOL_HINT_KEYWORDS = listOf("map", "location", "travel", "weather", "route")
+
+internal fun buildEnhancedMcpToolDescription(
+    toolName: String,
+    originalDescription: String?,
+): String {
+    val normalizedText = "$toolName ${originalDescription.orEmpty()}".lowercase()
+    val scenarioHint = when {
+        MCP_SEARCH_TOOL_HINT_KEYWORDS.any { it in normalizedText } ->
+            "适合查询最新新闻、热点事件、最近动态和网页信息检索。"
+        MCP_BROWSER_TOOL_HINT_KEYWORDS.any { it in normalizedText } ->
+            "适合打开网页、抓取页面内容和提取网页正文。"
+        MCP_FINANCE_TOOL_HINT_KEYWORDS.any { it in normalizedText } ->
+            "适合查询股价、市场数据和金融信息。"
+        MCP_LOCATION_TOOL_HINT_KEYWORDS.any { it in normalizedText } ->
+            "适合查询地点、本地信息、路线或天气。"
+        else -> null
+    }
+
+    val baseDescription = originalDescription?.trim().orEmpty()
+    return when {
+        baseDescription.isBlank() && scenarioHint.isNullOrBlank() -> "MCP tool: $toolName"
+        baseDescription.isBlank() -> scenarioHint!!
+        scenarioHint.isNullOrBlank() -> baseDescription
+        scenarioHint in baseDescription -> baseDescription
+        else -> "$baseDescription $scenarioHint"
+    }
+}
+
 class McpManager(context: Context) {
     private val database = AppDatabase.getDatabase(context)
     private val mcpDao = database.mcpConfigDao()
@@ -71,6 +103,20 @@ class McpManager(context: Context) {
         }
     }
 
+    suspend fun updateServer(config: McpServerConfig) {
+        _isLoading.value = true
+        try {
+            mcpDao.updateConfig(McpServerConfigEntity.fromModel(config))
+            if (config.enabled) {
+                clientManager.addServer(config)
+            } else {
+                clientManager.disconnectServer(config.id)
+            }
+        } finally {
+            _isLoading.value = false
+        }
+    }
+
     suspend fun removeServer(serverId: String) {
         mcpDao.deleteConfigById(serverId)
         clientManager.removeServer(serverId)
@@ -117,7 +163,10 @@ class McpManager(context: Context) {
     private fun buildToolDefinition(tool: McpTool): Map<String, Any> {
         val functionDef = mutableMapOf<String, Any>(
             "name" to tool.name,
-            "description" to (tool.description ?: "MCP tool: ${tool.name}")
+            "description" to buildEnhancedMcpToolDescription(
+                toolName = tool.name,
+                originalDescription = tool.description
+            )
         )
 
         tool.inputSchema?.let { schema ->

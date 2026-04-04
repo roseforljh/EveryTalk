@@ -71,4 +71,29 @@ class AppViewModelWebFetchDispatchTest {
         assertEquals(arguments, fallbackArguments)
         assertTrue(statusUpdates.isEmpty())
     }
+
+    @Test
+    fun `current time tool is dispatched locally`() = runTest {
+        val localResult = buildJsonObject {
+            put("now", JsonPrimitive("2026-04-04T12:00:00+08:00"))
+        }
+        var fallbackCalled = false
+        val statusUpdates = mutableListOf<String?>()
+
+        val result = executeSharedToolCall(
+            toolName = BUILT_IN_CURRENT_TIME_TOOL_NAME,
+            arguments = buildJsonObject {},
+            updateStatus = { statusUpdates.add(it) },
+            localWebFetchExecutor = { error("webfetch executor should not run") },
+            localCurrentTimeExecutor = { localResult },
+            fallbackExecutor = { _, _ ->
+                fallbackCalled = true
+                JsonObject(emptyMap())
+            }
+        )
+
+        assertSame(localResult, result)
+        assertTrue(!fallbackCalled)
+        assertEquals(listOf("正在获取当前时间", null), statusUpdates)
+    }
 }

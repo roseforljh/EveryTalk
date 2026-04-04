@@ -142,7 +142,7 @@ class SimpleModeManager(
             stateHolder._loadedHistoryIndex.value = null
             // 新会话是全新的、独立的：禁止任何迁移/继承
             val newId = "chat_${UUID.randomUUID()}"
-            stateHolder._currentConversationId.value = newId
+            stateHolder.setCurrentConversationId(newId)
             stateHolder.updateOpenClawSessionId(null)
             stateHolder.systemPrompts[newId] = ""
             // 不为新会话自动回填会话参数，保持默认关闭
@@ -348,7 +348,7 @@ class SimpleModeManager(
             // 保留图像消息（不在加载文本历史时清空）
             Log.d(TAG, "🔥 Preserved image generation messages (${stateHolder.imageGenerationMessages.size} messages).")
             
-            stateHolder._currentConversationId.value = stableId
+            stateHolder.setCurrentConversationId(stableId)
             stateHolder.systemPrompts[stableId] = systemPrompt
             Log.d(TAG, "🔥 Set current conversation ID and system prompt.")
 
