@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.15.0](https://github.com/roseforljh/EveryTalk/compare/v1.14.0...v1.15.0) (2026-04-04)
+
+
+### Features
+
+* animate settings tab indicator with swipe and change color to onSurface ([305f429](https://github.com/roseforljh/EveryTalk/commit/305f4298d38ecb48d562643a72d0b2de5a70432a))
+* implement swipeable tabs in settings screen and update tab text colors ([fd75d9f](https://github.com/roseforljh/EveryTalk/commit/fd75d9fd77b686b001441adad65098f0d8f8c59a))
+* refactor settings screen to three tabs and change chat MCP options to toggle ([fd1fcc3](https://github.com/roseforljh/EveryTalk/commit/fd1fcc33f6c8cee806cbd64b82500d4a57668824))
+
+
+### Bug Fixes
+
+* 修复双模式bug ([14deb86](https://github.com/roseforljh/EveryTalk/commit/14deb86364c035313038263b754104f3d615c7c8))
+* 可以调用工具解析https链接 ([8688850](https://github.com/roseforljh/EveryTalk/commit/86888501c107897e2956afc388534129a20fd243))
+* 实现mcp调用能力 ([cc486cf](https://github.com/roseforljh/EveryTalk/commit/cc486cf5b3c44c0592d0171529c03af0ac780e69))
+* 适配三方联网搜索 ([ccc484b](https://github.com/roseforljh/EveryTalk/commit/ccc484b36b6efbf0a689567eabcc0b499b08b4f6))
+
 ## [1.14.0](https://github.com/roseforljh/EveryTalk/compare/v1.13.2...v1.14.0) (2026-03-29)
 
 
