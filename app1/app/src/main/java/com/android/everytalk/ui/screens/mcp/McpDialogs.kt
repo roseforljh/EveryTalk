@@ -30,14 +30,13 @@ import com.android.everytalk.data.mcp.*
 import com.android.everytalk.ui.screens.settings.DialogShape
 import com.android.everytalk.ui.screens.settings.DialogTextFieldColors
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun McpServerListDialog(
+fun McpServerListContent(
     serverStates: Map<String, McpServerState>,
     onAddServer: (McpServerConfig) -> Unit,
     onRemoveServer: (String) -> Unit,
     onToggleServer: (String, Boolean) -> Unit,
-    onDismiss: () -> Unit
+    modifier: Modifier = Modifier
 ) {
     var showAddDialog by remember { mutableStateOf(false) }
     var serverToDeleteId by remember { mutableStateOf<String?>(null) }
@@ -75,111 +74,95 @@ fun McpServerListDialog(
         }
     }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(28.dp),
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-        modifier = Modifier.border(
-            width = 0.5.dp,
-            color = Color.White.copy(alpha = 0.15f),
-            shape = RoundedCornerShape(28.dp)
-        ),
-        title = {
-            Row(
+    Column(modifier = modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(
+                    text = "MCP 服务器",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "管理您的 MCP 连接",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            FilledTonalIconButton(
+                onClick = { showAddDialog = true },
+                colors = IconButtonDefaults.filledTonalIconButtonColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            ) {
+                Icon(Icons.Filled.Add, contentDescription = "添加服务器")
+            }
+        }
+
+        if (serverStates.isEmpty()) {
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .weight(1f),
+                contentAlignment = Alignment.Center
             ) {
-                Column {
-                    Text(
-                        text = "MCP 服务器",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "管理您的 MCP 连接",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                FilledTonalIconButton(
-                    onClick = { showAddDialog = true },
-                    colors = IconButtonDefaults.filledTonalIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer,
-                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    Icon(Icons.Filled.Add, contentDescription = "添加服务器")
-                }
-            }
-        },
-        text = {
-            if (serverStates.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(240.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        modifier = Modifier.size(80.dp)
                     ) {
-                        Surface(
-                            shape = CircleShape,
-                            color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                            modifier = Modifier.size(80.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    Icons.Outlined.Dns,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(40.dp),
-                                    tint = MaterialTheme.colorScheme.secondary
-                                )
-                            }
-                        }
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                "暂无连接",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                "添加 MCP 服务器以扩展能力",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                Icons.Outlined.Dns,
+                                contentDescription = null,
+                                modifier = Modifier.size(40.dp),
+                                tint = MaterialTheme.colorScheme.secondary
                             )
                         }
                     }
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 600.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                    contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp)
-                ) {
-                    items(serverStates.values.toList(), key = { it.config.id }) { state ->
-                        McpServerItem(
-                            serverState = state,
-                            onToggle = { onToggleServer(state.config.id, it) },
-                            onDeleteClick = { serverToDeleteId = state.config.id }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            "暂无连接",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            "添加 MCP 服务器以扩展能力",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("完成")
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp)
+            ) {
+                items(serverStates.values.toList(), key = { it.config.id }) { state ->
+                    McpServerItem(
+                        serverState = state,
+                        onToggle = { onToggleServer(state.config.id, it) },
+                        onDeleteClick = { serverToDeleteId = state.config.id }
+                    )
+                }
             }
         }
-    )
+    }
 
     if (showAddDialog) {
         AddMcpServerDialog(
@@ -190,6 +173,42 @@ fun McpServerListDialog(
             onDismiss = { showAddDialog = false }
         )
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun McpServerListDialog(
+    serverStates: Map<String, McpServerState>,
+    onAddServer: (McpServerConfig) -> Unit,
+    onRemoveServer: (String) -> Unit,
+    onToggleServer: (String, Boolean) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(28.dp),
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier.border(
+            width = 0.5.dp,
+            color = Color.White.copy(alpha = 0.15f),
+            shape = RoundedCornerShape(28.dp)
+        ),
+        title = null,
+        text = {
+            McpServerListContent(
+                serverStates = serverStates,
+                onAddServer = onAddServer,
+                onRemoveServer = onRemoveServer,
+                onToggleServer = onToggleServer,
+                modifier = Modifier.heightIn(max = 600.dp)
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("完成")
+            }
+        }
+    )
 }
 
 @Composable

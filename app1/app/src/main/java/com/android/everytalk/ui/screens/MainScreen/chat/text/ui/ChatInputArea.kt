@@ -412,6 +412,7 @@ fun ChatInputArea(
     var showConversationParamsDialog by remember { mutableStateOf(false) }
     var showMcpServerListDialog by remember { mutableStateOf(false) }
     var tempCameraImageUri by remember { mutableStateOf<Uri?>(null) }
+    val isMcpEnabled by viewModel.stateHolder._isMcpEnabledForNextRequest.collectAsState()
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.PickMultipleVisualMedia()
@@ -915,14 +916,14 @@ fun ChatInputArea(
                                     scaleY = moreScale.value
                                     transformOrigin = TransformOrigin(0f, 1f)
                                 }) {
-                                    OptimizedMoreOptionsPanel { selectedOption ->
+                                    OptimizedMoreOptionsPanel(isMcpEnabled = isMcpEnabled) { selectedOption ->
                                         if (showMoreOptionsPanel) showMoreOptionsPanel = false
                                         when (selectedOption) {
                                             MoreOptionsType.CONVERSATION_PARAMS -> {
                                                 showConversationParamsDialog = true
                                             }
                                             MoreOptionsType.MCP -> {
-                                                showMcpServerListDialog = true
+                                                viewModel.stateHolder._isMcpEnabledForNextRequest.value = !isMcpEnabled
                                             }
                                             else -> {
                                                 val mimeTypesArray = Array(selectedOption.mimeTypes.size) { index ->

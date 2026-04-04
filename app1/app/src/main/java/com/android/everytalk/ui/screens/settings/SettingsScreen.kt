@@ -8,15 +8,20 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ImportExport
 import androidx.compose.material3.*
+import androidx.compose.material3.TabRow
+import androidx.compose.material3.Tab
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.statecontroller.SimpleModeManager
+import com.android.everytalk.ui.screens.mcp.McpServerListContent
 import com.android.everytalk.ui.screens.settings.dialogs.AutoFetchModelsConfirmDialog
 import com.android.everytalk.ui.screens.settings.dialogs.ModelSelectionDialog
 import java.util.UUID
@@ -75,6 +80,9 @@ fun SettingsScreen(
     val isRefreshingModels by viewModel.isRefreshingModels.collectAsState()
     val showAutoFetchConfirm by viewModel.showAutoFetchConfirmDialog.collectAsState()
     val showModelSelection by viewModel.showModelSelectionDialog.collectAsState()
+    
+    val mcpServerStates by viewModel.mcpServerStates.collectAsState()
+    val scope = rememberCoroutineScope()
 
     val apiConfigsByApiKeyAndModality = remember(textConfigs, imageConfigs, isInImageMode) {
         val configsToShow = if (isInImageMode) {
@@ -221,7 +229,7 @@ fun SettingsScreen(
         topBar = {
             TopAppBar(
                 title = { 
-                    val titleText = if (isInImageMode) "图像生成配置" else "文本模型配置"
+                    val titleText = if (isInImageMode) "图像生成配置" else "设置"
                     Text(titleText, color = MaterialTheme.colorScheme.onSurface) 
                 },
                 navigationIcon = {
@@ -254,50 +262,100 @@ fun SettingsScreen(
             )
         }
     ) { paddingValues ->
-        SettingsScreenContent(
-            paddingValues = paddingValues,
-            apiConfigsByApiKeyAndModality = apiConfigsByApiKeyAndModality,
-            isImageMode = isInImageMode,
-            onAddFullConfigClick = {
-                // 文本和图像模式都默认选择"默认"
-                val initialProvider = "默认"
-                newFullConfigProvider = initialProvider
-                newFullConfigKey = ""
-                val providerKey = initialProvider.lowercase().trim()
-                newFullConfigAddress = if (isInImageMode)
-                    SettingsDefaults.imageDefaultApiAddresses[providerKey] ?: ""
-                else
-                    SettingsDefaults.textDefaultApiAddresses[providerKey] ?: ""
-                showAddFullConfigDialog = true
-            },
-            onSelectConfig = { configToSelect ->
-                viewModel.selectConfig(configToSelect, isInImageMode)
-            },
-            selectedConfigIdInApp = selectedConfigForApp?.id,
-            onAddModelForApiKeyClick = { apiKey, existingProvider, existingAddress, existingChannel, existingModality ->
-                addModelToKeyTargetApiKey = apiKey
-                addModelToKeyTargetProvider = existingProvider
-                addModelToKeyTargetAddress = existingAddress
-                addModelToKeyTargetChannel = existingChannel
-                addModelToKeyTargetModality = existingModality
-                addModelToKeyNewModelName = ""
-                showAddModelToKeyDialog = true
-            },
-            onDeleteModelForApiKey = { configToDelete ->
-                viewModel.deleteConfig(configToDelete, isInImageMode)
-            },
-            onEditConfigClick = { config ->
-                configToEdit = config
-                showEditConfigDialog = true
-            },
-            onDeleteConfigGroup = { representativeConfig ->
-                viewModel.deleteConfigGroup(representativeConfig, isInImageMode)
-            },
-            onRefreshModelsClick = { config ->
-                viewModel.refreshModelsForConfig(config)
-            },
-            isRefreshingModels = isRefreshingModels
-        )
+        var selectedTabIndex by remember { mutableStateOf(0) }
+        val tabs = listOf("平台配置", "联网搜索", "MCP")
+
+        Column(modifier = Modifier.fillMaxSize().padding(paddingValues)) {
+            if (!isInImageMode) {
+                TabRow(
+                    selectedTabIndex = selectedTabIndex,
+                    containerColor = MaterialTheme.colorScheme.background,
+                    contentColor = MaterialTheme.colorScheme.primary
+                ) {
+                    tabs.forEachIndexed { index, title ->
+                        Tab(
+                            selected = selectedTabIndex == index,
+                            onClick = { selectedTabIndex = index },
+                            text = { Text(title) }
+                        )
+                    }
+                }
+            }
+
+            if (isInImageMode || selectedTabIndex == 0) {
+                SettingsScreenContent(
+                    paddingValues = PaddingValues(0.dp),
+                    apiConfigsByApiKeyAndModality = apiConfigsByApiKeyAndModality,
+                    isImageMode = isInImageMode,
+                    onAddFullConfigClick = {
+                        // 文本和图像模式都默认选择"默认"
+                        val initialProvider = "默认"
+                        newFullConfigProvider = initialProvider
+                        newFullConfigKey = ""
+                        val providerKey = initialProvider.lowercase().trim()
+                        newFullConfigAddress = if (isInImageMode)
+                            SettingsDefaults.imageDefaultApiAddresses[providerKey] ?: ""
+                        else
+                            SettingsDefaults.textDefaultApiAddresses[providerKey] ?: ""
+                        showAddFullConfigDialog = true
+                    },
+                    onSelectConfig = { configToSelect ->
+                        viewModel.selectConfig(configToSelect, isInImageMode)
+                    },
+                    selectedConfigIdInApp = selectedConfigForApp?.id,
+                    onAddModelForApiKeyClick = { apiKey, existingProvider, existingAddress, existingChannel, existingModality ->
+                        addModelToKeyTargetApiKey = apiKey
+                        addModelToKeyTargetProvider = existingProvider
+                        addModelToKeyTargetAddress = existingAddress
+                        addModelToKeyTargetChannel = existingChannel
+                        addModelToKeyTargetModality = existingModality
+                        addModelToKeyNewModelName = ""
+                        showAddModelToKeyDialog = true
+                    },
+                    onDeleteModelForApiKey = { configToDelete ->
+                        viewModel.deleteConfig(configToDelete, isInImageMode)
+                    },
+                    onEditConfigClick = { config ->
+                        configToEdit = config
+                        showEditConfigDialog = true
+                    },
+                    onDeleteConfigGroup = { representativeConfig ->
+                        viewModel.deleteConfigGroup(representativeConfig, isInImageMode)
+                    },
+                    onRefreshModelsClick = { config ->
+                        viewModel.refreshModelsForConfig(config)
+                    },
+                    isRefreshingModels = isRefreshingModels
+                )
+            } else if (selectedTabIndex == 1) {
+                // 联网搜索 UI 占位
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text("联网搜索配置 (开发中)", style = MaterialTheme.typography.titleMedium)
+                }
+            } else if (selectedTabIndex == 2) {
+                // MCP Tab
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(20.dp)
+                ) {
+                    McpServerListContent(
+                        serverStates = mcpServerStates,
+                        onAddServer = { config -> 
+                            viewModel.addMcpServer(config) 
+                        },
+                        onRemoveServer = { id -> 
+                            viewModel.removeMcpServer(id) 
+                        },
+                        onToggleServer = { id, enabled -> 
+                            viewModel.toggleMcpServer(id, enabled) 
+                        }
+                    )
+                }
+            }
+        }
     }
 
     if (showAddFullConfigDialog) {

@@ -825,7 +825,9 @@ private data class AttachmentProcessingResult(
                         }
                         
                         // 4. MCP 工具 (来自 MCP 服务器)
-                        val mcpTools = getMcpToolsForRequest()
+                        val mcpTools = if (stateHolder._isMcpEnabledForNextRequest.value) {
+                            getMcpToolsForRequest()
+                        } else emptyList()
                         if (mcpTools.isNotEmpty()) {
                             Log.d("MessageSender", "注入 ${mcpTools.size} 个 MCP 工具")
                             toolsList.addAll(mcpTools)

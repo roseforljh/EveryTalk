@@ -214,6 +214,7 @@ fun OptimizedImageSelectionPanel(
 @Composable
 fun OptimizedMoreOptionsPanel(
     modifier: Modifier = Modifier,
+    isMcpEnabled: Boolean = false,
     onOptionSelected: (MoreOptionsType) -> Unit
 ) {
     var activeOption by remember { mutableStateOf<MoreOptionsType?>(null) }
@@ -256,7 +257,7 @@ fun OptimizedMoreOptionsPanel(
                     // 为每个选项设置不同颜色
                     val iconTint = when (option) {
                         MoreOptionsType.ATTACHMENT -> Color(0xff607D8B)   // 蓝灰色
-                        MoreOptionsType.MCP -> Color(0xff9C27B0)          // 紫色
+                        MoreOptionsType.MCP -> if (isMcpEnabled) Color(0xff9C27B0) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)          // 紫色
                         MoreOptionsType.CONVERSATION_PARAMS -> Color(0xfff76213) // 橙色
                     }
                     Icon(

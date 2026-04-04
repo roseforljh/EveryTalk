@@ -134,6 +134,7 @@ data class PendingConfigParams(
     // 分离的API状态
     val _isTextApiCalling = MutableStateFlow(false)
     val _isImageApiCalling = MutableStateFlow(false)
+    val _isMcpEnabledForNextRequest = MutableStateFlow(false)
 
     // 分离的流式消息ID
     val _currentTextStreamingAiMessageId = MutableStateFlow<String?>(null)
