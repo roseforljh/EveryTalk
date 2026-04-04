@@ -11,6 +11,10 @@ import androidx.compose.material3.*
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Tab
 import androidx.compose.runtime.*
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.ui.text.font.FontWeight
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -83,6 +87,7 @@ fun SettingsScreen(
     
     val mcpServerStates by viewModel.mcpServerStates.collectAsState()
     val scope = rememberCoroutineScope()
+    val coroutineScope = rememberCoroutineScope()
 
     val apiConfigsByApiKeyAndModality = remember(textConfigs, imageConfigs, isInImageMode) {
         val configsToShow = if (isInImageMode) {
@@ -262,27 +267,38 @@ fun SettingsScreen(
             )
         }
     ) { paddingValues ->
-        var selectedTabIndex by remember { mutableStateOf(0) }
         val tabs = listOf("平台配置", "联网搜索", "MCP")
+        val pagerState = rememberPagerState(pageCount = { tabs.size })
 
         Column(modifier = Modifier.fillMaxSize().padding(paddingValues)) {
             if (!isInImageMode) {
                 TabRow(
-                    selectedTabIndex = selectedTabIndex,
+                    selectedTabIndex = pagerState.currentPage,
                     containerColor = MaterialTheme.colorScheme.background,
-                    contentColor = MaterialTheme.colorScheme.primary
+                    contentColor = MaterialTheme.colorScheme.onSurface
                 ) {
                     tabs.forEachIndexed { index, title ->
+                        val isSelected = pagerState.currentPage == index
                         Tab(
-                            selected = selectedTabIndex == index,
-                            onClick = { selectedTabIndex = index },
-                            text = { Text(title) }
+                            selected = isSelected,
+                            onClick = {
+                                coroutineScope.launch {
+                                    pagerState.animateScrollToPage(index)
+                                }
+                            },
+                            text = { 
+                                Text(
+                                    text = title,
+                                    color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                ) 
+                            }
                         )
                     }
                 }
             }
 
-            if (isInImageMode || selectedTabIndex == 0) {
+            if (isInImageMode) {
                 SettingsScreenContent(
                     paddingValues = PaddingValues(0.dp),
                     apiConfigsByApiKeyAndModality = apiConfigsByApiKeyAndModality,
@@ -327,32 +343,82 @@ fun SettingsScreen(
                     },
                     isRefreshingModels = isRefreshingModels
                 )
-            } else if (selectedTabIndex == 1) {
-                // 联网搜索 UI 占位
-                Column(
-                    modifier = Modifier.fillMaxSize().padding(20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Text("联网搜索配置 (开发中)", style = MaterialTheme.typography.titleMedium)
-                }
-            } else if (selectedTabIndex == 2) {
-                // MCP Tab
-                Column(
-                    modifier = Modifier.fillMaxSize().padding(20.dp)
-                ) {
-                    McpServerListContent(
-                        serverStates = mcpServerStates,
-                        onAddServer = { config -> 
-                            viewModel.addMcpServer(config) 
-                        },
-                        onRemoveServer = { id -> 
-                            viewModel.removeMcpServer(id) 
-                        },
-                        onToggleServer = { id, enabled -> 
-                            viewModel.toggleMcpServer(id, enabled) 
+            } else {
+                HorizontalPager(
+                    state = pagerState,
+                    modifier = Modifier.fillMaxSize()
+                ) { page ->
+                    when (page) {
+                        0 -> {
+                            SettingsScreenContent(
+                                paddingValues = PaddingValues(0.dp),
+                                apiConfigsByApiKeyAndModality = apiConfigsByApiKeyAndModality,
+                                isImageMode = isInImageMode,
+                                onAddFullConfigClick = {
+                                    val initialProvider = "默认"
+                                    newFullConfigProvider = initialProvider
+                                    newFullConfigKey = ""
+                                    val providerKey = initialProvider.lowercase().trim()
+                                    newFullConfigAddress = SettingsDefaults.textDefaultApiAddresses[providerKey] ?: ""
+                                    showAddFullConfigDialog = true
+                                },
+                                onSelectConfig = { configToSelect ->
+                                    viewModel.selectConfig(configToSelect, isInImageMode)
+                                },
+                                selectedConfigIdInApp = selectedConfigForApp?.id,
+                                onAddModelForApiKeyClick = { apiKey, existingProvider, existingAddress, existingChannel, existingModality ->
+                                    addModelToKeyTargetApiKey = apiKey
+                                    addModelToKeyTargetProvider = existingProvider
+                                    addModelToKeyTargetAddress = existingAddress
+                                    addModelToKeyTargetChannel = existingChannel
+                                    addModelToKeyTargetModality = existingModality
+                                    addModelToKeyNewModelName = ""
+                                    showAddModelToKeyDialog = true
+                                },
+                                onDeleteModelForApiKey = { configToDelete ->
+                                    viewModel.deleteConfig(configToDelete, isInImageMode)
+                                },
+                                onEditConfigClick = { config ->
+                                    configToEdit = config
+                                    showEditConfigDialog = true
+                                },
+                                onDeleteConfigGroup = { representativeConfig ->
+                                    viewModel.deleteConfigGroup(representativeConfig, isInImageMode)
+                                },
+                                onRefreshModelsClick = { config ->
+                                    viewModel.refreshModelsForConfig(config)
+                                },
+                                isRefreshingModels = isRefreshingModels
+                            )
                         }
-                    )
+                        1 -> {
+                            Column(
+                                modifier = Modifier.fillMaxSize().padding(20.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Text("联网搜索配置 (开发中)", style = MaterialTheme.typography.titleMedium)
+                            }
+                        }
+                        2 -> {
+                            Column(
+                                modifier = Modifier.fillMaxSize().padding(20.dp)
+                            ) {
+                                McpServerListContent(
+                                    serverStates = mcpServerStates,
+                                    onAddServer = { config -> 
+                                        viewModel.addMcpServer(config) 
+                                    },
+                                    onRemoveServer = { id -> 
+                                        viewModel.removeMcpServer(id) 
+                                    },
+                                    onToggleServer = { id, enabled -> 
+                                        viewModel.toggleMcpServer(id, enabled) 
+                                    }
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
