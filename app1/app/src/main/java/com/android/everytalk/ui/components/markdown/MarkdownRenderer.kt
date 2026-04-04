@@ -1081,7 +1081,10 @@ fun MarkdownRenderer(
             // 最后一个（持续变化的）part 的 contentKey 为空，不缓存
             val sp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
             val cacheKey = if (contentKey.isNotBlank()) {
-                MarkdownSpansCache.generateKey(contentKey + "_v42", isDark, sp)
+                // 核心修复：在缓存 Key 中包含处理后文本的哈希值
+                // 这样当流式结束（isStreaming=false）导致预处理结果变化时，
+                // 或者消息内容被修改时，缓存会自动失效并重新渲染，避免显示旧的转义结果。
+                MarkdownSpansCache.generateKey("${contentKey}_${processed.hashCode()}_v46", isDark, sp)
             } else ""
 
             val cachedSpanned = if (cacheKey.isNotBlank()) MarkdownSpansCache.get(cacheKey) else null

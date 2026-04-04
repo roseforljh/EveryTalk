@@ -28,6 +28,7 @@ object ContentParser {
         "^(.*?)(\\$\\$(?!\\$)[^\\n]+?\\$\\$|\\$(?!\\$)[^\\n$]+?\\$(?!\\$)|\\\\\\[[^\\n]+\\\\\\]|\\\\\\([^\\n]+\\\\\\))\\s*$"
     )
     private val fencedBlockLanguageRegex = Regex("^[A-Za-z0-9_+\\-#.]+$")
+    private val openingFenceRegex = Regex("^([`~]{3,})([^`~]*)$")
     private val listMarkerRegex = Regex("^\\s{0,3}(?:[-*+]\\s+|\\d+[.)]\\s+)")
 
     fun parseCompleteContent(text: String, isStreaming: Boolean = false): List<ContentPart> {
@@ -132,11 +133,11 @@ object ContentParser {
             val line = lines[index]
             val nextOffset = offset + line.length + 1
 
-            val fenceStart = line.trimStart()
-            if (fenceStart.startsWith("```") && isValidFenceStart(lines, index)) {
+            val openingFence = parseOpeningFence(line)
+            if (openingFence != null && isValidFenceStart(line)) {
                 flushText()
                 val startOffset = offset
-                val language = fenceStart.removePrefix("```").trim().ifBlank { null }
+                val language = openingFence.language.ifBlank { null }
                 val rawFence = line
                 val codeBuilder = StringBuilder()
                 index++
@@ -144,9 +145,8 @@ object ContentParser {
                 var closed = false
                 while (index < lines.size) {
                     val currentLine = lines[index]
-                    val currentTrimmed = currentLine.trimStart()
                     val currentNextOffset = offset + currentLine.length + 1
-                    if (currentTrimmed == "```" && isFenceClosingLine(currentLine, rawFence)) {
+                    if (isFenceClosingLine(currentLine, rawFence, openingFence.marker)) {
                         closed = true
                         index++
                         offset = currentNextOffset
@@ -159,23 +159,7 @@ object ContentParser {
                 }
                 if (closed) {
                     val codeContent = codeBuilder.toString()
-                    if (shouldUseRichCodeBlock(rawFence, language, lines, startOffset)) {
-                        parts.add(ContentPart.Code(language, codeContent, startOffset))
-                    } else if (language == null && isLikelyIndentedCodeBlock(codeContent)) {
-                        parts.add(ContentPart.Code(language, codeContent, startOffset))
-                    } else {
-                        if (textBuffer.isEmpty()) {
-                            textStartOffset = startOffset
-                        }
-                        if (textBuffer.isNotEmpty()) textBuffer.append('\n')
-                        textBuffer.append(line)
-                        if (codeContent.isNotEmpty()) {
-                            textBuffer.append('\n')
-                            textBuffer.append(codeContent)
-                        }
-                        textBuffer.append('\n')
-                        textBuffer.append("```")
-                    }
+                    parts.add(ContentPart.Code(language, codeContent, startOffset))
                 } else {
                     parts.add(
                         ContentPart.StreamingCode(
@@ -217,57 +201,34 @@ object ContentParser {
         return splitMathBlocks(mergeAdjacentTextParts(parts))
     }
 
-    private fun isValidFenceStart(lines: List<String>, index: Int): Boolean {
-        val currentLine = lines[index]
-        val trimmed = currentLine.trimStart()
-        if (!trimmed.startsWith("```")) return false
+    private data class OpeningFence(
+        val marker: String,
+        val language: String
+    )
+
+    private fun parseOpeningFence(line: String): OpeningFence? {
+        val trimmed = line.trimStart()
+        val match = openingFenceRegex.matchEntire(trimmed) ?: return null
+        return OpeningFence(
+            marker = match.groupValues[1],
+            language = match.groupValues[2].trim()
+        )
+    }
+
+    private fun isValidFenceStart(currentLine: String): Boolean {
+        if (parseOpeningFence(currentLine) == null) return false
         if (currentLine.takeWhile { it == ' ' || it == '\t' }.contains('\t')) return false
         return true
     }
 
-    private fun isFenceClosingLine(line: String, openingFence: String): Boolean {
+    private fun isFenceClosingLine(line: String, openingFence: String, marker: String): Boolean {
+        val trimmed = line.trimStart()
+        if (trimmed != marker) return false
         val currentIndent = line.indexOfFirst { it != ' ' }.let { if (it < 0) line.length else it }
         val openingIndent = openingFence.indexOfFirst { it != ' ' }.let { if (it < 0) openingFence.length else it }
         return currentIndent == openingIndent
     }
 
-    private fun shouldUseRichCodeBlock(
-        rawFence: String,
-        language: String?,
-        lines: List<String>,
-        startOffset: Int,
-    ): Boolean {
-        if (language == null) return false
-        if (!fencedBlockLanguageRegex.matches(language)) return false
-
-        val indent = rawFence.indexOfFirst { it != ' ' }.let { if (it < 0) rawFence.length else it }
-        if (indent < 4) return true
-
-        val lineIndex = locateLineIndexByOffset(lines, startOffset)
-        if (lineIndex <= 0) return true
-        val previousNonBlank = lines.subList(0, lineIndex).asReversed().firstOrNull { it.isNotBlank() } ?: return true
-        if (listMarkerRegex.containsMatchIn(previousNonBlank)) return true
-
-        val parentListItem = lines.subList(0, lineIndex).asReversed().firstOrNull { candidate ->
-            candidate.isNotBlank() && candidate.isIndentedListContinuation(indent)
-        }
-        return parentListItem != null
-    }
-
-    private fun locateLineIndexByOffset(lines: List<String>, targetOffset: Int): Int {
-        var offset = 0
-        lines.forEachIndexed { index, line ->
-            if (offset == targetOffset) return index
-            offset += line.length + 1
-        }
-        return -1
-    }
-
-    private fun String.isIndentedListContinuation(targetIndent: Int): Boolean {
-        val currentIndent = indexOfFirst { it != ' ' }.let { if (it < 0) length else it }
-        if (currentIndent >= targetIndent) return false
-        return listMarkerRegex.containsMatchIn(trim())
-    }
 
     private fun parseCodeFence(node: ASTNode, text: String): Pair<String?, String> {
         var language: String? = null

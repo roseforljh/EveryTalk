@@ -351,6 +351,7 @@ open class MessageItemsController(
         }
         val hasStreamingContent = !streamingRenderState?.content.isNullOrBlank()
         val hasVisibleContent = effectiveMessage.contentStarted || effectiveMessage.text.isNotBlank() || hasStreamingContent
+        val hasVisibleReasoning = hasReasoning && !effectiveMessage.contentStarted
 
         // 🔧 修复Loading不显示问题：记录流式开始时间
         // 当开始流式传输时，记录时间戳；用于确保Loading状态至少显示MIN_CONNECTING_DISPLAY_TIME_MS
@@ -383,15 +384,15 @@ open class MessageItemsController(
         }
 
         val state = when {
-            // 仅在正文尚未开始前允许保留 Connecting，避免流式输出中途回退到“正在连接大模型...”
-            isCurrentStreaming && !hasReasoning && !hasVisibleContent && isWithinMinDisplayTime -> {
-                com.android.everytalk.ui.state.AiBubbleState.Connecting()
-            }
-            isCurrentStreaming && hasReasoning && !effectiveMessage.contentStarted -> {
+            isCurrentStreaming && hasVisibleReasoning -> {
                 com.android.everytalk.ui.state.AiBubbleState.Reasoning(
                     message.reasoning ?: "",
                     isComplete = reasoningComplete
                 )
+            }
+            // 仅在正文尚未开始前允许保留 Connecting，避免流式输出中途回退到“正在连接大模型...”
+            isCurrentStreaming && !hasVisibleContent && isWithinMinDisplayTime -> {
+                com.android.everytalk.ui.state.AiBubbleState.Connecting()
             }
             isCurrentStreaming && hasVisibleContent -> {
                 // 清理时间戳，因为已经开始流式输出

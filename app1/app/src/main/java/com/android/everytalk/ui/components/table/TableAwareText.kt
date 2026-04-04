@@ -98,10 +98,15 @@ import kotlinx.coroutines.flow.mapLatest
 
 internal fun shouldRenderTrailingStreamingTextWithMarkdown(content: String): Boolean {
     return !content.contains("```") &&
+        !content.contains("~~~") &&
         !content.contains("```infographic", ignoreCase = true) &&
         !(content.contains('|') && content.contains("---")) &&
         !content.contains("$$") &&
         !content.contains("\\[")
+}
+
+internal fun containsFencedCodeSyntax(content: String): Boolean {
+    return content.contains("```") || content.contains("~~~")
 }
 
 internal fun shouldRenderStableNativeMathPart(
@@ -211,7 +216,7 @@ fun TableAwareText(
     // - 结构不同 -> 替换为正确解析结果（必要的一次重组）
     LaunchedEffect(isStreaming) {
         if (!isStreaming && parsedParts.isNotEmpty()) {
-            val freshParts = ContentParser.parseCompleteContent(text)
+            val freshParts = ContentParser.parseCompleteContent(text, isStreaming = true)
             val structureChanged = freshParts.size != parsedParts.size ||
                 freshParts.zip(parsedParts).any { (a, b) -> a.javaClass != b.javaClass }
             if (structureChanged) {
@@ -229,7 +234,7 @@ fun TableAwareText(
             if (!isStreaming && effectiveCacheKey.isNotBlank()) {
                 ContentParseCache.get(effectiveCacheKey)
             } else null
-        } ?: ContentParser.parseCompleteContent(text, isStreaming = isStreaming).also { parts ->
+        } ?: ContentParser.parseCompleteContent(text, isStreaming = true).also { parts ->
             if (!isStreaming && effectiveCacheKey.isNotBlank()) {
                 ContentParseCache.put(effectiveCacheKey, parts)
             }
@@ -259,8 +264,16 @@ fun TableAwareText(
                         val isTrailingStreamingText = isStreaming && index == parsedParts.lastIndex
                         val trailingLooksLightweightMarkdown = isTrailingStreamingText &&
                             shouldRenderTrailingStreamingTextWithMarkdown(part.content)
+                        val containsFencedCode = containsFencedCodeSyntax(part.content)
 
                         when {
+                            containsFencedCode -> {
+                                StableMarkdownText(
+                                    markdown = part.content,
+                                    style = style,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
                             trailingLooksLightweightMarkdown -> {
                                 MarkdownRenderer(
                                     markdown = part.content,

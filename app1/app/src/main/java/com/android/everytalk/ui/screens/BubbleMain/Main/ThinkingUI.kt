@@ -66,9 +66,9 @@ internal fun ReasoningToggleAndContent(
     val coroutineScope = rememberCoroutineScope()
     
     // 简化显示条件：仅在推理流式期间显示思考框；主内容开始后即收起
-    val showInlineStreamingBox = isReasoningStreaming &&
+    val showInlineStreamingBox = displayedReasoningText.isNotBlank() &&
             !messageIsError &&
-            displayedReasoningText.isNotBlank()
+            (isReasoningStreaming || !mainContentHasStarted)
 
     val showDotsAnimationOnToggle = false
 
