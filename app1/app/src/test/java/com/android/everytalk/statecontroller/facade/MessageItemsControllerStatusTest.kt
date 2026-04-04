@@ -271,6 +271,26 @@ class MessageItemsControllerStatusTest {
     }
 
     @Test
+    fun `terminal writing stage text is hidden when no tool or search stage remains`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+
+        val text = controller.resolveStreamingStageTextForTest(
+            Message(
+                id = "ai-terminal-writing",
+                text = "",
+                sender = Sender.AI,
+                contentStarted = false,
+                executionStatus = "我正在把结果写出来…",
+                currentWebSearchStage = null,
+                reasoning = null
+            ),
+            6000L
+        )
+
+        assertNull(text)
+    }
+
+    @Test
     fun `image generation flow should not keep loading when render state already has content`() {
         val controller = MessageItemsControllerTestAccess.newController()
         controller.seedStreamingRenderContent("img-streaming", "图片描述已经开始输出")

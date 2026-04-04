@@ -100,7 +100,11 @@ open class MessageItemsController(
     }
 
     private fun resolveStreamingStageText(message: Message, elapsedMs: Long, reasoningComplete: Boolean = false): String? {
-        if (message.contentStarted || message.text.isNotBlank()) {
+        val looksTerminalWritingStage =
+            message.executionStatus == getConnectingStageText(elapsedMs) &&
+                message.currentWebSearchStage.isNullOrBlank() &&
+                message.reasoning.isNullOrBlank()
+        if (message.contentStarted || message.text.isNotBlank() || looksTerminalWritingStage) {
             return null
         }
         message.executionStatus?.takeIf { it.isNotBlank() }?.let { return it }
