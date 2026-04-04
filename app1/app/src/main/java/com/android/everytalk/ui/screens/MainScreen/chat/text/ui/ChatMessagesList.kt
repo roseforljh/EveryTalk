@@ -567,12 +567,6 @@ fun ChatMessagesList(
                                         color = MaterialTheme.colorScheme.onSurface
                                     )
                                 }
-                                Spacer(Modifier.width(ChatDimensions.LOADING_SPACER_WIDTH))
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(ChatDimensions.LOADING_INDICATOR_SIZE),
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    strokeWidth = ChatDimensions.LOADING_INDICATOR_STROKE_WIDTH
-                                )
                             }
                         }
                         
@@ -591,12 +585,6 @@ fun ChatMessagesList(
                                     text = item.text,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Spacer(Modifier.width(ChatDimensions.LOADING_SPACER_WIDTH))
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(ChatDimensions.LOADING_INDICATOR_SIZE),
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    strokeWidth = ChatDimensions.LOADING_INDICATOR_STROKE_WIDTH
                                 )
                             }
                         }
