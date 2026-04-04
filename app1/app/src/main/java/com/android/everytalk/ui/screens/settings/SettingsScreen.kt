@@ -30,6 +30,8 @@ import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.statecontroller.SimpleModeManager
 import com.android.everytalk.ui.screens.mcp.McpServerListContent
+import com.android.everytalk.ui.screens.settings.EditExternalWebSearchProviderDialog
+import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.ui.screens.settings.dialogs.AutoFetchModelsConfirmDialog
 import com.android.everytalk.ui.screens.settings.dialogs.ModelSelectionDialog
 import java.util.UUID
@@ -91,6 +93,9 @@ fun SettingsScreen(
     
     val mcpServerStates by viewModel.mcpServerStates.collectAsState()
     val allMcpConfigs by viewModel.allMcpConfigs.collectAsState()
+    val externalWebSearchConfigs by viewModel.externalWebSearchConfigs.collectAsState()
+    val selectedExternalWebSearchProviderId by viewModel.selectedExternalWebSearchProviderId.collectAsState()
+    var editingExternalProvider by remember { mutableStateOf<ExternalWebSearchProvider?>(null) }
     val scope = rememberCoroutineScope()
     val coroutineScope = rememberCoroutineScope()
 
@@ -426,13 +431,12 @@ fun SettingsScreen(
                             )
                         }
                         1 -> {
-                            Column(
-                                modifier = Modifier.fillMaxSize().padding(20.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center
-                            ) {
-                                Text("联网搜索配置 (开发中)", style = MaterialTheme.typography.titleMedium)
-                            }
+                            ExternalWebSearchSettingsContent(
+                                selectedProviderId = selectedExternalWebSearchProviderId,
+                                configs = externalWebSearchConfigs,
+                                onSelectProvider = { viewModel.selectExternalWebSearchProvider(it) },
+                                onEditProvider = { editingExternalProvider = it }
+                            )
                         }
                         2 -> {
                             Column(
@@ -571,6 +575,17 @@ fun SettingsScreen(
                 }
             },
             isImageMode = isInImageMode
+        )
+    }
+
+    editingExternalProvider?.let { provider ->
+        EditExternalWebSearchProviderDialog(
+            provider = provider,
+            currentApiKey = externalWebSearchConfigs[provider.providerId]?.apiKey.orEmpty(),
+            onApiKeyChange = { apiKey ->
+                viewModel.updateExternalWebSearchProviderApiKey(provider, apiKey)
+            },
+            onDismiss = { editingExternalProvider = null }
         )
     }
 

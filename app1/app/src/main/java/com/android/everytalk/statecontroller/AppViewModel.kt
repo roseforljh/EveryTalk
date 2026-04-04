@@ -84,6 +84,8 @@ import com.android.everytalk.data.mcp.McpServerConfig
 import com.android.everytalk.data.mcp.McpServerState
 import com.android.everytalk.data.mcp.McpStatus
 import com.android.everytalk.data.network.GeminiDirectClient
+import com.android.everytalk.data.network.ExternalWebSearchProvider
+import com.android.everytalk.data.network.ExternalWebSearchProviderConfig
 import com.android.everytalk.data.network.OpenAIDirectClient
 import com.android.everytalk.data.network.WebFetchToolExecutor
 import com.android.everytalk.util.storage.IncrementalBackupManager
@@ -91,6 +93,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import java.util.Calendar
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -103,8 +106,16 @@ internal suspend fun executeSharedToolCall(
     localWebFetchExecutor: suspend (JsonObject) -> JsonElement = { WebFetchToolExecutor.execute(it) },
     localCurrentTimeExecutor: suspend () -> JsonElement = {
         val now = Date()
+        val calendar = Calendar.getInstance()
+        calendar.time = now
         val timezone = TimeZone.getDefault()
         val isoFormatter = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US).apply {
+            timeZone = timezone
+        }
+        val dateFormatter = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply {
+            timeZone = timezone
+        }
+        val timeFormatter = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).apply {
             timeZone = timezone
         }
         val displayFormatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).apply {
@@ -112,7 +123,12 @@ internal suspend fun executeSharedToolCall(
         }
         buildJsonObject {
             put("datetime", JsonPrimitive(isoFormatter.format(now)))
+            put("date", JsonPrimitive(dateFormatter.format(now)))
+            put("time", JsonPrimitive(timeFormatter.format(now)))
             put("local_time", JsonPrimitive(displayFormatter.format(now)))
+            put("hour", JsonPrimitive(calendar.get(Calendar.HOUR_OF_DAY)))
+            put("minute", JsonPrimitive(calendar.get(Calendar.MINUTE)))
+            put("second", JsonPrimitive(calendar.get(Calendar.SECOND)))
             put("timezone", JsonPrimitive(timezone.id))
             put("timestamp_ms", JsonPrimitive(now.time))
         }
@@ -143,6 +159,23 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         isLenient = true
         ignoreUnknownKeys = true
     }
+
+    private val _externalWebSearchConfigs =
+        MutableStateFlow<Map<String, ExternalWebSearchProviderConfig>>(emptyMap())
+    val externalWebSearchConfigs: StateFlow<Map<String, ExternalWebSearchProviderConfig>>
+        get() = _externalWebSearchConfigs.asStateFlow()
+
+    private val _selectedExternalWebSearchProviderId = MutableStateFlow<String?>(null)
+    val selectedExternalWebSearchProviderId: StateFlow<String?>
+        get() = _selectedExternalWebSearchProviderId.asStateFlow()
+
+    val selectedExternalWebSearchProvider: ExternalWebSearchProvider?
+        get() = ExternalWebSearchProvider.fromId(_selectedExternalWebSearchProviderId.value)
+
+    val selectedExternalWebSearchProviderApiKey: String
+        get() = selectedExternalWebSearchProvider
+            ?.let { provider -> _externalWebSearchConfigs.value[provider.providerId]?.apiKey.orEmpty() }
+            .orEmpty()
 
     private val cacheManager: CacheManager by lazy { 
         org.koin.java.KoinJavaComponent.getKoin().get() 
@@ -242,7 +275,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 showSnackbar = ::showSnackbar,
                 triggerScrollToBottom = { triggerScrollToBottom() },
                 uriToBase64Encoder = { uri -> encodeUriAsBase64(uri) },
-                getMcpToolsForRequest = { mcpManager.getToolsForChatRequest() }
+                getMcpToolsForRequest = { mcpManager.getToolsForChatRequest() },
+                getSelectedExternalWebSearchProvider = { selectedExternalWebSearchProvider },
+                getSelectedExternalWebSearchProviderApiKey = { selectedExternalWebSearchProviderApiKey }
         )
     }
 
@@ -624,6 +659,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val loadedCustomProviders = persistenceManager.loadCustomProviders()
             providerManager.setCustomProviders(loadedCustomProviders)
         }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val configs = persistenceManager.loadExternalWebSearchConfigs()
+                    .associateBy { it.providerId }
+                val selectedProviderId = persistenceManager.loadSelectedExternalWebSearchProviderId()
+                    ?: ExternalWebSearchProvider.defaultProvider.providerId
+
+                withContext(Dispatchers.Main) {
+                    _externalWebSearchConfigs.value = configs
+                    _selectedExternalWebSearchProviderId.value = selectedProviderId
+                }
+            }.onFailure {
+                Log.e("AppViewModel", "加载外部联网搜索配置失败", it)
+            }
+        }
         
         // 监听模式切换消息并显示 Toast
         viewModelScope.launch {
@@ -878,6 +929,43 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun updateExternalWebSearchProviderApiKey(
+        provider: ExternalWebSearchProvider,
+        apiKey: String,
+    ) {
+        val normalizedApiKey = apiKey.trim()
+        val updatedConfigs = _externalWebSearchConfigs.value.toMutableMap().apply {
+            put(
+                provider.providerId,
+                ExternalWebSearchProviderConfig(
+                    providerId = provider.providerId,
+                    apiKey = normalizedApiKey,
+                )
+            )
+        }
+        _externalWebSearchConfigs.value = updatedConfigs
+
+        if (normalizedApiKey.isNotBlank() && _selectedExternalWebSearchProviderId.value == null) {
+            _selectedExternalWebSearchProviderId.value = provider.providerId
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            persistenceManager.saveExternalWebSearchConfigs(updatedConfigs.values.toList())
+            persistenceManager.saveSelectedExternalWebSearchProviderId(_selectedExternalWebSearchProviderId.value)
+        }
+    }
+
+    fun selectExternalWebSearchProvider(provider: ExternalWebSearchProvider) {
+        _selectedExternalWebSearchProviderId.value = provider.providerId
+        viewModelScope.launch(Dispatchers.IO) {
+            persistenceManager.saveSelectedExternalWebSearchProviderId(provider.providerId)
+        }
+    }
+
+    fun canUseSelectedExternalWebSearchProvider(): Boolean {
+        return selectedExternalWebSearchProvider != null && selectedExternalWebSearchProviderApiKey.isNotBlank()
+    }
+
     fun toggleCodeExecutionEnabled() {
         val newValue = !stateHolder._isCodeExecutionEnabled.value
         stateHolder.updateCurrentConversationFunctionToggleState { it.copy(codeExecutionEnabled = newValue) }
@@ -930,6 +1018,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         mimeType: String? = null,
         isImageGeneration: Boolean = false
     ) {
+        if (!isImageGeneration && stateHolder._isWebSearchEnabled.value) {
+            val currentConfig = stateHolder._selectedApiConfig.value
+            val supportsNative = com.android.everytalk.data.network.WebSearchSupport.supportsNativeWebSearch(currentConfig)
+            if (!supportsNative && !canUseSelectedExternalWebSearchProvider()) {
+                showSnackbar("请先在设置-联网搜索中配置并勾选一个搜索服务商")
+                return
+            }
+        }
         if (
             attachments.isEmpty() &&
             audioBase64 == null &&

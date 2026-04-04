@@ -15,6 +15,7 @@ import com.android.everytalk.data.database.entities.toApiConfig
 import com.android.everytalk.data.database.entities.toEntity
 import com.android.everytalk.data.database.entities.toMessage
 import com.android.everytalk.data.database.entities.toVoiceBackendConfig
+import com.android.everytalk.data.network.ExternalWebSearchProviderConfig
 import com.android.everytalk.util.ConversationNameHelper
 import kotlinx.coroutines.runBlocking
 import java.util.UUID
@@ -106,6 +107,31 @@ class RoomDataSource(context: Context) {
     suspend fun saveCustomProviders(providers: Set<String>) {
         val jsonString = json.encodeToString(SetSerializer(String.serializer()), providers)
         saveSetting("custom_providers", jsonString)
+    }
+
+    suspend fun loadExternalWebSearchConfigs(): List<ExternalWebSearchProviderConfig> {
+        val jsonString = settingsDao.getValue("external_web_search_configs")
+        return if (jsonString != null) {
+            try {
+                json.decodeFromString<List<ExternalWebSearchProviderConfig>>(jsonString)
+            } catch (_: Exception) {
+                emptyList()
+            }
+        } else {
+            emptyList()
+        }
+    }
+
+    suspend fun saveExternalWebSearchConfigs(configs: List<ExternalWebSearchProviderConfig>) {
+        val jsonString = json.encodeToString(configs)
+        saveSetting("external_web_search_configs", jsonString)
+    }
+
+    suspend fun loadSelectedExternalWebSearchProviderId(): String? =
+        settingsDao.getValue("selected_external_web_search_provider_id")
+
+    suspend fun saveSelectedExternalWebSearchProviderId(providerId: String?) {
+        saveSetting("selected_external_web_search_provider_id", providerId)
     }
 
     private suspend fun saveSetting(key: String, value: String?) {

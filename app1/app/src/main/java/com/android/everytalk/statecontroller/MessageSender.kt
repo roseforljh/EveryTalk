@@ -23,6 +23,8 @@ import com.android.everytalk.data.DataClass.ThinkingConfig
 import com.android.everytalk.data.DataClass.ImageGenRequest
 import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.network.WebSearchSupport
+import com.android.everytalk.data.network.ExternalWebSearchProvider
+import com.android.everytalk.data.network.ExternalWebSearchService
 import com.android.everytalk.statecontroller.defaultReasoningBudgetForModel
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import kotlinx.coroutines.CoroutineScope
@@ -86,6 +88,19 @@ private val MCP_REALTIME_OR_NEWS_KEYWORDS = listOf(
     "stock", "stocks", "market", "price", "weather", "score", "match result", "who won", "ranking"
 )
 
+private val MCP_SEARCH_TOOL_NAME_KEYWORDS = listOf(
+    "search", "web", "exa", "news", "query", "browser", "crawl", "scrape", "fetch"
+)
+
+private val MCP_SEARCH_TOOL_DESCRIPTION_KEYWORDS = listOf(
+    "搜索", "检索", "网页", "页面", "新闻", "热点", "最新", "查询", "抓取", "爬取", "浏览",
+    "search", "web", "page", "news", "latest", "query", "crawl", "scrape", "browser", "fetch"
+)
+
+private data class McpToolClassification(
+    val isSearchLike: Boolean,
+)
+
 private const val MCP_BASE_USAGE_GUIDANCE = """
 当 MCP 已启用时，你应主动判断当前问题是否需要借助 MCP 工具来获得更准确、更新或更专业的信息。
 
@@ -101,6 +116,12 @@ private const val MCP_BASE_USAGE_GUIDANCE = """
 
 private const val MCP_REALTIME_NEWS_GUIDANCE = """
 当前问题明显依赖最新外部信息，请优先考虑调用最合适的 MCP 工具后再回答。
+"""
+
+private const val MCP_WITH_WEB_SEARCH_GUIDANCE = """
+当 MCP 与联网搜索同时启用时，优先基于当前请求已提供的联网搜索结果或原生联网搜索能力回答。
+仅当确实需要访问专用工具、业务系统、数据库或第三方服务时，再调用 MCP 工具。
+如果现有联网结果已经足够，就不要为了重复检索而再次调用 MCP。
 """
 
 internal fun containsHttpUrl(messageText: String): Boolean {
@@ -136,18 +157,68 @@ internal fun buildMcpUsageGuidance(
     messageText: String,
     isMcpEnabled: Boolean,
     hasMcpTools: Boolean,
+    hasEffectiveWebSearch: Boolean = false,
 ): String? {
     if (!isMcpEnabled || !hasMcpTools) {
         return null
     }
 
     return buildString {
-        append(MCP_BASE_USAGE_GUIDANCE.trim())
-        if (looksLikeRealtimeOrNewsQuery(messageText)) {
+        if (hasEffectiveWebSearch) {
+            append(MCP_WITH_WEB_SEARCH_GUIDANCE.trim())
+        } else {
+            append(MCP_BASE_USAGE_GUIDANCE.trim())
+        }
+        if (!hasEffectiveWebSearch && looksLikeRealtimeOrNewsQuery(messageText)) {
             append("\n\n")
             append(MCP_REALTIME_NEWS_GUIDANCE.trim())
         }
     }
+}
+
+internal fun filterMcpToolsForRequest(
+    mcpTools: List<Map<String, Any>>,
+    shouldFilterSearchLikeTools: Boolean,
+): List<Map<String, Any>> {
+    if (!shouldFilterSearchLikeTools) {
+        return mcpTools
+    }
+
+    return mcpTools.filterNot { toolDefinition ->
+        classifyMcpTool(toolDefinition).isSearchLike
+    }
+}
+
+internal fun isSearchLikeMcpTool(
+    toolName: String,
+    toolDescription: String,
+): Boolean {
+    return classifyMcpTool(toolName, toolDescription).isSearchLike
+}
+
+private fun classifyMcpTool(toolDefinition: Map<String, Any>): McpToolClassification {
+    val functionDefinition = toolDefinition["function"] as? Map<*, *>
+    val toolName = (functionDefinition?.get("name") as? String)
+        ?: (toolDefinition["name"] as? String)
+        ?: ""
+    val toolDescription = (functionDefinition?.get("description") as? String)
+        ?: (toolDefinition["description"] as? String)
+        ?: ""
+    return classifyMcpTool(toolName, toolDescription)
+}
+
+private fun classifyMcpTool(
+    toolName: String,
+    toolDescription: String,
+): McpToolClassification {
+    val normalizedName = toolName.lowercase()
+    val normalizedDescription = toolDescription.lowercase()
+    val isSearchLike =
+        MCP_SEARCH_TOOL_NAME_KEYWORDS.any { keyword -> keyword in normalizedName } ||
+            MCP_SEARCH_TOOL_DESCRIPTION_KEYWORDS.any { keyword -> keyword in normalizedDescription }
+    return McpToolClassification(
+        isSearchLike = isSearchLike,
+    )
 }
 
 internal fun mergeSystemPromptWithGuidance(
@@ -173,7 +244,9 @@ internal fun buildCurrentTimeGuidance(now: Date = Date()): String {
 当前本地时间：$currentTime
 时区：${timezone.id}
 
-如果用户询问今天、现在、当前、最近、最新、截止目前等时间敏感问题，请基于这个时间上下文回答；如果需要更精确的当前时间，请主动调用时间工具。
+如果用户询问今天、现在、当前、最近、最新、截止目前、今天上午/下午/晚上、几点几分、刚刚等时间敏感问题，请基于这个时间上下文回答。
+如果答案需要更精确到小时、分钟或秒，或者需要据此判断应该搜索哪个时间窗口的最新信息，请主动调用时间工具。
+时间工具可提供结构化的 date、time、hour、minute、second、timezone 和 timestamp_ms，请优先利用这些字段提高判断精度。
 """.trim()
 }
 
@@ -206,7 +279,7 @@ internal fun builtInCurrentTimeToolDefinition(): Map<String, Any> {
         "type" to "function",
         "function" to mapOf(
             "name" to BUILT_IN_CURRENT_TIME_TOOL_NAME,
-            "description" to "Get the current local date, time, timezone, and Unix timestamp from the device.",
+                "description" to "Get the current local date, time, hour, minute, second, timezone, and Unix timestamp from the device.",
             "parameters" to mapOf(
                 "type" to "object",
                 "properties" to emptyMap<String, Any>()
@@ -269,7 +342,9 @@ private data class AttachmentProcessingResult(
     private val showSnackbar: (String) -> Unit,
     private val triggerScrollToBottom: () -> Unit,
     private val uriToBase64Encoder: (Uri) -> String?,
-    private val getMcpToolsForRequest: () -> List<Map<String, Any>> = { emptyList() }
+    private val getMcpToolsForRequest: () -> List<Map<String, Any>> = { emptyList() },
+    private val getSelectedExternalWebSearchProvider: () -> ExternalWebSearchProvider? = { null },
+    private val getSelectedExternalWebSearchProviderApiKey: () -> String = { "" },
 ) {
 
     private val fileManager: FileManager by lazy { FileManager(application) }
@@ -766,44 +841,11 @@ private data class AttachmentProcessingResult(
                 val apiMessagesForBackend = ensureUserMessagePresent(historyApiMessages, currentUserApiMessage)
 
                 val isMcpEnabledForRequest = stateHolder._isMcpEnabledForNextRequest.value
-                val mcpToolsForRequest = if (isMcpEnabledForRequest) {
+                val rawMcpToolsForRequest = if (isMcpEnabledForRequest) {
                     getMcpToolsForRequest()
                 } else {
                     emptyList()
                 }
-                val combinedSystemPrompt = mergeSystemPromptWithGuidance(
-                    systemPrompt = mergeSystemPromptWithGuidance(
-                        systemPrompt = systemPrompt,
-                        guidance = buildCurrentTimeGuidance()
-                    ),
-                    guidance = buildMcpUsageGuidance(
-                        messageText = textToActuallySend,
-                        isMcpEnabled = isMcpEnabledForRequest,
-                        hasMcpTools = mcpToolsForRequest.isNotEmpty(),
-                    )
-                )
-
-                if (!combinedSystemPrompt.isNullOrBlank()) {
-                    val systemMessage = SimpleTextApiMessage(role = "system", content = combinedSystemPrompt)
-                    val existingSystemMessageIndex = apiMessagesForBackend.indexOfFirst { it.role == "system" }
-                    if (existingSystemMessageIndex != -1) {
-                        apiMessagesForBackend[existingSystemMessageIndex] = systemMessage
-                    } else {
-                        apiMessagesForBackend.add(0, systemMessage)
-                    }
-                }
-
-                logApiMessages("finalMessages", apiMessagesForBackend)
-
-                if (apiMessagesForBackend.isEmpty() || apiMessagesForBackend.lastOrNull()?.role != "user") {
-                    withContext(Dispatchers.Main.immediate) {
-                        stateHolder.messages.remove(newUserMessageForUi)
-                        val animationMap = if (isImageGeneration) stateHolder.imageMessageAnimationStates else stateHolder.textMessageAnimationStates
-                        animationMap.remove(newUserMessageForUi.id)
-                    }
-                    return@withContext
-                }
-
                 // 规范化图像尺寸：为空或包含占位符时回退到 1024x1024（基础兜底）
                 val baseSanitizedImageSize = currentConfig.imageSize?.takeIf { it.isNotBlank() && !it.contains("<") } ?: "1024x1024"
                 
@@ -853,14 +895,139 @@ private data class AttachmentProcessingResult(
                     stateHolder._shouldShowImageGenerationError.value = false
                 }
 
-                // 检查是否为Gemini渠道且开启了联网搜索
-                // 增强检测：要求渠道为 Gemini 且模型名称包含 Gemini，才视为原生 Gemini 支持环境
                 val isGeminiChannel = WebSearchSupport.isGeminiNativeSearch(currentConfig)
                 val supportsNativeWebSearch = WebSearchSupport.supportsNativeWebSearch(currentConfig)
-                val shouldEnableGoogleSearch = isGeminiChannel && stateHolder._isWebSearchEnabled.value
+                val selectedExternalProvider = getSelectedExternalWebSearchProvider()
+                val selectedExternalProviderApiKey = getSelectedExternalWebSearchProviderApiKey()
+                val webSearchRouting = WebSearchSupport.resolveWebSearchRouting(
+                    config = currentConfig,
+                    isWebSearchEnabled = stateHolder._isWebSearchEnabled.value,
+                    selectedExternalProvider = selectedExternalProvider,
+                    selectedExternalProviderApiKey = selectedExternalProviderApiKey,
+                )
+                val hasEffectiveWebSearch =
+                    webSearchRouting.useNativeWebSearch || webSearchRouting.externalProvider != null
+                val mcpToolsForRequest = filterMcpToolsForRequest(
+                    mcpTools = rawMcpToolsForRequest,
+                    shouldFilterSearchLikeTools = isMcpEnabledForRequest && hasEffectiveWebSearch,
+                )
+                val shouldEnableGoogleSearch = isGeminiChannel && webSearchRouting.useNativeWebSearch
 
-                // 添加调试日志
-                Log.d("MessageSender", "Channel: ${currentConfig.channel}, model: ${currentConfig.model}, supportsNativeWebSearch: $supportsNativeWebSearch, webSearchEnabled: ${stateHolder._isWebSearchEnabled.value}, shouldEnableGoogleSearch: $shouldEnableGoogleSearch")
+                val systemPromptWithWebSearchAwareMcp = mergeSystemPromptWithGuidance(
+                    systemPrompt = mergeSystemPromptWithGuidance(
+                        systemPrompt = systemPrompt,
+                        guidance = buildCurrentTimeGuidance()
+                    ),
+                    guidance = buildMcpUsageGuidance(
+                        messageText = textToActuallySend,
+                        isMcpEnabled = isMcpEnabledForRequest,
+                        hasMcpTools = mcpToolsForRequest.isNotEmpty(),
+                        hasEffectiveWebSearch = hasEffectiveWebSearch,
+                    )
+                )
+                if (!systemPromptWithWebSearchAwareMcp.isNullOrBlank()) {
+                    val systemMessage = SimpleTextApiMessage(role = "system", content = systemPromptWithWebSearchAwareMcp)
+                    val existingSystemMessageIndex = apiMessagesForBackend.indexOfFirst { it.role == "system" }
+                    if (existingSystemMessageIndex != -1) {
+                        apiMessagesForBackend[existingSystemMessageIndex] = systemMessage
+                    } else {
+                        apiMessagesForBackend.add(0, systemMessage)
+                    }
+                }
+
+                logApiMessages("finalMessages", apiMessagesForBackend)
+
+                if (apiMessagesForBackend.isEmpty() || apiMessagesForBackend.lastOrNull()?.role != "user") {
+                    withContext(Dispatchers.Main.immediate) {
+                        stateHolder.messages.remove(newUserMessageForUi)
+                        val animationMap = if (isImageGeneration) stateHolder.imageMessageAnimationStates else stateHolder.textMessageAnimationStates
+                        animationMap.remove(newUserMessageForUi.id)
+                    }
+                    return@withContext
+                }
+
+                Log.d(
+                    "MessageSender",
+                    "Channel: ${currentConfig.channel}, model: ${currentConfig.model}, supportsNativeWebSearch: $supportsNativeWebSearch, webSearchEnabled: ${stateHolder._isWebSearchEnabled.value}, shouldEnableGoogleSearch: $shouldEnableGoogleSearch, externalProvider=${webSearchRouting.externalProvider?.providerId}"
+                )
+
+                // 🎯 优化：在开始可能的外部联网搜索之前，预先创建 AI 占位消息。
+                // 这样用户在点击发送后能立即看到 UI 反馈（加载指示器），而不是等待搜索完成。
+                val preCreatedAiMessageId = if (!isImageGeneration) {
+                    apiHandler.cancelCurrentApiJob("发送新消息，预清理", isNewMessageSend = true, isImageGeneration = false)
+                    apiHandler.prepareStreamingAiMessage(
+                        modelName = currentConfig.model,
+                        providerName = currentConfig.provider,
+                        isImageGeneration = false,
+                        onNewAiMessageAdded = triggerScrollToBottom
+                    )
+                } else null
+
+                if (!isImageGeneration && webSearchRouting.externalProvider != null) {
+                    // 🎯 设置状态指示器，告知用户正在联网搜索
+                    withContext(Dispatchers.Main.immediate) {
+                        stateHolder.updateMessageStatus(
+                            preCreatedAiMessageId!!,
+                            "正在使用 ${webSearchRouting.externalProvider.displayName} 搜索...",
+                            isImageGeneration = false
+                        )
+                    }
+
+                    val externalSearchResult = ExternalWebSearchService.search(
+                        provider = webSearchRouting.externalProvider,
+                        apiKey = selectedExternalProviderApiKey,
+                        query = textToActuallySend,
+                    )
+
+                    externalSearchResult.onSuccess { response ->
+                        // 🎯 搜索完成，提示正在整理结果
+                        withContext(Dispatchers.Main.immediate) {
+                            stateHolder.updateMessageStatus(
+                                preCreatedAiMessageId!!,
+                                "正在整理搜索结果",
+                                isImageGeneration = false
+                            )
+                        }
+
+                        val serializedResults = response.results.joinToString(separator = "\n\n") { result ->
+                            buildString {
+                                append("标题: ${result.title}\n")
+                                append("链接: ${result.href}\n")
+                                append("摘要: ${result.snippet}")
+                            }
+                        }
+                        val searchSystemPrompt = """
+以下是通过 ${response.provider.displayName} 获取的实时联网搜索结果，请优先依据这些结果回答；如果结果不充分，请明确说明。
+
+$serializedResults
+                        """.trimIndent()
+                        val externalSystemMessage = SimpleTextApiMessage(role = "system", content = searchSystemPrompt)
+                        val existingSystemMessageIndex = apiMessagesForBackend.indexOfFirst { it.role == "system" }
+                        if (existingSystemMessageIndex != -1) {
+                            val existingSystem = apiMessagesForBackend[existingSystemMessageIndex] as? SimpleTextApiMessage
+                            val mergedContent = listOfNotNull(existingSystem?.content, searchSystemPrompt)
+                                .filter { it.isNotBlank() }
+                                .joinToString(separator = "\n\n")
+                            apiMessagesForBackend[existingSystemMessageIndex] =
+                                SimpleTextApiMessage(role = "system", content = mergedContent)
+                        } else {
+                            apiMessagesForBackend.add(0, externalSystemMessage)
+                        }
+
+                        withContext(Dispatchers.Main.immediate) {
+                            val messageList = stateHolder.messages
+                            val aiIndex = messageList.indexOfLast { it.id == preCreatedAiMessageId || it.sender == UiSender.AI }
+                            if (aiIndex != -1) {
+                                val currentMessage = messageList[aiIndex]
+                                messageList[aiIndex] = currentMessage.copy(webSearchResults = response.results)
+                            }
+                        }
+                    }.onFailure { error ->
+                        withContext(Dispatchers.Main.immediate) {
+                            showSnackbar(error.message ?: "外部联网搜索失败")
+                        }
+                    }
+                }
 
                 // 3. 代码执行启用逻辑 - 用户全权控制
                 val enableCodeExecutionForRequest: Boolean? =
@@ -884,7 +1051,7 @@ private data class AttachmentProcessingResult(
                     deviceId = com.android.everytalk.util.DeviceIdManager.getDeviceId(application),
                     conversationId = stateHolder._currentConversationId.value,
                     openClawSessionId = stateHolder._currentOpenClawSessionId.value,
-                    useWebSearch = supportsNativeWebSearch && stateHolder._isWebSearchEnabled.value,
+                    useWebSearch = webSearchRouting.useNativeWebSearch,
                     // 显式传递代码执行开关状态
                     enableCodeExecution = enableCodeExecutionForRequest,
                     // 新会话未设置时，只回落温度/TopP；maxTokens 一律保持关闭（null）
@@ -899,7 +1066,7 @@ private data class AttachmentProcessingResult(
                             )
                         } else null
                     ).let { if (it.temperature != null || it.topP != null || it.maxOutputTokens != null || it.thinkingConfig != null) it else null },
-                    qwenEnableSearch = if (WebSearchSupport.shouldEnableQwenNativeSearch(currentConfig, stateHolder._isWebSearchEnabled.value)) true else null,
+                    qwenEnableSearch = if (WebSearchSupport.shouldEnableQwenNativeSearch(currentConfig, webSearchRouting.useNativeWebSearch)) true else null,
                     customModelParameters = if (modelIsGeminiType) {
                         // 为Gemini模型添加reasoning_effort参数
                         // 根据模型类型设置不同的思考级别
@@ -1057,7 +1224,8 @@ private data class AttachmentProcessingResult(
                     onNewAiMessageAdded = triggerScrollToBottom,
                     audioBase64 = audioBase64,
                     mimeType = mimeType,
-                    isImageGeneration = isImageGeneration
+                    isImageGeneration = isImageGeneration,
+                    preCreatedAiMessageId = preCreatedAiMessageId
                 )
             }
         }

@@ -87,6 +87,57 @@ class ApiHandler(
     private val MAX_RETRY_ATTEMPTS = 3
     private val retryCountMap = mutableMapOf<String, Int>()
 
+    /**
+     * 预先创建 AI 占位消息并设置流式状态，用于在正式 API 请求开始前（如执行外部搜索时）提供即时 UI 反馈
+     * @return 预创建的 AI 消息 ID
+     */
+    fun prepareStreamingAiMessage(
+        modelName: String,
+        providerName: String,
+        isImageGeneration: Boolean = false,
+        onNewAiMessageAdded: () -> Unit = {}
+    ): String {
+        val aiMessageId = UUID.randomUUID().toString()
+        logger.debug("Preparing streaming AI message: $aiMessageId, model=$modelName, isImageGeneration=$isImageGeneration")
+
+        PerformanceMonitor.setContext(aiMessageId, mode = if (isImageGeneration) "image" else "text")
+
+        // 初始化处理器和状态
+        val newMessageProcessor = MessageProcessor()
+        messageProcessorMap[aiMessageId] = newMessageProcessor
+        stateHolder.createStreamingBuffer(aiMessageId, isImageGeneration)
+
+        // 设置流式状态
+        if (isImageGeneration) {
+            stateHolder._currentImageStreamingAiMessageId.value = aiMessageId
+            stateHolder._isImageApiCalling.value = true
+            stateHolder.imageReasoningCompleteMap[aiMessageId] = false
+        } else {
+            stateHolder._currentTextStreamingAiMessageId.value = aiMessageId
+            stateHolder._isTextApiCalling.value = true
+            stateHolder.textReasoningCompleteMap[aiMessageId] = false
+        }
+
+        // 创建并添加消息
+        val newAiMessage = Message(
+            id = aiMessageId,
+            text = "",
+            sender = Sender.AI,
+            contentStarted = false,
+            modelName = modelName,
+            providerName = providerName
+        )
+
+        viewModelScope.launch(Dispatchers.Main.immediate) {
+            val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
+            messageList.add(newAiMessage)
+            onNewAiMessageAdded()
+            logger.debug("🔧 Pre-created AI message added to list: $aiMessageId")
+        }
+
+        return aiMessageId
+    }
+
     fun cancelCurrentApiJob(reason: String, isNewMessageSend: Boolean = false, isImageGeneration: Boolean = false) {
         val selectedConfig = if (isImageGeneration) stateHolder._selectedImageGenApiConfig.value else stateHolder._selectedApiConfig.value
         if (selectedConfig?.channel.equals("OpenClaw", ignoreCase = true) || selectedConfig?.provider.equals("OpenClaw", ignoreCase = true)) {
@@ -214,10 +265,11 @@ class ApiHandler(
         onNewAiMessageAdded: () -> Unit,
         audioBase64: String? = null,
         mimeType: String? = null,
-        isImageGeneration: Boolean = false
+        isImageGeneration: Boolean = false,
+        preCreatedAiMessageId: String? = null
     ) {
         logger.debug(
-            "streamChatResponse request summary: rawInputText='$userMessageTextForContext', trimmedInputText='${userMessageTextForContext.trim()}', messages.size=${requestBody.messages.size}, conversationId=${requestBody.conversationId}"
+            "streamChatResponse request summary: rawInputText='$userMessageTextForContext', trimmedInputText='${userMessageTextForContext.trim()}', messages.size=${requestBody.messages.size}, conversationId=${requestBody.conversationId}, preCreatedId=$preCreatedAiMessageId"
         )
         requestBody.messages.forEachIndexed { index, message ->
             val preview = when (message) {
@@ -241,61 +293,54 @@ class ApiHandler(
         }?.take(30) ?: "N/A"
 
         logger.debug("Starting new stream chat response with context: '$contextForLog'")
-        cancelCurrentApiJob("开始新的流式传输，上下文: '$contextForLog'", isNewMessageSend = true, isImageGeneration = isImageGeneration)
-
-        // 使用MessageProcessor创建新的AI消息
-        val newAiMessage = Message(
-            id = UUID.randomUUID().toString(),
-            text = "",
-            sender = Sender.AI,
-            // 关键修复：不要在创建时置为 true
-            // 仅当首个正文增量到来时再置 true，否则思考框判定条件将被提前终止
-            contentStarted = false,
-            modelName = requestBody.model,
-            providerName = requestBody.provider
-        )
-        val aiMessageId = newAiMessage.id
-        // Set performance context (mode only; backend/model can be set later if available)
-        PerformanceMonitor.setContext(aiMessageId, mode = if (isImageGeneration) "image" else "text")
-
-        // 为新消息创建独立的消息处理器和块管理器
-        val newMessageProcessor = MessageProcessor()
-        messageProcessorMap[aiMessageId] = newMessageProcessor
         
-        // 🎯 检测内存压力并触发清理（Requirements: 6.5）
-        if (checkMemoryPressureAndCleanup()) {
-            logger.debug("Memory pressure cleanup triggered before starting new stream")
+        // 如果没有预先创建的 ID，才执行常规的取消逻辑
+        if (preCreatedAiMessageId == null) {
+            cancelCurrentApiJob("开始新的流式传输，上下文: '$contextForLog'", isNewMessageSend = true, isImageGeneration = isImageGeneration)
         }
-        
-        // 🎯 创建 StreamingBuffer 用于节流更新（Requirements: 1.1, 3.1, 3.2）
-        // StreamingMessageStateManager 的初始化统一由 createStreamingBuffer 负责，避免重复 startStreaming
-        stateHolder.createStreamingBuffer(aiMessageId, isImageGeneration)
-        logger.debug("Created StreamingBuffer for message: $aiMessageId")
 
-        // 🔧 修复Loading不显示问题：确保状态设置同步完成后再启动流收集
-        // 之前的问题：状态设置在协程中异步执行，流可能在状态设置完成前就开始发送事件
-        // 这会导致 MessageItemsController.computeBubbleState 在检查 isApiCalling 时返回错误状态
+        // 使用预创建的 ID 或创建新 ID
+        val aiMessageId = preCreatedAiMessageId ?: UUID.randomUUID().toString()
         
-        // 1. 首先同步设置流式状态（确保 Loading 指示器可以被正确显示）
-        val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
-        
-        // 🔧 关键修复：先设置 streaming ID 和 isApiCalling 状态
-        // 这样当消息被添加到列表时，MessageItemsController 就能正确计算出 Connecting 状态
-        if (isImageGeneration) {
-            stateHolder._currentImageStreamingAiMessageId.value = aiMessageId
-            stateHolder._isImageApiCalling.value = true
-            stateHolder.imageReasoningCompleteMap[aiMessageId] = false
+        if (preCreatedAiMessageId == null) {
+            // 只有在非预创建情况下才初始化处理器和状态（预创建时 prepareStreamingAiMessage 已做）
+            val newAiMessage = Message(
+                id = aiMessageId,
+                text = "",
+                sender = Sender.AI,
+                contentStarted = false,
+                modelName = requestBody.model,
+                providerName = requestBody.provider
+            )
+            PerformanceMonitor.setContext(aiMessageId, mode = if (isImageGeneration) "image" else "text")
+
+            val newMessageProcessor = MessageProcessor()
+            messageProcessorMap[aiMessageId] = newMessageProcessor
+            
+            if (checkMemoryPressureAndCleanup()) {
+                logger.debug("Memory pressure cleanup triggered before starting new stream")
+            }
+            
+            stateHolder.createStreamingBuffer(aiMessageId, isImageGeneration)
+
+            if (isImageGeneration) {
+                stateHolder._currentImageStreamingAiMessageId.value = aiMessageId
+                stateHolder._isImageApiCalling.value = true
+                stateHolder.imageReasoningCompleteMap[aiMessageId] = false
+            } else {
+                stateHolder._currentTextStreamingAiMessageId.value = aiMessageId
+                stateHolder._isTextApiCalling.value = true
+                stateHolder.textReasoningCompleteMap[aiMessageId] = false
+            }
+            
+            val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
+            viewModelScope.launch(Dispatchers.Main.immediate) {
+                messageList.add(newAiMessage)
+                onNewAiMessageAdded()
+                logger.debug("🔧 AI message added to list: $aiMessageId")
+            }
         } else {
-            stateHolder._currentTextStreamingAiMessageId.value = aiMessageId
-            stateHolder._isTextApiCalling.value = true
-            stateHolder.textReasoningCompleteMap[aiMessageId] = false
-        }
-        
-        // 2. 然后添加消息到列表（此时状态已经正确设置）
-        viewModelScope.launch(Dispatchers.Main.immediate) {
-            messageList.add(newAiMessage)
-            onNewAiMessageAdded()
-            logger.debug("🔧 AI message added to list with streaming state already set: $aiMessageId")
+            logger.debug("🔧 Using pre-created AI message ID: $aiMessageId")
         }
 
         eventChannel?.close()
@@ -898,6 +943,8 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                         aiMessageId,
                         when (toolName.lowercase()) {
                             "webfetch" -> "我先帮你读一下网页内容…"
+                            "firecrawl_search" -> "正在检索最新信息…"
+                            "web_search_exa" -> "正在检索最新信息…"
                             else -> "我先调用一下 $toolName 看看…"
                         },
                         isImageGeneration

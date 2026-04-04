@@ -54,6 +54,26 @@ class DataPersistenceManager(
         }
     }
 
+    suspend fun loadExternalWebSearchConfigs() = withContext(Dispatchers.IO) {
+        roomDataSource.loadExternalWebSearchConfigs()
+    }
+
+    suspend fun saveExternalWebSearchConfigs(configs: List<com.android.everytalk.data.network.ExternalWebSearchProviderConfig>) {
+        withContext(Dispatchers.IO) {
+            roomDataSource.saveExternalWebSearchConfigs(configs)
+        }
+    }
+
+    suspend fun loadSelectedExternalWebSearchProviderId(): String? = withContext(Dispatchers.IO) {
+        roomDataSource.loadSelectedExternalWebSearchProviderId()
+    }
+
+    suspend fun saveSelectedExternalWebSearchProviderId(providerId: String?) {
+        withContext(Dispatchers.IO) {
+            roomDataSource.saveSelectedExternalWebSearchProviderId(providerId)
+        }
+    }
+
     /**
      * 将消息中的 data:image;base64,... 图片落盘为本地文件，并将 URL 替换为 file:// 或绝对路径
      * 这样可避免把巨大 Base64 串写入 SharedPreferences 导致超限/丢失，重启后可稳定恢复。

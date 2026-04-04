@@ -100,6 +100,10 @@ fun ChatScreen(
     val supportsNativeWebSearch by remember(selectedApiConfig) {
         derivedStateOf { com.android.everytalk.data.network.WebSearchSupport.supportsNativeWebSearch(selectedApiConfig) }
     }
+    val selectedExternalWebSearchProviderId by viewModel.selectedExternalWebSearchProviderId.collectAsState()
+    val canUseWebSearch by remember(selectedApiConfig, selectedExternalWebSearchProviderId) {
+        derivedStateOf { supportsNativeWebSearch || viewModel.canUseSelectedExternalWebSearchProvider() }
+    }
     val selectedMediaItems = viewModel.selectedMediaItems
     val isLoadingHistory by viewModel.isLoadingHistory.collectAsState()
     val mcpServerStates by viewModel.mcpServerStates.collectAsState()
@@ -454,12 +458,12 @@ fun ChatScreen(
                 onClearMediaItems = { viewModel.clearMediaItems() },
                 isApiCalling = isApiCalling,
                 isWebSearchEnabled = isWebSearchEnabled,
-                supportsNativeWebSearch = supportsNativeWebSearch,
+                isWebSearchAvailable = canUseWebSearch,
                 onToggleWebSearch = {
-                    if (supportsNativeWebSearch) {
+                    if (canUseWebSearch) {
                         viewModel.toggleWebSearchMode(!isWebSearchEnabled)
                     } else {
-                        viewModel.showSnackbar("当前模型不支持原生联网搜索")
+                        viewModel.showSnackbar("当前模型无原生联网，请先在设置中配置外部搜索商")
                     }
                 },
                 isCodeExecutionEnabled = isCodeExecutionEnabled,

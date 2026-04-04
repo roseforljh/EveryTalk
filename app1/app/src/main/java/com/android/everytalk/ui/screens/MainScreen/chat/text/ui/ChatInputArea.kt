@@ -220,7 +220,7 @@ private fun safeDeleteTempFile(context: Context, uri: Uri?) {
 @Composable
 private fun FunctionPanelContent(
     isWebSearchEnabled: Boolean,
-    supportsNativeWebSearch: Boolean,
+    isWebSearchAvailable: Boolean,
     onToggleWebSearch: () -> Unit,
     isCodeExecutionEnabled: Boolean,
     onToggleCodeExecution: () -> Unit,
@@ -243,9 +243,9 @@ private fun FunctionPanelContent(
             // 网页搜索
             FunctionPanelItem(
                 icon = Icons.Filled.Language,
-                label = webSearchToggleLabel(supportsNativeWebSearch, isWebSearchEnabled),
-                tint = if (isWebSearchEnabled && supportsNativeWebSearch) com.android.everytalk.ui.theme.SeaBlue else MaterialTheme.colorScheme.onSurfaceVariant,
-                enabled = supportsNativeWebSearch,
+                label = webSearchToggleLabel(isWebSearchAvailable, isWebSearchEnabled),
+                tint = if (isWebSearchEnabled && isWebSearchAvailable) com.android.everytalk.ui.theme.SeaBlue else MaterialTheme.colorScheme.onSurfaceVariant,
+                enabled = isWebSearchAvailable,
                 onClick = { onToggleWebSearch() }
             )
             // 代码执行 (仅 Gemini)
@@ -376,7 +376,7 @@ fun ChatInputArea(
     onClearMediaItems: () -> Unit,
     isApiCalling: Boolean,
     isWebSearchEnabled: Boolean,
-    supportsNativeWebSearch: Boolean,
+    isWebSearchAvailable: Boolean,
     onToggleWebSearch: () -> Unit,
     isCodeExecutionEnabled: Boolean = false,
     onToggleCodeExecution: () -> Unit = {},
@@ -777,6 +777,7 @@ fun ChatInputArea(
                 val supportsNativeWebSearch = selectedApiConfig?.let { config ->
                     com.android.everytalk.data.network.WebSearchSupport.supportsNativeWebSearch(config)
                 } == true
+                val effectiveWebSearchAvailable = isWebSearchAvailable || supportsNativeWebSearch
 
                 // 输入框 + 加号按钮在同一行
                 Row(
@@ -837,7 +838,7 @@ fun ChatInputArea(
                                 }) {
                                     FunctionPanelContent(
                                         isWebSearchEnabled = isWebSearchEnabled,
-                                        supportsNativeWebSearch = supportsNativeWebSearch,
+                                        isWebSearchAvailable = effectiveWebSearchAvailable,
                                         onToggleWebSearch = onToggleWebSearch,
                                         isCodeExecutionEnabled = isCodeExecutionEnabled,
                                         onToggleCodeExecution = onToggleCodeExecution,

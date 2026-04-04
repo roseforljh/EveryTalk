@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -18,10 +19,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -47,6 +51,7 @@ import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.PopupProperties
 import com.android.everytalk.data.DataClass.ModalityType
+import com.android.everytalk.data.network.ExternalWebSearchProvider
 
 val DialogTextFieldColors
     @Composable get() = run {
@@ -68,6 +73,138 @@ val DialogTextFieldColors
         )
     }
 val DialogShape = RoundedCornerShape(12.dp)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun EditExternalWebSearchProviderDialog(
+    provider: ExternalWebSearchProvider,
+    currentApiKey: String,
+    onApiKeyChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var apiKey by remember(currentApiKey, provider.providerId) { mutableStateOf(currentApiKey) }
+    var apiKeyVisible by remember { mutableStateOf(false) }
+    val cancelButtonColor = if (isSystemInDarkTheme()) Color(0xFFFF5252) else Color(0xFFD32F2F)
+    val confirmButtonColor = if (isSystemInDarkTheme()) Color.White else Color(0xFF212121)
+    val confirmButtonTextColor = if (isSystemInDarkTheme()) Color.Black else Color.White
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(28.dp),
+        containerColor = MaterialTheme.colorScheme.surface,
+        title = {
+            Text(
+                text = "编辑 ${provider.displayName}",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = provider.accentColor.copy(alpha = 0.12f),
+                    border = BorderStroke(1.dp, provider.accentColor.copy(alpha = 0.35f)),
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = provider.description,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Outlined.Link,
+                                contentDescription = null,
+                                tint = provider.accentColor,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = provider.baseUrl,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                OutlinedTextField(
+                    value = apiKey,
+                    onValueChange = { apiKey = it },
+                    label = { Text("API Key") },
+                    placeholder = { Text(provider.apiKeyPlaceholder) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = DialogTextFieldColors,
+                    visualTransformation = if (apiKeyVisible) {
+                        androidx.compose.ui.text.input.VisualTransformation.None
+                    } else {
+                        androidx.compose.ui.text.input.PasswordVisualTransformation()
+                    },
+                    trailingIcon = {
+                        IconButton(onClick = { apiKeyVisible = !apiKeyVisible }) {
+                            Icon(
+                                imageVector = if (apiKeyVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                contentDescription = if (apiKeyVisible) "隐藏" else "显示",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                )
+            }
+        },
+        confirmButton = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = cancelButtonColor
+                    ),
+                    border = BorderStroke(1.dp, cancelButtonColor)
+                ) {
+                    Text("取消", fontWeight = FontWeight.SemiBold)
+                }
+                Button(
+                    onClick = {
+                        onApiKeyChange(apiKey)
+                        onDismiss()
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = confirmButtonColor,
+                        contentColor = confirmButtonTextColor
+                    )
+                ) {
+                    Text("保存", fontWeight = FontWeight.SemiBold)
+                }
+            }
+        },
+        dismissButton = {}
+    )
+}
 
 @Composable
 internal fun SettingsFieldLabel(

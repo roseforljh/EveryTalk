@@ -91,7 +91,7 @@ open class MessageItemsController(
         }
     }
 
-    private fun resolveStreamingStageText(message: Message, elapsedMs: Long): String? {
+    private fun resolveStreamingStageText(message: Message, elapsedMs: Long, reasoningComplete: Boolean = false): String? {
         if (message.contentStarted || message.text.isNotBlank()) {
             return null
         }
@@ -99,11 +99,15 @@ open class MessageItemsController(
         message.currentWebSearchStage?.takeIf { it.isNotBlank() }?.let { stage ->
             return getNaturalWebSearchStageText(stage, message)
         }
+        if (!message.reasoning.isNullOrBlank()) {
+            // 只有当推理已完成（但内容未开始）时，才返回“整理中”，让用户感知到正在处理搜索/工具结果
+            return if (reasoningComplete) "正在整理工具结果…" else null
+        }
         return getConnectingStageText(elapsedMs)
     }
 
-    internal fun debugResolveStreamingStageText(message: Message, elapsedMs: Long): String? {
-        return resolveStreamingStageText(message, elapsedMs)
+    internal fun debugResolveStreamingStageText(message: Message, elapsedMs: Long, reasoningComplete: Boolean = false): String? {
+        return resolveStreamingStageText(message, elapsedMs, reasoningComplete)
     }
 
     internal fun debugComputeBubbleState(
@@ -148,9 +152,11 @@ open class MessageItemsController(
                                     it is ChatListItem.StatusIndicator
                             } ?: false
 
-                            val expectedStageText = if (isCurrentlyStreaming && !message.contentStarted && !hasReasoning) {
+                            val reasoningComplete = stateHolder.textReasoningCompleteMap[message.id] ?: false
+
+                            val expectedStageText = if (isCurrentlyStreaming && !message.contentStarted) {
                                 val elapsedMs = streamingStartTimestamps[message.id]?.let { System.currentTimeMillis() - it } ?: 0L
-                                resolveStreamingStageText(message, elapsedMs)
+                                resolveStreamingStageText(message, elapsedMs, reasoningComplete)
                             } else null
 
                             val hasLoadingIndicator = cached?.items?.any { it is ChatListItem.LoadingIndicator } ?: false
@@ -421,6 +427,10 @@ open class MessageItemsController(
             preferStreamingState = isApiCalling && message.id == currentStreamingAiMessageId,
         )
 
+        val reasoningCompleteMap =
+            if (isImageGeneration) stateHolder.imageReasoningCompleteMap else stateHolder.textReasoningCompleteMap
+        val reasoningComplete = reasoningCompleteMap[message.id] ?: false
+
         return when (state) {
             is com.android.everytalk.ui.state.AiBubbleState.Connecting -> {
                 android.util.Log.d("MessageItemsController", "createAiMessageItems: Connecting -> LoadingIndicator")
@@ -428,16 +438,30 @@ open class MessageItemsController(
                 listOf(
                     ChatListItem.LoadingIndicator(
                         messageId = message.id,
-                        text = resolveStreamingStageText(message, elapsedMs)
+                        text = resolveStreamingStageText(message, elapsedMs, reasoningComplete)
                     )
                 )
             }
             is com.android.everytalk.ui.state.AiBubbleState.Reasoning -> {
-                android.util.Log.d(
-                    "MessageItemsController",
-                    "createAiMessageItems: Reasoning -> AiMessageReasoning, reasoning=${message.reasoning?.take(30)}"
-                )
-                listOf(ChatListItem.AiMessageReasoning(message))
+                val elapsedMs = streamingStartTimestamps[message.id]?.let { System.currentTimeMillis() - it } ?: 0L
+                val stageText = resolveStreamingStageText(message, elapsedMs, reasoningComplete)
+                
+                val items = mutableListOf<ChatListItem>()
+                items.add(ChatListItem.AiMessageReasoning(message))
+                
+                if (!stageText.isNullOrBlank()) {
+                    android.util.Log.d(
+                        "MessageItemsController",
+                        "createAiMessageItems: Reasoning + LoadingIndicator, stage=$stageText"
+                    )
+                    items.add(
+                        ChatListItem.LoadingIndicator(
+                            messageId = message.id,
+                            text = stageText
+                        )
+                    )
+                }
+                items
             }
             is com.android.everytalk.ui.state.AiBubbleState.Streaming -> {
                 val items = mutableListOf<ChatListItem>()
