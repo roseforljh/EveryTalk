@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.15.2](https://github.com/roseforljh/EveryTalk/compare/v1.15.1...v1.15.2) (2026-04-04)
+
+
+### Bug Fixes
+
+* 优化加载时机 ([df1215a](https://github.com/roseforljh/EveryTalk/commit/df1215a38a76c9d8a31b1d4a9f1617709b0586e4))
+* 优化流式输出 ([fb183ef](https://github.com/roseforljh/EveryTalk/commit/fb183efa1ab588a482dd518488ab819120cc507b))
+* 优化输出格式、修复了一些bug ([32af1ac](https://github.com/roseforljh/EveryTalk/commit/32af1acbf564e2f7e115c8645b2df97ffa5cc8da))
+* 修复ai输出卡死 ([c7b6fc2](https://github.com/roseforljh/EveryTalk/commit/c7b6fc2c82a5d9840e6ddd32efa65559b27705e9))
+* 修复一些问题 ([57bcedd](https://github.com/roseforljh/EveryTalk/commit/57bceddff2beeddacd0f36045d0f1d52b8104e7f))
+
 ## [1.15.1](https://github.com/roseforljh/EveryTalk/compare/v1.15.0...v1.15.1) (2026-04-04)
 
 
