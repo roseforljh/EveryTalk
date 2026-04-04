@@ -211,6 +211,27 @@ class MessageItemsControllerStatusTest {
     }
 
     @Test
+    fun `chat list keeps status indicator while streaming content is already visible`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder.messages.add(
+            Message(
+                id = "ai-streaming-status",
+                text = "已经开始输出",
+                sender = Sender.AI,
+                contentStarted = true,
+                executionStatus = "我先调用一下工具看看…"
+            )
+        )
+        controller.stateHolder._isTextApiCalling.value = true
+        controller.stateHolder._currentTextStreamingAiMessageId.value = "ai-streaming-status"
+
+        val items = controller.chatListItemsForTest()
+
+        assertTrue(items.any { it is ChatListItem.AiMessage })
+        assertTrue(items.any { it is ChatListItem.StatusIndicator })
+    }
+
+    @Test
     fun `bubble state does not return to connecting once visible content has arrived during api call`() {
         val controller = MessageItemsControllerTestAccess.newController()
         controller.seedStreamingRenderContent("ai-streaming", "已经输出一部分内容")

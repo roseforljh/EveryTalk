@@ -26,7 +26,7 @@ internal class MessageItemsControllerForTest(
 ) : MessageItemsController(stateHolder, streamingMessageStateManager, scope) {
     fun normalizeStatusTextForTest(message: Message): String = normalizeStatusText(message)
     fun resolveStreamingStageTextForTest(message: Message, elapsedMs: Long): String? =
-        super.debugResolveStreamingStageText(message, elapsedMs)
+        super.debugResolveStreamingStageText(message, elapsedMs, reasoningComplete = false)
 
     fun computeBubbleStateForTest(
         message: Message,

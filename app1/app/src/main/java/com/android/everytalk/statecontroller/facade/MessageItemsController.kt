@@ -491,7 +491,6 @@ open class MessageItemsController(
                 
                 // 添加执行状态指示器
                 val statusText = when {
-                    message.contentStarted || message.text.isNotBlank() -> null
                     !message.executionStatus.isNullOrBlank() -> message.executionStatus
                     !message.currentWebSearchStage.isNullOrBlank() -> normalizeStatusText(message)
                     else -> null
