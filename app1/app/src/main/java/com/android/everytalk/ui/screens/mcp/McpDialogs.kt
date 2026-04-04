@@ -496,47 +496,38 @@ fun AddMcpServerDialog(
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.fillMaxWidth()
+                    // Compact Row for Presets
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        items(McpServerPreset.entries.toList()) { preset ->
+                        McpServerPreset.entries.forEach { preset ->
                             val isSelected = selectedPreset == preset
                             val presetColor = when (preset) {
                                 McpServerPreset.CUSTOM -> Color(0xFF8B5CF6)
                                 McpServerPreset.EXA_SEARCH -> Color(0xFF6366F1)
                                 McpServerPreset.FIRECRAWL -> Color(0xFFEF4444)
                             }
-                            val borderColor by animateColorAsState(
-                                if (isSelected) presetColor else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-                                label = "borderColor"
-                            )
-                            val containerColor by animateColorAsState(
-                                if (isSelected) presetColor.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.5f),
-                                label = "containerColor"
-                            )
                             
                             Surface(
                                 onClick = { selectedPreset = preset },
-                                shape = RoundedCornerShape(16.dp),
-                                color = containerColor,
-                                border = BorderStroke(1.5.dp, borderColor),
-                                modifier = Modifier
-                                    .width(100.dp)
-                                    .height(80.dp)
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (isSelected) presetColor.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceContainerHighest,
+                                border = BorderStroke(1.dp, if (isSelected) presetColor else Color.Transparent),
+                                modifier = Modifier.weight(1f).height(40.dp)
                             ) {
-                                Column(
-                                    modifier = Modifier.padding(12.dp),
-                                    verticalArrangement = Arrangement.Center,
-                                    horizontalAlignment = Alignment.CenterHorizontally
+                                Row(
+                                    modifier = Modifier.fillMaxSize(),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Icon(
                                         imageVector = getServerIcon(preset.name),
                                         contentDescription = null,
                                         tint = if (isSelected) presetColor else MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(24.dp)
+                                        modifier = Modifier.size(16.dp)
                                     )
-                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
                                     Text(
                                         text = preset.displayName,
                                         style = MaterialTheme.typography.labelMedium,
@@ -596,30 +587,29 @@ fun AddMcpServerDialog(
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(48.dp)
+                                    .height(40.dp)
                                     .clip(RoundedCornerShape(12.dp))
                                     .background(MaterialTheme.colorScheme.surfaceContainerHighest),
-                                horizontalArrangement = Arrangement.spacedBy(0.dp)
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
-                                McpTransportType.entries.forEachIndexed { index, type ->
+                                McpTransportType.entries.forEach { type ->
                                     val isSelected = transportType == type
-                                    val buttonColor = if (index == 0) Color(0xFF10B981) else Color(0xFF3B82F6)
-                                    val textColor = if (isSelected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+                                    val buttonColor = MaterialTheme.colorScheme.primary
+                                    val textColor = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
                                     
                                     Box(
                                         modifier = Modifier
                                             .weight(1f)
                                             .fillMaxHeight()
-                                            .padding(4.dp)
-                                            .clip(RoundedCornerShape(8.dp))
+                                            .clip(RoundedCornerShape(12.dp))
                                             .background(if (isSelected) buttonColor else Color.Transparent)
                                             .clickable { transportType = type },
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Text(
                                             text = type.name,
-                                            style = MaterialTheme.typography.labelLarge,
-                                            fontWeight = FontWeight.Bold,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                                             color = textColor
                                         )
                                     }
