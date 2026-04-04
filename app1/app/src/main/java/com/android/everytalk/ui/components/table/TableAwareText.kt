@@ -209,32 +209,12 @@ fun TableAwareText(
             }
     }
 
-    // 当 isStreaming 从 true 切换为 false 时，做一次全量重解析检查结构变化。
-    // 增量路径可能将代码块（infographic/code/table）合并进 Text，
-    // 此处通过结构比较（类型 + 数量）决定是否替换 parsedParts：
-    // - 结构一致 -> 保持原解析，避免闪烁
-    // - 结构不同 -> 替换为正确解析结果（必要的一次重组）
-    LaunchedEffect(isStreaming) {
-        if (!isStreaming && parsedParts.isNotEmpty()) {
-            val freshParts = ContentParser.parseCompleteContent(text, isStreaming = true)
-            val structureChanged = freshParts.size != parsedParts.size ||
-                freshParts.zip(parsedParts).any { (a, b) -> a.javaClass != b.javaClass }
-            if (structureChanged) {
-                parsedParts = freshParts
-            }
-            if (contentKey.isNotBlank()) {
-                val cacheKey = "${contentKey}_${text.hashCode()}_v${ContentParseCache.PARSER_VERSION}"
-                ContentParseCache.put(cacheKey, parsedParts)
-            }
-        }
-    }
-
     if (parsedParts.isEmpty() && text.isNotEmpty()) {
         val initialParts = remember(text, contentKey, isStreaming) {
             if (!isStreaming && effectiveCacheKey.isNotBlank()) {
                 ContentParseCache.get(effectiveCacheKey)
             } else null
-        } ?: ContentParser.parseCompleteContent(text, isStreaming = true).also { parts ->
+        } ?: ContentParser.parseCompleteContent(text, isStreaming = isStreaming).also { parts ->
             if (!isStreaming && effectiveCacheKey.isNotBlank()) {
                 ContentParseCache.put(effectiveCacheKey, parts)
             }
