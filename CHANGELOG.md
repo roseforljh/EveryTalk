@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.15.1](https://github.com/roseforljh/EveryTalk/compare/v1.15.0...v1.15.1) (2026-04-04)
+
+
+### Bug Fixes
+
+* 紧急bug修复 ([9a5c3c5](https://github.com/roseforljh/EveryTalk/commit/9a5c3c5a0c3ce03fa582dcae390bb9872c0ae251))
+
 ## [1.15.0](https://github.com/roseforljh/EveryTalk/compare/v1.14.0...v1.15.0) (2026-04-04)
 
 
