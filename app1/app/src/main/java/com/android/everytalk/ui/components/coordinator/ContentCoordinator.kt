@@ -73,7 +73,7 @@ fun ContentCoordinator(
     }
     
     // 轻量检测
-    val hasCodeBlock = text.contains("```")
+    val hasCodeBlock = text.contains("```") || text.contains("~~~")
     // 表格检测：简单的启发式检查，避免复杂的正则匹配
     // 只有同时包含 | 和 - 才可能是表格（表头分隔线至少包含 --- 或 :---）
     val hasTable = text.contains("|") && text.contains("-")

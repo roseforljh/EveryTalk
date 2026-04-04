@@ -172,6 +172,10 @@ class HistoryController(
             stateHolder._isLoadingHistory.value = true
             try {
                 simpleModeSwitcher.loadTextHistory(index)
+                val processed = processLoadedMessages(stateHolder.messages.toList())
+                val repaired = repairHistoryMessageParts(processed)
+                stateHolder.messages.clear()
+                stateHolder.messages.addAll(repaired)
                 // Drawer 搜索状态由上层 UI/DrawerManager 负责，这里不直接修改
             } catch (e: Exception) {
                 Log.e("HistoryController", "Error loading text history", e)

@@ -91,6 +91,14 @@ open class MessageItemsController(
         }
     }
 
+    private fun buildEffectiveMessage(message: Message, isCurrentStreaming: Boolean): Message {
+        if (!isCurrentStreaming) return message
+        val renderState = streamingMessageStateManager.getCurrentRenderState(message.id)
+        val hasStreamingContent = !renderState.content.isNullOrBlank()
+        if (!hasStreamingContent || message.contentStarted) return message
+        return message.copy(contentStarted = true)
+    }
+
     private fun resolveStreamingStageText(message: Message, elapsedMs: Long, reasoningComplete: Boolean = false): String? {
         if (message.contentStarted || message.text.isNotBlank()) {
             return null
@@ -139,8 +147,9 @@ open class MessageItemsController(
                             val cached = chatListItemCache[message.id]
                             val hasReasoning = !message.reasoning.isNullOrBlank()
                             val isCurrentlyStreaming = isApiCalling && message.id == currentStreamingAiMessageId
+                            val effectiveMessage = buildEffectiveMessage(message, isCurrentlyStreaming)
                             val parseResult = resolveParseResult(
-                                message = message,
+                                message = effectiveMessage,
                                 preferStreamingState = isCurrentlyStreaming,
                             )
 
@@ -154,9 +163,9 @@ open class MessageItemsController(
 
                             val reasoningComplete = stateHolder.textReasoningCompleteMap[message.id] ?: false
 
-                            val expectedStageText = if (isCurrentlyStreaming && !message.contentStarted) {
+                            val expectedStageText = if (isCurrentlyStreaming && !effectiveMessage.contentStarted) {
                                 val elapsedMs = streamingStartTimestamps[message.id]?.let { System.currentTimeMillis() - it } ?: 0L
-                                resolveStreamingStageText(message, elapsedMs, reasoningComplete)
+                                resolveStreamingStageText(effectiveMessage, elapsedMs, reasoningComplete)
                             } else null
 
                             val hasLoadingIndicator = cached?.items?.any { it is ChatListItem.LoadingIndicator } ?: false
@@ -171,7 +180,7 @@ open class MessageItemsController(
                                 cached.blocksHash == parseResult.blocksHash &&
                                 cached.hasPendingMath == parseResult.hasPendingMath &&
                                 cached.imageUrls == message.imageUrls &&
-                                cached.contentStarted == message.contentStarted &&
+                                cached.contentStarted == effectiveMessage.contentStarted &&
                                 cached.executionStatus == message.executionStatus &&
                                 cached.currentWebSearchStage == message.currentWebSearchStage &&
                                 loadingTextMatches &&
@@ -192,12 +201,12 @@ open class MessageItemsController(
                                 android.util.Log.d(
                                     "MessageItemsController",
                                     "Cache MISS for ${message.id.take(8)}, text.len=${message.text.length}, " +
-                                        "contentStarted=${message.contentStarted}, cached.contentStarted=${cached?.contentStarted}, " +
+                                        "contentStarted=${effectiveMessage.contentStarted}, cached.contentStarted=${cached?.contentStarted}, " +
                                         "blocksHash=${parseResult.blocksHash}, cachedHash=${cached?.blocksHash}, " +
                                         "pendingMath=${parseResult.hasPendingMath}, cachedPending=${cached?.hasPendingMath}"
                                 )
                                 val newItems = createAiMessageItems(
-                                    message,
+                                    effectiveMessage,
                                     isApiCalling,
                                     currentStreamingAiMessageId,
                                     parseResult = parseResult
@@ -211,7 +220,7 @@ open class MessageItemsController(
                                     blocksHash = parseResult.blocksHash,
                                     hasPendingMath = parseResult.hasPendingMath,
                                     imageUrls = message.imageUrls,
-                                    contentStarted = message.contentStarted,
+                                    contentStarted = effectiveMessage.contentStarted,
                                     executionStatus = message.executionStatus,
                                     currentWebSearchStage = message.currentWebSearchStage,
                                     items = newItems
@@ -249,7 +258,11 @@ open class MessageItemsController(
                             val cached = imageGenerationChatListItemCache[message.id]
                             val hasReasoning = !message.reasoning.isNullOrBlank()
                             val isCurrentlyStreaming = isApiCalling && message.id == currentStreamingAiMessageId
-                            val parseResult = StreamBlockParser.parse(message.text, message.id)
+                            val effectiveMessage = buildEffectiveMessage(message, isCurrentlyStreaming)
+                            val parseResult = resolveParseResult(
+                                message = effectiveMessage,
+                                preferStreamingState = isCurrentlyStreaming,
+                            )
 
                             val cacheValid = cached != null &&
                                 cached.reasoning == message.reasoning &&
@@ -258,6 +271,7 @@ open class MessageItemsController(
                                 cached.blocksHash == parseResult.blocksHash &&
                                 cached.hasPendingMath == parseResult.hasPendingMath &&
                                 cached.imageUrls == message.imageUrls &&
+                                cached.contentStarted == effectiveMessage.contentStarted &&
                                 (isCurrentlyStreaming == (cached.items.any { it is ChatListItem.LoadingIndicator }))
 
                             android.util.Log.d(
@@ -276,7 +290,7 @@ open class MessageItemsController(
                             } else {
                                 android.util.Log.d("MessageItemsController", "[IMAGE CACHE MISS] Recomputing items")
                                 val newItems = createAiMessageItems(
-                                    message,
+                                    effectiveMessage,
                                     isApiCalling,
                                     currentStreamingAiMessageId,
                                     parseResult = parseResult,
@@ -291,7 +305,7 @@ open class MessageItemsController(
                                     blocksHash = parseResult.blocksHash,
                                     hasPendingMath = parseResult.hasPendingMath,
                                     imageUrls = message.imageUrls,
-                                    contentStarted = message.contentStarted,
+                                    contentStarted = effectiveMessage.contentStarted,
                                     executionStatus = message.executionStatus,
                                     currentWebSearchStage = message.currentWebSearchStage,
                                     items = newItems
@@ -325,6 +339,7 @@ open class MessageItemsController(
         }
 
         val isCurrentStreaming = isApiCalling && message.id == currentStreamingAiMessageId
+        val effectiveMessage = buildEffectiveMessage(message, isCurrentStreaming)
         val hasReasoning = !message.reasoning.isNullOrBlank()
         val reasoningCompleteMap =
             if (isImageGeneration) stateHolder.imageReasoningCompleteMap else stateHolder.textReasoningCompleteMap
@@ -335,7 +350,7 @@ open class MessageItemsController(
             null
         }
         val hasStreamingContent = !streamingRenderState?.content.isNullOrBlank()
-        val hasVisibleContent = message.contentStarted || message.text.isNotBlank() || hasStreamingContent
+        val hasVisibleContent = effectiveMessage.contentStarted || effectiveMessage.text.isNotBlank() || hasStreamingContent
 
         // 🔧 修复Loading不显示问题：记录流式开始时间
         // 当开始流式传输时，记录时间戳；用于确保Loading状态至少显示MIN_CONNECTING_DISPLAY_TIME_MS
@@ -362,7 +377,7 @@ open class MessageItemsController(
                 verboseTag,
                 "computeBubbleState: id=${message.id.take(8)}, " +
                     "isStreaming=$isCurrentStreaming, hasReasoning=$hasReasoning, " +
-                    "reasoningComplete=$reasoningComplete, contentStarted=${message.contentStarted}, " +
+                    "reasoningComplete=$reasoningComplete, contentStarted=${effectiveMessage.contentStarted}, " +
                     "message.reasoning=${message.reasoning?.take(20)}, isWithinMinDisplayTime=$isWithinMinDisplayTime"
             )
         }
@@ -372,7 +387,7 @@ open class MessageItemsController(
             isCurrentStreaming && !hasReasoning && !hasVisibleContent && isWithinMinDisplayTime -> {
                 com.android.everytalk.ui.state.AiBubbleState.Connecting()
             }
-            isCurrentStreaming && hasReasoning && !message.contentStarted -> {
+            isCurrentStreaming && hasReasoning && !effectiveMessage.contentStarted -> {
                 com.android.everytalk.ui.state.AiBubbleState.Reasoning(
                     message.reasoning ?: "",
                     isComplete = reasoningComplete
@@ -405,7 +420,7 @@ open class MessageItemsController(
             android.util.Log.d(
                 "MessageItemsController",
                 "BubbleState for ${message.id.take(8)}: ${state::class.simpleName}, " +
-                    "isStreaming=$isCurrentStreaming, contentStarted=${message.contentStarted}, " +
+                    "isStreaming=$isCurrentStreaming, contentStarted=${effectiveMessage.contentStarted}, " +
                     "textLen=${message.text.length}, isWithinMinDisplayTime=$isWithinMinDisplayTime"
             )
         }

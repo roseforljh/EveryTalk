@@ -6,6 +6,8 @@ import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import io.mockk.every
 import io.mockk.mockkStatic
 import io.mockk.unmockkAll
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -248,6 +250,45 @@ class MessageItemsControllerStatusTest {
         )
 
         assertTrue(state is com.android.everytalk.ui.state.AiBubbleState.Streaming)
+    }
+
+    @Test
+    fun `stage text disappears when streaming render state already has content`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.seedStreamingRenderContent("ai-stage-hidden", "已经输出正文")
+
+        val text = controller.resolveStreamingStageTextForTest(
+            Message(
+                id = "ai-stage-hidden",
+                text = "",
+                sender = Sender.AI,
+                contentStarted = true
+            ),
+            4000L
+        )
+
+        assertNull(text)
+    }
+
+    @Test
+    fun `image generation flow should not keep loading when render state already has content`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.seedStreamingRenderContent("img-streaming", "图片描述已经开始输出")
+        controller.stateHolder.imageGenerationMessages.add(
+            Message(
+                id = "img-streaming",
+                text = "",
+                sender = Sender.AI,
+                contentStarted = false
+            )
+        )
+        controller.stateHolder._isImageApiCalling.value = true
+        controller.stateHolder._currentImageStreamingAiMessageId.value = "img-streaming"
+
+        val items = runBlocking { controller.imageGenerationChatListItems.first { it.isNotEmpty() } }
+
+        assertTrue(items.any { it is ChatListItem.AiMessage })
+        assertFalse(items.any { it is ChatListItem.LoadingIndicator })
     }
 
 }

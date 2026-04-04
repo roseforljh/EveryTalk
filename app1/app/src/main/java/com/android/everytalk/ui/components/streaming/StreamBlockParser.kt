@@ -3,6 +3,8 @@ package com.android.everytalk.ui.components.streaming
 import java.util.Locale
 
 object StreamBlockParser {
+    private val fencedBlockLanguageRegex = Regex("^[A-Za-z0-9_+\\-#.]+$")
+    private val openingFenceRegex = Regex("^([`~]{3,})([^`~]*)$")
 
     private data class DelimiterMatch(
         val start: Int,
@@ -65,7 +67,7 @@ object StreamBlockParser {
         }
 
         while (cursor < content.length) {
-            val codeStart = content.indexOf("```", cursor)
+            val codeStart = findNextFenceStart(content, cursor)
             val mathBlockStart = content.indexOf("$$", cursor)
             val inlineStart = content.indexOf('$', cursor)
             val escapedInlineStart = content.indexOf("\\(", cursor)
@@ -89,27 +91,51 @@ object StreamBlockParser {
                 cursor = nextSpecial
             }
 
-            if (content.startsWith("```", cursor)) {
-                val close = content.indexOf("```", cursor + 3)
+            val fence = parseFenceStart(content, cursor)
+            if (fence != null) {
+                val fenceHeader = fence.language
+                val close = findFenceClose(content, fence)
                 if (close >= 0) {
-                    val end = close + 3
+                    val end = close + fence.marker.length
+                    val fencedText = content.substring(cursor, end)
+                    val shouldTreatAsCode = fenceHeader.isEmpty() || fencedBlockLanguageRegex.matches(fenceHeader)
                     blocks.add(
-                        StreamBlock.CodeBlock(
-                            stableId = nextId(StreamBlockType.CODE_BLOCK),
-                            text = content.substring(cursor, end),
-                            start = cursor,
-                            endExclusive = end
-                        )
+                        if (shouldTreatAsCode) {
+                            StreamBlock.CodeBlock(
+                                stableId = nextId(StreamBlockType.CODE_BLOCK),
+                                text = fencedText,
+                                start = cursor,
+                                endExclusive = end
+                            )
+                        } else {
+                            StreamBlock.PlainText(
+                                stableId = nextId(StreamBlockType.PLAIN_TEXT),
+                                text = fencedText,
+                                start = cursor,
+                                endExclusive = end
+                            )
+                        }
                     )
                     cursor = end
                 } else {
+                    val fencedText = content.substring(cursor)
+                    val shouldTreatAsCode = fenceHeader.isEmpty() || fencedBlockLanguageRegex.matches(fenceHeader)
                     blocks.add(
-                        StreamBlock.CodeBlock(
-                            stableId = nextId(StreamBlockType.CODE_BLOCK),
-                            text = content.substring(cursor),
-                            start = cursor,
-                            endExclusive = content.length
-                        )
+                        if (shouldTreatAsCode) {
+                            StreamBlock.CodeBlock(
+                                stableId = nextId(StreamBlockType.CODE_BLOCK),
+                                text = fencedText,
+                                start = cursor,
+                                endExclusive = content.length
+                            )
+                        } else {
+                            StreamBlock.PlainText(
+                                stableId = nextId(StreamBlockType.PLAIN_TEXT),
+                                text = fencedText,
+                                start = cursor,
+                                endExclusive = content.length
+                            )
+                        }
                     )
                     cursor = content.length
                 }
@@ -126,21 +152,21 @@ object StreamBlockParser {
                             text = content.substring(cursor, end),
                             start = cursor,
                             endExclusive = end,
-                            state = MathBlockState.RENDERED
+                            state = MathBlockState.RENDERED,
                         )
                     )
                     cursor = end
                 } else {
-                    hasPendingMath = true
                     blocks.add(
                         StreamBlock.MathBlock(
                             stableId = nextId(StreamBlockType.MATH_BLOCK),
                             text = content.substring(cursor),
                             start = cursor,
                             endExclusive = content.length,
-                            state = MathBlockState.RAW
+                            state = MathBlockState.RAW,
                         )
                     )
+                    hasPendingMath = true
                     cursor = content.length
                 }
                 continue
@@ -276,5 +302,60 @@ object StreamBlockParser {
             hasPendingMath = hasPendingMath,
             blocksHash = hashSource.hashCode().toString()
         )
+    }
+
+    private data class FenceStart(
+        val start: Int,
+        val marker: String,
+        val language: String,
+        val headerEnd: Int,
+    )
+
+    private fun findNextFenceStart(content: String, startIndex: Int): Int {
+        var searchIndex = startIndex
+        while (searchIndex < content.length) {
+            val backtick = content.indexOf("```", searchIndex).takeIf { it >= 0 }
+            val tilde = content.indexOf("~~~", searchIndex).takeIf { it >= 0 }
+            val candidate = listOfNotNull(backtick, tilde).minOrNull() ?: return -1
+            if (parseFenceStart(content, candidate) != null) return candidate
+            searchIndex = candidate + 1
+        }
+        return -1
+    }
+
+    private fun parseFenceStart(content: String, start: Int): FenceStart? {
+        if (start < 0 || start >= content.length) return null
+        val lineStart = content.lastIndexOf('\n', start).let { if (it < 0) 0 else it + 1 }
+        val indentPrefix = content.substring(lineStart, start)
+        if (indentPrefix.any { it != ' ' && it != '\t' }) return null
+
+        val headerEnd = content.indexOf('\n', start).let { if (it >= 0) it else content.length }
+        val trimmedHeader = content.substring(start, headerEnd).trim()
+        val match = openingFenceRegex.matchEntire(trimmedHeader) ?: return null
+        val marker = match.groupValues[1]
+        val language = match.groupValues[2].trim()
+        return FenceStart(
+            start = start,
+            marker = marker,
+            language = language,
+            headerEnd = headerEnd,
+        )
+    }
+
+    private fun findFenceClose(content: String, fence: FenceStart): Int {
+        var searchIndex = fence.headerEnd
+        while (searchIndex < content.length) {
+            val close = content.indexOf(fence.marker, searchIndex)
+            if (close < 0) return -1
+            val lineStart = content.lastIndexOf('\n', close).let { if (it < 0) 0 else it + 1 }
+            val lineEnd = content.indexOf('\n', close).let { if (it < 0) content.length else it }
+            val beforeFence = content.substring(lineStart, close)
+            val afterFence = content.substring(close + fence.marker.length, lineEnd).trim()
+            if (beforeFence.all { it == ' ' || it == '\t' } && afterFence.isEmpty()) {
+                return close
+            }
+            searchIndex = close + fence.marker.length
+        }
+        return -1
     }
 }

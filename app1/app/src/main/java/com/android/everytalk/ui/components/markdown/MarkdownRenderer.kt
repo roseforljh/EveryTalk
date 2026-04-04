@@ -144,15 +144,19 @@ private fun logMarkdownRenderSession(session: MarkdownRenderSession) {
 }
 
 private fun hasUnclosedFence(text: String): Boolean {
+    return countFenceMarkers(text, "```") % 2 == 1 || countFenceMarkers(text, "~~~") % 2 == 1
+}
+
+private fun countFenceMarkers(text: String, marker: String): Int {
     var count = 0
     var index = 0
     while (true) {
-        val pos = text.indexOf("```", index)
+        val pos = text.indexOf(marker, index)
         if (pos < 0) break
         count++
-        index = pos + 3
+        index = pos + marker.length
     }
-    return (count % 2) == 1
+    return count
 }
 
 private fun findSafeStreamingSplitIndex(previousProcessed: String, currentProcessed: String): Int {

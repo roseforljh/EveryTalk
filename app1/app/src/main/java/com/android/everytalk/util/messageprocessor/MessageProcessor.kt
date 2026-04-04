@@ -1,6 +1,9 @@
 package com.android.everytalk.util.messageprocessor
 
 import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.ui.components.ContentParser
+import com.android.everytalk.ui.components.ContentPart
+import com.android.everytalk.ui.components.MarkdownPart
 import com.android.everytalk.data.network.AppStreamEvent
 import com.android.everytalk.util.AppLogger
 import kotlinx.coroutines.sync.Mutex
@@ -138,12 +141,36 @@ class MessageProcessor {
         // 不做“整体重组/替换”。若本地缓冲为空，保留既有 message 字段，避免覆盖已持久化/已加载的文本。
         val finalText = if (currentText.isNotEmpty()) currentText else message.text
         val finalReasoning = currentReasoning ?: message.reasoning
+        val finalParts = when {
+            finalText.isBlank() -> message.parts
+            currentText.isNotEmpty() -> buildMarkdownParts(finalText)
+            message.parts.isNotEmpty() -> message.parts
+            else -> buildMarkdownParts(finalText)
+        }
 
         return message.copy(
             text = finalText,
             reasoning = finalReasoning,
-            contentStarted = message.contentStarted || finalText.isNotBlank() || !finalReasoning.isNullOrBlank()
+            contentStarted = message.contentStarted || finalText.isNotBlank() || !finalReasoning.isNullOrBlank(),
+            parts = finalParts
         )
+    }
+
+    private fun buildMarkdownParts(text: String): List<MarkdownPart> {
+        return ContentParser.parseCompleteContent(text, isStreaming = true).mapIndexedNotNull { index, part ->
+            when (part) {
+                is ContentPart.Text -> MarkdownPart.Text(
+                    id = "text_$index",
+                    content = part.content
+                )
+                is ContentPart.Code -> MarkdownPart.CodeBlock(
+                    id = "code_$index",
+                    content = part.content,
+                    language = part.language.orEmpty()
+                )
+                else -> null
+            }
+        }
     }
 
     fun cancel() {

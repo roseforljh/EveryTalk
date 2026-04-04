@@ -66,14 +66,32 @@ object SystemPromptInjector {
         - 绝对不要把多个列表项写在同一行。
         - 一个列表项后如果还有后续列表项，必须先换行。
         - 新的 `-` 或 `1.` 必须出现在新的一行开头，不能出现在句子中间。
+        - 绝对不要在列表项内部嵌套 fenced code block。
+        - 只要需要输出命令、脚本、配置片段，必须把代码块提升到列表外层，单独占一个段落。
+        - 命令类回答默认使用“结论 + 平铺命令块”的结构，不要写成“列表项标题 + 解释 + 缩进代码块”。
+        - 如果有多个平台或多个方案，允许先写简短小标题，再在标题下单独放代码块；不要把代码块挂在 `-`、`*`、`1.` 下面。
+        - 如果某一项只有一条命令，优先直接给代码块，不要先写“打开 PowerShell，输入：”再嵌套代码块。
 
         ✅ 正确示例：
         - 第一项
         - 第二项
         - 第三项
 
+        ✅ 正确示例：
+        ### Windows
+
+        ```powershell
+        irm https://openclaw.ai/install.ps1 | iex
+        ```
+
         ❌ 错误示例：
         - 第一项- 第二项- 第三项
+
+        ❌ 错误示例：
+        - Windows：
+            ```powershell
+            irm https://openclaw.ai/install.ps1 | iex
+            ```
 
         ## 粗体和斜体规则
         - 使用 `**粗体**` 和 `*斜体*`，并确保标记始终正确闭合。
@@ -190,13 +208,30 @@ Content here...
 - After EVERY list item, you MUST insert a newline before the next item.
 - NEVER write multiple list items on the same line.
 - Each `-` must be at the START of a new line.
+- NEVER put fenced code blocks inside list items.
+- For commands, scripts, config snippets, or shell examples, place the code block at the top level as its own paragraph.
+- Default command/tutorial answers to a flat structure: short label or heading first, then a standalone fenced code block.
+- If there are multiple platforms or options, use short headings, not nested bullet items, before each code block.
+- Do NOT write patterns like "Option A:" followed by an indented fenced code block under a list item.
 
 ✅ CORRECT:
 - Item one
 - Item two
 - Item three
 
+✅ CORRECT:
+### Windows
+
+```powershell
+irm https://openclaw.ai/install.ps1 | iex
+```
+
 ❌ WRONG: - Item one- Item two- Item three
+❌ WRONG:
+- Windows:
+    ```powershell
+    irm https://openclaw.ai/install.ps1 | iex
+    ```
 
 ## Output Rules
 - Use proper Markdown headers: # ## ###

@@ -33,6 +33,20 @@ class SystemPromptInjectorRenderSafetyTest {
     }
 
     @Test
+    fun `system prompts should forbid fenced code blocks nested inside lists`() {
+        val zhPrompt = SystemPromptInjector.getSystemPrompt("zh-CN")
+        val enPrompt = SystemPromptInjector.getSystemPrompt("en")
+
+        assertTrue(zhPrompt.contains("绝对不要在列表项内部嵌套 fenced code block"))
+        assertTrue(zhPrompt.contains("命令类回答默认使用“结论 + 平铺命令块”的结构"))
+        assertTrue(zhPrompt.contains("代码块提升到列表外层"))
+
+        assertTrue(enPrompt.contains("NEVER put fenced code blocks inside list items"))
+        assertTrue(enPrompt.contains("flat structure"))
+        assertTrue(enPrompt.contains("Do NOT write patterns like \"Option A:\""))
+    }
+
+    @Test
     fun `system prompts should include concise and cautious answer rules`() {
         val zhPrompt = SystemPromptInjector.getSystemPrompt("zh-CN")
         val enPrompt = SystemPromptInjector.getSystemPrompt("en")

@@ -309,15 +309,19 @@ class StreamingMessageStateManager {
     }
 
     private fun isInsideUnclosedFence(text: String): Boolean {
+        return countFenceMarkers(text, "```") % 2 == 1 || countFenceMarkers(text, "~~~") % 2 == 1
+    }
+
+    private fun countFenceMarkers(text: String, marker: String): Int {
         var idx = 0
         var count = 0
         while (true) {
-            val p = text.indexOf("```", idx)
+            val p = text.indexOf(marker, idx)
             if (p < 0) break
             count++
-            idx = p + 3
+            idx = p + marker.length
         }
-        return (count % 2) == 1
+        return count
     }
 
     private fun endsWithDangerousMarkdownPrefix(text: String): Boolean {
@@ -333,7 +337,9 @@ class StreamingMessageStateManager {
         if (Regex("^\\d+\\.$").matches(trimmed)) {
             return true
         }
-        if (trimmedEnd == "```" || trimmedEnd.startsWith("```") && !trimmedEnd.contains(' ')) {
+        val isBareBacktickFence = trimmedEnd == "```" || trimmedEnd.startsWith("```") && !trimmedEnd.contains(' ')
+        val isBareTildeFence = trimmedEnd == "~~~" || trimmedEnd.startsWith("~~~") && !trimmedEnd.contains(' ')
+        if (isBareBacktickFence || isBareTildeFence) {
             return true
         }
         if (trimmedEnd.endsWith("|") && trimmedEnd.count { it == '|' } >= 2) {
