@@ -428,6 +428,7 @@ class SimpleModeManager(
         // 5. 设置对话ID（必须在消息加载前设置）
         val stableId = conversationToLoad.firstOrNull()?.id ?: "image_history_${UUID.randomUUID()}"
         stateHolder._currentImageGenerationConversationId.value = stableId
+        stateHolder.applyCurrentImageConversationFunctionToggleState()
         
         // 🔧 修复：恢复会话使用的图像生成配置
         val savedConfigId = stateHolder.conversationApiConfigIds.value[stableId]

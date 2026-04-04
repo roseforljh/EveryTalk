@@ -170,6 +170,11 @@ val _isStreamingPaused = MutableStateFlow(false)
         return conversationFunctionToggleStates.value[_currentConversationId.value] ?: ConversationFunctionToggleState()
     }
 
+    fun getCurrentImageConversationFunctionToggleState(): ConversationFunctionToggleState {
+        return conversationFunctionToggleStates.value[_currentImageGenerationConversationId.value]
+            ?: ConversationFunctionToggleState()
+    }
+
     fun updateCurrentConversationFunctionToggleState(
         update: (ConversationFunctionToggleState) -> ConversationFunctionToggleState
     ) {
@@ -248,6 +253,13 @@ val _isStreamingPaused = MutableStateFlow(false)
 
     fun applyCurrentConversationFunctionToggleState() {
         val toggleState = getCurrentConversationFunctionToggleState()
+        _isWebSearchEnabled.value = toggleState.webSearchEnabled
+        _isCodeExecutionEnabled.value = toggleState.codeExecutionEnabled
+        _isMcpEnabledForNextRequest.value = toggleState.mcpEnabled
+    }
+
+    fun applyCurrentImageConversationFunctionToggleState() {
+        val toggleState = getCurrentImageConversationFunctionToggleState()
         _isWebSearchEnabled.value = toggleState.webSearchEnabled
         _isCodeExecutionEnabled.value = toggleState.codeExecutionEnabled
         _isMcpEnabledForNextRequest.value = toggleState.mcpEnabled
@@ -438,6 +450,7 @@ val _isStreamingPaused = MutableStateFlow(false)
             _apiHandler.clearImageChatResources()
         }
         isImageConversationDirty.value = false
+        applyCurrentImageConversationFunctionToggleState()
     }
 
     val selectedMediaItems: SnapshotStateList<SelectedMediaItem> =
