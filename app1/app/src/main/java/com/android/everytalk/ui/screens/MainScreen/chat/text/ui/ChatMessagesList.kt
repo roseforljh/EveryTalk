@@ -60,6 +60,7 @@ fun ChatMessagesList(
     viewModel: AppViewModel,
     listState: LazyListState,
     scrollStateManager: com.android.everytalk.ui.screens.MainScreen.chat.text.state.ChatScrollStateManager,
+    scrollSessionKey: String,
     bubbleMaxWidth: Dp,
     onShowAiMessageOptions: (Message) -> Unit,
     onImageLoaded: () -> Unit,
@@ -121,9 +122,7 @@ fun ChatMessagesList(
     var previousUserMessageId by remember { mutableStateOf<String?>(null) }
     var dynamicBottomPaddingTarget by remember { mutableStateOf(0.dp) }
     var firstBubbleScreenY by remember { mutableStateOf(-1) }
-    
-    val conversationId by viewModel.currentConversationId.collectAsState()
-    
+
     val dynamicBottomPadding by androidx.compose.animation.core.animateDpAsState(
         targetValue = dynamicBottomPaddingTarget,
         animationSpec = androidx.compose.animation.core.tween(
@@ -132,8 +131,8 @@ fun ChatMessagesList(
         ),
         label = "dynamicBottomPadding"
     )
-    
-    LaunchedEffect(conversationId) {
+
+    LaunchedEffect(scrollSessionKey) {
         dynamicBottomPaddingTarget = 0.dp
         firstBubbleScreenY = -1
         previousUserMessageId = null

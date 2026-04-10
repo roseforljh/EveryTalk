@@ -50,6 +50,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.navigation.NavController
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.navigation.Screen
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.statecontroller.ConversationScrollState
@@ -70,6 +71,22 @@ import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.delay
+
+internal fun shouldPreserveScrollSessionOnConversationIdChange(
+    previousConversationId: String?,
+    newConversationId: String,
+    messages: List<Message>
+): Boolean {
+    if (previousConversationId.isNullOrBlank() || previousConversationId == newConversationId) {
+        return false
+    }
+
+    val derivedStableConversationId = messages.firstOrNull { it.sender == Sender.User }?.id
+        ?: messages.firstOrNull { it.sender == Sender.System && !it.isPlaceholderName }?.id
+        ?: messages.firstOrNull()?.id
+
+    return derivedStableConversationId == newConversationId
+}
 
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -148,7 +165,24 @@ fun ChatScreen(
 
     val lastSendAt = remember { mutableStateOf(0L) }
 
-    val listState = remember(conversationId) {
+    var scrollSessionKey by remember { mutableStateOf(conversationId) }
+    var previousConversationIdForScroll by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(conversationId, messages.size, messages.firstOrNull()?.id) {
+        val shouldPreserveScrollSession = shouldPreserveScrollSessionOnConversationIdChange(
+            previousConversationId = previousConversationIdForScroll,
+            newConversationId = conversationId,
+            messages = messages.toList()
+        )
+
+        if (!shouldPreserveScrollSession) {
+            scrollSessionKey = conversationId
+        }
+
+        previousConversationIdForScroll = conversationId
+    }
+
+    val listState = remember(scrollSessionKey) {
         LazyListState(0, 0)
     }
 
@@ -413,6 +447,7 @@ fun ChatScreen(
                                 viewModel = viewModel,
                                 listState = listState,
                                 scrollStateManager = scrollStateManager,
+                                scrollSessionKey = scrollSessionKey,
                                 bubbleMaxWidth = bubbleMaxWidth,
                                 onShowAiMessageOptions = { msg ->
                                     selectedMessageForOptions = msg

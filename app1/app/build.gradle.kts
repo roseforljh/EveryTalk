@@ -1,6 +1,7 @@
 // app/build.gradle.kts
 import java.util.Properties
 import java.io.FileInputStream
+import java.io.File
 
 // Function to safely load properties from a file
 fun loadProperties(project: Project): Properties {
@@ -13,6 +14,12 @@ fun loadProperties(project: Project): Properties {
 }
 
 val localProperties = loadProperties(project)
+
+val stableBuildDir = File(
+    System.getProperty("user.home"),
+    ".everytalk-gradle-build/${rootProject.name}/${project.name}"
+)
+layout.buildDirectory.set(stableBuildDir)
 
 // Sanitize property strings before injecting into BuildConfig fields
 fun sanitizeForBuildConfig(value: String?): String {

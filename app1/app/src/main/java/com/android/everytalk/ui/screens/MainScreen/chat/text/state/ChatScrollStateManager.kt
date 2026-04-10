@@ -68,7 +68,6 @@ class ChatScrollStateManager(
     val nestedScrollConnection = object : NestedScrollConnection {
         override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
             if (source == NestedScrollSource.UserInput || source == NestedScrollSource.SideEffect) {
-                preventAutoScroll = false
                 updateScrollToBottomButton(available.y)
             }
             return Offset.Zero
@@ -127,6 +126,11 @@ class ChatScrollStateManager(
                 
                 val confirmedAtBottom = consecutiveBottomFrames >= BOTTOM_DETECTION_THRESHOLD && !inFreezeWindow
                 _isAtBottom.value = confirmedAtBottom
+                preventAutoScroll = resolvePreventAutoScroll(
+                    currentValue = preventAutoScroll,
+                    isProgrammaticScroll = isProgrammaticScroll,
+                    isStrictlyAtBottom = snapshot.isStrictlyAtBottom
+                )
 
                 if (confirmedAtBottom) {
                     _showScrollToBottomButton.value = false
@@ -433,4 +437,13 @@ private fun computeScrollDurationMs(
     val vp = viewportPx.toFloat().coerceAtLeast(1f)
     val pages = (abs(distancePx) / vp).coerceIn(1f, 6f)
     return (baseDurationMs * pages).roundToInt().coerceAtMost(maxDurationMs)
+}
+
+internal fun resolvePreventAutoScroll(
+    currentValue: Boolean,
+    isProgrammaticScroll: Boolean,
+    isStrictlyAtBottom: Boolean
+): Boolean {
+    if (isProgrammaticScroll) return currentValue
+    return !isStrictlyAtBottom
 }
