@@ -109,6 +109,20 @@ internal fun containsFencedCodeSyntax(content: String): Boolean {
     return content.contains("```") || content.contains("~~~")
 }
 
+internal fun shouldPreferStableMarkdownFallback(
+    content: String,
+    isStreaming: Boolean,
+    isTrailingStreamingText: Boolean,
+): Boolean {
+    if (containsFencedCodeSyntax(content)) return isStreaming
+    return isTrailingStreamingText && !shouldRenderTrailingStreamingTextWithMarkdown(content)
+}
+
+internal data class TableAwareParseRequest(
+    val text: String,
+    val isStreaming: Boolean,
+)
+
 internal fun shouldRenderStableNativeMathPart(
     isBlockMath: Boolean,
     isStreaming: Boolean,
@@ -159,9 +173,6 @@ fun TableAwareText(
         )
     }
 
-    // 增量解析：记录上一次解析时的文本，用于判断是否为 append-only
-    var previousText by remember { mutableStateOf("") }
-
     val updatedText by rememberUpdatedState(text)
     val updatedIsStreaming by rememberUpdatedState(isStreaming)
     val effectiveCacheKey = if (contentKey.isNotBlank() && !isStreaming) {
@@ -172,17 +183,22 @@ fun TableAwareText(
         // 仅监听文本本身的变化来触发重新解析
         // 不再将 isStreaming 纳入触发条件，避免流式结束瞬间因 isStreaming 切换
         // 而触发全量重解析 + Compose 全量重组，导致整个气泡闪一下
-        snapshotFlow { updatedText }
+        snapshotFlow {
+            TableAwareParseRequest(
+                text = updatedText,
+                isStreaming = updatedIsStreaming,
+            )
+        }
             .distinctUntilChanged()
-            .mapLatest { currentText ->
-                val streaming = updatedIsStreaming
+            .mapLatest { request ->
+                val currentText = request.text
+                val streaming = request.isStreaming
                 val cacheKey = if (contentKey.isNotBlank() && !streaming) {
                     "${contentKey}_${currentText.hashCode()}_v${ContentParseCache.PARSER_VERSION}"
                 } else ""
 
                 if (!streaming && cacheKey.isNotBlank()) {
                     ContentParseCache.get(cacheKey)?.let {
-                        previousText = currentText
                         return@mapLatest it
                     }
                 }
@@ -196,7 +212,6 @@ fun TableAwareText(
                     ContentParseCache.put(cacheKey, parts)
                 }
 
-                previousText = currentText
                 parts
             }
             .catch { e ->
@@ -244,14 +259,30 @@ fun TableAwareText(
                         val isTrailingStreamingText = isStreaming && index == parsedParts.lastIndex
                         val trailingLooksLightweightMarkdown = isTrailingStreamingText &&
                             shouldRenderTrailingStreamingTextWithMarkdown(part.content)
-                        val containsFencedCode = containsFencedCodeSyntax(part.content)
+                        val shouldRerouteCompletedFencedText = !isStreaming && containsFencedCodeSyntax(part.content)
+                        val shouldUseStableFallback = shouldPreferStableMarkdownFallback(
+                            content = part.content,
+                            isStreaming = isStreaming,
+                            isTrailingStreamingText = isTrailingStreamingText,
+                        )
 
                         when {
-                            containsFencedCode -> {
-                                StableMarkdownText(
-                                    markdown = part.content,
+                            shouldRerouteCompletedFencedText -> {
+                                TableAwareText(
+                                    text = part.content,
                                     style = style,
-                                    modifier = Modifier.fillMaxWidth()
+                                    color = color,
+                                    isStreaming = false,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    recursionDepth = recursionDepth + 1,
+                                    contentKey = if (contentKey.isNotBlank()) {
+                                        "${contentKey}_nested_${index}_${part.content.hashCode()}"
+                                    } else "",
+                                    onLongPress = onLongPress,
+                                    onImageClick = onImageClick,
+                                    sender = sender,
+                                    onCodePreviewRequested = onCodePreviewRequested,
+                                    onCodeCopied = onCodeCopied,
                                 )
                             }
                             trailingLooksLightweightMarkdown -> {
@@ -268,7 +299,7 @@ fun TableAwareText(
                                     disableVerticalPadding = true
                                 )
                             }
-                            isTrailingStreamingText -> {
+                            shouldUseStableFallback -> {
                                 StableMarkdownText(
                                     markdown = part.content,
                                     style = style,

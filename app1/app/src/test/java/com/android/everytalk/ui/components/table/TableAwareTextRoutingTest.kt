@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.components.table
 
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -34,5 +35,37 @@ class TableAwareTextRoutingTest {
         assertTrue(containsFencedCodeSyntax("```bash\ncurl -fsSL https://get.docker.com | bash\n```"))
         assertTrue(containsFencedCodeSyntax("~~~powershell\nirm https://openclaw.ai/install.ps1 | iex\n~~~"))
         assertFalse(containsFencedCodeSyntax("普通文本，没有代码围栏"))
+    }
+
+    @Test
+    fun `fenced code text should leave stable fallback after stream completes`() {
+        assertFalse(
+            shouldPreferStableMarkdownFallback(
+                content = "```powershell\nwmic diskdrive get model,caption,size\n```",
+                isStreaming = false,
+                isTrailingStreamingText = false,
+            )
+        )
+    }
+
+    @Test
+    fun `fenced code text should keep stable fallback while streaming`() {
+        assertTrue(
+            shouldPreferStableMarkdownFallback(
+                content = "```powershell\nwmic diskdrive get model,caption,size\n```",
+                isStreaming = true,
+                isTrailingStreamingText = true,
+            )
+        )
+    }
+
+    @Test
+    fun `parse request should change when streaming mode changes with same text`() {
+        val text = "```kotlin\nprintln(\"hi\")\n```"
+
+        assertNotEquals(
+            TableAwareParseRequest(text = text, isStreaming = true),
+            TableAwareParseRequest(text = text, isStreaming = false),
+        )
     }
 }

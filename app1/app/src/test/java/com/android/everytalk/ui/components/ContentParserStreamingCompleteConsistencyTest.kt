@@ -110,15 +110,18 @@ class ContentParserStreamingCompleteConsistencyTest {
             ```
         """.trimIndent()
 
-        val parts = ContentParser.parseCompleteContent(input, isStreaming = true)
-        val codeParts = parts.filterIsInstance<ContentPart.Code>()
+        val streamingParts = ContentParser.parseCompleteContent(input, isStreaming = true)
+        val completeParts = ContentParser.parseCompleteContent(input, isStreaming = false)
+        val streamingCodeParts = streamingParts.filterIsInstance<ContentPart.Code>()
+        val completeCodeParts = completeParts.filterIsInstance<ContentPart.Code>()
 
-        assertEquals(7, codeParts.size)
-        assertTrue(codeParts.any { it.content.contains("curl -fsSL https://get.docker.com | bash") })
-        assertTrue(codeParts.any { it.content.contains("git clone https://github.com/router-for-me/CLIProxyAPI.git") })
-        assertTrue(codeParts.any { it.content.contains("cp config.example.yaml config.yaml") })
-        assertTrue(codeParts.any { it.content.contains("docker compose up -d") })
-        assertTrue(codeParts.any { it.content.contains("wget https://github.com/router-for-me/CLIProxyAPI/releases/download") })
-        assertTrue(codeParts.any { it.content.contains("./CLIProxyAPI") })
+        assertEquals(streamingCodeParts.size, completeCodeParts.size)
+        assertEquals(7, completeCodeParts.size)
+        assertTrue(completeCodeParts.any { it.content.contains("curl -fsSL https://get.docker.com | bash") })
+        assertTrue(completeCodeParts.any { it.content.contains("git clone https://github.com/router-for-me/CLIProxyAPI.git") })
+        assertTrue(completeCodeParts.any { it.content.contains("cp config.example.yaml config.yaml") })
+        assertTrue(completeCodeParts.any { it.content.contains("docker compose up -d") })
+        assertTrue(completeCodeParts.any { it.content.contains("wget https://github.com/router-for-me/CLIProxyAPI/releases/download") })
+        assertTrue(completeCodeParts.any { it.content.contains("./CLIProxyAPI") })
     }
 }

@@ -59,6 +59,14 @@ internal fun reconcileMessageAfterStatusClear(updatedMessage: Message, clearedMe
     )
 }
 
+internal fun mergeStreamingCompletionMessage(syncedMessage: Message, finalizedMessage: Message): Message {
+    return syncedMessage.copy(
+        reasoning = finalizedMessage.reasoning ?: syncedMessage.reasoning,
+        parts = finalizedMessage.parts.ifEmpty { syncedMessage.parts },
+        contentStarted = true,
+    )
+}
+
 class ApiHandler(
     private val stateHolder: ViewModelStateHolder,
     private val viewModelScope: CoroutineScope,
@@ -879,6 +887,10 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     
                     // 🎯 同步流式消息到 messages 列表（一次性更新）
                     stateHolder.syncStreamingMessageToList(aiMessageId, isImageGeneration)
+                    updatedMessage = mergeStreamingCompletionMessage(
+                        syncedMessage = messageList[messageIndex],
+                        finalizedMessage = finalizedMessage,
+                    )
                     logger.debug("Synced streaming message $aiMessageId to messages list")
                     
                     // 暂停时不触发UI刷新，等待恢复后统一刷新

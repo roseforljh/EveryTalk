@@ -40,7 +40,28 @@ object ContentParser {
         }
 
         val astTree = parser.buildMarkdownTreeFromString(text)
-        return extractParts(astTree, text)
+        val astParts = extractParts(astTree, text)
+        if (!isStreaming && shouldFallbackToStreamingFriendlyParsing(text, astParts)) {
+            val fallbackParts = parseStreamingFriendlyContent(text)
+            if (fallbackParts.any { it is ContentPart.Code || it is ContentPart.Table || it is ContentPart.StreamingCode }) {
+                return fallbackParts
+            }
+        }
+        return astParts
+    }
+
+    private fun shouldFallbackToStreamingFriendlyParsing(text: String, astParts: List<ContentPart>): Boolean {
+        if (!containsClosedFenceSyntax(text)) return false
+        return astParts.any { part ->
+            part is ContentPart.Text && containsClosedFenceSyntax(part.content)
+        }
+    }
+
+    private fun containsClosedFenceSyntax(text: String): Boolean {
+        val normalized = text.replace("\r\n", "\n").replace('\r', '\n')
+        val backtickFenceCount = Regex("(?m)^\\s*```+").findAll(normalized).count()
+        val tildeFenceCount = Regex("(?m)^\\s*~~~+").findAll(normalized).count()
+        return backtickFenceCount >= 2 || tildeFenceCount >= 2
     }
 
     private fun extractParts(root: ASTNode, text: String): List<ContentPart> {

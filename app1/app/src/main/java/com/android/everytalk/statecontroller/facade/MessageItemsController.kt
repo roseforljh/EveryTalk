@@ -178,6 +178,7 @@ open class MessageItemsController(
                             } else true
 
                             val cacheValid = cached != null &&
+                                cached.text == message.text &&
                                 cached.reasoning == message.reasoning &&
                                 cached.outputType == message.outputType &&
                                 cached.hasReasoning == hasReasoning &&
@@ -269,6 +270,7 @@ open class MessageItemsController(
                             )
 
                             val cacheValid = cached != null &&
+                                cached.text == message.text &&
                                 cached.reasoning == message.reasoning &&
                                 cached.outputType == message.outputType &&
                                 cached.hasReasoning == hasReasoning &&

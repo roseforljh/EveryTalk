@@ -46,16 +46,19 @@ class ContentParserNestedListFenceTest {
                 ```
         """.trimIndent()
 
-        val parts = ContentParser.parseCompleteContent(input, isStreaming = true)
-        val codeParts = parts.filterIsInstance<ContentPart.Code>()
+        val streamingParts = ContentParser.parseCompleteContent(input, isStreaming = true)
+        val completeParts = ContentParser.parseCompleteContent(input, isStreaming = false)
+        val streamingCodeParts = streamingParts.filterIsInstance<ContentPart.Code>()
+        val completeCodeParts = completeParts.filterIsInstance<ContentPart.Code>()
 
-        assertEquals(6, codeParts.size)
-        assertTrue(codeParts.any { it.language == "bash" && it.content.contains("openclaw.ai/install.sh | bash") })
-        assertTrue(codeParts.any { it.language == "powershell" && it.content.contains("install.ps1 | iex") })
-        assertTrue(codeParts.any { it.language == "bash" && it.content.contains("install.sh | bash") })
-        assertTrue(codeParts.any { it.language == "powershell" && it.content.contains("install.ps1 | iex") })
-        assertTrue(codeParts.any { it.language == "bash" && it.content.contains("openclaw onboard") })
-        assertTrue(codeParts.any { it.language == "bash" && it.content.contains("openclaw gateway status") })
+        assertEquals(streamingCodeParts.size, completeCodeParts.size)
+        assertEquals(6, completeCodeParts.size)
+        assertTrue(completeCodeParts.any { it.language == "bash" && it.content.contains("openclaw.ai/install.sh | bash") })
+        assertTrue(completeCodeParts.any { it.language == "powershell" && it.content.contains("install.ps1 | iex") })
+        assertTrue(completeCodeParts.any { it.language == "bash" && it.content.contains("install.sh | bash") })
+        assertTrue(completeCodeParts.any { it.language == "powershell" && it.content.contains("install.ps1 | iex") })
+        assertTrue(completeCodeParts.any { it.language == "bash" && it.content.contains("openclaw onboard") })
+        assertTrue(completeCodeParts.any { it.language == "bash" && it.content.contains("openclaw gateway status") })
     }
 
     @Test
@@ -89,13 +92,16 @@ class ContentParserNestedListFenceTest {
             ```
         """.trimIndent()
 
-        val parts = ContentParser.parseCompleteContent(input, isStreaming = true)
-        val codeParts = parts.filterIsInstance<ContentPart.Code>()
+        val streamingParts = ContentParser.parseCompleteContent(input, isStreaming = true)
+        val completeParts = ContentParser.parseCompleteContent(input, isStreaming = false)
+        val streamingCodeParts = streamingParts.filterIsInstance<ContentPart.Code>()
+        val completeCodeParts = completeParts.filterIsInstance<ContentPart.Code>()
 
-        assertEquals(4, codeParts.size)
-        assertTrue(codeParts.any { it.language == "bash" && it.content.contains("openclaw.ai/install.sh | bash") })
-        assertTrue(codeParts.any { it.language == "powershell" && it.content.contains("irm https://openclaw.ai/install.ps1 | iex") })
-        assertTrue(codeParts.any { it.language == "powershell" && it.content.contains("iex (irm https://qclaw.io/install.ps1)") })
-        assertTrue(codeParts.any { it.language == "bash" && it.content.contains("openclaw onboard --install-daemon") })
+        assertEquals(streamingCodeParts.size, completeCodeParts.size)
+        assertEquals(4, completeCodeParts.size)
+        assertTrue(completeCodeParts.any { it.language == "bash" && it.content.contains("openclaw.ai/install.sh | bash") })
+        assertTrue(completeCodeParts.any { it.language == "powershell" && it.content.contains("irm https://openclaw.ai/install.ps1 | iex") })
+        assertTrue(completeCodeParts.any { it.language == "powershell" && it.content.contains("iex (irm https://qclaw.io/install.ps1)") })
+        assertTrue(completeCodeParts.any { it.language == "bash" && it.content.contains("openclaw onboard --install-daemon") })
     }
 }
