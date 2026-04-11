@@ -44,6 +44,15 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
+internal fun reasoningPlaceholderText(
+    displayedReasoningText: String,
+    isReasoningStreaming: Boolean,
+): String {
+    return displayedReasoningText.ifBlank {
+        if (isReasoningStreaming) "正在思考..." else ""
+    }
+}
+
 @Composable
 internal fun ReasoningToggleAndContent(
     currentMessageId: String,
@@ -142,7 +151,10 @@ internal fun ReasoningToggleAndContent(
                             .padding(horizontal = 12.dp, vertical = scrimHeight)
                     ) {
                         Text(
-                            text = displayedReasoningText.ifBlank { if (isReasoningStreaming) "正在连接图像大模型..." else "" },
+                            text = reasoningPlaceholderText(
+                                displayedReasoningText = displayedReasoningText,
+                                isReasoningStreaming = isReasoningStreaming,
+                            ),
                             color = reasoningTextColor,
                             style = MaterialTheme.typography.bodySmall.copy(lineHeight = 18.sp),
                         )
@@ -184,7 +196,7 @@ internal fun ReasoningToggleAndContent(
 
         // 延迟显示控制：仅当思考框完全消失（动画结束）后才显示小白点
         // 初始化逻辑：如果是历史消息（showInlineStreamingBox初始为false），则无需延迟，直接显示
-        var showDotDelayed by remember { mutableStateOf(!showInlineStreamingBox) }
+        var showDotDelayed by remember(currentMessageId) { mutableStateOf(!showInlineStreamingBox) }
 
         LaunchedEffect(showInlineStreamingBox) {
             if (showInlineStreamingBox) {

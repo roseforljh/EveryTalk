@@ -67,6 +67,15 @@ internal fun mergeStreamingCompletionMessage(syncedMessage: Message, finalizedMe
     )
 }
 
+internal fun applyReasoningChunk(currentMessage: Message, reasoningChunk: String): Message {
+    if (reasoningChunk.isBlank()) return currentMessage
+    return if (currentMessage.reasoning.isNullOrBlank()) {
+        currentMessage.copy(reasoning = reasoningChunk)
+    } else {
+        currentMessage
+    }
+}
+
 class ApiHandler(
     private val stateHolder: ViewModelStateHolder,
     private val viewModelScope: CoroutineScope,
@@ -751,8 +760,9 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     if (processedResult is com.android.everytalk.util.messageprocessor.ProcessedEventResult.ReasoningUpdated) {
                         val reasoningChunk = appEvent.text
                         if (reasoningChunk.isNotBlank()) {
-                            if (currentMessage.reasoning.isNullOrBlank()) {
-                                messageList[messageIndex] = currentMessage.copy(reasoning = reasoningChunk)
+                            val seededMessage = applyReasoningChunk(currentMessage, reasoningChunk)
+                            if (seededMessage !== currentMessage) {
+                                messageList[messageIndex] = seededMessage
                             }
                             PerformanceMonitor.recordEvent(aiMessageId, "Reasoning", reasoningChunk.length)
                             stateHolder.appendReasoningToMessage(aiMessageId, reasoningChunk, isImageGeneration)
@@ -769,36 +779,6 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                             }
                         }
                         return@withContext
-                        // 推理增量更新
-                        updatedMessage = updatedMessage.copy(reasoning = processedResult.reasoning)
-                        
-                        // 🔥 核心修复：立即更新消息列表中的 reasoning，确保 UI 实时显示思考框
-                        val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
-                        val currentMessage = messageList.find { it.id == aiMessageId }
-                        if (currentMessage != null) {
-                            val deltaReasoning = processedResult.reasoning.removePrefix(currentMessage.reasoning ?: "")
-                            if (deltaReasoning.isNotEmpty()) {
-                                PerformanceMonitor.recordEvent(aiMessageId, "Reasoning", deltaReasoning.length)
-                                stateHolder.appendReasoningToMessage(aiMessageId, deltaReasoning, isImageGeneration)
-                                android.util.Log.d("ApiHandler", "🎯 Appended reasoning delta (${deltaReasoning.length} chars) to message $aiMessageId")
-                            }
-                        }
-                        
-                        // 🎯 根因修复：
-                        // - 推理更新之前未标记"会话脏"，导致退出时 reasoning 未被持久化，重启后小白点消失
-                        // - 这里在每次推理增量到来时标记脏并立即持久化"last open chat"，确保 reasoning 保留
-                        if (isImageGeneration) {
-                            stateHolder.isImageConversationDirty.value = true
-                        } else {
-                            stateHolder.isTextConversationDirty.value = true
-                        }
-                        viewModelScope.launch(Dispatchers.IO) {
-                            try {
-                                historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration)
-                            } catch (_: Exception) {
-                                // 静默处理，避免影响流式
-                            }
-                        }
                     }
                 }
                 is AppStreamEvent.ReasoningFinish -> {
