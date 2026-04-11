@@ -3,6 +3,21 @@ package com.android.everytalk.ui.screens.MainScreen.chat.text.ui
 import com.android.everytalk.R
 
 import androidx.compose.animation.togetherWith
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.animateScrollBy
@@ -15,6 +30,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -550,22 +566,8 @@ fun ChatMessagesList(
                                 horizontalArrangement = Arrangement.Start
                             ) {
                                 val defaultText = stringResource(id = R.string.connecting_to_model)
-                                val displayText = item.text ?: defaultText
-                                
-                                androidx.compose.animation.AnimatedContent(
-                                    targetState = displayText,
-                                    transitionSpec = {
-                                        (androidx.compose.animation.slideInVertically { height -> height } + androidx.compose.animation.fadeIn())
-                                            .togetherWith(androidx.compose.animation.slideOutVertically { height -> -height } + androidx.compose.animation.fadeOut())
-                                    },
-                                    label = "LoadingTextAnimation"
-                                ) { text ->
-                                    Text(
-                                        text = text,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                }
+                                val displayText = resolveLoadingStageDisplayText(item.text, defaultText)
+                                LoadingStageIndicator(text = displayText)
                             }
                         }
                         
@@ -638,6 +640,158 @@ enum class ContentType {
 fun detectContentTypeForPadding(text: String): ContentType {
     // 所有内容都使用正常内边距
     return ContentType.SIMPLE
+}
+
+internal fun resolveLoadingStageDisplayText(text: String?, defaultText: String): String {
+    return text?.takeIf { it.isNotBlank() } ?: defaultText
+}
+
+internal fun loadingStageViewportHeightDp(): Float = 34f
+
+internal fun loadingStageMaskHeightDp(): Float = 10f
+
+internal fun loadingStageBreathingDotSizeDp(): Float = 6f
+
+@Composable
+private fun LoadingStageIndicator(
+    text: String,
+    modifier: Modifier = Modifier,
+) {
+    val viewportHeight = loadingStageViewportHeightDp().dp
+    val maskHeight = loadingStageMaskHeightDp().dp
+    val breathingDotSize = loadingStageBreathingDotSizeDp().dp
+    val infiniteTransition = rememberInfiniteTransition(label = "loadingStage")
+    val lineAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.18f,
+        targetValue = 0.52f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1800, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "loadingStageLineAlpha",
+    )
+    val glowAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.06f,
+        targetValue = 0.14f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 2200, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "loadingStageGlowAlpha",
+    )
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(viewportHeight),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .background(
+                    brush = androidx.compose.ui.graphics.Brush.radialGradient(
+                        colors = listOf(
+                            MaterialTheme.colorScheme.primary.copy(alpha = glowAlpha),
+                            Color.Transparent,
+                        ),
+                        radius = 220f,
+                        center = Offset(120f, viewportHeight.value * 1.6f),
+                    )
+                )
+        )
+
+        Box(
+            modifier = Modifier
+                .padding(start = 6.dp)
+                .size(breathingDotSize)
+                .background(
+                    color = Color.White.copy(alpha = lineAlpha),
+                    shape = CircleShape
+                )
+        )
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 24.dp, end = 12.dp),
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(viewportHeight)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .background(
+                            brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                                colors = listOf(
+                                    MaterialTheme.colorScheme.background,
+                                    MaterialTheme.colorScheme.background.copy(alpha = 0f),
+                                )
+                            )
+                        )
+                )
+
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .fillMaxWidth()
+                        .padding(vertical = maskHeight)
+                ) {
+                    AnimatedContent(
+                        targetState = text,
+                        transitionSpec = {
+                            (slideInVertically(initialOffsetY = { it / 2 }) + fadeIn(animationSpec = tween(260)) + scaleIn(initialScale = 0.985f, animationSpec = tween(260)))
+                                .togetherWith(
+                                    slideOutVertically(targetOffsetY = { -it / 2 }) + fadeOut(animationSpec = tween(220)) + scaleOut(targetScale = 0.985f, animationSpec = tween(220))
+                                )
+                        },
+                        label = "LoadingStageTextAnimation"
+                    ) { stageText ->
+                        Text(
+                            text = stageText,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.92f),
+                            maxLines = 1,
+                        )
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .height(maskHeight)
+                        .background(
+                            brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                                colors = listOf(
+                                    MaterialTheme.colorScheme.background,
+                                    MaterialTheme.colorScheme.background.copy(alpha = 0f),
+                                )
+                            )
+                        )
+                )
+
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(maskHeight)
+                        .background(
+                            brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                                colors = listOf(
+                                    MaterialTheme.colorScheme.background.copy(alpha = 0f),
+                                    MaterialTheme.colorScheme.background,
+                                )
+                            )
+                        )
+                )
+            }
+        }
+    }
 }
 
 
