@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.15.3](https://github.com/roseforljh/EveryTalk/compare/v1.15.2...v1.15.3) (2026-04-11)
+
+
+### Bug Fixes
+
+* 优化mcp架构 ([c7fa421](https://github.com/roseforljh/EveryTalk/commit/c7fa4215d43cc84ad312d68987ccd9453a3185b6))
+* 优化文本模式加载态动画表现 ([332a7ea](https://github.com/roseforljh/EveryTalk/commit/332a7eaf49ee223809a98b750d8428fd9d9e65c9))
+* 优化输出结构 ([3155cf6](https://github.com/roseforljh/EveryTalk/commit/3155cf669deb10d906e43df1c044c967d222c88d))
+* 修复潜在和显式bug ([ff24a25](https://github.com/roseforljh/EveryTalk/commit/ff24a25c495d07f655d7e41933c6c5bd9f418e7a))
+* 页面跳动 ([33e59f2](https://github.com/roseforljh/EveryTalk/commit/33e59f21651c1ac8c1c7b7d2683e5b4ef06a65d2))
+
 ## [1.15.2](https://github.com/roseforljh/EveryTalk/compare/v1.15.1...v1.15.2) (2026-04-04)
 
 
