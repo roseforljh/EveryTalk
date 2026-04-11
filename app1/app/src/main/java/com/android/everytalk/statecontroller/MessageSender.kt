@@ -26,6 +26,13 @@ import com.android.everytalk.data.network.WebSearchSupport
 import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.data.network.ExternalWebSearchService
 import com.android.everytalk.statecontroller.defaultReasoningBudgetForModel
+import com.android.everytalk.statecontroller.mcp.dispatch.McpDispatchIntent
+import com.android.everytalk.statecontroller.mcp.dispatch.McpDispatchStrategy
+import com.android.everytalk.statecontroller.mcp.dispatch.McpToolCandidate
+import com.android.everytalk.statecontroller.mcp.dispatch.QueryIntent
+import com.android.everytalk.statecontroller.mcp.dispatch.classifyMcpIntent
+import com.android.everytalk.statecontroller.mcp.dispatch.selectMcpCandidates
+import com.android.everytalk.statecontroller.mcp.dispatch.toToolDefinition
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -158,6 +165,7 @@ internal fun buildMcpUsageGuidance(
     isMcpEnabled: Boolean,
     hasMcpTools: Boolean,
     hasEffectiveWebSearch: Boolean = false,
+    dispatchIntent: McpDispatchIntent? = null,
 ): String? {
     if (!isMcpEnabled || !hasMcpTools) {
         return null
@@ -168,6 +176,18 @@ internal fun buildMcpUsageGuidance(
             append(MCP_WITH_WEB_SEARCH_GUIDANCE.trim())
         } else {
             append(MCP_BASE_USAGE_GUIDANCE.trim())
+        }
+        when (dispatchIntent?.primaryIntent) {
+            QueryIntent.DOCS_LOOKUP -> {
+                append("\n\n当前问题属于文档/API/SDK 查询，优先考虑文档类 MCP 工具和官方文档结果。")
+            }
+            QueryIntent.WEB_CONTENT_READ -> {
+                append("\n\n当前问题属于网页内容读取，优先考虑网页读取类 MCP 工具。")
+            }
+            QueryIntent.REALTIME_INFO -> {
+                append("\n\n当前问题属于最新信息查询，优先考虑搜索类或网页类 MCP 工具。")
+            }
+            else -> Unit
         }
         if (!hasEffectiveWebSearch && looksLikeRealtimeOrNewsQuery(messageText)) {
             append("\n\n")
@@ -333,6 +353,44 @@ private data class AttachmentProcessingResult(
     val imageUriStringsForUi: List<String> = emptyList(),
     val apiContentParts: List<ApiContentPart> = emptyList()
 )
+
+data class PreparedMcpDispatch(
+    val intent: McpDispatchIntent,
+    val tools: List<Map<String, Any>>,
+    val guidance: String?,
+)
+
+internal fun buildToolsForMessage(
+    messageText: String,
+    allCandidates: List<McpToolCandidate>,
+): List<Map<String, Any>> {
+    return prepareMcpDispatch(messageText, allCandidates).tools
+}
+
+internal fun prepareMcpDispatch(
+    messageText: String,
+    allCandidates: List<McpToolCandidate>,
+    strategy: McpDispatchStrategy = McpDispatchStrategy.modelLedDefault(),
+    isMcpEnabled: Boolean = true,
+    hasEffectiveWebSearch: Boolean = false,
+): PreparedMcpDispatch {
+    val intent = classifyMcpIntent(messageText)
+    val plan = selectMcpCandidates(intent, allCandidates, strategy)
+    val tools = plan.exposedTools.map { it.toToolDefinition() }
+    val guidance = buildMcpUsageGuidance(
+        messageText = messageText,
+        isMcpEnabled = isMcpEnabled,
+        hasMcpTools = tools.isNotEmpty(),
+        hasEffectiveWebSearch = hasEffectiveWebSearch,
+        dispatchIntent = intent,
+    )
+    return PreparedMcpDispatch(
+        intent = intent,
+        tools = tools,
+        guidance = guidance,
+    )
+}
+
  class MessageSender(
      private val application: Application,
     private val viewModelScope: CoroutineScope,
@@ -343,6 +401,7 @@ private data class AttachmentProcessingResult(
     private val triggerScrollToBottom: () -> Unit,
     private val uriToBase64Encoder: (Uri) -> String?,
     private val getMcpToolsForRequest: () -> List<Map<String, Any>> = { emptyList() },
+    private val getMcpDispatchCandidates: () -> List<McpToolCandidate> = { emptyList() },
     private val getSelectedExternalWebSearchProvider: () -> ExternalWebSearchProvider? = { null },
     private val getSelectedExternalWebSearchProviderApiKey: () -> String = { "" },
 ) {
@@ -846,6 +905,11 @@ private data class AttachmentProcessingResult(
                 } else {
                     emptyList()
                 }
+                val dispatchCandidates = if (isMcpEnabledForRequest) {
+                    getMcpDispatchCandidates()
+                } else {
+                    emptyList()
+                }
                 // 规范化图像尺寸：为空或包含占位符时回退到 1024x1024（基础兜底）
                 val baseSanitizedImageSize = currentConfig.imageSize?.takeIf { it.isNotBlank() && !it.contains("<") } ?: "1024x1024"
                 
@@ -907,8 +971,28 @@ private data class AttachmentProcessingResult(
                 )
                 val hasEffectiveWebSearch =
                     webSearchRouting.useNativeWebSearch || webSearchRouting.externalProvider != null
+                val preparedMcpDispatch = if (isMcpEnabledForRequest && dispatchCandidates.isNotEmpty()) {
+                    prepareMcpDispatch(
+                        messageText = textToActuallySend,
+                        allCandidates = dispatchCandidates,
+                        isMcpEnabled = true,
+                        hasEffectiveWebSearch = hasEffectiveWebSearch,
+                    )
+                } else {
+                    PreparedMcpDispatch(
+                        intent = classifyMcpIntent(textToActuallySend),
+                        tools = emptyList(),
+                        guidance = buildMcpUsageGuidance(
+                            messageText = textToActuallySend,
+                            isMcpEnabled = isMcpEnabledForRequest,
+                            hasMcpTools = false,
+                            hasEffectiveWebSearch = hasEffectiveWebSearch,
+                            dispatchIntent = classifyMcpIntent(textToActuallySend),
+                        )
+                    )
+                }
                 val mcpToolsForRequest = filterMcpToolsForRequest(
-                    mcpTools = rawMcpToolsForRequest,
+                    mcpTools = if (preparedMcpDispatch.tools.isNotEmpty()) preparedMcpDispatch.tools else rawMcpToolsForRequest,
                     shouldFilterSearchLikeTools = isMcpEnabledForRequest && hasEffectiveWebSearch,
                 )
                 val shouldEnableGoogleSearch = isGeminiChannel && webSearchRouting.useNativeWebSearch
@@ -918,11 +1002,12 @@ private data class AttachmentProcessingResult(
                         systemPrompt = systemPrompt,
                         guidance = buildCurrentTimeGuidance()
                     ),
-                    guidance = buildMcpUsageGuidance(
+                    guidance = preparedMcpDispatch.guidance ?: buildMcpUsageGuidance(
                         messageText = textToActuallySend,
                         isMcpEnabled = isMcpEnabledForRequest,
                         hasMcpTools = mcpToolsForRequest.isNotEmpty(),
                         hasEffectiveWebSearch = hasEffectiveWebSearch,
+                        dispatchIntent = preparedMcpDispatch.intent,
                     )
                 )
                 if (!systemPromptWithWebSearchAwareMcp.isNullOrBlank()) {

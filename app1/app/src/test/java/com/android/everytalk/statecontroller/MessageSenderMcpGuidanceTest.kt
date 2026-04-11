@@ -1,5 +1,8 @@
 package com.android.everytalk.statecontroller
 
+import com.android.everytalk.statecontroller.mcp.dispatch.McpDispatchIntent
+import com.android.everytalk.statecontroller.mcp.dispatch.McpToolCategory
+import com.android.everytalk.statecontroller.mcp.dispatch.QueryIntent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -70,12 +73,56 @@ class MessageSenderMcpGuidanceTest {
     }
 
     @Test
+    fun `docs intent guidance prefers docs tools`() {
+        val guidance = buildMcpUsageGuidance(
+            messageText = "Ktor client bearer auth 怎么配",
+            isMcpEnabled = true,
+            hasMcpTools = true,
+            dispatchIntent = McpDispatchIntent(
+                primaryIntent = QueryIntent.DOCS_LOOKUP,
+                shouldPreferMcp = true,
+                candidateCategories = setOf(McpToolCategory.DOCS)
+            )
+        ).orEmpty()
+
+        assertTrue(guidance.contains("官方文档"))
+        assertTrue(guidance.contains("文档类 MCP 工具"))
+    }
+
+    @Test
     fun `time guidance includes current date and timezone context`() {
         val guidance = buildCurrentTimeGuidance().orEmpty()
 
         assertTrue(guidance.contains("当前本地时间"))
         assertTrue(guidance.contains("时区"))
         assertTrue(guidance.contains("如果用户询问今天"))
+    }
+
+    @Test
+    fun `docs request exposes docs first tools only`() {
+        val tools = buildToolsForMessage(
+            messageText = "Room 2.8 migration 怎么写",
+            allCandidates = listOf(
+                com.android.everytalk.statecontroller.mcp.dispatch.toMcpToolCandidate(
+                    serverId = "docs",
+                    serverName = "Context7",
+                    tool = com.android.everytalk.data.mcp.McpTool("query-docs", "Query docs")
+                ),
+                com.android.everytalk.statecontroller.mcp.dispatch.toMcpToolCandidate(
+                    serverId = "browser",
+                    serverName = "Firecrawl",
+                    tool = com.android.everytalk.data.mcp.McpTool("crawl_page", "Read page")
+                ),
+                com.android.everytalk.statecontroller.mcp.dispatch.toMcpToolCandidate(
+                    serverId = "service",
+                    serverName = "InternalService",
+                    tool = com.android.everytalk.data.mcp.McpTool("internal-service-call", "Business service")
+                )
+            )
+        )
+
+        assertTrue(tools.any { functionDef -> ((functionDef["function"] as Map<*, *>)["name"] as? String) == "query-docs" })
+        assertFalse(tools.any { functionDef -> ((functionDef["function"] as Map<*, *>)["name"] as? String) == "internal-service-call" })
     }
 
     @Test

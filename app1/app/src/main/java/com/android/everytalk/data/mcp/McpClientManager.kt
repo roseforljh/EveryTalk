@@ -3,6 +3,7 @@ package com.android.everytalk.data.mcp
 import android.util.Log
 import com.android.everytalk.data.mcp.transport.SseClientTransport
 import com.android.everytalk.data.mcp.transport.StreamableHttpClientTransport
+import com.android.everytalk.statecontroller.mcp.dispatch.McpFailureType
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
@@ -36,6 +37,18 @@ import java.util.concurrent.TimeUnit
 import kotlin.time.Duration.Companion.seconds
 
 private const val TAG = "McpClientManager"
+
+private fun classifyFailureType(error: Throwable): McpFailureType {
+    val message = error.message.orEmpty().lowercase()
+    return when {
+        "401" in message || "403" in message || "unauthorized" in message || "forbidden" in message -> McpFailureType.AUTH_ERROR
+        "timeout" in message || "timed out" in message -> McpFailureType.TIMEOUT
+        "invalid" in message || "argument" in message -> McpFailureType.INVALID_ARGUMENT
+        "network" in message || "unreachable" in message || "connection" in message -> McpFailureType.NETWORK_ERROR
+        "500" in message || "server" in message -> McpFailureType.SERVER_ERROR
+        else -> McpFailureType.UNKNOWN
+    }
+}
 
 class McpClientManager(
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -182,11 +195,12 @@ class McpClientManager(
             Log.i(TAG, "addServer: connected ${config.name}")
         }.onFailure { e ->
             e.printStackTrace()
-            setStatus(config.id, McpStatus.Error(e.message ?: e.javaClass.name))
+            val failureType = classifyFailureType(e)
+            setStatus(config.id, McpStatus.Error(e.message ?: e.javaClass.name, failureType.name))
             updateServerState(config.id) {
                 McpServerState(
                     config = config,
-                    status = McpStatus.Error(e.message ?: "Connection failed"),
+                    status = McpStatus.Error(e.message ?: "Connection failed", failureType.name),
                     errorMessage = e.message
                 )
             }

@@ -545,6 +545,16 @@ enum class McpServerPreset(
         transportType = McpTransportType.HTTP,
         requiresApiKey = true,
         apiKeyPlaceholder = "Firecrawl API Key"
+    ),
+    CONTEXT7(
+        displayName = "Context7",
+        description = "官方文档检索",
+        urlTemplate = "https://mcp.context7.com/mcp",
+        transportType = McpTransportType.HTTP,
+        requiresApiKey = true,
+        apiKeyPlaceholder = "Context7 API Key",
+        useHeaderAuth = true,
+        headerName = "CONTEXT7_API_KEY"
     );
 
     fun buildUrl(apiKey: String): String {
@@ -572,6 +582,7 @@ fun AddMcpServerDialog(
                 existingConfig == null -> McpServerPreset.CUSTOM
                 existingConfig.url.contains("mcp.exa.ai", ignoreCase = true) -> McpServerPreset.EXA_SEARCH
                 existingConfig.url.contains("mcp.firecrawl.dev", ignoreCase = true) -> McpServerPreset.FIRECRAWL
+                existingConfig.url.contains("mcp.context7.com", ignoreCase = true) -> McpServerPreset.CONTEXT7
                 else -> McpServerPreset.CUSTOM
             }
         )
@@ -634,28 +645,33 @@ fun AddMcpServerDialog(
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    // Compact Row for Presets
-                    Row(
+                    LazyRow(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(horizontal = 2.dp)
                     ) {
-                        McpServerPreset.entries.forEach { preset ->
+                        items(McpServerPreset.entries, key = { it.name }) { preset ->
                             val isSelected = selectedPreset == preset
                             val presetColor = when (preset) {
                                 McpServerPreset.CUSTOM -> Color(0xFF8B5CF6)
                                 McpServerPreset.EXA_SEARCH -> Color(0xFF6366F1)
                                 McpServerPreset.FIRECRAWL -> Color(0xFFEF4444)
+                                McpServerPreset.CONTEXT7 -> Color(0xFF10B981)
                             }
-                            
+
                             Surface(
                                 onClick = { selectedPreset = preset },
                                 shape = RoundedCornerShape(12.dp),
                                 color = if (isSelected) presetColor.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceContainerHighest,
                                 border = BorderStroke(1.dp, if (isSelected) presetColor else Color.Transparent),
-                                modifier = Modifier.weight(1f).height(40.dp)
+                                modifier = Modifier
+                                    .widthIn(min = 104.dp)
+                                    .height(40.dp)
                             ) {
                                 Row(
-                                    modifier = Modifier.fillMaxSize(),
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(horizontal = 12.dp),
                                     horizontalArrangement = Arrangement.Center,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
@@ -670,7 +686,8 @@ fun AddMcpServerDialog(
                                         text = preset.displayName,
                                         style = MaterialTheme.typography.labelMedium,
                                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                        color = if (isSelected) presetColor else MaterialTheme.colorScheme.onSurface
+                                        color = if (isSelected) presetColor else MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1
                                     )
                                 }
                             }

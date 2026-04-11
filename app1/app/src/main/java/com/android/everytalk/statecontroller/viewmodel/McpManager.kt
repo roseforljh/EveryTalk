@@ -5,6 +5,8 @@ import android.util.Log
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.database.entities.McpServerConfigEntity
 import com.android.everytalk.data.mcp.*
+import com.android.everytalk.statecontroller.mcp.dispatch.McpToolCandidate
+import com.android.everytalk.statecontroller.mcp.dispatch.toMcpToolCandidate
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.JsonElement
@@ -142,6 +144,20 @@ class McpManager(context: Context) {
 
     fun getAllAvailableTools(): List<McpTool> {
         return clientManager.getAllAvailableTools()
+    }
+
+    fun getDispatchCandidates(): List<McpToolCandidate> {
+        return serverStates.value.values
+            .filter { it.status is McpStatus.Connected && it.config.enabled }
+            .flatMap { state ->
+                state.tools.map { tool ->
+                    toMcpToolCandidate(
+                        serverId = state.config.id,
+                        serverName = state.config.name,
+                        tool = tool
+                    )
+                }
+            }
     }
 
     fun getToolsForChatRequest(): List<Map<String, Any>> {

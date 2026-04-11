@@ -77,6 +77,7 @@ import com.android.everytalk.statecontroller.controller.conversation.AnimationSt
 import com.android.everytalk.statecontroller.controller.conversation.EditMessageController
 import com.android.everytalk.statecontroller.controller.media.ClipboardController
 import com.android.everytalk.statecontroller.controller.config.ConfigFacade
+import com.android.everytalk.statecontroller.mcp.dispatch.McpUiStage
 import com.android.everytalk.statecontroller.controller.config.ProviderController
 import com.android.everytalk.statecontroller.controller.cache.CacheController
 import com.android.everytalk.statecontroller.viewmodel.McpManager
@@ -168,6 +169,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _selectedExternalWebSearchProviderId = MutableStateFlow<String?>(null)
     val selectedExternalWebSearchProviderId: StateFlow<String?>
         get() = _selectedExternalWebSearchProviderId.asStateFlow()
+    private val _mcpUiStage = MutableStateFlow<McpUiStage?>(null)
+    val mcpUiStage: StateFlow<McpUiStage?>
+        get() = _mcpUiStage.asStateFlow()
 
     val selectedExternalWebSearchProvider: ExternalWebSearchProvider?
         get() = ExternalWebSearchProvider.fromId(_selectedExternalWebSearchProviderId.value)
@@ -276,9 +280,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 triggerScrollToBottom = { triggerScrollToBottom() },
                 uriToBase64Encoder = { uri -> encodeUriAsBase64(uri) },
                 getMcpToolsForRequest = { mcpManager.getToolsForChatRequest() },
+                getMcpDispatchCandidates = { mcpManager.getDispatchCandidates() },
                 getSelectedExternalWebSearchProvider = { selectedExternalWebSearchProvider },
                 getSelectedExternalWebSearchProviderApiKey = { selectedExternalWebSearchProviderApiKey }
-        )
+        ).also {
+            _mcpUiStage.value = null
+        }
     }
 
     private val openClawRuntimeStatusService by lazy {

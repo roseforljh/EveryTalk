@@ -145,6 +145,12 @@ object SyntaxHighlighter {
             "sh" to ShellHighlighter,
             "shell" to ShellHighlighter,
             "zsh" to ShellHighlighter,
+            "powershell" to ShellHighlighter,
+            "ps1" to ShellHighlighter,
+            "pwsh" to ShellHighlighter,
+            "cmd" to ShellHighlighter,
+            "bat" to ShellHighlighter,
+            "batch" to ShellHighlighter,
 
             // YAML
             "yaml" to YamlHighlighter,

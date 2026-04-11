@@ -128,6 +128,7 @@ fun ChatScreen(
     val conversationId by viewModel.currentConversationId.collectAsState()
     val latestReleaseInfo by viewModel.latestReleaseInfo.collectAsState()
     val updateInfo by viewModel.updateInfo.collectAsState()
+    val mcpUiStage by viewModel.mcpUiStage.collectAsState()
     val systemPrompt by viewModel.systemPrompt.collectAsState()
     val isSystemPromptEngaged by viewModel.isSystemPromptEngaged.collectAsState()
     val isSystemPromptExpanded by remember(conversationId) {
@@ -568,6 +569,24 @@ fun ChatScreen(
                 isSystemPromptEngaged = isSystemPromptEngaged,
                 onToggleSystemPromptEngaged = { viewModel.toggleSystemPromptEngaged() }
             )
+
+            mcpUiStage?.takeIf { it.userVisibleText.isNotBlank() }?.let { stage ->
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 72.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    tonalElevation = 2.dp,
+                ) {
+                    Text(
+                        text = stage.userVisibleText,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                }
+            }
         }
 
         if (showEditDialog) {
