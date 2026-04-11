@@ -49,6 +49,13 @@ jobs:
           fi
           echo "Resolved app directory: $APP_DIR"
           echo "APP_DIR=$APP_DIR" >> $GITHUB_ENV
+          ROOT_PROJECT_NAME=$(basename "$APP_DIR")
+          ARTIFACT_GLOB="$HOME/.everytalk-gradle-build/$ROOT_PROJECT_NAME/app/outputs/apk/release/*.apk"
+          ARTIFACT_DIR="$HOME/.everytalk-gradle-build/$ROOT_PROJECT_NAME/app/outputs/apk/release"
+          echo "Resolved artifact dir: $ARTIFACT_DIR"
+          echo "ROOT_PROJECT_NAME=$ROOT_PROJECT_NAME" >> $GITHUB_ENV
+          echo "ARTIFACT_GLOB=$ARTIFACT_GLOB" >> $GITHUB_ENV
+          echo "ARTIFACT_DIR=$ARTIFACT_DIR" >> $GITHUB_ENV
 
       # 从 Secrets 还原 keystore（你已经有签名）
       # 在仓库 Settings → Secrets and variables → Actions 中配置：
@@ -138,7 +145,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            ${{ env.APP_DIR }}/app/build/outputs/apk/release/*.apk
+            ${{ env.ARTIFACT_GLOB }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -166,7 +173,7 @@ jobs:
           BRANCH: ${{ github.ref_name }}
           RUN_ID: ${{ github.run_id }}
           SHA: ${{ github.sha }}
-          APK_DIR: ${{ env.APP_DIR }}/app/build/outputs/apk/release
+          APK_DIR: ${{ env.ARTIFACT_DIR }}
         run: |
           # 脚本位于仓库根目录的 .github/scripts 下
           python3 .github/scripts/send_telegram.py
@@ -177,4 +184,4 @@ jobs:
         with:
           name: android-release-apk
           path: |
-            ${{ env.APP_DIR }}/app/build/outputs/apk/release/*.apk
+            ${{ env.ARTIFACT_GLOB }}
