@@ -71,43 +71,43 @@ private val LightColorScheme = lightColorScheme(
     onPrimary = Color.White,
     primaryContainer = Color.White, // 纯白按钮背景
     onPrimaryContainer = Color(0xFF21005D),
-    
+
     // 次要色调
     secondary = PurpleGrey40,
     onSecondary = Color.White,
     secondaryContainer = Color.White, // 纯白按钮背景
     onSecondaryContainer = Color(0xFF1D192B),
-    
+
     // 强调色
     tertiary = Pink40,
     onTertiary = Color.White,
     tertiaryContainer = Color.White, // 纯白按钮背景
     onTertiaryContainer = Color(0xFF31111D),
-    
+
     // 背景和表面 - 全部改为纯白
     background = Color.White, // 主聊天背景改为纯白
-    onBackground = Color(0xFF1C1B1F),
+    onBackground = Color(0xFF000000),
     surface = Color.White, // 卡片、对话框表面改为纯白
-    onSurface = Color(0xFF1C1B1F),
+    onSurface = Color(0xFF000000),
     surfaceVariant = Color.White, // 表面变体改为纯白
     onSurfaceVariant = Color(0xFF49454F),
-    
+
     // 错误状态
     error = Color(0xFFBA1A1A),
     onError = Color.White,
     errorContainer = Color(0xFFFFDAD6),
     onErrorContainer = Color(0xFF410002),
-    
+
     // 轮廓线
     outline = Color(0xFF79747E),
     outlineVariant = Color(0xFFCAC4D0),
-    
+
     // 其他颜色
     scrim = Color.Black,
     inverseSurface = Color(0xFF313033),
     inverseOnSurface = Color(0xFFF4EFF4),
     inversePrimary = Purple80,
-    
+
     // Material 3 新增颜色 - 优化弹出选项卡颜色
     surfaceTint = Color.White,
     surfaceBright = Color.White,
@@ -118,6 +118,10 @@ private val LightColorScheme = lightColorScheme(
     surfaceContainerHigh = Color.White,
     surfaceContainerHighest = Color.White
 )
+
+internal fun lightThemeOnBackground(): Color = LightColorScheme.onBackground
+internal fun lightThemeOnSurface(): Color = LightColorScheme.onSurface
+internal fun lightThemeOnSurfaceVariant(): Color = LightColorScheme.onSurfaceVariant
 
 @Composable
 fun App1Theme(

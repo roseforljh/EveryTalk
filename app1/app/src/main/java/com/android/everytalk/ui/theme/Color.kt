@@ -24,11 +24,11 @@ val DarkCardBackground = Color(0xFF2A2A2A)     // 卡片背景 - 取代白色
 val DarkCardElevated = Color(0xFF000000)       // 悬浮卡片背景
 val DarkInputBackground = Color(0xFF000000)    // 输入框背景
 
-// 深色前景系列 - 柔和的文字颜色
-val DarkOnBackground = Color(0xFFE8E8E8)       // 背景上的文字 - 柔和白
-val DarkOnSurface = Color(0xFFDEDEDE)          // 表面上的文字
+// 深色前景系列 - 纯白主文字 + 灰阶次级文字
+val DarkOnBackground = Color(0xFFFFFFFF)       // 背景上的文字 - 纯白
+val DarkOnSurface = Color(0xFFFFFFFF)          // 表面上的文字 - 纯白
 val DarkOnSurfaceVariant = Color(0xFFBBBBBB)   // 表面变体上的文字 - 中等灰
-val DarkOnCard = Color(0xFFE0E0E0)             // 卡片上的文字
+val DarkOnCard = Color(0xFFFFFFFF)             // 卡片上的文字 - 纯白
 
 // 深色主色调 - 温和的蓝色系
 val DarkPrimary = Color(0xFF6C9EFF)            // 主色调 - 更亮的蓝色
@@ -65,8 +65,8 @@ val DarkSuccess = Color(0xFF66BB6A)            // 成功色 - 柔和绿
 val DarkWarning = Color(0xFFFFB74D)            // 警告色 - 柔和橙
 val DarkInfo = Color(0xFF64B5F6)               // 信息色 - 柔和蓝
 
-// 文字颜色 - 层次分明但不刺眼
-val DarkTextPrimary = Color(0xFFF0F0F0)        // 主要文字 - 柔和白
+// 文字颜色 - 纯白主文字 + 灰阶层次
+val DarkTextPrimary = Color(0xFFFFFFFF)        // 主要文字 - 纯白
 val DarkTextSecondary = Color(0xFFD0D0D0)      // 次要文字 - 中等灰白
 val DarkTextTertiary = Color(0xFFA8A8A8)       // 三级文字 - 浅灰
 val DarkTextDisabled = Color(0xFF666666)       // 禁用文字 - 深灰
