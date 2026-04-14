@@ -468,17 +468,35 @@ internal fun prepareMcpDispatch(
         messages: MutableList<AbstractApiMessage>,
         currentUserMessage: AbstractApiMessage
     ): MutableList<AbstractApiMessage> {
-        val currentUserText = extractPrimaryText(currentUserMessage).trim()
-        if (currentUserText.isBlank()) {
+        val hasUserContent = when (currentUserMessage) {
+            is SimpleTextApiMessage -> currentUserMessage.content.trim().isNotBlank()
+            is PartsApiMessage -> currentUserMessage.parts.any { part ->
+                when (part) {
+                    is ApiContentPart.Text -> part.text.trim().isNotBlank()
+                    is ApiContentPart.InlineData, is ApiContentPart.FileUri -> true
+                }
+            }
+        }
+        if (!hasUserContent) {
             return messages
         }
         val existingUserIndex = messages.indexOfFirst { message ->
-            message.role == "user" && extractPrimaryText(message).trim() == currentUserText
+            if (message.role != "user") {
+                return@indexOfFirst false
+            }
+            when {
+                message == currentUserMessage -> true
+                message is SimpleTextApiMessage && currentUserMessage is SimpleTextApiMessage ->
+                    message.content.trim() == currentUserMessage.content.trim()
+                message is PartsApiMessage && currentUserMessage is PartsApiMessage ->
+                    message.parts == currentUserMessage.parts
+                else -> false
+            }
         }
         if (existingUserIndex == -1) {
             Log.w(
                 "MessageSender",
-                "current user input missing from request messages, injecting fallback user message text=${currentUserText.take(80)}"
+                "current user input missing from request messages, injecting fallback user message preview=${describeApiMessage(currentUserMessage)}"
             )
             messages.add(currentUserMessage)
         }
