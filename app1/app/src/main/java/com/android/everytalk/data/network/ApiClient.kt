@@ -26,7 +26,6 @@ import io.ktor.utils.io.streams.asInput
 import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.*
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -536,7 +535,7 @@ object ApiClient {
             send(AppStreamEvent.Error("Direct connection failed: ${e.message}", null))
             send(AppStreamEvent.Finish("direct_connection_failed"))
         }
-    }.buffer(Channel.BUFFERED).flowOn(Dispatchers.IO)
+    }
 
 
     private fun getUpdateUrls(): List<String> {
