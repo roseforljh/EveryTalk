@@ -523,103 +523,66 @@ private fun separateTextAndLongBlockMathLines(input: String): String {
     return rebuilt.joinToString("\n")
 }
 
+/**
+ * 在数学转换前保护货币符号，避免 $5、$10 等金额被误判为内联数学分隔符。
+ *
+ * 策略：同行内存在两个「$ + 数字」的配对时才转义（金额场景）。
+ * 保留 $1+2=3$、$x^2$ 等合法数学公式不动。
+ */
 private fun escapeCurrencyOutsideMath(input: String): String {
     if (!input.contains('$')) return input
 
-    fun hasClosingSingleDollar(start: Int): Boolean {
-        var j = start
-        while (j < input.length && input[j] != '\n') {
+    fun findNextUnescapedDollar(from: Int): Int {
+        var j = from
+        while (j < input.length) {
             val c = input[j]
-            val isEscaped = j > 0 && input[j - 1] == '\\'
-            if (c == '$' && !isEscaped) {
+            if (c == '\n') return -1
+            val escaped = j > 0 && input[j - 1] == '\\'
+            if (c == '`') {
+                // 跳过行内代码段
+                j++
+                while (j < input.length && input[j] != '`') {
+                    if (input[j] == '\n' || (j > 0 && input[j - 1] == '\\' && input[j] == '`')) break
+                    j++
+                }
+                if (j < input.length) j++
+                continue
+            }
+            if (c == '$' && !escaped) {
                 val isDouble = j + 1 < input.length && input[j + 1] == '$'
                 if (isDouble) {
                     j += 2
                     continue
                 }
-                return true
+                return j
             }
             j++
         }
-        return false
-    }
-
-    fun hasClosingDoubleDollar(start: Int): Boolean {
-        var j = start
-        while (j + 1 < input.length && input[j] != '\n') {
-            val isEscaped = j > 0 && input[j - 1] == '\\'
-            if (input[j] == '$' && input[j + 1] == '$' && !isEscaped) {
-                return true
-            }
-            j++
-        }
-        return false
+        return -1
     }
 
     val out = StringBuilder(input.length + 16)
-    var inInlineCode = false
-    var inInlineMath = false
-    var inBlockMath = false
     var i = 0
-
     while (i < input.length) {
         val ch = input[i]
+        val escaped = i > 0 && input[i - 1] == '\\'
 
-        val isEscaped = i > 0 && input[i - 1] == '\\'
-        if (ch == '`' && !isEscaped) {
-            inInlineCode = !inInlineCode
-            out.append(ch)
-            i++
-            continue
-        }
-        if (inInlineCode) {
-            out.append(ch)
-            i++
-            continue
-        }
-
-        if (!inInlineMath && !inBlockMath && i + 3 < input.length && input.startsWith("$$$", i) && input[i + 3].isDigit()) {
+        // $$$ 后跟数字 → 货币，转义第一个 $
+        if (i + 2 < input.length && input.startsWith("$$$", i) && input[i + 2].isDigit()) {
             out.append("\\$")
-            i += 3
-            continue
-        }
-
-        if (!inInlineMath && i + 1 < input.length && input.startsWith("$$", i)) {
-            if (!inBlockMath && i + 2 < input.length && input[i + 2].isDigit()) {
-                if (hasClosingDoubleDollar(i + 2)) {
-                    inBlockMath = true
-                    out.append("$$")
-                    i += 2
-                    continue
-                } else {
-                    out.append("\\$")
-                    i += 2
-                    continue
-                }
-            }
-            inBlockMath = !inBlockMath
-            out.append("$$")
             i += 2
             continue
         }
 
-        if (ch == '$' && !inBlockMath) {
-            if (!inInlineMath && i + 1 < input.length && input[i + 1].isDigit()) {
-                if (hasClosingSingleDollar(i + 1)) {
-                    inInlineMath = true
-                    out.append('$')
-                    i++
-                    continue
-                } else {
-                    out.append("\\$")
-                    i++
-                    continue
-                }
+        // $ 后跟数字 → 可能是货币，检查同行是否有配对的另一个 $+数字
+        if (!escaped && ch == '$' && i + 1 < input.length && input[i + 1].isDigit()) {
+            val closingIdx = findNextUnescapedDollar(i + 1)
+            if (closingIdx > i && closingIdx + 1 < input.length && input[closingIdx + 1].isDigit()) {
+                // 同行找到了另一个 $+数字 → 确认是金额对，转义
+                out.append("\\$")
+                i++
+                continue
             }
-            inInlineMath = !inInlineMath
-            out.append(ch)
-            i++
-            continue
         }
 
         out.append(ch)
