@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.15.6](https://github.com/roseforljh/EveryTalk/compare/v1.15.5...v1.15.6) (2026-04-26)
+
+
+### Bug Fixes
+
+* 一些输出上的优化？ ([8bbbb42](https://github.com/roseforljh/EveryTalk/commit/8bbbb421171baf02d9e867bf45ed5095b7147d58))
+* 优化数学公式和美金的逻辑冲突 ([9c960a7](https://github.com/roseforljh/EveryTalk/commit/9c960a7617638e5cb1a9d85634fee2a26925ebbe))
+
 ## [1.15.5](https://github.com/roseforljh/EveryTalk/compare/v1.15.4...v1.15.5) (2026-04-14)
 
 
