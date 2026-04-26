@@ -39,6 +39,11 @@ class WebSearchSupportTest {
     }
 
     @Test
+    fun `supported and disabled toggle shows online search label`() {
+        assertEquals("联网搜索", webSearchToggleLabel(isSupported = true, isEnabled = false))
+    }
+
+    @Test
     fun `disabled toggle does not enable qwen native search`() {
         val config = createConfig(channel = "OpenAI兼容", model = "qwen-plus")
 

@@ -1,7 +1,7 @@
 # EveryTalk - 新一代智能对话平台
 
 <p align="center">
-  <img src="https://qone.kuz7.com/uploads/images/2025/11/09/28553c13-29b3-4ab4-87a8-e72ad4be8568.png" alt="EveryTalk Logo" width="200"/>
+  <img src="app1/app/src/main/res/mipmap-xxxhdpi/ic_launcher.webp" alt="EveryTalk Logo" width="200"/>
 </p>
 
 <p align="center">
@@ -19,10 +19,53 @@
   <a href="https://t.me/+EKxpszVkOBc1MGJl"><img src="https://img.shields.io/badge/Telegram-Join%20Group-blue?style=for-the-badge&logo=telegram" alt="Telegram Group"></a>
 </p>
 
+## 项目状态
+
+- **项目定位**: 面向 Android 的原生 AI 对话客户端，聚焦多模型接入、流式交互、多模态能力与本地化使用体验。
+- **当前平台**: Android 8.1 及以上，推荐 Android 10+；开发环境建议使用 Android Studio + JDK 17。
+- **能力范围**: 当前 README 所述能力覆盖文本对话、视觉理解、图像生成、语音交互、数学公式渲染、原生联网搜索与 OpenClaw 扩展接入。
+- **接入方式**: 支持直连兼容 API，也支持通过可选后端做请求代理、图像生成与附加能力扩展。
+- **使用门槛**: 首次使用至少需要一套可用的模型 API 地址、模型名称与对应密钥；部分高级能力依赖上游模型或后端支持。
+
+## 适合 / 不适合
+
+### 适合
+
+- 想在 Android 设备上统一接入多种大模型的个人用户
+- 需要流式响应、多模态输入、图像生成、语音交互的重度 AI 使用者
+- 希望基于 Kotlin + Jetpack Compose 学习原生 AI 应用实现的开发者
+- 需要通过 OpenClaw / Bridge 方案扩展远程能力的进阶用户
+
+### 不适合
+
+- 期望开箱即用、无需任何 API 配置即可直接使用的用户
+- 只关注单一模型官方体验，不需要多模型切换与自定义配置的用户
+- 需要 iOS、Web 或桌面端原生客户端的场景
+- 希望所有联网、语音、图像等能力都在纯离线环境下可用的场景
+
+## 使用前须知
+
+- 本项目当前主交付形态是 **Android 原生客户端**，核心工程位于 `app1/`。
+- 应用支持 **无后端直连模式**，但并不是所有模型都具备一致能力；例如联网搜索只对支持原生搜索的模型生效。
+- 图像生成、语音链路、后端代理、OpenClaw 等能力，是否可用取决于你接入的服务端或上游模型是否支持。
+- README 中的“支持”表示项目已经提供对应接入链路或消费能力，不等于任意模型在任意配置下都默认可用。
+- 仓库中同时包含 Android 客户端与可选后端相关代码，初次阅读时建议优先从 `README.md`、`docs/openclaw-integration.md` 和 `docs/plans/` 进入。
+
+## 文档入口
+
+- **项目总览**: 当前 `README.md`，用于了解定位、能力范围、接入方式与常见问题。
+- **OpenClaw 专题**: [`docs/openclaw-integration.md`](docs/openclaw-integration.md)，说明 EveryTalk -> Bridge -> Gateway 的接入链路与部署方式。
+- **方案沉淀**: `docs/plans/`，包含部分功能设计与演进方案，可用于理解历史决策与结构调整方向。
+- **Claude / Agent 相关文档**: `CLAUDE.md` 与 `AGENTS.md`，适合需要在本仓库内继续开发或协作的维护者。
+
 ---
 
 ## 目录
 
+- [🧭 项目状态](#项目状态)
+- [📌 适合--不适合](#适合--不适合)
+- [⚠️ 使用前须知](#使用前须知)
+- [📚 文档入口](#文档入口)
 - [🌟 核心特性](#-核心特性)
 - [📱 应用截图](#-应用截图)
 - [🚀 快速开始](#-快速开始)
