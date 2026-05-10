@@ -480,20 +480,10 @@ internal fun prepareMcpDispatch(
         if (!hasUserContent) {
             return messages
         }
-        val existingUserIndex = messages.indexOfFirst { message ->
-            if (message.role != "user") {
-                return@indexOfFirst false
-            }
-            when {
-                message == currentUserMessage -> true
-                message is SimpleTextApiMessage && currentUserMessage is SimpleTextApiMessage ->
-                    message.content.trim() == currentUserMessage.content.trim()
-                message is PartsApiMessage && currentUserMessage is PartsApiMessage ->
-                    message.parts == currentUserMessage.parts
-                else -> false
-            }
+        val existingCurrentUserMessage = messages.any { message ->
+            message.role == "user" && message.id == currentUserMessage.id
         }
-        if (existingUserIndex == -1) {
+        if (!existingCurrentUserMessage) {
             Log.w(
                 "MessageSender",
                 "current user input missing from request messages, injecting fallback user message preview=${describeApiMessage(currentUserMessage)}"
@@ -843,16 +833,15 @@ internal fun prepareMcpDispatch(
                     stateHolder.imageGenerationMessages.add(newUserMessageForUi)
                 } else {
                     stateHolder.messages.add(newUserMessageForUi)
-                    // 首条消息产生后（文本模式），将"待应用参数"落库，满足：空会话不保存；非空会话保存
+                    if (!isFromRegeneration) {
+                        stateHolder._lastSentUserMessageId.value = newUserMessageForUi.id
+                    }
                     stateHolder.persistPendingParamsIfNeeded(isImageGeneration = false)
                 }
                 if (!isFromRegeneration) {
                    stateHolder._text.value = ""
                    stateHolder.clearSelectedMedia()
                 }
-                // 注意：不再在此处调用 triggerScrollToBottom()
-                // ChatScreen 和 ImageGenerationScreen 各自有更好的滚动逻辑（scrollItemToTop），
-                // 会在 onSendMessage 回调后执行带动画的平滑滚动
             }
 
             // 🔥 新增：当在新会话中发送第一条消息时，立即将其添加到历史记录中，以便在抽屉中即时可见
@@ -1061,8 +1050,7 @@ internal fun prepareMcpDispatch(
                     apiHandler.prepareStreamingAiMessage(
                         modelName = currentConfig.model,
                         providerName = currentConfig.provider,
-                        isImageGeneration = false,
-                        onNewAiMessageAdded = triggerScrollToBottom
+                        isImageGeneration = false
                     )
                 } else null
 

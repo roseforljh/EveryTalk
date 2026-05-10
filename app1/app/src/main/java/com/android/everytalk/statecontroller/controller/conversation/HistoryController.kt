@@ -170,6 +170,9 @@ class HistoryController(
     fun loadTextHistory(index: Int) {
         scope.launch {
             stateHolder._isLoadingHistory.value = true
+            stateHolder._isTextApiCalling.value = false
+            stateHolder._currentTextStreamingAiMessageId.value = null
+            stateHolder._lastSentUserMessageId.value = null
             try {
                 simpleModeSwitcher.loadTextHistory(index)
                 val processed = processLoadedMessages(stateHolder.messages.toList())

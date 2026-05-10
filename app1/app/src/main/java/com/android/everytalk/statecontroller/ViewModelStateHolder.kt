@@ -27,7 +27,8 @@ import kotlinx.serialization.Serializable
 data class ConversationScrollState(
     val firstVisibleItemIndex: Int = 0,
     val firstVisibleItemScrollOffset: Int = 0,
-    val userScrolledAway: Boolean = false
+    val userScrolledAway: Boolean = false,
+    val firstBubbleScreenY: Int = -1
 )
 
 enum class OpenClawGatewayConnectionState {
@@ -142,6 +143,8 @@ data class ConversationFunctionToggleState(
     val _isTextApiCalling = MutableStateFlow(false)
     val _isImageApiCalling = MutableStateFlow(false)
     val _isMcpEnabledForNextRequest = MutableStateFlow(false)
+
+    val _lastSentUserMessageId = MutableStateFlow<String?>(null)
 
     // 分离的流式消息ID
     val _currentTextStreamingAiMessageId = MutableStateFlow<String?>(null)

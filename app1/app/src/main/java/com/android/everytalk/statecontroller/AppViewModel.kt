@@ -345,6 +345,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         get() = stateHolder._isTextApiCalling.asStateFlow()
     val isImageApiCalling: StateFlow<Boolean>
         get() = stateHolder._isImageApiCalling.asStateFlow()
+    val lastSentUserMessageId: StateFlow<String?>
+        get() = stateHolder._lastSentUserMessageId.asStateFlow()
+    fun consumeLastSentUserMessageId() {
+        stateHolder._lastSentUserMessageId.value = null
+    }
     val currentTextStreamingAiMessageId: StateFlow<String?>
         get() = stateHolder._currentTextStreamingAiMessageId.asStateFlow()
     val currentImageStreamingAiMessageId: StateFlow<String?>
@@ -1028,6 +1033,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         mimeType: String? = null,
         isImageGeneration: Boolean = false
     ) {
+        Log.d("AppViewModel", "onSendMessage: isImage=$isImageGeneration, attachments=${attachments.size}")
         if (!isImageGeneration && stateHolder._isWebSearchEnabled.value) {
             val currentConfig = stateHolder._selectedApiConfig.value
             val supportsNative = com.android.everytalk.data.network.WebSearchSupport.supportsNativeWebSearch(currentConfig)

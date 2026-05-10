@@ -614,16 +614,12 @@ class ApiHandler(
                 if (currentJob == thisJob) {
                     if (isImageGeneration) {
                         stateHolder.imageApiJob = null
-                        if (stateHolder._isImageApiCalling.value && stateHolder._currentImageStreamingAiMessageId.value == aiMessageId) {
-                            stateHolder._isImageApiCalling.value = false
-                            stateHolder._currentImageStreamingAiMessageId.value = null
-                        }
+                        stateHolder._isImageApiCalling.value = false
+                        stateHolder._currentImageStreamingAiMessageId.value = null
                     } else {
                         stateHolder.textApiJob = null
-                        if (stateHolder._isTextApiCalling.value && stateHolder._currentTextStreamingAiMessageId.value == aiMessageId) {
-                            stateHolder._isTextApiCalling.value = false
-                            stateHolder._currentTextStreamingAiMessageId.value = null
-                        }
+                        stateHolder._isTextApiCalling.value = false
+                        stateHolder._currentTextStreamingAiMessageId.value = null
                     }
                 }
             }

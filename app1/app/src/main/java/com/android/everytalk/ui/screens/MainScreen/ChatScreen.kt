@@ -203,8 +203,8 @@ fun ChatScreen(
             savedState.firstVisibleItemIndex > 0 || savedState.firstVisibleItemScrollOffset > 0
         )
         if (shouldRestore) {
-            snapshotFlow { isLoadingHistory }
-                .filter { !it }
+            snapshotFlow { !isLoadingHistory && listState.layoutInfo.totalItemsCount > savedState.firstVisibleItemIndex }
+                .filter { it }
                 .first()
 
             listState.scrollToItem(
@@ -253,12 +253,14 @@ fun ChatScreen(
             .filter { (_, _, isScrolling) -> !isScrolling && !isLoadingHistory }
             .collect { (index, offset, _) ->
                 if (listState.layoutInfo.totalItemsCount > 0) {
+                    val existing = viewModel.getScrollState(conversationId)
                     viewModel.cacheScrollState(
                         conversationId,
                         ConversationScrollState(
                             firstVisibleItemIndex = index,
                             firstVisibleItemScrollOffset = offset,
                             userScrolledAway = !isAtBottom,
+                            firstBubbleScreenY = existing?.firstBubbleScreenY ?: -1
                         )
                     )
                 }
@@ -268,10 +270,12 @@ fun ChatScreen(
     DisposableEffect(conversationId, isAtBottom) {
         val idToSaveFor = conversationId
         onDispose {
+            val existing = viewModel.getScrollState(idToSaveFor)
             val stateToSave = ConversationScrollState(
                 firstVisibleItemIndex = listState.firstVisibleItemIndex,
                 firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset,
                 userScrolledAway = !isAtBottom,
+                firstBubbleScreenY = existing?.firstBubbleScreenY ?: -1
             )
             viewModel.saveScrollState(idToSaveFor, stateToSave)
         }
@@ -288,7 +292,7 @@ fun ChatScreen(
     val chatListItems by viewModel.chatListItems.collectAsState()
     LaunchedEffect(scrollStateManager) {
         viewModel.scrollToItemEvent.collect { messageId ->
-            // 收到滚动请求时，列表可能尚未更新（StateFlow更新有延迟），因此需要重试等待
+            android.util.Log.d("ChatScreen", "scrollToItemEvent received: messageId=$messageId")
             var attempts = 0
             var targetIndex = -1
             while (attempts < 20) {
@@ -310,10 +314,10 @@ fun ChatScreen(
                 attempts++
             }
             
+            android.util.Log.d("ChatScreen", "scrollToItemEvent: targetIndex=$targetIndex, totalItems=${listState.layoutInfo.totalItemsCount}")
             if (targetIndex != -1) {
                 scrollStateManager.scrollItemToTop(targetIndex)
             } else {
-                // 如果找不到目标消息（例如列表更新失败），回退到滚动到底部
                 scrollStateManager.smoothScrollToBottom(isUserAction = true)
             }
         }
@@ -501,7 +505,6 @@ fun ChatScreen(
                 onSendMessageRequest = { messageText, _, attachments, mimeType ->
                     scrollStateManager.lockAutoScroll()
                     lastSendAt.value = System.currentTimeMillis()
-                    
                     viewModel.onSendMessage(messageText = messageText, attachments = attachments, audioBase64 = null, mimeType = mimeType)
                     keyboardController?.hide()
                 },
