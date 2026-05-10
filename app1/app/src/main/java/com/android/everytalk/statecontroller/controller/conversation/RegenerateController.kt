@@ -189,7 +189,7 @@ class RegenerateController(
                         }
                         
                         if (scrollToNewMessage) {
-                            stateHolder._scrollToItemEvent.tryEmit(newUserMessageId)
+                            stateHolder._lastSentUserMessageId.value = newUserMessageId
                         }
                     }
                 }

@@ -154,13 +154,37 @@ fun ChatMessagesList(
         dynamicBottomPaddingTarget = 0.dp
         firstBubbleScreenY = viewModel.getScrollState(scrollSessionKey)?.firstBubbleScreenY ?: -1
         android.util.Log.d("GrokScroll", "Session changed, reset state, restored firstBubbleScreenY=$firstBubbleScreenY")
+        
+        if (firstBubbleScreenY > 0 && chatItems.isNotEmpty()) {
+            val lastUserIdx = chatItems.indexOfLast { 
+                it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage 
+            }
+            if (lastUserIdx > 0) {
+                kotlinx.coroutines.delay(100)
+                val viewportHeight = listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset
+                dynamicBottomPaddingTarget = with(density) { (viewportHeight * 2).toDp() }
+                kotlinx.coroutines.delay(100)
+                listState.scrollToItem(lastUserIdx, scrollOffset = -firstBubbleScreenY)
+                kotlinx.coroutines.delay(50)
+                val li = listState.layoutInfo
+                val item = li.visibleItemsInfo.firstOrNull { it.index == lastUserIdx }
+                if (item != null) {
+                    val actualY = item.offset - li.viewportStartOffset
+                    val correction = actualY - firstBubbleScreenY
+                    if (correction != 0) {
+                        listState.scrollBy(correction.toFloat())
+                    }
+                }
+                android.util.Log.d("GrokScroll", "Session restore: scrolled to lastUser=$lastUserIdx at Y=$firstBubbleScreenY")
+            }
+        }
     }
     
     LaunchedEffect(isApiCalling) {
         if (!isApiCalling && dynamicBottomPaddingTarget > 0.dp) {
             kotlinx.coroutines.delay(300)
             dynamicBottomPaddingTarget = 0.dp
-            android.util.Log.d("GrokScroll", "Cleared padding")
+            android.util.Log.d("GrokScroll", "API done, cleared padding")
         }
     }
 
@@ -257,6 +281,8 @@ fun ChatMessagesList(
                 } else {
                     android.util.Log.d("GrokScroll", "Item not visible after scrollToItem, fallback")
                 }
+
+                android.util.Log.d("GrokScroll", "Keep padding until API done")
 
                 viewModel.consumeLastSentUserMessageId()
             }
