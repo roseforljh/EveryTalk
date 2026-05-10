@@ -152,7 +152,23 @@ internal fun hasExplicitWebReadIntent(messageText: String): Boolean {
 }
 
 internal fun shouldExposeBuiltInWebFetchTool(messageText: String): Boolean {
-    return containsHttpUrl(messageText) && hasExplicitWebReadIntent(messageText)
+    val normalizedText = messageText.lowercase()
+    if (WEBFETCH_NEGATIVE_INTENT_KEYWORDS.any { it in normalizedText }) {
+        return false
+    }
+    if (containsHttpUrl(messageText)) {
+        return true
+    }
+    return hasWebFetchIntent(messageText)
+}
+
+internal fun hasWebFetchIntent(messageText: String): Boolean {
+    val normalizedText = messageText.lowercase()
+    val hasActionKeyword = WEBFETCH_ACTION_KEYWORDS.any { it in normalizedText }
+    val hasTargetKeyword = WEBFETCH_TARGET_KEYWORDS.any { it in normalizedText }
+    val hasContentQuestion = WEBFETCH_CONTENT_QUESTION_KEYWORDS.any { it in normalizedText }
+    val hasRealtimeKeyword = MCP_REALTIME_OR_NEWS_KEYWORDS.any { it in normalizedText }
+    return (hasActionKeyword && hasTargetKeyword) || hasContentQuestion || hasRealtimeKeyword
 }
 
 internal fun looksLikeRealtimeOrNewsQuery(messageText: String): Boolean {
@@ -264,9 +280,15 @@ internal fun buildCurrentTimeGuidance(now: Date = Date()): String {
 当前本地时间：$currentTime
 时区：${timezone.id}
 
-如果用户询问今天、现在、当前、最近、最新、截止目前、今天上午/下午/晚上、几点几分、刚刚等时间敏感问题，请基于这个时间上下文回答。
-如果答案需要更精确到小时、分钟或秒，或者需要据此判断应该搜索哪个时间窗口的最新信息，请主动调用时间工具。
-时间工具可提供结构化的 date、time、hour、minute、second、timezone 和 timestamp_ms，请优先利用这些字段提高判断精度。
+## 工具使用规则（必须遵守）
+
+你拥有以下内建工具，必须在合适时机主动调用，不要仅凭记忆回答：
+
+1. **get_current_datetime**：获取设备精确时间。任何涉及"今天/现在/当前/几点/星期几/日期"的问题，必须先调用此工具获取准确时间再回答。不要猜测时间。
+
+2. **webfetch**：抓取网页正文内容。当用户提供了 URL，或问题涉及需要联网获取的实时信息（新闻、天气、股价、比赛结果、最新动态等），必须主动调用此工具获取信息后再回答。不要编造或猜测外部信息。
+
+调用原则：宁可多调用一次工具确认，也不要凭猜测回答时间或外部信息类问题。
 """.trim()
 }
 
@@ -275,7 +297,7 @@ internal fun builtInWebFetchToolDefinition(): Map<String, Any> {
         "type" to "function",
         "function" to mapOf(
             "name" to BUILT_IN_WEBFETCH_TOOL_NAME,
-            "description" to "Fetch a web page and return readable text content.",
+            "description" to "Fetch a web page and return readable text content. Use this tool proactively when the user provides a URL, asks about web content, or needs real-time information from the internet (news, weather, stock prices, etc.). You may construct URLs yourself if you know the target site.",
             "parameters" to mapOf(
                 "type" to "object",
                 "properties" to mapOf(
@@ -299,7 +321,7 @@ internal fun builtInCurrentTimeToolDefinition(): Map<String, Any> {
         "type" to "function",
         "function" to mapOf(
             "name" to BUILT_IN_CURRENT_TIME_TOOL_NAME,
-                "description" to "Get the current local date, time, hour, minute, second, timezone, and Unix timestamp from the device.",
+                "description" to "Get the current local date, time, hour, minute, second, timezone, and Unix timestamp from the device. You MUST call this tool whenever the user asks anything related to the current time, date, day of week, or any time-sensitive question. Do not guess the time.",
             "parameters" to mapOf(
                 "type" to "object",
                 "properties" to emptyMap<String, Any>()

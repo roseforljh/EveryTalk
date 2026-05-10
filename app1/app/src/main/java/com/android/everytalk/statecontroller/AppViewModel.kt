@@ -93,7 +93,10 @@ import com.android.everytalk.util.storage.IncrementalBackupManager
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import java.util.Calendar
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -105,6 +108,7 @@ internal suspend fun executeSharedToolCall(
     arguments: JsonObject,
     updateStatus: suspend (String?) -> Unit = {},
     localWebFetchExecutor: suspend (JsonObject) -> JsonElement = { WebFetchToolExecutor.execute(it) },
+    mcpWebFetchFallback: (suspend (JsonObject) -> JsonElement)? = null,
     localCurrentTimeExecutor: suspend () -> JsonElement = {
         val now = Date()
         val calendar = Calendar.getInstance()
@@ -139,6 +143,15 @@ internal suspend fun executeSharedToolCall(
     if (toolName.equals(BUILT_IN_WEBFETCH_TOOL_NAME, ignoreCase = true)) {
         updateStatus("正在分析链接")
         val result = localWebFetchExecutor(arguments)
+        val resultObj = result as? JsonObject
+        val isSuccess = resultObj?.get("ok")?.jsonPrimitive?.booleanOrNull == true
+        if (!isSuccess && mcpWebFetchFallback != null) {
+            Log.d("ToolCall", "Jina Reader 失败，尝试 MCP webfetch fallback")
+            updateStatus("正在通过 MCP 工具抓取")
+            val mcpResult = mcpWebFetchFallback(arguments)
+            updateStatus(null)
+            return mcpResult
+        }
         updateStatus(null)
         return result
     }
@@ -631,12 +644,33 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
        scope = viewModelScope
    )
 
+    private val mcpWebFetchToolNameKeywords = listOf(
+        "fetch", "crawl", "scrape", "reader", "browse", "firecrawl", "webfetch"
+    )
+
+    private fun buildMcpWebFetchFallback(): (suspend (JsonObject) -> JsonElement)? {
+        if (!stateHolder._isMcpEnabledForNextRequest.value) return null
+        val allTools = mcpManager.getAllAvailableTools()
+        val webFetchTool = allTools.firstOrNull { tool ->
+            val name = tool.name.lowercase()
+            mcpWebFetchToolNameKeywords.any { keyword -> keyword in name }
+        } ?: return null
+        return { arguments ->
+            val url = arguments["url"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val mcpArgs = buildJsonObject {
+                put("url", JsonPrimitive(url))
+            }
+            mcpManager.callTool(webFetchTool.name, mcpArgs)
+        }
+    }
+
   init {
          GeminiDirectClient.setMcpToolExecutor { toolName, arguments, updateStatus ->
             executeSharedToolCall(
                 toolName = toolName,
                 arguments = arguments,
                 updateStatus = updateStatus,
+                mcpWebFetchFallback = buildMcpWebFetchFallback(),
                 fallbackExecutor = { fallbackToolName, fallbackArguments ->
                     mcpManager.callTool(fallbackToolName, fallbackArguments)
                 }
@@ -647,6 +681,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 toolName = toolName,
                 arguments = arguments,
                 updateStatus = updateStatus,
+                mcpWebFetchFallback = buildMcpWebFetchFallback(),
                 fallbackExecutor = { fallbackToolName, fallbackArguments ->
                     mcpManager.callTool(fallbackToolName, fallbackArguments)
                 }

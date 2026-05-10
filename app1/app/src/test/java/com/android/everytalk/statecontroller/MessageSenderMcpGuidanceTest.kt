@@ -95,7 +95,7 @@ class MessageSenderMcpGuidanceTest {
 
         assertTrue(guidance.contains("当前本地时间"))
         assertTrue(guidance.contains("时区"))
-        assertTrue(guidance.contains("如果用户询问今天"))
+        assertTrue(guidance.contains("get_current_datetime"))
     }
 
     @Test

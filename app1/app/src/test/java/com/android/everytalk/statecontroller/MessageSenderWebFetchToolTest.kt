@@ -42,27 +42,26 @@ class MessageSenderWebFetchToolTest {
     }
 
     @Test
-    fun `bare url does not expose webfetch tool`() {
+    fun `bare url exposes webfetch tool`() {
         val tools = appendBuiltInWebFetchToolIfNeeded(
             messageText = "https://example.com/article",
             tools = emptyList(),
         )
 
-        assertTrue(tools.isEmpty())
+        assertEquals(1, tools.size)
         assertTrue(containsHttpUrl("https://example.com/article"))
-        assertFalse(hasExplicitWebReadIntent("https://example.com/article"))
-        assertFalse(shouldExposeBuiltInWebFetchTool("https://example.com/article"))
+        assertTrue(shouldExposeBuiltInWebFetchTool("https://example.com/article"))
     }
 
     @Test
-    fun `shared link without explicit read intent does not expose webfetch tool`() {
+    fun `shared link with url exposes webfetch tool`() {
         val tools = appendBuiltInWebFetchToolIfNeeded(
             messageText = "分享个链接给你 https://example.com/article",
             tools = emptyList(),
         )
 
-        assertTrue(tools.isEmpty())
-        assertFalse(shouldExposeBuiltInWebFetchTool("分享个链接给你 https://example.com/article"))
+        assertEquals(1, tools.size)
+        assertTrue(shouldExposeBuiltInWebFetchTool("分享个链接给你 https://example.com/article"))
     }
 
     @Test

@@ -329,8 +329,6 @@ android {
         // ===== Profile Installer =====
         implementation(libs.androidx.profileinstaller)
 
-        // ===== HTML 解析 - JSoup =====
-        implementation("org.jsoup:jsoup:1.21.2")
 
         // ===== 图片加载 - Coil =====
         implementation("io.coil-kt.coil3:coil-compose:3.2.0")
