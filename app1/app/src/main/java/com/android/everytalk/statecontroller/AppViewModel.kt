@@ -614,7 +614,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
        cacheManager = cacheManager,
        conversationPreviewController = conversationPreviewController,
        persistScrollStates = {
-           persistenceManager.saveConversationScrollStates(stateHolder.conversationScrollStates.toMap())
+           if (scrollStatesInitialized) {
+               persistenceManager.saveConversationScrollStates(stateHolder.conversationScrollStates.toMap())
+           }
        },
        scope = viewModelScope
    )
@@ -752,6 +754,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     withContext(Dispatchers.Main) {
                         stateHolder.conversationScrollStates.clear()
                         stateHolder.conversationScrollStates.putAll(states)
+                        scrollStatesInitialized = true
                     }
                     Log.d("AppViewModel", "会话滚动位置已加载 - 共 ${states.size} 条")
                 } catch (e: Exception) {
@@ -1919,8 +1922,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         scrollStateController.saveScrollState(conversationId, scrollState)
     }
 
+    private var scrollStatesInitialized = false
+
     fun saveScrollState(conversationId: String, scrollState: ConversationScrollState) {
         scrollStateController.saveScrollState(conversationId, scrollState)
+        if (!scrollStatesInitialized) return
         viewModelScope.launch(Dispatchers.IO) {
             persistenceManager.saveConversationScrollStates(stateHolder.conversationScrollStates.toMap())
         }

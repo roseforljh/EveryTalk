@@ -22,7 +22,10 @@ interface ChatDao {
 
     @Transaction
     suspend fun saveSessionWithMessages(session: ChatSessionEntity, messages: List<MessageEntity>) {
+        // 数据库保存会话和消息。
+        // @Transaction 保证下面三步要么全部成功，要么全部回滚，避免会话已更新但消息只保存一半。
         insertSession(session)
+        // 先清空该会话旧消息，再写入当前完整消息列表，保证本地历史记录和界面状态一致。
         clearMessagesForSession(session.id)
         insertMessages(messages)
     }

@@ -176,7 +176,6 @@ class HistoryController(
                 val repaired = repairHistoryMessageParts(processed)
                 stateHolder.messages.clear()
                 stateHolder.messages.addAll(repaired)
-                // Drawer 搜索状态由上层 UI/DrawerManager 负责，这里不直接修改
             } catch (e: Exception) {
                 Log.e("HistoryController", "Error loading text history", e)
                 showSnackbar("加载文本历史对话失败: ${e.message}")
@@ -195,7 +194,6 @@ class HistoryController(
                 val repaired = repairHistoryMessageParts(processed)
                 stateHolder.imageGenerationMessages.clear()
                 stateHolder.imageGenerationMessages.addAll(repaired)
-                // Drawer 搜索状态由上层 UI/DrawerManager 负责，这里不直接修改
             } catch (e: Exception) {
                 Log.e("HistoryController", "IMAGE ERROR", e)
                 showSnackbar("加载图像历史失败: ${e.message}")

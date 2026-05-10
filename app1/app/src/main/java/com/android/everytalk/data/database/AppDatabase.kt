@@ -58,6 +58,8 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "eztalk_room_database"
                 )
+                // 数据库本体使用 Android Room + SQLite。
+                // 当前没有接入 SQLCipher/SupportFactory，所以不是整库加密；敏感密钥的保护在上层字段处理逻辑中完成。
                 .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 .build()
                 INSTANCE = instance

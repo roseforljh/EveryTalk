@@ -256,6 +256,8 @@ fun ChatMessagesList(
                 previousUserMessageId = lastUserMessageId
             }
             
+            // 前端消息列表渲染。
+            // LazyColumn 只渲染屏幕附近的消息，适合长对话；listState 负责记录滚动位置。
             LazyColumn(
                 state = listState,
                 reverseLayout = false,
@@ -275,6 +277,7 @@ fun ChatMessagesList(
             key = { _, item -> item.stableId },
             contentType = { _, item -> 
                 when (item) {
+                    // stableId 和 contentType 用来稳定复用消息气泡，流式回复时界面不会频繁重建。
                     // Merge all AI message types into a single contentType to prevent
                     // item recreation when switching between Streaming/Non-Streaming states.
                     // This allows the inner Composable to handle state transitions smoothly.
@@ -315,6 +318,8 @@ fun ChatMessagesList(
             ) {
 
                     // 根据消息类型渲染不同内容；这里不用 Column 包裹以避免额外布局抖动
+                    // 前端消息列表渲染：这里按消息类型分发到不同气泡组件。
+                    // 用户消息靠右，AI 和系统消息靠左，附件、思考过程、正文等内容在各自分支里渲染。
                     when (item) {
                         is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage -> {
                             // 使用 Row + Arrangement.End，确保用户消息稳定靠右显示

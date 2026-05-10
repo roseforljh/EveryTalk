@@ -52,6 +52,8 @@ class ChatServiceImpl(
         context: Context,
         isImageGeneration: Boolean
     ): Flow<StreamResult> = flow {
+        // 后端/服务层流式回复入口。
+        // 先创建一条空 AI 消息，让前端立刻显示回复气泡，再把网络层返回的流式事件持续转发出去。
         val messageId = UUID.randomUUID().toString()
         val newMessage = Message(
             id = messageId,
@@ -70,12 +72,14 @@ class ChatServiceImpl(
             _currentTextStreamingMessageId.value = messageId
         }
         
+        // ApiClient 负责真正请求模型接口；这里把每个流式事件包装成 StreamResult.Event 交给 ViewModel 更新界面。
         ApiClient.streamChatResponse(request, attachments, context)
             .collect { event ->
                 emit(StreamResult.Event(event))
             }
-    }
+        }
         .onStart {
+            // 请求开始和结束时同步 StateFlow，界面据此显示“正在生成”和停止按钮。
             if (isImageGeneration) {
                 _isImageGenerating.value = true
             } else {

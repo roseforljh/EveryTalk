@@ -64,6 +64,10 @@ class SettingsController(
     private fun obfuscateKey(key: String): String {
         if (key.isBlank()) return key
         return try {
+            // 敏感字段保护方式。
+            // 这里使用固定字节 0x5A 对 API Key 的 UTF-8 字节逐个 XOR，再用 Base64 转成可存储字符串。
+            // 示例：原始 key -> UTF-8 字节 -> 每个字节 xor 0x5A -> Base64 -> 加上 EZT_OBF_V1: 前缀。
+            // 该方案属于轻量混淆，方便导入导出和兼容旧数据；不是 SQLCipher 这种数据库整库加密。
             val xorKey = 0x5A.toByte()
             val xored = key.toByteArray(Charsets.UTF_8).map { (it.toInt() xor xorKey.toInt()).toByte() }.toByteArray()
             OBFUSCATION_PREFIX + Base64.encodeToString(xored, Base64.NO_WRAP)
@@ -80,6 +84,9 @@ class SettingsController(
         if (obfuscatedKey.isBlank()) return obfuscatedKey
         if (!obfuscatedKey.startsWith(OBFUSCATION_PREFIX)) return obfuscatedKey // 兼容旧版本明文密钥
         return try {
+            // 毕设讲解点：解密/还原过程。
+            // 先识别 EZT_OBF_V1: 前缀，再 Base64 解码得到 XOR 后的字节。
+            // XOR 是可逆运算，所以再次对每个字节 xor 0x5A，就能还原原始 API Key。
             val encoded = obfuscatedKey.removePrefix(OBFUSCATION_PREFIX)
             val xorKey = 0x5A.toByte()
             val decoded = Base64.decode(encoded, Base64.NO_WRAP)
@@ -94,6 +101,7 @@ class SettingsController(
      * 混淆ApiConfig中的密钥
      */
     private fun obfuscateApiConfig(config: ApiConfig): ApiConfig {
+        // 只处理 key 字段，地址、模型名、供应商等非密钥字段保持原样。
         return config.copy(key = obfuscateKey(config.key))
     }
     
@@ -108,6 +116,7 @@ class SettingsController(
      * 混淆VoiceBackendConfig中的密钥
      */
     private fun obfuscateVoiceConfig(config: VoiceBackendConfig): VoiceBackendConfig {
+        // 语音配置里有三类密钥：语音识别 STT、对话 Chat、语音合成 TTS，分别做同样的 XOR + Base64 混淆。
         return config.copy(
             sttApiKey = obfuscateKey(config.sttApiKey),
             chatApiKey = obfuscateKey(config.chatApiKey),

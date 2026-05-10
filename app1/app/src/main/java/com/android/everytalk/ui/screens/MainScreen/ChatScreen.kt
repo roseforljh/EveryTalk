@@ -191,7 +191,10 @@ fun ChatScreen(
         derivedStateOf { viewModel.getScrollState(conversationId) }
     }
 
+    var initialScrollHandled by remember(conversationId) { mutableStateOf(false) }
+
     LaunchedEffect(conversationId, savedStateForConversation) {
+        if (initialScrollHandled) return@LaunchedEffect
         if (System.currentTimeMillis() - lastSendAt.value < 1200) {
             return@LaunchedEffect
         }
@@ -208,6 +211,18 @@ fun ChatScreen(
                 index = savedState.firstVisibleItemIndex,
                 scrollOffset = savedState.firstVisibleItemScrollOffset
             )
+            initialScrollHandled = true
+        } else if (savedState == null) {
+            snapshotFlow { !isLoadingHistory && listState.layoutInfo.totalItemsCount > 0 }
+                .filter { it }
+                .first()
+            val totalItems = listState.layoutInfo.totalItemsCount
+            if (totalItems > 0) {
+                listState.scrollToItem(totalItems - 1)
+            }
+            initialScrollHandled = true
+        } else {
+            initialScrollHandled = true
         }
     }
 
@@ -235,16 +250,18 @@ fun ChatScreen(
             )
         }
             .distinctUntilChanged()
-            .filter { (_, _, isScrolling) -> !isScrolling }
+            .filter { (_, _, isScrolling) -> !isScrolling && !isLoadingHistory }
             .collect { (index, offset, _) ->
-                viewModel.cacheScrollState(
-                    conversationId,
-                    ConversationScrollState(
-                        firstVisibleItemIndex = index,
-                        firstVisibleItemScrollOffset = offset,
-                        userScrolledAway = !isAtBottom,
+                if (listState.layoutInfo.totalItemsCount > 0) {
+                    viewModel.cacheScrollState(
+                        conversationId,
+                        ConversationScrollState(
+                            firstVisibleItemIndex = index,
+                            firstVisibleItemScrollOffset = offset,
+                            userScrolledAway = !isAtBottom,
+                        )
                     )
-                )
+                }
             }
     }
 

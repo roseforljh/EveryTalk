@@ -35,7 +35,7 @@ import android.text.style.ClickableSpan
 import android.view.View
 import android.text.Spannable
 import android.text.SpannableStringBuilder
-import io.noties.markwon.image.AsyncDrawable // 浣跨敤 AsyncDrawable
+import io.noties.markwon.image.AsyncDrawable 
 import io.noties.markwon.image.AsyncDrawableSpan
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.ui.components.MathStreamingPolicy
@@ -1207,16 +1207,6 @@ fun MarkdownRenderer(
                     }
                 }
             }
-
-            // 更新长按监听器：移除，改由 Compose 层统一处理
-            // if (onLongPress != null) {
-            //    tv.setOnLongClickListener {
-            //        onLongPress.invoke()
-            //        true
-            //    }
-            // } else {
-            //    tv.setOnLongClickListener(null)
-            // }
         }
     )
 }
