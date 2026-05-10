@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.16.0](https://github.com/roseforljh/EveryTalk/compare/v1.15.6...v1.16.0) (2026-05-10)
+
+
+### Features
+
+* 用户图片附件靠右显示+边缘渐变+桌面图标跟随深色模式实时切换 ([25ecc94](https://github.com/roseforljh/EveryTalk/commit/25ecc9472bff66afd1b19d359eacb1c5941704b5))
+* 重构webfetch工具链路，接入Jina Reader API + MCP fallback ([17dc57e](https://github.com/roseforljh/EveryTalk/commit/17dc57ee53da386f98a3bb317614096a829101a2))
+
+
+### Bug Fixes
+
+* MCP工具调用不积极，优化dispatch策略和系统提示词 ([44ac6c0](https://github.com/roseforljh/EveryTalk/commit/44ac6c0887318cd0c3106b2799b2a71e7152ec54))
+* 优化置顶逻辑 ([75519cb](https://github.com/roseforljh/EveryTalk/commit/75519cb24842088a2e3b9cefd7782f2859cfa66f))
+* 会话位置记忆 ([db0adde](https://github.com/roseforljh/EveryTalk/commit/db0adde5c956cf38fbc11680b2d95a114a1c6edd))
+* 修复置顶滚动session竞态及底部空白问题 ([d07642c](https://github.com/roseforljh/EveryTalk/commit/d07642cb1ac64bd4aaac15ebe08da3737eb69d06))
+* 修复重新回答置顶逻辑 ([da2a35e](https://github.com/roseforljh/EveryTalk/commit/da2a35e0ba04554edadf0f5306dcfa4f51c3439f))
+* 用户气泡置顶 ([afb9868](https://github.com/roseforljh/EveryTalk/commit/afb9868e783b66f12802ec68d54c25dda83e29cf))
+
 ## [1.15.6](https://github.com/roseforljh/EveryTalk/compare/v1.15.5...v1.15.6) (2026-04-26)
 
 
