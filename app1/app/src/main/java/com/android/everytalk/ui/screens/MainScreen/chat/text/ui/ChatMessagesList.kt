@@ -162,7 +162,7 @@ fun ChatMessagesList(
             if (lastUserIdx > 0) {
                 kotlinx.coroutines.delay(100)
                 val viewportHeight = listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset
-                dynamicBottomPaddingTarget = with(density) { (viewportHeight * 2).toDp() }
+                dynamicBottomPaddingTarget = with(density) { viewportHeight.toDp() }
                 kotlinx.coroutines.delay(100)
                 listState.scrollToItem(lastUserIdx, scrollOffset = -firstBubbleScreenY)
                 kotlinx.coroutines.delay(50)
@@ -185,6 +185,36 @@ fun ChatMessagesList(
             kotlinx.coroutines.delay(300)
             dynamicBottomPaddingTarget = 0.dp
             android.util.Log.d("GrokScroll", "API done, cleared padding")
+        }
+    }
+
+    // 流式输出期间，动态缩小底部 padding，避免出现多余空白
+    // key 只用 isApiCalling，避免 target 变化导致重启和 delay 重置
+    LaunchedEffect(isApiCalling) {
+        if (!isApiCalling) return@LaunchedEffect
+
+        // 等待置顶滚动动画完成后再开始缩小
+        kotlinx.coroutines.delay(800)
+
+        if (dynamicBottomPaddingTarget <= 0.dp) return@LaunchedEffect
+
+        snapshotFlow {
+            val li = listState.layoutInfo
+            val viewportHeight = li.viewportEndOffset - li.viewportStartOffset
+            if (viewportHeight <= 0) return@snapshotFlow -1
+
+            val lastRealItem = li.visibleItemsInfo.lastOrNull { it.key != "dynamic_padding_spacer" }
+                ?: return@snapshotFlow -1
+
+            val contentBottomInViewport = lastRealItem.offset + lastRealItem.size
+            val gap = li.viewportEndOffset - contentBottomInViewport - li.afterContentPadding
+            gap.coerceAtLeast(0)
+        }.collect { gapPx ->
+            if (gapPx < 0) return@collect
+            val newPadding = with(density) { gapPx.toDp() }
+            if (newPadding < dynamicBottomPaddingTarget) {
+                dynamicBottomPaddingTarget = newPadding
+            }
         }
     }
 
@@ -257,9 +287,9 @@ fun ChatMessagesList(
                 val targetScreenY = firstBubbleScreenY
                 
                 val viewportHeight = li.viewportEndOffset - li.viewportStartOffset
-                dynamicBottomPaddingTarget = with(density) { (viewportHeight * 2).toDp() }
+                dynamicBottomPaddingTarget = with(density) { viewportHeight.toDp() }
                 kotlinx.coroutines.delay(100)
-                
+
                 listState.scrollToItem(lastUserIndex, scrollOffset = -targetScreenY)
                 kotlinx.coroutines.delay(50)
                 
@@ -895,7 +925,7 @@ fun AiMessageItem(
                 val effectiveContent = if (shouldPreferStreamingContent) {
                     streamingRenderState.content.ifBlank { message.text }
                 } else {
-                    message.text
+                    message.text.ifBlank { streamingRenderState.content }
                 }
 
                 val renderMessage = if (effectiveContent == message.text) {

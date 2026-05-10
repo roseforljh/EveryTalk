@@ -77,8 +77,11 @@ internal fun shouldPreserveScrollSessionOnConversationIdChange(
     newConversationId: String,
     messages: List<Message>
 ): Boolean {
-    if (previousConversationId.isNullOrBlank() || previousConversationId == newConversationId) {
+    if (previousConversationId.isNullOrBlank()) {
         return false
+    }
+    if (previousConversationId == newConversationId) {
+        return true
     }
 
     val derivedStableConversationId = messages.firstOrNull { it.sender == Sender.User }?.id
