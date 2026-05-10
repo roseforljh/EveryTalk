@@ -227,71 +227,35 @@ fun ChatMessagesList(
                 
                 android.util.Log.d("GrokScroll", "Consumed, proceeding with scroll")
                 
+                if (firstBubbleScreenY < 0) {
+                    firstBubbleScreenY = topPaddingPx
+                }
+                val targetScreenY = firstBubbleScreenY
+                
+                val viewportHeight = li.viewportEndOffset - li.viewportStartOffset
+                dynamicBottomPaddingTarget = with(density) { (viewportHeight * 2).toDp() }
+                kotlinx.coroutines.delay(100)
+                
+                listState.scrollToItem(lastUserIndex, scrollOffset = -targetScreenY)
                 kotlinx.coroutines.delay(50)
                 
-                if (firstBubbleScreenY < 0) {
-                    val firstUserIdx = currentUserMessageIndices.firstOrNull() ?: -1
-                    val firstUserItem = if (firstUserIdx >= 0) {
-                        listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == firstUserIdx }
-                    } else null
-                    firstBubbleScreenY = if (firstUserItem != null) {
-                        firstUserItem.offset - listState.layoutInfo.viewportStartOffset
-                    } else {
-                        topPaddingPx
-                    }
-                    android.util.Log.d("GrokScroll", "Recaptured firstBubbleScreenY=$firstBubbleScreenY (fromItem=${firstUserItem != null})")
-                }
-                
-                val targetScreenY = firstBubbleScreenY
-                android.util.Log.d("GrokScroll", "Target Y: $targetScreenY")
-                
-                val liCurrent = listState.layoutInfo
-                var currItem = liCurrent.visibleItemsInfo.firstOrNull { it.index == lastUserIndex }
-                
-                if (currItem == null) {
-                    val viewportHeight = li.viewportEndOffset - li.viewportStartOffset
-                    dynamicBottomPaddingTarget = with(density) { viewportHeight.toDp() }
-                    android.util.Log.d("GrokScroll", "Adding padding to make item visible")
-                    repeat(3) { kotlinx.coroutines.delay(16) }
-                    
-                    val animationDistance = with(density) { 200.dp.toPx().toInt() }
-                    listState.scrollToItem(lastUserIndex, scrollOffset = -animationDistance)
-                    kotlinx.coroutines.delay(50)
-                    
-                    val li2 = listState.layoutInfo
-                    currItem = li2.visibleItemsInfo.firstOrNull { it.index == lastUserIndex }
-                }
-                
+                val li2 = listState.layoutInfo
+                val currItem = li2.visibleItemsInfo.firstOrNull { it.index == lastUserIndex }
                 if (currItem != null) {
-                    val li3 = listState.layoutInfo
-                    val currScreenY = currItem.offset - li3.viewportStartOffset
-                    val scrollNeeded = currScreenY - targetScreenY
-                    android.util.Log.d("GrokScroll", "currScreenY=$currScreenY, scrollNeeded=$scrollNeeded")
-                    
-                    if (scrollNeeded != 0) {
-                        if (scrollNeeded > 0) {
-                            val viewportHeight = li3.viewportEndOffset - li3.viewportStartOffset
-                            val lastItem = li3.visibleItemsInfo.lastOrNull()
-                            val contentBottom = if (lastItem != null) lastItem.offset + lastItem.size else 0
-                            val canScroll = contentBottom - viewportHeight + li3.afterContentPadding
-                            
-                            if (scrollNeeded > canScroll) {
-                                val extraPadding = scrollNeeded - canScroll + 50
-                                dynamicBottomPaddingTarget = with(density) { extraPadding.toDp() }
-                                android.util.Log.d("GrokScroll", "Extra padding: $extraPadding")
-                                repeat(3) { kotlinx.coroutines.delay(16) }
-                            }
-                        }
-                        
+                    val actualY = currItem.offset - li2.viewportStartOffset
+                    val correction = actualY - targetScreenY
+                    if (correction != 0) {
                         listState.animateScrollBy(
-                            scrollNeeded.toFloat(),
+                            correction.toFloat(),
                             androidx.compose.animation.core.tween(
-                                durationMillis = 500,
+                                durationMillis = 400,
                                 easing = androidx.compose.animation.core.CubicBezierEasing(0.25f, 0.1f, 0.25f, 1.0f)
                             )
                         )
-                        android.util.Log.d("GrokScroll", "Scrolled by $scrollNeeded")
                     }
+                    android.util.Log.d("GrokScroll", "Scrolled: targetY=$targetScreenY, actualY=$actualY, correction=$correction")
+                } else {
+                    android.util.Log.d("GrokScroll", "Item not visible after scrollToItem, fallback")
                 }
 
                 viewModel.consumeLastSentUserMessageId()

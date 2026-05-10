@@ -11,6 +11,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.geometry.Offset
@@ -275,213 +276,167 @@ fun AttachmentsContent(
     val roleMax = if (message.sender == Sender.User) screenDp * 0.6f else screenDp * 0.8f
     val attachmentsAppliedMax = roleMax.coerceAtMost(maxWidth)
 
-    Box {
-        FlowRow(
-            modifier = Modifier.padding(top = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            attachments.forEach { attachment ->
-                when (attachment) {
-                    is SelectedMediaItem.ImageFromUri -> {
-                        var imageGlobalPosition by remember { mutableStateOf(Offset.Zero) }
-                        // 🔥 修复：如果是 data URI，直接使用字符串而不是 Uri 对象，Coil 更好地支持字符串形式的 data URI
-                        val imageModel = if (attachment.uri.scheme == "data") {
-                            attachment.uri.toString()
-                        } else {
-                            attachment.uri
-                        }
-                        // 额外父级宽度约束，防止重组或内部状态重置导致图片短暂"放大占满并左对齐"
-                        // 在 FlowRow 中，我们可能希望图片不要太大，以便多张并排
-                        // 如果只有一张，可以大一点；多张时适当缩小
-                        val isMultiple = attachments.size > 1
-                        val itemMaxWidth = if (isMultiple) attachmentsAppliedMax * 0.48f else attachmentsAppliedMax * 0.8f
-                        
-                        Box(
-                            modifier = Modifier
-                                .widthIn(
-                                    max = itemMaxWidth
-                                )
-                        ) {
-                            ProportionalAsyncImage(
-                                model = imageModel,
-                                contentDescription = "Image attachment",
-                                maxWidth = itemMaxWidth,
-                                isAiGenerated = isAiGenerated,
-                                onSuccess = { _ -> onImageLoaded() },
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .onGloballyPositioned {
-                                        imageGlobalPosition = it.localToRoot(Offset.Zero)
-                                    }
-                                    .pointerInput(message.id, attachment.uri) {
-                                        detectTapGestures(
-                                            onTap = {
-                                                val url = attachment.uri.toString()
-                                                if (onImageClick != null) {
-                                                    onImageClick.invoke(url)
-                                                } else {
-                                                    // 默认内置预览
-                                                    previewUrlInternal = url
-                                                }
-                                            },
-                                            onLongPress = { localOffset ->
-                                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                                val globalOffset = imageGlobalPosition + localOffset
-                                                onLongPress(message, globalOffset)
-                                            }
-                                        )
-                                    }
-                            )
-                        }
-                    }
-                    is SelectedMediaItem.ImageFromBitmap -> {
-                        var imageGlobalPosition by remember { mutableStateOf(Offset.Zero) }
-                        // 额外父级宽度约束，防止重组或内部状态重置导致图片短暂"放大占满并左对齐"
-                        val isMultiple = attachments.size > 1
-                        val itemMaxWidth = if (isMultiple) attachmentsAppliedMax * 0.48f else attachmentsAppliedMax * 0.8f
+    val imageAttachments = remember(attachments) {
+        attachments.filter { it is SelectedMediaItem.ImageFromUri || it is SelectedMediaItem.ImageFromBitmap }
+    }
+    val nonImageAttachments = remember(attachments) {
+        attachments.filter { it is SelectedMediaItem.GenericFile || it is SelectedMediaItem.Audio }
+    }
 
-                        Box(
-                            modifier = Modifier
-                                .widthIn(
-                                    max = itemMaxWidth
-                                )
-                        ) {
-                            ProportionalAsyncImage(
-                                model = attachment.bitmap,
-                                contentDescription = "Image attachment",
-                                maxWidth = itemMaxWidth,
-                                isAiGenerated = isAiGenerated,
-                                onSuccess = { _ -> onImageLoaded() },
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .onGloballyPositioned {
-                                        imageGlobalPosition = it.localToRoot(Offset.Zero)
-                                    }
-                                    .pointerInput(message.id, attachment.bitmap) {
-                                        detectTapGestures(
-                                            onTap = {
-                                                val bmp = attachment.bitmap
-                                                val dataUri = bmp?.let { bitmapToDataUri(it) }
-                                                if (dataUri != null) {
-                                                    if (onImageClick != null) {
-                                                        onImageClick.invoke(dataUri)
-                                                    } else {
-                                                        // 默认内置预览
-                                                        previewUrlInternal = dataUri
-                                                    }
-                                                }
-                                            },
-                                            onLongPress = { localOffset ->
-                                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                                val globalOffset = imageGlobalPosition + localOffset
-                                                onLongPress(message, globalOffset)
-                                            }
-                                        )
-                                    }
-                            )
+    Column(modifier = Modifier.padding(top = 8.dp)) {
+        if (imageAttachments.isNotEmpty()) {
+            val imageStripHeight = 100.dp
+            Box(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier
+                        .height(imageStripHeight)
+                        .horizontalScroll(rememberScrollState())
+                ) {
+                    imageAttachments.forEachIndexed { idx, attachment ->
+                        var imageGlobalPosition by remember { mutableStateOf(Offset.Zero) }
+                        val imageModel: Any = when (attachment) {
+                            is SelectedMediaItem.ImageFromUri -> if (attachment.uri.scheme == "data") attachment.uri.toString() else attachment.uri
+                            is SelectedMediaItem.ImageFromBitmap -> attachment.bitmap as Any
+                            else -> ""
                         }
-                    }
-                    is SelectedMediaItem.GenericFile -> {
-                        var itemGlobalPosition by remember { mutableStateOf(Offset.Zero) }
-                        Row(
+                        coil3.compose.AsyncImage(
+                            model = imageModel,
+                            contentDescription = "Image attachment",
+                            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                            onSuccess = { onImageLoaded() },
                             modifier = Modifier
-                                .widthIn(max = attachmentsAppliedMax)
-                                .padding(vertical = 4.dp)
-                                .background(bubbleColor, RoundedCornerShape(12.dp))
+                                .height(imageStripHeight)
+                                .widthIn(min = 80.dp, max = 160.dp)
                                 .clip(RoundedCornerShape(12.dp))
-                                .onGloballyPositioned {
-                                    itemGlobalPosition = it.localToRoot(Offset.Zero)
-                                }
-                                .pointerInput(message.id, attachment.uri) {
+                                .onGloballyPositioned { imageGlobalPosition = it.localToRoot(Offset.Zero) }
+                                .pointerInput(message.id, idx) {
                                     detectTapGestures(
                                         onTap = {
-                                            val intent = Intent(Intent.ACTION_VIEW).apply {
-                                                setDataAndType(
-                                                    attachment.uri,
-                                                    attachment.mimeType
-                                                )
-                                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                            val url = when (attachment) {
+                                                is SelectedMediaItem.ImageFromUri -> attachment.uri.toString()
+                                                is SelectedMediaItem.ImageFromBitmap -> attachment.bitmap?.let { bitmapToDataUri(it) } ?: ""
+                                                else -> ""
                                             }
-                                            context.startActivity(intent)
+                                            if (url.isNotBlank()) {
+                                                if (onImageClick != null) onImageClick.invoke(url) else { previewUrlInternal = url }
+                                            }
                                         },
                                         onLongPress = { localOffset ->
                                             haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                            val globalOffset = itemGlobalPosition + localOffset
-                                            onLongPress(message, globalOffset)
+                                            onLongPress(message, imageGlobalPosition + localOffset)
                                         }
                                     )
                                 }
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = getIconForMimeType(attachment.mimeType),
-                                contentDescription = "Attachment",
-                                modifier = Modifier.size(24.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = attachment.displayName
-                                    ?: attachment.uri.path?.substringAfterLast('/')
-                                    ?: "Attached File",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+                        )
                     }
-                    is SelectedMediaItem.Audio -> {
-                        var itemGlobalPosition by remember { mutableStateOf(Offset.Zero) }
-                        Row(
-                            modifier = Modifier
-                                .widthIn(max = attachmentsAppliedMax)
-                                .padding(vertical = 4.dp)
-                                .background(bubbleColor, RoundedCornerShape(12.dp))
-                                .clip(RoundedCornerShape(12.dp))
-                                .onGloballyPositioned {
-                                    itemGlobalPosition = it.localToRoot(Offset.Zero)
-                                }
-                                .pointerInput(message.id, attachment) {
-                                    detectTapGestures(
-                                        onTap = {
-                                            // TODO: Implement audio playback
-                                        },
-                                        onLongPress = { localOffset ->
-                                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                            val globalOffset = itemGlobalPosition + localOffset
-                                            onLongPress(message, globalOffset)
-                                        }
-                                    )
-                                }
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Outlined.Audiotrack,
-                                contentDescription = "Audio Attachment",
-                                modifier = Modifier.size(24.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Audio attachment",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+                }
+                if (imageAttachments.size > 3) {
+                    androidx.compose.foundation.layout.Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(4.dp)
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = "${imageAttachments.size} 张",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }
         }
 
-        // 内置全屏图片预览对话框（当未外部接管 onImageClick 时）
-        if (previewUrlInternal != null) {
-            com.android.everytalk.ui.components.ImagePreviewDialog(
-                url = previewUrlInternal!!,
-                onDismiss = { previewUrlInternal = null }
-            )
+        nonImageAttachments.forEach { attachment ->
+            when (attachment) {
+                is SelectedMediaItem.GenericFile -> {
+                    var itemGlobalPosition by remember { mutableStateOf(Offset.Zero) }
+                    Row(
+                        modifier = Modifier
+                            .widthIn(max = attachmentsAppliedMax)
+                            .padding(vertical = 4.dp)
+                            .background(bubbleColor, RoundedCornerShape(12.dp))
+                            .clip(RoundedCornerShape(12.dp))
+                            .onGloballyPositioned { itemGlobalPosition = it.localToRoot(Offset.Zero) }
+                            .pointerInput(message.id, attachment.uri) {
+                                detectTapGestures(
+                                    onTap = {
+                                        val intent = Intent(Intent.ACTION_VIEW).apply {
+                                            setDataAndType(attachment.uri, attachment.mimeType)
+                                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                        }
+                                        context.startActivity(intent)
+                                    },
+                                    onLongPress = { localOffset ->
+                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                        onLongPress(message, itemGlobalPosition + localOffset)
+                                    }
+                                )
+                            }
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = getIconForMimeType(attachment.mimeType),
+                            contentDescription = "Attachment",
+                            modifier = Modifier.size(24.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = attachment.displayName ?: attachment.uri.path?.substringAfterLast('/') ?: "Attached File",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                is SelectedMediaItem.Audio -> {
+                    var itemGlobalPosition by remember { mutableStateOf(Offset.Zero) }
+                    Row(
+                        modifier = Modifier
+                            .widthIn(max = attachmentsAppliedMax)
+                            .padding(vertical = 4.dp)
+                            .background(bubbleColor, RoundedCornerShape(12.dp))
+                            .clip(RoundedCornerShape(12.dp))
+                            .onGloballyPositioned { itemGlobalPosition = it.localToRoot(Offset.Zero) }
+                            .pointerInput(message.id, attachment) {
+                                detectTapGestures(
+                                    onTap = { },
+                                    onLongPress = { localOffset ->
+                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                        onLongPress(message, itemGlobalPosition + localOffset)
+                                    }
+                                )
+                            }
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Audiotrack,
+                            contentDescription = "Audio Attachment",
+                            modifier = Modifier.size(24.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Audio attachment",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                else -> {}
+            }
         }
+    }
+
+    if (previewUrlInternal != null) {
+        com.android.everytalk.ui.components.ImagePreviewDialog(
+            url = previewUrlInternal!!,
+            onDismiss = { previewUrlInternal = null }
+        )
     }
 }
 
