@@ -56,8 +56,8 @@ class MessageSenderMcpGuidanceTest {
             hasMcpTools = true
         ).orEmpty()
 
-        assertTrue(guidance.contains("主动判断当前问题是否需要借助 MCP 工具"))
-        assertTrue(guidance.contains("优先考虑调用最合适的 MCP 工具后再回答"))
+        assertTrue(guidance.contains("必须积极主动地使用它们"))
+        assertTrue(guidance.contains("必须先调用工具获取信息再回答"))
     }
 
     @Test
@@ -68,7 +68,7 @@ class MessageSenderMcpGuidanceTest {
             hasMcpTools = true
         ).orEmpty()
 
-        assertTrue(guidance.contains("如果问题可以仅凭已有知识准确回答，则无需调用 MCP"))
+        assertTrue(guidance.contains("纯粹是闲聊、创意写作、或完全不涉及外部信息时，才可以不调用工具"))
         assertFalse(guidance.contains("明显依赖最新外部信息"))
     }
 

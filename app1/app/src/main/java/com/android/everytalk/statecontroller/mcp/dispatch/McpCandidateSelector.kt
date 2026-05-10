@@ -22,7 +22,7 @@ fun selectMcpCandidates(
         QueryIntent.WEB_CONTENT_READ -> candidates.filter {
             it.category == McpToolCategory.BROWSER
         }
-        QueryIntent.LOCAL_REASONING -> emptyList()
+        QueryIntent.LOCAL_REASONING -> candidates
         else -> candidates
     }.sortedByDescending { it.reliabilityScore }
 
