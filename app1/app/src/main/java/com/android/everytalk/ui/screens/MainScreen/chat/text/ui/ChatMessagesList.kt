@@ -225,7 +225,6 @@ fun ChatMessagesList(
                     return@LaunchedEffect
                 }
                 
-                viewModel.consumeLastSentUserMessageId()
                 android.util.Log.d("GrokScroll", "Consumed, proceeding with scroll")
                 
                 kotlinx.coroutines.delay(50)
@@ -294,6 +293,8 @@ fun ChatMessagesList(
                         android.util.Log.d("GrokScroll", "Scrolled by $scrollNeeded")
                     }
                 }
+
+                viewModel.consumeLastSentUserMessageId()
             }
             
             // 前端消息列表渲染。
