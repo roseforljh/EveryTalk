@@ -80,6 +80,7 @@ import com.android.everytalk.data.DataClass.Message
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import android.graphics.BitmapFactory
+import androidx.compose.foundation.gestures.animateScrollBy
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
@@ -92,8 +93,10 @@ import com.android.everytalk.ui.theme.ChatDimensions
 import com.android.everytalk.ui.theme.chatColors
 import com.android.everytalk.ui.components.EnhancedMarkdownText
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.first
 import coil3.size.Size
 import kotlin.math.min
 
@@ -201,11 +204,120 @@ fun ImageGenerationMessagesList(
     val isApiCalling by viewModel.isImageApiCalling.collectAsState()
     val currentStreamingId by viewModel.currentImageStreamingAiMessageId.collectAsState()
 
-    // Grok-style: 不再需要 anchor restore 逻辑
+    // Grok-style 置顶逻辑（与文本模式对齐）
     val isAtBottom by scrollStateManager.isAtBottom
+
+    var dynamicBottomPaddingTarget by remember { mutableStateOf(0.dp) }
+    var firstBubbleScreenY by remember { mutableStateOf(-1) }
+
+    val dynamicBottomPadding by androidx.compose.animation.core.animateDpAsState(
+        targetValue = dynamicBottomPaddingTarget,
+        animationSpec = androidx.compose.animation.core.tween(
+            durationMillis = 500,
+            easing = androidx.compose.animation.core.CubicBezierEasing(0.25f, 0.1f, 0.25f, 1.0f)
+        ),
+        label = "imageDynamicBottomPadding"
+    )
+
+    LaunchedEffect(isApiCalling) {
+        if (!isApiCalling && dynamicBottomPaddingTarget > 0.dp) {
+            kotlinx.coroutines.delay(300)
+            dynamicBottomPaddingTarget = 0.dp
+        }
+    }
+
+    LaunchedEffect(isApiCalling) {
+        if (!isApiCalling) return@LaunchedEffect
+        kotlinx.coroutines.delay(800)
+        if (dynamicBottomPaddingTarget <= 0.dp) return@LaunchedEffect
+        snapshotFlow {
+            val li = listState.layoutInfo
+            val viewportHeight = li.viewportEndOffset - li.viewportStartOffset
+            if (viewportHeight <= 0) return@snapshotFlow -1
+            val lastRealItem = li.visibleItemsInfo.lastOrNull { it.key != "image_dynamic_padding_spacer" }
+                ?: return@snapshotFlow -1
+            val contentBottomInViewport = lastRealItem.offset + lastRealItem.size
+            val gap = li.viewportEndOffset - contentBottomInViewport - li.afterContentPadding
+            gap.coerceAtLeast(0)
+        }.collect { gapPx ->
+            if (gapPx < 0) return@collect
+            val newPadding = with(density) { gapPx.toDp() }
+            if (newPadding < dynamicBottomPaddingTarget) {
+                dynamicBottomPaddingTarget = newPadding
+            }
+        }
+    }
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val availableHeight = maxHeight
+        val topPaddingPx = with(density) { 8.dp.toPx().toInt() }
+
+        val lastSentImageUserMessageId by viewModel.lastSentImageUserMessageId.collectAsState()
+
+        LaunchedEffect(lastSentImageUserMessageId) {
+            val sentId = lastSentImageUserMessageId ?: return@LaunchedEffect
+
+            val currentItems = viewModel.imageGenerationChatListItems.first { items ->
+                items.any { item ->
+                    item is ChatListItem.UserMessage && item.stableId == sentId
+                }
+            }
+            val lastUserIndex = currentItems.indexOfLast { item ->
+                item is ChatListItem.UserMessage && item.stableId == sentId
+            }
+            val currentUserMessageIndices = currentItems.mapIndexedNotNull { index, item ->
+                if (item is ChatListItem.UserMessage) index else null
+            }
+
+            val li = listState.layoutInfo
+            val firstUserIndex = currentUserMessageIndices.firstOrNull() ?: -1
+
+            if (currentUserMessageIndices.size == 1) {
+                val firstItem = li.visibleItemsInfo.firstOrNull { it.index == firstUserIndex }
+                    ?: kotlinx.coroutines.withTimeoutOrNull(2000) {
+                        snapshotFlow {
+                            listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == firstUserIndex }
+                        }.first { it != null }
+                    }
+                firstBubbleScreenY = if (firstItem != null) {
+                    firstItem.offset - listState.layoutInfo.viewportStartOffset
+                } else {
+                    topPaddingPx
+                }
+                viewModel.consumeLastSentImageUserMessageId()
+                return@LaunchedEffect
+            }
+
+            if (firstBubbleScreenY < 0) {
+                firstBubbleScreenY = topPaddingPx
+            }
+            val targetScreenY = firstBubbleScreenY
+
+            val viewportHeight = li.viewportEndOffset - li.viewportStartOffset
+            dynamicBottomPaddingTarget = with(density) { viewportHeight.toDp() }
+            kotlinx.coroutines.delay(100)
+
+            listState.scrollToItem(lastUserIndex, scrollOffset = -targetScreenY)
+            kotlinx.coroutines.delay(50)
+
+            val li2 = listState.layoutInfo
+            val currItem = li2.visibleItemsInfo.firstOrNull { it.index == lastUserIndex }
+            if (currItem != null) {
+                val actualY = currItem.offset - li2.viewportStartOffset
+                val correction = actualY - targetScreenY
+                if (correction != 0) {
+                    listState.animateScrollBy(
+                        correction.toFloat(),
+                        androidx.compose.animation.core.tween(
+                            durationMillis = 400,
+                            easing = androidx.compose.animation.core.CubicBezierEasing(0.25f, 0.1f, 0.25f, 1.0f)
+                        )
+                    )
+                }
+            }
+
+            viewModel.consumeLastSentImageUserMessageId()
+        }
 
         if (chatItems.isEmpty()) {
             if (isApiCalling) {
@@ -449,6 +561,11 @@ fun ImageGenerationMessagesList(
             }
                 item(key = "chat_screen_footer_spacer_in_list") {
                     Spacer(modifier = Modifier.height(1.dp))
+                }
+                if (dynamicBottomPadding > 0.dp) {
+                    item(key = "image_dynamic_padding_spacer") {
+                        Spacer(modifier = Modifier.height(dynamicBottomPadding))
+                    }
                 }
             }
         }

@@ -350,6 +350,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun consumeLastSentUserMessageId() {
         stateHolder._lastSentUserMessageId.value = null
     }
+    val lastSentImageUserMessageId: StateFlow<String?>
+        get() = stateHolder._lastSentImageUserMessageId.asStateFlow()
+    fun consumeLastSentImageUserMessageId() {
+        stateHolder._lastSentImageUserMessageId.value = null
+    }
     val currentTextStreamingAiMessageId: StateFlow<String?>
         get() = stateHolder._currentTextStreamingAiMessageId.asStateFlow()
     val currentImageStreamingAiMessageId: StateFlow<String?>

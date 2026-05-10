@@ -35,15 +35,10 @@
         <activity
             android:name="com.android.everytalk.statecontroller.MainActivity"
             android:configChanges="orientation|screenSize|keyboardHidden|keyboard"
-            android:exported="true"
+            android:exported="false"
             android:theme="@style/Theme.App1"
             android:windowSoftInputMode="adjustResize"
             tools:ignore="WrongManifestParent">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
             
             <!-- 接收系统分享的文本内容 -->
             <intent-filter>
@@ -59,6 +54,34 @@
                 <data android:mimeType="text/*" />
             </intent-filter>
         </activity>
+
+        <activity-alias
+            android:name=".LauncherLight"
+            android:targetActivity="com.android.everytalk.statecontroller.MainActivity"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:roundIcon="@mipmap/ic_launcher_round"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".LauncherDark"
+            android:targetActivity="com.android.everytalk.statecontroller.MainActivity"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_night"
+            android:roundIcon="@mipmap/ic_launcher_night_round"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
 
 
 

@@ -145,6 +145,7 @@ data class ConversationFunctionToggleState(
     val _isMcpEnabledForNextRequest = MutableStateFlow(false)
 
     val _lastSentUserMessageId = MutableStateFlow<String?>(null)
+    val _lastSentImageUserMessageId = MutableStateFlow<String?>(null)
 
     // 分离的流式消息ID
     val _currentTextStreamingAiMessageId = MutableStateFlow<String?>(null)

@@ -574,11 +574,23 @@ private fun escapeCurrencyOutsideMath(input: String): String {
             continue
         }
 
+        // 未闭合的 $$数字 → 货币，折叠为转义后的单个金额符号
+        if (!escaped && i + 2 < input.length && input.startsWith("$$", i) && input[i + 2].isDigit()) {
+            val closingDoubleIdx = input.indexOf("$$", startIndex = i + 2)
+            if (closingDoubleIdx == -1 || input.substring(i + 2, closingDoubleIdx).contains('\n')) {
+                out.append("\\$")
+                i += 2
+                continue
+            }
+        }
+
         // $ 后跟数字 → 可能是货币，检查同行是否有配对的另一个 $+数字
         if (!escaped && ch == '$' && i + 1 < input.length && input[i + 1].isDigit()) {
             val closingIdx = findNextUnescapedDollar(i + 1)
-            if (closingIdx > i && closingIdx + 1 < input.length && input[closingIdx + 1].isDigit()) {
-                // 同行找到了另一个 $+数字 → 确认是金额对，转义
+            if (closingIdx == -1 ||
+                (closingIdx > i && closingIdx + 1 < input.length && input[closingIdx + 1].isDigit())
+            ) {
+                // 无数学闭合，或同行找到了另一个 $+数字 → 确认是金额，转义
                 out.append("\\$")
                 i++
                 continue

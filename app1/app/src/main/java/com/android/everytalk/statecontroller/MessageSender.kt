@@ -831,6 +831,9 @@ internal fun prepareMcpDispatch(
                 animationMap[newUserMessageForUi.id] = true
                 if (isImageGeneration) {
                     stateHolder.imageGenerationMessages.add(newUserMessageForUi)
+                    if (!isFromRegeneration) {
+                        stateHolder._lastSentImageUserMessageId.value = newUserMessageForUi.id
+                    }
                 } else {
                     stateHolder.messages.add(newUserMessageForUi)
                     if (!isFromRegeneration) {

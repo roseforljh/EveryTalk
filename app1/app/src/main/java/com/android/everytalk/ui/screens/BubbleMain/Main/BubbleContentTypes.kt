@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.foundation.clickable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.TileMode
@@ -78,6 +79,9 @@ private val CONTEXT_MENU_ITEM_ICON_SIZE = 20.dp
 // 基本对齐采用"角点贴手指"，再整体向下微移，避免"整体偏高"
 private val CONTEXT_MENU_FINGER_VERTICAL_OFFSET = -90.dp
 private val CONTEXT_MENU_FIXED_WIDTH = 120.dp
+
+internal fun attachmentStripHorizontalAlignment(sender: Sender): Alignment.Horizontal =
+    if (sender == Sender.User) Alignment.End else Alignment.Start
 
 
 @Composable
@@ -283,15 +287,30 @@ fun AttachmentsContent(
         attachments.filter { it is SelectedMediaItem.GenericFile || it is SelectedMediaItem.Audio }
     }
 
-    Column(modifier = Modifier.padding(top = 8.dp)) {
+    val attachmentHorizontalAlignment = attachmentStripHorizontalAlignment(message.sender)
+
+    Column(
+        modifier = Modifier.padding(top = 8.dp),
+        horizontalAlignment = attachmentHorizontalAlignment
+    ) {
         if (imageAttachments.isNotEmpty()) {
             val imageStripHeight = 100.dp
+            val scrollState = rememberScrollState()
+            val isUser = message.sender == Sender.User
+
+            LaunchedEffect(isUser, imageAttachments.size) {
+                if (isUser) scrollState.scrollTo(scrollState.maxValue)
+            }
+
+            val fadeColor = if (androidx.compose.foundation.isSystemInDarkTheme()) Color.Black else Color.White
+
             Box(modifier = Modifier.fillMaxWidth()) {
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    horizontalArrangement = if (isUser) Arrangement.spacedBy(4.dp, Alignment.End) else Arrangement.spacedBy(4.dp),
                     modifier = Modifier
                         .height(imageStripHeight)
-                        .horizontalScroll(rememberScrollState())
+                        .fillMaxWidth()
+                        .horizontalScroll(scrollState)
                 ) {
                     imageAttachments.forEachIndexed { idx, attachment ->
                         var imageGlobalPosition by remember { mutableStateOf(Offset.Zero) }
@@ -345,6 +364,32 @@ fun AttachmentsContent(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+                }
+                if (scrollState.value > 0) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .width(16.dp)
+                            .height(imageStripHeight)
+                            .background(
+                                Brush.horizontalGradient(
+                                    colors = listOf(fadeColor, Color.Transparent)
+                                )
+                            )
+                    )
+                }
+                if (scrollState.value < scrollState.maxValue) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .width(16.dp)
+                            .height(imageStripHeight)
+                            .background(
+                                Brush.horizontalGradient(
+                                    colors = listOf(Color.Transparent, fadeColor)
+                                )
+                            )
+                    )
                 }
             }
         }
