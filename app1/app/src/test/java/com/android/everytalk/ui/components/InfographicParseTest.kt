@@ -37,7 +37,6 @@ items
             when (part) {
                 is ContentPart.Text -> assertNotNull(index)
                 is ContentPart.Code -> assertNotNull(part.language)
-                is ContentPart.StreamingCode -> assertNotNull(part.content)
                 is ContentPart.Table -> assertTrue(part.lines.isNotEmpty())
                 is ContentPart.Math -> assertNotNull(part.content)
             }
@@ -70,7 +69,6 @@ items
             when (part) {
                 is ContentPart.Text -> assertNotNull(index)
                 is ContentPart.Code -> assertNotNull(part.language)
-                is ContentPart.StreamingCode -> assertNotNull(part.content)
                 is ContentPart.Table -> assertTrue(part.lines.isNotEmpty())
                 is ContentPart.Math -> assertNotNull(part.content)
             }

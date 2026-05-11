@@ -671,6 +671,19 @@ open class MessageItemsController(
     ): StreamBlockParser.ParseResult {
         val shouldUseStreamingState = preferStreamingState || streamingMessageStateManager.isStreaming(message.id)
         if (!shouldUseStreamingState) {
+            // 当 message.text 为空但 render state 仍有内容时，使用 render state 兜底，
+            // 避免 activeStreamingMessages.remove 和 message.text 同步之间的竞态窗口
+            // 导致一帧空白内容和高度坍塌。
+            if (message.text.isBlank()) {
+                val renderState = streamingMessageStateManager.getCurrentRenderState(message.id)
+                if (renderState.content.isNotBlank()) {
+                    return StreamBlockParser.ParseResult(
+                        blocks = renderState.blocks,
+                        hasPendingMath = renderState.hasPendingMath,
+                        blocksHash = renderState.blocksHash,
+                    )
+                }
+            }
             return StreamBlockParser.parse(message.text, message.id)
         }
 

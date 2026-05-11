@@ -1,6 +1,6 @@
 package com.android.everytalk.ui.components.table
 
-import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -60,12 +60,12 @@ class TableAwareTextRoutingTest {
     }
 
     @Test
-    fun `parse request should change when streaming mode changes with same text`() {
+    fun `parse request should be equal when text is the same`() {
         val text = "```kotlin\nprintln(\"hi\")\n```"
 
-        assertNotEquals(
-            TableAwareParseRequest(text = text, isStreaming = true),
-            TableAwareParseRequest(text = text, isStreaming = false),
+        assertEquals(
+            TableAwareParseRequest(text = text),
+            TableAwareParseRequest(text = text),
         )
     }
 }

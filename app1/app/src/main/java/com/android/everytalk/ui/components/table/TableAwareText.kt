@@ -120,7 +120,6 @@ internal fun shouldPreferStableMarkdownFallback(
 
 internal data class TableAwareParseRequest(
     val text: String,
-    val isStreaming: Boolean,
 )
 
 internal fun shouldRenderStableNativeMathPart(
@@ -183,16 +182,10 @@ fun TableAwareText(
         // 仅监听文本本身的变化来触发重新解析
         // 不再将 isStreaming 纳入触发条件，避免流式结束瞬间因 isStreaming 切换
         // 而触发全量重解析 + Compose 全量重组，导致整个气泡闪一下
-        snapshotFlow {
-            TableAwareParseRequest(
-                text = updatedText,
-                isStreaming = updatedIsStreaming,
-            )
-        }
+        snapshotFlow { updatedText }
             .distinctUntilChanged()
-            .mapLatest { request ->
-                val currentText = request.text
-                val streaming = request.isStreaming
+            .mapLatest { currentText ->
+                val streaming = updatedIsStreaming
                 val cacheKey = if (contentKey.isNotBlank() && !streaming) {
                     "${contentKey}_${currentText.hashCode()}_v${ContentParseCache.PARSER_VERSION}"
                 } else ""
@@ -206,7 +199,7 @@ fun TableAwareText(
                 // 流式阶段也对完整累计文本做后台结构化解析。
                 // 不再走“仅追加最后一个 Text 块”的快捷路径，否则列表/标题/表格/代码围栏
                 // 会长期停留在错误结构，直到结束才一次性纠正。
-                val parts = ContentParser.parseCompleteContent(currentText, isStreaming = streaming)
+                val parts = ContentParser.parseCompleteContent(currentText)
 
                 if (!streaming && cacheKey.isNotBlank()) {
                     ContentParseCache.put(cacheKey, parts)
@@ -229,7 +222,7 @@ fun TableAwareText(
             if (!isStreaming && effectiveCacheKey.isNotBlank()) {
                 ContentParseCache.get(effectiveCacheKey)
             } else null
-        } ?: ContentParser.parseCompleteContent(text, isStreaming = isStreaming).also { parts ->
+        } ?: ContentParser.parseCompleteContent(text).also { parts ->
             if (!isStreaming && effectiveCacheKey.isNotBlank()) {
                 ContentParseCache.put(effectiveCacheKey, parts)
             }
@@ -342,21 +335,13 @@ fun TableAwareText(
                                     .padding(vertical = 4.dp),
                                 isStreaming = isStreaming
                             )
-                        } else if (isStreaming) {
-                            StreamingCodeBlockCard(
-                                language = part.language,
-                                code = part.content,
-                                modifier = Modifier.padding(vertical = 4.dp),
-                                isCompleted = true,
-                                onLongPress = onLongPress
-                            )
                         } else {
                             val clipboard = LocalClipboard.current
                             CodeBlockCard(
                                 language = part.language,
                                 code = part.content,
                                 modifier = Modifier.padding(vertical = 4.dp),
-                                isStreaming = false,
+                                isStreaming = isStreaming,
                                 onPreviewRequested = if (onCodePreviewRequested != null) {
                                     { onCodePreviewRequested(part.language ?: "", part.content) }
                                 } else null,
@@ -373,15 +358,6 @@ fun TableAwareText(
                                 onLongPress = onLongPress
                             )
                         }
-                    }
-                    is ContentPart.StreamingCode -> {
-                        StreamingCodeBlockCard(
-                            language = part.language,
-                            code = part.content,
-                            modifier = Modifier.padding(vertical = 4.dp),
-                            isCompleted = false,
-                            onLongPress = onLongPress
-                        )
                     }
                     is ContentPart.Table -> {
                         TableRenderer(

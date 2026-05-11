@@ -234,8 +234,10 @@ class StreamingMessageStateManager {
         pendingJobs.remove(messageId)?.cancel()
         pendingBuffers.remove(messageId)
         streamingStates.remove(messageId)
-        streamingRenderStates.remove(messageId)
-        Log.d("StreamingMessageStateManager", "Cleared streaming state for message: $messageId")
+        // 不删除 streamingRenderStates：UI 侧仍在 collectAsState 订阅该 Flow，
+        // 如果此时 remove，UI 会收到一个全新的空 RenderState，导致一帧内容空白和高度坍塌。
+        // 保留最终态让 UI 自然过渡到 message.text；下次 startStreaming 时会覆盖。
+        Log.d("StreamingMessageStateManager", "Cleared streaming state for message: $messageId (renderState retained)")
     }
 
     fun clearAll() {
