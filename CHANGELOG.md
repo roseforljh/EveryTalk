@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.16.1](https://github.com/roseforljh/EveryTalk/compare/v1.16.0...v1.16.1) (2026-05-11)
+
+
+### Bug Fixes
+
+* 根治流式结束时AI气泡高度坍塌 ([36d73b7](https://github.com/roseforljh/EveryTalk/commit/36d73b7aabe0d2184610d9b80120e90266b0fef2))
+
 ## [1.16.0](https://github.com/roseforljh/EveryTalk/compare/v1.15.6...v1.16.0) (2026-05-10)
 
 
