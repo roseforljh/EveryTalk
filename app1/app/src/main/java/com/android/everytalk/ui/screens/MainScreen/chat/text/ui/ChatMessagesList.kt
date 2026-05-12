@@ -290,18 +290,15 @@ fun ChatMessagesList(
                 }
                 val stableDurationNanos = frameNanos - stableSinceNanos
                 if (stableDurationNanos >= stableWindowNanos && dynamicBottomPaddingTarget > 0.dp) {
-                    val spacerItem = li.visibleItemsInfo.firstOrNull { it.key == "dynamic_padding_spacer" }
-                    if (spacerItem != null) {
-                        val spacerEnd = spacerItem.offset + spacerItem.size
-                        val safeReductionPx = (spacerEnd - li.viewportEndOffset - clampBufferPx).coerceAtLeast(0)
-                        if (safeReductionPx > 0) {
-                            val currentPaddingPx = with(density) { dynamicBottomPaddingImmediate.toPx() }
-                            val newPaddingPx = (currentPaddingPx - safeReductionPx).coerceAtLeast(0f)
-                            val newPadding = with(density) { newPaddingPx.toDp() }
-                            if (newPadding < dynamicBottomPaddingTarget) {
-                                dynamicBottomPaddingImmediate = newPadding
-                                dynamicBottomPaddingTarget = newPadding
-                            }
+                    val lastRealItem = li.visibleItemsInfo.lastOrNull { it.key != "dynamic_padding_spacer" }
+                    if (lastRealItem != null) {
+                        val contentBottom = lastRealItem.offset + lastRealItem.size
+                        val gapPx = (li.viewportEndOffset - contentBottom - li.afterContentPadding)
+                            .coerceAtLeast(0)
+                        val gapDp = with(density) { gapPx.toDp() }
+                        if (gapDp < dynamicBottomPaddingTarget) {
+                            dynamicBottomPaddingImmediate = gapDp
+                            dynamicBottomPaddingTarget = gapDp
                         }
                     }
                 }
@@ -439,20 +436,16 @@ fun ChatMessagesList(
 
                     android.util.Log.d("GrokScroll", "Keep padding until API done")
 
-                    // 立即缩减 viewport 外的 spacer，避免触发 maxScroll clamp
+                    // 立即缩减多余空白
                     val liAfter = listState.layoutInfo
-                    val spacerItem = liAfter.visibleItemsInfo.firstOrNull { it.key == "dynamic_padding_spacer" }
-                    if (spacerItem != null) {
-                        val safeReductionPx = (spacerItem.offset + spacerItem.size - liAfter.viewportEndOffset - 1)
+                    val lastReal = liAfter.visibleItemsInfo.lastOrNull { it.key != "dynamic_padding_spacer" }
+                    if (lastReal != null) {
+                        val gapPx = (liAfter.viewportEndOffset - (lastReal.offset + lastReal.size) - liAfter.afterContentPadding)
                             .coerceAtLeast(0)
-                        if (safeReductionPx > 0) {
-                            val currentPaddingPx = with(density) { dynamicBottomPaddingImmediate.toPx() }
-                            val newPaddingPx = (currentPaddingPx - safeReductionPx).coerceAtLeast(0f)
-                            val newPadding = with(density) { newPaddingPx.toDp() }
-                            if (newPadding < dynamicBottomPaddingImmediate) {
-                                dynamicBottomPaddingImmediate = newPadding
-                                dynamicBottomPaddingTarget = newPadding
-                            }
+                        val gapDp = with(density) { gapPx.toDp() }
+                        if (gapDp < dynamicBottomPaddingImmediate) {
+                            dynamicBottomPaddingImmediate = gapDp
+                            dynamicBottomPaddingTarget = gapDp
                         }
                     }
 
@@ -468,7 +461,7 @@ fun ChatMessagesList(
             LazyColumn(
                 state = listState,
                 reverseLayout = false,
-                userScrollEnabled = grokScrollCompleted && pinnedUserMessageId == null,
+                userScrollEnabled = grokScrollCompleted,
                 modifier = Modifier
                     .fillMaxSize()
                     .nestedScroll(scrollStateManager.nestedScrollConnection),
