@@ -1,7 +1,9 @@
 package com.android.everytalk.data.network
 
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
@@ -21,6 +23,12 @@ object WebFetchToolExecutor {
             maxContentChars = maxContentChars,
         )
 
+        val images = if (result.success && !result.content.isNullOrBlank()) {
+            WebFetchImageExtractor.extractAndDownloadImages(result.content)
+        } else {
+            emptyList()
+        }
+
         return buildJsonObject {
             put("ok", JsonPrimitive(result.success))
             put("requestedUrl", JsonPrimitive(result.requestedUrl))
@@ -32,6 +40,17 @@ object WebFetchToolExecutor {
             result.statusCode?.let { put("statusCode", JsonPrimitive(it)) }
             result.error?.let { put("error", JsonPrimitive(it)) }
             put("maxContentChars", JsonPrimitive(maxContentChars))
+            if (images.isNotEmpty()) {
+                put("_images", buildJsonArray {
+                    images.forEach { img ->
+                        add(buildJsonObject {
+                            put("url", JsonPrimitive(img.url))
+                            put("base64", JsonPrimitive(img.base64Data))
+                            put("mimeType", JsonPrimitive(img.mimeType))
+                        })
+                    }
+                })
+            }
         }
     }
 }

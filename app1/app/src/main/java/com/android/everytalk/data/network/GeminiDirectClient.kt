@@ -125,14 +125,34 @@ object GeminiDirectClient {
                             }
                         }
                         Log.i(TAG, "🔧 工具 $toolName 执行成功: ${result.toString().take(100)}")
+                        val images = (result as? JsonObject)?.get("_images")?.let { it as? JsonArray }
+                        val textResult = if (images != null) {
+                            buildJsonObject {
+                                (result as JsonObject).entries.forEach { (k, v) ->
+                                    if (k != "_images") put(k, v)
+                                }
+                            }
+                        } else result
+
                         toolResponses.add(buildJsonObject {
                             put("functionResponse", buildJsonObject {
                                 put("name", toolName)
                                 put("response", buildJsonObject {
-                                    put("result", result)
+                                    put("result", textResult)
                                 })
                             })
                         })
+                        images?.forEach { imgElement ->
+                            val imgObj = imgElement as? JsonObject ?: return@forEach
+                            val b64 = imgObj["base64"]?.jsonPrimitive?.contentOrNull ?: return@forEach
+                            val mime = imgObj["mimeType"]?.jsonPrimitive?.contentOrNull ?: "image/jpeg"
+                            toolResponses.add(buildJsonObject {
+                                putJsonObject("inlineData") {
+                                    put("mimeType", mime)
+                                    put("data", b64)
+                                }
+                            })
+                        }
                     } catch (e: Exception) {
                         Log.e(TAG, "🔧 工具 $toolName 执行失败", e)
                         toolResponses.add(buildJsonObject {

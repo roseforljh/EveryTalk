@@ -538,11 +538,50 @@ object OpenAIDirectClient {
                         }
                         Log.i(TAG, "🔧 工具 ${toolInfo.name} 执行成功: ${result.toString().take(100)}")
 
-                        conversationHistory.add(buildJsonObject {
-                            put("role", "tool")
-                            put("tool_call_id", toolInfo.id)
-                            put("content", result.toString())
-                        })
+                        val images = (result as? JsonObject)?.get("_images")?.let { it as? JsonArray }
+                        if (images != null && images.isNotEmpty()) {
+                            val textOnly = buildJsonObject {
+                                (result as JsonObject).entries.forEach { (k, v) ->
+                                    if (k != "_images") put(k, v)
+                                }
+                            }
+                            conversationHistory.add(buildJsonObject {
+                                put("role", "tool")
+                                put("tool_call_id", toolInfo.id)
+                                put("content", textOnly.toString())
+                            })
+                            val imageParts = buildJsonArray {
+                                images.forEach { imgElement ->
+                                    val imgObj = imgElement as? JsonObject ?: return@forEach
+                                    val b64 = imgObj["base64"]?.jsonPrimitive?.contentOrNull ?: return@forEach
+                                    val mime = imgObj["mimeType"]?.jsonPrimitive?.contentOrNull ?: "image/jpeg"
+                                    addJsonObject {
+                                        put("type", "image_url")
+                                        putJsonObject("image_url") {
+                                            put("url", "data:$mime;base64,$b64")
+                                        }
+                                    }
+                                }
+                            }
+                            if (imageParts.isNotEmpty()) {
+                                conversationHistory.add(buildJsonObject {
+                                    put("role", "user")
+                                    put("content", buildJsonArray {
+                                        addJsonObject {
+                                            put("type", "text")
+                                            put("text", "以上是从网页中提取的图片，请结合网页文本内容一起分析。")
+                                        }
+                                        imageParts.forEach { add(it) }
+                                    })
+                                })
+                            }
+                        } else {
+                            conversationHistory.add(buildJsonObject {
+                                put("role", "tool")
+                                put("tool_call_id", toolInfo.id)
+                                put("content", result.toString())
+                            })
+                        }
                     } catch (e: Exception) {
                         Log.e(TAG, "🔧 工具 ${toolInfo.name} 执行失败", e)
                         conversationHistory.add(buildJsonObject {
