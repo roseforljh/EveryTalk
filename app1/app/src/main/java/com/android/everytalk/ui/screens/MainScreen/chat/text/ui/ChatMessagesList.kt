@@ -264,6 +264,7 @@ fun ChatMessagesList(
         val targetY = firstBubbleScreenY
         if (targetY <= 0) return@LaunchedEffect
 
+        var stableFrames = 0
         while (true) {
             withFrameNanos { }
             val li = listState.layoutInfo
@@ -271,13 +272,31 @@ fun ChatMessagesList(
                 ?: continue
             val currentY = item.offset - li.viewportStartOffset
             val drift = currentY - targetY
+
             if (kotlin.math.abs(drift) > 1) {
+                stableFrames = 0
                 val consumed = listState.scrollBy(drift.toFloat())
                 val missing = kotlin.math.abs(drift.toFloat()) - kotlin.math.abs(consumed)
                 if (drift > 0 && missing > 0.5f) {
                     val missingDp = with(density) { missing.toDp() }
                     dynamicBottomPaddingImmediate += missingDp
                     dynamicBottomPaddingTarget += missingDp
+                }
+            } else {
+                stableFrames++
+                if (stableFrames >= 3 && dynamicBottomPaddingTarget > 0.dp) {
+                    val lastRealItem = li.visibleItemsInfo.lastOrNull { it.key != "dynamic_padding_spacer" }
+                    if (lastRealItem != null) {
+                        val contentBottom = lastRealItem.offset + lastRealItem.size
+                        val gap = li.viewportEndOffset - contentBottom - li.afterContentPadding
+                        if (gap > 0) {
+                            val gapDp = with(density) { gap.toDp() }
+                            if (gapDp < dynamicBottomPaddingTarget) {
+                                dynamicBottomPaddingImmediate = gapDp
+                                dynamicBottomPaddingTarget = gapDp
+                            }
+                        }
+                    }
                 }
             }
         }
