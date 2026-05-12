@@ -154,12 +154,10 @@ fun ChatMessagesList(
         label = "dynamicBottomPadding"
     )
 
-    // 流式期间直接用 immediate（避免动画过程中穿越 maxScroll 临界点导致 clamping 抖动）
-    // API 结束后用动画平滑收起
     val dynamicBottomPadding = if (isApiCalling) {
         dynamicBottomPaddingImmediate
     } else {
-        maxOf(dynamicBottomPaddingImmediate, dynamicBottomPaddingAnimated)
+        dynamicBottomPaddingAnimated
     }
 
     LaunchedEffect(scrollSessionKey) {
@@ -199,11 +197,8 @@ fun ChatMessagesList(
     
     LaunchedEffect(isApiCalling) {
         if (!isApiCalling && dynamicBottomPaddingTarget > 0.dp) {
-            kotlinx.coroutines.delay(500)
-            // 只设置动画目标为 0，不清除 immediate，避免高度坍塌
+            kotlinx.coroutines.delay(300)
             dynamicBottomPaddingTarget = 0.dp
-            // 等动画完成后再清除 immediate
-            kotlinx.coroutines.delay(600)
             dynamicBottomPaddingImmediate = 0.dp
             android.util.Log.d("GrokScroll", "API done, cleared padding")
         }
@@ -264,17 +259,24 @@ fun ChatMessagesList(
         val targetY = firstBubbleScreenY
         if (targetY <= 0) return@LaunchedEffect
 
-        var stableFrames = 0
+        val stableWindowNanos = 50_000_000L
+        val clampBufferPx = 1
+        var stableSinceNanos = 0L
+        var lastLayoutVersion = listState.layoutInfo.totalItemsCount
         while (true) {
-            withFrameNanos { }
+            val frameNanos = withFrameNanos { it }
             val li = listState.layoutInfo
+            val layoutVersion = li.totalItemsCount + li.visibleItemsInfo.sumOf { it.size }
+            val layoutChanged = layoutVersion != lastLayoutVersion
+            lastLayoutVersion = layoutVersion
+
             val item = li.visibleItemsInfo.firstOrNull { it.key == pinnedId }
                 ?: continue
             val currentY = item.offset - li.viewportStartOffset
             val drift = currentY - targetY
 
             if (kotlin.math.abs(drift) > 1) {
-                stableFrames = 0
+                stableSinceNanos = 0L
                 val consumed = listState.scrollBy(drift.toFloat())
                 val missing = kotlin.math.abs(drift.toFloat()) - kotlin.math.abs(consumed)
                 if (drift > 0 && missing > 0.5f) {
@@ -283,20 +285,30 @@ fun ChatMessagesList(
                     dynamicBottomPaddingTarget += missingDp
                 }
             } else {
-                stableFrames++
-                if (stableFrames >= 3 && dynamicBottomPaddingTarget > 0.dp) {
-                    val lastRealItem = li.visibleItemsInfo.lastOrNull { it.key != "dynamic_padding_spacer" }
-                    if (lastRealItem != null) {
-                        val contentBottom = lastRealItem.offset + lastRealItem.size
-                        val gap = li.viewportEndOffset - contentBottom - li.afterContentPadding
-                        if (gap > 0) {
-                            val gapDp = with(density) { gap.toDp() }
-                            if (gapDp < dynamicBottomPaddingTarget) {
-                                dynamicBottomPaddingImmediate = gapDp
-                                dynamicBottomPaddingTarget = gapDp
+                if (stableSinceNanos == 0L) {
+                    stableSinceNanos = frameNanos
+                }
+                val stableDurationNanos = frameNanos - stableSinceNanos
+                if (stableDurationNanos >= stableWindowNanos && dynamicBottomPaddingTarget > 0.dp) {
+                    val spacerItem = li.visibleItemsInfo.firstOrNull { it.key == "dynamic_padding_spacer" }
+                    if (spacerItem != null) {
+                        val spacerEnd = spacerItem.offset + spacerItem.size
+                        val safeReductionPx = (spacerEnd - li.viewportEndOffset - clampBufferPx).coerceAtLeast(0)
+                        if (safeReductionPx > 0) {
+                            val currentPaddingPx = with(density) { dynamicBottomPaddingImmediate.toPx() }
+                            val newPaddingPx = (currentPaddingPx - safeReductionPx).coerceAtLeast(0f)
+                            val newPadding = with(density) { newPaddingPx.toDp() }
+                            if (newPadding < dynamicBottomPaddingTarget) {
+                                dynamicBottomPaddingImmediate = newPadding
+                                dynamicBottomPaddingTarget = newPadding
                             }
                         }
                     }
+                }
+                if (!layoutChanged && stableDurationNanos >= stableWindowNanos) {
+                    snapshotFlow { listState.layoutInfo.totalItemsCount + listState.layoutInfo.visibleItemsInfo.sumOf { it.size } }
+                        .first { it != lastLayoutVersion }
+                    stableSinceNanos = 0L
                 }
             }
         }
@@ -427,15 +439,20 @@ fun ChatMessagesList(
 
                     android.util.Log.d("GrokScroll", "Keep padding until API done")
 
-                    // 立即缩减 spacer 到实际需要的大小，消除多余滚动空间
+                    // 立即缩减 viewport 外的 spacer，避免触发 maxScroll clamp
                     val liAfter = listState.layoutInfo
-                    val lastReal = liAfter.visibleItemsInfo.lastOrNull { it.key != "dynamic_padding_spacer" }
-                    if (lastReal != null) {
-                        val gap = liAfter.viewportEndOffset - (lastReal.offset + lastReal.size) - liAfter.afterContentPadding
-                        val correctPadding = with(density) { gap.coerceAtLeast(0).toDp() }
-                        if (correctPadding < dynamicBottomPaddingImmediate) {
-                            dynamicBottomPaddingImmediate = correctPadding
-                            dynamicBottomPaddingTarget = correctPadding
+                    val spacerItem = liAfter.visibleItemsInfo.firstOrNull { it.key == "dynamic_padding_spacer" }
+                    if (spacerItem != null) {
+                        val safeReductionPx = (spacerItem.offset + spacerItem.size - liAfter.viewportEndOffset - 1)
+                            .coerceAtLeast(0)
+                        if (safeReductionPx > 0) {
+                            val currentPaddingPx = with(density) { dynamicBottomPaddingImmediate.toPx() }
+                            val newPaddingPx = (currentPaddingPx - safeReductionPx).coerceAtLeast(0f)
+                            val newPadding = with(density) { newPaddingPx.toDp() }
+                            if (newPadding < dynamicBottomPaddingImmediate) {
+                                dynamicBottomPaddingImmediate = newPadding
+                                dynamicBottomPaddingTarget = newPadding
+                            }
                         }
                     }
 
@@ -625,7 +642,12 @@ fun ChatMessagesList(
                                     .fillMaxWidth()
                                     .onSizeChanged { newSize ->
                                         val prevHeight = reasoningHeightMap[item.message.id] ?: newSize.height
-                                        if (prevHeight > newSize.height && isApiCalling && firstBubbleScreenY > 0) {
+                                        if (
+                                            prevHeight > newSize.height &&
+                                            isApiCalling &&
+                                            firstBubbleScreenY > 0 &&
+                                            pinnedUserMessageId != null
+                                        ) {
                                             val deltaDp = with(density) { (prevHeight - newSize.height).toDp() }
                                             dynamicBottomPaddingImmediate += deltaDp
                                             dynamicBottomPaddingTarget += deltaDp
