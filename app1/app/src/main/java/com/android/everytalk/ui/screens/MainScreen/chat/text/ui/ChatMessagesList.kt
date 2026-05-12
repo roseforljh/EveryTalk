@@ -4,6 +4,7 @@ import com.android.everytalk.R
 
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -66,8 +67,8 @@ import com.android.everytalk.ui.components.StableMarkdownText
 import com.android.everytalk.ui.components.markdown.MarkdownRenderer
 import com.android.everytalk.ui.components.streaming.StreamBlocksRenderer
 import com.android.everytalk.ui.components.WebPreviewDialog
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import androidx.compose.ui.layout.onSizeChanged
 import kotlinx.coroutines.flow.first
 
 @Composable
@@ -84,7 +85,7 @@ fun ChatMessagesList(
     additionalBottomPadding: Dp = 0.dp
 ) {
     val haptic = LocalHapticFeedback.current
-    val coroutineScope = rememberCoroutineScope()
+    val reasoningHeightMap = remember { mutableMapOf<String, Int>() }
     // 防止 AnimatedItems 等状态在重组时被重复触发
 
     var isContextMenuVisible by remember { mutableStateOf(false) }
@@ -136,12 +137,15 @@ fun ChatMessagesList(
     }
     
     var dynamicBottomPaddingTarget by remember { mutableStateOf(0.dp) }
+    var dynamicBottomPaddingImmediate by remember { mutableStateOf(0.dp) }
+    var grokScrollCompleted by remember { mutableStateOf(true) }
+    var pinnedUserMessageId by remember { mutableStateOf<String?>(null) }
     var firstBubbleScreenY by remember {
         val saved = viewModel.getScrollState(scrollSessionKey)?.firstBubbleScreenY ?: -1
         mutableStateOf(saved)
     }
 
-    val dynamicBottomPadding by androidx.compose.animation.core.animateDpAsState(
+    val dynamicBottomPaddingAnimated by androidx.compose.animation.core.animateDpAsState(
         targetValue = dynamicBottomPaddingTarget,
         animationSpec = androidx.compose.animation.core.tween(
             durationMillis = 500,
@@ -150,8 +154,19 @@ fun ChatMessagesList(
         label = "dynamicBottomPadding"
     )
 
+    // 流式期间直接用 immediate（避免动画过程中穿越 maxScroll 临界点导致 clamping 抖动）
+    // API 结束后用动画平滑收起
+    val dynamicBottomPadding = if (isApiCalling) {
+        dynamicBottomPaddingImmediate
+    } else {
+        maxOf(dynamicBottomPaddingImmediate, dynamicBottomPaddingAnimated)
+    }
+
     LaunchedEffect(scrollSessionKey) {
+        grokScrollCompleted = true
+        pinnedUserMessageId = null
         dynamicBottomPaddingTarget = 0.dp
+        dynamicBottomPaddingImmediate = 0.dp
         firstBubbleScreenY = viewModel.getScrollState(scrollSessionKey)?.firstBubbleScreenY ?: -1
         android.util.Log.d("GrokScroll", "Session changed, reset state, restored firstBubbleScreenY=$firstBubbleScreenY")
         
@@ -162,7 +177,9 @@ fun ChatMessagesList(
             if (lastUserIdx > 0) {
                 kotlinx.coroutines.delay(100)
                 val viewportHeight = listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset
-                dynamicBottomPaddingTarget = with(density) { viewportHeight.toDp() }
+                val paddingDp = with(density) { viewportHeight.toDp() }
+                dynamicBottomPaddingImmediate = paddingDp
+                dynamicBottomPaddingTarget = paddingDp
                 kotlinx.coroutines.delay(100)
                 listState.scrollToItem(lastUserIdx, scrollOffset = -firstBubbleScreenY)
                 kotlinx.coroutines.delay(50)
@@ -182,19 +199,25 @@ fun ChatMessagesList(
     
     LaunchedEffect(isApiCalling) {
         if (!isApiCalling && dynamicBottomPaddingTarget > 0.dp) {
-            kotlinx.coroutines.delay(300)
+            kotlinx.coroutines.delay(500)
+            // 只设置动画目标为 0，不清除 immediate，避免高度坍塌
             dynamicBottomPaddingTarget = 0.dp
+            // 等动画完成后再清除 immediate
+            kotlinx.coroutines.delay(600)
+            dynamicBottomPaddingImmediate = 0.dp
             android.util.Log.d("GrokScroll", "API done, cleared padding")
+        }
+        if (!isApiCalling) {
+            pinnedUserMessageId = null
         }
     }
 
     // 流式输出期间，动态缩小底部 padding，避免出现多余空白
-    // key 只用 isApiCalling，避免 target 变化导致重启和 delay 重置
+    // GrokScroll 结束时已做初始 shrink，此处只负责 AI 内容增长时持续缩减
     LaunchedEffect(isApiCalling) {
         if (!isApiCalling) return@LaunchedEffect
 
-        // 等待置顶滚动动画完成后再开始缩小
-        kotlinx.coroutines.delay(800)
+        snapshotFlow { grokScrollCompleted }.first { it }
 
         if (dynamicBottomPaddingTarget <= 0.dp) return@LaunchedEffect
 
@@ -211,8 +234,10 @@ fun ChatMessagesList(
             gap.coerceAtLeast(0)
         }.collect { gapPx ->
             if (gapPx < 0) return@collect
+            if (pinnedUserMessageId != null) return@collect
             val newPadding = with(density) { gapPx.toDp() }
             if (newPadding < dynamicBottomPaddingTarget) {
+                dynamicBottomPaddingImmediate = newPadding
                 dynamicBottomPaddingTarget = newPadding
             }
         }
@@ -228,6 +253,32 @@ fun ChatMessagesList(
                         firstBubbleScreenY = firstBubbleScreenY
                     )
                 )
+            }
+        }
+    }
+
+    LaunchedEffect(pinnedUserMessageId, isApiCalling, grokScrollCompleted, firstBubbleScreenY) {
+        val pinnedId = pinnedUserMessageId ?: return@LaunchedEffect
+        if (!isApiCalling) return@LaunchedEffect
+        if (!grokScrollCompleted) return@LaunchedEffect
+        val targetY = firstBubbleScreenY
+        if (targetY <= 0) return@LaunchedEffect
+
+        while (true) {
+            withFrameNanos { }
+            val li = listState.layoutInfo
+            val item = li.visibleItemsInfo.firstOrNull { it.key == pinnedId }
+                ?: continue
+            val currentY = item.offset - li.viewportStartOffset
+            val drift = currentY - targetY
+            if (kotlin.math.abs(drift) > 1) {
+                val consumed = listState.scrollBy(drift.toFloat())
+                val missing = kotlin.math.abs(drift.toFloat()) - kotlin.math.abs(consumed)
+                if (drift > 0 && missing > 0.5f) {
+                    val missingDp = with(density) { missing.toDp() }
+                    dynamicBottomPaddingImmediate += missingDp
+                    dynamicBottomPaddingTarget += missingDp
+                }
             }
         }
     }
@@ -281,40 +332,99 @@ fun ChatMessagesList(
                 
                 android.util.Log.d("GrokScroll", "Consumed, proceeding with scroll")
                 
-                if (firstBubbleScreenY < 0) {
-                    firstBubbleScreenY = topPaddingPx
-                }
-                val targetScreenY = firstBubbleScreenY
-                
-                val viewportHeight = li.viewportEndOffset - li.viewportStartOffset
-                dynamicBottomPaddingTarget = with(density) { viewportHeight.toDp() }
-                kotlinx.coroutines.delay(100)
-
-                listState.scrollToItem(lastUserIndex, scrollOffset = -targetScreenY)
-                kotlinx.coroutines.delay(50)
-                
-                val li2 = listState.layoutInfo
-                val currItem = li2.visibleItemsInfo.firstOrNull { it.index == lastUserIndex }
-                if (currItem != null) {
-                    val actualY = currItem.offset - li2.viewportStartOffset
-                    val correction = actualY - targetScreenY
-                    if (correction != 0) {
-                        listState.animateScrollBy(
-                            correction.toFloat(),
-                            androidx.compose.animation.core.tween(
-                                durationMillis = 400,
-                                easing = androidx.compose.animation.core.CubicBezierEasing(0.25f, 0.1f, 0.25f, 1.0f)
-                            )
-                        )
+                grokScrollCompleted = false
+                pinnedUserMessageId = sentId
+                try {
+                    if (firstBubbleScreenY < 0) {
+                        firstBubbleScreenY = topPaddingPx
                     }
-                    android.util.Log.d("GrokScroll", "Scrolled: targetY=$targetScreenY, actualY=$actualY, correction=$correction")
-                } else {
-                    android.util.Log.d("GrokScroll", "Item not visible after scrollToItem, fallback")
+                    val targetScreenY = firstBubbleScreenY
+                    
+                    val viewportHeight = li.viewportEndOffset - li.viewportStartOffset
+                    val paddingDp = with(density) { viewportHeight.toDp() }
+                    dynamicBottomPaddingImmediate = paddingDp
+                    dynamicBottomPaddingTarget = paddingDp
+
+                    // 等待 spacer 被添加到布局中（currentItems + spacer）
+                    val expectedItemCount = currentItems.size + 1
+                    kotlinx.coroutines.withTimeoutOrNull(500) {
+                        snapshotFlow { listState.layoutInfo.totalItemsCount }
+                            .first { it >= expectedItemCount }
+                    }
+
+                    val initialItem = kotlinx.coroutines.withTimeoutOrNull(300) {
+                        snapshotFlow {
+                            listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == lastUserIndex }
+                        }.first { it != null }
+                    }
+
+                    if (initialItem == null) {
+                        listState.animateScrollToItem(lastUserIndex, scrollOffset = 0)
+                        kotlinx.coroutines.withTimeoutOrNull(300) {
+                            snapshotFlow {
+                                listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == lastUserIndex }
+                            }.first { it != null }
+                        }
+                    }
+
+                    val startInfo = listState.layoutInfo
+                    val startItem = startInfo.visibleItemsInfo.firstOrNull { it.index == lastUserIndex }
+                    if (startItem != null) {
+                        val startY = startItem.offset - startInfo.viewportStartOffset
+                        val distancePx = startY - targetScreenY
+                        if (kotlin.math.abs(distancePx) > 4) {
+                            val durationMs = (240 + kotlin.math.abs(distancePx) * 0.35f).toInt().coerceIn(260, 520)
+                            val easing = CubicBezierEasing(0.25f, 0.1f, 0.25f, 1.0f)
+                            val startNanos = withFrameNanos { it }
+                            var previous = 0f
+                            while (true) {
+                                val frameNanos = withFrameNanos { it }
+                                val elapsedMs = (frameNanos - startNanos) / 1_000_000f
+                                val fraction = (elapsedMs / durationMs).coerceIn(0f, 1f)
+                                val current = distancePx * easing.transform(fraction)
+                                listState.scrollBy(current - previous)
+                                previous = current
+                                if (fraction >= 1f) break
+                            }
+                            val remaining = distancePx - previous
+                            if (kotlin.math.abs(remaining) > 0.5f) {
+                                listState.scrollBy(remaining)
+                            }
+                        }
+                    }
+
+                    val li2 = listState.layoutInfo
+                    val currItem = li2.visibleItemsInfo.firstOrNull { it.index == lastUserIndex }
+                    if (currItem != null) {
+                        val actualY = currItem.offset - li2.viewportStartOffset
+                        val correction = actualY - targetScreenY
+                        if (kotlin.math.abs(correction) > 4) {
+                            listState.scrollBy(correction.toFloat())
+                        }
+                        android.util.Log.d("GrokScroll", "Scrolled: targetY=$targetScreenY, actualY=$actualY, correction=$correction")
+                    } else {
+                        android.util.Log.d("GrokScroll", "Item not visible after scrollToItem, fallback")
+                    }
+
+                    android.util.Log.d("GrokScroll", "Keep padding until API done")
+
+                    // 立即缩减 spacer 到实际需要的大小，消除多余滚动空间
+                    val liAfter = listState.layoutInfo
+                    val lastReal = liAfter.visibleItemsInfo.lastOrNull { it.key != "dynamic_padding_spacer" }
+                    if (lastReal != null) {
+                        val gap = liAfter.viewportEndOffset - (lastReal.offset + lastReal.size) - liAfter.afterContentPadding
+                        val correctPadding = with(density) { gap.coerceAtLeast(0).toDp() }
+                        if (correctPadding < dynamicBottomPaddingImmediate) {
+                            dynamicBottomPaddingImmediate = correctPadding
+                            dynamicBottomPaddingTarget = correctPadding
+                        }
+                    }
+
+                    viewModel.consumeLastSentUserMessageId()
+                    android.util.Log.d("GrokScroll", "Scroll sequence completed")
+                } finally {
+                    grokScrollCompleted = true
                 }
-
-                android.util.Log.d("GrokScroll", "Keep padding until API done")
-
-                viewModel.consumeLastSentUserMessageId()
             }
             
             // 前端消息列表渲染。
@@ -322,6 +432,7 @@ fun ChatMessagesList(
             LazyColumn(
                 state = listState,
                 reverseLayout = false,
+                userScrollEnabled = grokScrollCompleted,
                 modifier = Modifier
                     .fillMaxSize()
                     .nestedScroll(scrollStateManager.nestedScrollConnection),
@@ -491,7 +602,17 @@ fun ChatMessagesList(
                             val isReasoningComplete = reasoningCompleteMap[item.message.id] ?: false
 
                             Box(
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .onSizeChanged { newSize ->
+                                        val prevHeight = reasoningHeightMap[item.message.id] ?: newSize.height
+                                        if (prevHeight > newSize.height && isApiCalling && firstBubbleScreenY > 0) {
+                                            val deltaDp = with(density) { (prevHeight - newSize.height).toDp() }
+                                            dynamicBottomPaddingImmediate += deltaDp
+                                            dynamicBottomPaddingTarget += deltaDp
+                                        }
+                                        reasoningHeightMap[item.message.id] = newSize.height
+                                    },
                                 contentAlignment = Alignment.CenterStart
                             ) {
                                 ReasoningToggleAndContent(

@@ -187,10 +187,6 @@ class RegenerateController(
                             }
                             listRef.removeAt(finalUserIndex)
                         }
-                        
-                        if (scrollToNewMessage) {
-                            stateHolder._lastSentUserMessageId.value = newUserMessageId
-                        }
                     }
                 }
             }

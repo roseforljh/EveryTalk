@@ -433,7 +433,17 @@ fun ChatInputArea(
                         val isFileSizeValid = checkFileSizeAndShowError(context, uri, fileName, onShowSnackbar)
                         if (isFileSizeValid) {
                             withContext(Dispatchers.Main) {
-                                onAddMediaItem(SelectedMediaItem.ImageFromUri(uri, UUID.randomUUID().toString(), mimeType))
+                                if (mimeType.startsWith("video/")) {
+                                    onAddMediaItem(SelectedMediaItem.GenericFile(
+                                        uri = uri,
+                                        id = UUID.randomUUID().toString(),
+                                        displayName = fileName,
+                                        mimeType = mimeType,
+                                        filePath = null
+                                    ))
+                                } else {
+                                    onAddMediaItem(SelectedMediaItem.ImageFromUri(uri, UUID.randomUUID().toString(), mimeType))
+                                }
                             }
                         }
                     }

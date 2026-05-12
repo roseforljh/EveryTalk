@@ -9,6 +9,7 @@ import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import io.ktor.http.*
 import io.ktor.utils.io.*
@@ -49,7 +50,9 @@ object GeminiDirectClient {
             while (loopCount < MAX_TOOL_LOOPS) {
                 loopCount++
                 Log.i(TAG, "🔄 开始循环 #$loopCount, 历史记录数: ${conversationHistory.size}")
-                val payload = buildGeminiPayloadWithHistory(currentRequest, conversationHistory)
+                val payload = withContext(Dispatchers.Default) {
+                    buildGeminiPayloadWithHistory(currentRequest, conversationHistory)
+                }
                 Log.d(TAG, "请求 payload 长度: ${payload.length}")
                 
                 var pendingToolCalls = mutableListOf<Pair<String, JsonObject>>()

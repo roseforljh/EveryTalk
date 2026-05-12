@@ -94,10 +94,12 @@ internal fun ReasoningToggleAndContent(
             enter = fadeIn(tween(150)) + expandVertically(
                 animationSpec = tween(250), expandFrom = Alignment.Top
             ),
-            exit = fadeOut(tween(150)) + shrinkVertically(
-                animationSpec = tween(100), shrinkTowards = Alignment.Top
+            exit = fadeOut(tween(200)) + shrinkVertically(
+                animationSpec = tween(300, easing = FastOutSlowInEasing),
+                shrinkTowards = Alignment.Top
             )
         ) {
+            val currentDensity = LocalDensity.current
             Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = boxBackgroundColor,
@@ -108,9 +110,7 @@ internal fun ReasoningToggleAndContent(
                     .heightIn(min = 50.dp, max = 180.dp)
                     .onSizeChanged {
                         if (it.height > 0 && !visibilityNotified) {
-                            view.post {
-                                onVisibilityChanged()
-                            }
+                            view.post { onVisibilityChanged() }
                             visibilityNotified = true
                         }
                     }
@@ -148,7 +148,8 @@ internal fun ReasoningToggleAndContent(
                             .fillMaxSize()
                             .nestedScroll(innerScrollBlocker)
                             .verticalScroll(scrollState)
-                            .padding(horizontal = 12.dp, vertical = scrimHeight)
+                            .padding(horizontal = 12.dp, vertical = scrimHeight),
+                        verticalArrangement = Arrangement.Center
                     ) {
                         Text(
                             text = reasoningPlaceholderText(
