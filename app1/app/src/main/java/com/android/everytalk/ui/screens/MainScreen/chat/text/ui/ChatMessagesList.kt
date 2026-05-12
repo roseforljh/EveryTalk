@@ -468,7 +468,7 @@ fun ChatMessagesList(
             LazyColumn(
                 state = listState,
                 reverseLayout = false,
-                userScrollEnabled = grokScrollCompleted,
+                userScrollEnabled = grokScrollCompleted && pinnedUserMessageId == null,
                 modifier = Modifier
                     .fillMaxSize()
                     .nestedScroll(scrollStateManager.nestedScrollConnection),
