@@ -145,12 +145,19 @@ fun ChatMessagesList(
         mutableStateOf(saved)
     }
 
+    var skipAnimation by remember { mutableStateOf(false) }
+
     val dynamicBottomPaddingAnimated by androidx.compose.animation.core.animateDpAsState(
         targetValue = dynamicBottomPaddingTarget,
-        animationSpec = androidx.compose.animation.core.tween(
-            durationMillis = 500,
-            easing = androidx.compose.animation.core.CubicBezierEasing(0.25f, 0.1f, 0.25f, 1.0f)
-        ),
+        animationSpec = if (skipAnimation) {
+            androidx.compose.animation.core.snap()
+        } else {
+            androidx.compose.animation.core.tween(
+                durationMillis = 200,
+                easing = androidx.compose.animation.core.CubicBezierEasing(0.25f, 0.1f, 0.25f, 1.0f)
+            )
+        },
+        finishedListener = { if (skipAnimation) skipAnimation = false },
         label = "dynamicBottomPadding"
     )
 
@@ -161,6 +168,7 @@ fun ChatMessagesList(
     }
 
     LaunchedEffect(scrollSessionKey) {
+        skipAnimation = true
         grokScrollCompleted = true
         pinnedUserMessageId = null
         dynamicBottomPaddingTarget = 0.dp
@@ -197,7 +205,6 @@ fun ChatMessagesList(
     
     LaunchedEffect(isApiCalling) {
         if (!isApiCalling && dynamicBottomPaddingTarget > 0.dp) {
-            kotlinx.coroutines.delay(300)
             dynamicBottomPaddingTarget = 0.dp
             dynamicBottomPaddingImmediate = 0.dp
             android.util.Log.d("GrokScroll", "API done, cleared padding")
@@ -1051,14 +1058,15 @@ fun AiMessageItem(
 
     val density = LocalDensity.current
     var lastMeasuredHeightPx by remember(message.id) { mutableStateOf(0) }
-    var wasStreaming by remember(message.id) { mutableStateOf(false) }
-    var streamingEndTime by remember(message.id) { mutableStateOf(0L) }
+    var heightProtectionActive by remember(message.id) { mutableStateOf(false) }
 
     LaunchedEffect(isStreaming) {
-        if (!isStreaming && wasStreaming) {
-            streamingEndTime = System.currentTimeMillis()
+        if (isStreaming) {
+            heightProtectionActive = true
+        } else if (heightProtectionActive) {
+            kotlinx.coroutines.delay(500L)
+            heightProtectionActive = false
         }
-        wasStreaming = isStreaming
     }
 
     Row(
@@ -1075,10 +1083,7 @@ fun AiMessageItem(
             contentColor = MaterialTheme.colorScheme.onSurface,
             shadowElevation = 0.dp
         ) {
-            val inHeightProtectionWindow = !isStreaming &&
-                streamingEndTime > 0L &&
-                (System.currentTimeMillis() - streamingEndTime) < 500L
-            val minHeightModifier = if ((isStreaming || inHeightProtectionWindow) && lastMeasuredHeightPx > 0) {
+            val minHeightModifier = if ((isStreaming || heightProtectionActive) && lastMeasuredHeightPx > 0) {
                 Modifier.heightIn(min = with(density) { lastMeasuredHeightPx.toDp() })
             } else {
                 Modifier
@@ -1093,7 +1098,7 @@ fun AiMessageItem(
                         if (isStreaming && size.height > lastMeasuredHeightPx) {
                             lastMeasuredHeightPx = size.height
                         }
-                        if (!isStreaming && !inHeightProtectionWindow) {
+                        if (!isStreaming && size.height > 0) {
                             lastMeasuredHeightPx = size.height
                         }
                     }

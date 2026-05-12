@@ -57,11 +57,12 @@ object NetworkUtils {
         val body = errorBody ?: "(no body)"
         Log.e(TAG, "$apiName API 错误 $statusCode: $body")
         
-        val errorMessage = when (statusCode.value) {
-            401 -> "$apiName: API 密钥无效或已过期"
-            403 -> "$apiName: 访问被拒绝，请检查 API 权限"
-            429 -> "$apiName: 请求过于频繁，请稍后重试"
-            500, 502, 503, 504 -> "$apiName: 服务器暂时不可用，请稍后重试"
+        val errorMessage = when {
+            statusCode.value == 401 -> "$apiName: API 密钥无效或已过期"
+            statusCode.value == 403 -> "$apiName: 访问被拒绝，请检查 API 权限"
+            statusCode.value == 429 -> "$apiName: 请求过于频繁，请稍后重试"
+            statusCode.value in listOf(500, 502, 503, 504) -> "$apiName: 服务器暂时不可用，请稍后重试"
+            statusCode.value == 400 && body.contains("image_url") -> "$apiName: 该模型不支持图像识别，请切换支持视觉的模型"
             else -> "$apiName API 错误: $statusCode"
         }
         

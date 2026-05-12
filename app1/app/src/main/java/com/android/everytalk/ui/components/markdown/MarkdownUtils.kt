@@ -34,7 +34,7 @@ private val BLOCKQUOTE_REGEX = Regex("^>\\s+", RegexOption.MULTILINE)
 private val UNORDERED_LIST_REGEX = Regex("^[\\s]*[-*+]\\s+", RegexOption.MULTILINE)
 private val ORDERED_LIST_REGEX = Regex("^[\\s]*\\d+\\.\\s+", RegexOption.MULTILINE)
 private val HORIZONTAL_RULE_REGEX = Regex("^[-*_]{3,}$", RegexOption.MULTILINE)
-private val TABLE_SEPARATOR_REGEX = Regex("^\\|?[\\s]*:?-+:?[\\s]*\\|.*$", RegexOption.MULTILINE)
+private val TABLE_SEPARATOR_REGEX = Regex("^\\|?[\\s]*:*-+:*[\\s]*\\|.*$", RegexOption.MULTILINE)
 private val TABLE_ROW_REGEX = Regex("^\\|(.*)\\|$", RegexOption.MULTILINE)
 private val EXCESSIVE_EMPTY_LINES_REGEX = Regex("\\n{3,}")
 

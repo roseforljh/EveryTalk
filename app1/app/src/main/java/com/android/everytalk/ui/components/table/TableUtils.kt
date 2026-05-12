@@ -15,8 +15,8 @@ import androidx.compose.ui.unit.dp
 object TableUtils {
 
     // 表格分隔行正则：匹配 | :---: | --- | :--- | 等格式
-    // 支持左对齐(:---)、右对齐(---:)、居中对齐(:---:)
-    private val TABLE_SEPARATOR_REGEX = Regex("^\\s*\\|?\\s*:?-{2,}:?\\s*(\\|\\s*:?-{2,}:?\\s*)+\\|?\\s*$")
+    // 支持左对齐(:---)、右对齐(---:)、居中对齐(:---:)，容错多余冒号(::---:)
+    private val TABLE_SEPARATOR_REGEX = Regex("^\\s*\\|?\\s*:*-{2,}:*\\s*(\\|\\s*:*-{2,}:*\\s*)+\\|?\\s*$")
 
     // 表格数据行正则：至少包含一个 | 分隔符，且两侧都有内容（非空白）
     // 格式：| cell1 | cell2 | 或 cell1 | cell2

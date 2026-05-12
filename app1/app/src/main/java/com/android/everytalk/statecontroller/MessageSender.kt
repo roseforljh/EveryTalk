@@ -24,8 +24,6 @@ import com.android.everytalk.data.DataClass.ImageGenRequest
 import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.network.WebSearchSupport
 import com.android.everytalk.data.network.ExternalWebSearchProvider
-import com.android.everytalk.data.network.ExternalWebSearchService
-import com.android.everytalk.data.network.JinaSearchService
 import com.android.everytalk.statecontroller.defaultReasoningBudgetForModel
 import com.android.everytalk.statecontroller.mcp.dispatch.McpDispatchIntent
 import com.android.everytalk.statecontroller.mcp.dispatch.McpDispatchStrategy
@@ -59,33 +57,7 @@ import kotlinx.serialization.json.longOrNull
 
 internal const val BUILT_IN_WEBFETCH_TOOL_NAME = "webfetch"
 internal const val BUILT_IN_CURRENT_TIME_TOOL_NAME = "get_current_datetime"
-
-private val HTTP_URL_REGEX = Regex("""https?://[^\s<>()\"]+""", RegexOption.IGNORE_CASE)
-
-private val WEBFETCH_NEGATIVE_INTENT_KEYWORDS = listOf(
-    "先别打开", "不要打开", "别打开", "先别访问", "不要访问", "别访问",
-    "不要读取", "别读取", "先别读", "不要分析", "别分析",
-    "不要总结", "别总结", "不要抓取", "别抓取", "不用打开",
-    "don't open", "do not open", "don't fetch", "do not fetch", "without opening", "without visiting"
-)
-
-private val WEBFETCH_ACTION_KEYWORDS = listOf(
-    "看", "看看", "读取", "打开", "分析", "总结", "提炼", "翻译", "解释",
-    "提取", "核对", "对比", "比较", "判断",
-    "read", "open", "analyze", "analyse", "summarize", "summarise",
-    "translate", "extract", "compare", "check", "review"
-)
-
-private val WEBFETCH_TARGET_KEYWORDS = listOf(
-    "链接", "网页", "页面", "文章", "网站", "网址", "url", "link",
-    "page", "webpage", "website", "article"
-)
-
-private val WEBFETCH_CONTENT_QUESTION_KEYWORDS = listOf(
-    "讲了什么", "说了什么", "写了什么", "内容是什么", "主要内容",
-    "核心观点", "要点", "重点", "主旨", "main point",
-    "what does this", "what is on", "what's on"
-)
+internal const val BUILT_IN_WEB_SEARCH_TOOL_NAME = "web_search"
 
 private val MCP_REALTIME_OR_NEWS_KEYWORDS = listOf(
     "今天", "今日", "刚刚", "刚才", "最新", "最近", "近期", "实时", "当前", "现在",
@@ -133,46 +105,6 @@ private const val MCP_WITH_WEB_SEARCH_GUIDANCE = """
 - 两者互补，不要因为有联网搜索就放弃使用 MCP 工具。
 - 如果 MCP 工具能提供更精准或更专业的结果，优先使用 MCP。
 """
-
-internal fun containsHttpUrl(messageText: String): Boolean {
-    return HTTP_URL_REGEX.containsMatchIn(messageText)
-}
-
-internal fun hasExplicitWebReadIntent(messageText: String): Boolean {
-    val normalizedText = messageText.lowercase()
-    if (WEBFETCH_NEGATIVE_INTENT_KEYWORDS.any { it in normalizedText }) {
-        return false
-    }
-
-    val hasTargetKeyword = WEBFETCH_TARGET_KEYWORDS.any { it in normalizedText }
-    if (!hasTargetKeyword) {
-        return false
-    }
-
-    val hasActionKeyword = WEBFETCH_ACTION_KEYWORDS.any { it in normalizedText }
-    val hasContentQuestionKeyword = WEBFETCH_CONTENT_QUESTION_KEYWORDS.any { it in normalizedText }
-    return hasActionKeyword || hasContentQuestionKeyword
-}
-
-internal fun shouldExposeBuiltInWebFetchTool(messageText: String): Boolean {
-    val normalizedText = messageText.lowercase()
-    if (WEBFETCH_NEGATIVE_INTENT_KEYWORDS.any { it in normalizedText }) {
-        return false
-    }
-    if (containsHttpUrl(messageText)) {
-        return true
-    }
-    return hasWebFetchIntent(messageText)
-}
-
-internal fun hasWebFetchIntent(messageText: String): Boolean {
-    val normalizedText = messageText.lowercase()
-    val hasActionKeyword = WEBFETCH_ACTION_KEYWORDS.any { it in normalizedText }
-    val hasTargetKeyword = WEBFETCH_TARGET_KEYWORDS.any { it in normalizedText }
-    val hasContentQuestion = WEBFETCH_CONTENT_QUESTION_KEYWORDS.any { it in normalizedText }
-    val hasRealtimeKeyword = MCP_REALTIME_OR_NEWS_KEYWORDS.any { it in normalizedText }
-    return (hasActionKeyword && hasTargetKeyword) || hasContentQuestion || hasRealtimeKeyword
-}
 
 internal fun looksLikeRealtimeOrNewsQuery(messageText: String): Boolean {
     val normalizedText = messageText.lowercase()
@@ -274,24 +206,37 @@ internal fun mergeSystemPromptWithGuidance(
     }
 }
 
-internal fun buildCurrentTimeGuidance(now: Date = Date()): String {
+internal fun buildCurrentTimeGuidance(now: Date = Date(), hasWebSearchTool: Boolean = false): String {
     val timezone = TimeZone.getDefault()
     val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
     formatter.timeZone = timezone
     val currentTime = formatter.format(now)
+
+    val webSearchDesc = if (hasWebSearchTool) {
+        "\n\n3. **web_search**：联网搜索。当你无法确认答案是否准确或需要实时信息时调用。"
+    } else ""
+
     return """
 当前本地时间：$currentTime
 时区：${timezone.id}
 
-## 工具使用规则（必须遵守）
+## 工具使用规则
 
-你拥有以下内建工具，必须在合适时机主动调用，不要仅凭记忆回答：
+你拥有多种工具，全部列在本次请求的 tools 列表中，按需主动调用。以下是内建工具说明：
 
-1. **get_current_datetime**：获取设备精确时间。任何涉及"今天/现在/当前/几点/星期几/日期"的问题，必须先调用此工具获取准确时间再回答。不要猜测时间。
+1. **get_current_datetime**：获取当前时间。涉及时间、日期、星期的问题必须先调用。
 
-2. **webfetch**：抓取网页正文内容。当用户提供了 URL，或问题涉及需要联网获取的实时信息（新闻、天气、股价、比赛结果、最新动态等），必须主动调用此工具获取信息后再回答。不要编造或猜测外部信息。
+2. **webfetch**：抓取指定 URL 的网页正文。用户给了链接直接抓；你自己知道的网址也可以主动抓取。$webSearchDesc
 
-调用原则：宁可多调用一次工具确认，也不要凭猜测回答时间或外部信息类问题。
+除以上工具外，tools 列表中的其他工具同样可用，根据用户需求主动选择最合适的工具。
+
+## 图像能力说明
+
+如果你具备图像识别能力，工具返回的图片你可以正常查看和分析。如果你不具备图像识别能力，请优先选择纯文本来源获取信息，避免依赖图片内容作答。
+
+## 格式要求
+
+输出表格时，分隔行必须严格使用标准格式：|:---|:---:|---:|，不要出现多余冒号（如 ::---:）。
 """.trim()
 }
 
@@ -300,7 +245,7 @@ internal fun builtInWebFetchToolDefinition(): Map<String, Any> {
         "type" to "function",
         "function" to mapOf(
             "name" to BUILT_IN_WEBFETCH_TOOL_NAME,
-            "description" to "Fetch a web page and return readable text content. Use this tool proactively when the user provides a URL, asks about web content, or needs real-time information from the internet (news, weather, stock prices, etc.). You may construct URLs yourself if you know the target site.",
+            "description" to "Fetch a web page and return its text content. Use when the user provides a URL or when you need content from a specific webpage.",
             "parameters" to mapOf(
                 "type" to "object",
                 "properties" to mapOf(
@@ -333,14 +278,29 @@ internal fun builtInCurrentTimeToolDefinition(): Map<String, Any> {
     )
 }
 
+internal fun builtInWebSearchToolDefinition(): Map<String, Any> {
+    return mapOf(
+        "type" to "function",
+        "function" to mapOf(
+            "name" to BUILT_IN_WEB_SEARCH_TOOL_NAME,
+            "description" to "Search the web and return results. Use when the question needs up-to-date information you don't have.",
+            "parameters" to mapOf(
+                "type" to "object",
+                "properties" to mapOf(
+                    "query" to mapOf(
+                        "type" to "string",
+                        "description" to "The search query to look up."
+                    )
+                ),
+                "required" to listOf("query")
+            )
+        )
+    )
+}
+
 internal fun appendBuiltInWebFetchToolIfNeeded(
-    messageText: String,
     tools: List<Map<String, Any>>,
 ): List<Map<String, Any>> {
-    if (!shouldExposeBuiltInWebFetchTool(messageText)) {
-        return tools
-    }
-
     val hasWebFetchTool = tools.any { toolDefinition ->
         extractToolName(toolDefinition)?.equals(BUILT_IN_WEBFETCH_TOOL_NAME, ignoreCase = true) == true
     }
@@ -1024,14 +984,17 @@ internal fun prepareMcpDispatch(
                 }
                 val mcpToolsForRequest = filterMcpToolsForRequest(
                     mcpTools = if (preparedMcpDispatch.tools.isNotEmpty()) preparedMcpDispatch.tools else rawMcpToolsForRequest,
-                    shouldFilterSearchLikeTools = isMcpEnabledForRequest && hasEffectiveWebSearch,
+                    shouldFilterSearchLikeTools = false,
                 )
                 val shouldEnableGoogleSearch = isGeminiChannel && webSearchRouting.useNativeWebSearch
+                val mcpHasSearchTool = mcpToolsForRequest.any { classifyMcpTool(it).isSearchLike }
+                val shouldInjectWebSearchTool = !shouldEnableGoogleSearch && !mcpHasSearchTool
+                        && (webSearchRouting.externalProvider != null || webSearchRouting.useJinaSearch)
 
                 val systemPromptWithWebSearchAwareMcp = mergeSystemPromptWithGuidance(
                     systemPrompt = mergeSystemPromptWithGuidance(
                         systemPrompt = systemPrompt,
-                        guidance = buildCurrentTimeGuidance()
+                        guidance = buildCurrentTimeGuidance(hasWebSearchTool = shouldInjectWebSearchTool)
                     ),
                     guidance = preparedMcpDispatch.guidance ?: buildMcpUsageGuidance(
                         messageText = textToActuallySend,
@@ -1077,129 +1040,6 @@ internal fun prepareMcpDispatch(
                         isImageGeneration = false
                     )
                 } else null
-
-                if (!isImageGeneration && webSearchRouting.externalProvider != null) {
-                    // 🎯 设置状态指示器，告知用户正在联网搜索
-                    withContext(Dispatchers.Main.immediate) {
-                        stateHolder.updateMessageStatus(
-                            preCreatedAiMessageId!!,
-                            "正在使用 ${webSearchRouting.externalProvider.displayName} 搜索...",
-                            isImageGeneration = false
-                        )
-                    }
-
-                    val externalSearchResult = ExternalWebSearchService.search(
-                        provider = webSearchRouting.externalProvider,
-                        apiKey = selectedExternalProviderApiKey,
-                        query = textToActuallySend,
-                    )
-
-                    externalSearchResult.onSuccess { response ->
-                        // 🎯 搜索完成，提示正在整理结果
-                        withContext(Dispatchers.Main.immediate) {
-                            stateHolder.updateMessageStatus(
-                                preCreatedAiMessageId!!,
-                                "正在整理搜索结果",
-                                isImageGeneration = false
-                            )
-                        }
-
-                        val serializedResults = response.results.joinToString(separator = "\n\n") { result ->
-                            buildString {
-                                append("标题: ${result.title}\n")
-                                append("链接: ${result.href}\n")
-                                append("摘要: ${result.snippet}")
-                            }
-                        }
-                        val searchSystemPrompt = """
-以下是通过 ${response.provider.displayName} 获取的实时联网搜索结果，请优先依据这些结果回答；如果结果不充分，请明确说明。
-
-$serializedResults
-                        """.trimIndent()
-                        val externalSystemMessage = SimpleTextApiMessage(role = "system", content = searchSystemPrompt)
-                        val existingSystemMessageIndex = apiMessagesForBackend.indexOfFirst { it.role == "system" }
-                        if (existingSystemMessageIndex != -1) {
-                            val existingSystem = apiMessagesForBackend[existingSystemMessageIndex] as? SimpleTextApiMessage
-                            val mergedContent = listOfNotNull(existingSystem?.content, searchSystemPrompt)
-                                .filter { it.isNotBlank() }
-                                .joinToString(separator = "\n\n")
-                            apiMessagesForBackend[existingSystemMessageIndex] =
-                                SimpleTextApiMessage(role = "system", content = mergedContent)
-                        } else {
-                            apiMessagesForBackend.add(0, externalSystemMessage)
-                        }
-
-                        withContext(Dispatchers.Main.immediate) {
-                            val messageList = stateHolder.messages
-                            val aiIndex = messageList.indexOfLast { it.id == preCreatedAiMessageId || it.sender == UiSender.AI }
-                            if (aiIndex != -1) {
-                                val currentMessage = messageList[aiIndex]
-                                messageList[aiIndex] = currentMessage.copy(webSearchResults = response.results)
-                            }
-                        }
-                    }.onFailure { error ->
-                        withContext(Dispatchers.Main.immediate) {
-                            showSnackbar(error.message ?: "外部联网搜索失败")
-                        }
-                    }
-                } else if (!isImageGeneration && webSearchRouting.useJinaSearch) {
-                    withContext(Dispatchers.Main.immediate) {
-                        stateHolder.updateMessageStatus(
-                            preCreatedAiMessageId!!,
-                            "正在联网搜索...",
-                            isImageGeneration = false
-                        )
-                    }
-
-                    val jinaSearchResult = JinaSearchService.search(query = textToActuallySend)
-
-                    jinaSearchResult.onSuccess { response ->
-                        withContext(Dispatchers.Main.immediate) {
-                            stateHolder.updateMessageStatus(
-                                preCreatedAiMessageId!!,
-                                "正在整理搜索结果",
-                                isImageGeneration = false
-                            )
-                        }
-
-                        val serializedResults = response.results.joinToString(separator = "\n\n") { result ->
-                            buildString {
-                                append("标题: ${result.title}\n")
-                                if (result.href.isNotBlank()) append("链接: ${result.href}\n")
-                                append("摘要: ${result.snippet}")
-                            }
-                        }
-                        val searchSystemPrompt = """
-以下是通过联网搜索获取的实时搜索结果，请优先依据这些结果回答；如果结果不充分，请明确说明。
-
-$serializedResults
-                        """.trimIndent()
-                        val existingSystemMessageIndex = apiMessagesForBackend.indexOfFirst { it.role == "system" }
-                        if (existingSystemMessageIndex != -1) {
-                            val existingSystem = apiMessagesForBackend[existingSystemMessageIndex] as? SimpleTextApiMessage
-                            val mergedContent = listOfNotNull(existingSystem?.content, searchSystemPrompt)
-                                .filter { it.isNotBlank() }
-                                .joinToString(separator = "\n\n")
-                            apiMessagesForBackend[existingSystemMessageIndex] =
-                                SimpleTextApiMessage(role = "system", content = mergedContent)
-                        } else {
-                            apiMessagesForBackend.add(0, SimpleTextApiMessage(role = "system", content = searchSystemPrompt))
-                        }
-
-                        withContext(Dispatchers.Main.immediate) {
-                            val messageList = stateHolder.messages
-                            val aiIndex = messageList.indexOfLast { it.id == preCreatedAiMessageId || it.sender == UiSender.AI }
-                            if (aiIndex != -1) {
-                                val currentMessage = messageList[aiIndex]
-                                messageList[aiIndex] = currentMessage.copy(webSearchResults = response.results)
-                            }
-                        }
-                    }.onFailure { error ->
-                        withContext(Dispatchers.Main.immediate) {
-                            showSnackbar(error.message ?: "联网搜索失败")
-                        }
-                    }
-                }
 
                 // 3. 代码执行启用逻辑 - 用户全权控制
                 val enableCodeExecutionForRequest: Boolean? =
@@ -1291,12 +1131,17 @@ $serializedResults
                             toolsList.addAll(mcpToolsForRequest)
                         }
 
+                        // 5. 联网搜索工具 (外部/Jina，模型自行决定是否调用)
+                        if (shouldInjectWebSearchTool) {
+                            Log.d("MessageSender", "注入内建 web_search 工具")
+                            toolsList.add(builtInWebSearchToolDefinition())
+                        }
+
                         val effectiveTools = appendBuiltInWebFetchToolIfNeeded(
-                            messageText = textToActuallySend,
                             tools = toolsList,
                         )
                         if (effectiveTools.size != toolsList.size) {
-                            Log.d("MessageSender", "为含 URL 的当前消息注入内建 webfetch 工具")
+                            Log.d("MessageSender", "注入内建 webfetch 工具")
                         }
                         val effectiveToolsWithCurrentTime = appendBuiltInCurrentTimeTool(effectiveTools)
                         if (effectiveToolsWithCurrentTime.size != effectiveTools.size) {

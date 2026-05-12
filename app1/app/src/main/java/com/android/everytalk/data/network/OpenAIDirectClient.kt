@@ -23,7 +23,7 @@ import kotlinx.coroutines.withContext
 
 object OpenAIDirectClient {
     private const val TAG = "OpenAIDirectClient"
-    private const val MAX_TOOL_LOOPS = 5
+    private const val MAX_TOOL_LOOPS = 50
 
     private class StreamingContentAggregator {
         private val buffer = StringBuilder()
@@ -445,6 +445,7 @@ object OpenAIDirectClient {
                 var pendingToolCalls = mutableListOf<OpenAiToolCallInfo>()
                 var hasContent = false
                 var parseResult: OpenAIParseResult? = null
+                var shouldRetryWithoutImages = false
 
                 client.preparePost(url) {
                     contentType(ContentType.Application.Json)
@@ -454,6 +455,16 @@ object OpenAIDirectClient {
                 }.execute { response ->
                     if (!response.status.isSuccess()) {
                         val errorBody = try { response.bodyAsText() } catch (_: Exception) { null }
+                        if (response.status.value == 400 && errorBody?.contains("image_url") == true) {
+                            Log.w(TAG, "模型不支持 image_url，移除图片消息后重试")
+                            conversationHistory.removeAll { msg ->
+                                val content = msg["content"]
+                                content is kotlinx.serialization.json.JsonArray &&
+                                    content.toString().contains("image_url")
+                            }
+                            shouldRetryWithoutImages = true
+                            return@execute
+                        }
                         val result = NetworkUtils.handleApiError(response.status, errorBody, "OpenAI")
                         send(result.error)
                         send(result.finish)
@@ -488,6 +499,11 @@ object OpenAIDirectClient {
                     )
                 }
 
+                if (shouldRetryWithoutImages) {
+                    loopCount--
+                    continue
+                }
+
                 Log.i(TAG, "循环 #$loopCount 结束, pendingToolCalls=${pendingToolCalls.size}, hasContent=$hasContent")
 
                 if (pendingToolCalls.isEmpty()) {
@@ -506,6 +522,9 @@ object OpenAIDirectClient {
                 conversationHistory.add(buildJsonObject {
                     put("role", "assistant")
                     put("content", parseResult?.fullText ?: "")
+                    if (!parseResult?.reasoningContent.isNullOrEmpty()) {
+                        put("reasoning_content", parseResult!!.reasoningContent)
+                    }
                     putJsonArray("tool_calls") {
                         pendingToolCalls.forEach { toolInfo ->
                             addJsonObject {
@@ -618,7 +637,8 @@ object OpenAIDirectClient {
 
     private data class OpenAIParseResult(
         val hasToolCalls: Boolean,
-        val fullText: String
+        val fullText: String,
+        val reasoningContent: String = ""
     )
     
     /**
@@ -909,6 +929,7 @@ object OpenAIDirectClient {
     private fun anyToJsonElement(value: Any?): JsonElement {
         return when (value) {
             null -> JsonNull
+            is JsonElement -> value
             is String -> JsonPrimitive(value)
             is Number -> JsonPrimitive(value)
             is Boolean -> JsonPrimitive(value)
@@ -1258,6 +1279,7 @@ object OpenAIDirectClient {
     ): OpenAIParseResult {
         val lineBuffer = StringBuilder()
         var fullText = ""
+        var fullReasoningContent = ""
 
         var reasoningStarted = false
         var reasoningFinished = false
@@ -1302,6 +1324,7 @@ object OpenAIDirectClient {
 
                                     if (!reasoningText.isNullOrEmpty()) {
                                         if (!reasoningStarted) reasoningStarted = true
+                                        fullReasoningContent += reasoningText
                                         emitEvent(AppStreamEvent.Reasoning(reasoningText))
                                     }
 
@@ -1406,6 +1429,6 @@ object OpenAIDirectClient {
             emitEvent(AppStreamEvent.Error("流解析失败: ${NetworkUtils.sanitizeMessage(e.message)}", null))
         }
 
-        return OpenAIParseResult(hasToolCalls = hasToolCalls, fullText = fullText)
+        return OpenAIParseResult(hasToolCalls = hasToolCalls, fullText = fullText, reasoningContent = fullReasoningContent)
     }
 }

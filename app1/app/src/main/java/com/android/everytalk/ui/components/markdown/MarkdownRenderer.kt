@@ -907,8 +907,8 @@ fun MarkdownRenderer(
                             lastTouchRawY = event.rawY
                         }
                         
-                        // 仅在 ACTION_UP 时检测图片点击
-                        if (onImageClick != null && event.action == MotionEvent.ACTION_UP) {
+                        // 仅在 ACTION_UP 时检测图片点击和链接点击
+                        if (event.action == MotionEvent.ACTION_UP) {
                             val text = tvLocal.text
                             if (text is android.text.Spannable) {
                                 var x = event.x.toInt()
@@ -927,40 +927,54 @@ fun MarkdownRenderer(
                                     val lineStart = layout.getLineStart(line)
                                     val lineEnd = layout.getLineEnd(line)
                                 
-                                    val imageSpans = text.getSpans(lineStart, lineEnd, AsyncDrawableSpan::class.java)
-                                    for (imageSpan in imageSpans) {
-                                        val spanStart = text.getSpanStart(imageSpan)
-                                        val xStart = layout.getPrimaryHorizontal(spanStart)
-                                        val drawable = imageSpan.drawable
-                                        val bounds = drawable.bounds
-                                        val width = bounds.width()
+                                    if (onImageClick != null) {
+                                        val imageSpans = text.getSpans(lineStart, lineEnd, AsyncDrawableSpan::class.java)
+                                        for (imageSpan in imageSpans) {
+                                            val spanStart = text.getSpanStart(imageSpan)
+                                            val xStart = layout.getPrimaryHorizontal(spanStart)
+                                            val drawable = imageSpan.drawable
+                                            val bounds = drawable.bounds
+                                            val width = bounds.width()
 
-                                        val touchSlop = 20
-                                        if (x >= (xStart - touchSlop) && x <= (xStart + width + touchSlop)) {
-                                            val sourceRaw = drawable.destination
-                                            val source = sourceRaw?.trim().orEmpty()
-                                            if (isSupportedImageSource(source)) {
-                                                onImageClick(source)
-                                                return@setOnTouchListener true
+                                            val touchSlop = 20
+                                            if (x >= (xStart - touchSlop) && x <= (xStart + width + touchSlop)) {
+                                                val sourceRaw = drawable.destination
+                                                val source = sourceRaw?.trim().orEmpty()
+                                                if (isSupportedImageSource(source)) {
+                                                    onImageClick(source)
+                                                    return@setOnTouchListener true
+                                                }
+                                            }
+                                        }
+
+                                        val standardImageSpans = text.getSpans(lineStart, lineEnd, android.text.style.ImageSpan::class.java)
+                                        for (imageSpan in standardImageSpans) {
+                                            val spanStart = text.getSpanStart(imageSpan)
+                                            val xStart = layout.getPrimaryHorizontal(spanStart)
+                                            val drawable = imageSpan.drawable
+                                            val width = drawable.bounds.width()
+
+                                            if (x >= xStart && x <= (xStart + width)) {
+                                                val sourceRaw = imageSpan.source
+                                                val source = sourceRaw?.trim().orEmpty()
+                                                if (isSupportedImageSource(source)) {
+                                                    onImageClick(source)
+                                                    return@setOnTouchListener true
+                                                }
                                             }
                                         }
                                     }
 
-                                    val standardImageSpans = text.getSpans(lineStart, lineEnd, android.text.style.ImageSpan::class.java)
-                                    for (imageSpan in standardImageSpans) {
-                                        val spanStart = text.getSpanStart(imageSpan)
-                                        val xStart = layout.getPrimaryHorizontal(spanStart)
-                                        val drawable = imageSpan.drawable
-                                        val width = drawable.bounds.width()
-
-                                        if (x >= xStart && x <= (xStart + width)) {
-                                            val sourceRaw = imageSpan.source
-                                            val source = sourceRaw?.trim().orEmpty()
-                                            if (isSupportedImageSource(source)) {
-                                                onImageClick(source)
-                                                return@setOnTouchListener true
-                                            }
-                                        }
+                                    // 链接点击检测
+                                    val offset = layout.getOffsetForHorizontal(line, event.x - tvLocal.totalPaddingLeft + tvLocal.scrollX.toFloat())
+                                    val urlSpans = text.getSpans(offset, offset, android.text.style.URLSpan::class.java)
+                                    if (urlSpans.isNotEmpty()) {
+                                        val url = urlSpans[0].url
+                                        try {
+                                            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                                            tvLocal.context.startActivity(intent)
+                                        } catch (_: Exception) {}
+                                        return@setOnTouchListener true
                                     }
                                 }
                             }

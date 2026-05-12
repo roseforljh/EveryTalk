@@ -87,6 +87,8 @@ import com.android.everytalk.data.mcp.McpStatus
 import com.android.everytalk.data.network.GeminiDirectClient
 import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.data.network.ExternalWebSearchProviderConfig
+import com.android.everytalk.data.network.ExternalWebSearchService
+import com.android.everytalk.data.network.JinaSearchService
 import com.android.everytalk.data.network.OpenAIDirectClient
 import com.android.everytalk.data.network.WebFetchToolExecutor
 import com.android.everytalk.util.storage.IncrementalBackupManager
@@ -109,6 +111,7 @@ internal suspend fun executeSharedToolCall(
     updateStatus: suspend (String?) -> Unit = {},
     localWebFetchExecutor: suspend (JsonObject) -> JsonElement = { WebFetchToolExecutor.execute(it) },
     mcpWebFetchFallback: (suspend (JsonObject) -> JsonElement)? = null,
+    localWebSearchExecutor: (suspend (String) -> JsonElement)? = null,
     localCurrentTimeExecutor: suspend () -> JsonElement = {
         val now = Date()
         val calendar = Calendar.getInstance()
@@ -158,6 +161,16 @@ internal suspend fun executeSharedToolCall(
     if (toolName.equals(BUILT_IN_CURRENT_TIME_TOOL_NAME, ignoreCase = true)) {
         updateStatus("正在获取当前时间")
         val result = localCurrentTimeExecutor()
+        updateStatus(null)
+        return result
+    }
+    if (toolName.equals(BUILT_IN_WEB_SEARCH_TOOL_NAME, ignoreCase = true) && localWebSearchExecutor != null) {
+        val query = arguments["query"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        if (query.isBlank()) {
+            return buildJsonObject { put("error", JsonPrimitive("query is required")) }
+        }
+        updateStatus("正在联网搜索")
+        val result = localWebSearchExecutor(query)
         updateStatus(null)
         return result
     }
@@ -648,6 +661,67 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         "fetch", "crawl", "scrape", "reader", "browse", "firecrawl", "webfetch"
     )
 
+    private fun buildLocalWebSearchExecutor(): (suspend (String) -> JsonElement)? {
+        if (!stateHolder._isWebSearchEnabled.value) return null
+        val provider = selectedExternalWebSearchProvider
+        val apiKey = selectedExternalWebSearchProviderApiKey
+        if (provider != null && apiKey.isNotBlank()) {
+            return { query ->
+                val result = ExternalWebSearchService.search(provider, apiKey, query)
+                result.fold(
+                    onSuccess = { response ->
+                        buildJsonObject {
+                            put("ok", JsonPrimitive(true))
+                            put("results", kotlinx.serialization.json.JsonArray(
+                                response.results.map { r ->
+                                    buildJsonObject {
+                                        put("title", JsonPrimitive(r.title))
+                                        put("url", JsonPrimitive(r.href))
+                                        put("snippet", JsonPrimitive(r.snippet))
+                                    }
+                                }
+                            ))
+                        }
+                    },
+                    onFailure = { e ->
+                        buildJsonObject {
+                            put("ok", JsonPrimitive(false))
+                            put("error", JsonPrimitive(e.message ?: "搜索失败"))
+                        }
+                    }
+                )
+            }
+        }
+        if (JinaSearchService.isAvailable) {
+            return { query ->
+                val result = JinaSearchService.search(query)
+                result.fold(
+                    onSuccess = { response ->
+                        buildJsonObject {
+                            put("ok", JsonPrimitive(true))
+                            put("results", kotlinx.serialization.json.JsonArray(
+                                response.results.map { r ->
+                                    buildJsonObject {
+                                        put("title", JsonPrimitive(r.title))
+                                        put("url", JsonPrimitive(r.href))
+                                        put("snippet", JsonPrimitive(r.snippet))
+                                    }
+                                }
+                            ))
+                        }
+                    },
+                    onFailure = { e ->
+                        buildJsonObject {
+                            put("ok", JsonPrimitive(false))
+                            put("error", JsonPrimitive(e.message ?: "搜索失败"))
+                        }
+                    }
+                )
+            }
+        }
+        return null
+    }
+
     private fun buildMcpWebFetchFallback(): (suspend (JsonObject) -> JsonElement)? {
         if (!stateHolder._isMcpEnabledForNextRequest.value) return null
         val allTools = mcpManager.getAllAvailableTools()
@@ -671,6 +745,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 arguments = arguments,
                 updateStatus = updateStatus,
                 mcpWebFetchFallback = buildMcpWebFetchFallback(),
+                localWebSearchExecutor = buildLocalWebSearchExecutor(),
                 fallbackExecutor = { fallbackToolName, fallbackArguments ->
                     mcpManager.callTool(fallbackToolName, fallbackArguments)
                 }
@@ -682,6 +757,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 arguments = arguments,
                 updateStatus = updateStatus,
                 mcpWebFetchFallback = buildMcpWebFetchFallback(),
+                localWebSearchExecutor = buildLocalWebSearchExecutor(),
                 fallbackExecutor = { fallbackToolName, fallbackArguments ->
                     mcpManager.callTool(fallbackToolName, fallbackArguments)
                 }
