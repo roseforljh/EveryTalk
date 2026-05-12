@@ -168,66 +168,12 @@ fun ChatMessagesList(
     }
 
     LaunchedEffect(scrollSessionKey) {
-        skipAnimation = true
         grokScrollCompleted = true
         pinnedUserMessageId = null
         dynamicBottomPaddingTarget = 0.dp
         dynamicBottomPaddingImmediate = 0.dp
         firstBubbleScreenY = viewModel.getScrollState(scrollSessionKey)?.firstBubbleScreenY ?: -1
         android.util.Log.d("GrokScroll", "Session changed, reset state, restored firstBubbleScreenY=$firstBubbleScreenY")
-        
-        // 等待 chatItems 稳定（MessageItemsController 后台处理完成）
-        if (chatItems.isEmpty()) {
-            kotlinx.coroutines.withTimeoutOrNull(500) {
-                snapshotFlow { chatItems.size }.first { it > 0 }
-            }
-        }
-        
-        if (firstBubbleScreenY > 0 && chatItems.isNotEmpty()) {
-            val lastUserIdx = chatItems.indexOfLast { 
-                it is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage 
-            }
-            if (lastUserIdx > 0) {
-                kotlinx.coroutines.delay(100)
-                val viewportHeight = listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset
-                val paddingDp = with(density) { viewportHeight.toDp() }
-                dynamicBottomPaddingImmediate = paddingDp
-                dynamicBottomPaddingTarget = paddingDp
-                kotlinx.coroutines.delay(100)
-                listState.scrollToItem(lastUserIdx, scrollOffset = -firstBubbleScreenY)
-                kotlinx.coroutines.delay(50)
-                val li = listState.layoutInfo
-                val item = li.visibleItemsInfo.firstOrNull { it.index == lastUserIdx }
-                if (item != null) {
-                    val actualY = item.offset - li.viewportStartOffset
-                    val correction = actualY - firstBubbleScreenY
-                    if (correction != 0) {
-                        listState.scrollBy(correction.toFloat())
-                    }
-                }
-                // 等待 layout 更新后缩减多余 padding
-                kotlinx.coroutines.delay(100)
-                val liAfter = listState.layoutInfo
-                val lastReal = liAfter.visibleItemsInfo.lastOrNull { it.key != "dynamic_padding_spacer" }
-                if (lastReal != null) {
-                    val gapPx = (liAfter.viewportEndOffset - (lastReal.offset + lastReal.size) - liAfter.afterContentPadding)
-                        .coerceAtLeast(0)
-                    val gapDp = with(density) { gapPx.toDp() }
-                    dynamicBottomPaddingImmediate = gapDp
-                    dynamicBottomPaddingTarget = gapDp
-                } else {
-                    dynamicBottomPaddingImmediate = 0.dp
-                    dynamicBottomPaddingTarget = 0.dp
-                }
-                android.util.Log.d("GrokScroll", "Session restore shrink: lastReal=${lastReal != null}, padding=${dynamicBottomPaddingImmediate}")
-                android.util.Log.d("GrokScroll", "Session restore: scrolled to lastUser=$lastUserIdx at Y=$firstBubbleScreenY")
-            }
-        } else if (chatItems.isNotEmpty()) {
-            // 没有保存的滚动位置，默认滚动到底部
-            kotlinx.coroutines.delay(100)
-            listState.scrollToItem(chatItems.size - 1)
-            android.util.Log.d("GrokScroll", "Session changed: no saved position, scrolled to bottom")
-        }
     }
     
     LaunchedEffect(isApiCalling) {
