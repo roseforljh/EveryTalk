@@ -683,7 +683,7 @@ object GeminiDirectClient {
             
         } catch (e: Exception) {
             Log.e(TAG, "SSE 流解析错误", e)
-            emitEvent(AppStreamEvent.Error(e.message ?: "Unknown error"))
+            emitEvent(AppStreamEvent.Error(NetworkUtils.sanitizeMessage(e.message)))
             // 错误时也不发送 Finish，让上层处理
         }
         
@@ -910,7 +910,7 @@ object GeminiDirectClient {
             
         } catch (e: Exception) {
             Log.e(TAG, "解析 Gemini 流失败", e)
-            send(AppStreamEvent.Error("流解析失败: ${e.message}", null))
+            send(AppStreamEvent.Error("流解析失败: ${NetworkUtils.sanitizeMessage(e.message)}", null))
         }
         
         // 结束解析子流（返回即可完成 channelFlow）

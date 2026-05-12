@@ -1104,7 +1104,7 @@ object OpenAIDirectClient {
             send(AppStreamEvent.Finish("stop"))
 
         } catch (e: Exception) {
-            send(AppStreamEvent.Error("流解析失败: ${e.message}", null))
+            send(AppStreamEvent.Error("流解析失败: ${NetworkUtils.sanitizeMessage(e.message)}", null))
         }
 
         awaitClose {
@@ -1403,7 +1403,7 @@ object OpenAIDirectClient {
             // 注意：不在这里发送 Finish，由调用方决定（可能还有工具循环）
 
         } catch (e: Exception) {
-            emitEvent(AppStreamEvent.Error("流解析失败: ${e.message}", null))
+            emitEvent(AppStreamEvent.Error("流解析失败: ${NetworkUtils.sanitizeMessage(e.message)}", null))
         }
 
         return OpenAIParseResult(hasToolCalls = hasToolCalls, fullText = fullText)

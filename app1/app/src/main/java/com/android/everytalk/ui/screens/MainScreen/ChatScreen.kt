@@ -122,7 +122,11 @@ fun ChatScreen(
     }
     val selectedExternalWebSearchProviderId by viewModel.selectedExternalWebSearchProviderId.collectAsState()
     val canUseWebSearch by remember(selectedApiConfig, selectedExternalWebSearchProviderId) {
-        derivedStateOf { supportsNativeWebSearch || viewModel.canUseSelectedExternalWebSearchProvider() }
+        derivedStateOf {
+            supportsNativeWebSearch ||
+                viewModel.canUseSelectedExternalWebSearchProvider() ||
+                com.android.everytalk.data.network.WebSearchSupport.canUseJinaSearch()
+        }
     }
     val selectedMediaItems = viewModel.selectedMediaItems
     val isLoadingHistory by viewModel.isLoadingHistory.collectAsState()

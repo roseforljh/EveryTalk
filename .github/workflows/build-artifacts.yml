@@ -106,6 +106,8 @@ jobs:
           QWEN_EDIT_API_SECRET: ${{ secrets.QWEN_EDIT_API_SECRET }}
           SEEDREAM_API_URL: ${{ secrets.SEEDREAM_API_URL }}
           ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
+          JINA_READER_BASE_URL: ${{ secrets.JINA_READER_BASE_URL }}
+          JINA_SEARCH_BASE_URL: ${{ secrets.JINA_SEARCH_BASE_URL }}
         run: |
           echo "Creating local.properties..."
           cat > ${{ env.APP_DIR }}/local.properties <<EOF
@@ -126,6 +128,8 @@ jobs:
           QWEN_EDIT_API_SECRET=$QWEN_EDIT_API_SECRET
           SEEDREAM_API_URL=$SEEDREAM_API_URL
           ZHIPU_API_KEY=$ZHIPU_API_KEY
+          JINA_READER_BASE_URL=$JINA_READER_BASE_URL
+          JINA_SEARCH_BASE_URL=$JINA_SEARCH_BASE_URL
           EOF
           echo "local.properties created."
 

@@ -177,6 +177,8 @@ android {
             buildConfigField("String", "SEEDREAM_API_URL", "\"${getConfigValue("SEEDREAM_API_URL")}\"")
             buildConfigField("String", "GOOGLE_SEARCH_API_KEY", "\"${getConfigValue("GOOGLE_SEARCH_API_KEY")}\"")
             buildConfigField("String", "ZHIPU_API_KEY", "\"${getConfigValue("ZHIPU_API_KEY")}\"")
+            buildConfigField("String", "JINA_READER_BASE_URL", "\"${getConfigValue("JINA_READER_BASE_URL")}\"")
+            buildConfigField("String", "JINA_SEARCH_BASE_URL", "\"${getConfigValue("JINA_SEARCH_BASE_URL")}\"")
         }
         debug {
             isProfileable = false // debug 构建也可以设为 profileable,方便测试
@@ -199,6 +201,8 @@ android {
             buildConfigField("String", "SEEDREAM_API_URL", "\"${getConfigValue("SEEDREAM_API_URL")}\"")
             buildConfigField("String", "GOOGLE_SEARCH_API_KEY", "\"${getConfigValue("GOOGLE_SEARCH_API_KEY")}\"")
             buildConfigField("String", "ZHIPU_API_KEY", "\"${getConfigValue("ZHIPU_API_KEY")}\"")
+            buildConfigField("String", "JINA_READER_BASE_URL", "\"${getConfigValue("JINA_READER_BASE_URL")}\"")
+            buildConfigField("String", "JINA_SEARCH_BASE_URL", "\"${getConfigValue("JINA_SEARCH_BASE_URL")}\"")
 
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"

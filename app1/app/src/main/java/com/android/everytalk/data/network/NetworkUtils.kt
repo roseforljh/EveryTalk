@@ -16,6 +16,18 @@ data class ErrorWithFinish(
 
 object NetworkUtils {
     private const val TAG = "NetworkUtils"
+
+    private val SENSITIVE_PARAM_REGEX = Regex(
+        """([?&])(key|token|api[_-]?key|secret|password|authorization)=[^&\]\s]*""",
+        RegexOption.IGNORE_CASE
+    )
+
+    fun sanitizeMessage(raw: String?): String {
+        if (raw.isNullOrBlank()) return "未知错误"
+        return SENSITIVE_PARAM_REGEX.replace(raw) { match ->
+            "${match.groupValues[1]}${match.groupValues[2]}=***"
+        }
+    }
     
     fun HttpRequestBuilder.configureSSERequest() {
         accept(ContentType.Text.EventStream)
@@ -69,7 +81,7 @@ object NetworkUtils {
             exception is java.net.UnknownHostException -> "$apiName: 无法连接服务器，请检查网络"
             exception is java.net.SocketTimeoutException -> "$apiName: 连接超时，请检查网络"
             exception is javax.net.ssl.SSLException -> "$apiName: SSL 连接失败，请检查网络安全设置"
-            else -> "$apiName 连接失败: ${exception.message}"
+            else -> "$apiName 连接失败: ${sanitizeMessage(exception.message)}"
         }
         
         return ErrorWithFinish(

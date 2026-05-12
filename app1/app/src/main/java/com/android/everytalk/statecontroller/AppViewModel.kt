@@ -1077,7 +1077,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (!isImageGeneration && stateHolder._isWebSearchEnabled.value) {
             val currentConfig = stateHolder._selectedApiConfig.value
             val supportsNative = com.android.everytalk.data.network.WebSearchSupport.supportsNativeWebSearch(currentConfig)
-            if (!supportsNative && !canUseSelectedExternalWebSearchProvider()) {
+            if (!supportsNative && !canUseSelectedExternalWebSearchProvider() && !com.android.everytalk.data.network.WebSearchSupport.canUseJinaSearch()) {
                 showSnackbar("请先在设置-联网搜索中配置并勾选一个搜索服务商")
                 return
             }

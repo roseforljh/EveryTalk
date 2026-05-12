@@ -532,7 +532,7 @@ object ApiClient {
             android.util.Log.i("ApiClient", "Provider ${provider.providerName} completed")
         } catch (e: Exception) {
             android.util.Log.e("ApiClient", "Direct connection failed", e)
-            send(AppStreamEvent.Error("Direct connection failed: ${e.message}", null))
+            send(AppStreamEvent.Error("Direct connection failed: ${NetworkUtils.sanitizeMessage(e.message)}", null))
             send(AppStreamEvent.Finish("direct_connection_failed"))
         }
     }

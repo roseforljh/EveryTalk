@@ -1,6 +1,7 @@
 package com.android.everytalk.data.network
 
 import android.util.Log
+import com.android.everytalk.BuildConfig
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpRedirect
@@ -18,6 +19,8 @@ object WebFetchService {
     private const val JINA_TIMEOUT_MS = 30_000L
     private const val DEFAULT_MAX_CONTENT_CHARS = 24_000
 
+    private val readerBaseUrl: String = BuildConfig.JINA_READER_BASE_URL.trimEnd('/')
+
     private val jinaClient by lazy {
         HttpClient(OkHttp) {
             install(HttpTimeout) {
@@ -33,6 +36,14 @@ object WebFetchService {
         url: String,
         maxContentChars: Int = DEFAULT_MAX_CONTENT_CHARS,
     ): WebFetchResult = withContext(Dispatchers.IO) {
+        if (readerBaseUrl.isBlank()) {
+            return@withContext WebFetchResult(
+                success = false,
+                requestedUrl = url,
+                error = "未配置 JINA_READER_BASE_URL",
+            )
+        }
+
         val normalizedUrl = url.trim()
         val validatedUrl = validateUrl(normalizedUrl)
             ?: return@withContext WebFetchResult(
@@ -41,30 +52,30 @@ object WebFetchService {
                 error = "URL 无效，仅支持 http/https 网页地址",
             )
 
-        fetchViaJina(validatedUrl, maxContentChars)
+        fetchViaReader(validatedUrl, maxContentChars)
     }
 
-    private suspend fun fetchViaJina(
+    private suspend fun fetchViaReader(
         url: String,
         maxContentChars: Int,
     ): WebFetchResult {
         return try {
-            val jinaUrl = "https://r.jina.ai/$url"
-            Log.d(TAG, "通过 Jina Reader API 抓取: $jinaUrl")
+            val fetchUrl = "$readerBaseUrl/$url"
+            Log.d(TAG, "通过 Reader API 抓取: $fetchUrl")
 
-            val response = jinaClient.get(jinaUrl) {
+            val response = jinaClient.get(fetchUrl) {
                 header(HttpHeaders.Accept, "text/markdown")
                 header("X-Return-Format", "markdown")
                 header("X-No-Cache", "true")
             }
 
             if (!response.status.isSuccess()) {
-                Log.w(TAG, "Jina Reader 返回非成功状态: ${response.status.value}")
+                Log.w(TAG, "Reader API 返回非成功状态: ${response.status.value}")
                 return WebFetchResult(
                     success = false,
                     requestedUrl = url,
                     statusCode = response.status.value,
-                    error = "Jina Reader API 返回 HTTP ${response.status.value}",
+                    error = "Reader API 返回 HTTP ${response.status.value}",
                 )
             }
 
@@ -73,7 +84,7 @@ object WebFetchService {
                 return WebFetchResult(
                     success = false,
                     requestedUrl = url,
-                    error = "Jina Reader 返回空内容",
+                    error = "Reader API 返回空内容",
                 )
             }
 
@@ -91,11 +102,11 @@ object WebFetchService {
                 statusCode = response.status.value,
             )
         } catch (e: Exception) {
-            Log.w(TAG, "Jina Reader API 请求异常", e)
+            Log.w(TAG, "Reader API 请求异常", e)
             WebFetchResult(
                 success = false,
                 requestedUrl = url,
-                error = "Jina Reader API 请求失败: ${e.message ?: "未知错误"}",
+                error = "Reader API 请求失败: ${e.message ?: "未知错误"}",
             )
         }
     }

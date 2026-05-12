@@ -5,6 +5,7 @@ import android.os.Build
 import android.util.Log
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.network.AppStreamEvent
+import com.android.everytalk.data.network.NetworkUtils
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.websocket.webSocketSession
 import io.ktor.http.HttpHeaders
@@ -146,7 +147,7 @@ class OpenClawGatewayClient(
                 }
             } catch (e: Exception) {
                 logDebug("close reason / exception", e.message ?: "unknown")
-                send(AppStreamEvent.Error(e.message ?: "OpenClaw Gateway stream failed."))
+                send(AppStreamEvent.Error(NetworkUtils.sanitizeMessage(e.message ?: "OpenClaw Gateway stream failed.")))
             } finally {
                 send(AppStreamEvent.Finish("completed"))
                 OpenClawRuntimeState.clear()

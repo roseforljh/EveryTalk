@@ -10,6 +10,7 @@ import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.network.AppStreamEvent
 import com.android.everytalk.data.DataClass.ApiContentPart
 import com.android.everytalk.data.network.ApiClient
+import com.android.everytalk.data.network.NetworkUtils
 import com.android.everytalk.data.network.openclaw.OpenClawRuntimeState
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.models.SelectedMediaItem.Audio
@@ -1005,15 +1006,14 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     val errorPrefix = if (existingContent.isNotBlank()) "\n\n" else ""
                     val errorTextContent = ERROR_VISUAL_PREFIX + when (error) {
                         is IOException -> {
-                            val message = error.message ?: "IO 错误"
+                            val message = NetworkUtils.sanitizeMessage(error.message ?: "IO 错误")
                             if (message.contains("服务器错误") || message.contains("HTTP 错误")) {
-                                // 对于 HTTP 状态错误，直接显示详细信息
                                 message
                             } else {
                                 "网络通讯故障: $message"
                             }
                         }
-                        else -> "处理时发生错误: ${error.message ?: "未知应用错误"}"
+                        else -> "处理时发生错误: ${NetworkUtils.sanitizeMessage(error.message ?: "未知应用错误")}"
                     }
                     val errorMsg = msg.copy(
                         text = existingContent + errorPrefix + errorTextContent,

@@ -55,3 +55,9 @@ QWEN_EDIT_API_SECRET=your-qwen-edit-api-secret
 
 ## 智谱 BigModel API（联网搜索）
 ZHIPU_API_KEY=your-zhipu-api-key
+
+## Jina Reader（网页抓取）
+JINA_READER_BASE_URL=https://r.jina.ai
+
+## Jina Search（联网搜索，自部署 jina-ai/reader 的 search 入口）
+JINA_SEARCH_BASE_URL=https://s.jina.ai

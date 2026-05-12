@@ -25,6 +25,7 @@ import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.network.WebSearchSupport
 import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.data.network.ExternalWebSearchService
+import com.android.everytalk.data.network.JinaSearchService
 import com.android.everytalk.statecontroller.defaultReasoningBudgetForModel
 import com.android.everytalk.statecontroller.mcp.dispatch.McpDispatchIntent
 import com.android.everytalk.statecontroller.mcp.dispatch.McpDispatchStrategy
@@ -1000,7 +1001,7 @@ internal fun prepareMcpDispatch(
                     selectedExternalProviderApiKey = selectedExternalProviderApiKey,
                 )
                 val hasEffectiveWebSearch =
-                    webSearchRouting.useNativeWebSearch || webSearchRouting.externalProvider != null
+                    webSearchRouting.useNativeWebSearch || webSearchRouting.externalProvider != null || webSearchRouting.useJinaSearch
                 val preparedMcpDispatch = if (isMcpEnabledForRequest && dispatchCandidates.isNotEmpty()) {
                     prepareMcpDispatch(
                         messageText = textToActuallySend,
@@ -1139,6 +1140,63 @@ $serializedResults
                     }.onFailure { error ->
                         withContext(Dispatchers.Main.immediate) {
                             showSnackbar(error.message ?: "外部联网搜索失败")
+                        }
+                    }
+                } else if (!isImageGeneration && webSearchRouting.useJinaSearch) {
+                    withContext(Dispatchers.Main.immediate) {
+                        stateHolder.updateMessageStatus(
+                            preCreatedAiMessageId!!,
+                            "正在联网搜索...",
+                            isImageGeneration = false
+                        )
+                    }
+
+                    val jinaSearchResult = JinaSearchService.search(query = textToActuallySend)
+
+                    jinaSearchResult.onSuccess { response ->
+                        withContext(Dispatchers.Main.immediate) {
+                            stateHolder.updateMessageStatus(
+                                preCreatedAiMessageId!!,
+                                "正在整理搜索结果",
+                                isImageGeneration = false
+                            )
+                        }
+
+                        val serializedResults = response.results.joinToString(separator = "\n\n") { result ->
+                            buildString {
+                                append("标题: ${result.title}\n")
+                                if (result.href.isNotBlank()) append("链接: ${result.href}\n")
+                                append("摘要: ${result.snippet}")
+                            }
+                        }
+                        val searchSystemPrompt = """
+以下是通过联网搜索获取的实时搜索结果，请优先依据这些结果回答；如果结果不充分，请明确说明。
+
+$serializedResults
+                        """.trimIndent()
+                        val existingSystemMessageIndex = apiMessagesForBackend.indexOfFirst { it.role == "system" }
+                        if (existingSystemMessageIndex != -1) {
+                            val existingSystem = apiMessagesForBackend[existingSystemMessageIndex] as? SimpleTextApiMessage
+                            val mergedContent = listOfNotNull(existingSystem?.content, searchSystemPrompt)
+                                .filter { it.isNotBlank() }
+                                .joinToString(separator = "\n\n")
+                            apiMessagesForBackend[existingSystemMessageIndex] =
+                                SimpleTextApiMessage(role = "system", content = mergedContent)
+                        } else {
+                            apiMessagesForBackend.add(0, SimpleTextApiMessage(role = "system", content = searchSystemPrompt))
+                        }
+
+                        withContext(Dispatchers.Main.immediate) {
+                            val messageList = stateHolder.messages
+                            val aiIndex = messageList.indexOfLast { it.id == preCreatedAiMessageId || it.sender == UiSender.AI }
+                            if (aiIndex != -1) {
+                                val currentMessage = messageList[aiIndex]
+                                messageList[aiIndex] = currentMessage.copy(webSearchResults = response.results)
+                            }
+                        }
+                    }.onFailure { error ->
+                        withContext(Dispatchers.Main.immediate) {
+                            showSnackbar(error.message ?: "联网搜索失败")
                         }
                     }
                 }
