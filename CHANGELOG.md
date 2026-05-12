@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.17.0](https://github.com/roseforljh/EveryTalk/compare/v1.16.1...v1.17.0) (2026-05-12)
+
+
+### Features
+
+* webfetch自动提取网页图片并传递给LLM进行多模态分析 ([518b52f](https://github.com/roseforljh/EveryTalk/commit/518b52fd35eec5c8a8eb18aa1ca89ea2575b279a))
+* WebFetch自部署支持 + Jina Search联网搜索兜底 + 错误信息脱敏 ([7d10f73](https://github.com/roseforljh/EveryTalk/commit/7d10f7393326710afaab1fc9cf4039cb17260f6b))
+
+
+### Bug Fixes
+
+* frame loop 统一控制 pinned 模式下的 drift 修正和 spacer 缩减 ([76f349c](https://github.com/roseforljh/EveryTalk/commit/76f349cacac575b1e13b6511e568b17c82400866))
+* pinned 期间禁止用户手动滚动 ([dd0dccc](https://github.com/roseforljh/EveryTalk/commit/dd0dccce2d6182d9364462a51c13fa7879cb81a5))
+* spacer 缩减改为 gap 计算，消除底部多余空白 ([c316ae2](https://github.com/roseforljh/EveryTalk/commit/c316ae239cb5e33fadbceb062160d0f0c5655657))
+* 优化 pinned scroll 帧循环功耗和 API 结束动画 ([e8b08e0](https://github.com/roseforljh/EveryTalk/commit/e8b08e0b997a2a32fd4d865ffe9c619bc5a8d365))
+* 修复AI气泡流式输出时滑动导致高度坍塌 & MCP候选选择器逻辑 ([35ace6b](https://github.com/roseforljh/EveryTalk/commit/35ace6b5cfd7a1f5d6cab0bcb1dc44ae362f42a7))
+* 修复AI气泡流式输出时高度坍塌与内容跳转bug ([00ce7b6](https://github.com/roseforljh/EveryTalk/commit/00ce7b67318f787d547b3f505ce953579a7c04bc))
+* 修复切换会话底部空白 + AI气泡内容消失 + 流式结束重组 ([f72e13e](https://github.com/roseforljh/EveryTalk/commit/f72e13ebd0f5264984198fbbd0370340fa2680a7))
+* 修复思考框收起时用户置顶气泡下落问题 ([5648376](https://github.com/roseforljh/EveryTalk/commit/5648376de5a7c4d4e49ef461207d6f7895fdc6ea))
+* 工具调用多项修复 - MCP schema序列化/链接点击/气泡高度/表格解析 ([5875e4f](https://github.com/roseforljh/EveryTalk/commit/5875e4fe526e74fa709d5391a5c49f46aadf5dae))
+* 移除 LaunchedEffect(scrollSessionKey) 中的滚动恢复逻辑 ([10ad713](https://github.com/roseforljh/EveryTalk/commit/10ad7139c4adfc4f1722cea3c1d87cc9f193b97c))
+
 ## [1.16.1](https://github.com/roseforljh/EveryTalk/compare/v1.16.0...v1.16.1) (2026-05-11)
 
 
