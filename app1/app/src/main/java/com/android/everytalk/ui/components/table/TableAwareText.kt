@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -59,6 +60,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
@@ -232,14 +234,28 @@ fun TableAwareText(
 
     val verticalPaddingDp = 0.dp
 
+    // 流式期间记录已测量的最大高度，防止结构变化（如检测到代码块/表格）时高度坍塌
+    var measuredHeightPx by remember { mutableStateOf(0) }
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val heightStabilizer = if (isStreaming && measuredHeightPx > 0) {
+        Modifier.heightIn(min = with(density) { measuredHeightPx.toDp() })
+    } else {
+        Modifier
+    }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
+            .then(heightStabilizer)
             .padding(vertical = verticalPaddingDp)
-            // 移除 animateContentSize()
-            // 流式输出中每一帧 Column 子项的数量、尺寸都在变化，
-            // animateContentSize 会对这些变化施加补间动画，
-            // 这正是导致画面疯狂跳动闪烁的最大元凶之一。
+            .onSizeChanged { size ->
+                if (isStreaming && size.height > measuredHeightPx) {
+                    measuredHeightPx = size.height
+                }
+                if (!isStreaming) {
+                    measuredHeightPx = size.height
+                }
+            }
     ) {
         parsedParts.forEachIndexed { index, part ->
             // 使用类型 + startOffset 作为主 key，尽量贴近“结构块身份”而不是索引身份。

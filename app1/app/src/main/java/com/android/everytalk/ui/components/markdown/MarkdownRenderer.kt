@@ -787,6 +787,8 @@ fun MarkdownRenderer(
     }
 
     val processedMarkdown = remember(markdown, isStreaming) {
+        // 流式结束时不立即切换预处理模式：如果内容未变，保持上次的预处理结果
+        // 避免仅因 isStreaming 切换而触发数学公式转义策略变化导致高度突变
         preprocessAiMarkdown(markdown, isStreaming)
     }
     val pureMathBlockLayout = remember(processedMarkdown) {

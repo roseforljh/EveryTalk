@@ -121,6 +121,20 @@ fun EnhancedMarkdownText(
         val isActuallyStreaming = isStreaming ||
             (viewModel?.streamingMessageStateManager?.isStreaming(message.id) == true)
 
+        // 流式结束后给数学节流一个冷却期，避免立即切换渲染模式导致高度突变
+        var wasActuallyStreaming by remember(resolvedContentKey) { mutableStateOf(false) }
+        var streamEndTimeMs by remember(resolvedContentKey) { mutableStateOf(0L) }
+        LaunchedEffect(isActuallyStreaming) {
+            if (!isActuallyStreaming && wasActuallyStreaming) {
+                streamEndTimeMs = android.os.SystemClock.elapsedRealtime()
+            }
+            wasActuallyStreaming = isActuallyStreaming
+        }
+        val inStreamingCooldown = !isActuallyStreaming &&
+            streamEndTimeMs > 0L &&
+            (android.os.SystemClock.elapsedRealtime() - streamEndTimeMs) < 300L
+        val effectiveIsStreaming = isActuallyStreaming || inStreamingCooldown
+
         var throttledMathContent by remember(resolvedContentKey) { mutableStateOf(content) }
         var lastRawMathContent by remember(resolvedContentKey) { mutableStateOf(content) }
         var lastMathUpdateAt by remember(resolvedContentKey) { mutableStateOf(0L) }
@@ -188,7 +202,7 @@ fun EnhancedMarkdownText(
             text = displayText,
             style = style,
             color = textColor,
-            isStreaming = isActuallyStreaming,
+            isStreaming = effectiveIsStreaming,
             modifier = widthModifier,
             contentKey = resolvedContentKey,
             onLongPress = onLongPress,

@@ -1051,6 +1051,15 @@ fun AiMessageItem(
 
     val density = LocalDensity.current
     var lastMeasuredHeightPx by remember(message.id) { mutableStateOf(0) }
+    var wasStreaming by remember(message.id) { mutableStateOf(false) }
+    var streamingEndTime by remember(message.id) { mutableStateOf(0L) }
+
+    LaunchedEffect(isStreaming) {
+        if (!isStreaming && wasStreaming) {
+            streamingEndTime = System.currentTimeMillis()
+        }
+        wasStreaming = isStreaming
+    }
 
     Row(
         modifier = modifier.wrapContentWidth(),
@@ -1066,7 +1075,10 @@ fun AiMessageItem(
             contentColor = MaterialTheme.colorScheme.onSurface,
             shadowElevation = 0.dp
         ) {
-            val minHeightModifier = if (isStreaming && lastMeasuredHeightPx > 0) {
+            val inHeightProtectionWindow = !isStreaming &&
+                streamingEndTime > 0L &&
+                (System.currentTimeMillis() - streamingEndTime) < 500L
+            val minHeightModifier = if ((isStreaming || inHeightProtectionWindow) && lastMeasuredHeightPx > 0) {
                 Modifier.heightIn(min = with(density) { lastMeasuredHeightPx.toDp() })
             } else {
                 Modifier
@@ -1081,7 +1093,7 @@ fun AiMessageItem(
                         if (isStreaming && size.height > lastMeasuredHeightPx) {
                             lastMeasuredHeightPx = size.height
                         }
-                        if (!isStreaming) {
+                        if (!isStreaming && !inHeightProtectionWindow) {
                             lastMeasuredHeightPx = size.height
                         }
                     }
@@ -1097,7 +1109,15 @@ fun AiMessageItem(
                 val effectiveContent = if (shouldPreferStreamingContent) {
                     streamingRenderState.content.ifBlank { message.text }
                 } else {
-                    message.text.ifBlank { streamingRenderState.content }
+                    // 流式结束后，优先使用 message.text；但如果 message.text 为空或明显短于
+                    // streamingRenderState.content，说明存在同步竞态，使用流式内容兜底防止闪烁
+                    if (message.text.isBlank() && streamingRenderState.content.isNotBlank()) {
+                        streamingRenderState.content
+                    } else if (message.text.length < streamingRenderState.content.length * 0.8 && streamingRenderState.content.isNotBlank()) {
+                        streamingRenderState.content
+                    } else {
+                        message.text
+                    }
                 }
 
                 val renderMessage = if (effectiveContent == message.text) {
