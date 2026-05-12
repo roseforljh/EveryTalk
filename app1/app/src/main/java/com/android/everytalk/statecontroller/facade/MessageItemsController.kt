@@ -178,7 +178,6 @@ open class MessageItemsController(
                             } else true
 
                             val cacheValid = cached != null &&
-                                cached.text == message.text &&
                                 cached.reasoning == message.reasoning &&
                                 cached.outputType == message.outputType &&
                                 cached.hasReasoning == hasReasoning &&
@@ -189,7 +188,7 @@ open class MessageItemsController(
                                 cached.executionStatus == message.executionStatus &&
                                 cached.currentWebSearchStage == message.currentWebSearchStage &&
                                 loadingTextMatches &&
-                                // 缓存校验增加对 webSearchResults 的检查，确保 Footer 变化能触发更新
+                                (cached.items.isNotEmpty() || message.text.isBlank()) &&
                                 (cached.items.any { it is ChatListItem.AiMessageFooter } == !message.webSearchResults.isNullOrEmpty()) &&
                                 // 校验流式状态兼容性：
                                 // 1. 如果当前是流式：我们接受任何缓存（因为 AiMessage 现在也用于流式），只要内容匹配
@@ -270,7 +269,6 @@ open class MessageItemsController(
                             )
 
                             val cacheValid = cached != null &&
-                                cached.text == message.text &&
                                 cached.reasoning == message.reasoning &&
                                 cached.outputType == message.outputType &&
                                 cached.hasReasoning == hasReasoning &&
