@@ -1049,6 +1049,9 @@ fun AiMessageItem(
         )
     }
 
+    val density = LocalDensity.current
+    var lastMeasuredHeightPx by remember(message.id) { mutableStateOf(0) }
+
     Row(
         modifier = modifier.wrapContentWidth(),
         horizontalArrangement = Arrangement.Start
@@ -1063,11 +1066,25 @@ fun AiMessageItem(
             contentColor = MaterialTheme.colorScheme.onSurface,
             shadowElevation = 0.dp
         ) {
+            val minHeightModifier = if (isStreaming && lastMeasuredHeightPx > 0) {
+                Modifier.heightIn(min = with(density) { lastMeasuredHeightPx.toDp() })
+            } else {
+                Modifier
+            }
             Box(
-                modifier = Modifier.padding(
-                    horizontal = ChatDimensions.BUBBLE_INNER_PADDING_HORIZONTAL,
-                    vertical = ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL
-                )
+                modifier = minHeightModifier
+                    .padding(
+                        horizontal = ChatDimensions.BUBBLE_INNER_PADDING_HORIZONTAL,
+                        vertical = ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL
+                    )
+                    .onSizeChanged { size ->
+                        if (isStreaming && size.height > lastMeasuredHeightPx) {
+                            lastMeasuredHeightPx = size.height
+                        }
+                        if (!isStreaming) {
+                            lastMeasuredHeightPx = size.height
+                        }
+                    }
             ) {
                 val streamingRenderState by remember(message.id, viewModel) {
                     viewModel.getStreamingRenderState(message.id)

@@ -12,6 +12,15 @@ fun selectMcpCandidates(
     candidates: List<McpToolCandidate>,
     strategy: McpDispatchStrategy,
 ): McpDispatchPlan {
+    if (!intent.shouldPreferMcp) {
+        return McpDispatchPlan(
+            intent = intent,
+            exposedTools = emptyList(),
+            hiddenToolsCount = candidates.size,
+            budget = strategy.budget,
+        )
+    }
+
     val filtered = when (intent.primaryIntent) {
         QueryIntent.DOCS_LOOKUP -> candidates.filter {
             it.category == McpToolCategory.DOCS || it.category == McpToolCategory.SEARCH
@@ -22,7 +31,6 @@ fun selectMcpCandidates(
         QueryIntent.WEB_CONTENT_READ -> candidates.filter {
             it.category == McpToolCategory.BROWSER
         }
-        QueryIntent.LOCAL_REASONING -> candidates
         else -> candidates
     }.sortedByDescending { it.reliabilityScore }
 
