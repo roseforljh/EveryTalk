@@ -945,11 +945,14 @@ internal fun prepareMcpDispatch(
                 }
                 
                 val finalImageSize = familyBasedImageSize ?: baseSanitizedImageSize
-                // 最终用于请求的 image_size（Qwen-Image-Edit 必须禁用）
-                val imageSizeForRequest: String? = if (detectedFamilyForImage == com.android.everytalk.ui.components.ImageGenCapabilities.ModelFamily.QWEN && isQwenEditModel) {
-                    null
-                } else {
-                    finalImageSize
+                val hasAttachmentImages = attachmentsForApiClient.any {
+                    it is com.android.everytalk.models.SelectedMediaItem.ImageFromUri ||
+                        it is com.android.everytalk.models.SelectedMediaItem.ImageFromBitmap
+                }
+                val imageSizeForRequest: String? = when {
+                    detectedFamilyForImage == com.android.everytalk.ui.components.ImageGenCapabilities.ModelFamily.QWEN && isQwenEditModel -> null
+                    detectedFamilyForImage == com.android.everytalk.ui.components.ImageGenCapabilities.ModelFamily.GPT_IMAGE && selectedRatioForImage.isAuto && hasAttachmentImages -> null
+                    else -> finalImageSize
                 }
                 // 检查是否包含图像生成关键词
                 if (isImageGeneration && hasImageGenerationKeywords(textToActuallySend)) {

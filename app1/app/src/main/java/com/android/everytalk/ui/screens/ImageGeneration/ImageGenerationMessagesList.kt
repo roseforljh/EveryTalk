@@ -4,11 +4,18 @@ import com.android.everytalk.R
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -54,6 +61,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.sp
 import android.net.Uri
 import androidx.compose.ui.window.Dialog
@@ -189,19 +197,43 @@ fun ImageGenerationMessagesList(
     var imagePreviewModel by remember { mutableStateOf<Any?>(null) }
     var imagePreviewModels by remember { mutableStateOf<List<Any>>(emptyList()) }
 
-    // 收集当前会话中所有 AI 生成的图片 URL（用于左右滑动切换）
-    val allImageUrls = remember(chatItems) {
+    val allConversationImages = remember(chatItems) {
         chatItems.flatMap { item ->
             when (item) {
+                is ChatListItem.UserMessage -> {
+                    item.attachments.mapNotNull { att ->
+                        when (att) {
+                            is com.android.everytalk.models.SelectedMediaItem.ImageFromUri ->
+                                if (att.uri.scheme == "data") att.uri.toString() else att.uri
+                            is com.android.everytalk.models.SelectedMediaItem.ImageFromBitmap ->
+                                att.bitmap
+                            else -> null
+                        }
+                    }
+                }
                 is ChatListItem.AiMessage -> {
-                    viewModel.getMessageById(item.messageId)?.imageUrls ?: emptyList()
+                    (viewModel.getMessageById(item.messageId)?.imageUrls ?: emptyList()).map { it as Any }
                 }
                 else -> emptyList()
             }
         }
     }
-    // 当前预览图片在 allImageUrls 中的索引
     var currentImageIndex by remember { mutableStateOf(0) }
+
+    fun openImagePreview(model: Any) {
+        imagePreviewModel = model
+        val index = allConversationImages.indexOfFirst { img ->
+            img == model || run {
+                val a = img.toString()
+                val b = model.toString()
+                (a.startsWith("/") && b.startsWith("file://") && b.endsWith(a)) ||
+                    (b.startsWith("/") && a.startsWith("file://") && a.endsWith(b))
+            }
+        }
+        currentImageIndex = if (index >= 0) index else 0
+        imagePreviewModels = if (allConversationImages.isNotEmpty()) allConversationImages else listOf(model)
+        isImagePreviewVisible = true
+    }
 
     val isApiCalling by viewModel.isImageApiCalling.collectAsState()
     val currentStreamingId by viewModel.currentImageStreamingAiMessageId.collectAsState()
@@ -391,18 +423,15 @@ fun ImageGenerationMessagesList(
                                                 onAttachmentClick = { att ->
                                                     when (att) {
                                                         is com.android.everytalk.models.SelectedMediaItem.ImageFromUri -> {
-                                                            imagePreviewModel = if (att.uri.scheme == "data") {
+                                                            val model = if (att.uri.scheme == "data") {
                                                                 att.uri.toString()
                                                             } else {
                                                                 att.uri
                                                             }
-                                                            imagePreviewModels = listOfNotNull(imagePreviewModel)
-                                                            isImagePreviewVisible = true
+                                                            openImagePreview(model)
                                                         }
                                                         is com.android.everytalk.models.SelectedMediaItem.ImageFromBitmap -> {
-                                                            imagePreviewModel = att.bitmap
-                                                            imagePreviewModels = listOfNotNull(imagePreviewModel)
-                                                            isImagePreviewVisible = true
+                                                            att.bitmap?.let { openImagePreview(it) }
                                                         }
                                                         else -> { /* 其他类型暂不预览 */ }
                                                     }
@@ -423,9 +452,7 @@ fun ImageGenerationMessagesList(
                                                 bubbleColor = MaterialTheme.chatColors.userBubble,
                                                 scrollStateManager = scrollStateManager,
                                                 onImageClick = { url ->
-                                                    imagePreviewModel = url
-                                                    imagePreviewModels = listOf(url)
-                                                    isImagePreviewVisible = true
+                                                    openImagePreview(url)
                                                 }
                                             )
                                         }
@@ -474,24 +501,7 @@ fun ImageGenerationMessagesList(
                                         }
                                     },
                                     onOpenPreview = { model ->
-                                        imagePreviewModel = model
-                                        // 查找当前图片在 allImageUrls 中的索引
-                                        val modelStr = model.toString()
-                                        var index = allImageUrls.indexOfFirst { it == modelStr }
-
-                                        // 尝试模糊匹配：解决本地路径与 file:// URI 不一致的问题
-                                        if (index < 0) {
-                                            index = allImageUrls.indexOfFirst {
-                                                // 如果 allImageUrls 中是 /path，modelStr 是 file:///path
-                                                (it.startsWith("/") && modelStr.startsWith("file://") && modelStr.endsWith(it)) ||
-                                                // 反之亦然
-                                                (modelStr.startsWith("/") && it.startsWith("file://") && it.endsWith(modelStr))
-                                            }
-                                        }
-
-                                        currentImageIndex = if (index >= 0) index else 0
-                                        imagePreviewModels = if (allImageUrls.isNotEmpty()) allImageUrls else listOf(model)
-                                        isImagePreviewVisible = true
+                                        openImagePreview(model)
                                     },
                                     isStreaming = currentStreamingId == message.id,
                                     onImageLoaded = onImageLoaded,
@@ -622,9 +632,7 @@ fun ImageGenerationMessagesList(
                 onView = { msg ->
                     val firstUrl = msg.imageUrls?.firstOrNull()
                     if (!firstUrl.isNullOrBlank()) {
-                        imagePreviewModel = firstUrl // 可为 String 或 Uri，AsyncImage 都支持
-                        imagePreviewModels = if (allImageUrls.isNotEmpty()) allImageUrls else listOf(firstUrl)
-                        isImagePreviewVisible = true
+                        openImagePreview(firstUrl)
                     }
                     isImageMenuVisible = false
                 },
@@ -1197,37 +1205,111 @@ fun ImageGenerationMessagesList(
                     modifier = Modifier.fillMaxSize()
                 ) {
                     Box(modifier = Modifier.fillMaxSize()) {
-                        // 顶部工具栏：左关右更多
+                        // 顶部工具栏：左关 + 居中页码
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 12.dp, vertical = 8.dp)
                                 .align(Alignment.TopCenter),
-                            horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             IconButton(onClick = { isImagePreviewVisible = false }) {
                                 Icon(
                                     imageVector = Icons.Filled.Close,
                                     contentDescription = "关闭预览",
-                                    tint = Color.White
+                                    tint = Color.White,
+                                    modifier = Modifier.size(24.dp)
                                 )
                             }
-                            Spacer(modifier = Modifier.width(48.dp))
+                            if (imagePreviewModels.size > 1) {
+                                Text(
+                                    text = "${pagerState.currentPage + 1} / ${imagePreviewModels.size}",
+                                    color = Color.White.copy(alpha = 0.8f),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium,
+                                    modifier = Modifier.weight(1f),
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.size(48.dp))
+                            } else {
+                                Spacer(modifier = Modifier.weight(1f))
+                            }
                         }
 
-                        // 左右滑动切换图片 + 双击缩放
+                        // 左右滑动切换图片 + 双指缩放
                         HorizontalPager(
                             state = pagerState,
                             modifier = Modifier
                                 .fillMaxSize()
                                 .padding(vertical = 56.dp),
-                            userScrollEnabled = scale == 1f, // 仅在未缩放时允许滑动
+                            userScrollEnabled = imagePreviewModels.size > 1 && scale == 1f,
                             beyondViewportPageCount = 1
                         ) { page ->
                             val currentUrl = imagePreviewModels.getOrNull(page)
+                            val animatedScale = remember(page) { Animatable(1f) }
+                            var pageOffsetX by remember(page) { mutableStateOf(0f) }
+                            var pageOffsetY by remember(page) { mutableStateOf(0f) }
+                            val coroutineScope = rememberCoroutineScope()
+
                             Box(
-                                modifier = Modifier.fillMaxSize(),
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .pointerInput(page) {
+                                        val w = size.width.toFloat()
+                                        val h = size.height.toFloat()
+                                        awaitEachGesture {
+                                            awaitFirstDown(requireUnconsumed = false)
+                                            do {
+                                                val event = awaitPointerEvent()
+                                                val pointerCount = event.changes.size
+                                                if (pointerCount >= 2) {
+                                                    val zoomChange = event.calculateZoom()
+                                                    val panChange = event.calculatePan()
+                                                    val curScale = animatedScale.value
+                                                    if (zoomChange != 1f || curScale > 1f) {
+                                                        val newScale = (curScale * zoomChange).coerceIn(1f, 5f)
+                                                        coroutineScope.launch { animatedScale.snapTo(newScale) }
+                                                        if (newScale > 1f) {
+                                                            val mx = (newScale - 1f) * w / 2f
+                                                            val my = (newScale - 1f) * h / 2f
+                                                            pageOffsetX = (pageOffsetX + panChange.x).coerceIn(-mx, mx)
+                                                            pageOffsetY = (pageOffsetY + panChange.y).coerceIn(-my, my)
+                                                        } else {
+                                                            pageOffsetX = 0f
+                                                            pageOffsetY = 0f
+                                                        }
+                                                        scale = newScale
+                                                        event.changes.forEach { it.consume() }
+                                                    }
+                                                } else if (pointerCount == 1 && animatedScale.value > 1f) {
+                                                    val panChange = event.calculatePan()
+                                                    val s = animatedScale.value
+                                                    val mx = (s - 1f) * w / 2f
+                                                    val my = (s - 1f) * h / 2f
+                                                    pageOffsetX = (pageOffsetX + panChange.x).coerceIn(-mx, mx)
+                                                    pageOffsetY = (pageOffsetY + panChange.y).coerceIn(-my, my)
+                                                    event.changes.forEach { it.consume() }
+                                                }
+                                            } while (event.changes.any { it.pressed })
+                                        }
+                                    }
+                                    .combinedClickable(
+                                        indication = null,
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        onClick = { },
+                                        onDoubleClick = {
+                                            coroutineScope.launch {
+                                                if (animatedScale.value > 1f) {
+                                                    animatedScale.animateTo(1f, tween(250))
+                                                    pageOffsetX = 0f
+                                                    pageOffsetY = 0f
+                                                } else {
+                                                    animatedScale.animateTo(2f, tween(250))
+                                                }
+                                                scale = animatedScale.value
+                                            }
+                                        }
+                                    ),
                                 contentAlignment = Alignment.Center
                             ) {
                                 AsyncImage(
@@ -1235,34 +1317,17 @@ fun ImageGenerationMessagesList(
                                     contentDescription = "预览图片 ${page + 1}/${imagePreviewModels.size}",
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .combinedClickable(
-                                            indication = null,
-                                            interactionSource = remember { MutableInteractionSource() },
-                                            onClick = { },
-                                            onDoubleClick = {
-                                                scale = if (scale > 1f) 1f else 2f
-                                            }
-                                        )
                                         .graphicsLayer {
-                                            scaleX = scale
-                                            scaleY = scale
+                                            scaleX = animatedScale.value
+                                            scaleY = animatedScale.value
+                                            translationX = pageOffsetX
+                                            translationY = pageOffsetY
                                         },
                                     contentScale = ContentScale.FillWidth
                                 )
                             }
                         }
 
-                        // 页码指示器（仅当有多张图片时显示）
-                        if (imagePreviewModels.size > 1) {
-                            Text(
-                                text = "${pagerState.currentPage + 1} / ${imagePreviewModels.size}",
-                                color = Color.White.copy(alpha = 0.8f),
-                                style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier
-                                    .align(Alignment.TopCenter)
-                                    .padding(top = 52.dp)
-                            )
-                        }
 
                         // 底部操作栏（编辑 / 选择 / 保存 / 共享）- 图标+小号加粗文字，增大间隔，定制按压动画
                         Row(
