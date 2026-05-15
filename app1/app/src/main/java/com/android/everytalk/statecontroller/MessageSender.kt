@@ -932,6 +932,15 @@ internal fun prepareMcpDispatch(
                             (mapped.firstOrNull()?.label ?: "1328x1328")
                         }
                     }
+                    com.android.everytalk.ui.components.ImageGenCapabilities.ModelFamily.GPT_IMAGE -> {
+                        if (selectedRatioForImage.isAuto) {
+                            null
+                        } else {
+                            com.android.everytalk.ui.components.ImageGenCapabilities
+                                .getGptImageSize(selectedRatioForImage.displayName)
+                                ?.label
+                        }
+                    }
                     else -> null
                 }
                 
