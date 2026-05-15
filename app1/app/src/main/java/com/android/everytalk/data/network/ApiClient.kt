@@ -494,28 +494,12 @@ object ApiClient {
     ): Flow<AppStreamEvent> = channelFlow {
         android.util.Log.i("ApiClient", "Direct mode started")
 
-        // 1. 针对"默认"提供商进行配置注入（若字段为空）
-        // 这样能确保即使是旧数据或未完整初始化的配置，也能使用 BuildConfig 中的默认值
-        // 默认模型使用 Gemini 渠道，以支持 Google Search 原生工具
-        val effectiveRequest = if (request.provider == "默认" || request.provider == "default") {
-            request.copy(
-                apiAddress = request.apiAddress.takeIf { !it.isNullOrBlank() }
-                    ?: com.android.everytalk.BuildConfig.DEFAULT_TEXT_API_URL,
-                apiKey = request.apiKey.takeIf { it.isNotBlank() }
-                    ?: com.android.everytalk.BuildConfig.DEFAULT_TEXT_API_KEY,
-                // 强制指定默认提供商使用 Gemini 渠道，以确保启用原生工具
-                channel = "Gemini"
-            )
-        } else {
-            request
-        }
-
         // 构建多模态请求（注入图片附件）
         val requestForDirect = try {
-            buildDirectMultimodalRequest(effectiveRequest, attachments, applicationContext)
+            buildDirectMultimodalRequest(request, attachments, applicationContext)
         } catch (e: Exception) {
             android.util.Log.w("ApiClient", "Failed to build multimodal request, using original: ${e.message}")
-            effectiveRequest
+            request
         }
         
         try {
@@ -523,7 +507,7 @@ object ApiClient {
             val provider = providerRegistry.getProvider(requestForDirect)
             android.util.Log.i(
                 "ApiClient",
-                "Using provider: ${provider.providerName} (request.provider=${requestForDirect.provider}, channel=${requestForDirect.channel}, model=${effectiveRequest.model})"
+                "Using provider: ${provider.providerName} (request.provider=${requestForDirect.provider}, channel=${requestForDirect.channel}, model=${requestForDirect.model})"
             )
             
             providerRegistry.streamChat(requestForDirect, attachments, applicationContext)

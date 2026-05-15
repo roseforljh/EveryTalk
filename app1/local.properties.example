@@ -32,11 +32,6 @@ GOOGLE_SEARCH_API_KEY=your-google-search-api-key
 ## OpenAI / 兼容 API
 DEFAULT_OPENAI_API_BASE_URL=https://api.openai.com
 
-## 默认文本 API（当用户选择"默认"提供商时使用）
-DEFAULT_TEXT_API_URL=https://your-api-gateway.com/v1/chat/completions
-DEFAULT_TEXT_API_KEY=sk-your-default-key
-DEFAULT_TEXT_MODELS=gpt-4o,gpt-4o-mini,claude-3-5-sonnet
-
 ## SiliconFlow 图像生成
 SILICONFLOW_IMAGE_API_URL=https://api.siliconflow.cn/v1/images/generations
 SILICONFLOW_DEFAULT_IMAGE_MODEL=Kwai-Kolors/Kolors

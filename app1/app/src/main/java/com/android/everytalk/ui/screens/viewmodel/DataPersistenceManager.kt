@@ -271,146 +271,19 @@ class DataPersistenceManager(
                     stateHolder._apiConfigs.value
                 }
                 
-                // 检查是否已初始化过默认配置 (从 Room 数据库读取)
-                val defaultConfigsInitialized = roomDataSource.getSetting(KEY_DEFAULT_CONFIGS_INITIALIZED, "false") == "true"
-                
-                // 自动创建默认文本配置（如果不存在且未初始化过）
-                val hasDefaultTextConfig = loadedConfigs.any {
+                // 清理旧的默认文本配置（如果存在）
+                val hasLegacyDefaultConfigs = loadedConfigs.any {
                     it.provider.trim().lowercase() in listOf("默认", "default") &&
                     it.modalityType == com.android.everytalk.data.DataClass.ModalityType.TEXT
                 }
-                
-                // 强制更新默认配置逻辑：
-                // 如果已存在默认配置，检查是否缺少了BuildConfig中定义的新模型，如果缺少则自动添加。
-                // 如果是首次初始化，则全部创建。
-                
-                // 从 BuildConfig 获取默认配置信息
-                val defaultApiKey = com.android.everytalk.BuildConfig.DEFAULT_TEXT_API_KEY
-                val defaultApiUrl = com.android.everytalk.BuildConfig.DEFAULT_TEXT_API_URL
-                val rawModels = com.android.everytalk.BuildConfig.DEFAULT_TEXT_MODELS
-                val targetDefaultModels = if (rawModels.isNotBlank()) {
-                    rawModels.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-                } else {
-                    listOf("gemini-3-flash-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite")
-                }
-
-                // 过滤掉不在最新配置列表中的旧默认配置
-                val existingDefaultConfigs = loadedConfigs.filter {
-                    it.provider.trim().lowercase() in listOf("默认", "default") &&
-                    it.modalityType == com.android.everytalk.data.DataClass.ModalityType.TEXT
-                }
-                
-                // 找出需要删除的过时默认配置
-                val deprecatedConfigs = existingDefaultConfigs.filter {
-                    it.model !in targetDefaultModels
-                }
-                
-                // 找出需要添加的缺失默认配置
-                val missingModels = targetDefaultModels.filter { targetModel ->
-                    existingDefaultConfigs.none { it.model == targetModel }
-                }
-                
-                var hasChanges = false
-                var currentConfigs = loadedConfigs
-                
-                // 简化逻辑：直接覆盖默认配置
-                // 1. 保留所有非默认配置
-                val nonDefaultConfigs = loadedConfigs.filter {
-                    val isDefault = it.provider.trim().lowercase() in listOf("默认", "default") &&
-                                    it.modalityType == com.android.everytalk.data.DataClass.ModalityType.TEXT
-                    !isDefault
-                }
-                
-                // 2. 根据最新列表生成全新的默认配置
-                val newDefaultConfigs = targetDefaultModels.map { modelName ->
-                    ApiConfig(
-                        id = java.util.UUID.randomUUID().toString(),
-                        name = modelName,
-                        provider = "默认",
-                        address = defaultApiUrl,
-                        key = defaultApiKey,
-                        model = modelName,
-                        modalityType = com.android.everytalk.data.DataClass.ModalityType.TEXT,
-                        channel = "Gemini",
-                        isValid = true
-                    )
-                }
-                
-                // 3. 合并
-                val newConfigList = nonDefaultConfigs + newDefaultConfigs
-                
-                // 4. 检查是否有变化（数量不同，或者包含的内容不同）
-                // 简单起见，只要涉及到默认配置的变动就视为有变化
-                val oldDefaultModels = existingDefaultConfigs.map { it.model }.toSet()
-                val newDefaultModels = targetDefaultModels.toSet()
-                
-                if (oldDefaultModels != newDefaultModels) {
-                    Log.i(TAG, "loadInitialData: 默认模型列表发生变化，全量刷新...")
-                    Log.i(TAG, "  旧: $oldDefaultModels")
-                    Log.i(TAG, "  新: $newDefaultModels")
-                    currentConfigs = newConfigList
-                    hasChanges = true
-                }
-                
-                if (hasChanges) {
-                    loadedConfigs = currentConfigs
-                    roomDataSource.clearApiConfigs() // 先清除所有，再重新保存，确保清理干净
-                    roomDataSource.saveApiConfigs(loadedConfigs)
-                    Log.i(TAG, "loadInitialData: 已同步默认模型列表（移除过时项，添加新项）")
-                } else if (!defaultConfigsInitialized && existingDefaultConfigs.isEmpty()) {
-                     // 完全没有任何默认配置的情况（虽然上面逻辑应该覆盖了，保留作为兜底）
-                     Log.i(TAG, "loadInitialData: 未找到默认文本配置且首次初始化，自动创建...")
-                     val newDefaultConfigs = targetDefaultModels.map { modelName ->
-                        ApiConfig(
-                            id = java.util.UUID.randomUUID().toString(),
-                            name = modelName,
-                            provider = "默认",
-                            address = defaultApiUrl,
-                            key = defaultApiKey,
-                            model = modelName,
-                            modalityType = com.android.everytalk.data.DataClass.ModalityType.TEXT,
-                            channel = "Gemini",
-                            isValid = true
-                        )
+                if (hasLegacyDefaultConfigs) {
+                    loadedConfigs = loadedConfigs.filter {
+                        !(it.provider.trim().lowercase() in listOf("默认", "default") &&
+                          it.modalityType == com.android.everytalk.data.DataClass.ModalityType.TEXT)
                     }
-                    loadedConfigs = loadedConfigs + newDefaultConfigs
+                    roomDataSource.clearApiConfigs()
                     roomDataSource.saveApiConfigs(loadedConfigs)
-                    Log.i(TAG, "loadInitialData: 已创建并保存 ${newDefaultConfigs.size} 个默认文本配置")
-                }
-                
-                // 检查并修复旧的默认配置（如果存在旧模型名称，更新为新名称）
-                // 同时也迁移旧的"OpenAI兼容"渠道到"Gemini"渠道，以启用代码执行按钮
-                val updatedConfigs = loadedConfigs.map { config ->
-                    var newConfig = config
-                    val isDefaultProvider = config.provider.trim().lowercase() in listOf("默认", "default")
-                    val isTextMode = config.modalityType == com.android.everytalk.data.DataClass.ModalityType.TEXT
-                    
-                    if (isDefaultProvider && isTextMode) {
-                        // 1. 同步默认配置的 URL 和 Key（确保与 BuildConfig 保持一致）
-                        if (newConfig.address != defaultApiUrl || newConfig.key != defaultApiKey) {
-                            Log.i(TAG, "loadInitialData: 同步默认配置地址/密钥: ${newConfig.address} -> $defaultApiUrl")
-                            newConfig = newConfig.copy(address = defaultApiUrl, key = defaultApiKey)
-                        }
-
-                        // 2. 迁移 Gemini 模型的渠道为 "Gemini"
-                        if (newConfig.model.startsWith("gemini") && newConfig.channel != "Gemini") {
-                            Log.i(TAG, "loadInitialData: 自动迁移默认 Gemini 模型渠道: ${newConfig.channel} -> Gemini")
-                            newConfig = newConfig.copy(channel = "Gemini")
-                        }
-
-                        // 3. 迁移 Imagen 模型的渠道为 "Gemini" (针对图像配置)
-                        if (newConfig.model.startsWith("imagen") && newConfig.channel != "Gemini") {
-                            Log.i(TAG, "loadInitialData: 自动迁移默认 Imagen 模型渠道: ${newConfig.channel} -> Gemini")
-                            newConfig = newConfig.copy(channel = "Gemini")
-                        }
-                    }
-                    newConfig
-                }
-
-                if (updatedConfigs != loadedConfigs) {
-                    loadedConfigs = updatedConfigs
-                    roomDataSource.saveApiConfigs(loadedConfigs)
-                    Log.i(TAG, "loadInitialData: 已保存更新后的API配置 (含渠道迁移)")
+                    Log.i(TAG, "loadInitialData: 已清理旧的默认文本配置")
                 }
 
                 initialConfigPresent = loadedConfigs.isNotEmpty()
@@ -442,7 +315,9 @@ class DataPersistenceManager(
 
                 // Load image generation configs
                 var loadedImageGenConfigs: List<ApiConfig> = roomDataSource.loadImageGenApiConfigs()
-                
+
+                val defaultConfigsInitialized = roomDataSource.getSetting(KEY_DEFAULT_CONFIGS_INITIALIZED, "false") == "true"
+
                 // 自动创建默认图像配置（如果不存在且未初始化过）
                 // 默认创建三个图像模型：Modal Z-Image-Turbo、Qwen 图像编辑、SiliconFlow
                 val hasDefaultImageConfig = loadedImageGenConfigs.any {

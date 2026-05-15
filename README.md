@@ -137,21 +137,6 @@
 2.  下载最新版本的 `app-release.apk` 文件。
 3.  在您的安卓设备上允许"安装未知来源的应用",然后点击 APK 文件进行安装。
 
-### 1.1 自动发版与 Telegram 通知
-
-项目已配置完整的 CI/CD 流程（见 [.github/workflows/build-artifacts.yml](.github/workflows/build-artifacts.yml)）：
-
-1. **自动发版**：
-   - 合并 Release PR 后，自动构建 Release APK 和 AAB。
-   - 自动上传构建产物到 GitHub Releases。
-
-2. **Telegram 通知**：
-   - 构建完成后，机器人会自动向配置的 Telegram 频道发送新版本通知。
-   - 通知包含：版本号、更新日志链接、下载地址。
-
-3. **配置方法**：
-   - 在仓库 Settings → Secrets 中配置 `TELEGRAM_TOKEN` (Bot Token) 和 `TELEGRAM_TO` (频道 ID/用户名)。
-   - 配置 Android 签名密钥 (可选) 以生成正式签名的 APK。
 ### 2. 配置模型
 
 首次启动应用后,您需要配置连接 AI 模型的 API。
