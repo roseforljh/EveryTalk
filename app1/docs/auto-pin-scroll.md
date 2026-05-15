@@ -33,6 +33,8 @@ stateHolder._lastSentImageUserMessageId.value = newUserMessageForUi.id
 
 位于 `ChatMessagesList.kt`（文本）和 `ImageGenerationMessagesList.kt`（图像）。
 
+图像模式还有一个关键约束：生成期间不能有任何外部自动滚动覆盖置顶状态。`ImageGenerationScreen.kt` 的 `onImageLoaded` 必须在 `!isApiCalling` 时才允许 `jumpToBottom()`，否则图片加载完成会把刚钉住的用户消息重新拉到底部。
+
 ## 置顶算法详解
 
 ### 阶段一：捕获首条气泡位置 (firstBubbleScreenY)
@@ -49,26 +51,56 @@ firstBubbleScreenY = firstItem.offset - listState.layoutInfo.viewportStartOffset
 
 当发送第 2+ 条消息时：
 
-1. **设置动态 padding**：`dynamicBottomPaddingTarget = viewportHeight`
+1. **禁止用户手动滚动**：`grokScrollCompleted = false`
+   - LazyColumn 使用 `userScrollEnabled = grokScrollCompleted`
+   - 置顶动画执行期间，用户滑动不会和程序滚动抢状态
+
+2. **记录钉住目标**：`pinnedUserMessageId = sentId`
+   - API 调用期间，帧级修正逻辑会持续检查这个消息是否偏离目标 Y
+
+3. **设置动态 padding**：`dynamicBottomPaddingImmediate = viewportHeight`，`dynamicBottomPaddingTarget = viewportHeight`
    - 在 LazyColumn 底部插入一个 Spacer，提供足够的滚动空间
    - 没有这个 padding，LazyColumn 无法将底部的消息滚动到屏幕顶部区域
+   - API 调用期间使用 immediate padding，避免动画延迟导致置顶时机不稳定
 
-2. **等待布局**：`delay(100)` 让 padding 生效
+4. **等待布局**：等待 LazyColumn 总 item 数包含 dynamic padding spacer
 
-3. **粗滚动**：`listState.scrollToItem(lastUserIndex, scrollOffset = -targetScreenY)`
-   - 将目标消息大致滚动到 targetScreenY 位置
+5. **粗滚动**：如果目标 item 不在可见区域，先 `animateScrollToItem(lastUserIndex, scrollOffset = 0)`
+   - 先让目标消息进入可见区域，确保后续能测量真实 offset
 
-4. **精修正**：测量实际位置与目标的偏差，用动画修正
+6. **精修正**：测量实际位置与目标的偏差，用逐帧 `scrollBy` 修正
    ```kotlin
-   val correction = actualY - targetScreenY
-   listState.animateScrollBy(correction.toFloat(), tween(400ms))
+   val distancePx = startY - targetScreenY
+   listState.scrollBy(current - previous)
    ```
 
-### 阶段三：动态缩小 padding
+7. **恢复用户滚动**：`finally { grokScrollCompleted = true }`
 
-置顶完成后（800ms delay），启动 snapshotFlow 监测：
+### 阶段三：帧级钉住修正
+
+API 调用期间，`pinnedUserMessageId` 不为空时启动持续修正：
 
 ```kotlin
+val item = visibleItemsInfo.firstOrNull { it.key == pinnedId } ?: continue
+val currentY = item.offset - viewportStartOffset
+val drift = currentY - targetY
+if (abs(drift) > 1) {
+    val consumed = listState.scrollBy(drift.toFloat())
+}
+```
+
+作用：
+
+- AI 内容变高、图片加载、loading 文案切换都会改变列表布局
+- 一旦用户气泡偏离目标 Y，下一帧立即滚回去
+- 如果滚动空间不够，会补充 dynamic padding，保证消息仍能被钉住
+
+### 阶段四：动态缩小 padding
+
+置顶完成后，启动 snapshotFlow 监测：
+
+```kotlin
+snapshotFlow { grokScrollCompleted }.first { it }
 snapshotFlow {
     val lastRealItem = visibleItemsInfo.lastOrNull { it.key != "dynamic_padding_spacer" }
     val gap = viewportEnd - lastRealItem.bottom - afterContentPadding
@@ -80,9 +112,9 @@ snapshotFlow {
 }
 ```
 
-随着 AI 内容增长，padding 自动缩小，用户无法滚动到空白区域。
+随着 AI 内容增长，padding 自动缩小，用户无法滚动到空白区域。`pinnedUserMessageId != null` 时普通 shrink flow 不主动缩小 padding，避免和帧级钉住修正抢状态。
 
-### 阶段四：清除 padding
+### 阶段五：清除 padding
 
 API 调用完成后：
 
@@ -91,9 +123,83 @@ LaunchedEffect(isApiCalling) {
     if (!isApiCalling && dynamicBottomPaddingTarget > 0.dp) {
         delay(300)
         dynamicBottomPaddingTarget = 0.dp
+        dynamicBottomPaddingImmediate = 0.dp
+    }
+    pinnedUserMessageId = null
+    grokScrollCompleted = true
+}
+```
+
+## 图像模式专项修复要点
+
+图像模式曾出现“用户气泡已置顶但仍能向下滚出大量空白”的问题，根因不是单一滚动函数，而是三个机制叠加：
+
+### 1. 最后一条 AI/Loading 被强行撑高
+
+旧逻辑：
+
+```kotlin
+val shouldApplyMinHeight = isLastItem && chatItems.size >= 2
+Modifier.heightIn(min = availableHeight * 0.85f)
+```
+
+案例：用户消息刚被钉到 85dp 位置，下面的 loading item 又被强制撑成 85% 屏幕高度。即使 dynamic padding 被缩小，列表本身仍有一大块真实内容高度，所以用户还能继续向下滚出空白感。
+
+修复：
+
+- 图像模式 AI 消息不再套 `heightIn(min = availableHeight * 0.85f)`
+- 图像模式 LoadingIndicator 不再套 `heightIn(min = availableHeight * 0.85f)`
+- LoadingIndicator 使用正常内容高度，只让 dynamic padding 负责置顶空间
+
+### 2. 图片加载完成后自动跳底覆盖置顶
+
+旧逻辑：
+
+```kotlin
+onImageLoaded = {
+    if (scrollStateManager.isAtBottom.value) {
+        scrollStateManager.jumpToBottom()
     }
 }
 ```
+
+案例：用户气泡刚被帧级逻辑钉住，AI 图片加载完成触发 `onImageLoaded`，如果此时底部检测认为还在 bottom，就会调用 `jumpToBottom()`，直接把置顶状态覆盖掉。
+
+修复：
+
+```kotlin
+onImageLoaded = {
+    if (!isApiCalling && scrollStateManager.isAtBottom.value) {
+        scrollStateManager.jumpToBottom()
+    }
+}
+```
+
+生成期间禁止图片加载事件触发跳底，生成结束后保留普通图片加载补偿。
+
+### 3. 图像模式目标 Y 和 LazyColumn 实际 top padding 不一致
+
+旧逻辑目标：
+
+```kotlin
+val topPaddingPx = with(density) { 8.dp.toPx().toInt() }
+```
+
+实际 LazyColumn：
+
+```kotlin
+contentPadding = PaddingValues(top = 85.dp)
+```
+
+案例：算法以 8dp 为置顶目标，布局实际从 85dp 开始，导致测量、修正、可滚动边界不一致。
+
+修复：
+
+```kotlin
+val topPaddingPx = with(density) { 85.dp.toPx().toInt() }
+```
+
+图像模式必须保证 `topPaddingPx` 和 LazyColumn `contentPadding.top` 同源。
 
 ## Session 保护机制
 
@@ -134,20 +240,28 @@ return derivedStableConversationId == newConversationId
     │       ├─ size == 1? → 捕获 firstBubbleScreenY，return
     │       │
     │       ├─ size > 1:
-    │       │   ├─ 设置 dynamicBottomPaddingTarget = viewportHeight
-    │       │   ├─ delay(100)
-    │       │   ├─ scrollToItem(lastUserIndex, -targetScreenY)
-    │       │   ├─ delay(50)
-    │       │   └─ animateScrollBy(correction) 精修正
+    │       │   ├─ grokScrollCompleted = false，禁止用户手动滚动
+    │       │   ├─ pinnedUserMessageId = sentId，记录钉住目标
+    │       │   ├─ 设置 dynamicBottomPaddingImmediate/Target = viewportHeight
+    │       │   ├─ 等待 dynamic padding spacer 进入布局
+    │       │   ├─ 如目标不可见，animateScrollToItem(lastUserIndex, 0)
+    │       │   ├─ 逐帧 scrollBy 修正到 targetScreenY
+    │       │   ├─ 立即缩小多余 padding
+    │       │   └─ finally 设置 grokScrollCompleted = true
     │       │
     │       └─ consumeLastSentUserMessageId()
     │
     ├─► LaunchedEffect(isApiCalling = true)
-    │       ├─ delay(800) 等待滚动完成
+    │       ├─ 等待 grokScrollCompleted = true
     │       └─ snapshotFlow 动态缩小 padding
     │
+    ├─► LaunchedEffect(pinnedUserMessageId)
+    │       └─ API 调用期间逐帧修正用户气泡 drift
+    │
     └─► API 完成 → LaunchedEffect(isApiCalling = false)
-            └─ delay(300) → dynamicBottomPaddingTarget = 0
+            ├─ delay(300) → 清空 dynamicBottomPadding
+            ├─ pinnedUserMessageId = null
+            └─ grokScrollCompleted = true
 ```
 
 ## 关键设计决策
@@ -155,9 +269,12 @@ return derivedStableConversationId == newConversationId
 | 决策 | 原因 |
 |------|------|
 | padding 用 `viewportHeight` 而非 `viewportHeight * 2` | 1x 足够置顶，2x 产生过多空白 |
-| 动态缩小延迟 800ms | 等待置顶滚动动画完成，避免提前缩小导致滚动失败 |
-| 缩小逻辑 key 只用 `isApiCalling` | 避免 target 变化重启 LaunchedEffect 导致 delay 重置 |
-| `animateDpAsState` 做 padding 过渡 | 500ms tween 动画，避免 padding 突变导致视觉跳动 |
+| `grokScrollCompleted` 控制 `userScrollEnabled` | 置顶滚动期间禁止用户手势抢滚动状态 |
+| `pinnedUserMessageId` 做帧级修正 | API 调用期间持续把用户气泡钉回目标 Y |
+| shrink flow 等待 `grokScrollCompleted` | 避免 padding 过早缩小导致置顶失败 |
+| 图像模式不对最后一条 AI/Loading 加 0.85 屏高 | 避免真实内容高度制造可下滚空白 |
+| 图像生成中禁用 `onImageLoaded -> jumpToBottom()` | 防止图片加载完成覆盖置顶状态 |
+| 图像模式 topPaddingPx 使用 85dp | 必须和 LazyColumn `contentPadding.top` 一致 |
 | session 保护返回 `true` 当 ID 相同 | 防止 `messages.size` 变化触发虚假 session 重置 |
 
 ## 涉及文件清单
