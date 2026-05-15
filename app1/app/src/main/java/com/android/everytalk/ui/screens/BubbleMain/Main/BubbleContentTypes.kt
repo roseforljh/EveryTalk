@@ -762,9 +762,9 @@ fun ImageContextMenu(
 
        val estimatedMenuHeightPx = with(density) { (48.dp * 2 + 16.dp).toPx() }
 
-       // 将菜单左上角"精确对齐"到手指按压位置（向上微移 16dp）；如越界再进行边界夹紧
+       // 将菜单左上角精确对齐到手指按压位置
        val rawX = pressOffset.x
-       val rawY = pressOffset.y- with(density) { 71.dp.toPx() }
+       val rawY = pressOffset.y
  
 
        val finalX = rawX.coerceIn(0f, screenWidthPx - menuWidthPx)

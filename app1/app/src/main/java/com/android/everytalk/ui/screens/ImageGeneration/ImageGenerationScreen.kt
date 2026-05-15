@@ -236,7 +236,7 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                     showImageMessageOptionsBottomSheet = true
                 },
                 onImageLoaded = {
-                    if (scrollStateManager.isAtBottom.value) {
+                    if (!isApiCalling && scrollStateManager.isAtBottom.value) {
                         scrollStateManager.jumpToBottom()
                     }
                 },

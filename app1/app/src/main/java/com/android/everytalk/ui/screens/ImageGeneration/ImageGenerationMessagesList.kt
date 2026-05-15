@@ -50,6 +50,7 @@ import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -103,7 +104,7 @@ import com.android.everytalk.data.DataClass.Message
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import android.graphics.BitmapFactory
-import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.scrollBy
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
@@ -288,7 +289,6 @@ fun ImageGenerationMessagesList(
     additionalBottomPadding: Dp = 0.dp
 ) {
     val haptic = LocalHapticFeedback.current
-    val coroutineScope = rememberCoroutineScope()
     val animatedItems = remember { mutableStateMapOf<String, Boolean>() }
     val density = LocalDensity.current
 
@@ -348,30 +348,33 @@ fun ImageGenerationMessagesList(
     val currentStreamingId by viewModel.currentImageStreamingAiMessageId.collectAsState()
 
     // Grok-style 置顶逻辑（与文本模式对齐）
-    val isAtBottom by scrollStateManager.isAtBottom
-
     var dynamicBottomPaddingTarget by remember { mutableStateOf(0.dp) }
+    var dynamicBottomPaddingImmediate by remember { mutableStateOf(0.dp) }
     var firstBubbleScreenY by remember { mutableStateOf(-1) }
+    var grokScrollCompleted by remember { mutableStateOf(true) }
+    var pinnedUserMessageId by remember { mutableStateOf<String?>(null) }
 
-    val dynamicBottomPadding by androidx.compose.animation.core.animateDpAsState(
-        targetValue = dynamicBottomPaddingTarget,
-        animationSpec = androidx.compose.animation.core.tween(
-            durationMillis = 500,
-            easing = androidx.compose.animation.core.CubicBezierEasing(0.25f, 0.1f, 0.25f, 1.0f)
-        ),
-        label = "imageDynamicBottomPadding"
-    )
+    val dynamicBottomPadding = if (isApiCalling) {
+        dynamicBottomPaddingImmediate
+    } else {
+        dynamicBottomPaddingTarget
+    }
 
     LaunchedEffect(isApiCalling) {
         if (!isApiCalling && dynamicBottomPaddingTarget > 0.dp) {
             kotlinx.coroutines.delay(300)
             dynamicBottomPaddingTarget = 0.dp
+            dynamicBottomPaddingImmediate = 0.dp
+        }
+        if (!isApiCalling) {
+            pinnedUserMessageId = null
+            grokScrollCompleted = true
         }
     }
 
     LaunchedEffect(isApiCalling) {
         if (!isApiCalling) return@LaunchedEffect
-        kotlinx.coroutines.delay(800)
+        snapshotFlow { grokScrollCompleted }.first { it }
         if (dynamicBottomPaddingTarget <= 0.dp) return@LaunchedEffect
         snapshotFlow {
             val li = listState.layoutInfo
@@ -384,16 +387,73 @@ fun ImageGenerationMessagesList(
             gap.coerceAtLeast(0)
         }.collect { gapPx ->
             if (gapPx < 0) return@collect
+            if (pinnedUserMessageId != null) return@collect
             val newPadding = with(density) { gapPx.toDp() }
             if (newPadding < dynamicBottomPaddingTarget) {
+                dynamicBottomPaddingImmediate = newPadding
                 dynamicBottomPaddingTarget = newPadding
             }
         }
     }
 
+    // 持续帧级 drift 修正：API 调用期间将用户消息钉在目标位置
+    LaunchedEffect(pinnedUserMessageId, isApiCalling, grokScrollCompleted, firstBubbleScreenY) {
+        val pinnedId = pinnedUserMessageId ?: return@LaunchedEffect
+        if (!isApiCalling) return@LaunchedEffect
+        if (!grokScrollCompleted) return@LaunchedEffect
+        val targetY = firstBubbleScreenY
+        if (targetY <= 0) return@LaunchedEffect
+
+        val stableWindowNanos = 50_000_000L
+        var stableSinceNanos = 0L
+        var lastLayoutVersion = listState.layoutInfo.totalItemsCount
+        while (true) {
+            val frameNanos = withFrameNanos { it }
+            val li = listState.layoutInfo
+            val layoutVersion = li.totalItemsCount + li.visibleItemsInfo.sumOf { it.size }
+            val layoutChanged = layoutVersion != lastLayoutVersion
+            lastLayoutVersion = layoutVersion
+
+            val item = li.visibleItemsInfo.firstOrNull { it.key == pinnedId }
+                ?: continue
+            val currentY = item.offset - li.viewportStartOffset
+            val drift = currentY - targetY
+
+            if (kotlin.math.abs(drift) > 1) {
+                stableSinceNanos = 0L
+                val consumed = listState.scrollBy(drift.toFloat())
+                val missing = kotlin.math.abs(drift.toFloat()) - kotlin.math.abs(consumed)
+                if (drift > 0 && missing > 0.5f) {
+                    val missingDp = with(density) { missing.toDp() }
+                    dynamicBottomPaddingImmediate += missingDp
+                    dynamicBottomPaddingTarget += missingDp
+                }
+            } else {
+                if (stableSinceNanos == 0L) stableSinceNanos = frameNanos
+                val stableDurationNanos = frameNanos - stableSinceNanos
+                if (stableDurationNanos >= stableWindowNanos && dynamicBottomPaddingTarget > 0.dp) {
+                    val lastRealItem = li.visibleItemsInfo.lastOrNull { it.key != "image_dynamic_padding_spacer" }
+                    if (lastRealItem != null) {
+                        val contentBottom = lastRealItem.offset + lastRealItem.size
+                        val gapPx = (li.viewportEndOffset - contentBottom - li.afterContentPadding).coerceAtLeast(0)
+                        val gapDp = with(density) { gapPx.toDp() }
+                        if (gapDp < dynamicBottomPaddingTarget) {
+                            dynamicBottomPaddingImmediate = gapDp
+                            dynamicBottomPaddingTarget = gapDp
+                        }
+                    }
+                }
+                if (!layoutChanged && stableDurationNanos >= stableWindowNanos) {
+                    snapshotFlow { listState.layoutInfo.totalItemsCount + listState.layoutInfo.visibleItemsInfo.sumOf { it.size } }
+                        .first { it != lastLayoutVersion }
+                    stableSinceNanos = 0L
+                }
+            }
+        }
+    }
+
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val availableHeight = maxHeight
-        val topPaddingPx = with(density) { 8.dp.toPx().toInt() }
+        val topPaddingPx = with(density) { 85.dp.toPx().toInt() }
 
         val lastSentImageUserMessageId by viewModel.lastSentImageUserMessageId.collectAsState()
 
@@ -431,35 +491,86 @@ fun ImageGenerationMessagesList(
                 return@LaunchedEffect
             }
 
+            grokScrollCompleted = false
+            pinnedUserMessageId = sentId
+
             if (firstBubbleScreenY < 0) {
                 firstBubbleScreenY = topPaddingPx
             }
             val targetScreenY = firstBubbleScreenY
 
-            val viewportHeight = li.viewportEndOffset - li.viewportStartOffset
-            dynamicBottomPaddingTarget = with(density) { viewportHeight.toDp() }
-            kotlinx.coroutines.delay(100)
+            try {
+                val viewportHeight = li.viewportEndOffset - li.viewportStartOffset
+                val paddingDp = with(density) { viewportHeight.toDp() }
+                dynamicBottomPaddingImmediate = paddingDp
+                dynamicBottomPaddingTarget = paddingDp
 
-            listState.scrollToItem(lastUserIndex, scrollOffset = -targetScreenY)
-            kotlinx.coroutines.delay(50)
-
-            val li2 = listState.layoutInfo
-            val currItem = li2.visibleItemsInfo.firstOrNull { it.index == lastUserIndex }
-            if (currItem != null) {
-                val actualY = currItem.offset - li2.viewportStartOffset
-                val correction = actualY - targetScreenY
-                if (correction != 0) {
-                    listState.animateScrollBy(
-                        correction.toFloat(),
-                        androidx.compose.animation.core.tween(
-                            durationMillis = 400,
-                            easing = androidx.compose.animation.core.CubicBezierEasing(0.25f, 0.1f, 0.25f, 1.0f)
-                        )
-                    )
+                kotlinx.coroutines.withTimeoutOrNull(500) {
+                    snapshotFlow { listState.layoutInfo.totalItemsCount }
+                        .first { it >= currentItems.size + 1 }
                 }
-            }
 
-            viewModel.consumeLastSentImageUserMessageId()
+                val initialItem = kotlinx.coroutines.withTimeoutOrNull(300) {
+                    snapshotFlow {
+                        listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == lastUserIndex }
+                    }.first { it != null }
+                }
+                if (initialItem == null) {
+                    listState.animateScrollToItem(lastUserIndex, scrollOffset = 0)
+                    kotlinx.coroutines.withTimeoutOrNull(300) {
+                        snapshotFlow {
+                            listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == lastUserIndex }
+                        }.first { it != null }
+                    }
+                }
+
+                val startInfo = listState.layoutInfo
+                val startItem = startInfo.visibleItemsInfo.firstOrNull { it.index == lastUserIndex }
+                if (startItem != null) {
+                    val startY = startItem.offset - startInfo.viewportStartOffset
+                    val distancePx = startY - targetScreenY
+                    if (kotlin.math.abs(distancePx) > 4) {
+                        val durationMs = (240 + kotlin.math.abs(distancePx) * 0.35f).toInt().coerceIn(260, 520)
+                        val easing = androidx.compose.animation.core.CubicBezierEasing(0.25f, 0.1f, 0.25f, 1.0f)
+                        val startNanos = withFrameNanos { it }
+                        var previous = 0f
+                        while (true) {
+                            val frameNanos = withFrameNanos { it }
+                            val elapsedMs = (frameNanos - startNanos) / 1_000_000f
+                            val fraction = (elapsedMs / durationMs).coerceIn(0f, 1f)
+                            val current = distancePx * easing.transform(fraction)
+                            listState.scrollBy(current - previous)
+                            previous = current
+                            if (fraction >= 1f) break
+                        }
+                    }
+                }
+
+                val li2 = listState.layoutInfo
+                val currItem = li2.visibleItemsInfo.firstOrNull { it.index == lastUserIndex }
+                if (currItem != null) {
+                    val actualY = currItem.offset - li2.viewportStartOffset
+                    val correction = actualY - targetScreenY
+                    if (kotlin.math.abs(correction) > 4) {
+                        listState.scrollBy(correction.toFloat())
+                    }
+                }
+
+                val liAfter = listState.layoutInfo
+                val lastReal = liAfter.visibleItemsInfo.lastOrNull { it.key != "image_dynamic_padding_spacer" }
+                if (lastReal != null) {
+                    val gapPx = (liAfter.viewportEndOffset - (lastReal.offset + lastReal.size) - liAfter.afterContentPadding).coerceAtLeast(0)
+                    val gapDp = with(density) { gapPx.toDp() }
+                    if (gapDp < dynamicBottomPaddingImmediate) {
+                        dynamicBottomPaddingImmediate = gapDp
+                        dynamicBottomPaddingTarget = gapDp
+                    }
+                }
+
+                viewModel.consumeLastSentImageUserMessageId()
+            } finally {
+                grokScrollCompleted = true
+            }
         }
 
         if (chatItems.isEmpty()) {
@@ -471,6 +582,7 @@ fun ImageGenerationMessagesList(
         } else {
             LazyColumn(
                 state = listState,
+                userScrollEnabled = grokScrollCompleted,
                 modifier = Modifier
                     .fillMaxSize()
                     .nestedScroll(scrollStateManager.nestedScrollConnection),
@@ -592,9 +704,6 @@ fun ImageGenerationMessagesList(
                             val message = viewModel.getMessageById(item.messageId)
                             android.util.Log.d("ImageGenMessagesList", "[UI] Rendering AI message: id=${message?.id?.take(8)}, hasImageUrls=${message?.imageUrls?.isNotEmpty()}, imageUrlsCount=${message?.imageUrls?.size}")
                             if (message != null) {
-                                val isLastItem = index == chatItems.lastIndex
-                                val shouldApplyMinHeight = isLastItem && chatItems.size >= 2
-
                                 AiMessageItem(
                                     message = message,
                                     text = item.text,
@@ -616,29 +725,16 @@ fun ImageGenerationMessagesList(
                                     onImageLoaded = onImageLoaded,
                                     scrollStateManager = scrollStateManager,
                                     viewModel = viewModel,
-                                    modifier = if (shouldApplyMinHeight) {
-                                        Modifier.heightIn(min = availableHeight * 0.85f)
-                                    } else {
-                                        Modifier
-                                    }
+                                    modifier = Modifier
                                 )
                             }
                         }
                         is ChatListItem.LoadingIndicator -> {
-                            val isLastItem = index == chatItems.lastIndex
-                            val shouldApplyMinHeight = isLastItem && chatItems.size >= 2
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(vertical = 16.dp)
-                                    .then(
-                                        if (shouldApplyMinHeight) {
-                                            Modifier.heightIn(min = availableHeight * 0.85f)
-                                        } else {
-                                            Modifier
-                                        }
-                                    ),
-                                contentAlignment = if (shouldApplyMinHeight) Alignment.TopStart else Alignment.CenterStart
+                                    .padding(vertical = 16.dp),
+                                contentAlignment = Alignment.CenterStart
                             ) {
                                 ImageGenLoadingIndicator()
                             }
