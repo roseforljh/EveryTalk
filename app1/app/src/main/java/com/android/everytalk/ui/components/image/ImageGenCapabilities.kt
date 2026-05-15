@@ -23,6 +23,7 @@ object ImageGenCapabilities {
         QWEN,      // 通义千问图像家族（固定分辨率集合，通常用 image_size）
         KOLORS,    // Kolors/Kwai/SiliconFlow 默认图像家族（固定分辨率集合）
         MODAL_Z_IMAGE, // Modal Z-Image-Turbo 家族
+        GPT_IMAGE, // OpenAI GPT-Image-2 家族（支持 quality: low/medium/high/auto，灵活尺寸）
         UNKNOWN
     }
 
@@ -34,6 +35,16 @@ object ImageGenCapabilities {
         Q1K("1K"), // Seedream 默认/兼容
         Q2K("2K"),
         Q4K("4K")
+    }
+
+    /**
+     * GPT-Image-2 质量档位
+     */
+    enum class GptImageQuality(val apiValue: String, val displayName: String) {
+        AUTO("auto", "Auto"),
+        LOW("low", "Low"),
+        MEDIUM("medium", "Medium"),
+        HIGH("high", "High")
     }
 
     /**
@@ -112,6 +123,7 @@ object ImageGenCapabilities {
             containsAny("doubao", "seedream", "volces") -> ModelFamily.SEEDREAM
             containsAny("qwen", "qwen-image", "qwen-vl") -> ModelFamily.QWEN
             containsAny("kolors", "kwai", "siliconflow") -> ModelFamily.KOLORS
+            containsAny("gpt-image", "gpt_image") -> ModelFamily.GPT_IMAGE
             else -> ModelFamily.UNKNOWN
         }
     }
@@ -172,6 +184,17 @@ object ImageGenCapabilities {
         ar("HD 9:16")
     )
 
+    // GPT-Image-2
+    private val RATIOS_GPT_IMAGE: List<AspectRatioOption> = listOf(
+        ar("1:1"),
+        ar("3:2"),
+        ar("2:3"),
+        ar("16:9"),
+        ar("9:16"),
+        ar("4:3"),
+        ar("3:4")
+    )
+
     // UNKNOWN：保留空表示“走应用现有默认比例集”
     private val RATIOS_UNKNOWN_USE_DEFAULT: List<AspectRatioOption> = emptyList()
 
@@ -209,6 +232,12 @@ object ImageGenCapabilities {
             supportsQuality = false, // 不需要二级分组，直接在列表中展示
             supportsGeminiImageSize = false,
             maxInputImages = 0 // Modal Z-Image 不支持图像编辑
+        )
+        ModelFamily.GPT_IMAGE -> FamilyCapabilities(
+            ratios = RATIOS_GPT_IMAGE,
+            supportsQuality = false,
+            supportsGeminiImageSize = false,
+            maxInputImages = 1
         )
         ModelFamily.UNKNOWN -> FamilyCapabilities(
             ratios = RATIOS_UNKNOWN_USE_DEFAULT,
@@ -395,6 +424,44 @@ object ImageGenCapabilities {
         return KOLORS_ALL_SIZES.filter { so ->
             gcdEqualRatio(so.width, so.height, ratio)
         }
+    }
+
+    // -------- GPT-Image-2 尺寸映射 --------
+
+    private val GPT_IMAGE_SIZES: Map<String, SizeOption> = mapOf(
+        "1:1" to sz(1024, 1024),
+        "3:2" to sz(1536, 1024),
+        "2:3" to sz(1024, 1536),
+        "16:9" to sz(2048, 1152),
+        "9:16" to sz(1152, 2048),
+        "4:3" to sz(2048, 1536),
+        "3:4" to sz(1536, 2048)
+    )
+
+    private val GPT_IMAGE_SIZES_2K: Map<String, SizeOption> = mapOf(
+        "1:1" to sz(2048, 2048),
+        "3:2" to sz(2048, 1152),
+        "2:3" to sz(1152, 2048),
+        "16:9" to sz(3840, 2160),
+        "9:16" to sz(2160, 3840),
+        "4:3" to sz(2048, 1536),
+        "3:4" to sz(1536, 2048)
+    )
+
+    /**
+     * 返回 GPT-Image-2 在给定比例下的推荐尺寸。
+     */
+    @JvmStatic
+    fun getGptImageSize(aspectRatio: String): SizeOption? {
+        return GPT_IMAGE_SIZES[aspectRatio.trim()]
+    }
+
+    /**
+     * 返回 GPT-Image-2 所有支持的质量档位。
+     */
+    @JvmStatic
+    fun getGptImageQualities(): List<GptImageQuality> {
+        return GptImageQuality.values().toList()
     }
 
     // -------- 工具方法 --------

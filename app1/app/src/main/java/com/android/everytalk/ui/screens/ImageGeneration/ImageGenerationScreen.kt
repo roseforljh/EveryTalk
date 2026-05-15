@@ -77,6 +77,7 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
     
     // 图像比例状态（使用全局StateHolder，便于下游请求读取）
     val selectedImageRatio by viewModel.stateHolder._selectedImageRatio.collectAsState()
+    val gptImageQuality by viewModel.stateHolder._gptImageQuality.collectAsState()
 
     // 获取抽屉和搜索相关状态
     val isDrawerOpen = !viewModel.drawerState.isClosed
@@ -302,7 +303,9 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                 },
                 onGeminiImageSizeChanged = { size ->
                     viewModel.updateGeminiImageSizeForSelectedConfig(size)
-                }
+                },
+                currentGptImageQuality = gptImageQuality,
+                onGptImageQualityChanged = { viewModel.stateHolder._gptImageQuality.value = it }
             )
         }
     }

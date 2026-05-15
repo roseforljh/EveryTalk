@@ -1213,7 +1213,10 @@ internal fun prepareMcpDispatch(
                             // 禁用水印（针对 Seedream 直连）
                             watermark = false,
                             // 将配置中的 imageSize (1K/2K/4K) 传递给 Gemini 专用字段
-                            geminiImageSize = if (modelIsGeminiType) currentConfig.imageSize else null
+                            geminiImageSize = if (modelIsGeminiType) currentConfig.imageSize else null,
+                            quality = if (detectedFamilyForImage == com.android.everytalk.ui.components.ImageGenCapabilities.ModelFamily.GPT_IMAGE) {
+                                stateHolder._gptImageQuality.value.apiValue
+                            } else null
                         )
                     } else null
                 )

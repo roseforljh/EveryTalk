@@ -316,7 +316,10 @@ fun ImageGenerationInputArea(
     // 更新当前图像参数（步数+引导系数）的回调
     onChangeImageParams: ((Int, Float) -> Unit)? = null,
     // 新增：Gemini 尺寸变更回调
-    onGeminiImageSizeChanged: ((String) -> Unit)? = null
+    onGeminiImageSizeChanged: ((String) -> Unit)? = null,
+    // GPT-Image-2 质量参数
+    currentGptImageQuality: ImageGenCapabilities.GptImageQuality = ImageGenCapabilities.GptImageQuality.AUTO,
+    onGptImageQualityChanged: ((ImageGenCapabilities.GptImageQuality) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -405,6 +408,7 @@ fun ImageGenerationInputArea(
 
     // 步数调整对话框状态
     var showStepsDialog by remember { mutableStateOf(false) }
+    var showGptQualityDialog by remember { mutableStateOf(false) }
     var showRatioDialog by remember { mutableStateOf(false) }
     // 参数调整对话框状态 (Qwen Edit)
     var showParamsDialog by remember { mutableStateOf(false) }
@@ -721,7 +725,14 @@ fun ImageGenerationInputArea(
                                             showFunctionPanel = false
                                         },
                                         currentImageSteps = currentImageSteps,
-                                        selectedImageRatio = selectedImageRatio
+                                        selectedImageRatio = selectedImageRatio,
+                                        isGptImage = detectedFamily == ImageGenCapabilities.ModelFamily.GPT_IMAGE,
+                                        currentGptImageQuality = currentGptImageQuality,
+                                        onShowQualityDialog = {
+                                            lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
+                                            showFunctionPanel = false
+                                            showGptQualityDialog = true
+                                        }
                                     )
                                 }
                             }
@@ -1019,6 +1030,51 @@ fun ImageGenerationInputArea(
         )
     }
 
+    if (showGptQualityDialog && onGptImageQualityChanged != null) {
+        AlertDialog(
+            onDismissRequest = { showGptQualityDialog = false },
+            title = { Text("选择图像质量") },
+            text = {
+                Column {
+                    Text(
+                        text = "质量越高生成越慢，费用越高",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                    ImageGenCapabilities.getGptImageQualities().forEach { quality ->
+                        val isSelected = quality == currentGptImageQuality
+                        Surface(
+                            onClick = {
+                                onGptImageQualityChanged(quality)
+                                showGptQualityDialog = false
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = quality.displayName,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showGptQualityDialog = false }) { Text("取消") }
+            }
+        )
+    }
+
     if (showRatioDialog) {
         com.android.everytalk.ui.components.ImageRatioSelectionDialog(
             selectedRatio = selectedImageRatio,
@@ -1056,7 +1112,10 @@ private fun ImageFunctionPanelContent(
     onShowParamsDialog: () -> Unit,
     onClearContent: () -> Unit,
     currentImageSteps: Int?,
-    selectedImageRatio: ImageRatio
+    selectedImageRatio: ImageRatio,
+    isGptImage: Boolean = false,
+    currentGptImageQuality: ImageGenCapabilities.GptImageQuality = ImageGenCapabilities.GptImageQuality.AUTO,
+    onShowQualityDialog: () -> Unit = {}
 ) {
     Surface(
         modifier = Modifier
@@ -1073,6 +1132,14 @@ private fun ImageFunctionPanelContent(
                     label = selectedImageRatio.displayName,
                     tint = MaterialTheme.colorScheme.primary,
                     onClick = onShowRatioDialog
+                )
+            }
+            if (isGptImage) {
+                ImageFunctionPanelItem(
+                    icon = Icons.Outlined.HighQuality,
+                    label = "质量: ${currentGptImageQuality.displayName}",
+                    tint = Color(0xFF9C27B0),
+                    onClick = onShowQualityDialog
                 )
             }
             if (supportsImageEditing) {

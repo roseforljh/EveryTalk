@@ -44,7 +44,9 @@ data class ImageGenRequest(
    // 新增：Gemini 3 Pro Image 专用尺寸档位（"1K"|"2K"|"4K"）
    // 仅对 gemini-3-pro-image-preview 模型生效，gemini-2.5-flash-image 固定为 1K
    @SerialName("gemini_image_size")
-   val geminiImageSize: String? = null
+   val geminiImageSize: String? = null,
+   @SerialName("quality")
+   val quality: String? = null
 )
 
 @Serializable

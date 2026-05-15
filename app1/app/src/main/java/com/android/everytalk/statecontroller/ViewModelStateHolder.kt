@@ -484,6 +484,7 @@ val _isStreamingPaused = MutableStateFlow(false)
     val _selectedImageGenApiConfig = MutableStateFlow<ApiConfig?>(null)
     // 图像输出宽高比（默认 AUTO）
     val _selectedImageRatio = MutableStateFlow(com.android.everytalk.data.DataClass.ImageRatio.DEFAULT_SELECTED)
+    val _gptImageQuality = MutableStateFlow(com.android.everytalk.ui.components.ImageGenCapabilities.GptImageQuality.AUTO)
     
     // ========= 语音配置状态 =========
     /** 语音后端配置列表 */

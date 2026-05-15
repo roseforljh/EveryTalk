@@ -293,7 +293,48 @@ fun AttachmentsContent(
         modifier = Modifier.padding(top = 8.dp),
         horizontalAlignment = attachmentHorizontalAlignment
     ) {
-        if (imageAttachments.isNotEmpty()) {
+        if (imageAttachments.isNotEmpty() && isAiGenerated) {
+            // AI 生成的图片：等比例缩放，填满可用宽度
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                imageAttachments.forEach { attachment ->
+                    val imageModel: Any = when (attachment) {
+                        is SelectedMediaItem.ImageFromUri -> if (attachment.uri.scheme == "data") attachment.uri.toString() else attachment.uri
+                        is SelectedMediaItem.ImageFromBitmap -> attachment.bitmap as Any
+                        else -> ""
+                    }
+                    coil3.compose.AsyncImage(
+                        model = imageModel,
+                        contentDescription = "AI generated image",
+                        contentScale = androidx.compose.ui.layout.ContentScale.FillWidth,
+                        onSuccess = { onImageLoaded() },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .pointerInput(message.id) {
+                                detectTapGestures(
+                                    onTap = {
+                                        val url = when (attachment) {
+                                            is SelectedMediaItem.ImageFromUri -> attachment.uri.toString()
+                                            is SelectedMediaItem.ImageFromBitmap -> attachment.bitmap?.let { bitmapToDataUri(it) } ?: ""
+                                            else -> ""
+                                        }
+                                        if (url.isNotBlank()) {
+                                            if (onImageClick != null) onImageClick.invoke(url) else { previewUrlInternal = url }
+                                        }
+                                    },
+                                    onLongPress = { localOffset ->
+                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                        onLongPress(message, localOffset)
+                                    }
+                                )
+                            }
+                    )
+                }
+            }
+        } else if (imageAttachments.isNotEmpty()) {
             val imageStripHeight = 100.dp
             val scrollState = rememberScrollState()
             val isUser = message.sender == Sender.User
