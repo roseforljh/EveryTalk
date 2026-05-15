@@ -451,7 +451,11 @@ internal fun AddNewFullConfigDialog(
 ) {
     var providerMenuExpanded by remember { mutableStateOf(false) }
     var channelMenuExpanded by remember { mutableStateOf(false) }
-    val channels = listOf("OpenAI兼容", "Gemini", "OpenClaw")
+    val channels = if (isImageMode) {
+        listOf("OpenAI兼容", "Gemini")
+    } else {
+        listOf("OpenAI兼容", "Gemini", "OpenClaw")
+    }
     var selectedChannel by remember { mutableStateOf(channels.first()) }
     // val focusRequesterApiKey = remember { FocusRequester() } // Removed auto-focus
     var textFieldAnchorBounds by remember { mutableStateOf<Rect?>(null) }
@@ -473,7 +477,7 @@ internal fun AddNewFullConfigDialog(
         lower !in listOf("默认", "default", "default_text")
     }
     val isDefaultSel = false // 移除默认选项，此变量保持为 false
-    val isGoogleProvider = provider.trim().lowercase() in listOf("google","谷歌")
+    val isGoogleProvider = provider.trim().lowercase() in listOf("google", "gemini", "谷歌")
     // 当平台为 Google 时，通道锁定为 Gemini
     LaunchedEffect(provider) {
         if (isGoogleProvider) {
@@ -627,7 +631,7 @@ internal fun AddNewFullConfigDialog(
                                         onClick = {
                                             // 选平台时若为 Google/谷歌，则锁定渠道为 Gemini
                                             val low = providerItem.trim().lowercase()
-                                            if (low == "google" || low == "谷歌") {
+                                            if (low == "google" || low == "gemini" || low == "谷歌") {
                                                 selectedChannel = "Gemini"
                                             }
                                             onProviderChange(providerItem)
@@ -714,7 +718,8 @@ internal fun AddNewFullConfigDialog(
                                     base = apiAddress,
                                     provider = provider,
                                     channel = selectedChannel,
-                                    accessMode = if (OpenClawSettingsRules.isOpenClaw(provider, selectedChannel)) "bridge" else null
+                                    accessMode = if (OpenClawSettingsRules.isOpenClaw(provider, selectedChannel)) "bridge" else null,
+                                    isImageMode = isImageMode
                                 )
                             }
                             if (fullUrlPreview.isNotEmpty()) {
@@ -833,7 +838,8 @@ internal fun EditConfigDialog(
     representativeConfig: com.android.everytalk.data.DataClass.ApiConfig,
     allProviders: List<String>,
     onDismissRequest: () -> Unit,
-    onConfirm: (newProvider: String, newAddress: String, newKey: String, newChannel: String, newEnableCodeExecution: Boolean?, newToolsJson: String?) -> Unit
+    onConfirm: (newProvider: String, newAddress: String, newKey: String, newChannel: String, newEnableCodeExecution: Boolean?, newToolsJson: String?) -> Unit,
+    isImageMode: Boolean = false
 ) {
     Log.d("EditConfigDialog", "Opening dialog for config: ${representativeConfig.name}, provider: ${representativeConfig.provider}")
     var provider by remember { mutableStateOf(representativeConfig.provider) }
@@ -845,7 +851,11 @@ internal fun EditConfigDialog(
     val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
     val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
 
-    val channelTypes = listOf("OpenAI兼容", "Gemini", "OpenClaw")
+    val channelTypes = if (isImageMode) {
+        listOf("OpenAI兼容", "Gemini")
+    } else {
+        listOf("OpenAI兼容", "Gemini", "OpenClaw")
+    }
     
     var channelMenuExpanded by remember { mutableStateOf(false) }
     var channelTextFieldAnchorBounds by remember { mutableStateOf<Rect?>(null) }
@@ -972,7 +982,8 @@ internal fun EditConfigDialog(
                                 base = apiAddress,
                                 provider = provider,
                                 channel = selectedChannel,
-                                accessMode = if (OpenClawSettingsRules.isOpenClaw(provider, selectedChannel)) "bridge" else null
+                                accessMode = if (OpenClawSettingsRules.isOpenClaw(provider, selectedChannel)) "bridge" else null,
+                                isImageMode = isImageMode
                             )
                         }
                         if (fullUrlPreview.isNotEmpty()) {

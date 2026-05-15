@@ -319,7 +319,8 @@ fun ImageGenerationInputArea(
     onGeminiImageSizeChanged: ((String) -> Unit)? = null,
     // GPT-Image-2 质量参数
     currentGptImageQuality: ImageGenCapabilities.GptImageQuality = ImageGenCapabilities.GptImageQuality.AUTO,
-    onGptImageQualityChanged: ((ImageGenCapabilities.GptImageQuality) -> Unit)? = null
+    onGptImageQualityChanged: ((ImageGenCapabilities.GptImageQuality) -> Unit)? = null,
+    onHeightChange: (Int) -> Unit = {}
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -609,7 +610,10 @@ fun ImageGenerationInputArea(
                 )
             )
         )
-        .onSizeChanged { intSize -> chatInputContentHeightPx = intSize.height }
+        .onSizeChanged { intSize ->
+            chatInputContentHeightPx = intSize.height
+            onHeightChange(intSize.height)
+        }
         .windowInsetsPadding(targetInsets)
     ) {
         Column(
@@ -1205,7 +1209,9 @@ private fun ImageFunctionPanelItem(
             Spacer(modifier = Modifier.width(10.dp))
             Text(
                 text = label,
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
+                ),
                 color = MaterialTheme.colorScheme.onSurface
             )
         }

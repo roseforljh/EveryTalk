@@ -1996,8 +1996,26 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         modelAndConfigController.clearFetchedModels()
     }
 
-    fun createMultipleConfigs(provider: String, address: String, key: String, modelNames: List<String>, channel: String = "OpenAI兼容", enableCodeExecution: Boolean? = null, toolsJson: String? = null) {
-        modelAndConfigController.createMultipleConfigs(provider, address, key, modelNames, channel, enableCodeExecution, toolsJson)
+    fun createMultipleConfigs(
+        provider: String,
+        address: String,
+        key: String,
+        modelNames: List<String>,
+        channel: String = "OpenAI兼容",
+        isImageGen: Boolean = false,
+        enableCodeExecution: Boolean? = null,
+        toolsJson: String? = null
+    ) {
+        modelAndConfigController.createMultipleConfigs(
+            provider,
+            address,
+            key,
+            modelNames,
+            channel,
+            isImageGen,
+            enableCodeExecution,
+            toolsJson
+        )
     }
 
     // 新增：用于通知UI显示添加模型对话框的 Flow
@@ -2234,18 +2252,23 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        createMultipleConfigs(
-            provider = params.provider,
-            address = params.address,
-            key = params.key,
-            modelNames = models,
-            channel = params.channel,
-            enableCodeExecution = params.enableCodeExecution,
-            toolsJson = params.toolsJson
-        )
+        if (params.isRefresh) {
+            modelAndConfigController.replaceModelsForConfigGroup(params, models)
+        } else {
+            createMultipleConfigs(
+                provider = params.provider,
+                address = params.address,
+                key = params.key,
+                modelNames = models,
+                channel = params.channel,
+                isImageGen = params.isImageGen,
+                enableCodeExecution = params.enableCodeExecution,
+                toolsJson = params.toolsJson
+            )
+            showSnackbar("已添加 ${models.size} 个模型配置")
+        }
         stateHolder._showModelSelectionDialog.value = false
         stateHolder._pendingConfigParams.value = null
-        showSnackbar("已添加 ${models.size} 个模型配置")
     }
 
     fun onSelectModels(selectedModels: List<String>) {
@@ -2255,18 +2278,23 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        createMultipleConfigs(
-            provider = params.provider,
-            address = params.address,
-            key = params.key,
-            modelNames = selectedModels,
-            channel = params.channel,
-            enableCodeExecution = params.enableCodeExecution,
-            toolsJson = params.toolsJson
-        )
+        if (params.isRefresh) {
+            modelAndConfigController.replaceModelsForConfigGroup(params, selectedModels)
+        } else {
+            createMultipleConfigs(
+                provider = params.provider,
+                address = params.address,
+                key = params.key,
+                modelNames = selectedModels,
+                channel = params.channel,
+                isImageGen = params.isImageGen,
+                enableCodeExecution = params.enableCodeExecution,
+                toolsJson = params.toolsJson
+            )
+            showSnackbar("已添加 ${selectedModels.size} 个模型配置")
+        }
         stateHolder._showModelSelectionDialog.value = false
         stateHolder._pendingConfigParams.value = null
-        showSnackbar("已添加 ${selectedModels.size} 个模型配置")
     }
 
     override fun onCleared() {

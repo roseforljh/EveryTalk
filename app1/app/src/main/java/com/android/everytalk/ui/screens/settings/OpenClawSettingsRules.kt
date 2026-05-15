@@ -149,7 +149,8 @@ object OpenClawSettingsRules {
         base: String,
         provider: String,
         channel: String?,
-        accessMode: String? = null
+        accessMode: String? = null,
+        isImageMode: Boolean = false
     ): String {
         val raw = base.trim()
         if (raw.isEmpty()) return ""
@@ -165,6 +166,18 @@ object OpenClawSettingsRules {
 
         if (shouldBypassPath(raw)) {
             return noHash
+        }
+
+        if (isImageMode && !isGemini) {
+            val imageBase = noHash
+                .replace(Regex("/v1/images/generations/?$"), "")
+                .replace(Regex("/images/generations/?$"), "")
+                .replace(Regex("/v1/chat/completions/?$"), "")
+                .replace(Regex("/chat/completions/?$"), "")
+                .replace(Regex("/v1/completions/?$"), "")
+                .replace(Regex("/completions/?$"), "")
+                .trimEnd('/')
+            return "$imageBase/v1/images/generations"
         }
 
         if (isGemini) {
@@ -196,7 +209,8 @@ object OpenClawSettingsRules {
         base: String,
         provider: String,
         channel: String?,
-        accessMode: String? = null
+        accessMode: String? = null,
+        isImageMode: Boolean = false
     ): String {
         val raw = base.trim()
         if (provider.trim().equals("OpenClaw Remote", ignoreCase = true)) {
@@ -213,6 +227,10 @@ object OpenClawSettingsRules {
         val p = provider.lowercase().trim()
         val ch = channel?.lowercase()?.trim().orEmpty()
         val isGemini = p.contains("google") || ch.contains("gemini")
+
+        if (isImageMode && !isGemini) {
+            return "图像模式：自动使用 /v1/images/generations"
+        }
 
         if (isGemini) {
             if (hasPathAfterHost(noHash) || endsWithSlash(noHash)) {

@@ -59,7 +59,16 @@ class ModelAndConfigController(
         }
     }
 
-    fun createMultipleConfigs(provider: String, address: String, key: String, modelNames: List<String>, channel: String = "OpenAI兼容", enableCodeExecution: Boolean? = null, toolsJson: String? = null) {
+    fun createMultipleConfigs(
+        provider: String,
+        address: String,
+        key: String,
+        modelNames: List<String>,
+        channel: String = "OpenAI兼容",
+        isImageGen: Boolean = false,
+        enableCodeExecution: Boolean? = null,
+        toolsJson: String? = null
+    ) {
         if (modelNames.isEmpty()) {
             showSnackbar("请至少选择一个模型")
             return
@@ -78,12 +87,16 @@ class ModelAndConfigController(
                         name = modelName,
                         id = UUID.randomUUID().toString(),
                         isValid = true,
-                        modalityType = com.android.everytalk.data.DataClass.ModalityType.TEXT,
+                        modalityType = if (isImageGen) {
+                            com.android.everytalk.data.DataClass.ModalityType.IMAGE
+                        } else {
+                            com.android.everytalk.data.DataClass.ModalityType.TEXT
+                        },
                         channel = channel,
                         enableCodeExecution = enableCodeExecution,
                         toolsJson = toolsJson
                     )
-                    configManager.addConfig(config)
+                    configManager.addConfig(config, isImageGen)
                     successfulConfigs.add(modelName)
                 } catch (e: Exception) {
                     Log.e("ModelAndConfig", "Failed to create config for model: $modelName", e)
@@ -157,6 +170,7 @@ class ModelAndConfigController(
 
     fun refreshModelsForConfig(config: ApiConfig) {
         val refreshId = "${config.key}-${config.modalityType}"
+        val isImageGen = config.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE
         scope.launch {
             modelFetchManager.addRefreshingModel(refreshId)
             try {
@@ -164,61 +178,101 @@ class ModelAndConfigController(
                     ApiClient.getModels(config.address, config.key, config.channel)
                 }
 
-                // 1. 删除与此API密钥和模态类型匹配的所有现有配置
-                val currentConfigs = stateHolder._apiConfigs.value
-                val configsToKeep = currentConfigs.filterNot {
-                    it.key == config.key &&
-                    it.provider == config.provider &&
-                    it.address == config.address &&
-                    it.channel == config.channel
+                if (models.isEmpty()) {
+                    showSnackbar("未获取到任何模型")
+                    return@launch
                 }
 
-                // 2. 新配置
-                val newConfigs = models.map { modelName ->
-                    ApiConfig(
-                        address = config.address,
-                        key = config.key,
-                        model = modelName,
-                        provider = config.provider,
-                        name = modelName,
-                        id = UUID.randomUUID().toString(),
-                        isValid = true,
-                        modalityType = config.modalityType,
-                        channel = config.channel
-                    )
-                }
-                val finalConfigs = configsToKeep + newConfigs
-
-                // 3. 更新并保存
-                stateHolder._apiConfigs.value = finalConfigs
-                persistenceManager.saveApiConfigs(finalConfigs)
-
-                // 4. 更新选中的配置（如有必要）
-                val currentSelectedConfig = stateHolder._selectedApiConfig.value
-                if (currentSelectedConfig != null &&
-                    currentSelectedConfig.key == config.key &&
-                    currentSelectedConfig.provider == config.provider &&
-                    currentSelectedConfig.address == config.address &&
-                    currentSelectedConfig.channel == config.channel &&
-                    !finalConfigs.any { it.id == currentSelectedConfig.id }
-                ) {
-                    val newSelection = finalConfigs.firstOrNull {
-                        it.key == config.key &&
-                        it.provider == config.provider &&
-                        it.address == config.address &&
-                        it.channel == config.channel
-                    }
-                    stateHolder._selectedApiConfig.value = newSelection
-                    persistenceManager.saveSelectedConfigIdentifier(newSelection?.id)
-                }
-
-                showSnackbar("刷新成功，获取到 ${models.size} 个模型")
+                modelFetchManager.setFetchedModels(models)
+                stateHolder._pendingConfigParams.value = com.android.everytalk.statecontroller.PendingConfigParams(
+                    provider = config.provider,
+                    address = config.address,
+                    key = config.key,
+                    channel = config.channel,
+                    isImageGen = isImageGen,
+                    enableCodeExecution = config.enableCodeExecution,
+                    toolsJson = config.toolsJson,
+                    isRefresh = true
+                )
+                stateHolder._showModelSelectionDialog.value = true
             } catch (e: Exception) {
                 Log.e("ModelAndConfig", "刷新模型失败", e)
                 showSnackbar("刷新模型失败: ${e.message}")
             } finally {
                 modelFetchManager.removeRefreshingModel(refreshId)
             }
+        }
+    }
+
+    fun replaceModelsForConfigGroup(params: com.android.everytalk.statecontroller.PendingConfigParams, modelNames: List<String>) {
+        scope.launch {
+            val currentConfigs = if (params.isImageGen) {
+                stateHolder._imageGenApiConfigs.value
+            } else {
+                stateHolder._apiConfigs.value
+            }
+            val configsToKeep = currentConfigs.filterNot {
+                it.key == params.key &&
+                it.provider == params.provider &&
+                it.address == params.address &&
+                it.channel == params.channel
+            }
+
+            val newConfigs = modelNames.map { modelName ->
+                ApiConfig(
+                    address = params.address,
+                    key = params.key,
+                    model = modelName,
+                    provider = params.provider,
+                    name = modelName,
+                    id = UUID.randomUUID().toString(),
+                    isValid = true,
+                    modalityType = if (params.isImageGen) {
+                        com.android.everytalk.data.DataClass.ModalityType.IMAGE
+                    } else {
+                        com.android.everytalk.data.DataClass.ModalityType.TEXT
+                    },
+                    channel = params.channel,
+                    enableCodeExecution = params.enableCodeExecution,
+                    toolsJson = params.toolsJson
+                )
+            }
+            val finalConfigs = configsToKeep + newConfigs
+
+            if (params.isImageGen) {
+                stateHolder._imageGenApiConfigs.value = finalConfigs
+            } else {
+                stateHolder._apiConfigs.value = finalConfigs
+            }
+            persistenceManager.saveApiConfigs(finalConfigs, params.isImageGen)
+
+            val currentSelectedConfig = if (params.isImageGen) {
+                stateHolder._selectedImageGenApiConfig.value
+            } else {
+                stateHolder._selectedApiConfig.value
+            }
+            if (currentSelectedConfig != null &&
+                currentSelectedConfig.key == params.key &&
+                currentSelectedConfig.provider == params.provider &&
+                currentSelectedConfig.address == params.address &&
+                currentSelectedConfig.channel == params.channel &&
+                !finalConfigs.any { it.id == currentSelectedConfig.id }
+            ) {
+                val newSelection = finalConfigs.firstOrNull {
+                    it.key == params.key &&
+                    it.provider == params.provider &&
+                    it.address == params.address &&
+                    it.channel == params.channel
+                }
+                if (params.isImageGen) {
+                    stateHolder._selectedImageGenApiConfig.value = newSelection
+                } else {
+                    stateHolder._selectedApiConfig.value = newSelection
+                }
+                persistenceManager.saveSelectedConfigIdentifier(newSelection?.id, params.isImageGen)
+            }
+
+            showSnackbar("刷新成功，已更新 ${modelNames.size} 个模型")
         }
     }
 }

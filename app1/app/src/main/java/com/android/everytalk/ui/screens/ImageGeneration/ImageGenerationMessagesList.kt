@@ -167,7 +167,8 @@ fun ImageGenerationMessagesList(
     scrollStateManager: ChatScrollStateManager,
     bubbleMaxWidth: Dp,
     onShowAiMessageOptions: (Message) -> Unit,
-    onImageLoaded: () -> Unit
+    onImageLoaded: () -> Unit,
+    additionalBottomPadding: Dp = 0.dp
 ) {
     val haptic = LocalHapticFeedback.current
     val coroutineScope = rememberCoroutineScope()
@@ -331,7 +332,12 @@ fun ImageGenerationMessagesList(
                 modifier = Modifier
                     .fillMaxSize()
                     .nestedScroll(scrollStateManager.nestedScrollConnection),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                contentPadding = PaddingValues(
+                    start = 16.dp,
+                    end = 16.dp,
+                    top = 85.dp,
+                    bottom = additionalBottomPadding + 8.dp
+                ),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 itemsIndexed(

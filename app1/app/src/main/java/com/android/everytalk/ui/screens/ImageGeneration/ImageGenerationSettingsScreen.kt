@@ -29,6 +29,8 @@ import com.android.everytalk.ui.screens.settings.DialogTextFieldColors
 import com.android.everytalk.ui.screens.settings.DialogShape
 import com.android.everytalk.ui.screens.settings.SettingsDefaults
 import com.android.everytalk.ui.screens.settings.SettingsFieldLabel
+import com.android.everytalk.ui.screens.settings.dialogs.AutoFetchModelsConfirmDialog
+import com.android.everytalk.ui.screens.settings.dialogs.ModelSelectionDialog
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -48,6 +50,8 @@ fun ImageGenerationSettingsScreen(
     val isFetchingModels by viewModel.isFetchingModels.collectAsState()
     val fetchedModels by viewModel.fetchedModels.collectAsState()
     val isRefreshingModels by viewModel.isRefreshingModels.collectAsState()
+    val showAutoFetchConfirm by viewModel.showAutoFetchConfirmDialog.collectAsState()
+    val showModelSelection by viewModel.showModelSelectionDialog.collectAsState()
 
     // 固定为图像模式的配置分组
     val apiConfigsByApiKeyAndModality = remember(savedConfigs) {
@@ -81,6 +85,11 @@ fun ImageGenerationSettingsScreen(
     var addModelToKeyTargetChannel by remember { mutableStateOf("") }
     var addModelToKeyTargetModality by remember { mutableStateOf(ModalityType.IMAGE) }
     var addModelToKeyNewModelName by remember { mutableStateOf("") }
+    var showManualModelInputDialog by remember { mutableStateOf(false) }
+    var manualModelInputProvider by remember { mutableStateOf("") }
+    var manualModelInputAddress by remember { mutableStateOf("") }
+    var manualModelInputKey by remember { mutableStateOf("") }
+    var manualModelInputChannel by remember { mutableStateOf("") }
 
     var showAddCustomProviderDialog by remember { mutableStateOf(false) }
     var newCustomProviderNameInput by remember { mutableStateOf("") }
@@ -91,6 +100,18 @@ fun ImageGenerationSettingsScreen(
     var configToEdit by remember { mutableStateOf<ApiConfig?>(null) }
     var showConfirmDeleteProviderDialog by remember { mutableStateOf(false) }
     var providerToDelete by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        viewModel.showManualModelInputRequest.collect { request ->
+            if (request.isImageGen) {
+                manualModelInputProvider = request.provider
+                manualModelInputAddress = request.address
+                manualModelInputKey = request.key
+                manualModelInputChannel = request.channel
+                showManualModelInputDialog = true
+            }
+        }
+    }
+
     LaunchedEffect(savedConfigs, selectedConfigForApp) {
         // 固定使用图像配置选择逻辑
         val currentSelected = selectedConfigForApp
@@ -145,8 +166,7 @@ fun ImageGenerationSettingsScreen(
                 val initialProvider = "默认"
                 newFullConfigProvider = initialProvider
                 newFullConfigKey = ""
-                val providerKey = initialProvider.lowercase().trim()
-                newFullConfigAddress = SettingsDefaults.imageDefaultApiAddresses[providerKey] ?: ""
+                newFullConfigAddress = SettingsDefaults.imageDefaultApiAddressFor(initialProvider)
                 showAddFullConfigDialog = true
             },
             onSelectConfig = { configToSelect ->
@@ -184,8 +204,7 @@ fun ImageGenerationSettingsScreen(
             provider = newFullConfigProvider,
             onProviderChange = { selectedProvider ->
                 newFullConfigProvider = selectedProvider
-                val providerKey = selectedProvider.lowercase().trim()
-                newFullConfigAddress = SettingsDefaults.imageDefaultApiAddresses[providerKey] ?: ""
+                newFullConfigAddress = SettingsDefaults.imageDefaultApiAddressFor(selectedProvider)
             },
             allProviders = SettingsDefaults.imageDefaultApiAddresses.keys.toList().filter { it !in listOf("默认", "default") },
             onShowAddCustomProviderDialog = { showAddCustomProviderDialog = true },
@@ -223,7 +242,8 @@ fun ImageGenerationSettingsScreen(
                    viewModel.clearFetchedModels()
                } else if (pLower in listOf("硅基流动","siliconflow") && key.isBlank() && address.isBlank()) {
                    // 新增：硅基流动默认配置（使用预设地址，便于快速添加）
-                   val defaultAddr = SettingsDefaults.imageDefaultApiAddresses[pLower] ?: "https://api.siliconflow.cn/v1/images/generations"
+                   val defaultAddr = SettingsDefaults.imageDefaultApiAddressFor(providerTrim)
+                       .ifBlank { "https://api.siliconflow.cn/v1/images/generations" }
                    val config = ApiConfig(
                        id = java.util.UUID.randomUUID().toString(),
                        name = "SiliconFlow (默认)",
@@ -239,24 +259,31 @@ fun ImageGenerationSettingsScreen(
                    showAddFullConfigDialog = false
                    viewModel.clearFetchedModels()
                } else if (key.isNotBlank() && providerTrim.isNotBlank() && address.isNotBlank()) {
-                   pendingFullConfig = ApiConfig(
-                       address = address,
-                       key = key,
-                       model = "",
-                       provider = providerTrim,
-                       name = "",
-                       channel = channel,
-                       modalityType = ModalityType.IMAGE,
-                       imageSize = imageSize,
-                       numInferenceSteps = numInferenceSteps,
-                       guidanceScale = guidanceScale
-                   )
+                   viewModel.startAddConfigFlow(providerTrim, address, key, channel, isImageGen = true)
                    showAddFullConfigDialog = false
-                   showAddModelNameDialog = true
-                   viewModel.clearFetchedModels()
                }
            },
            isImageMode = true
+        )
+    }
+
+    if (showManualModelInputDialog) {
+        AddImageModelToKeyDialog(
+            onDismissRequest = { showManualModelInputDialog = false },
+            onConfirm = { modelName ->
+                val config = ApiConfig(
+                    id = UUID.randomUUID().toString(),
+                    address = manualModelInputAddress,
+                    key = manualModelInputKey,
+                    model = modelName,
+                    provider = manualModelInputProvider,
+                    name = modelName,
+                    modalityType = ModalityType.IMAGE,
+                    channel = manualModelInputChannel
+                )
+                viewModel.addConfig(config, isImageGen = true)
+                showManualModelInputDialog = false
+            }
         )
     }
 
@@ -301,6 +328,26 @@ fun ImageGenerationSettingsScreen(
         )
     }
 
+    if (showAutoFetchConfirm) {
+        AutoFetchModelsConfirmDialog(
+            showDialog = true,
+            onDismiss = { viewModel.dismissAutoFetchConfirmDialog() },
+            onConfirmAutoFetch = { viewModel.onConfirmAutoFetch() },
+            onManualInput = { viewModel.onManualInput() }
+        )
+    }
+
+    if (showModelSelection) {
+        ModelSelectionDialog(
+            showDialog = true,
+            models = fetchedModels,
+            onDismiss = { viewModel.dismissModelSelectionDialog() },
+            onSelectAll = { viewModel.onSelectAllModels() },
+            onSelectModels = { selected -> viewModel.onSelectModels(selected) },
+            onManualInput = { viewModel.onManualInput() }
+        )
+    }
+
     if (showAddCustomProviderDialog) {
         AddProviderDialog(
             newProviderName = newCustomProviderNameInput,
@@ -317,10 +364,7 @@ fun ImageGenerationSettingsScreen(
                     viewModel.addProvider(trimmedName)
                     if (showAddFullConfigDialog) {
                         newFullConfigProvider = trimmedName
-                        val providerKey = trimmedName.lowercase().trim()
-                        newFullConfigAddress = SettingsDefaults.imageDefaultApiAddresses[providerKey]
-                            ?: SettingsDefaults.imageDefaultApiAddresses[providerKey.replace(" ", "")]
-                            ?: ""
+                        newFullConfigAddress = SettingsDefaults.imageDefaultApiAddressFor(trimmedName)
                     }
                     showAddCustomProviderDialog = false
                     newCustomProviderNameInput = ""
@@ -350,7 +394,8 @@ fun ImageGenerationSettingsScreen(
                 )
                 showEditConfigDialog = false
                 configToEdit = null
-            }
+            },
+            isImageMode = true
         )
     }
 
@@ -366,8 +411,7 @@ fun ImageGenerationSettingsScreen(
                 if (newFullConfigProvider == providerNameToDelete) {
                     val nextDefaultProvider = viewModel.allProviders.value.firstOrNull() ?: "openai compatible"
                     newFullConfigProvider = nextDefaultProvider
-                    val providerKey = nextDefaultProvider.lowercase().trim()
-                    newFullConfigAddress = SettingsDefaults.imageDefaultApiAddresses[providerKey] ?: ""
+                    newFullConfigAddress = SettingsDefaults.imageDefaultApiAddressFor(nextDefaultProvider)
                 }
                 showConfirmDeleteProviderDialog = false
                 providerToDelete = null

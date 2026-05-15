@@ -616,8 +616,8 @@ private fun ApiKeyItemGroup(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    // 默认配置和图像模式都不显示刷新按钮
-                    if (modalityType != ModalityType.IMAGE && !isPinnedGroup) {
+                    // 默认配置和不可展开模型组不显示刷新按钮
+                    if (!isPinnedGroup && canExpandModels) {
                         if (isRefreshing) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(20.dp),

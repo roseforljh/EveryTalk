@@ -54,7 +54,8 @@ data class PendingConfigParams(
     val channel: String,
     val isImageGen: Boolean,
     val enableCodeExecution: Boolean? = null,
-    val toolsJson: String? = null
+    val toolsJson: String? = null,
+    val isRefresh: Boolean = false
 )
 
 @Serializable

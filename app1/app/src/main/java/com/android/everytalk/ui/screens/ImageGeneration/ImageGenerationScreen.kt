@@ -14,6 +14,7 @@ import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
@@ -55,6 +56,8 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
     val focusRequester = remember { FocusRequester() }
     val imeInsets = WindowInsets.ime
     val density = LocalDensity.current
+    var inputAreaHeightPx by remember { mutableIntStateOf(0) }
+    val inputAreaHeightDp = with(density) { inputAreaHeightPx.toDp() }
     val keyboardController = LocalSoftwareKeyboardController.current
     val listState = remember { androidx.compose.foundation.lazy.LazyListState() }
     val scrollStateManager = rememberChatScrollStateManager(listState, coroutineScope)
@@ -214,8 +217,89 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
-        contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
-        topBar = {
+        contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
+    ) { paddingValues ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+        ) {
+            ImageGenerationMessagesList(
+                chatItems = imageGenerationChatListItems,
+                viewModel = viewModel,
+                listState = listState,
+                scrollStateManager = scrollStateManager,
+                bubbleMaxWidth = bubbleMaxWidth,
+                onShowAiMessageOptions = { msg ->
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    selectedMessageForOptions = msg
+                    showImageMessageOptionsBottomSheet = true
+                },
+                onImageLoaded = {
+                    if (scrollStateManager.isAtBottom.value) {
+                        scrollStateManager.jumpToBottom()
+                    }
+                },
+                additionalBottomPadding = inputAreaHeightDp
+            )
+
+            ScrollToBottomButton(
+                scrollStateManager = scrollStateManager,
+                bottomPadding = inputAreaHeightDp + 24.dp,
+                endPadding = 16.dp
+            )
+
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.BottomCenter
+            ) {
+                ImageGenerationInputArea(
+                    text = text,
+                    onTextChange = { viewModel.onTextChange(it) },
+                    onSendMessageRequest = { messageText, attachments ->
+                        viewModel.onSendMessage(
+                            messageText = messageText,
+                            attachments = attachments,
+                            isImageGeneration = true
+                        )
+                        keyboardController?.hide()
+                    },
+                    selectedMediaItems = selectedMediaItems,
+                    onAddMediaItem = { viewModel.addMediaItem(it) },
+                    onRemoveMediaItemAtIndex = { viewModel.removeMediaItemAtIndex(it) },
+                    onClearMediaItems = { viewModel.clearMediaItems() },
+                    isApiCalling = isApiCalling,
+                    onStopApiCall = { viewModel.onCancelAPICall() },
+                    focusRequester = focusRequester,
+                    selectedApiConfig = selectedApiConfig,
+                    onShowSnackbar = { viewModel.showSnackbar(it) },
+                    imeInsets = imeInsets,
+                    density = density,
+                    keyboardController = keyboardController,
+                    onFocusChange = {
+                        if (!justClosedEditDialog) {
+                            scrollStateManager.jumpToBottom()
+                        }
+                    },
+                    selectedImageRatio = selectedImageRatio,
+                    onImageRatioChanged = { viewModel.stateHolder._selectedImageRatio.value = it },
+                    currentImageSteps = selectedApiConfig?.numInferenceSteps,
+                    onChangeImageSteps = { steps ->
+                        viewModel.updateImageNumInferenceStepsForSelectedConfig(steps)
+                    },
+                    currentImageGuidance = selectedApiConfig?.guidanceScale,
+                    onChangeImageParams = { steps, guidance ->
+                        viewModel.updateImageGenerationParamsForSelectedConfig(steps, guidance)
+                    },
+                    onGeminiImageSizeChanged = { size ->
+                        viewModel.updateGeminiImageSizeForSelectedConfig(size)
+                    },
+                    currentGptImageQuality = gptImageQuality,
+                    onGptImageQualityChanged = { viewModel.stateHolder._gptImageQuality.value = it },
+                    onHeightChange = { height -> inputAreaHeightPx = height }
+                )
+            }
+
             AppTopBar(
                 selectedConfigName = selectedApiConfig?.name?.takeIf { it.isNotBlank() }
                     ?: selectedApiConfig?.model ?: "选择配置",
@@ -227,85 +311,6 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                 onSystemPromptClick = {},
                 systemPrompt = "",
                 isSystemPromptExpanded = false
-            )
-        }
-    ) { paddingValues ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-        ) {
-            Box(modifier = Modifier.weight(1f)) {
-                // 移除 Crossfade 以避免编辑消息时因状态更新导致的列表重组和滚动丢失
-                // 直接展示列表，确保 LazyColumn 状态稳定性
-                ImageGenerationMessagesList(
-                    chatItems = imageGenerationChatListItems,
-                    viewModel = viewModel,
-                    listState = listState,
-                    scrollStateManager = scrollStateManager,
-                    bubbleMaxWidth = bubbleMaxWidth,
-                    onShowAiMessageOptions = { msg ->
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        selectedMessageForOptions = msg
-                        showImageMessageOptionsBottomSheet = true
-                    },
-                    onImageLoaded = {
-                        if (scrollStateManager.isAtBottom.value) {
-                            scrollStateManager.jumpToBottom()
-                        }
-                    },
-                )
-
-                // 复用文本模式的“返回底部”按钮，悬浮于列表右下角
-                ScrollToBottomButton(
-                    scrollStateManager = scrollStateManager,
-                    bottomPadding = 24.dp,
-                    endPadding = 16.dp
-                )
-            }
-            ImageGenerationInputArea(
-                text = text,
-                onTextChange = { viewModel.onTextChange(it) },
-                onSendMessageRequest = { messageText, attachments ->
-                    viewModel.onSendMessage(
-                        messageText = messageText,
-                        attachments = attachments,
-                        isImageGeneration = true
-                    )
-                    keyboardController?.hide()
-                },
-                selectedMediaItems = selectedMediaItems,
-                onAddMediaItem = { viewModel.addMediaItem(it) },
-                onRemoveMediaItemAtIndex = { viewModel.removeMediaItemAtIndex(it) },
-                onClearMediaItems = { viewModel.clearMediaItems() },
-                isApiCalling = isApiCalling,
-                onStopApiCall = { viewModel.onCancelAPICall() },
-                focusRequester = focusRequester,
-                selectedApiConfig = selectedApiConfig,
-                onShowSnackbar = { viewModel.showSnackbar(it) },
-                imeInsets = imeInsets,
-                density = density,
-                keyboardController = keyboardController,
-                onFocusChange = {
-                    if (!justClosedEditDialog) {
-                        scrollStateManager.jumpToBottom()
-                    }
-                },
-                selectedImageRatio = selectedImageRatio,
-                onImageRatioChanged = { viewModel.stateHolder._selectedImageRatio.value = it },
-                currentImageSteps = selectedApiConfig?.numInferenceSteps,
-                onChangeImageSteps = { steps ->
-                    viewModel.updateImageNumInferenceStepsForSelectedConfig(steps)
-                },
-                currentImageGuidance = selectedApiConfig?.guidanceScale,
-                onChangeImageParams = { steps, guidance ->
-                    viewModel.updateImageGenerationParamsForSelectedConfig(steps, guidance)
-                },
-                onGeminiImageSizeChanged = { size ->
-                    viewModel.updateGeminiImageSizeForSelectedConfig(size)
-                },
-                currentGptImageQuality = gptImageQuality,
-                onGptImageQualityChanged = { viewModel.stateHolder._gptImageQuality.value = it }
             )
         }
     }

@@ -42,9 +42,16 @@ object SettingsDefaults {
     val imageDefaultApiAddresses: Map<String, String> = mapOf(
         "SiliconFlow" to "https://api.siliconflow.cn/v1/images/generations",
         "OpenAI Compatible" to "",
-        "Gemini" to "",
+        "Google" to "",
         "SeeDream" to "https://ark.cn-beijing.volces.com/api/v3/images/generations"
     )
+    fun imageDefaultApiAddressFor(provider: String): String {
+        val normalized = provider.trim().lowercase().replace(" ", "")
+        val lookupKey = if (normalized == "gemini") "google" else normalized
+        return imageDefaultApiAddresses.entries.firstOrNull {
+            it.key.trim().lowercase().replace(" ", "") == lookupKey
+        }?.value ?: ""
+    }
     // 文本模式默认地址
     val textDefaultApiAddresses: Map<String, String> = mapOf(
         "硅基流动" to "https://api.siliconflow.cn",
@@ -458,7 +465,7 @@ fun SettingsScreen(
                 newFullConfigProvider = selectedProvider
                 val providerKey = selectedProvider.lowercase().trim()
                 newFullConfigAddress = if (isInImageMode)
-                    SettingsDefaults.imageDefaultApiAddresses[providerKey] ?: ""
+                    SettingsDefaults.imageDefaultApiAddressFor(providerKey)
                 else
                     SettingsDefaults.textDefaultApiAddresses[providerKey] ?: ""
             },
@@ -634,10 +641,7 @@ fun SettingsScreen(
                     viewModel.addProvider(trimmedName)
                     if (showAddFullConfigDialog) {
                         newFullConfigProvider = trimmedName
-                        val providerKey = trimmedName.lowercase().trim()
-                        newFullConfigAddress = SettingsDefaults.imageDefaultApiAddresses[providerKey]
-                            ?: SettingsDefaults.imageDefaultApiAddresses[providerKey.replace(" ", "")]
-                            ?: ""
+                        newFullConfigAddress = SettingsDefaults.imageDefaultApiAddressFor(trimmedName)
                     }
                     showAddCustomProviderDialog = false
                     newCustomProviderNameInput = ""
@@ -667,7 +671,8 @@ fun SettingsScreen(
                 )
                 showEditConfigDialog = false
                 configToEdit = null
-            }
+            },
+            isImageMode = isInImageMode
         )
     }
 
@@ -683,8 +688,7 @@ fun SettingsScreen(
                 if (newFullConfigProvider == providerNameToDelete) {
                     val nextDefaultProvider = viewModel.allProviders.value.firstOrNull() ?: "openai compatible"
                     newFullConfigProvider = nextDefaultProvider
-                    val providerKey = nextDefaultProvider.lowercase().trim()
-                    newFullConfigAddress = SettingsDefaults.imageDefaultApiAddresses[providerKey] ?: ""
+                    newFullConfigAddress = SettingsDefaults.imageDefaultApiAddressFor(nextDefaultProvider)
                 }
                 showConfirmDeleteProviderDialog = false
                 providerToDelete = null
