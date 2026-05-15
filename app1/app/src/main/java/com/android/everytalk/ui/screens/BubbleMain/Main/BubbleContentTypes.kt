@@ -363,11 +363,11 @@ fun AttachmentsContent(
                         coil3.compose.AsyncImage(
                             model = imageModel,
                             contentDescription = "Image attachment",
-                            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                            contentScale = androidx.compose.ui.layout.ContentScale.Fit,
                             onSuccess = { onImageLoaded() },
                             modifier = Modifier
-                                .height(imageStripHeight)
-                                .widthIn(min = 80.dp, max = 160.dp)
+                                .size(imageStripHeight)
+                                .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
                                 .clip(RoundedCornerShape(12.dp))
                                 .onGloballyPositioned { imageGlobalPosition = it.localToRoot(Offset.Zero) }
                                 .pointerInput(message.id, idx) {

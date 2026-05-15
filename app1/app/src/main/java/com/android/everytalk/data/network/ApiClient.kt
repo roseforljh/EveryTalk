@@ -891,12 +891,29 @@ object ApiClient {
                         ImageGenerationDirectClient.generateImageSeedream(client, effectiveImgReq)
                     }
                 }
-                else -> ImageGenerationDirectClient.generateImageOpenAI(client, effectiveImgReq)
+                else -> {
+                    val inputImages = extractInputImages(chatRequest)
+                    if (inputImages.isNotEmpty() && supportsOpenAIImageEdit(effectiveImgReq.model)) {
+                        android.util.Log.i("ApiClient", "🔄 OpenAI 图像编辑模式: 检测到 ${inputImages.size} 张输入图片")
+                        ImageGenerationDirectClient.generateImageOpenAIWithReference(
+                            client, effectiveImgReq, inputImages
+                        )
+                    } else {
+                        ImageGenerationDirectClient.generateImageOpenAI(client, effectiveImgReq)
+                    }
+                }
             }
         } catch (e: Exception) {
             android.util.Log.e("ApiClient", "❌ 图像生成直连失败", e)
             throw IOException("图像生成直连失败: ${e.message}", e)
         }
+    }
+
+    private fun supportsOpenAIImageEdit(model: String): Boolean {
+        val normalized = model.lowercase()
+        return normalized.contains("gpt-image") ||
+            normalized.contains("chatgpt-image") ||
+            normalized.contains("dall-e-2")
     }
 
     /**

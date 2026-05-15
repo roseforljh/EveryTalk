@@ -217,10 +217,14 @@ fun ImageSelectionPanel(
                         .padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    val iconTint = when (option) {
+                        ImageSourceOption.ALBUM -> Color(0xff2cb334)
+                        ImageSourceOption.CAMERA -> Color(0xff2196F3)
+                    }
                     Icon(
                         imageVector = option.icon,
                         contentDescription = option.label,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        tint = iconTint,
                         modifier = Modifier.size(24.dp)
                     )
                     Spacer(Modifier.width(12.dp))

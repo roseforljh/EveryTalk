@@ -10,6 +10,7 @@ import com.android.everytalk.ui.components.ImageGenCapabilities
 import io.ktor.client.*
 import io.ktor.client.plugins.timeout
 import io.ktor.client.request.*
+import io.ktor.client.request.forms.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
 import kotlinx.serialization.json.*
@@ -100,6 +101,65 @@ object ImageGenerationDirectClient {
             throw Exception("OpenAI 图像生成错误 ${response.status}: $errorBody")
         }
         
+        return parseOpenAIImageResponse(response.bodyAsText())
+    }
+
+    /**
+     * 直连 OpenAI 兼容图像编辑 API
+     * 官方 GPT Image 编辑接口使用 multipart/form-data: /v1/images/edits
+     */
+    suspend fun generateImageOpenAIWithReference(
+        client: HttpClient,
+        request: ImageGenRequest,
+        inputImages: List<Pair<String, String>>
+    ): ImageGenerationResponse {
+        Log.i(TAG, "🔄 启动 OpenAI 兼容图像编辑直连模式")
+
+        if (inputImages.isEmpty()) {
+            throw Exception("OpenAI 图像编辑需要提供输入图片")
+        }
+
+        val rawAddress = request.apiAddress.trimEnd('/').takeIf { it.isNotBlank() }
+            ?: com.android.everytalk.BuildConfig.DEFAULT_OPENAI_API_BASE_URL.trimEnd('/').takeIf { it.isNotBlank() }
+            ?: "https://api.openai.com"
+
+        val url = when {
+            rawAddress.endsWith("/v1/images/edits") || rawAddress.endsWith("/images/edits") -> rawAddress
+            rawAddress.endsWith("/v1/images/generations") -> rawAddress.removeSuffix("/generations") + "/edits"
+            rawAddress.endsWith("/images/generations") -> rawAddress.removeSuffix("/generations") + "/edits"
+            else -> "$rawAddress/v1/images/edits"
+        }
+
+        Log.d(TAG, "直连 URL: $url")
+
+        val response = client.post(url) {
+            header(HttpHeaders.Authorization, "Bearer ${request.apiKey}")
+            setBody(MultiPartFormDataContent(formData {
+                append("model", request.model)
+                append("prompt", request.prompt.takeIf { it.isNotBlank() } ?: "Edit this image")
+                request.imageSize?.takeIf { it.isNotBlank() }?.let { append("size", it) }
+                request.batchSize?.let { append("n", it.toString()) }
+                request.quality?.takeIf { it.isNotBlank() }?.let { append("quality", it) }
+                inputImages.forEachIndexed { index, (base64, mimeType) ->
+                    val bytes = Base64.decode(base64, Base64.DEFAULT)
+                    append(
+                        key = "image[]",
+                        value = bytes,
+                        headers = Headers.build {
+                            append(HttpHeaders.ContentType, mimeType)
+                            append(HttpHeaders.ContentDisposition, "filename=\"image_$index.${extensionForMime(mimeType)}\"")
+                        }
+                    )
+                }
+            }))
+        }
+
+        if (!response.status.isSuccess()) {
+            val errorBody = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
+            Log.e(TAG, "OpenAI 图像编辑错误 ${response.status}: $errorBody")
+            throw Exception("OpenAI 图像编辑错误 ${response.status}: $errorBody")
+        }
+
         return parseOpenAIImageResponse(response.bodyAsText())
     }
 
@@ -624,6 +684,13 @@ object ImageGenerationDirectClient {
             request.numInferenceSteps?.let { put("num_inference_steps", it) }
             request.guidanceScale?.let { put("guidance_scale", it) }
         }.toString()
+    }
+
+    private fun extensionForMime(mimeType: String): String = when (mimeType.lowercase()) {
+        "image/png" -> "png"
+        "image/webp" -> "webp"
+        "image/jpeg", "image/jpg" -> "jpg"
+        else -> "png"
     }
 
     private fun buildSeedreamPayload(request: ImageGenRequest): String {

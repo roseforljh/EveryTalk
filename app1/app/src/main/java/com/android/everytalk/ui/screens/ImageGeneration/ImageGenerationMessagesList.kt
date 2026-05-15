@@ -187,6 +187,7 @@ fun ImageGenerationMessagesList(
     // 图片预览对话框状态
     var isImagePreviewVisible by remember { mutableStateOf(false) }
     var imagePreviewModel by remember { mutableStateOf<Any?>(null) }
+    var imagePreviewModels by remember { mutableStateOf<List<Any>>(emptyList()) }
 
     // 收集当前会话中所有 AI 生成的图片 URL（用于左右滑动切换）
     val allImageUrls = remember(chatItems) {
@@ -395,10 +396,12 @@ fun ImageGenerationMessagesList(
                                                             } else {
                                                                 att.uri
                                                             }
+                                                            imagePreviewModels = listOfNotNull(imagePreviewModel)
                                                             isImagePreviewVisible = true
                                                         }
                                                         is com.android.everytalk.models.SelectedMediaItem.ImageFromBitmap -> {
                                                             imagePreviewModel = att.bitmap
+                                                            imagePreviewModels = listOfNotNull(imagePreviewModel)
                                                             isImagePreviewVisible = true
                                                         }
                                                         else -> { /* 其他类型暂不预览 */ }
@@ -421,6 +424,7 @@ fun ImageGenerationMessagesList(
                                                 scrollStateManager = scrollStateManager,
                                                 onImageClick = { url ->
                                                     imagePreviewModel = url
+                                                    imagePreviewModels = listOf(url)
                                                     isImagePreviewVisible = true
                                                 }
                                             )
@@ -486,6 +490,7 @@ fun ImageGenerationMessagesList(
                                         }
 
                                         currentImageIndex = if (index >= 0) index else 0
+                                        imagePreviewModels = if (allImageUrls.isNotEmpty()) allImageUrls else listOf(model)
                                         isImagePreviewVisible = true
                                     },
                                     isStreaming = currentStreamingId == message.id,
@@ -618,6 +623,7 @@ fun ImageGenerationMessagesList(
                     val firstUrl = msg.imageUrls?.firstOrNull()
                     if (!firstUrl.isNullOrBlank()) {
                         imagePreviewModel = firstUrl // 可为 String 或 Uri，AsyncImage 都支持
+                        imagePreviewModels = if (allImageUrls.isNotEmpty()) allImageUrls else listOf(firstUrl)
                         isImagePreviewVisible = true
                     }
                     isImageMenuVisible = false
@@ -630,7 +636,7 @@ fun ImageGenerationMessagesList(
         }
 
         // 全屏黑底图片预览（图1风格）+ 手势缩放 + 保存/分享 + 左右滑动切换
-        if (isImagePreviewVisible && allImageUrls.isNotEmpty()) {
+        if (isImagePreviewVisible && imagePreviewModels.isNotEmpty()) {
             val context = LocalContext.current
             val scope = rememberCoroutineScope()
             // 当前选中的图像生成配置（用于附加鉴权/来源头）
@@ -640,14 +646,14 @@ fun ImageGenerationMessagesList(
 
             // HorizontalPager 状态
             val pagerState = rememberPagerState(
-                initialPage = currentImageIndex.coerceIn(0, allImageUrls.lastIndex.coerceAtLeast(0)),
-                pageCount = { allImageUrls.size }
+                initialPage = currentImageIndex.coerceIn(0, imagePreviewModels.lastIndex.coerceAtLeast(0)),
+                pageCount = { imagePreviewModels.size }
             )
 
             // 当 pager 页面变化时，同步更新 imagePreviewModel
             LaunchedEffect(pagerState.currentPage) {
-                if (pagerState.currentPage in allImageUrls.indices) {
-                    imagePreviewModel = allImageUrls[pagerState.currentPage]
+                if (pagerState.currentPage in imagePreviewModels.indices) {
+                    imagePreviewModel = imagePreviewModels[pagerState.currentPage]
                     currentImageIndex = pagerState.currentPage
                 }
             }
@@ -1219,14 +1225,14 @@ fun ImageGenerationMessagesList(
                             userScrollEnabled = scale == 1f, // 仅在未缩放时允许滑动
                             beyondViewportPageCount = 1
                         ) { page ->
-                            val currentUrl = allImageUrls.getOrNull(page)
+                            val currentUrl = imagePreviewModels.getOrNull(page)
                             Box(
                                 modifier = Modifier.fillMaxSize(),
                                 contentAlignment = Alignment.Center
                             ) {
                                 AsyncImage(
                                     model = currentUrl,
-                                    contentDescription = "预览图片 ${page + 1}/${allImageUrls.size}",
+                                    contentDescription = "预览图片 ${page + 1}/${imagePreviewModels.size}",
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .combinedClickable(
@@ -1247,9 +1253,9 @@ fun ImageGenerationMessagesList(
                         }
 
                         // 页码指示器（仅当有多张图片时显示）
-                        if (allImageUrls.size > 1) {
+                        if (imagePreviewModels.size > 1) {
                             Text(
-                                text = "${pagerState.currentPage + 1} / ${allImageUrls.size}",
+                                text = "${pagerState.currentPage + 1} / ${imagePreviewModels.size}",
                                 color = Color.White.copy(alpha = 0.8f),
                                 style = MaterialTheme.typography.bodyMedium,
                                 modifier = Modifier
