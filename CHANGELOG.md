@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.17.1](https://github.com/roseforljh/EveryTalk/compare/v1.17.0...v1.17.1) (2026-05-15)
+
+
+### Bug Fixes
+
+* gpt-image-2图像编辑 ([9461dd2](https://github.com/roseforljh/EveryTalk/commit/9461dd29659fb092fed338c79cd6366de6334352))
+* 优化图像模式输入框区域 ([8b7ced5](https://github.com/roseforljh/EveryTalk/commit/8b7ced57a9d2b353cb70a3c1600ab3f3c4d0bb97))
+* 优化图像配置模型获取流程 ([db48ff2](https://github.com/roseforljh/EveryTalk/commit/db48ff275fec3ee75404dc5a7ca76c8d401fa619))
+* 修复 Gemini 兼容流结束误报 ([92b9c61](https://github.com/roseforljh/EveryTalk/commit/92b9c61faa4ffd7c36d8f032e2143d41a53656bb))
+* 删除所有默认免费模型 ([b735983](https://github.com/roseforljh/EveryTalk/commit/b735983797771b187c71ae4b42c19b6980cb6929))
+* 参数补充 ([cffebcd](https://github.com/roseforljh/EveryTalk/commit/cffebcd70de0a5a76603489a88234816ad702c38))
+* 图片预览多图滑动+缩放+动画；文本模式图片预览对齐；图像模式加载动画文本滚动 ([a8bcc6f](https://github.com/roseforljh/EveryTalk/commit/a8bcc6f5c003e0ff9d44a48a4332fc3b82862faa))
+* 图片预览支持全会话滑动、双指缩放、边界约束、丝滑动画；GPT-IMAGE编辑auto不传size ([25b4635](https://github.com/roseforljh/EveryTalk/commit/25b463547cb083ab23b0ad59d96c31a50fd11d59))
+* 文本模式图片操作优化、图像模式置顶逻辑优化 ([91400e0](https://github.com/roseforljh/EveryTalk/commit/91400e06bad609f5255b163ce40d23dab662351b))
+* 适配了gpt-iamge-2模型 ([9ed3664](https://github.com/roseforljh/EveryTalk/commit/9ed36644dc89d39165a11c9056b1a3af73cb306d))
+
 ## [1.17.0](https://github.com/roseforljh/EveryTalk/compare/v1.16.1...v1.17.0) (2026-05-12)
 
 
