@@ -18,6 +18,14 @@ class WebSearchSupportTest {
     }
 
     @Test
+    fun `prefixed gemini model is recognized in openai compatible channel`() {
+        val config = createConfig(channel = "OpenAI兼容", model = "custom-12newapi/gemini-3-flash-preview")
+
+        assertTrue(WebSearchSupport.isGeminiModel(config))
+        assertFalse(WebSearchSupport.supportsNativeWebSearch(config))
+    }
+
+    @Test
     fun `qwen model supports native web search`() {
         val config = createConfig(channel = "OpenAI兼容", model = "qwen-max")
 

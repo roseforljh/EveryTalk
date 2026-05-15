@@ -51,6 +51,14 @@ class ProviderSelectionTest {
         assertFalse(geminiProvider.canHandle(request))
         assertTrue(openAIProvider.canHandle(request))
     }
+
+    @Test
+    fun `prefixed gemini model in openai channel uses openai provider`() {
+        val request = createRequest(channel = "openai-compatible", model = "custom-12newapi/gemini-3-flash-preview")
+
+        assertFalse(geminiProvider.canHandle(request))
+        assertTrue(openAIProvider.canHandle(request))
+    }
     
     @Test
     fun `default provider falls back to openai compatible`() {

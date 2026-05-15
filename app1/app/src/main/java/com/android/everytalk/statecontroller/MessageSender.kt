@@ -755,7 +755,7 @@ internal fun prepareMcpDispatch(
         }
 
         viewModelScope.launch {
-            val modelIsGeminiType = currentConfig.model.lowercase().startsWith("gemini")
+            val modelIsGeminiType = WebSearchSupport.isGeminiModel(currentConfig)
             val shouldUsePartsApiMessage = modelIsGeminiType
             val providerForRequestBackend = currentConfig.provider
             val isDefaultProvider = currentConfig.provider.trim().lowercase() in listOf("默认", "default")

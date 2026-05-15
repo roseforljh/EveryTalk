@@ -14,10 +14,20 @@ object WebSearchSupport {
         return isGeminiNativeSearch(config) || isQwenNativeSearch(config)
     }
 
+    fun isGeminiModel(config: ApiConfig?): Boolean {
+        if (config == null) return false
+        return isGeminiModelName(config.model)
+    }
+
+    fun isGeminiModelName(model: String): Boolean {
+        val normalized = model.substringAfterLast('/').lowercase()
+        return normalized.startsWith("gemini")
+    }
+
     fun isGeminiNativeSearch(config: ApiConfig?): Boolean {
         if (config == null) return false
         return config.channel.contains("gemini", ignoreCase = true) &&
-            config.model.contains("gemini", ignoreCase = true)
+            isGeminiModel(config)
     }
 
     fun isQwenNativeSearch(config: ApiConfig?): Boolean {

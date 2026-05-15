@@ -514,6 +514,12 @@ object ApiClient {
                 .collect { event -> send(event) }
             
             android.util.Log.i("ApiClient", "Provider ${provider.providerName} completed")
+        } catch (e: CancellationException) {
+            if (e.message?.startsWith("Stream finished with event:") == true) {
+                android.util.Log.i("ApiClient", "Direct stream completed normally: ${e.message}")
+            } else {
+                throw e
+            }
         } catch (e: Exception) {
             android.util.Log.e("ApiClient", "Direct connection failed", e)
             send(AppStreamEvent.Error("Direct connection failed: ${NetworkUtils.sanitizeMessage(e.message)}", null))

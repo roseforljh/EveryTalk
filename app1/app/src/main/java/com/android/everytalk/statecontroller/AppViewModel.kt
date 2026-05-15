@@ -90,6 +90,7 @@ import com.android.everytalk.data.network.ExternalWebSearchProviderConfig
 import com.android.everytalk.data.network.ExternalWebSearchService
 import com.android.everytalk.data.network.JinaSearchService
 import com.android.everytalk.data.network.OpenAIDirectClient
+import com.android.everytalk.data.network.WebSearchSupport
 import com.android.everytalk.data.network.WebFetchToolExecutor
 import com.android.everytalk.util.storage.IncrementalBackupManager
 import kotlinx.serialization.json.JsonElement
@@ -1431,7 +1432,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             maxOutputTokens = null,
             thinkingConfig = null
         )
-        val isGeminiModel = currentConfig.model.lowercase().startsWith("gemini")
+        val isGeminiModel = WebSearchSupport.isGeminiModel(currentConfig)
         val thinkingConfig = if (enabled) {
             ThinkingConfig(
                 includeThoughts = true,

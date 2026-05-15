@@ -846,7 +846,12 @@ object OpenAIDirectClient {
 
             // Gemini-in-OpenAI 格式支持 (Gemini 通过 OpenAI 兼容接口调用)
             val isGemini = request.channel.contains("gemini", ignoreCase = true) ||
-                           request.model.contains("gemini", ignoreCase = true)
+                WebSearchSupport.isGeminiModelName(request.model)
+            if (isGemini) {
+                val reasoningEffort = request.customModelParameters?.get("reasoning_effort")?.toString()
+                    ?: defaultGeminiReasoningEffort(request.model)
+                put("reasoning_effort", reasoningEffort)
+            }
 
             // Qwen 联网搜索支持
             val isQwenSearchEnabled = request.qwenEnableSearch == true
@@ -915,6 +920,14 @@ object OpenAIDirectClient {
                 }
             }
         }.toString()
+    }
+
+    private fun defaultGeminiReasoningEffort(model: String): String {
+        return when {
+            model.contains("flash", ignoreCase = true) -> "low"
+            model.contains("pro", ignoreCase = true) -> "medium"
+            else -> "high"
+        }
     }
 
     private fun mapToJsonElement(map: Map<String, Any>): JsonElement {
@@ -1253,6 +1266,14 @@ object OpenAIDirectClient {
                 config.temperature?.let { put("temperature", it) }
                 config.topP?.let { put("top_p", it) }
                 config.maxOutputTokens?.let { put("max_tokens", it) }
+            }
+
+            val isGemini = request.channel.contains("gemini", ignoreCase = true) ||
+                WebSearchSupport.isGeminiModelName(request.model)
+            if (isGemini) {
+                val reasoningEffort = request.customModelParameters?.get("reasoning_effort")?.toString()
+                    ?: defaultGeminiReasoningEffort(request.model)
+                put("reasoning_effort", reasoningEffort)
             }
 
             // MCP 工具注入
