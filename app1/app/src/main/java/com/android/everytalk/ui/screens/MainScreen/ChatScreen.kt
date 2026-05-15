@@ -488,7 +488,29 @@ fun ChatScreen(
                                     }
                                 },
                                 onImageClick = { imageUrl ->
-                                    viewModel.showImageViewer(imageUrl)
+                                    val allUrls = chatListItems.flatMap { item ->
+                                        when (item) {
+                                            is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage -> {
+                                                item.attachments.mapNotNull { att ->
+                                                    when (att) {
+                                                        is com.android.everytalk.models.SelectedMediaItem.ImageFromUri ->
+                                                            att.uri.toString()
+                                                        else -> null
+                                                    }
+                                                }
+                                            }
+                                            is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage -> {
+                                                viewModel.getMessageById(item.messageId)?.imageUrls ?: emptyList()
+                                            }
+                                            else -> emptyList()
+                                        }
+                                    }
+                                    val index = allUrls.indexOf(imageUrl).coerceAtLeast(0)
+                                    if (allUrls.size > 1) {
+                                        viewModel.showImageViewer(allUrls, index)
+                                    } else {
+                                        viewModel.showImageViewer(imageUrl)
+                                    }
                                 },
                                 additionalBottomPadding = inputAreaHeightDp
                             )
@@ -697,11 +719,13 @@ fun ChatScreen(
 
     // 图片查看器
     val showImageViewer by viewModel.showImageViewer.collectAsState()
-    val imageViewerUrl by viewModel.imageViewerUrl.collectAsState()
+    val imageViewerUrls by viewModel.imageViewerUrls.collectAsState()
+    val imageViewerIndex by viewModel.imageViewerIndex.collectAsState()
 
-    if (showImageViewer && imageViewerUrl != null) {
+    if (showImageViewer && imageViewerUrls.isNotEmpty()) {
         ImagePreviewDialog(
-            url = imageViewerUrl!!,
+            urls = imageViewerUrls,
+            initialIndex = imageViewerIndex,
             onDismiss = { viewModel.dismissImageViewer() }
         )
     }

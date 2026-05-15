@@ -1,14 +1,29 @@
 package com.android.everytalk.ui.screens.ImageGeneration
 
 import com.android.everytalk.R
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -117,49 +132,143 @@ fun ImageGenerationLoadingView() {
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.CenterStart
     ) {
-        Row(
-            verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.Start
+        ImageGenLoadingIndicator()
+    }
+}
+
+@Composable
+private fun ImageGenLoadingIndicator(
+    modifier: Modifier = Modifier,
+) {
+    val stages = remember {
+        listOf("正在生成图像", "正在处理请求", "正在渲染画面", "即将完成")
+    }
+    var stageIndex by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(2500)
+            stageIndex = (stageIndex + 1) % stages.size
+        }
+    }
+    val displayText = stages[stageIndex]
+    val viewportHeight = 34.dp
+    val maskHeight = 10.dp
+    val breathingDotSize = 6.dp
+    val infiniteTransition = rememberInfiniteTransition(label = "imageGenLoading")
+    val lineAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.18f,
+        targetValue = 0.52f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1800, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "imageGenLineAlpha",
+    )
+    val glowAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.06f,
+        targetValue = 0.14f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 2200, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "imageGenGlowAlpha",
+    )
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(viewportHeight),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .background(
+                    brush = androidx.compose.ui.graphics.Brush.radialGradient(
+                        colors = listOf(
+                            MaterialTheme.colorScheme.primary.copy(alpha = glowAlpha),
+                            Color.Transparent,
+                        ),
+                        radius = 220f,
+                        center = Offset(120f, viewportHeight.value * 1.6f),
+                    )
+                )
+        )
+
+        Box(
+            modifier = Modifier
+                .padding(start = 6.dp)
+                .size(breathingDotSize)
+                .background(
+                    color = Color.White.copy(alpha = lineAlpha),
+                    shape = CircleShape
+                )
+        )
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 24.dp, end = 12.dp),
+            contentAlignment = Alignment.CenterStart,
         ) {
-            val style = MaterialTheme.typography.bodyLarge.copy(
-                fontWeight = FontWeight.ExtraBold,
-            )
-            Text("正在生成图像", style = style)
-
-            val animY = remember { List(3) { Animatable(0f) } }
-            val coroutineScope = rememberCoroutineScope()
-            val density = LocalDensity.current
-
-            LaunchedEffect(Unit) {
-                animY.forEach { it.snapTo(0f) } // 初始化
-                try {
-                    repeat(Int.MAX_VALUE) {
-                        animY.forEachIndexed { index, anim ->
-                            launch {
-                                kotlinx.coroutines.delay((index * 150L) % 450)
-                                anim.animateTo(
-                                    targetValue = with(density) { (-6).dp.toPx() },
-                                    animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(viewportHeight)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .fillMaxWidth()
+                        .padding(vertical = maskHeight)
+                ) {
+                    AnimatedContent(
+                        targetState = displayText,
+                        transitionSpec = {
+                            (slideInVertically(initialOffsetY = { it / 2 }) + fadeIn(animationSpec = tween(260)) + scaleIn(initialScale = 0.985f, animationSpec = tween(260)))
+                                .togetherWith(
+                                    slideOutVertically(targetOffsetY = { -it / 2 }) + fadeOut(animationSpec = tween(220)) + scaleOut(targetScale = 0.985f, animationSpec = tween(220))
                                 )
-                                anim.animateTo(
-                                    targetValue = 0f,
-                                    animationSpec = tween(durationMillis = 450, easing = FastOutSlowInEasing)
-                                )
-                                if (index == animY.lastIndex) kotlinx.coroutines.delay(600)
-                            }
-                        }
-                        kotlinx.coroutines.delay(1200)
+                        },
+                        label = "ImageGenLoadingTextAnimation"
+                    ) { stageText ->
+                        Text(
+                            text = stageText,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.92f),
+                            maxLines = 1,
+                        )
                     }
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    coroutineScope.launch { animY.forEach { launch { it.snapTo(0f) } } }
                 }
-            }
 
-            animY.forEach {
-                Text(
-                    text = ".",
-                    style = style,
-                    modifier = Modifier.offset(y = with(density) { it.value.toDp() })
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .height(maskHeight)
+                        .background(
+                            brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                                colors = listOf(
+                                    MaterialTheme.colorScheme.background,
+                                    MaterialTheme.colorScheme.background.copy(alpha = 0f),
+                                )
+                            )
+                        )
+                )
+
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(maskHeight)
+                        .background(
+                            brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                                colors = listOf(
+                                    MaterialTheme.colorScheme.background.copy(alpha = 0f),
+                                    MaterialTheme.colorScheme.background,
+                                )
+                            )
+                        )
                 )
             }
         }
@@ -531,49 +640,7 @@ fun ImageGenerationMessagesList(
                                     ),
                                 contentAlignment = if (shouldApplyMinHeight) Alignment.TopStart else Alignment.CenterStart
                             ) {
-                                Row(
-                                    verticalAlignment = Alignment.Bottom,
-                                    horizontalArrangement = Arrangement.Start
-                                ) {
-                                    val style = MaterialTheme.typography.bodyLarge.copy(
-                                        fontWeight = FontWeight.ExtraBold,
-                                    )
-                                    Text("正在生成图像", style = style)
-                                    val animY = remember { List(3) { Animatable(0f) } }
-                                    val coroutineScope = rememberCoroutineScope()
-                                    val density = LocalDensity.current
-                                    LaunchedEffect(Unit) {
-                                        animY.forEach { it.snapTo(0f) }
-                                        try {
-                                            repeat(Int.MAX_VALUE) {
-                                                animY.forEachIndexed { index, anim ->
-                                                    launch {
-                                                        kotlinx.coroutines.delay((index * 150L) % 450)
-                                                        anim.animateTo(
-                                                            targetValue = with(density) { (-6).dp.toPx() },
-                                                            animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing)
-                                                        )
-                                                        anim.animateTo(
-                                                            targetValue = 0f,
-                                                            animationSpec = tween(durationMillis = 450, easing = FastOutSlowInEasing)
-                                                        )
-                                                        if (index == animY.lastIndex) kotlinx.coroutines.delay(600)
-                                                    }
-                                                }
-                                                kotlinx.coroutines.delay(1200)
-                                            }
-                                        } catch (e: kotlinx.coroutines.CancellationException) {
-                                            coroutineScope.launch { animY.forEach { launch { it.snapTo(0f) } } }
-                                        }
-                                    }
-                                    animY.forEach {
-                                        Text(
-                                            text = ".",
-                                            style = style,
-                                            modifier = Modifier.offset(y = with(density) { it.value.toDp() })
-                                        )
-                                    }
-                                }
+                                ImageGenLoadingIndicator()
                             }
                         }
                         else -> {}

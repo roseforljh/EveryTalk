@@ -1742,14 +1742,31 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _imageViewerUrl = MutableStateFlow<String?>(null)
     val imageViewerUrl: StateFlow<String?> = _imageViewerUrl.asStateFlow()
 
+    private val _imageViewerUrls = MutableStateFlow<List<String>>(emptyList())
+    val imageViewerUrls: StateFlow<List<String>> = _imageViewerUrls.asStateFlow()
+
+    private val _imageViewerIndex = MutableStateFlow(0)
+    val imageViewerIndex: StateFlow<Int> = _imageViewerIndex.asStateFlow()
+
     fun showImageViewer(url: String) {
         _imageViewerUrl.value = url
+        _imageViewerUrls.value = listOf(url)
+        _imageViewerIndex.value = 0
+        _showImageViewer.value = true
+    }
+
+    fun showImageViewer(urls: List<String>, index: Int = 0) {
+        _imageViewerUrl.value = urls.getOrNull(index)
+        _imageViewerUrls.value = urls
+        _imageViewerIndex.value = index
         _showImageViewer.value = true
     }
 
     fun dismissImageViewer() {
         _showImageViewer.value = false
         _imageViewerUrl.value = null
+        _imageViewerUrls.value = emptyList()
+        _imageViewerIndex.value = 0
     }
 
     fun downloadImage(url: String) {

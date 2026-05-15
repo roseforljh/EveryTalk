@@ -1,40 +1,43 @@
 package com.android.everytalk.ui.components
 
-import android.content.ContentValues
-import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
-import android.os.Environment
-import android.provider.MediaStore
 import android.util.Base64
 import android.widget.Toast
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.Image
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.FloatingActionButtonDefaults
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Download
+import androidx.compose.ui.zIndex
+import coil3.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -43,26 +46,38 @@ import java.io.InputStream
 import java.net.URL
 import com.android.everytalk.util.storage.FileManager
 
-/**
- * 全屏图片预览对话框（不依赖三方图片库；支持 http/https、content/file、data URI）
- */
 @Composable
 fun ImagePreviewDialog(
     url: String,
     onDismiss: () -> Unit
 ) {
-    val context = LocalContext.current
+    ImagePreviewDialog(
+        urls = listOf(url),
+        initialIndex = 0,
+        onDismiss = onDismiss
+    )
+}
 
-    val bitmapState by produceState<Result<Bitmap?>?>(initialValue = null, url) {
-        value = runCatching {
-            withContext(Dispatchers.IO) {
-                loadBitmap(context = context, url = url)
-            }
-        }
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun ImagePreviewDialog(
+    urls: List<String>,
+    initialIndex: Int = 0,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    var scale by remember { mutableStateOf(1f) }
+
+    val pagerState = rememberPagerState(
+        initialPage = initialIndex.coerceIn(0, (urls.size - 1).coerceAtLeast(0)),
+        pageCount = { urls.size }
+    )
+
+    LaunchedEffect(pagerState.currentPage) {
+        scale = 1f
     }
 
-    val coroutineScope = rememberCoroutineScope()
-    
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(
@@ -71,94 +86,161 @@ fun ImagePreviewDialog(
             dismissOnClickOutside = true
         )
     ) {
-        // 检测是否为深色主题
-        val isDarkTheme = MaterialTheme.colorScheme.surface.luminance() < 0.5f
-        
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.92f))
+        Surface(
+            color = Color.Black,
+            contentColor = Color.White,
+            tonalElevation = 0.dp,
+            modifier = Modifier.fillMaxSize()
         ) {
-            when (val res = bitmapState) {
-                null -> {
-                    // 正在启动加载
-                    CircularProgressIndicator(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .align(Alignment.Center),
-                        color = Color.White
-                    )
+            Box(modifier = Modifier.fillMaxSize()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .align(Alignment.TopCenter)
+                        .zIndex(2f),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = onDismiss) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "关闭预览",
+                            tint = Color.White,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                    if (urls.size > 1) {
+                        Text(
+                            text = "${pagerState.currentPage + 1} / ${urls.size}",
+                            color = Color.White.copy(alpha = 0.8f),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.weight(1f),
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.size(48.dp))
+                    } else {
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
                 }
-                else -> {
-                    val bmp = res.getOrNull()
-                    if (bmp != null) {
-                        Image(
-                            bitmap = bmp.asImageBitmap(),
-                            contentDescription = "preview image",
-                            contentScale = ContentScale.FillWidth,
+
+                HorizontalPager(
+                    state = pagerState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(vertical = 56.dp),
+                    userScrollEnabled = urls.size > 1 && scale == 1f,
+                    beyondViewportPageCount = 1
+                ) { page ->
+                    val currentUrl = urls.getOrNull(page) ?: return@HorizontalPager
+                    val animatedScale = remember(page) { Animatable(1f) }
+                    var pageOffsetX by remember(page) { mutableStateOf(0f) }
+                    var pageOffsetY by remember(page) { mutableStateOf(0f) }
+                    val pageCoroutineScope = rememberCoroutineScope()
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(page) {
+                                val w = size.width.toFloat()
+                                val h = size.height.toFloat()
+                                awaitEachGesture {
+                                    awaitFirstDown(requireUnconsumed = false)
+                                    do {
+                                        val event = awaitPointerEvent()
+                                        val pointerCount = event.changes.size
+                                        if (pointerCount >= 2) {
+                                            val zoomChange = event.calculateZoom()
+                                            val panChange = event.calculatePan()
+                                            val curScale = animatedScale.value
+                                            if (zoomChange != 1f || curScale > 1f) {
+                                                val newScale = (curScale * zoomChange).coerceIn(1f, 5f)
+                                                pageCoroutineScope.launch { animatedScale.snapTo(newScale) }
+                                                if (newScale > 1f) {
+                                                    val mx = (newScale - 1f) * w / 2f
+                                                    val my = (newScale - 1f) * h / 2f
+                                                    pageOffsetX = (pageOffsetX + panChange.x).coerceIn(-mx, mx)
+                                                    pageOffsetY = (pageOffsetY + panChange.y).coerceIn(-my, my)
+                                                } else {
+                                                    pageOffsetX = 0f
+                                                    pageOffsetY = 0f
+                                                }
+                                                scale = newScale
+                                                event.changes.forEach { it.consume() }
+                                            }
+                                        } else if (pointerCount == 1 && animatedScale.value > 1f) {
+                                            val panChange = event.calculatePan()
+                                            val s = animatedScale.value
+                                            val mx = (s - 1f) * w / 2f
+                                            val my = (s - 1f) * h / 2f
+                                            pageOffsetX = (pageOffsetX + panChange.x).coerceIn(-mx, mx)
+                                            pageOffsetY = (pageOffsetY + panChange.y).coerceIn(-my, my)
+                                            event.changes.forEach { it.consume() }
+                                        }
+                                    } while (event.changes.any { it.pressed })
+                                }
+                            }
+                            .combinedClickable(
+                                indication = null,
+                                interactionSource = remember { MutableInteractionSource() },
+                                onClick = { },
+                                onDoubleClick = {
+                                    pageCoroutineScope.launch {
+                                        if (animatedScale.value > 1f) {
+                                            animatedScale.animateTo(1f, tween(250))
+                                            pageOffsetX = 0f
+                                            pageOffsetY = 0f
+                                        } else {
+                                            animatedScale.animateTo(2f, tween(250))
+                                        }
+                                        scale = animatedScale.value
+                                    }
+                                }
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        AsyncImage(
+                            model = currentUrl,
+                            contentDescription = "预览图片 ${page + 1}/${urls.size}",
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .align(Alignment.Center)
-                        )
-                    } else {
-                        Text(
-                            text = "图片加载失败",
-                            color = Color.White,
-                            modifier = Modifier.align(Alignment.Center)
+                                .graphicsLayer {
+                                    scaleX = animatedScale.value
+                                    scaleY = animatedScale.value
+                                    translationX = pageOffsetX
+                                    translationY = pageOffsetY
+                                },
+                            contentScale = ContentScale.FillWidth
                         )
                     }
                 }
-            }
 
-            // 关闭按钮（右上角）
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(end = 16.dp, top = 16.dp)
-                    .size(48.dp)
-                    .zIndex(2f)
-                    .background(
-                        color = Color.Black.copy(alpha = 0.35f),
-                        shape = CircleShape
-                    )
-            ) {
-                IconButton(
-                    onClick = onDismiss,
-                    modifier = Modifier.fillMaxSize()
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 16.dp, bottom = 16.dp)
+                        .size(48.dp)
+                        .zIndex(2f)
+                        .background(
+                            color = Color.Black.copy(alpha = 0.35f),
+                            shape = CircleShape
+                        )
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "关闭",
-                        tint = Color.White
-                    )
-                }
-            }
-            
-            // 下载按钮（右下角）
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(end = 16.dp, bottom = 16.dp)
-                    .size(48.dp)
-                    .zIndex(2f)
-                    .background(
-                        color = Color.Black.copy(alpha = 0.35f),
-                        shape = CircleShape
-                    )
-            ) {
-                IconButton(
-                    onClick = {
-                        coroutineScope.launch {
-                            saveImageToGallery(context, url)
-                        }
-                    },
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Download,
-                        contentDescription = "下载图片",
-                        tint = Color.White
-                    )
+                    IconButton(
+                        onClick = {
+                            val currentUrl = urls.getOrNull(pagerState.currentPage) ?: return@IconButton
+                            coroutineScope.launch {
+                                saveImageToGallery(context, currentUrl)
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Download,
+                            contentDescription = "下载图片",
+                            tint = Color.White
+                        )
+                    }
                 }
             }
         }
@@ -181,7 +263,6 @@ private fun loadBitmap(context: android.content.Context, url: String): Bitmap? {
             }
         }
         else -> {
-            // 尝试将其当作文件路径
             runCatching {
                 val uri = Uri.parse(url)
                 val input: InputStream? = when {
@@ -195,7 +276,6 @@ private fun loadBitmap(context: android.content.Context, url: String): Bitmap? {
 }
 
 private fun decodeDataUrlToBitmap(dataUrl: String): Bitmap? {
-    // data:[<mediatype>][;base64],<data>
     val commaIndex = dataUrl.indexOf(',')
     if (commaIndex == -1) return null
     val meta = dataUrl.substring(0, commaIndex)
@@ -204,16 +284,12 @@ private fun decodeDataUrlToBitmap(dataUrl: String): Bitmap? {
     val bytes: ByteArray = if (isBase64) {
         Base64.decode(dataPart, Base64.DEFAULT)
     } else {
-        // URL encoded data
         java.net.URLDecoder.decode(dataPart, "UTF-8").toByteArray()
     }
     return ByteArrayInputStream(bytes).use { input -> BitmapFactory.decodeStream(input) }
 }
 
-/**
- * 保存图片到相册
- */
-private suspend fun saveImageToGallery(context: Context, url: String) {
+private suspend fun saveImageToGallery(context: android.content.Context, url: String) {
     withContext(Dispatchers.IO) {
         try {
             val fileManager = FileManager(context)
@@ -230,7 +306,6 @@ private suspend fun saveImageToGallery(context: Context, url: String) {
                 mime = mime,
                 displayNameBase = "everytalk"
             )
-
             withContext(Dispatchers.Main) {
                 if (savedUri != null) {
                     Toast.makeText(context, "图片已保存到相册", Toast.LENGTH_SHORT).show()
@@ -240,7 +315,6 @@ private suspend fun saveImageToGallery(context: Context, url: String) {
             }
         } catch (e: Exception) {
             e.printStackTrace()
-            // 在主线程显示错误提示
             withContext(Dispatchers.Main) {
                 Toast.makeText(context, "图片保存失败: ${e.message}", Toast.LENGTH_SHORT).show()
             }
