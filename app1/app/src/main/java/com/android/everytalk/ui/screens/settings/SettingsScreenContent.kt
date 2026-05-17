@@ -23,14 +23,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.unit.Velocity
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.PushPin
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.outlined.Cancel
-import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material3.*
 import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.runtime.*
@@ -39,9 +31,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.data.network.ExternalWebSearchProvider
@@ -89,7 +83,7 @@ private fun DefaultPinnedCard(
                     )
                 }
                 Icon(
-                    imageVector = Icons.Filled.PushPin,
+                    painter = painterResource(R.drawable.ic_pin),
                     contentDescription = "默认配置(固定)",
                     tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
                     modifier = Modifier.size(40.dp).padding(8.dp)
@@ -185,7 +179,7 @@ internal fun SettingsScreenContent(
             )
         ) {
             Icon(
-                Icons.Filled.Add,
+                painter = painterResource(R.drawable.ic_plus),
                 contentDescription = "添加配置",
                 modifier = Modifier.size(24.dp)
             )
@@ -217,7 +211,7 @@ internal fun SettingsScreenContent(
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Icon(
-                            Icons.Filled.Add,
+                            painter = painterResource(R.drawable.ic_plus),
                             contentDescription = null,
                             modifier = Modifier.size(48.dp),
                             tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
@@ -409,7 +403,7 @@ internal fun ExternalWebSearchSettingsContent(
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            imageVector = if (isSelected) Icons.Filled.CheckCircle else Icons.Outlined.RadioButtonUnchecked,
+                            painter = if (isSelected) painterResource(R.drawable.ic_check_circle) else painterResource(R.drawable.ic_circle_empty),
                             contentDescription = "选择 ${provider.displayName}",
                             tint = if (isSelected) provider.accentColor else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
                             modifier = Modifier.size(24.dp)
@@ -553,7 +547,7 @@ private fun ApiKeyItemGroup(
                 // 图像模式"默认"配置显示钉子图标,表示固定不可删除
                 if (isPinnedGroup) {
                     Icon(
-                        imageVector = Icons.Filled.PushPin,
+                        painter = painterResource(R.drawable.ic_pin),
                         contentDescription = "默认配置(固定)",
                         tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
                         modifier = Modifier
@@ -567,7 +561,7 @@ private fun ApiKeyItemGroup(
                         modifier = Modifier.size(40.dp)
                     ) {
                         Icon(
-                            Icons.Outlined.Cancel,
+                            painter = painterResource(R.drawable.ic_remove_circle),
                             contentDescription = "删除配置组",
                             tint = MaterialTheme.colorScheme.error,
                             modifier = Modifier.size(22.dp)
@@ -630,7 +624,7 @@ private fun ApiKeyItemGroup(
                                 modifier = Modifier.size(36.dp)
                             ) {
                                 Icon(
-                                    Icons.Default.Refresh,
+                                    painter = painterResource(R.drawable.ic_refresh),
                                     contentDescription = "刷新模型列表",
                                     tint = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.size(20.dp)
@@ -645,7 +639,7 @@ private fun ApiKeyItemGroup(
                             modifier = Modifier.size(36.dp)
                         ) {
                             Icon(
-                                Icons.Filled.Add,
+                                painter = painterResource(R.drawable.ic_plus),
                                 contentDescription = "为此Key和类型添加模型",
                                 tint = Color(0xFF4CAF50),
                                 modifier = Modifier.size(20.dp)
@@ -742,7 +736,7 @@ private fun ModelItem(
     ) {
         // 选择指示器
         Icon(
-            imageVector = if (isSelected) Icons.Filled.CheckCircle else Icons.Outlined.RadioButtonUnchecked,
+            painter = if (isSelected) painterResource(R.drawable.ic_check_circle) else painterResource(R.drawable.ic_circle_empty),
             contentDescription = "选择模型",
             tint = if (isSelected)
                 MaterialTheme.colorScheme.primary
@@ -781,7 +775,7 @@ private fun ModelItem(
             modifier = Modifier.size(32.dp)
         ) {
             Icon(
-                Icons.Filled.Close,
+                painter = painterResource(R.drawable.ic_x),
                 contentDescription = "删除模型",
                 tint = MaterialTheme.colorScheme.error,
                 modifier = Modifier.size(18.dp)

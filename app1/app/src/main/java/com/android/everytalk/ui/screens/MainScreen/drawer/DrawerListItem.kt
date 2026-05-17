@@ -11,8 +11,8 @@ import androidx.compose.foundation.gestures.GestureCancellationException
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.ui.res.painterResource
+import com.android.everytalk.R
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -202,7 +202,7 @@ internal fun DrawerConversationListItem(
                 )
                 if (isPinned) {
                     Icon(
-                        imageVector = Icons.Filled.PushPin,
+                        painter = painterResource(R.drawable.ic_pin),
                         contentDescription = "已置顶",
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier

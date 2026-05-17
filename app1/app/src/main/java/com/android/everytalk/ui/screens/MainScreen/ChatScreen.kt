@@ -333,6 +333,7 @@ fun ChatScreen(
         skipPartiallyExpanded = true
     )
     var showModelSelectionBottomSheet by remember { mutableStateOf(false) }
+    var showEditConfigDialog by remember { mutableStateOf(false) }
     
     val textModels by viewModel.apiConfigs.collectAsState()
     val imageModels by viewModel.imageGenApiConfigs.collectAsState()
@@ -628,7 +629,12 @@ fun ChatScreen(
                     viewModel.selectConfig(modelConfig)
                     showModelSelectionBottomSheet = false
                 },
-                onDismissModelSelection = { showModelSelectionBottomSheet = false }
+                onDismissModelSelection = { showModelSelectionBottomSheet = false },
+                onTitleLongClick = {
+                    if (selectedApiConfig != null) {
+                        showEditConfigDialog = true
+                    }
+                }
             )
 
             mcpUiStage?.takeIf { it.userVisibleText.isNotBlank() }?.let { stage ->
@@ -663,6 +669,24 @@ fun ChatScreen(
             WebSourcesDialog(
                 sources = sourcesForDialog,
                 onDismissRequest = { viewModel.dismissSourcesDialog() }
+            )
+        }
+
+        if (showEditConfigDialog && selectedApiConfig != null) {
+            com.android.everytalk.ui.screens.settings.EditConfigDialog(
+                representativeConfig = selectedApiConfig!!,
+                allProviders = availableModels.map { it.provider }.distinct(),
+                onDismissRequest = { showEditConfigDialog = false },
+                onConfirm = { newProvider, newAddress, newKey, newChannel, _, _ ->
+                    viewModel.updateConfigGroup(
+                        representativeConfig = selectedApiConfig!!,
+                        newProvider = newProvider,
+                        newAddress = newAddress,
+                        newKey = newKey,
+                        newChannel = newChannel
+                    )
+                    showEditConfigDialog = false
+                }
             )
         }
 

@@ -15,11 +15,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.outlined.*
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.ui.res.painterResource
+import com.android.everytalk.R
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -353,7 +350,7 @@ fun AppDrawerContent(
                                     modifier = Modifier.size(24.dp)
                                 ) {
                                     Icon(
-                                        Icons.AutoMirrored.Filled.ArrowBack,
+                                        painter = painterResource(R.drawable.ic_arrow_back),
                                         "返回",
                                         modifier = Modifier.size(20.dp)
                                     )
@@ -364,7 +361,7 @@ fun AppDrawerContent(
                                     modifier = Modifier.size(24.dp)
                                 ) {
                                     Icon(
-                                        Icons.Filled.Search,
+                                        painter = painterResource(R.drawable.ic_search),
                                         "搜索图标",
                                         modifier = Modifier.size(20.dp)
                                     )
@@ -375,7 +372,7 @@ fun AppDrawerContent(
                     trailingIcon = {
                         if (currentSearchQuery.isNotEmpty()) {
                             IconButton(onClick = { onSearchQueryChange("") }) {
-                                Icon(Icons.Filled.Close, "清除搜索")
+                                Icon(painter = painterResource(R.drawable.ic_x), "清除搜索")
                             }
                         }
                     },
@@ -432,7 +429,7 @@ fun AppDrawerContent(
                         horizontalArrangement = Arrangement.Start
                     ) {
                         Icon(
-                            Icons.Filled.AddCircleOutline,
+                            painter = painterResource(R.drawable.ic_plus),
                             "新建会话图标",
                             tint = MaterialTheme.colorScheme.onSurface
                         )
@@ -477,7 +474,7 @@ fun AppDrawerContent(
                         horizontalArrangement = Arrangement.Start
                     ) {
                         Icon(
-                            Icons.Filled.ClearAll,
+                            painter = painterResource(R.drawable.ic_trash),
                             "清空记录图标",
                             tint = MaterialTheme.colorScheme.onSurface
                         )
@@ -519,7 +516,7 @@ fun AppDrawerContent(
                             horizontalArrangement = Arrangement.Start
                         ) {
                             Icon(
-                                Icons.Filled.TextFields,
+                                painter = painterResource(R.drawable.ic_writing),
                                 "文本生成图标",
                                 tint = MaterialTheme.colorScheme.onSurface
                             )
@@ -565,7 +562,7 @@ fun AppDrawerContent(
                             horizontalArrangement = Arrangement.Start
                         ) {
                             Icon(
-                                Icons.Filled.Image,
+                                painter = painterResource(R.drawable.ic_image_gallery),
                                 "图像生成图标",
                                 tint = MaterialTheme.colorScheme.onSurface
                             )
@@ -619,7 +616,7 @@ fun AppDrawerContent(
                         }
                 ) {
                     Icon(
-                        Icons.Filled.Add,
+                        painter = painterResource(R.drawable.ic_plus),
                         "创建分组",
                         modifier = Modifier.size(16.dp),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = addGroupButtonAlpha)
@@ -894,7 +891,7 @@ fun AppDrawerContent(
                     horizontalArrangement = Arrangement.Start
                 ) {
                     Icon(
-                        Icons.Filled.Info,
+                        painter = painterResource(R.drawable.ic_info),
                         "关于图标",
                         tint = MaterialTheme.colorScheme.onSurface
                     )
@@ -1125,7 +1122,7 @@ fun CollapsibleGroupHeader(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
-                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                painter = painterResource(R.drawable.ic_arrow_end),
                 contentDescription = if (isExpanded) "收起" else "展开",
                 tint = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier
@@ -1150,7 +1147,7 @@ fun CollapsibleGroupHeader(
                         modifier = Modifier.size(32.dp)
                     ) {
                         Icon(
-                            Icons.Filled.MoreVert,
+                            painter = painterResource(R.drawable.ic_dots_vertical),
                             "更多选项",
                             modifier = Modifier.size(20.dp)
                         )
@@ -1168,7 +1165,7 @@ fun CollapsibleGroupHeader(
                                     showRenameDialog = true
                                 },
                                 leadingIcon = {
-                                    Icon(Icons.Filled.Edit, "重命名")
+                                    Icon(painter = painterResource(R.drawable.ic_pencil), "重命名")
                                 }
                             )
                         }
@@ -1180,7 +1177,7 @@ fun CollapsibleGroupHeader(
                                     onDelete()
                                 },
                                 leadingIcon = {
-                                    Icon(Icons.Filled.Delete, "删除")
+                                    Icon(painter = painterResource(R.drawable.ic_trash), "删除")
                                 }
                             )
                         }

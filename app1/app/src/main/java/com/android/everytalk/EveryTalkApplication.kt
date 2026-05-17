@@ -17,7 +17,10 @@ class EveryTalkApplication : Application() {
         super.onCreate()
 
         NativeLatexSupport.ensureInitialized(this)
-        MdiIconMap.init(this)
+        try {
+            MdiIconMap.init(this)
+        } catch (_: Throwable) {
+        }
 
         startKoin {
             androidLogger(Level.ERROR)

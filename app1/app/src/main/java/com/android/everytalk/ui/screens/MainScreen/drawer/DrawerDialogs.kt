@@ -2,9 +2,8 @@ package com.android.everytalk.ui.screens.MainScreen.drawer
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.RemoveCircleOutline
+import androidx.compose.ui.res.painterResource
+import com.android.everytalk.R
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -356,7 +355,7 @@ internal fun MoveToGroupDialog(
                                 headlineContent = { Text("移出分组") },
                                 leadingContent = {
                                     Icon(
-                                        Icons.Default.RemoveCircleOutline,
+                                        painter = painterResource(R.drawable.ic_remove_circle),
                                         contentDescription = "移出分组"
                                     )
                                 },
@@ -372,7 +371,7 @@ internal fun MoveToGroupDialog(
                             headlineContent = { Text(groupName) },
                             leadingContent = {
                                 Icon(
-                                    Icons.Default.Folder,
+                                    painter = painterResource(R.drawable.ic_folder),
                                     contentDescription = "分组"
                                 )
                             },

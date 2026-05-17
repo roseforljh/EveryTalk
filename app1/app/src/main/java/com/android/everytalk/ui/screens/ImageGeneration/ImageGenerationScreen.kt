@@ -9,10 +9,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.clickable
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Download
-import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material3.*
+import androidx.compose.ui.res.painterResource
+import com.android.everytalk.R
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -328,7 +327,7 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                     headlineContent = { Text("查看图片", color = MaterialTheme.colorScheme.onSurface) },
                     leadingContent = {
                         Icon(
-                            imageVector = Icons.Outlined.Image,
+                            painter = painterResource(R.drawable.ic_image_gallery),
                             contentDescription = "查看图片",
                             tint = MaterialTheme.colorScheme.onSurface
                         )
@@ -357,7 +356,7 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                     headlineContent = { Text("下载图片", color = MaterialTheme.colorScheme.onSurface) },
                     leadingContent = {
                         Icon(
-                            imageVector = Icons.Outlined.Download,
+                            painter = painterResource(R.drawable.ic_download),
                             contentDescription = "下载图片",
                             tint = MaterialTheme.colorScheme.onSurface
                         )

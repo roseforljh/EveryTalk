@@ -28,13 +28,11 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.outlined.*
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.*
+import androidx.compose.ui.res.painterResource
+import com.android.everytalk.R
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -280,7 +278,7 @@ fun SelectedItemPreview(
             )
         ) {
             Icon(
-                Icons.Filled.Close,
+                painter = painterResource(R.drawable.ic_x),
                 contentDescription = "Remove item",
                 modifier = Modifier.size(12.dp)
             )
@@ -672,7 +670,7 @@ fun ImageGenerationInputArea(
                                 modifier = Modifier.size(40.dp)
                             ) {
                                 Icon(
-                                    imageVector = Icons.Filled.Add,
+                                    painter = painterResource(R.drawable.ic_plus),
                                     contentDescription = "功能面板",
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(24.dp)
@@ -835,7 +833,7 @@ fun ImageGenerationInputArea(
                                     modifier = Modifier.size(36.dp)
                                 ) {
                                     Icon(
-                                        imageVector = if (isApiCalling) Icons.Filled.Stop else Icons.Filled.KeyboardArrowUp,
+                                        painter = if (isApiCalling) painterResource(R.drawable.ic_stop) else painterResource(R.drawable.ic_arrow_up),
                                         contentDescription = if (isApiCalling) "停止" else "发送",
                                         modifier = Modifier.size(20.dp)
                                     )
@@ -1136,7 +1134,7 @@ private fun ImageFunctionPanelContent(
         Column(modifier = Modifier.padding(vertical = 4.dp)) {
             if (!isQwenEdit) {
                 ImageFunctionPanelItem(
-                    icon = Icons.Outlined.AspectRatio,
+                    icon = painterResource(R.drawable.ic_aspect_ratio),
                     label = selectedImageRatio.displayName,
                     tint = MaterialTheme.colorScheme.primary,
                     onClick = onShowRatioDialog
@@ -1144,7 +1142,7 @@ private fun ImageFunctionPanelContent(
             }
             if (isGptImage) {
                 ImageFunctionPanelItem(
-                    icon = Icons.Outlined.HighQuality,
+                    icon = painterResource(R.drawable.ic_settings_slider),
                     label = "质量: ${currentGptImageQuality.displayName}",
                     tint = Color(0xFF9C27B0),
                     onClick = onShowQualityDialog
@@ -1152,7 +1150,7 @@ private fun ImageFunctionPanelContent(
             }
             if (supportsImageEditing) {
                 ImageFunctionPanelItem(
-                    icon = Icons.Outlined.Image,
+                    icon = painterResource(R.drawable.ic_image_gallery),
                     label = "选择图片",
                     tint = Color(0xff2cb334),
                     onClick = onToggleImagePanel
@@ -1160,7 +1158,7 @@ private fun ImageFunctionPanelContent(
             }
             if (detectedFamily == ImageGenCapabilities.ModelFamily.MODAL_Z_IMAGE && onChangeImageSteps != null) {
                 ImageFunctionPanelItem(
-                    icon = Icons.Outlined.Tune,
+                    icon = painterResource(R.drawable.ic_tuning),
                     label = "步数 ${currentImageSteps ?: 4}",
                     tint = MaterialTheme.colorScheme.primary,
                     onClick = onShowStepsDialog
@@ -1168,7 +1166,7 @@ private fun ImageFunctionPanelContent(
             }
             if (isQwenEdit && onChangeImageParams != null) {
                 ImageFunctionPanelItem(
-                    icon = Icons.Outlined.Tune,
+                    icon = painterResource(R.drawable.ic_tuning),
                     label = "参数调节",
                     tint = Color(0xFFFF9800),
                     onClick = onShowParamsDialog
@@ -1176,7 +1174,7 @@ private fun ImageFunctionPanelContent(
             }
             if (hasContent) {
                 ImageFunctionPanelItem(
-                    icon = Icons.Filled.Clear,
+                    icon = painterResource(R.drawable.ic_x),
                     label = "清除内容",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     onClick = onClearContent
@@ -1188,7 +1186,7 @@ private fun ImageFunctionPanelContent(
 
 @Composable
 private fun ImageFunctionPanelItem(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: androidx.compose.ui.graphics.painter.Painter,
     label: String,
     tint: Color,
     onClick: () -> Unit
@@ -1205,7 +1203,7 @@ private fun ImageFunctionPanelItem(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
-                imageVector = icon,
+                painter = icon,
                 contentDescription = label,
                 tint = tint,
                 modifier = Modifier.size(22.dp)

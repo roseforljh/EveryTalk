@@ -40,15 +40,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Undo
-import androidx.compose.material.icons.filled.Redo
-import androidx.compose.material.icons.outlined.Edit
-import androidx.compose.material.icons.outlined.Brush
-import androidx.compose.material.icons.outlined.Download
-import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.*
+import androidx.compose.ui.res.painterResource
 import androidx.compose.runtime.*
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -1378,7 +1371,7 @@ fun ImageGenerationMessagesList(
                         ) {
                             IconButton(onClick = { isImagePreviewVisible = false }) {
                                 Icon(
-                                    imageVector = Icons.Filled.Close,
+                                    painter = painterResource(R.drawable.ic_x),
                                     contentDescription = "关闭预览",
                                     tint = Color.White,
                                     modifier = Modifier.size(24.dp)
@@ -1502,22 +1495,22 @@ fun ImageGenerationMessagesList(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             BottomActionButton(
-                                icon = Icons.Outlined.Edit,
+                                icon = painterResource(R.drawable.ic_pencil),
                                 label = "编辑",
                                 onClick = { editCurrentImage() }
                             )
                             BottomActionButton(
-                                icon = Icons.Outlined.Brush,
+                                icon = painterResource(R.drawable.ic_pencil),
                                 label = "选择",
                                 onClick = { openBrushEditor() }
                             )
                             BottomActionButton(
-                                icon = Icons.Outlined.Download,
+                                icon = painterResource(R.drawable.ic_download),
                                 label = "保存",
                                 onClick = { saveToAlbum() }
                             )
                             BottomActionButton(
-                                icon = Icons.Outlined.Share,
+                                icon = painterResource(R.drawable.ic_share),
                                 label = "共享",
                                 onClick = { shareImage() }
                             )
@@ -1767,7 +1760,7 @@ private fun BrushEditorOverlay(
                                     enabled = strokes.isNotEmpty()
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Filled.Undo,
+                                        painter = painterResource(R.drawable.ic_arrow_back),
                                         contentDescription = "撤销",
                                         tint = if (strokes.isNotEmpty()) Color.White else Color.White.copy(alpha = 0.4f)
                                     )
@@ -1782,7 +1775,7 @@ private fun BrushEditorOverlay(
                                     enabled = undoneStrokes.isNotEmpty()
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Filled.Redo,
+                                        painter = painterResource(R.drawable.ic_arrow_end),
                                         contentDescription = "重做",
                                         tint = if (undoneStrokes.isNotEmpty()) Color.White else Color.White.copy(alpha = 0.4f)
                                     )
@@ -1848,7 +1841,7 @@ private fun BrushEditorOverlay(
  */
 @Composable
 private fun BottomActionButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: androidx.compose.ui.graphics.painter.Painter,
     label: String,
     onClick: () -> Unit
 ) {
@@ -1867,7 +1860,7 @@ private fun BottomActionButton(
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(
-                imageVector = icon,
+                painter = icon,
                 contentDescription = label,
                 tint = Color.White
             )

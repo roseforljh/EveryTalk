@@ -4,9 +4,6 @@ import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.ImportExport
 import androidx.compose.material3.*
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Tab
@@ -19,12 +16,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.material3.TabRowDefaults
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.layout.width
 import androidx.navigation.NavController
+import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.statecontroller.AppViewModel
@@ -253,8 +252,8 @@ fun SettingsScreen(
                         }
                     }, enabled = backButtonEnabled) {
                         Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            "返回",
+                            painter = painterResource(R.drawable.ic_arrow_back),
+                            contentDescription = "返回",
                             tint = if (backButtonEnabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                         )
                     }
@@ -262,7 +261,7 @@ fun SettingsScreen(
                 actions = {
                     IconButton(onClick = { showImportExportDialog = true }) {
                         Icon(
-                            imageVector = Icons.Default.ImportExport,
+                            painter = painterResource(R.drawable.ic_import_export),
                             contentDescription = "导入/导出配置",
                             tint = MaterialTheme.colorScheme.onSurface
                         )

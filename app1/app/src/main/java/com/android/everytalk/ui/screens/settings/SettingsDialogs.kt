@@ -17,17 +17,10 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.outlined.Add
-import androidx.compose.material.icons.outlined.Check
-import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.res.painterResource
+import com.android.everytalk.R
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -124,7 +117,7 @@ internal fun EditExternalWebSearchProviderDialog(
                         )
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
-                                imageVector = Icons.Outlined.Link,
+                                painter = painterResource(R.drawable.ic_link),
                                 contentDescription = null,
                                 tint = provider.accentColor,
                                 modifier = Modifier.size(16.dp)
@@ -156,7 +149,7 @@ internal fun EditExternalWebSearchProviderDialog(
                     trailingIcon = {
                         IconButton(onClick = { apiKeyVisible = !apiKeyVisible }) {
                             Icon(
-                                imageVector = if (apiKeyVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                painter = painterResource(R.drawable.ic_eye),
                                 contentDescription = if (apiKeyVisible) "隐藏" else "显示",
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -248,7 +241,7 @@ internal fun AddProviderDialog(
                 modifier = Modifier.padding(bottom = 8.dp)
             ) {
                 Icon(
-                    imageVector = Icons.Outlined.Add,
+                    painter = painterResource(R.drawable.ic_plus),
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.padding(end = 12.dp).size(24.dp)
@@ -360,7 +353,7 @@ internal fun AddProviderDialog(
                     )
                 ) {
                     Icon(
-                        imageVector = Icons.Outlined.Add,
+                        painter = painterResource(R.drawable.ic_plus),
                         contentDescription = null,
                         modifier = Modifier
                             .size(20.dp)
@@ -521,7 +514,7 @@ internal fun AddNewFullConfigDialog(
                 modifier = Modifier.padding(bottom = 8.dp)
             ) {
                 Icon(
-                    imageVector = Icons.Outlined.Add,
+                    painter = painterResource(R.drawable.ic_plus),
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.padding(end = 12.dp).size(24.dp)
@@ -583,7 +576,7 @@ internal fun AddNewFullConfigDialog(
                                     }
                                     onShowAddCustomProviderDialog()
                                 }) {
-                                    Icon(Icons.Outlined.Add, "添加自定义平台")
+                                    Icon(painter = painterResource(R.drawable.ic_plus), contentDescription = "添加自定义平台")
                                 }
                             },
                             shape = DialogShape,
@@ -620,7 +613,7 @@ internal fun AddNewFullConfigDialog(
                                                         modifier = Modifier.size(24.dp)
                                                     ) {
                                                         Icon(
-                                                            Icons.Filled.Close,
+                                                            painter = painterResource(R.drawable.ic_x),
                                                             contentDescription = "删除 $providerItem",
                                                             tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                                                         )
@@ -810,7 +803,7 @@ internal fun AddNewFullConfigDialog(
                         )
                     ) {
                         Icon(
-                            imageVector = Icons.Outlined.Add,
+                            painter = painterResource(R.drawable.ic_plus),
                             contentDescription = null,
                             modifier = Modifier
                                 .size(20.dp)
@@ -879,7 +872,7 @@ internal fun EditConfigDialog(
                 modifier = Modifier.padding(bottom = 8.dp)
             ) {
                 Icon(
-                    imageVector = Icons.Filled.KeyboardArrowUp,
+                    painter = painterResource(R.drawable.ic_arrow_up),
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.tertiary,
                     modifier = Modifier.padding(end = 12.dp).size(24.dp)
@@ -1067,7 +1060,7 @@ internal fun EditConfigDialog(
                         )
                     ) {
                         Icon(
-                            imageVector = Icons.Outlined.Check,
+                            painter = painterResource(R.drawable.ic_check),
                             contentDescription = null,
                             modifier = Modifier
                                 .size(20.dp)
@@ -1107,7 +1100,7 @@ internal fun ConfirmDeleteDialog(
                 modifier = Modifier.padding(bottom = 8.dp)
             ) {
                 Icon(
-                    imageVector = Icons.Filled.Close,
+                    painter = painterResource(R.drawable.ic_x),
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(end = 12.dp).size(24.dp)
@@ -1169,7 +1162,7 @@ internal fun ConfirmDeleteDialog(
                 modifier = Modifier.height(52.dp).padding(horizontal = 4.dp)
             ) {
                 Icon(
-                    imageVector = Icons.Filled.Close,
+                    painter = painterResource(R.drawable.ic_x),
                     contentDescription = null,
                     modifier = Modifier.size(20.dp).padding(end = 4.dp)
                 )
@@ -1256,7 +1249,7 @@ internal fun ImportExportDialog(
                             )
                         }
                         Icon(
-                            imageVector = Icons.Filled.KeyboardArrowDown,
+                            painter = painterResource(R.drawable.ic_arrow_down),
                             contentDescription = "导出",
                             tint = if (isExportEnabled)
                                 MaterialTheme.colorScheme.primary
@@ -1365,7 +1358,7 @@ internal fun ImportExportDialog(
                             )
                         }
                         Icon(
-                            imageVector = Icons.Filled.KeyboardArrowUp,
+                            painter = painterResource(R.drawable.ic_arrow_up),
                             contentDescription = "导入",
                             tint = MaterialTheme.colorScheme.secondary,
                             modifier = Modifier.size(32.dp)
@@ -1424,7 +1417,7 @@ internal fun AddModelDialog(
                 modifier = Modifier.padding(bottom = 8.dp)
             ) {
                 Icon(
-                    imageVector = Icons.Outlined.Add,
+                    painter = painterResource(R.drawable.ic_plus),
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.secondary,
                     modifier = Modifier.padding(end = 12.dp).size(24.dp)
@@ -1544,7 +1537,7 @@ internal fun AddModelDialog(
                     )
                 ) {
                     Icon(
-                        imageVector = Icons.Outlined.Add,
+                        painter = painterResource(R.drawable.ic_plus),
                         contentDescription = null,
                         modifier = Modifier
                             .size(20.dp)

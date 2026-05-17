@@ -10,6 +10,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
@@ -19,6 +20,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.isImeVisible
@@ -244,7 +246,8 @@ private fun FunctionPanelContent(
     onOpenConversationParams: () -> Unit = {},
     onOpenFilePicker: () -> Unit = {},
     onOpenCamera: () -> Unit = {},
-    onOpenGallery: () -> Unit = {}
+    onOpenGallery: () -> Unit = {},
+    onOpenSystemPrompt: () -> Unit = {}
 ) {
     val isDark = isSystemInDarkTheme()
     val cardBg = if (isDark) Color(0xFF212121) else Color(0xFFFFFFFF)
@@ -293,6 +296,15 @@ private fun FunctionPanelContent(
                 textColor = textColor,
                 isChecked = false,
                 onClick = { onOpenConversationParams(); onDismiss() }
+            )
+            FunctionPanelRow(
+                iconRes = R.drawable.ic_prompt,
+                label = "提示词",
+                iconBg = iconBg,
+                iconTint = iconTint,
+                textColor = textColor,
+                isChecked = false,
+                onClick = { onOpenSystemPrompt(); onDismiss() }
             )
             FunctionPanelRow(
                 iconRes = R.drawable.ic_paperclip,
@@ -844,11 +856,11 @@ fun ChatInputArea(
                     contentAlignment = Alignment.Center
                 ) {
                     val sep = separationProgress.coerceIn(0f, 1f)
-                    val layoutProgress = (sep / 0.7f).coerceIn(0f, 1f)
-                    val plusMotionProgress = layoutProgress * layoutProgress * (3f - 2f * layoutProgress)
+                    val layoutProgress = sep * sep * (3f - 2f * sep)
+                    val plusMotionProgress = layoutProgress
                     val textPaddingProgress = layoutProgress * layoutProgress
                     val expandedInputFieldWidth = (maxWidth * 0.82f).coerceAtMost(maxWidth - 48.dp)
-                    val collapsedInputFieldWidth = expandedInputFieldWidth - 16.dp
+                    val collapsedInputFieldWidth = expandedInputFieldWidth + 16.dp
                     val inputFieldWidth = collapsedInputFieldWidth + (expandedInputFieldWidth - collapsedInputFieldWidth) * layoutProgress
                     val plusBoxWidth = 64.dp
 
@@ -857,43 +869,33 @@ fun ChatInputArea(
                     val plusBorderInset = 1.dp * (1f - plusMotionProgress)
                     val plusWidth = (48f + 16f * plusStretchProgress - 20f * plusRecoverProgress).dp - plusBorderInset * 2
                     val plusOffset = plusBorderInset + (-20f * plusStretchProgress - 40f * plusRecoverProgress).dp
+                    val groupLeft = if (plusOffset < 0.dp) plusOffset * layoutProgress else 0.dp
+                    val groupWidth = inputFieldWidth - groupLeft
                     val plusHeight = inputMinHeight - plusBorderInset * 2
                     val plusCorner = plusHeight / 2
                     val plusShape = RoundedCornerShape(plusCorner)
                     val plusBg = inputBackground
                     val borderColor = if (isDarkTheme) Color(0xFF48474C) else Color(0xFFD6D6D6)
-                    val borderAlpha = ((sep - 0.7f) / 0.3f).coerceIn(0f, 1f)
-                    val plusBorderAlpha by animateFloatAsState(
-                        targetValue = borderAlpha,
-                        animationSpec = tween(durationMillis = 180),
-                        label = "plusBorderAlpha"
-                    )
-                    val inputBorderTargetAlpha = when {
-                        sep > 0.7f -> borderAlpha
-                        plusMotionProgress < 0.01f -> 1f
-                        else -> 0f
-                    }
-                    val inputBorderAlpha by animateFloatAsState(
-                        targetValue = inputBorderTargetAlpha,
-                        animationSpec = tween(durationMillis = 180),
-                        label = "inputBorderAlpha"
-                    )
+                    val separatedBorderAlpha = ((layoutProgress - 0.15f) / 0.35f).coerceIn(0f, 1f)
+                    val plusBorderAlpha = if (separationTarget > 0.5f) separatedBorderAlpha else 0f
+                    val collapsedInputBorderAlpha = ((0.35f - layoutProgress) / 0.35f).coerceIn(0f, 1f)
+                    val inputBorderAlpha = kotlin.math.max(separatedBorderAlpha, collapsedInputBorderAlpha)
 
                     val inputShape = RoundedCornerShape(inputMinHeight / 2)
-                    val textStartPadding = 40.dp - plusCorner * textPaddingProgress
+                    val textStartPadding = 48.dp - (48.dp - 16.dp) * textPaddingProgress
 
                     Box(
                         modifier = Modifier
-                            .offset(
-                                x = (expandedInputFieldWidth - inputFieldWidth) / 2 +
-                                    (-plusOffset / 2) * layoutProgress
-                            )
-                            .width(expandedInputFieldWidth)
+                            .width(groupWidth)
                             .wrapContentHeight(),
                         contentAlignment = Alignment.CenterStart
                     ) {
                         // 加号按钮
-                        Box(modifier = Modifier.zIndex(2f)) {
+                        Box(
+                            modifier = Modifier
+                                .offset(x = -groupLeft)
+                                .zIndex(2f)
+                        ) {
                             Box(
                                 modifier = Modifier
                                     .width(plusBoxWidth)
@@ -931,74 +933,73 @@ fun ChatInputArea(
 
                             if (renderFunctionPanel) {
                                 Popup(
-                                    alignment = Alignment.Center,
+                                    alignment = Alignment.BottomCenter,
                                     onDismissRequest = {
                                         lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
                                         if (showFunctionPanel) showFunctionPanel = false
                                     },
-                                    properties = PopupProperties(focusable = false, dismissOnBackPress = true, dismissOnClickOutside = true)
+                                    properties = PopupProperties(focusable = true, dismissOnBackPress = true, dismissOnClickOutside = true)
                                 ) {
                                     Box(
                                         modifier = Modifier
                                             .fillMaxSize()
                                             .clickable(
                                                 indication = null,
-                                                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                                                interactionSource = remember { MutableInteractionSource() }
                                             ) {
                                                 lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
                                                 showFunctionPanel = false
                                             }
-                                            .padding(bottom = with(LocalConfiguration.current) { (screenHeightDp * 0.10f).dp }),
+                                            .padding(bottom = with(density) { (chatInputContentHeightPx / density.density + 8f).dp }),
                                         contentAlignment = Alignment.BottomCenter
                                     ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth(0.8f)
-                                            .wrapContentHeight()
-                                            .clickable(
-                                                indication = null,
-                                                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-                                            ) {}
-                                            .graphicsLayer {
-                                                alpha = functionPanelAlpha.value
-                                                scaleX = functionPanelScale.value
-                                                scaleY = functionPanelScale.value
-                                                transformOrigin = TransformOrigin(0.5f, 1f)
-                                            }
-                                    ) {
-                                        FunctionPanelContent(
-                                            isWebSearchEnabled = isWebSearchEnabled,
-                                            isWebSearchAvailable = effectiveWebSearchAvailable,
-                                            onToggleWebSearch = onToggleWebSearch,
-                                            isCodeExecutionEnabled = isCodeExecutionEnabled,
-                                            onToggleCodeExecution = onToggleCodeExecution,
-                                            isGeminiChannel = isGeminiChannel,
-                                            onToggleImagePanel = onToggleImagePanel,
-                                            onToggleMoreOptionsPanel = onToggleMoreOptionsPanel,
-                                            hasContent = hasContent,
-                                            onClearContent = {
-                                                localTextFieldValue = TextFieldValue("", TextRange(0))
-                                                lastExternalText = ""
-                                                onTextChange("")
-                                                onClearMediaItems()
-                                                syncJob?.cancel()
-                                            },
-                                            onDismiss = {
-                                                lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
-                                                showFunctionPanel = false
-                                            },
-                                            isMcpEnabled = isMcpEnabled,
-                                            onToggleMcp = { viewModel.setMcpEnabledForNextRequest(!isMcpEnabled) },
-                                            onOpenConversationParams = { showConversationParamsDialog = true },
-                                            onOpenFilePicker = { filePickerLauncher.launch(arrayOf("*/*")) },
-                                            onOpenCamera = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
-                                            onOpenGallery = {
-                                                photoPickerLauncher.launch(
-                                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
-                                                )
-                                            }
-                                        )
-                                    }
+                                        Box(
+                                            modifier = Modifier
+                                                .widthIn(max = 320.dp)
+                                                .wrapContentHeight()
+                                                .graphicsLayer {
+                                                    alpha = functionPanelAlpha.value
+                                                    scaleX = functionPanelScale.value
+                                                    scaleY = functionPanelScale.value
+                                                    transformOrigin = TransformOrigin(0.5f, 1f)
+                                                }
+                                        ) {
+                                            FunctionPanelContent(
+                                                isWebSearchEnabled = isWebSearchEnabled,
+                                                isWebSearchAvailable = effectiveWebSearchAvailable,
+                                                onToggleWebSearch = onToggleWebSearch,
+                                                isCodeExecutionEnabled = isCodeExecutionEnabled,
+                                                onToggleCodeExecution = onToggleCodeExecution,
+                                                isGeminiChannel = isGeminiChannel,
+                                                onToggleImagePanel = onToggleImagePanel,
+                                                onToggleMoreOptionsPanel = onToggleMoreOptionsPanel,
+                                                hasContent = hasContent,
+                                                onClearContent = {
+                                                    localTextFieldValue = TextFieldValue("", TextRange(0))
+                                                    lastExternalText = ""
+                                                    onTextChange("")
+                                                    onClearMediaItems()
+                                                    syncJob?.cancel()
+                                                },
+                                                onDismiss = {
+                                                    lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
+                                                    showFunctionPanel = false
+                                                },
+                                                isMcpEnabled = isMcpEnabled,
+                                                onToggleMcp = { viewModel.setMcpEnabledForNextRequest(!isMcpEnabled) },
+                                                onOpenConversationParams = { showConversationParamsDialog = true },
+                                                onOpenFilePicker = { filePickerLauncher.launch(arrayOf("*/*")) },
+                                                onOpenCamera = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
+                                                onOpenGallery = {
+                                                    photoPickerLauncher.launch(
+                                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                                                    )
+                                                },
+                                                onOpenSystemPrompt = {
+                                                    viewModel.showSystemPromptDialog()
+                                                }
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -1076,6 +1077,7 @@ fun ChatInputArea(
                             value = localTextFieldValue,
                             onValueChange = { newValue -> localTextFieldValue = newValue },
                             modifier = Modifier
+                                .offset(x = -groupLeft)
                                 .width(inputFieldWidth)
                                 .align(Alignment.CenterStart)
                                 .zIndex(1f)
@@ -1097,6 +1099,7 @@ fun ChatInputArea(
                                 Column(
                                     modifier = Modifier
                                         .heightIn(min = inputMinHeight)
+                                        .animateContentSize(animationSpec = spring(stiffness = Spring.StiffnessMediumLow))
                                         .background(inputBackground, inputShape)
                                         .border(1.dp, borderColor.copy(alpha = inputBorderAlpha), inputShape)
                                         .padding(start = textStartPadding, end = 5.dp, top = safeVerticalPadding, bottom = safeVerticalPadding)
@@ -1174,7 +1177,9 @@ fun ChatInputArea(
                                         }
                                     }
                                     Row(
-                                        modifier = Modifier.fillMaxWidth(),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .heightIn(min = (inputMinHeight - safeVerticalPadding * 2).coerceAtLeast(0.dp)),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                     Box(modifier = Modifier.weight(1f)) {

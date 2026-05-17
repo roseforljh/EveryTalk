@@ -4,10 +4,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
+import androidx.compose.ui.res.painterResource
+import com.android.everytalk.R
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
@@ -59,7 +58,7 @@ fun ImageGenerationTopBar(
             ) {
                 IconButton(onClick = onMenuClick) {
                     Icon(
-                        imageVector = Icons.Filled.Menu,
+                        painter = painterResource(R.drawable.ic_menu),
                         contentDescription = "打开导航菜单",
                         tint = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.size(iconSize)
@@ -113,7 +112,7 @@ fun ImageGenerationTopBar(
             ) {
                 IconButton(onClick = onSettingsClick) {
                     Icon(
-                        imageVector = Icons.Filled.Settings,
+                        painter = painterResource(R.drawable.ic_settings),
                         contentDescription = "设置",
                         tint = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.size(iconSize)

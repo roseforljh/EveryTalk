@@ -6,6 +6,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.rememberScrollState
@@ -56,6 +58,7 @@ fun AppTopBar(
     selectedApiConfig: com.android.everytalk.data.DataClass.ApiConfig? = null,
     onModelSelected: (com.android.everytalk.data.DataClass.ApiConfig) -> Unit = {},
     onDismissModelSelection: () -> Unit = {},
+    onTitleLongClick: () -> Unit = {},
     modifier: Modifier = Modifier,
     barHeight: Dp = 85.dp,
     contentPaddingHorizontal: Dp = 12.dp,
@@ -121,6 +124,7 @@ fun AppTopBar(
 
                 // 模型选择器 - 胶囊，固定最大宽度
                 Box {
+                    @OptIn(ExperimentalFoundationApi::class)
                     Box(
                         modifier = Modifier
                             .height(iconButtonSize)
@@ -128,7 +132,10 @@ fun AppTopBar(
                             .clip(RoundedCornerShape(percent = 50))
                             .background(buttonBg)
                             .border(1.dp, borderColor, RoundedCornerShape(percent = 50))
-                            .clickable(onClick = onTitleClick)
+                            .combinedClickable(
+                                onClick = onTitleClick,
+                                onLongClick = onTitleLongClick
+                            )
                             .padding(horizontal = 16.dp),
                         contentAlignment = Alignment.Center
                     ) {
@@ -318,6 +325,7 @@ private fun TopBarMoreMenu(
 
     Popup(
         alignment = Alignment.TopEnd,
+        offset = androidx.compose.ui.unit.IntOffset(0, with(androidx.compose.ui.platform.LocalDensity.current) { 48.dp.toPx().toInt() }),
         onDismissRequest = onDismiss,
         properties = PopupProperties(focusable = true)
     ) {
@@ -404,6 +412,7 @@ private fun ModelSelectionDropdown(
 
     Popup(
         alignment = Alignment.TopStart,
+        offset = androidx.compose.ui.unit.IntOffset(0, with(androidx.compose.ui.platform.LocalDensity.current) { 48.dp.toPx().toInt() }),
         onDismissRequest = onDismiss,
         properties = PopupProperties(focusable = true)
     ) {

@@ -123,8 +123,8 @@ fun SystemPromptDialog(
                     this.scaleX = scaleAnim.value
                     this.scaleY = scaleAnim.value
                 },
-            // 使用 Material Theme 的 Surface 颜色，自适应亮/暗主题
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
             Column(
                 modifier = Modifier

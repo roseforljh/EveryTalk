@@ -543,7 +543,7 @@ open class MessageItemsController(
                 }
 
                 val hasImageContent = !message.imageUrls.isNullOrEmpty()
-                val hasTextContent = message.text.isNotBlank()
+                val hasTextContent = message.text.isNotBlank() || resolvedParseResult.blocks.isNotEmpty()
 
                 if (hasTextContent || (isImageGeneration && hasImageContent)) {
                     items.add(
