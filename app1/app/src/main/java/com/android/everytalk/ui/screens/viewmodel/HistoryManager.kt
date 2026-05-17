@@ -3,6 +3,7 @@ package com.android.everytalk.ui.screens.viewmodel
 import android.util.Log
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.data.network.extractThinkTagContent
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -110,7 +111,22 @@ class HistoryManager(
                     else -> true
                 }
             }
-            .map { it.copy(text = it.text.trim(), reasoning = it.reasoning?.trim()) }
+            .map { msg ->
+                val extraction = if (msg.sender == Sender.AI) extractThinkTagContent(msg.text) else null
+                if (extraction != null && extraction.changed) {
+                    val mergedReasoning = listOfNotNull(msg.reasoning, extraction.reasoning)
+                        .filter { it.isNotBlank() }
+                        .joinToString("\n\n")
+                        .ifBlank { null }
+                    msg.copy(
+                        text = extraction.content.trim(),
+                        reasoning = mergedReasoning?.trim(),
+                        parts = emptyList(),
+                    )
+                } else {
+                    msg.copy(text = msg.text.trim(), reasoning = msg.reasoning?.trim())
+                }
+            }
             .toList()
     }
 

@@ -5,6 +5,7 @@ import com.android.everytalk.ui.components.ContentParser
 import com.android.everytalk.ui.components.ContentPart
 import com.android.everytalk.ui.components.MarkdownPart
 import com.android.everytalk.data.network.AppStreamEvent
+import com.android.everytalk.data.network.extractThinkTagContent
 import com.android.everytalk.util.AppLogger
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -139,11 +140,18 @@ class MessageProcessor {
         logger.debug("Finalizing message ${message.id}: currentText=${currentText.length} chars, reasoning=${currentReasoning?.length ?: 0} chars")
 
         // 不做“整体重组/替换”。若本地缓冲为空，保留既有 message 字段，避免覆盖已持久化/已加载的文本。
-        val finalText = if (currentText.isNotEmpty()) currentText else message.text
-        val finalReasoning = currentReasoning ?: message.reasoning
+        val rawFinalText = if (currentText.isNotEmpty()) currentText else message.text
+        val thinkTagExtraction = extractThinkTagContent(rawFinalText)
+        val finalText = thinkTagExtraction.content
+        val extractedReasoning = thinkTagExtraction.reasoning.takeIf { it.isNotBlank() }
+        val finalReasoning = listOfNotNull(currentReasoning, message.reasoning, extractedReasoning)
+            .filter { it.isNotBlank() }
+            .joinToString("\n\n")
+            .ifBlank { null }
         val finalParts = when {
+            thinkTagExtraction.changed && finalText.isBlank() -> emptyList()
             finalText.isBlank() -> message.parts
-            currentText.isNotEmpty() -> buildMarkdownParts(finalText)
+            currentText.isNotEmpty() || thinkTagExtraction.changed -> buildMarkdownParts(finalText)
             message.parts.isNotEmpty() -> message.parts
             else -> buildMarkdownParts(finalText)
         }

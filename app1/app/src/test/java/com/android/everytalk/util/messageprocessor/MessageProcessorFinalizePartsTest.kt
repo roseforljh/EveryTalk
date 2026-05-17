@@ -56,4 +56,27 @@ class MessageProcessorFinalizePartsTest {
         assertTrue(codeBlocks.any { it.language == "powershell" && it.content.contains("openclaw.ai/install.ps1 | iex") })
         assertTrue(codeBlocks.any { it.language == "powershell" && it.content.contains("qclaw.io/install.ps1") })
     }
+
+    @Test
+    fun `finalize message processing should move think block from text to reasoning`() {
+        val text = """
+            <think>
+            I've just received information about Bill Gates.
+            </think>
+            在这张截图的语境中，CTO 是 Community Takeover。
+        """.trimIndent()
+
+        val message = Message(
+            id = "msg",
+            text = text,
+            sender = Sender.AI,
+            contentStarted = true
+        )
+
+        val processor = MessageProcessor().apply { initialize("session", "msg") }
+        val finalized = processor.finalizeMessageProcessing(message)
+
+        assertEquals("在这张截图的语境中，CTO 是 Community Takeover。", finalized.text)
+        assertEquals("I've just received information about Bill Gates.", finalized.reasoning)
+    }
 }

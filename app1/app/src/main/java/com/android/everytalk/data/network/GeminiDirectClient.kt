@@ -597,6 +597,7 @@ object GeminiDirectClient {
         var reasoningFinished = false
         var contentStarted = false
         var hasToolCalls = false
+        val thinkRouter = ThinkTagStreamRouter()
         
         try {
             Log.d(TAG, "开始解析 SSE 流（支持工具捕获）...")
@@ -626,14 +627,23 @@ object GeminiDirectClient {
                                             fullReasoning += textContent
                                             emitEvent(AppStreamEvent.Reasoning(textContent))
                                         } else if (!textContent.isNullOrEmpty()) {
-                                            if (reasoningStarted && !reasoningFinished) {
-                                                emitEvent(AppStreamEvent.ReasoningFinish(null))
-                                                reasoningFinished = true
+                                            val routed = thinkRouter.feed(textContent)
+                                            for (routedChunk in routed) {
+                                                if (routedChunk.isReasoning) {
+                                                    if (!reasoningStarted) reasoningStarted = true
+                                                    fullReasoning += routedChunk.text
+                                                    emitEvent(AppStreamEvent.Reasoning(routedChunk.text))
+                                                } else {
+                                                    if (reasoningStarted && !reasoningFinished) {
+                                                        emitEvent(AppStreamEvent.ReasoningFinish(null))
+                                                        reasoningFinished = true
+                                                    }
+                                                    if (!contentStarted) contentStarted = true
+                                                    eventCount++
+                                                    fullText += routedChunk.text
+                                                    emitEvent(AppStreamEvent.Content(routedChunk.text, null, null))
+                                                }
                                             }
-                                            if (!contentStarted) contentStarted = true
-                                            eventCount++
-                                            fullText += textContent
-                                            emitEvent(AppStreamEvent.Content(textContent, null, null))
                                         }
                                         
                                         partObj["functionCall"]?.jsonObject?.let { fcObj ->
@@ -671,6 +681,23 @@ object GeminiDirectClient {
                 }
             }
             
+            // 冲刷 thinkRouter 剩余内容
+            val routerRemaining = thinkRouter.flush()
+            for (routedChunk in routerRemaining) {
+                if (routedChunk.isReasoning) {
+                    if (!reasoningStarted) reasoningStarted = true
+                    fullReasoning += routedChunk.text
+                    emitEvent(AppStreamEvent.Reasoning(routedChunk.text))
+                } else {
+                    if (reasoningStarted && !reasoningFinished) {
+                        emitEvent(AppStreamEvent.ReasoningFinish(null))
+                        reasoningFinished = true
+                    }
+                    fullText += routedChunk.text
+                    emitEvent(AppStreamEvent.Content(routedChunk.text, null, null))
+                }
+            }
+
             // 只有当没有工具调用时才发送 ContentFinal
             // 有工具调用时，等待整个循环完成后再发送最终内容
             if (fullText.isNotEmpty() && !hasToolCalls) {
@@ -703,6 +730,7 @@ object GeminiDirectClient {
         var reasoningStarted = false
         var reasoningFinished = false
         var contentStarted = false
+        val thinkRouter = ThinkTagStreamRouter()
         
         // 用于存储 Grounding Metadata 以便最后添加引用
         var capturedGroundingMetadata: JsonObject? = null
@@ -755,23 +783,29 @@ object GeminiDirectClient {
                                             send(AppStreamEvent.Reasoning(textContent))
                                             Log.d(TAG, "🧠 思考片段 (${textContent.length}字): ${textContent.take(50)}...")
                                         } else if (!textContent.isNullOrEmpty()) {
-                                            // 这是正文内容
-                                            // 如果之前有思考过程但还没结束，先发送思考结束事件
-                                            if (reasoningStarted && !reasoningFinished) {
-                                                send(AppStreamEvent.ReasoningFinish(null))
-                                                reasoningFinished = true
-                                                Log.i(TAG, "🧠 思考过程结束，开始输出正文")
+                                            // 通过 ThinkTagStreamRouter 检测 <think> 标签
+                                            val routed = thinkRouter.feed(textContent)
+                                            for (routedChunk in routed) {
+                                                if (routedChunk.isReasoning) {
+                                                    if (!reasoningStarted) {
+                                                        reasoningStarted = true
+                                                        Log.i(TAG, "🧠 开始接收思考过程 (via <think> tag)")
+                                                    }
+                                                    fullReasoning += routedChunk.text
+                                                    send(AppStreamEvent.Reasoning(routedChunk.text))
+                                                } else {
+                                                    if (reasoningStarted && !reasoningFinished) {
+                                                        send(AppStreamEvent.ReasoningFinish(null))
+                                                        reasoningFinished = true
+                                                        Log.i(TAG, "🧠 思考过程结束，开始输出正文")
+                                                    }
+                                                    if (!contentStarted) contentStarted = true
+                                                    eventCount++
+                                                    fullText += routedChunk.text
+                                                    send(AppStreamEvent.Content(routedChunk.text, null, null))
+                                                    Log.i(TAG, "✓ 流式输出 #$eventCount (${routedChunk.text.length}字): ${routedChunk.text.take(50)}...")
+                                                }
                                             }
-                                            
-                                            if (!contentStarted) {
-                                                contentStarted = true
-                                            }
-                                            
-                                            eventCount++
-                                            fullText += textContent
-                                            // 立即发送 Content 事件
-                                            send(AppStreamEvent.Content(textContent, null, null))
-                                            Log.i(TAG, "✓ 流式输出 #$eventCount (${textContent.length}字): ${textContent.take(50)}...")
                                         }
                                         
                                         // 检查代码执行相关内容
@@ -882,6 +916,23 @@ object GeminiDirectClient {
             
             Log.i(TAG, "SSE 流读取完成，共 $lineCount 行，$eventCount 个事件")
             
+            // 冲刷 thinkRouter 剩余内容
+            val routerRemaining = thinkRouter.flush()
+            for (routedChunk in routerRemaining) {
+                if (routedChunk.isReasoning) {
+                    if (!reasoningStarted) reasoningStarted = true
+                    fullReasoning += routedChunk.text
+                    send(AppStreamEvent.Reasoning(routedChunk.text))
+                } else {
+                    if (reasoningStarted && !reasoningFinished) {
+                        send(AppStreamEvent.ReasoningFinish(null))
+                        reasoningFinished = true
+                    }
+                    fullText += routedChunk.text
+                    send(AppStreamEvent.Content(routedChunk.text, null, null))
+                }
+            }
+
             // 如果思考过程开始了但还没结束，发送结束事件
             if (reasoningStarted && !reasoningFinished) {
                 send(AppStreamEvent.ReasoningFinish(null))

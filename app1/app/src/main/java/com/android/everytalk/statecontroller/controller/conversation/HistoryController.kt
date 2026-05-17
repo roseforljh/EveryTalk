@@ -13,6 +13,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.data.network.extractThinkTagContent
 
 /**
  * HistoryController
@@ -272,7 +273,21 @@ class HistoryController(
     private fun processLoadedMessages(messages: List<Message>): List<Message> {
         return messages.map { message ->
             if (message.sender == Sender.AI && message.text.isNotBlank()) {
-                message.copy(contentStarted = true)
+                val extraction = extractThinkTagContent(message.text)
+                if (extraction.changed) {
+                    val mergedReasoning = listOfNotNull(message.reasoning, extraction.reasoning)
+                        .filter { it.isNotBlank() }
+                        .joinToString("\n\n")
+                        .ifBlank { null }
+                    message.copy(
+                        text = extraction.content,
+                        reasoning = mergedReasoning,
+                        contentStarted = true,
+                        parts = emptyList(),
+                    )
+                } else {
+                    message.copy(contentStarted = true)
+                }
             } else {
                 message
             }

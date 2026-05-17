@@ -11,6 +11,7 @@ import com.android.everytalk.data.network.AppStreamEvent
 import com.android.everytalk.data.DataClass.ApiContentPart
 import com.android.everytalk.data.network.ApiClient
 import com.android.everytalk.data.network.NetworkUtils
+import com.android.everytalk.data.network.extractThinkTagContent
 import com.android.everytalk.data.network.openclaw.OpenClawRuntimeState
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.models.SelectedMediaItem.Audio
@@ -61,7 +62,9 @@ internal fun reconcileMessageAfterStatusClear(updatedMessage: Message, clearedMe
 }
 
 internal fun mergeStreamingCompletionMessage(syncedMessage: Message, finalizedMessage: Message): Message {
+    val syncedThinkExtraction = extractThinkTagContent(syncedMessage.text)
     return syncedMessage.copy(
+        text = if (syncedThinkExtraction.changed) finalizedMessage.text else syncedMessage.text,
         reasoning = finalizedMessage.reasoning ?: syncedMessage.reasoning,
         parts = finalizedMessage.parts.ifEmpty { syncedMessage.parts },
         contentStarted = true,

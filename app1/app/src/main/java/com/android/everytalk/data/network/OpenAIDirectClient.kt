@@ -1048,6 +1048,7 @@ object OpenAIDirectClient {
         var reasoningFinished = false
         var contentStarted = false
         val contentAggregator = StreamingContentAggregator()
+        val thinkRouter = ThinkTagStreamRouter()
 
         try {
             while (!channel.isClosedForRead) {
@@ -1093,16 +1094,22 @@ object OpenAIDirectClient {
 
                                     val contentText = delta?.get("content")?.jsonPrimitive?.contentOrNull
                                     if (!contentText.isNullOrEmpty()) {
-                                        // 第一段正文到来，先收起思考框
-                                        if (reasoningStarted && !reasoningFinished) {
-                                            send(AppStreamEvent.ReasoningFinish(null))
-                                            reasoningFinished = true
+                                        val routed = thinkRouter.feed(contentText)
+                                        for (routedChunk in routed) {
+                                            if (routedChunk.isReasoning) {
+                                                if (!reasoningStarted) reasoningStarted = true
+                                                send(AppStreamEvent.Reasoning(routedChunk.text))
+                                            } else {
+                                                if (reasoningStarted && !reasoningFinished) {
+                                                    send(AppStreamEvent.ReasoningFinish(null))
+                                                    reasoningFinished = true
+                                                }
+                                                if (!contentStarted) contentStarted = true
+                                                eventCount++
+                                                fullText += routedChunk.text
+                                                send(AppStreamEvent.Content(routedChunk.text, null, null))
+                                            }
                                         }
-                                        if (!contentStarted) contentStarted = true
-
-                                        eventCount++
-                                        fullText += contentText
-                                        send(AppStreamEvent.Content(contentText, null, null))
                                     }
 
                                     // 结束原因
@@ -1125,6 +1132,22 @@ object OpenAIDirectClient {
                     line.startsWith(":") -> {
                         // SSE 注释/心跳，忽略
                     }
+                }
+            }
+
+            // 冲刷 thinkRouter 剩余内容
+            val routerRemaining = thinkRouter.flush()
+            for (routedChunk in routerRemaining) {
+                if (routedChunk.isReasoning) {
+                    if (!reasoningStarted) reasoningStarted = true
+                    send(AppStreamEvent.Reasoning(routedChunk.text))
+                } else {
+                    if (reasoningStarted && !reasoningFinished) {
+                        send(AppStreamEvent.ReasoningFinish(null))
+                        reasoningFinished = true
+                    }
+                    fullText += routedChunk.text
+                    send(AppStreamEvent.Content(routedChunk.text, null, null))
                 }
             }
 
@@ -1306,6 +1329,7 @@ object OpenAIDirectClient {
         var reasoningFinished = false
         var contentStarted = false
         val contentAggregator = StreamingContentAggregator()
+        val thinkRouter = ThinkTagStreamRouter()
         var hasToolCalls = false
 
         // 用于聚合流式的 tool_calls（OpenAI 会分多个 chunk 发送）
@@ -1349,18 +1373,27 @@ object OpenAIDirectClient {
                                         emitEvent(AppStreamEvent.Reasoning(reasoningText))
                                     }
 
-                                    // 处理正文内容
+                                    // 处理正文内容（支持 <think> 标签检测）
                                     val contentText = delta?.get("content")?.jsonPrimitive?.contentOrNull
                                     if (!contentText.isNullOrEmpty()) {
-                                        if (reasoningStarted && !reasoningFinished) {
-                                            emitEvent(AppStreamEvent.ReasoningFinish(null))
-                                            reasoningFinished = true
-                                        }
-                                        if (!contentStarted) contentStarted = true
-                                        fullText += contentText
-                                        val aggregatedChunks = contentAggregator.append(contentText)
-                                        aggregatedChunks.forEach { aggregated ->
-                                            emitEvent(AppStreamEvent.Content(aggregated, null, ""))
+                                        val routed = thinkRouter.feed(contentText)
+                                        for (routedChunk in routed) {
+                                            if (routedChunk.isReasoning) {
+                                                if (!reasoningStarted) reasoningStarted = true
+                                                fullReasoningContent += routedChunk.text
+                                                emitEvent(AppStreamEvent.Reasoning(routedChunk.text))
+                                            } else {
+                                                if (reasoningStarted && !reasoningFinished) {
+                                                    emitEvent(AppStreamEvent.ReasoningFinish(null))
+                                                    reasoningFinished = true
+                                                }
+                                                if (!contentStarted) contentStarted = true
+                                                fullText += routedChunk.text
+                                                val aggregatedChunks = contentAggregator.append(routedChunk.text)
+                                                aggregatedChunks.forEach { aggregated ->
+                                                    emitEvent(AppStreamEvent.Content(aggregated, null, ""))
+                                                }
+                                            }
                                         }
                                     }
 
@@ -1412,7 +1445,24 @@ object OpenAIDirectClient {
                 }
             }
 
-            // 处理完成后，先冲刷剩余正文缓冲
+            // 冲刷 thinkRouter 剩余内容
+            val routerRemaining = thinkRouter.flush()
+            for (routedChunk in routerRemaining) {
+                if (routedChunk.isReasoning) {
+                    if (!reasoningStarted) reasoningStarted = true
+                    fullReasoningContent += routedChunk.text
+                    emitEvent(AppStreamEvent.Reasoning(routedChunk.text))
+                } else {
+                    if (reasoningStarted && !reasoningFinished) {
+                        emitEvent(AppStreamEvent.ReasoningFinish(null))
+                        reasoningFinished = true
+                    }
+                    fullText += routedChunk.text
+                    contentAggregator.append(routedChunk.text)
+                }
+            }
+
+            // 冲刷正文缓冲
             val remainingContent = contentAggregator.flushRemaining()
             if (remainingContent.isNotEmpty()) {
                 emitEvent(AppStreamEvent.Content(remainingContent, null, ""))
