@@ -67,6 +67,7 @@ import com.android.everytalk.ui.theme.chatColors
 
 import com.android.everytalk.ui.components.EnhancedMarkdownText
 import com.android.everytalk.ui.components.WebPreviewDialog
+import com.android.everytalk.ui.components.scrollFadeEdge
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
@@ -292,8 +293,14 @@ fun ChatMessagesList(
         }
     }
     
-    Box(modifier = Modifier.fillMaxSize()) {
-            val topPadding = 85.dp
+    val fadeBackgroundColor = MaterialTheme.colorScheme.background
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .scrollFadeEdge(listState = listState, backgroundColor = fadeBackgroundColor)
+    ) {
+            val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+            val topPadding = statusBarTop + 72.dp
             val density = LocalDensity.current
             val topPaddingPx = with(density) { topPadding.toPx().toInt() }
             
@@ -447,12 +454,12 @@ fun ChatMessagesList(
                     .fillMaxSize()
                     .nestedScroll(scrollStateManager.nestedScrollConnection),
                 contentPadding = PaddingValues(
-                    start = 4.dp,
-                    end = 4.dp,
+                    start = 6.dp,
+                    end = 16.dp,
                     top = topPadding,
-                    bottom = additionalBottomPadding + 10.dp
+                    bottom = additionalBottomPadding + 12.dp
                 ),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 itemsIndexed(
             items = chatItems,

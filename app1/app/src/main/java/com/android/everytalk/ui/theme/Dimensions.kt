@@ -11,8 +11,9 @@ object ChatDimensions {
     val CORNER_RADIUS_SMALL = 8.dp
     
     // 间距
-    val HORIZONTAL_PADDING = 8.dp
-    val VERTICAL_PADDING = 8.dp
+    val HORIZONTAL_PADDING = 6.dp
+    val HORIZONTAL_PADDING_END = 16.dp
+    val VERTICAL_PADDING = 12.dp
     val BUBBLE_INNER_PADDING_HORIZONTAL = 12.dp
     val BUBBLE_INNER_PADDING_VERTICAL = 8.dp
     val CODE_BLOCK_PADDING_TOP = 12.dp
@@ -31,8 +32,8 @@ object ChatDimensions {
     val CODE_BLOCK_CORNER_RADIUS = 16.dp
     
     // 字体
-    val CODE_FONT_SIZE = 13.sp
-    val CODE_LINE_HEIGHT = 19.sp
+    val CODE_FONT_SIZE = 14.sp
+    val CODE_LINE_HEIGHT = 20.sp
     val HEADER_1_SIZE = 28.sp
     val HEADER_2_SIZE = 24.sp
     val HEADER_DEFAULT_SIZE = 20.sp

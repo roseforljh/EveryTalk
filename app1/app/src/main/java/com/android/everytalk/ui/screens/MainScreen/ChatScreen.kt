@@ -600,7 +600,24 @@ fun ChatScreen(
                 systemPrompt = systemPrompt,
                 isSystemPromptExpanded = isSystemPromptExpanded,
                 isSystemPromptEngaged = isSystemPromptEngaged,
-                onToggleSystemPromptEngaged = { viewModel.toggleSystemPromptEngaged() }
+                onToggleSystemPromptEngaged = { viewModel.toggleSystemPromptEngaged() },
+                hasContent = messages.isNotEmpty(),
+                onNewChat = { viewModel.startNewChat() },
+                onShareChat = {
+                    val idx = viewModel.loadedHistoryIndex.value
+                    if (idx != null) viewModel.shareConversation(idx, false)
+                },
+                onPinChat = {
+                    val idx = viewModel.loadedHistoryIndex.value
+                    if (idx != null) viewModel.togglePinForConversation(idx, false)
+                },
+                onDeleteChat = {
+                    val idx = viewModel.loadedHistoryIndex.value
+                    if (idx != null) {
+                        viewModel.deleteConversation(idx)
+                        viewModel.startNewChat()
+                    }
+                }
             )
 
             mcpUiStage?.takeIf { it.userVisibleText.isNotBlank() }?.let { stage ->
