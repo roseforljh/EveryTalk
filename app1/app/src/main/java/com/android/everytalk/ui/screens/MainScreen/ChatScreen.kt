@@ -40,6 +40,9 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.border
+import androidx.compose.ui.draw.shadow
 import androidx.navigation.NavController
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import com.android.everytalk.data.DataClass.Message
@@ -617,7 +620,15 @@ fun ChatScreen(
                         viewModel.deleteConversation(idx)
                         viewModel.startNewChat()
                     }
-                }
+                },
+                showModelSelection = showModelSelectionBottomSheet,
+                modelList = filteredModelsForBottomSheet,
+                selectedApiConfig = selectedApiConfig,
+                onModelSelected = { modelConfig ->
+                    viewModel.selectConfig(modelConfig)
+                    showModelSelectionBottomSheet = false
+                },
+                onDismissModelSelection = { showModelSelectionBottomSheet = false }
             )
 
             mcpUiStage?.takeIf { it.userVisibleText.isNotBlank() }?.let { stage ->
@@ -652,29 +663,6 @@ fun ChatScreen(
             WebSourcesDialog(
                 sources = sourcesForDialog,
                 onDismissRequest = { viewModel.dismissSourcesDialog() }
-            )
-        }
-
-        if (showModelSelectionBottomSheet) {
-            ModelSelectionBottomSheet(
-                onDismissRequest = { showModelSelectionBottomSheet = false },
-                sheetState = bottomSheetState,
-                availableModels = filteredModelsForBottomSheet,
-                selectedApiConfig = selectedApiConfig,
-                onModelSelected = { modelConfig ->
-                    viewModel.selectConfig(modelConfig)
-                    coroutineScope.launch {
-                        bottomSheetState.hide()
-                    }.invokeOnCompletion {
-                        if (!bottomSheetState.isVisible) {
-                            showModelSelectionBottomSheet = false
-                        }
-                    }
-                },
-                allApiConfigs = availableModels,
-                onPlatformSelected = { platformConfig ->
-                    viewModel.selectConfig(platformConfig)
-                }
             )
         }
 

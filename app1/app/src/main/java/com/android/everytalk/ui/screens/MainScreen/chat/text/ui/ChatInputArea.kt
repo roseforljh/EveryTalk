@@ -59,6 +59,7 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntOffset
@@ -242,7 +243,8 @@ private fun FunctionPanelContent(
     onToggleMcp: () -> Unit = {},
     onOpenConversationParams: () -> Unit = {},
     onOpenFilePicker: () -> Unit = {},
-    onOpenCamera: () -> Unit = {}
+    onOpenCamera: () -> Unit = {},
+    onOpenGallery: () -> Unit = {}
 ) {
     val isDark = isSystemInDarkTheme()
     val cardBg = if (isDark) Color(0xFF212121) else Color(0xFFFFFFFF)
@@ -254,7 +256,7 @@ private fun FunctionPanelContent(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(max = 420.dp)
+            .heightIn(max = 370.dp)
             .shadow(8.dp, RoundedCornerShape(28.dp))
             .border(1.dp, borderColor, RoundedCornerShape(28.dp)),
         shape = RoundedCornerShape(28.dp),
@@ -308,7 +310,7 @@ private fun FunctionPanelContent(
                 iconTint = iconTint,
                 textColor = textColor,
                 isChecked = false,
-                onClick = { onToggleImagePanel(); onDismiss() }
+                onClick = { onOpenGallery(); onDismiss() }
             )
             FunctionPanelRow(
                 iconRes = R.drawable.ic_camera,
@@ -734,28 +736,28 @@ fun ChatInputArea(
                 }
                 val isImeVisible = imeProgress > 0.01f
                 val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
-                LaunchedEffect(isImeVisible) {
-                    if (!isImeVisible) {
+                LaunchedEffect(isImeVisible, localText) {
+                    if (!isImeVisible && !showFunctionPanel && localText.isEmpty()) {
                         focusManager.clearFocus()
                     }
                 }
+                LaunchedEffect(localText, isFocused) {
+                    if (localText.isNotEmpty() && !isFocused) {
+                        focusRequester.requestFocus()
+                    }
+                }
 
+                val keepInputSeparated = localText.isNotEmpty() && isFocused
+                val separationTarget = if (keepInputSeparated) 1f else imeProgress
                 val separationProgress by animateFloatAsState(
-                    targetValue = if (imeProgress > 0.5f) 1f else 0f,
+                    targetValue = separationTarget,
                     animationSpec = spring(
-                        dampingRatio = 1f,
-                        stiffness = 280f
+                        dampingRatio = 0.857f,
+                        stiffness = 150f
                     ),
                     label = "separationProgress"
                 )
-                val sizeProgress by animateFloatAsState(
-                    targetValue = if (imeProgress > 0.5f) 1f else 0f,
-                    animationSpec = spring(
-                        dampingRatio = 1f,
-                        stiffness = 280f
-                    ),
-                    label = "sizeProgress"
-                )
+                val sizeProgress = separationProgress
                 val verticalPadding = ((4f - 1f * sizeProgress).coerceAtLeast(0f)).dp
                 val inputMinHeight = ((48f - 4f * sizeProgress).coerceIn(44f, 48f)).dp
 
@@ -834,42 +836,6 @@ fun ChatInputArea(
 
                 val inputBackground = if (isDarkTheme) Color(0xFF1F1F1F) else Color(0xFFE8E8E8)
 
-                // 已选中功能标签
-                if (isWebSearchEnabled && effectiveWebSearchAvailable) {
-                    Row(
-                        modifier = Modifier
-                            .align(Alignment.CenterHorizontally)
-                            .padding(bottom = 6.dp)
-                            .background(
-                                if (isDarkTheme) Color(0xFF3B3B3B) else Color(0xFFE0E0E0),
-                                RoundedCornerShape(16.dp)
-                            )
-                            .clickable { onToggleWebSearch() }
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_globe),
-                            contentDescription = null,
-                            tint = Color(0xFF66B5FF),
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text(
-                            "搜索",
-                            fontSize = 13.sp,
-                            color = Color(0xFF66B5FF)
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Icon(
-                            painter = painterResource(R.drawable.ic_x),
-                            contentDescription = "关闭",
-                            tint = Color(0xFF66B5FF),
-                            modifier = Modifier.size(14.dp)
-                        )
-                    }
-                }
-
                 // 输入区域
                 BoxWithConstraints(
                     modifier = Modifier
@@ -878,31 +844,56 @@ fun ChatInputArea(
                     contentAlignment = Alignment.Center
                 ) {
                     val sep = separationProgress.coerceIn(0f, 1f)
-                    val inputFieldWidth = (maxWidth * 0.78f).coerceAtMost(maxWidth - 56.dp)
+                    val layoutProgress = (sep / 0.7f).coerceIn(0f, 1f)
+                    val plusMotionProgress = layoutProgress * layoutProgress * (3f - 2f * layoutProgress)
+                    val textPaddingProgress = layoutProgress * layoutProgress
+                    val expandedInputFieldWidth = (maxWidth * 0.82f).coerceAtMost(maxWidth - 48.dp)
+                    val collapsedInputFieldWidth = expandedInputFieldWidth - 16.dp
+                    val inputFieldWidth = collapsedInputFieldWidth + (expandedInputFieldWidth - collapsedInputFieldWidth) * layoutProgress
                     val plusBoxWidth = 64.dp
 
-                    val plusStretchProgress = (sep * 2f).coerceIn(0f, 1f)
-                    val plusRecoverProgress = ((sep - 0.5f) * 2f).coerceIn(0f, 1f)
-                    val plusBorderInset = 1.dp * (1f - sep)
-                    val plusWidth = (46f + 18f * plusStretchProgress - 20f * plusRecoverProgress).dp
-                    val plusOffset = plusBorderInset + (-16f * plusStretchProgress - 32f * plusRecoverProgress).dp
+                    val plusStretchProgress = (plusMotionProgress * 2f).coerceIn(0f, 1f)
+                    val plusRecoverProgress = ((plusMotionProgress - 0.5f) * 2f).coerceIn(0f, 1f)
+                    val plusBorderInset = 1.dp * (1f - plusMotionProgress)
+                    val plusWidth = (48f + 16f * plusStretchProgress - 20f * plusRecoverProgress).dp - plusBorderInset * 2
+                    val plusOffset = plusBorderInset + (-20f * plusStretchProgress - 40f * plusRecoverProgress).dp
                     val plusHeight = inputMinHeight - plusBorderInset * 2
                     val plusCorner = plusHeight / 2
                     val plusShape = RoundedCornerShape(plusCorner)
                     val plusBg = inputBackground
                     val borderColor = if (isDarkTheme) Color(0xFF48474C) else Color(0xFFD6D6D6)
+                    val borderAlpha = ((sep - 0.7f) / 0.3f).coerceIn(0f, 1f)
+                    val plusBorderAlpha by animateFloatAsState(
+                        targetValue = borderAlpha,
+                        animationSpec = tween(durationMillis = 180),
+                        label = "plusBorderAlpha"
+                    )
+                    val inputBorderTargetAlpha = when {
+                        sep > 0.7f -> borderAlpha
+                        plusMotionProgress < 0.01f -> 1f
+                        else -> 0f
+                    }
+                    val inputBorderAlpha by animateFloatAsState(
+                        targetValue = inputBorderTargetAlpha,
+                        animationSpec = tween(durationMillis = 180),
+                        label = "inputBorderAlpha"
+                    )
 
                     val inputShape = RoundedCornerShape(inputMinHeight / 2)
-                    val textStartPadding = 48.dp - plusCorner * sep
+                    val textStartPadding = 40.dp - plusCorner * textPaddingProgress
 
                     Box(
                         modifier = Modifier
-                            .width(inputFieldWidth)
+                            .offset(
+                                x = (expandedInputFieldWidth - inputFieldWidth) / 2 +
+                                    (-plusOffset / 2) * layoutProgress
+                            )
+                            .width(expandedInputFieldWidth)
                             .wrapContentHeight(),
                         contentAlignment = Alignment.CenterStart
                     ) {
                         // 加号按钮
-                        Box(modifier = Modifier.zIndex(1f)) {
+                        Box(modifier = Modifier.zIndex(2f)) {
                             Box(
                                 modifier = Modifier
                                     .width(plusBoxWidth)
@@ -915,8 +906,8 @@ fun ChatInputArea(
                                         .width(plusWidth)
                                         .height(plusHeight)
                                         .background(plusBg, plusShape)
-                                        .border(1.dp, borderColor.copy(alpha = sep), plusShape),
-                                    contentAlignment = Alignment.Center
+                                        .border(1.dp, borderColor.copy(alpha = plusBorderAlpha), plusShape),
+                                    contentAlignment = Alignment.CenterStart
                                 ) {
                                     IconButton(
                                         onClick = {
@@ -940,18 +931,34 @@ fun ChatInputArea(
 
                             if (renderFunctionPanel) {
                                 Popup(
-                                    alignment = Alignment.BottomCenter,
-                                    offset = IntOffset(0, with(density) { (-60).dp.toPx().toInt() }),
+                                    alignment = Alignment.Center,
                                     onDismissRequest = {
                                         lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
                                         if (showFunctionPanel) showFunctionPanel = false
                                     },
-                                    properties = PopupProperties(focusable = true, dismissOnBackPress = true, dismissOnClickOutside = true)
+                                    properties = PopupProperties(focusable = false, dismissOnBackPress = true, dismissOnClickOutside = true)
                                 ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .clickable(
+                                                indication = null,
+                                                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                                            ) {
+                                                lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
+                                                showFunctionPanel = false
+                                            }
+                                            .padding(bottom = with(LocalConfiguration.current) { (screenHeightDp * 0.10f).dp }),
+                                        contentAlignment = Alignment.BottomCenter
+                                    ) {
                                     Box(
                                         modifier = Modifier
                                             .fillMaxWidth(0.8f)
                                             .wrapContentHeight()
+                                            .clickable(
+                                                indication = null,
+                                                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                                            ) {}
                                             .graphicsLayer {
                                                 alpha = functionPanelAlpha.value
                                                 scaleX = functionPanelScale.value
@@ -984,8 +991,14 @@ fun ChatInputArea(
                                             onToggleMcp = { viewModel.setMcpEnabledForNextRequest(!isMcpEnabled) },
                                             onOpenConversationParams = { showConversationParamsDialog = true },
                                             onOpenFilePicker = { filePickerLauncher.launch(arrayOf("*/*")) },
-                                            onOpenCamera = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) }
+                                            onOpenCamera = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
+                                            onOpenGallery = {
+                                                photoPickerLauncher.launch(
+                                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                                                )
+                                            }
                                         )
+                                    }
                                     }
                                 }
                             }
@@ -1065,6 +1078,7 @@ fun ChatInputArea(
                             modifier = Modifier
                                 .width(inputFieldWidth)
                                 .align(Alignment.CenterStart)
+                                .zIndex(1f)
                                 .focusRequester(focusRequester)
                                 .onFocusChanged { focusState ->
                                     isFocused = focusState.isFocused
@@ -1079,18 +1093,94 @@ fun ChatInputArea(
                             maxLines = 5,
                             decorationBox = { innerTextField ->
                                 val safeVerticalPadding = verticalPadding.coerceAtLeast(0.dp)
-                                Row(
+                                val hasActiveTags = (isWebSearchEnabled && effectiveWebSearchAvailable) || isMcpEnabled
+                                Column(
                                     modifier = Modifier
                                         .heightIn(min = inputMinHeight)
                                         .background(inputBackground, inputShape)
-                                        .border(1.dp, borderColor, inputShape)
-                                        .padding(start = textStartPadding, end = 5.dp, top = safeVerticalPadding, bottom = safeVerticalPadding),
-                                    verticalAlignment = Alignment.CenterVertically
+                                        .border(1.dp, borderColor.copy(alpha = inputBorderAlpha), inputShape)
+                                        .padding(start = textStartPadding, end = 5.dp, top = safeVerticalPadding, bottom = safeVerticalPadding)
                                 ) {
+                                    if (hasActiveTags) {
+                                        Row(
+                                            modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            if (isWebSearchEnabled && effectiveWebSearchAvailable) {
+                                                Row(
+                                                    modifier = Modifier
+                                                        .background(
+                                                            if (isDarkTheme) Color(0xFF2A2A2A) else Color(0xFFD0D0D0),
+                                                            RoundedCornerShape(14.dp)
+                                                        )
+                                                        .clickable { onToggleWebSearch() }
+                                                        .padding(horizontal = 8.dp, vertical = 5.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Icon(
+                                                        painter = painterResource(R.drawable.ic_globe),
+                                                        contentDescription = null,
+                                                        tint = Color(0xFF66B5FF),
+                                                        modifier = Modifier.size(14.dp)
+                                                    )
+                                                    Spacer(Modifier.width(4.dp))
+                                                    Text(
+                                                        "搜索",
+                                                        fontSize = 12.sp,
+                                                        color = Color(0xFF66B5FF)
+                                                    )
+                                                    Spacer(Modifier.width(4.dp))
+                                                    Icon(
+                                                        painter = painterResource(R.drawable.ic_x),
+                                                        contentDescription = "关闭联网搜索",
+                                                        tint = Color(0xFF66B5FF),
+                                                        modifier = Modifier.size(12.dp)
+                                                    )
+                                                }
+                                            }
+                                            if (isMcpEnabled) {
+                                                Row(
+                                                    modifier = Modifier
+                                                        .background(
+                                                            if (isDarkTheme) Color(0xFF2A2A2A) else Color(0xFFD0D0D0),
+                                                            RoundedCornerShape(14.dp)
+                                                        )
+                                                        .clickable { viewModel.setMcpEnabledForNextRequest(false) }
+                                                        .padding(horizontal = 8.dp, vertical = 5.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Icon(
+                                                        painter = painterResource(R.drawable.ic_hammer),
+                                                        contentDescription = null,
+                                                        tint = Color(0xFF66B5FF),
+                                                        modifier = Modifier.size(14.dp)
+                                                    )
+                                                    Spacer(Modifier.width(4.dp))
+                                                    Text(
+                                                        "MCP",
+                                                        fontSize = 12.sp,
+                                                        color = Color(0xFF66B5FF)
+                                                    )
+                                                    Spacer(Modifier.width(4.dp))
+                                                    Icon(
+                                                        painter = painterResource(R.drawable.ic_x),
+                                                        contentDescription = "关闭MCP",
+                                                        tint = Color(0xFF66B5FF),
+                                                        modifier = Modifier.size(12.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
                                     Box(modifier = Modifier.weight(1f)) {
                                         if (localText.isEmpty()) {
                                             Text(
-                                                "回复 EveryTalk",
+                                                if (isWebSearchEnabled && effectiveWebSearchAvailable) "搜索网页" else "回复 EveryTalk",
                                                 style = MaterialTheme.typography.bodyLarge,
                                                 color = if (isDarkTheme) Color(0xFFAFAFAF) else Color(0xFF8F8F8F)
                                             )
@@ -1120,6 +1210,7 @@ fun ChatInputArea(
                                             },
                                             modifier = Modifier.size(20.dp)
                                         )
+                                    }
                                     }
                                 }
                             }

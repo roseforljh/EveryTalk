@@ -8,6 +8,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -49,6 +51,11 @@ fun AppTopBar(
     onShareChat: () -> Unit = {},
     onPinChat: () -> Unit = {},
     onDeleteChat: () -> Unit = {},
+    showModelSelection: Boolean = false,
+    modelList: List<com.android.everytalk.data.DataClass.ApiConfig> = emptyList(),
+    selectedApiConfig: com.android.everytalk.data.DataClass.ApiConfig? = null,
+    onModelSelected: (com.android.everytalk.data.DataClass.ApiConfig) -> Unit = {},
+    onDismissModelSelection: () -> Unit = {},
     modifier: Modifier = Modifier,
     barHeight: Dp = 85.dp,
     contentPaddingHorizontal: Dp = 12.dp,
@@ -113,25 +120,36 @@ fun AppTopBar(
                 }
 
                 // 模型选择器 - 胶囊，固定最大宽度
-                Box(
-                    modifier = Modifier
-                        .height(iconButtonSize)
-                        .widthIn(max = 130.dp)
-                        .clip(RoundedCornerShape(percent = 50))
-                        .background(buttonBg)
-                        .border(1.dp, borderColor, RoundedCornerShape(percent = 50))
-                        .clickable(onClick = onTitleClick)
-                        .padding(horizontal = 16.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = modelDisplayInfo.first,
-                        color = modelDisplayInfo.second,
-                        fontSize = titleFontSize,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                Box {
+                    Box(
+                        modifier = Modifier
+                            .height(iconButtonSize)
+                            .widthIn(max = 130.dp)
+                            .clip(RoundedCornerShape(percent = 50))
+                            .background(buttonBg)
+                            .border(1.dp, borderColor, RoundedCornerShape(percent = 50))
+                            .clickable(onClick = onTitleClick)
+                            .padding(horizontal = 16.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = modelDisplayInfo.first,
+                            color = modelDisplayInfo.second,
+                            fontSize = titleFontSize,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    if (showModelSelection) {
+                        ModelSelectionDropdown(
+                            models = modelList,
+                            selectedApiConfig = selectedApiConfig,
+                            onModelSelected = onModelSelected,
+                            onDismiss = onDismissModelSelection
+                        )
+                    }
                 }
             }
 
@@ -369,5 +387,79 @@ private fun TopBarMenuItem(
             color = tint,
             maxLines = 1
         )
+    }
+}
+
+@Composable
+private fun ModelSelectionDropdown(
+    models: List<com.android.everytalk.data.DataClass.ApiConfig>,
+    selectedApiConfig: com.android.everytalk.data.DataClass.ApiConfig?,
+    onModelSelected: (com.android.everytalk.data.DataClass.ApiConfig) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val isDark = isSystemInDarkTheme()
+    val cardBg = if (isDark) Color(0xFF212121) else Color(0xFFFFFFFF)
+    val popupBorderColor = if (isDark) Color.White.copy(alpha = 0.10f) else Color(0xFF0D0D0D).copy(alpha = 0.05f)
+    val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
+
+    Popup(
+        alignment = Alignment.TopStart,
+        onDismissRequest = onDismiss,
+        properties = PopupProperties(focusable = true)
+    ) {
+        Surface(
+            modifier = Modifier
+                .widthIn(min = 200.dp, max = 280.dp)
+                .heightIn(max = 320.dp)
+                .shadow(8.dp, RoundedCornerShape(20.dp))
+                .border(1.dp, popupBorderColor, RoundedCornerShape(20.dp)),
+            shape = RoundedCornerShape(20.dp),
+            color = cardBg
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+            ) {
+                models.forEach { modelConfig ->
+                    val isSelected = modelConfig.id == selectedApiConfig?.id
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onModelSelected(modelConfig) }
+                            .padding(horizontal = 14.dp, vertical = 9.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = modelConfig.name.ifEmpty { modelConfig.model },
+                                fontSize = 14.sp,
+                                fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
+                                color = if (isSelected) Color(0xFF66B5FF) else textColor,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (modelConfig.name.isNotEmpty() && modelConfig.model.isNotEmpty() && modelConfig.name != modelConfig.model) {
+                                Text(
+                                    text = modelConfig.model,
+                                    fontSize = 11.sp,
+                                    color = if (isDark) Color(0xFF888888) else Color(0xFF999999),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                        if (isSelected) {
+                            androidx.compose.material3.Icon(
+                                painter = painterResource(R.drawable.ic_check),
+                                contentDescription = null,
+                                tint = Color(0xFF66B5FF),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
