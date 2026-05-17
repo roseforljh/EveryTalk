@@ -176,6 +176,16 @@ open class MessageItemsController(
                             val loadingTextMatches = if (hasLoadingIndicator && expectedStageText != null) {
                                 cached?.items?.any { it is ChatListItem.LoadingIndicator && it.text == expectedStageText } ?: false
                             } else true
+                            val cachedFooter = cached?.items
+                                ?.filterIsInstance<ChatListItem.AiMessageFooter>()
+                                ?.firstOrNull()
+                            val expectedHasFooter = !message.isError && if (isCurrentlyStreaming) {
+                                !message.webSearchResults.isNullOrEmpty()
+                            } else {
+                                effectiveMessage.text.isNotBlank() || !message.webSearchResults.isNullOrEmpty()
+                            }
+                            val footerMatches = (cachedFooter != null) == expectedHasFooter &&
+                                (!expectedHasFooter || cachedFooter?.message?.webSearchResults == message.webSearchResults)
 
                             val cacheValid = cached != null &&
                                 cached.reasoning == message.reasoning &&
@@ -189,7 +199,7 @@ open class MessageItemsController(
                                 cached.currentWebSearchStage == message.currentWebSearchStage &&
                                 loadingTextMatches &&
                                 (cached.items.isNotEmpty() || message.text.isBlank()) &&
-                                (cached.items.any { it is ChatListItem.AiMessageFooter } == !message.webSearchResults.isNullOrEmpty()) &&
+                                footerMatches &&
                                 // 校验流式状态兼容性：
                                 // 1. 如果当前是流式：我们接受任何缓存（因为 AiMessage 现在也用于流式），只要内容匹配
                                 // 2. 如果当前非流式：缓存中不能包含“仅流式”组件（如 Loading/StatusIndicator）
@@ -557,7 +567,7 @@ open class MessageItemsController(
                     )
                 }
 
-                if (!message.webSearchResults.isNullOrEmpty()) {
+                if (!isImageGeneration) {
                     items.add(ChatListItem.AiMessageFooter(message))
                 }
 

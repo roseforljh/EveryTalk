@@ -872,16 +872,26 @@ fun MarkdownRenderer(
                 // 设置居中对齐 - 对多行文本有效
                 // gravity = Gravity.CENTER_VERTICAL // 移除垂直居中，避免长文本/图片显示异常
                 
-                // 禁用文本选择但保留长按功能
-                setTextIsSelectable(false)
-                highlightColor = android.graphics.Color.TRANSPARENT
+                // AI 正文无自定义长按菜单时，交给系统 TextView 处理长按选中文本。
+                val allowSystemTextSelection = sender == Sender.AI && onLongPress == null
+                setTextIsSelectable(allowSystemTextSelection)
+                if (!allowSystemTextSelection) {
+                    highlightColor = android.graphics.Color.TRANSPARENT
+                }
                 
-                isFocusable = false
-                isFocusableInTouchMode = false
+                if (allowSystemTextSelection) {
+                    isFocusable = true
+                    isFocusableInTouchMode = true
+                } else {
+                    isFocusable = false
+                    isFocusableInTouchMode = false
+                }
                 
                 // 统一处理触摸事件：图片点击 + 长按坐标捕获
                 if (onImageClick != null || onLongPress != null) {
-                    movementMethod = null // 禁用 LinkMovementMethod，完全手动接管
+                    if (!allowSystemTextSelection) {
+                        movementMethod = null
+                    }
                     linksClickable = false
                     isClickable = true
                     isLongClickable = true
@@ -995,7 +1005,8 @@ fun MarkdownRenderer(
                     movementMethod = null
                     linksClickable = false
                     setOnTouchListener(null)
-                    isClickable = false
+                    isClickable = allowSystemTextSelection
+                    isLongClickable = allowSystemTextSelection
                     setOnLongClickListener(null)
                 }
             }

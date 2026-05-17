@@ -1,16 +1,17 @@
 @file:OptIn(ExperimentalFoundationApi::class)
 package com.android.everytalk.ui.screens.MainScreen.chat.text.ui
 import com.android.everytalk.R
+import androidx.compose.ui.res.painterResource
 
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -21,38 +22,40 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.scrollBy
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import android.content.Intent
 import android.os.SystemClock
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.*
-import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.ui.screens.BubbleMain.Main.AttachmentsContent
@@ -63,11 +66,10 @@ import com.android.everytalk.ui.theme.ChatDimensions
 import com.android.everytalk.ui.theme.chatColors
 
 import com.android.everytalk.ui.components.EnhancedMarkdownText
-import com.android.everytalk.ui.components.StableMarkdownText
-import com.android.everytalk.ui.components.markdown.MarkdownRenderer
-import com.android.everytalk.ui.components.streaming.StreamBlocksRenderer
 import com.android.everytalk.ui.components.WebPreviewDialog
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.ui.layout.onSizeChanged
 import kotlinx.coroutines.flow.first
 
@@ -84,7 +86,6 @@ fun ChatMessagesList(
     onImageClick: (String) -> Unit,
     additionalBottomPadding: Dp = 0.dp
 ) {
-    val haptic = LocalHapticFeedback.current
     val reasoningHeightMap = remember { mutableMapOf<String, Int>() }
     // 防止 AnimatedItems 等状态在重组时被重复触发
 
@@ -649,9 +650,7 @@ fun ChatMessagesList(
                             val message = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage) item.message else viewModel.getMessageById(messageId)
                             if (message != null) {
                                 val text = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage) item.text else message.text
-                                val hasReasoning = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage) item.hasReasoning else (item as com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageStreaming).hasReasoning
                                 val isStreaming = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageStreaming) true else (currentStreamingId == message.id)
-                                val blockPayload = item as? com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage
                                 if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage && item.hasPendingMath) {
                                     android.util.Log.d(
                                         "ChatMessagesList",
@@ -667,16 +666,9 @@ fun ChatMessagesList(
                                         message = message,
                                         text = text,
                                         maxWidth = bubbleMaxWidth,
-                                        hasReasoning = hasReasoning,
-                                        onLongPress = {
-                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            onShowAiMessageOptions(message)
-                                        },
                                         isStreaming = isStreaming,
                                         messageOutputType = message.outputType,
                                         viewModel = viewModel,
-                                        blockPayload = blockPayload,
-                                        showMenuButton = false,
                                         onImageClick = { url ->
                                             val now = SystemClock.elapsedRealtime()
                                             if (now - lastImagePreviewAt > 500) {
@@ -694,7 +686,6 @@ fun ChatMessagesList(
                             val message = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCode) item.message else viewModel.getMessageById(messageId)
                             if (message != null) {
                                 val text = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCode) item.text else message.text
-                                val hasReasoning = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCode) item.hasReasoning else (item as com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCodeStreaming).hasReasoning
                                 val isStreaming = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCodeStreaming) true else (currentStreamingId == message.id)
 
                                 Column(
@@ -705,15 +696,9 @@ fun ChatMessagesList(
                                         message = message,
                                         text = text,
                                         maxWidth = bubbleMaxWidth,
-                                        hasReasoning = hasReasoning,
-                                        onLongPress = {
-                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            onShowAiMessageOptions(message)
-                                        },
                                         isStreaming = isStreaming,
                                         messageOutputType = message.outputType,
                                         viewModel = viewModel,
-                                        showMenuButton = false,
                                         onImageClick = { url ->
                                             val now = SystemClock.elapsedRealtime()
                                             if (now - lastImagePreviewAt > 500) {
@@ -790,8 +775,6 @@ fun ChatMessagesList(
                                 )
                             }
                         }
-                        
-                        else -> { /* no-op */ }
                     }
                 }
             }
@@ -1001,15 +984,10 @@ fun AiMessageItem(
     message: Message,
     text: String,
     maxWidth: Dp,
-    hasReasoning: Boolean,
-    onLongPress: () -> Unit,
     modifier: Modifier = Modifier,
     isStreaming: Boolean,
-    isFastScroll: Boolean = false,
     messageOutputType: String,
     viewModel: AppViewModel,
-    blockPayload: com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage? = null,
-    showMenuButton: Boolean = true,
     onImageClick: ((String) -> Unit)? = null
 ) {
     val shape = RectangleShape
@@ -1113,7 +1091,6 @@ fun AiMessageItem(
                     color = MaterialTheme.colorScheme.onSurface,
                     isStreaming = shouldPreferStreamingContent,
                     messageOutputType = messageOutputType,
-                    onLongPress = { _ -> onLongPress() },
                     onImageClick = onImageClick,
                     onCodePreviewRequested = { lang, code ->
                         previewLanguage = lang
@@ -1136,22 +1113,233 @@ fun AiMessageItem(
 fun AiMessageFooterItem(
     message: Message,
     viewModel: AppViewModel,
+    onShowOptions: (Message) -> Unit = {},
 ) {
-    if (!message.webSearchResults.isNullOrEmpty()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = ChatDimensions.HORIZONTAL_PADDING),
-            horizontalArrangement = Arrangement.Start
-        ) {
-            TextButton(
-                onClick = {
-                    viewModel.showSourcesDialog(message.webSearchResults)
-                },
+    var showPopupMenu by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = ChatDimensions.HORIZONTAL_PADDING)
+    ) {
+        if (!message.webSearchResults.isNullOrEmpty()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Start
             ) {
-                Text(stringResource(id = R.string.view_sources, message.webSearchResults.size))
+                TextButton(
+                    onClick = {
+                        viewModel.showSourcesDialog(message.webSearchResults)
+                    },
+                ) {
+                    Text(stringResource(id = R.string.view_sources, message.webSearchResults.size))
+                }
             }
         }
+
+        Row(
+            modifier = Modifier.padding(top = 2.dp),
+            horizontalArrangement = Arrangement.Start,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(
+                onClick = {
+                    val latestMessage = viewModel.getMessageById(message.id) ?: message
+                    viewModel.copyToClipboard(latestMessage.text)
+                },
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_copy),
+                    contentDescription = "复制",
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
+            }
+            IconButton(
+                onClick = {
+                    val latestMessage = viewModel.getMessageById(message.id) ?: message
+                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, latestMessage.text)
+                    }
+                    context.startActivity(Intent.createChooser(shareIntent, "分享"))
+                },
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_share),
+                    contentDescription = "分享",
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
+            }
+            Box {
+                IconButton(
+                    onClick = { showPopupMenu = true },
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_dots_horizontal),
+                        contentDescription = "更多",
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                }
+                AiMessagePopupMenu(
+                    expanded = showPopupMenu,
+                    onDismiss = { showPopupMenu = false },
+                    onRegenerate = {
+                        val latestMessage = viewModel.getMessageById(message.id) ?: message
+                        viewModel.regenerateAiResponse(latestMessage, scrollToNewMessage = true)
+                    },
+                    modelName = message.modelName,
+                    onChangeModel = {
+                        val latestMessage = viewModel.getMessageById(message.id) ?: message
+                        viewModel.regenerateAiResponse(latestMessage, scrollToNewMessage = true)
+                    },
+                    onExport = {
+                        val latestMessage = viewModel.getMessageById(message.id) ?: message
+                        viewModel.exportMessageText(latestMessage.text)
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AiMessagePopupMenu(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    onRegenerate: () -> Unit,
+    modelName: String?,
+    onChangeModel: () -> Unit,
+    onExport: () -> Unit,
+) {
+    var showPopup by remember { mutableStateOf(false) }
+    val scaleAnim = remember { Animatable(0.8f) }
+    val alphaAnim = remember { Animatable(0f) }
+
+    val emphasizedDecelerate = CubicBezierEasing(0.0f, 0.0f, 0.2f, 1.0f)
+    val decelerateEasing = CubicBezierEasing(0.4f, 0.0f, 0.2f, 1.0f)
+
+    LaunchedEffect(expanded) {
+        if (expanded) {
+            showPopup = true
+            scaleAnim.snapTo(0.8f)
+            alphaAnim.snapTo(0f)
+            coroutineScope {
+                launch { scaleAnim.animateTo(1f, tween(120, easing = emphasizedDecelerate)) }
+                launch { alphaAnim.animateTo(1f, tween(30, easing = decelerateEasing)) }
+            }
+        } else if (showPopup) {
+            coroutineScope {
+                launch { alphaAnim.animateTo(0f, tween(75, easing = decelerateEasing)) }
+                launch {
+                    delay(74)
+                    scaleAnim.snapTo(0.8f)
+                }
+            }
+            showPopup = false
+        }
+    }
+
+    if (!showPopup) return
+
+    val isDark = isSystemInDarkTheme()
+    val cardBg = if (isDark) Color(0xFF212121) else Color(0xFFFFFFFF)
+    val textColor = MaterialTheme.colorScheme.onSurface
+    val iconTint = textColor
+    val borderColor = if (isDark) Color.White.copy(alpha = 0.10f) else Color(0xFF0D0D0D).copy(alpha = 0.05f)
+
+    Popup(
+        alignment = Alignment.BottomStart,
+        onDismissRequest = onDismiss,
+        properties = PopupProperties(focusable = true)
+    ) {
+        Surface(
+            modifier = Modifier
+                .wrapContentWidth()
+                .widthIn(min = 200.dp)
+                .graphicsLayer {
+                    this.scaleX = scaleAnim.value
+                    this.scaleY = scaleAnim.value
+                    this.alpha = alphaAnim.value
+                    this.transformOrigin = TransformOrigin(0f, 1f)
+                }
+                .shadow(8.dp, RoundedCornerShape(28.dp))
+                .border(1.dp, borderColor, RoundedCornerShape(28.dp)),
+            shape = RoundedCornerShape(28.dp),
+            color = cardBg
+        ) {
+            Column(modifier = Modifier
+                .width(IntrinsicSize.Max)
+                .padding(vertical = 12.dp)
+            ) {
+                PopupMenuItem(
+                    painter = painterResource(R.drawable.ic_regenerate),
+                    text = "重新回答",
+                    textColor = textColor,
+                    iconTint = iconTint,
+                    onClick = { onRegenerate(); onDismiss() }
+                )
+                PopupMenuItem(
+                    painter = painterResource(R.drawable.ic_robot_head),
+                    text = modelName ?: "切换模型",
+                    textColor = textColor,
+                    iconTint = iconTint,
+                    onClick = { onChangeModel(); onDismiss() }
+                )
+                PopupMenuItem(
+                    painter = painterResource(R.drawable.ic_export),
+                    text = "导出文本",
+                    textColor = textColor,
+                    iconTint = iconTint,
+                    onClick = { onExport(); onDismiss() }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PopupMenuItem(
+    painter: androidx.compose.ui.graphics.painter.Painter,
+    text: String,
+    textColor: Color,
+    iconTint: Color,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(44.dp)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier.size(32.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                painter = painter,
+                contentDescription = null,
+                tint = iconTint,
+                modifier = Modifier.size(24.dp)
+            )
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = text,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Normal,
+            color = textColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 

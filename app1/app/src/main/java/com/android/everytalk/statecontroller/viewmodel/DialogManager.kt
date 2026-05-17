@@ -19,13 +19,6 @@ class DialogManager {
     private val _editingMessage = MutableStateFlow<Message?>(null)
     val editingMessage: StateFlow<Message?> = _editingMessage.asStateFlow()
     
-    // 可选择文本对话框
-    private val _showSelectableTextDialog = MutableStateFlow(false)
-    val showSelectableTextDialog: StateFlow<Boolean> = _showSelectableTextDialog.asStateFlow()
-    
-    private val _textForSelectionDialog = MutableStateFlow("")
-    val textForSelectionDialog: StateFlow<String> = _textForSelectionDialog.asStateFlow()
-    
     // 系统提示对话框
     private val _showSystemPromptDialog = MutableStateFlow(false)
     val showSystemPromptDialog: StateFlow<Boolean> = _showSystemPromptDialog.asStateFlow()
@@ -56,17 +49,6 @@ class DialogManager {
     
     fun cancelEditing() {
         _editingMessage.value = null
-    }
-    
-    // 可选择文本对话框方法
-    fun showSelectableTextDialog(text: String) {
-        _textForSelectionDialog.value = text
-        _showSelectableTextDialog.value = true
-    }
-    
-    fun dismissSelectableTextDialog() {
-        _showSelectableTextDialog.value = false
-        _textForSelectionDialog.value = ""
     }
     
     // 系统提示对话框方法

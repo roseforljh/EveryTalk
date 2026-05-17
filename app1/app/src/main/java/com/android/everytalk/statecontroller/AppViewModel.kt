@@ -429,8 +429,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     )
     val showEditDialog: StateFlow<Boolean> = dialogManager.showEditDialog
     val editingMessage: StateFlow<Message?> = dialogManager.editingMessage
-    val showSelectableTextDialog: StateFlow<Boolean> = dialogManager.showSelectableTextDialog
-    val textForSelectionDialog: StateFlow<String> = dialogManager.textForSelectionDialog
     val showSystemPromptDialog: StateFlow<Boolean> = dialogManager.showSystemPromptDialog
     val showAboutDialog: StateFlow<Boolean> = dialogManager.showAboutDialog
     val showClearImageHistoryDialog: StateFlow<Boolean> = dialogManager.showClearImageHistoryDialog
@@ -1710,14 +1708,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             if (stateHolder._showSourcesDialog.value) stateHolder._showSourcesDialog.value = false
         }
-    }
-
-    fun showSelectableTextDialog(text: String) {
-        dialogManager.showSelectableTextDialog(text)
-    }
-
-    fun dismissSelectableTextDialog() {
-        dialogManager.dismissSelectableTextDialog()
     }
 
     fun copyToClipboard(text: String) {

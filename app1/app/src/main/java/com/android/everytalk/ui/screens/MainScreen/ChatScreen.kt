@@ -3,7 +3,6 @@ package com.android.everytalk.ui.screens.MainScreen
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -15,16 +14,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.text.ClickableText
-import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.text.selection.TextSelectionColors
-import androidx.compose.foundation.text.selection.LocalTextSelectionColors
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -45,8 +40,6 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.navigation.NavController
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import com.android.everytalk.data.DataClass.Message
@@ -380,8 +373,6 @@ fun ChatScreen(
     val editDialogInputText by viewModel.editDialogInputText.collectAsState()
     val showSourcesDialog by viewModel.showSourcesDialog.collectAsState()
     val sourcesForDialog by viewModel.sourcesForDialog.collectAsState()
-    val showSelectableTextDialog by viewModel.showSelectableTextDialog.collectAsState()
-    val textForSelectionDialog by viewModel.textForSelectionDialog.collectAsState()
     val imeInsets = WindowInsets.ime
     
     // 获取输入法高度用于整体布局偏移
@@ -409,13 +400,6 @@ fun ChatScreen(
             }
         }
     )
-
-    if (showSelectableTextDialog) {
-        SelectableTextDialog(
-            textToDisplay = textForSelectionDialog,
-            onDismissRequest = { viewModel.dismissSelectableTextDialog() }
-        )
-    }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -687,7 +671,6 @@ fun ChatScreen(
                     val latestMessage = viewModel.getMessageById(selectedMessageForOptions!!.id) ?: selectedMessageForOptions!!
                     
                     when (option) {
-                        AiMessageOption.SELECT_TEXT -> viewModel.showSelectableTextDialog(latestMessage.text)
                         AiMessageOption.COPY_FULL_TEXT -> viewModel.copyToClipboard(latestMessage.text)
                         AiMessageOption.REGENERATE -> {
                             keyboardController?.hide()
@@ -859,158 +842,6 @@ private fun AboutDialog(
     )
 }
 
- @Composable
- internal fun SelectableTextDialog(textToDisplay: String, onDismissRequest: () -> Unit) {
-    // 强制重组：当 textToDisplay 变化时，确保内部状态更新
-    val currentText by rememberUpdatedState(textToDisplay)
-    
-    Dialog(
-        onDismissRequest = onDismissRequest,
-        properties = DialogProperties(
-            dismissOnClickOutside = true,
-            dismissOnBackPress = true,
-            usePlatformDefaultWidth = false
-        )
-    ) {
-        val alpha = remember { Animatable(0f) }
-        val scale = remember { Animatable(0.8f) }
-
-        LaunchedEffect(Unit) {
-            launch {
-                alpha.animateTo(1f, animationSpec = tween(durationMillis = 300))
-            }
-            launch {
-                scale.animateTo(1f, animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing))
-            }
-        }
-
-        // 计算固定高度，避免 wrapContent 和 fillMaxSize 的冲突
-        // 或者是使用 fillMaxWidth + heightIn，但内部必须使用 weight 或 verticalScroll 来撑开
-        // 之前的失败表明：Card(heightIn) -> Box(fillMaxSize) -> SelectionContainer(fillMaxSize) -> Column(verticalScroll)
-        // 这种组合下，Column虽然可滚动，但如果没有足够内容撑开，或者父容器计算高度为0，就会空白。
-        // 但 Text 是有内容的。
-        // 可能是 SelectionContainer 的尺寸测量问题。
-        
-        // 尝试：不使用 fillMaxSize，而是让 Box/SelectionContainer 自适应内容高度，同时限制最大高度。
-        // 但 Card 已经限制了 max height。
-        
-        // 另一种可能：Dialog 的 window 布局参数问题。
-        
-        // 让我们尝试最稳健的布局：
-        // Card (fillMaxWidth, heightIn)
-        //   Box (fillMaxSize)  <-- 关键：确保 Box 填满 Card
-        //     SelectionContainer (fillMaxSize) <-- 关键：确保 SelectionContainer 填满 Box
-        //       Box (fillMaxSize, verticalScroll) <-- 关键：滚动容器
-        //         Text
-        
-        // 之前的代码似乎就是这样。为什么还是空白？
-        // 也许是因为 alpha 动画初始值为 0？不，动画会执行到 1。
-        
-        // 让我们尝试移除 SelectionContainer 看看内容是否显示，以隔离问题。
-        // 或者，给 Card 一个最小高度。
-        
-        Card(
-            shape = RoundedCornerShape(28.dp),
-            modifier = Modifier
-                .fillMaxWidth(0.92f)
-                .padding(vertical = 24.dp)
-                .heightIn(
-                    min = 200.dp, // 给定一个最小高度，确保不为0
-                    max = LocalConfiguration.current.screenHeightDp.dp * 0.75f
-                )
-                .graphicsLayer {
-                    this.alpha = alpha.value
-                    this.scaleX = scale.value
-                    this.scaleY = scale.value
-                },
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-        ) {
-            // 直接显示内容，移除顶部标题栏
-            Box(
-                modifier = Modifier
-                    .fillMaxSize() // 填满 Card 的大小（由 min/max height 和内容共同决定）
-                    .padding(12.dp)
-            ) {
-                val scrollState = rememberScrollState()
-                val scrimHeight = 24.dp // 加大模糊效果高度
-                val scrimColor = MaterialTheme.colorScheme.surface
-                
-                // 自定义文本选择颜色
-                val customTextSelectionColors = TextSelectionColors(
-                    handleColor = Color(0xFF2196F3), // 蓝色选择手柄
-                    backgroundColor = Color(0xFF2196F3).copy(alpha = 0.3f) // 半透明蓝色背景
-                )
-                
-                CompositionLocalProvider(LocalTextSelectionColors provides customTextSelectionColors) {
-                    // 关键修改：SelectionContainer 包裹 Text，而 Scroll 在 SelectionContainer 外部（或内部，取决于需求）
-                    // 为了让选择手柄跟随滚动，Scroll 应该在 SelectionContainer 内部。
-                    // 但是，如果 Scroll 在 SelectionContainer 内部，SelectionContainer 需要有确定的大小。
-                    
-                    // 尝试：SelectionContainer (fillMaxSize) -> Column (verticalScroll) -> Text
-                    // 这样 SelectionContainer 占据了 Box 的剩余空间（扣除 padding 和 scrim），
-                    // 内部 Column 负责滚动。
-                    
-                    SelectionContainer(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(vertical = scrimHeight)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .verticalScroll(scrollState)
-                        ) {
-                             androidx.compose.material3.Text(
-                                 text = currentText,
-                                 style = MaterialTheme.typography.bodyLarge.copy(
-                                     color = MaterialTheme.colorScheme.onSurface
-                                 ),
-                                 modifier = Modifier.fillMaxWidth()
-                             )
-                        }
-                    }
-                }
-                
-                // 上边框渐变模糊效果 - 加大高度和强度
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .fillMaxWidth()
-                        .height(scrimHeight)
-                        .background(
-                            brush = Brush.verticalGradient(
-                                colors = listOf(
-                                    scrimColor,
-                                    scrimColor.copy(alpha = 0.8f),
-                                    scrimColor.copy(alpha = 0.4f),
-                                    Color.Transparent
-                                )
-                            )
-                        )
-                )
-                
-                // 下边框渐变模糊效果 - 加大高度和强度
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .height(scrimHeight)
-                        .background(
-                            brush = Brush.verticalGradient(
-                                colors = listOf(
-                                    Color.Transparent,
-                                    scrimColor.copy(alpha = 0.4f),
-                                    scrimColor.copy(alpha = 0.8f),
-                                    scrimColor
-                                )
-                            )
-                        )
-                )
-            }
-        }
-    }
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AiMessageOptionsBottomSheet(
@@ -1052,7 +883,6 @@ private fun AiMessageOptionsBottomSheet(
 }
 
 private enum class AiMessageOption(val title: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
-    SELECT_TEXT("选择文本", Icons.Outlined.SelectAll),
     COPY_FULL_TEXT("复制全文", Icons.Filled.ContentCopy),
     REGENERATE("重新回答", Icons.Filled.Refresh),
     EXPORT_TEXT("导出文本", Icons.Filled.IosShare)
