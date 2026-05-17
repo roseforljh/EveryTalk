@@ -883,16 +883,17 @@ fun ChatInputArea(
 
                     val plusStretchProgress = (sep * 2f).coerceIn(0f, 1f)
                     val plusRecoverProgress = ((sep - 0.5f) * 2f).coerceIn(0f, 1f)
-                    val plusWidth = (48f + 16f * plusStretchProgress - 20f * plusRecoverProgress).dp
-                    val plusOffset = (-16f * plusStretchProgress - 32f * plusRecoverProgress).dp
-                    val plusHeight = inputMinHeight
+                    val plusBorderInset = 1.dp * (1f - sep)
+                    val plusWidth = (46f + 18f * plusStretchProgress - 20f * plusRecoverProgress).dp
+                    val plusOffset = plusBorderInset + (-16f * plusStretchProgress - 32f * plusRecoverProgress).dp
+                    val plusHeight = inputMinHeight - plusBorderInset * 2
                     val plusCorner = plusHeight / 2
                     val plusShape = RoundedCornerShape(plusCorner)
                     val plusBg = inputBackground
                     val borderColor = if (isDarkTheme) Color(0xFF48474C) else Color(0xFFD6D6D6)
 
                     val inputShape = RoundedCornerShape(inputMinHeight / 2)
-                    val textStartPadding = 48.dp * (1f - sep)
+                    val textStartPadding = 48.dp - plusCorner * sep
 
                     Box(
                         modifier = Modifier
@@ -914,7 +915,7 @@ fun ChatInputArea(
                                         .width(plusWidth)
                                         .height(plusHeight)
                                         .background(plusBg, plusShape)
-                                        .border(1.dp, borderColor, plusShape),
+                                        .border(1.dp, borderColor.copy(alpha = sep), plusShape),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     IconButton(
