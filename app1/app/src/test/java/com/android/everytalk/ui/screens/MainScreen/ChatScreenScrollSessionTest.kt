@@ -108,7 +108,7 @@ class ChatScreenScrollSessionTest {
     }
 
     @Test
-    fun `pre scroll consumes upward drag when pinned bubble is already at anchor`() {
+    fun `pre scroll does not consume upward drag when pinned bubble is already at anchor`() {
         val consumed = resolvePinnedAnchorPreScrollConsumption(
             availableY = -18f,
             currentY = 120,
@@ -118,7 +118,7 @@ class ChatScreenScrollSessionTest {
             grokScrollCompleted = true
         )
 
-        assertEquals(-18f, consumed)
+        assertEquals(0f, consumed)
     }
 
     @Test
