@@ -2,9 +2,13 @@ package com.android.everytalk.ui.screens.MainScreen
 
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.pinnedAnchorLayoutVersion
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.resolvePinnedAnchorPreScrollConsumption
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.restorePinnedBubbleAnchorForSession
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.shouldClearTransientBottomReserveOnStreamChange
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.shouldEnableUserScrollForPinnedUserBubble
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.shouldResetTransientBottomReserve
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -101,5 +105,73 @@ class ChatScreenScrollSessionTest {
         )
 
         assertTrue(result)
+    }
+
+    @Test
+    fun `pre scroll consumes upward drag when pinned bubble is already at anchor`() {
+        val consumed = resolvePinnedAnchorPreScrollConsumption(
+            availableY = -18f,
+            currentY = 120,
+            targetY = 120,
+            hasPinnedUserMessage = true,
+            hasDynamicBottomReserve = true,
+            grokScrollCompleted = true
+        )
+
+        assertEquals(-18f, consumed)
+    }
+
+    @Test
+    fun `pre scroll does not consume downward drag for pinned bubble`() {
+        val consumed = resolvePinnedAnchorPreScrollConsumption(
+            availableY = 18f,
+            currentY = 120,
+            targetY = 120,
+            hasPinnedUserMessage = true,
+            hasDynamicBottomReserve = true,
+            grokScrollCompleted = true
+        )
+
+        assertEquals(0f, consumed)
+    }
+
+    @Test
+    fun `pinned anchor layout version changes when scroll offset changes`() {
+        val before = pinnedAnchorLayoutVersion(
+            totalItemsCount = 10,
+            firstVisibleItemIndex = 3,
+            firstVisibleItemScrollOffset = 0,
+            visibleItemsSizeSum = 500,
+            visibleItemsOffsetSum = 800
+        )
+        val after = pinnedAnchorLayoutVersion(
+            totalItemsCount = 10,
+            firstVisibleItemIndex = 3,
+            firstVisibleItemScrollOffset = 24,
+            visibleItemsSizeSum = 500,
+            visibleItemsOffsetSum = 776
+        )
+
+        assertFalse(before == after)
+    }
+
+    @Test
+    fun `does not restore stale pinned bubble anchor after switching back to conversation`() {
+        val restored = restorePinnedBubbleAnchorForSession(
+            savedAnchorY = 184,
+            isPinnedRuntimeActive = false
+        )
+
+        assertEquals(-1, restored)
+    }
+
+    @Test
+    fun `restores pinned bubble anchor only while pinned runtime is active`() {
+        val restored = restorePinnedBubbleAnchorForSession(
+            savedAnchorY = 184,
+            isPinnedRuntimeActive = true
+        )
+
+        assertEquals(184, restored)
     }
 }

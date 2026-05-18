@@ -40,6 +40,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import android.content.Intent
 import android.os.SystemClock
 import androidx.compose.ui.graphics.Color
@@ -92,6 +94,39 @@ internal fun shouldEnableUserScrollForPinnedUserBubble(
 ): Boolean = grokScrollCompleted
 
 internal fun shouldClearTransientBottomReserveOnStreamChange(isApiCalling: Boolean): Boolean = false
+
+internal fun resolvePinnedAnchorPreScrollConsumption(
+    availableY: Float,
+    currentY: Int,
+    targetY: Int,
+    hasPinnedUserMessage: Boolean,
+    hasDynamicBottomReserve: Boolean,
+    grokScrollCompleted: Boolean
+): Float {
+    if (!grokScrollCompleted || !hasPinnedUserMessage || !hasDynamicBottomReserve) return 0f
+    if (targetY <= 0 || availableY >= 0f) return 0f
+    return if (currentY <= targetY + 1) availableY else 0f
+}
+
+internal fun pinnedAnchorLayoutVersion(
+    totalItemsCount: Int,
+    firstVisibleItemIndex: Int,
+    firstVisibleItemScrollOffset: Int,
+    visibleItemsSizeSum: Int,
+    visibleItemsOffsetSum: Int
+): Long {
+    var result = totalItemsCount.toLong()
+    result = result * 31 + firstVisibleItemIndex
+    result = result * 31 + firstVisibleItemScrollOffset
+    result = result * 31 + visibleItemsSizeSum
+    result = result * 31 + visibleItemsOffsetSum
+    return result
+}
+
+internal fun restorePinnedBubbleAnchorForSession(
+    savedAnchorY: Int,
+    isPinnedRuntimeActive: Boolean
+): Int = if (isPinnedRuntimeActive && savedAnchorY > 0) savedAnchorY else -1
 
 @Composable
 fun ChatMessagesList(
@@ -163,8 +198,7 @@ fun ChatMessagesList(
     var grokScrollCompleted by remember(scrollSessionKey) { mutableStateOf(true) }
     var pinnedUserMessageId by remember(scrollSessionKey) { mutableStateOf<String?>(null) }
     var firstBubbleScreenY by remember(scrollSessionKey) {
-        val saved = viewModel.getScrollState(scrollSessionKey)?.firstBubbleScreenY ?: -1
-        mutableStateOf(saved)
+        mutableStateOf(-1)
     }
     var previousConversationIdForReserve by remember { mutableStateOf<String?>(null) }
 
@@ -202,7 +236,10 @@ fun ChatMessagesList(
     LaunchedEffect(scrollSessionKey) {
         grokScrollCompleted = true
         clearTransientBottomReserve()
-        firstBubbleScreenY = viewModel.getScrollState(scrollSessionKey)?.firstBubbleScreenY ?: -1
+        firstBubbleScreenY = restorePinnedBubbleAnchorForSession(
+            savedAnchorY = viewModel.getScrollState(scrollSessionKey)?.firstBubbleScreenY ?: -1,
+            isPinnedRuntimeActive = pinnedUserMessageId != null && dynamicBottomPaddingTarget > 0.dp
+        )
         android.util.Log.d("GrokScroll", "Session changed, reset state, restored firstBubbleScreenY=$firstBubbleScreenY")
     }
 
@@ -210,7 +247,10 @@ fun ChatMessagesList(
         if (shouldResetTransientBottomReserve(previousConversationIdForReserve, conversationId, isApiCalling)) {
             grokScrollCompleted = true
             clearTransientBottomReserve()
-            firstBubbleScreenY = viewModel.getScrollState(conversationId)?.firstBubbleScreenY ?: -1
+            firstBubbleScreenY = restorePinnedBubbleAnchorForSession(
+                savedAnchorY = viewModel.getScrollState(conversationId)?.firstBubbleScreenY ?: -1,
+                isPinnedRuntimeActive = pinnedUserMessageId != null && dynamicBottomPaddingTarget > 0.dp
+            )
             android.util.Log.d("GrokScroll", "Conversation changed, cleared transient bottom reserve")
         }
         previousConversationIdForReserve = conversationId
@@ -273,13 +313,26 @@ fun ChatMessagesList(
         if (targetY <= 0) return@LaunchedEffect
 
         val stableWindowNanos = 50_000_000L
-        val clampBufferPx = 1
         var stableSinceNanos = 0L
-        var lastLayoutVersion = listState.layoutInfo.totalItemsCount
+        var lastLayoutVersion = listState.layoutInfo.run {
+            pinnedAnchorLayoutVersion(
+                totalItemsCount = totalItemsCount,
+                firstVisibleItemIndex = listState.firstVisibleItemIndex,
+                firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset,
+                visibleItemsSizeSum = visibleItemsInfo.sumOf { it.size },
+                visibleItemsOffsetSum = visibleItemsInfo.sumOf { it.offset }
+            )
+        }
         while (true) {
             val frameNanos = withFrameNanos { it }
             val li = listState.layoutInfo
-            val layoutVersion = li.totalItemsCount + li.visibleItemsInfo.sumOf { it.size }
+            val layoutVersion = pinnedAnchorLayoutVersion(
+                totalItemsCount = li.totalItemsCount,
+                firstVisibleItemIndex = listState.firstVisibleItemIndex,
+                firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset,
+                visibleItemsSizeSum = li.visibleItemsInfo.sumOf { it.size },
+                visibleItemsOffsetSum = li.visibleItemsInfo.sumOf { it.offset }
+            )
             val layoutChanged = layoutVersion != lastLayoutVersion
             lastLayoutVersion = layoutVersion
 
@@ -316,7 +369,16 @@ fun ChatMessagesList(
                     }
                 }
                 if (!layoutChanged && stableDurationNanos >= stableWindowNanos) {
-                    snapshotFlow { listState.layoutInfo.totalItemsCount + listState.layoutInfo.visibleItemsInfo.sumOf { it.size } }
+                    snapshotFlow {
+                        val info = listState.layoutInfo
+                        pinnedAnchorLayoutVersion(
+                            totalItemsCount = info.totalItemsCount,
+                            firstVisibleItemIndex = listState.firstVisibleItemIndex,
+                            firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset,
+                            visibleItemsSizeSum = info.visibleItemsInfo.sumOf { it.size },
+                            visibleItemsOffsetSum = info.visibleItemsInfo.sumOf { it.offset }
+                        )
+                    }
                         .first { it != lastLayoutVersion }
                     stableSinceNanos = 0L
                 }
@@ -334,6 +396,24 @@ fun ChatMessagesList(
             val topPadding = statusBarTop + 72.dp
             val density = LocalDensity.current
             val topPaddingPx = with(density) { topPadding.toPx().toInt() }
+            val pinnedAnchorNestedScrollConnection = object : NestedScrollConnection {
+                override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                    if (source != NestedScrollSource.UserInput) return Offset.Zero
+                    val pinnedId = pinnedUserMessageId ?: return Offset.Zero
+                    val item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == pinnedId }
+                        ?: return Offset.Zero
+                    val currentY = item.offset - listState.layoutInfo.viewportStartOffset
+                    val consumedY = resolvePinnedAnchorPreScrollConsumption(
+                        availableY = available.y,
+                        currentY = currentY,
+                        targetY = firstBubbleScreenY,
+                        hasPinnedUserMessage = true,
+                        hasDynamicBottomReserve = dynamicBottomPaddingTarget > 0.dp,
+                        grokScrollCompleted = grokScrollCompleted
+                    )
+                    return Offset(0f, consumedY)
+                }
+            }
             
             val lastSentUserMessageId by viewModel.lastSentUserMessageId.collectAsState()
             
@@ -488,6 +568,7 @@ fun ChatMessagesList(
                 ),
                 modifier = Modifier
                     .fillMaxSize()
+                    .nestedScroll(pinnedAnchorNestedScrollConnection)
                     .nestedScroll(scrollStateManager.nestedScrollConnection),
                 contentPadding = PaddingValues(
                     start = 6.dp,
